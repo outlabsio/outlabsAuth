@@ -156,19 +156,17 @@ class TestGroupService:
         mock_client_account = MagicMock()
         mock_client_account.id = client_account_id
         
-        # Properly mock the nested query structure
-        mock_base_query = MagicMock()
-        mock_filtered_query = MagicMock()
-        mock_filtered_query.skip.return_value = mock_filtered_query
-        mock_filtered_query.limit.return_value = mock_filtered_query
-        mock_filtered_query.to_list = AsyncMock(return_value=mock_groups)
+        # Mock the query chain: GroupModel.find() -> .skip() -> .limit() -> .to_list()
+        mock_query = MagicMock()
+        mock_query.skip.return_value = mock_query
+        mock_query.limit.return_value = mock_query
+        mock_query.to_list = AsyncMock(return_value=mock_groups)
         
         with patch('api.services.group_service.GroupModel') as mock_group_model, \
              patch('api.services.group_service.ClientAccountModel') as mock_client_model:
             
             mock_client_model.get = AsyncMock(return_value=mock_client_account)
-            mock_base_query.find.return_value = mock_filtered_query
-            mock_group_model.find.return_value = mock_base_query
+            mock_group_model.find.return_value = mock_query
             
             result = await group_service.get_groups(skip=0, limit=100, client_account_id=client_account_id)
         
