@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Test Orchestrator for outlabsAuth
+Run All Tests for outlabsAuth
 
 This script runs all test modules individually and provides a comprehensive summary.
-Can be run with: python tests/test_orchestrator.py
+Can be run with: python tests/run_all_tests.py
 """
 
 import subprocess
@@ -36,6 +36,8 @@ class TestOrchestrator:
         self.results: List[TestResult] = []
         self.test_modules = [
             "tests/test_auth_routes.py",
+            "tests/test_auth_security.py",
+            "tests/test_auth_comprehensive.py",
             "tests/test_user_routes.py", 
             "tests/test_role_routes.py",
             "tests/test_permission_routes.py",
@@ -44,6 +46,8 @@ class TestOrchestrator:
             "tests/test_client_account_routes.py",
             "tests/test_security_service.py",
             "tests/test_user_service.py",
+            "tests/test_access_control.py",
+            "tests/test_duplicate_constraints.py",
             "tests/test_integration.py",
             "tests/test_enhanced_access_control.py"
         ]
@@ -211,7 +215,7 @@ class TestOrchestrator:
         print(f"📄 Detailed report saved to: {report_path}")
 
 def main():
-    """Main entry point for test orchestration."""
+    """Main entry point for running all tests."""
     orchestrator = TestOrchestrator()
     orchestrator.run_all_tests()
 
