@@ -103,13 +103,11 @@ class UserService:
         Retrieves a list of users with pagination using Beanie ODM.
         If client_account_id is provided, filters users by that account.
         """
-        query = UserModel.find(fetch_links=True)
-        
         if client_account_id:
-            # Get the client account first
-            client_account = await ClientAccountModel.get(client_account_id)
-            if client_account:
-                query = query.find(UserModel.client_account.id == client_account_id)
+            # Filter by client account
+            query = UserModel.find(UserModel.client_account.id == client_account_id, fetch_links=True)
+        else:
+            query = UserModel.find(fetch_links=True)
             
         return await query.skip(skip).limit(limit).to_list()
 
