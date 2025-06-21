@@ -39,11 +39,11 @@ async def create_group(
     try:
         new_group = await group_service.create_group(group_data)
         
-        # Convert to response format
-        response_data = new_group.model_dump()
-        response_data["client_account_id"] = str(str(new_group.client_account.id).ref.id) if new_group.client_account else None
+        # Convert to response format using schema aliasing
+        response_data = new_group.model_dump(by_alias=True)
+        response_data["client_account_id"] = str(new_group.client_account.id) if new_group.client_account else None
         
-        return GroupResponseSchema(**response_data)
+        return GroupResponseSchema.model_validate(response_data)
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -66,18 +66,17 @@ async def list_groups(
     if client_account_id:
         filter_client_id = PydanticObjectId(client_account_id)
     elif current_user.client_account and not current_user.is_main_client:
-        filter_client_id = current_user.client_account.id
+        filter_client_id = current_user.client_account.ref.id
     
     groups = await group_service.get_groups(skip=skip, limit=limit, client_account_id=filter_client_id)
     
     # Convert to response format
     response_groups = []
     for group in groups:
-        response_data = group.model_dump()
+        response_data = group.model_dump(by_alias=True)
         # Convert PydanticObjectId to string for API response
-        response_data["id"] = str(group.id)
-        response_data["client_account_id"] = str(str(group.client_account.id).ref.id) if group.client_account else None
-        response_groups.append(GroupResponseSchema(**response_data))
+        response_data["client_account_id"] = str(group.client_account.id) if group.client_account else None
+        response_groups.append(GroupResponseSchema.model_validate(response_data))
     
     return response_groups
 
@@ -97,17 +96,17 @@ async def get_group(
     
     # Check if user has access to this group
     if current_user.client_account and not current_user.is_main_client:
-        if group.client_account.id != current_user.client_account.id:
+        if group.client_account.id != current_user.client_account.ref.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only access groups within your own client account"
             )
     
     # Convert to response format
-    response_data = group.model_dump()
-    response_data["client_account_id"] = str(str(group.client_account.id).ref.id) if group.client_account else None
+    response_data = group.model_dump(by_alias=True)
+    response_data["client_account_id"] = str(group.client_account.id) if group.client_account else None
     
-    return GroupResponseSchema(**response_data)
+    return GroupResponseSchema.model_validate(response_data)
 
 @router.put("/{group_id}", response_model=GroupResponseSchema, dependencies=[Depends(has_permission("group:update"))])
 async def update_group(
@@ -126,7 +125,7 @@ async def update_group(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
     if current_user.client_account and not current_user.is_main_client:
-        if existing_group.client_account.id != current_user.client_account.id:
+        if existing_group.client_account.id != current_user.client_account.ref.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only update groups within your own client account"
@@ -138,10 +137,10 @@ async def update_group(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
         
         # Convert to response format
-        response_data = updated_group.model_dump()
-        response_data["client_account_id"] = str(str(updated_group.client_account.id).ref.id) if updated_group.client_account else None
+        response_data = updated_group.model_dump(by_alias=True)
+        response_data["client_account_id"] = str(updated_group.client_account.id) if updated_group.client_account else None
         
-        return GroupResponseSchema(**response_data)
+        return GroupResponseSchema.model_validate(response_data)
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -163,7 +162,7 @@ async def delete_group(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
     if current_user.client_account and not current_user.is_main_client:
-        if existing_group.client_account.id != current_user.client_account.id:
+        if existing_group.client_account.id != current_user.client_account.ref.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only delete groups within your own client account"
@@ -192,7 +191,7 @@ async def add_users_to_group(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
     if current_user.client_account and not current_user.is_main_client:
-        if existing_group.client_account.id != current_user.client_account.id:
+        if existing_group.client_account.id != current_user.client_account.ref.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only manage members of groups within your own client account"
@@ -223,7 +222,7 @@ async def remove_users_from_group(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
     if current_user.client_account and not current_user.is_main_client:
-        if existing_group.client_account.id != current_user.client_account.id:
+        if existing_group.client_account.id != current_user.client_account.ref.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only manage members of groups within your own client account"
@@ -253,7 +252,7 @@ async def get_group_members(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
     if current_user.client_account and not current_user.is_main_client:
-        if existing_group.client_account.id != current_user.client_account.id:
+        if existing_group.client_account.id != current_user.client_account.ref.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only view members of groups within your own client account"
@@ -264,8 +263,8 @@ async def get_group_members(
     # Convert users to basic response format
     member_data = []
     for member in members:
-        member_dict = member.model_dump()
-        member_dict["client_account_id"] = str(str(member.client_account.id).ref.id) if member.client_account else None
+        member_dict = member.model_dump(by_alias=True)
+        member_dict["client_account_id"] = str(member.client_account.id) if member.client_account else None
         member_data.append(member_dict)
     
     return GroupMembersResponseSchema(
@@ -309,9 +308,9 @@ async def get_user_groups(
     # Convert groups to response format
     groups_response = []
     for group in user_groups:
-        response_data = group.model_dump()
-        response_data["client_account_id"] = str(str(group.client_account.id).ref.id) if group.client_account else None
-        groups_response.append(GroupResponseSchema(**response_data))
+        response_data = group.model_dump(by_alias=True)
+        response_data["client_account_id"] = str(group.client_account.id) if group.client_account else None
+        groups_response.append(GroupResponseSchema.model_validate(response_data))
     
     return UserGroupsResponseSchema(
         user_id=str(user_id),
