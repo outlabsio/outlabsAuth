@@ -36,18 +36,18 @@ class TestIntegrationWorkflows:
             "roles": ["platform_admin"]
         }
         
-        create_response = await client.post("/v1/users", json=user_data, headers=headers)
+        create_response = await client.post("/v1/users/", json=user_data, headers=headers)
         if create_response.status_code == 409:
             # User already exists, get their ID
-            users_response = await client.get("/v1/users", headers=headers)
+            users_response = await client.get("/v1/users/", headers=headers)
             users = users_response.json()
             user = next((u for u in users if u["email"] == user_data["email"]), None)
             assert user is not None
-            user_id = user["id"]
+            user_id = user.get("id", user.get("_id"))
         else:
             assert create_response.status_code == 201
             created_user = create_response.json()
-            user_id = created_user["id"]
+            user_id = created_user.get("id", created_user.get("_id"))
             assert created_user["email"] == user_data["email"]
         
         # 2. Read the user
@@ -92,11 +92,11 @@ class TestIntegrationWorkflows:
         
         # 1. Create a custom permission
         permission_data = {
-            "id": "integration:test",
+            "_id": "integration:test",
             "description": "Integration test permission"
         }
         
-        perm_response = await client.post("/v1/permissions", json=permission_data, headers=headers)
+        perm_response = await client.post("/v1/permissions/", json=permission_data, headers=headers)
         if perm_response.status_code == 409:
             # Permission already exists
             pass
@@ -105,14 +105,14 @@ class TestIntegrationWorkflows:
         
         # 2. Create a custom role with the permission
         role_data = {
-            "id": "integration_tester",
+            "_id": "integration_tester",
             "name": "Integration Tester",
             "description": "Role for integration testing",
             "permissions": ["integration:test", "user:read"],
             "is_assignable_by_main_client": True
         }
         
-        role_response = await client.post("/v1/roles", json=role_data, headers=headers)
+        role_response = await client.post("/v1/roles/", json=role_data, headers=headers)
         if role_response.status_code == 409:
             # Role already exists
             pass
@@ -128,16 +128,17 @@ class TestIntegrationWorkflows:
             "roles": ["integration_tester"]
         }
         
-        user_response = await client.post("/v1/users", json=user_data, headers=headers)
+        user_response = await client.post("/v1/users/", json=user_data, headers=headers)
         if user_response.status_code == 409:
             # User already exists, update their roles
-            users_response = await client.get("/v1/users", headers=headers)
+            users_response = await client.get("/v1/users/", headers=headers)
             users = users_response.json()
             user = next((u for u in users if u["email"] == user_data["email"]), None)
             assert user is not None
+            user_id = user.get("id", user.get("_id"))
             
             update_response = await client.put(
-                f"/v1/users/{user['id']}", 
+                f"/v1/users/{user_id}", 
                 json={"roles": ["integration_tester"]}, 
                 headers=headers
             )
@@ -146,7 +147,7 @@ class TestIntegrationWorkflows:
             assert user_response.status_code == 201
         
         # 4. Verify the user has the correct role
-        users_response = await client.get("/v1/users", headers=headers)
+        users_response = await client.get("/v1/users/", headers=headers)
         users = users_response.json()
         test_user = next((u for u in users if u["email"] == user_data["email"]), None)
         assert test_user is not None
@@ -258,7 +259,7 @@ class TestIntegrationWorkflows:
         assert "failed_creates" in result
         
         # 2. Verify users were created
-        users_response = await client.get("/v1/users", headers=headers)
+        users_response = await client.get("/v1/users/", headers=headers)
         assert users_response.status_code == 200
         
         users = users_response.json()
@@ -306,7 +307,7 @@ class TestIntegrationWorkflows:
             "password": "weak"
         }
         
-        response = await client.post("/v1/users", json=invalid_user, headers=headers)
+        response = await client.post("/v1/users/", json=invalid_user, headers=headers)
         assert response.status_code == 422  # Validation error
         
         # 2. Test accessing non-existent resources
@@ -314,7 +315,7 @@ class TestIntegrationWorkflows:
         assert response.status_code == 404
         
         # 3. Test unauthorized access
-        response = await client.get("/v1/users")
+        response = await client.get("/v1/users/")
         assert response.status_code == 401
         
         # 4. Test with invalid token

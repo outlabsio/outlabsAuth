@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-06-21T13:21:06.100067",
+  "timestamp": "2025-06-21T13:36:08.191751",
   "summary": {
     "total_modules": 6,
-    "total_passed": 60,
-    "total_failed": 5,
+    "total_passed": 65,
+    "total_failed": 0,
     "total_skipped": 0,
-    "total_duration": 23.163663864135742
+    "total_duration": 24.665396690368652
   },
   "modules": [
     {
@@ -13,7 +13,7 @@
       "passed": 3,
       "failed": 0,
       "skipped": 0,
-      "duration": 1.497068166732788,
+      "duration": 1.52581787109375,
       "success_rate": 100.0
     },
     {
@@ -21,7 +21,7 @@
       "passed": 14,
       "failed": 0,
       "skipped": 0,
-      "duration": 5.037999868392944,
+      "duration": 5.140640020370483,
       "success_rate": 100.0
     },
     {
@@ -29,7 +29,7 @@
       "passed": 16,
       "failed": 0,
       "skipped": 0,
-      "duration": 4.4212799072265625,
+      "duration": 4.520983934402466,
       "success_rate": 100.0
     },
     {
@@ -37,7 +37,7 @@
       "passed": 10,
       "failed": 0,
       "skipped": 0,
-      "duration": 3.0042760372161865,
+      "duration": 3.0150821208953857,
       "success_rate": 100.0
     },
     {
@@ -45,16 +45,16 @@
       "passed": 15,
       "failed": 0,
       "skipped": 0,
-      "duration": 5.940109014511108,
+      "duration": 5.874453067779541,
       "success_rate": 100.0
     },
     {
       "module": "tests/test_integration.py",
-      "passed": 2,
-      "failed": 5,
+      "passed": 7,
+      "failed": 0,
       "skipped": 0,
-      "duration": 3.2629308700561523,
-      "success_rate": 28.57142857142857
+      "duration": 4.588419675827026,
+      "success_rate": 100.0
     }
   ]
 }
