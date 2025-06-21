@@ -3,7 +3,7 @@ from typing import List, Optional
 from pydantic import Field, EmailStr
 from enum import Enum
 
-from .base_model import BaseDBModel, PyObjectId
+from ..models.base_model import BaseDBModel, PyObjectId
 
 class UserStatus(str, Enum):
     """
@@ -18,7 +18,7 @@ class UserModel(BaseDBModel):
     """
     Pydantic model for the 'users' collection in MongoDB.
     """
-    email: EmailStr = Field(..., index=True)
+    email: EmailStr = Field(..., index=True, unique=True)
     password_hash: str
     first_name: Optional[str] = None
     last_name: Optional[str] = None
@@ -27,6 +27,7 @@ class UserModel(BaseDBModel):
     is_main_client: bool = False
     status: UserStatus = Field(UserStatus.PENDING, index=True)
     last_login_at: Optional[datetime] = None
+    locale: Optional[str] = "en-US"
     metadata: Optional[dict] = None
     mfa_enabled: bool = False
     mfa_secret: Optional[str] = None

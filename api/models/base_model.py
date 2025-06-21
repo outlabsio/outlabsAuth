@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field, BeforeValidator
 from typing_extensions import Annotated
 from bson import ObjectId
@@ -23,8 +23,8 @@ class BaseDBModel(BaseModel):
     and configures Pydantic to work with MongoDB ObjectIds and aliases.
     """
     id: PyObjectId = Field(default_factory=ObjectId, alias="_id")
-    created_at: datetime = Field(default_factory=lambda: datetime.now(datetime.timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(datetime.timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     class Config:
         populate_by_name = True
@@ -36,8 +36,8 @@ class BaseDBModelWithStringID(BaseModel):
     A base model for database documents that use a string as the primary key (_id).
     """
     id: str = Field(alias="_id")
-    created_at: datetime = Field(default_factory=lambda: datetime.now(datetime.timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(datetime.timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     class Config:
         populate_by_name = True

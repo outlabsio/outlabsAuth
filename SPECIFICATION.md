@@ -60,6 +60,7 @@ Stores core user information and links to their organizational context.
 - `recovery_codes`: Array of String (Hashed/encrypted one-time recovery codes for MFA. Optional.)
 - `failed_login_attempts`: Integer (Counter for failed login attempts. Default: 0.)
 - `lockout_until`: Date (Timestamp until which account is locked. Optional.)
+- `locale`: String (User's preferred locale, e.g., "en-US", "es-MX". Default: "en-US".)
 
 ### 2.2. `client_accounts` Collection
 
@@ -235,7 +236,7 @@ All endpoints should be protected appropriately with authentication and authoriz
 - **Request**: `{"email": "string"}`
 - **Response**: `{"message": "Password reset email sent"}`
 - **Auth**: No auth.
-- **Logic**: Generates a unique, time-limited token, stores it in a temporary collection (e.g., `password_reset_tokens`), sends email containing a link with the token. Logs to `audit_logs`.
+- **Logic**: Generates a unique, time-limited token, stores its hash in a temporary collection. Publishes a `password_reset_email` event to a message queue (e.g., RabbitMQ) with the user's email and the raw token. Logs to `audit_logs`.
 
 #### `POST /v1/auth/password/reset-confirm`
 
@@ -574,6 +575,14 @@ All endpoints should be protected appropriately with authentication and authoriz
 - **Event Publishing**: RBAC service publishes events (e.g., `user.created`, `user.deleted`, `role.changed`, `client_account.suspended`, `user.password_reset`) to configured webhook URLs.
 - **Payloads**: Include relevant data in the webhook payload (e.g., `user_id`, `client_account_id`, `old_roles`, `new_roles`).
 - **Security**: Sign webhook payloads with a shared secret (HMAC) so consuming services can verify authenticity. Implement retry mechanisms for failed deliveries.
+
+### 4.9. Asynchronous Task Queues
+
+- **Message Broker**: RabbitMQ will be used as the message broker for handling asynchronous tasks that should not block API response times.
+- **Use Cases**:
+  - **Email Dispatch**: Sending transactional emails (e.g., password resets, welcome emails) will be handled by a dedicated worker consuming messages from a queue. This provides resilience and improves API performance.
+  - **Event Notifications**: Publishing events for other internal services to consume (as an alternative or supplement to webhooks).
+- **Implementation**: A worker process will be created alongside the main FastAPI application to consume messages. The `pika` or `aio-pika` library will be used for interacting with RabbitMQ.
 
 ## 5. Security Considerations
 

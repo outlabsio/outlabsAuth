@@ -5,7 +5,7 @@ from bson import ObjectId
 
 from ..database import get_database
 from ..services.user_service import user_service
-from ..schemas.user_schema import UserCreateSchema, UserUpdateSchema, UserResponseSchema
+from ..schemas.user_schema import UserCreateSchema, UserUpdateSchema, UserResponseSchema, UserBulkCreateResponseSchema
 from ..schemas.auth_schema import TokenDataSchema
 from ..models.user_model import UserModel
 from ..dependencies import valid_object_id, has_permission, get_current_user_with_token
@@ -36,6 +36,26 @@ async def create_sub_user(
     
     new_user = await user_service.create_sub_user(db, user_data, current_user.client_account_id)
     return new_user
+
+@router.post("/bulk-create", response_model=UserBulkCreateResponseSchema, status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("user:bulk_create"))])
+async def bulk_create_users(
+    users_data: List[UserCreateSchema],
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """
+    Creates multiple users in a single request.
+    This is an admin-only endpoint that processes users one by one and reports
+    on successes and failures.
+    """
+    successful_creates, failed_creates = await user_service.bulk_create_users(db, users_data)
+    
+    # Manually convert successful UserModel list to UserResponseSchema list if needed
+    # For now, let's assume Pydantic handles this conversion based on response_model
+    
+    return UserBulkCreateResponseSchema(
+        successful_creates=successful_creates,
+        failed_creates=failed_creates
+    )
 
 @router.post("/", response_model=UserResponseSchema, status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("user:create"))])
 async def create_user(

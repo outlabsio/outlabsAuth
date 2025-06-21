@@ -4,7 +4,7 @@ from bson import ObjectId
 from fastapi import HTTPException, status
 
 from ..models.user_model import UserModel
-from ..schemas.user_schema import UserCreateSchema, UserUpdateSchema
+from ..schemas.user_schema import UserCreateSchema, UserUpdateSchema, UserResponseSchema, FailedUserCreationSchema
 from .security_service import security_service
 from .role_service import role_service
 
@@ -137,6 +137,30 @@ class UserService:
         """
         result = await db.users.delete_one({"_id": user_id})
         return result.deleted_count
+
+    async def bulk_create_users(
+        self, 
+        db: AsyncIOMotorDatabase, 
+        users_data: List[UserCreateSchema]
+    ) -> (List[UserModel], List[FailedUserCreationSchema]):
+        """
+        Creates multiple users in a single operation, handling individual failures.
+        """
+        successful_creates = []
+        failed_creates = []
+
+        for user_data in users_data:
+            try:
+                # We can reuse the existing create_user method
+                new_user = await self.create_user(db, user_data)
+                successful_creates.append(new_user)
+            except Exception as e:
+                # Capture the user data and the error message for reporting
+                failed_creates.append(
+                    FailedUserCreationSchema(user_data=user_data, error=str(e))
+                )
+        
+        return successful_creates, failed_creates
 
 # Instantiate the service for use in other parts of the application
 user_service = UserService() 
