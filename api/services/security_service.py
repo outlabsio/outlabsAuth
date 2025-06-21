@@ -5,6 +5,7 @@ from jose import JWTError, jwt
 import uuid
 import secrets
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from fastapi import HTTPException, status
 
 from bson import ObjectId
 

@@ -52,8 +52,17 @@ async def bulk_create_users(
     # Manually convert successful UserModel list to UserResponseSchema list if needed
     # For now, let's assume Pydantic handles this conversion based on response_model
     
+    # Convert ObjectId to string for successful creates
+    converted_successful = []
+    for user in successful_creates:
+        user_dict = user.model_dump()
+        user_dict["id"] = str(user_dict["id"]) if user_dict.get("id") else None
+        if user_dict.get("client_account_id"):
+            user_dict["client_account_id"] = str(user_dict["client_account_id"])
+        converted_successful.append(user_dict)
+    
     return UserBulkCreateResponseSchema(
-        successful_creates=successful_creates,
+        successful_creates=converted_successful,
         failed_creates=failed_creates
     )
 

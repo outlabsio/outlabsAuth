@@ -59,10 +59,9 @@ def has_permission(required_permission: str):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have permission to perform this action."
             )
-        return current_user # Keep returning just the user for compatibility
+        return current_user
     return _has_permission
 
-# A simpler dependency that just returns the user, for endpoints that don't need the token data
 async def get_current_user(
     user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token)
 ) -> UserModel:

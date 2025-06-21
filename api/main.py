@@ -4,6 +4,8 @@ from .database import db, get_database
 from .routes import user_routes, permission_routes, role_routes, auth_routes, client_account_routes
 from .services.permission_service import permission_service
 from .schemas.permission_schema import PermissionCreateSchema
+from .services.role_service import role_service
+from .schemas.role_schema import RoleCreateSchema
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -15,8 +17,11 @@ async def lifespan(app: FastAPI):
     await db.connect()
     
     # Ensure essential permissions exist
-    db_session = db.db # Get the database session directly
-    
+    db_session = db.db
+    if db_session is None:
+        raise RuntimeError("Database connection not established")
+
+    all_permission_ids = []
     essential_permissions = [
         PermissionCreateSchema(_id="user:create", description="Allows creating a single user."),
         PermissionCreateSchema(_id="user:read", description="Allows reading user information."),
@@ -37,9 +42,25 @@ async def lifespan(app: FastAPI):
     ]
     
     for perm_data in essential_permissions:
+        all_permission_ids.append(perm_data.id)
         existing_perm = await permission_service.get_permission_by_id(db_session, perm_data.id)
         if not existing_perm:
             await permission_service.create_permission(db_session, perm_data)
+
+    # Ensure a platform_admin role exists and has all permissions
+    platform_admin_role_data = RoleCreateSchema(
+        _id="platform_admin",
+        name="Platform Administrator",
+        description="Grants all permissions in the system.",
+        permissions=all_permission_ids
+    )
+    
+    existing_admin_role = await role_service.get_role_by_id(db_session, "platform_admin")
+    if not existing_admin_role:
+        await role_service.create_role(db_session, platform_admin_role_data)
+    else:
+        # If role exists, ensure it has all permissions
+        await role_service.update_role(db_session, "platform_admin", platform_admin_role_data)
 
     yield
     await db.close()

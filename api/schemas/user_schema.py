@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 from bson import ObjectId
@@ -19,9 +19,10 @@ class UserCreateSchema(BaseModel):
     is_main_client: Optional[bool] = False
     locale: Optional[str] = None
 
-    class Config:
-        arbitrary_types_allowed = True
-        json_encoders = {PyObjectId: str}
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        json_encoders={PyObjectId: str}
+    )
 
 class UserUpdateSchema(BaseModel):
     """
@@ -39,11 +40,11 @@ class UserResponseSchema(BaseModel):
     Schema for returning user data in API responses.
     This schema excludes sensitive information like the password hash.
     """
-    id: PyObjectId = Field(..., alias="_id")
+    id: str = Field(..., alias="_id")
     email: EmailStr
     first_name: Optional[str] = None
     last_name: Optional[str] = None
-    client_account_id: Optional[PyObjectId] = None
+    client_account_id: Optional[str] = None
     roles: List[str]
     is_main_client: bool
     status: UserStatus
@@ -52,10 +53,10 @@ class UserResponseSchema(BaseModel):
     last_login_at: Optional[datetime] = None
     locale: Optional[str] = None
 
-    class Config:
-        populate_by_name = True
-        json_encoders = {PyObjectId: str}
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(
+        populate_by_name=True,
+        from_attributes=True
+    )
 
 class FailedUserCreationSchema(BaseModel):
     """

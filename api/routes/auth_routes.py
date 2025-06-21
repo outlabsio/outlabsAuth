@@ -142,7 +142,12 @@ async def read_users_me(
     """
     Get the profile of the currently authenticated user.
     """
-    return current_user
+    # Convert UserModel to dict and ensure ObjectId fields are strings
+    user_dict = current_user.model_dump(by_alias=True)
+    user_dict["_id"] = str(user_dict["_id"])
+    if user_dict.get("client_account_id"):
+        user_dict["client_account_id"] = str(user_dict["client_account_id"])
+    return user_dict
 
 @router.post("/password/reset-request", status_code=status.HTTP_200_OK)
 async def request_password_reset(
