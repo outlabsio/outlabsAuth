@@ -39,8 +39,8 @@ async def create_group(
     try:
         new_group = await group_service.create_group(group_data)
         
-        # Convert to response format using schema aliasing
-        response_data = new_group.model_dump(by_alias=True)
+        # Use Beanie's JSON serialization mode for automatic ObjectId conversion
+        response_data = new_group.model_dump(mode="json", by_alias=True)
         response_data["client_account_id"] = str(new_group.client_account.id) if new_group.client_account else None
         
         return GroupResponseSchema.model_validate(response_data)
@@ -73,8 +73,8 @@ async def list_groups(
     # Convert to response format
     response_groups = []
     for group in groups:
-        response_data = group.model_dump(by_alias=True)
-        # Convert PydanticObjectId to string for API response
+        response_data = group.model_dump(mode="json", by_alias=True)
+        # Convert PydanticObjectId to string for API response  
         response_data["client_account_id"] = str(group.client_account.id) if group.client_account else None
         response_groups.append(GroupResponseSchema.model_validate(response_data))
     
@@ -103,7 +103,7 @@ async def get_group(
             )
     
     # Convert to response format
-    response_data = group.model_dump(by_alias=True)
+    response_data = group.model_dump(mode="json", by_alias=True)
     response_data["client_account_id"] = str(group.client_account.id) if group.client_account else None
     
     return GroupResponseSchema.model_validate(response_data)
@@ -137,7 +137,7 @@ async def update_group(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
         
         # Convert to response format
-        response_data = updated_group.model_dump(by_alias=True)
+        response_data = updated_group.model_dump(mode="json", by_alias=True)
         response_data["client_account_id"] = str(updated_group.client_account.id) if updated_group.client_account else None
         
         return GroupResponseSchema.model_validate(response_data)
@@ -263,7 +263,7 @@ async def get_group_members(
     # Convert users to basic response format
     member_data = []
     for member in members:
-        member_dict = member.model_dump(by_alias=True)
+        member_dict = member.model_dump(mode="json", by_alias=True)
         member_dict["client_account_id"] = str(member.client_account.id) if member.client_account else None
         member_data.append(member_dict)
     
@@ -308,7 +308,7 @@ async def get_user_groups(
     # Convert groups to response format
     groups_response = []
     for group in user_groups:
-        response_data = group.model_dump(by_alias=True)
+        response_data = group.model_dump(mode="json", by_alias=True)
         response_data["client_account_id"] = str(group.client_account.id) if group.client_account else None
         groups_response.append(GroupResponseSchema.model_validate(response_data))
     
