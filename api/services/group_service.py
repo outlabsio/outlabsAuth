@@ -75,13 +75,15 @@ class GroupService:
         Retrieves a list of groups with pagination using Beanie ODM.
         If client_account_id is provided, filters groups by that account.
         """
-        query = GroupModel.find(fetch_links=True)
-        
         if client_account_id:
             # Get the client account first
             client_account = await ClientAccountModel.get(client_account_id)
             if client_account:
-                query = query.find(GroupModel.client_account.id == client_account_id)
+                query = GroupModel.find(GroupModel.client_account.id == client_account_id, fetch_links=True)
+            else:
+                query = GroupModel.find(fetch_links=True)
+        else:
+            query = GroupModel.find(fetch_links=True)
             
         return await query.skip(skip).limit(limit).to_list()
 

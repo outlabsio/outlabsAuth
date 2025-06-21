@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-06-21T19:26:20.568136",
+  "timestamp": "2025-06-21T19:32:04.110247",
   "summary": {
     "total_modules": 15,
     "total_passed": 234,
     "total_failed": 15,
     "total_skipped": 0,
-    "total_duration": 136.8472023010254
+    "total_duration": 136.49681973457336
   },
   "modules": [
     {
@@ -13,7 +13,7 @@
       "passed": 37,
       "failed": 3,
       "skipped": 0,
-      "duration": 16.719966888427734,
+      "duration": 16.701043844223022,
       "success_rate": 92.5
     },
     {
@@ -21,7 +21,7 @@
       "passed": 18,
       "failed": 6,
       "skipped": 0,
-      "duration": 21.069360971450806,
+      "duration": 21.092234134674072,
       "success_rate": 75.0
     },
     {
@@ -29,7 +29,7 @@
       "passed": 30,
       "failed": 0,
       "skipped": 0,
-      "duration": 19.00959300994873,
+      "duration": 18.931334733963013,
       "success_rate": 100.0
     },
     {
@@ -37,7 +37,7 @@
       "passed": 14,
       "failed": 0,
       "skipped": 0,
-      "duration": 7.8869099617004395,
+      "duration": 7.918438196182251,
       "success_rate": 100.0
     },
     {
@@ -45,7 +45,7 @@
       "passed": 16,
       "failed": 0,
       "skipped": 0,
-      "duration": 7.11906099319458,
+      "duration": 7.1126532554626465,
       "success_rate": 100.0
     },
     {
@@ -53,7 +53,7 @@
       "passed": 10,
       "failed": 0,
       "skipped": 0,
-      "duration": 5.403641939163208,
+      "duration": 5.436650991439819,
       "success_rate": 100.0
     },
     {
@@ -61,7 +61,7 @@
       "passed": 19,
       "failed": 0,
       "skipped": 0,
-      "duration": 8.435115098953247,
+      "duration": 8.467777013778687,
       "success_rate": 100.0
     },
     {
@@ -69,7 +69,7 @@
       "passed": 23,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.6038808822631836,
+      "duration": 0.593048095703125,
       "success_rate": 100.0
     },
     {
@@ -77,7 +77,7 @@
       "passed": 14,
       "failed": 0,
       "skipped": 0,
-      "duration": 7.023299217224121,
+      "duration": 6.740749835968018,
       "success_rate": 100.0
     },
     {
@@ -85,7 +85,7 @@
       "passed": 15,
       "failed": 0,
       "skipped": 0,
-      "duration": 8.157960176467896,
+      "duration": 8.14522385597229,
       "success_rate": 100.0
     },
     {
@@ -93,7 +93,7 @@
       "passed": 13,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.608687162399292,
+      "duration": 0.5803170204162598,
       "success_rate": 100.0
     },
     {
@@ -101,7 +101,7 @@
       "passed": 2,
       "failed": 4,
       "skipped": 0,
-      "duration": 8.568881034851074,
+      "duration": 8.576918125152588,
       "success_rate": 33.33333333333333
     },
     {
@@ -109,7 +109,7 @@
       "passed": 9,
       "failed": 1,
       "skipped": 0,
-      "duration": 9.56741714477539,
+      "duration": 9.573286056518555,
       "success_rate": 90.0
     },
     {
@@ -117,7 +117,7 @@
       "passed": 7,
       "failed": 0,
       "skipped": 0,
-      "duration": 7.606931924819946,
+      "duration": 7.559853792190552,
       "success_rate": 100.0
     },
     {
@@ -125,7 +125,7 @@
       "passed": 7,
       "failed": 1,
       "skipped": 0,
-      "duration": 9.066495895385742,
+      "duration": 9.067290782928467,
       "success_rate": 87.5
     }
   ]

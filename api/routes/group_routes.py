@@ -68,7 +68,8 @@ async def list_groups(
     if client_account_id:
         filter_client_id = PydanticObjectId(client_account_id)
     elif current_user.client_account and not current_user.is_main_client:
-        filter_client_id = current_user.client_account.ref.id
+        # When using fetch_links=True, Beanie returns fully loaded objects, not Link references
+        filter_client_id = current_user.client_account.id
     
     groups = await group_service.get_groups(skip=skip, limit=limit, client_account_id=filter_client_id)
     
