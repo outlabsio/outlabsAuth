@@ -181,71 +181,39 @@ class GroupService:
         """
         Removes multiple users from a group.
         """
-        print(f"DEBUG: remove_users_from_group called with group_id={group_id}, user_ids={user_ids}")
-        
         group = await self.get_group_by_id(group_id)
         if not group:
-            print(f"DEBUG: Group {group_id} not found")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Group not found"
             )
         
-        print(f"DEBUG: Group found: {group.id}")
-        
         # Convert user IDs and validate they exist
         valid_users = []
         for user_id_str in user_ids:
             try:
-                print(f"DEBUG: Processing user_id_str: {user_id_str}")
                 user_id = PydanticObjectId(user_id_str)
-                print(f"DEBUG: Converted to ObjectId: {user_id}")
                 user = await UserModel.get(user_id, fetch_links=True)
                 if user:
-                    print(f"DEBUG: User found: {user.id}, groups: {len(user.groups) if user.groups else 0}")
-                    if user.groups:
-                        for i, g in enumerate(user.groups):
-                            # Handle both Link objects and loaded GroupModel objects
-                            group_id_val = g.ref.id if hasattr(g, 'ref') else g.id
-                            print(f"DEBUG: User group {i}: {group_id_val}")
                     valid_users.append(user)
-                else:
-                    print(f"DEBUG: User {user_id_str} not found")
-            except Exception as e:
-                print(f"DEBUG: Exception processing user {user_id_str}: {e}")
+            except Exception:
                 continue  # Skip invalid user IDs
-        
-        print(f"DEBUG: Found {len(valid_users)} valid users to remove from group")
         
         # Remove group from each user's groups list
         for user in valid_users:
-            try:
-                print(f"DEBUG: Removing group {group_id} from user {user.id}")
-                
-                # Find and remove the group from user.groups
-                # Handle both Link objects and fully loaded GroupModel objects
-                original_count = len(user.groups) if user.groups else 0
-                filtered_groups = []
-                for g in user.groups:
-                    # Get the group ID whether it's a Link or a loaded GroupModel
-                    current_group_id = g.ref.id if hasattr(g, 'ref') else g.id
-                    if current_group_id != group_id:
-                        filtered_groups.append(g)
-                
-                user.groups = filtered_groups
-                new_count = len(user.groups) if user.groups else 0
-                
-                print(f"DEBUG: Groups count: {original_count} -> {new_count}")
-                
-                user.update_timestamp()
-                await user.save()
-                print(f"DEBUG: Successfully saved user {user.id}")
-                
-            except Exception as e:
-                print(f"DEBUG: Exception removing group from user {user.id}: {e}")
-                raise e
+            # Find and remove the group from user.groups
+            # Handle both Link objects and fully loaded GroupModel objects
+            filtered_groups = []
+            for g in user.groups:
+                # Get the group ID whether it's a Link or a loaded GroupModel
+                current_group_id = g.ref.id if hasattr(g, 'ref') else g.id
+                if current_group_id != group_id:
+                    filtered_groups.append(g)
+            
+            user.groups = filtered_groups
+            user.update_timestamp()
+            await user.save()
         
-        print(f"DEBUG: remove_users_from_group completed successfully")
         return True
 
     async def remove_all_users_from_group(self, group_id: PydanticObjectId) -> bool:
