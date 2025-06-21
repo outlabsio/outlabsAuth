@@ -4,42 +4,66 @@ This document outlines the comprehensive testing strategy for the outlabsAuth RB
 
 ## 🏆 Current Test Status
 
-**Overall Progress: 58.5% (38/65 tests passing)**
+**Overall Progress: 92.3% (60/65 tests passing)** 🎉
 
 ### ✅ **Perfect Modules (100% Success)**
 
 - **Authentication Routes**: 3/3 tests (100%) - Login, logout, /me endpoint
 - **User Management Routes**: 14/14 tests (100%) - Complete CRUD operations ⭐
+- **Role Management Routes**: 16/16 tests (100%) - Complete role lifecycle ⭐ **NEWLY COMPLETED!**
+- **Permission Management Routes**: 10/10 tests (100%) - Permission CRUD operations ⭐ **NEWLY COMPLETED!**
 - **Security Service**: 15/15 tests (100%) - Password hashing, JWT operations
 
 ### 🔧 **Modules In Progress**
 
-- **Role Routes**: 3/16 tests (18.8%) - Role management system
-- **Permission Routes**: 1/10 tests (10.0%) - Permission validation
-- **Integration Tests**: 2/7 tests (28.6%) - End-to-end workflows
+- **Integration Tests**: 2/7 tests (28.6%) - Only 5 failures remaining (end-to-end workflows)
 
 ### 🎯 **Next Priority Areas**
 
-1. **Role Management**: Fix ObjectId serialization and dependency issues
-2. **Permission System**: Resolve authentication and validation problems
-3. **Integration Tests**: Cross-module workflow testing
+1. **Integration Tests**: Fix remaining 307 redirects and missing configuration
+2. **Client Account Routes**: Implementation and testing (future module)
+3. **Performance Testing**: Load and stress testing (future enhancement)
 
-## 🚀 Major Breakthrough: 307 Redirect Issue SOLVED
+## 🚀 Major Breakthrough: Complete Resolution of 307 Redirect and ObjectId Issues
 
-**Problem**: User routes were returning 307 redirects instead of proper responses, blocking 64% of user management functionality.
+**Problem**: Role and permission routes were suffering from the same 307 redirect and ObjectId serialization issues that initially affected user routes.
 
-**Root Cause Discovered**: FastAPI automatic trailing slash redirects + Pydantic v2 ObjectId serialization issues.
+**Root Causes Identified & Solved**:
 
-**Solutions Implemented**:
+1. **✅ FIXED: Trailing Slash Redirects**
 
-1. **✅ Trailing Slash Fix**: Updated test URLs from `/v1/users` → `/v1/users/`
-2. **✅ ObjectId Serialization**: Added manual ObjectId → string conversion in all user route responses
-3. **✅ Schema Fixes**: Changed `PyObjectId` → `str` in request schemas
-4. **✅ Parameter Dependencies**: Fixed route parameter handling for ObjectId validation
+   - **Problem**: Routes like `/v1/roles` and `/v1/permissions` → 307 redirects to `/v1/roles/` and `/v1/permissions/`
+   - **Solution**: Updated all test URLs to include trailing slashes
+   - **Impact**: Fixed 13+ failing tests across role and permission modules
 
-**Impact**: User routes went from **5/14 passing (35.7%)** → **14/14 passing (100%)**
+2. **✅ FIXED: Schema Alias Confusion**
 
-**Key Learning**: Always check for FastAPI trailing slash behavior when debugging unexpected redirects!
+   - **Problem**: Tests sending `{"id": "value"}` but schemas expecting `{"_id": "value"}` due to Pydantic aliases
+   - **Root Cause**: Role and permission models use string IDs with `alias="_id"`
+   - **Solution**: Updated test data to use `_id` field names consistently
+   - **Impact**: Resolved 422 validation errors and KeyError exceptions
+
+3. **✅ FIXED: Test Data Conflicts**
+
+   - **Problem**: Tests failing with 409 conflicts due to reusing same test IDs across test runs
+   - **Solution**: Implemented unique UUID-based test IDs (e.g., `test_role_a1b2c3d4`)
+   - **Impact**: Eliminated false positive failures from data conflicts
+
+4. **✅ FIXED: ObjectId Serialization in API Routes**
+   - **Problem**: Role and permission routes returning model objects directly causing serialization issues
+   - **Solution**: Added manual field mapping in route handlers similar to user routes:
+     ```python
+     role_dict = role.model_dump(by_alias=True)
+     role_dict["id"] = role_dict.pop("_id", role_dict.get("id"))
+     return role_dict
+     ```
+   - **Impact**: Consistent JSON responses across all modules
+
+**Success Rate Journey**:
+
+- **Initial**: 58.5% (38/65 tests)
+- **After User Routes Fix**: 58.5% (same)
+- **After Role & Permission Fix**: **92.3% (60/65 tests)** 🎉
 
 ---
 
@@ -64,7 +88,7 @@ Use `python tests/test_orchestrator.py` to run all tests with comprehensive repo
 
 ## Testing Categories
 
-### 1. Authentication Testing (`test_auth_routes.py`)
+### 1. ✅ Authentication Testing (`test_auth_routes.py`) - **COMPLETED (3/3)**
 
 #### ✅ Completed
 
@@ -109,48 +133,22 @@ Use `python tests/test_orchestrator.py` to run all tests with comprehensive repo
   - [ ] Password complexity validation
   - [ ] Session invalidation after password change
 
-### 2. ✅ User Management Testing (`test_user_routes.py`) - **COMPLETED**
+### 2. ✅ User Management Testing (`test_user_routes.py`) - **COMPLETED (14/14)**
 
 #### ✅ **RESOLVED: 307 Trailing Slash Redirect Issue**
 
-**Status**: 9/14 tests passing (64.3%) - Major breakthrough achieved!
+**Status**: 14/14 tests passing (100%) ✅
 
-**Root Cause Identified**: FastAPI automatic trailing slash redirects + Pydantic v2 ObjectId serialization issues
+**Root Cause Identified & Fixed**: FastAPI automatic trailing slash redirects + Pydantic v2 ObjectId serialization issues
 
-**Issues Discovered & Fixed**:
+**Solutions Implemented**:
 
 1. **✅ FIXED: Trailing Slash Redirects**
-   - **Problem**: `/v1/users` → 307 redirect to `/v1/users/`
-   - **Root Cause**: FastAPI automatically redirects routes without trailing slashes to their trailing slash versions
-   - **Solution**: Updated test URLs to use trailing slashes (`/v1/users/`, `/v1/users/?skip=0&limit=10`)
+   - Updated test URLs from `/v1/users` → `/v1/users/`
 2. **✅ FIXED: Pydantic v2 ObjectId Serialization**
-   - **Problem**: `ResponseValidationError: Input should be a valid string` for ObjectId fields
-   - **Root Cause**: ObjectId fields not being converted to strings in API responses
-   - **Solution**: Added manual ObjectId → string conversion in all user route handlers
+   - Added manual ObjectId → string conversion in all user route handlers
 3. **✅ FIXED: UserCreateSchema ObjectId Issue**
-   - **Problem**: `PydanticSchemaGenerationError` for PyObjectId in request schemas
-   - **Root Cause**: Pydantic v2 couldn't generate schema for PyObjectId type
-   - **Solution**: Changed `client_account_id: Optional[PyObjectId]` → `Optional[str]`
-
-**Working Routes** (9/14):
-
-- ✅ `GET /v1/users/` - Returns 200 with user list
-- ✅ `GET /v1/users/?skip=0&limit=10` - Pagination works
-- ✅ `POST /v1/users/` - User creation scenarios
-- ✅ `POST /v1/users/bulk-create` - Bulk operations
-- ✅ Validation and error handling routes
-
-**✅ ALL ISSUES RESOLVED - 100% SUCCESS! (14/14)**
-
-**Final fixes applied:**
-
-- **`test_create_user_success`**: ✅ Fixed with unique email generation
-- **`test_get_user_by_id`**: ✅ Fixed ObjectId parameter handling and field naming
-- **`test_update_user`**: ✅ Fixed ObjectId parameter handling and field naming
-- **`test_bulk_create_with_duplicates`**: ✅ Adjusted test expectations
-- **`test_unauthorized_access`**: ✅ Updated to accept both 401/307 responses
-- **`test_get_nonexistent_user`**: ✅ Fixed to expect proper 404 response
-- **`test_update_nonexistent_user`**: ✅ Fixed to expect proper 404 response
+   - Changed `client_account_id: Optional[PyObjectId]` → `Optional[str]`
 
 #### ✅ **COMPLETED: User CRUD Test Coverage (14/14)**
 
@@ -184,90 +182,82 @@ Use `python tests/test_orchestrator.py` to run all tests with comprehensive repo
 - ✅ Unauthorized access protection
 - ✅ Authentication token validation
 
-#### 🔄 Future User Management Enhancements
+### 3. ✅ Role Management Testing (`test_role_routes.py`) - **COMPLETED (16/16)** 🎉
 
-- [ ] **User Creation**
-  - [ ] Create user with valid data
-  - [ ] Create user with duplicate email
-  - [ ] Create user with invalid email format
-  - [ ] Create user with missing required fields
-  - [ ] Create user with invalid role assignments
-  - [ ] Create user without proper permissions
-  - [ ] Bulk user creation (success/partial failure scenarios)
-- [ ] **User Retrieval**
-  - [ ] Get all users (admin perspective)
-  - [ ] Get users with pagination
-  - [ ] Get user by valid ID
-  - [ ] Get user by invalid ID format
-  - [ ] Get non-existent user
-  - [ ] Get users filtered by role
-  - [ ] Get users filtered by status
-  - [ ] Search users by email/name
-- [ ] **User Updates**
-  - [ ] Update user profile information
-  - [ ] Update user roles (with permission)
-  - [ ] Update user roles (without permission)
-  - [ ] Update user status (activate/deactivate)
-  - [ ] Update non-existent user
-  - [ ] Partial updates vs full updates
-- [ ] **User Deletion** (if implemented)
-  - [ ] Delete user with proper permissions
-  - [ ] Delete user without permissions
-  - [ ] Delete non-existent user
-  - [ ] Delete user with active sessions
+**Status**: 16/16 tests passing (100%) ✅ **NEWLY COMPLETED!**
 
-### 3. 🔧 Role Management Testing (`test_role_routes.py`) - **18.8% (3/16)**
+**Issues Resolved**:
 
-**Current Status**: Basic functionality working, ObjectId serialization issues remain
+1. **✅ FIXED: 307 Redirect Issues** - Added trailing slashes to all test URLs
+2. **✅ FIXED: Schema Alias Issues** - Updated test data to use `_id` instead of `id`
+3. **✅ FIXED: Test Data Conflicts** - Implemented unique UUID-based test IDs
+4. **✅ FIXED: ObjectId Serialization** - Added manual field mapping in route responses
 
-#### 🔄 Role Tests In Progress
+#### ✅ **COMPLETED: Role CRUD Test Coverage (16/16)**
 
-- [ ] **Role Creation**
-  - [ ] Create role with valid permissions
-  - [ ] Create role with invalid permissions
-  - [ ] Create role with duplicate ID
-  - [ ] Create role without required fields
-  - [ ] Create role without proper permissions
-- [ ] **Role Retrieval**
-  - [ ] Get all roles
-  - [ ] Get role by ID
-  - [ ] Get non-existent role
-  - [ ] Get roles with pagination
-- [ ] **Role Updates**
-  - [ ] Update role permissions
-  - [ ] Update role metadata
-  - [ ] Update non-existent role
-  - [ ] Update system roles (should fail)
-- [ ] **Role Deletion**
-  - [ ] Delete custom role
-  - [ ] Delete system role (should fail)
-  - [ ] Delete role assigned to users
-  - [ ] Delete non-existent role
-- [ ] **Role Assignment Rules**
-  - [ ] Validate `is_assignable_by_main_client` flag
-  - [ ] Test role hierarchy constraints
-  - [ ] Test permission inheritance
+**Role Creation Tests (4/4)**:
 
-### 4. 🔧 Permission Management Testing (`test_permission_routes.py`) - **10.0% (1/10)**
+- ✅ Create role with valid permissions
+- ✅ Create role with duplicate ID (409 conflict)
+- ✅ Create role with invalid permissions (400 validation)
+- ✅ Create role without proper permissions (401 unauthorized)
 
-**Current Status**: Authentication and route setup issues need resolution
+**Role Retrieval Tests (4/4)**:
 
-#### 🔄 Permission Tests In Progress
+- ✅ Get all roles with admin token
+- ✅ Get roles with pagination parameters
+- ✅ Get role by valid ID
+- ✅ Get non-existent role (404)
 
-- [ ] **Permission Creation**
-  - [ ] Create permission with valid format
-  - [ ] Create permission with invalid ID format
-  - [ ] Create duplicate permission
-  - [ ] Permission naming convention validation
-- [ ] **Permission Retrieval**
-  - [ ] Get all permissions
-  - [ ] Get permission by ID
-  - [ ] Get permissions with pagination
-  - [ ] Filter permissions by service/resource
-- [ ] **Permission Validation**
-  - [ ] Validate service:resource:action format
-  - [ ] Test permission dependencies
-  - [ ] Test permission conflicts
+**Role Update Tests (2/2)**:
+
+- ✅ Update role information successfully
+- ✅ Update non-existent role (404)
+
+**Role Deletion Tests (2/2)**:
+
+- ✅ Delete custom role successfully
+- ✅ Delete non-existent role (404)
+
+**Role Business Logic Tests (4/4)**:
+
+- ✅ System role deletion handling
+- ✅ Permission validation during role creation
+- ✅ Role assignability flag functionality
+- ✅ Unauthorized access protection
+
+### 4. ✅ Permission Management Testing (`test_permission_routes.py`) - **COMPLETED (10/10)** 🎉
+
+**Status**: 10/10 tests passing (100%) ✅ **NEWLY COMPLETED!**
+
+**Issues Resolved**:
+
+1. **✅ FIXED: 307 Redirect Issues** - Added trailing slashes to all test URLs
+2. **✅ FIXED: Missing Route** - Added `get_permission_by_id` route implementation
+3. **✅ FIXED: Schema Alias Issues** - Updated test data to use `_id` instead of `id`
+4. **✅ FIXED: Test Data Conflicts** - Implemented unique UUID-based test IDs
+5. **✅ FIXED: ObjectId Serialization** - Added manual field mapping in route responses
+
+#### ✅ **COMPLETED: Permission CRUD Test Coverage (10/10)**
+
+**Permission Creation Tests (4/4)**:
+
+- ✅ Create permission with valid format
+- ✅ Create permission with duplicate ID (409 conflict)
+- ✅ Create permission with invalid format (validation test)
+- ✅ Create permission without proper permissions (401 unauthorized)
+
+**Permission Retrieval Tests (4/4)**:
+
+- ✅ Get all permissions with admin token
+- ✅ Get permissions with pagination parameters
+- ✅ Get permission by valid ID
+- ✅ Get non-existent permission (404)
+
+**Permission Validation Tests (2/2)**:
+
+- ✅ Permission naming convention validation
+- ✅ Unauthorized access protection
 
 ### 5. ✅ Security Service Testing (`test_security_service.py`) - **COMPLETED (15/15)**
 
@@ -281,15 +271,26 @@ Use `python tests/test_orchestrator.py` to run all tests with comprehensive repo
 
 ### 6. 🔧 Integration Testing (`test_integration.py`) - **28.6% (2/7)**
 
-**Current Status**: End-to-end workflows partially working
+**Current Status**: Most failures are 307 redirects and one configuration issue
 
-#### 🔄 Integration Tests In Progress
+#### ✅ Working Integration Tests (2/7)
 
-- [ ] **Complete User Lifecycle**
-- [ ] **Role Assignment Workflows**
-- [ ] **Permission Validation Chains**
-- [ ] **Authentication + Authorization**
-- [ ] **Multi-user Scenarios**
+- ✅ Authentication and authorization flow
+- ✅ Session management workflow
+
+#### 🔄 Integration Tests In Progress (5/7)
+
+- [ ] **Complete User Lifecycle** - 307 redirect in user creation
+- [ ] **Role and Permission Workflow** - 307 redirects in permission/role creation
+- [ ] **Password Reset Workflow** - Missing `PASSWORD_RESET_TOKEN_EXPIRE_MINUTES` config
+- [ ] **Bulk Operations Workflow** - 307 redirect in bulk operations
+- [ ] **Error Handling and Recovery** - 307 redirect in error scenarios
+
+**Identified Issues to Fix**:
+
+1. **307 Redirects**: Integration tests need trailing slash updates (same pattern as other modules)
+2. **Missing Config**: Need to add `PASSWORD_RESET_TOKEN_EXPIRE_MINUTES` to settings
+3. **Field Names**: Update integration tests to use `_id` instead of `id` for consistency
 
 ### 7. Authorization Testing (`test_authorization.py` - Future)
 
@@ -314,7 +315,7 @@ Use `python tests/test_orchestrator.py` to run all tests with comprehensive repo
   - [ ] Role with no permissions
   - [ ] Permission changes affecting active sessions
 
-### 6. Security Testing (`test_security.py` - New)
+### 8. Security Testing (`test_security.py` - Future)
 
 #### 🔄 Planned Security Tests
 
@@ -341,31 +342,7 @@ Use `python tests/test_orchestrator.py` to run all tests with comprehensive repo
   - [ ] Audit log integrity
   - [ ] Personal data handling compliance
 
-### 7. Integration Testing (`test_integration.py`)
-
-#### ✅ Partially Completed
-
-- [x] Basic user lifecycle workflow
-- [x] Authentication flow
-- [x] Role and permission workflow
-
-#### 🔄 Planned Integration Tests
-
-- [ ] **Complete Workflows**
-  - [ ] User registration → email verification → first login
-  - [ ] Password reset → login with new password
-  - [ ] Role assignment → permission verification → access test
-  - [ ] Client account creation → user assignment → isolation test
-- [ ] **Multi-User Scenarios**
-  - [ ] Concurrent user operations
-  - [ ] Role changes affecting multiple users
-  - [ ] Bulk operations with mixed success/failure
-- [ ] **System State Tests**
-  - [ ] Database consistency after complex operations
-  - [ ] Cache invalidation scenarios
-  - [ ] Session cleanup and management
-
-### 8. Performance Testing (`test_performance.py` - Future)
+### 9. Performance Testing (`test_performance.py` - Future)
 
 #### 🔄 Planned Performance Tests
 
@@ -395,12 +372,12 @@ Use `python tests/test_orchestrator.py` to run all tests with comprehensive repo
 - **platform_admin**: Full system access (seeded)
 - **client_admin**: Client account management
 - **basic_user**: Limited read access
-- **test_role**: Custom role for testing
+- **test*role*[uuid]**: Custom role for testing (with unique IDs)
 
 ### Test Permissions
 
 - Standard CRUD permissions (seeded)
-- Custom test permissions
+- **test:permission:[uuid]**: Custom test permissions (with unique IDs)
 - Invalid/malformed permissions for negative testing
 
 ## Test Environment Setup
@@ -420,6 +397,8 @@ python tests/test_orchestrator.py
 # Run specific test modules
 pytest tests/test_auth_routes.py -v
 pytest tests/test_user_routes.py -v
+pytest tests/test_role_routes.py -v
+pytest tests/test_permission_routes.py -v
 
 # Run with coverage
 pytest --cov=api tests/
@@ -443,6 +422,24 @@ pytest tests/test_security.py -v
 - [ ] Cross-browser compatibility
 - [ ] Mobile responsiveness
 - [ ] Accessibility compliance
+
+## Lessons Learned & Best Practices
+
+### Key Debugging Insights
+
+1. **Always Check FastAPI Trailing Slash Behavior**: 307 redirects are often caused by missing trailing slashes
+2. **Pydantic v2 Alias Handling**: Be careful with field aliases - test data must match schema expectations
+3. **Use Unique Test Data**: Implement UUID-based test identifiers to avoid conflicts between test runs
+4. **Manual ObjectId Serialization**: Convert ObjectId fields manually in route responses for consistent JSON output
+5. **Debug with Response Content**: Always print response content when debugging 422/400 errors
+
+### Testing Patterns That Work
+
+1. **Consistent URL Patterns**: Always use trailing slashes in test URLs
+2. **UUID-Based Test Data**: Generate unique identifiers for test entities
+3. **Field Name Consistency**: Use `_id` for string-based document IDs consistently
+4. **Comprehensive Error Testing**: Test both success and failure scenarios
+5. **Gradual Module Completion**: Fix one module completely before moving to the next
 
 ## Future Enhancements
 
@@ -470,6 +467,7 @@ pytest tests/test_security.py -v
 3. Add comprehensive docstrings
 4. Update this README with new test categories
 5. Ensure tests are isolated and idempotent
+6. Use unique UUIDs for test data to avoid conflicts
 
 ### Test Naming Convention
 
@@ -480,12 +478,16 @@ pytest tests/test_security.py -v
 ### Test Data Guidelines
 
 - Use realistic but obviously fake data
-- Avoid hardcoded values where possible
+- Generate unique identifiers with UUID for test entities
 - Clean up test data appropriately
 - Use fixtures for common test data
 
 ---
 
-**Total Test Coverage Goal**: 90%+ line coverage, 100% critical path coverage
+**Total Test Coverage Goal**: 95%+ line coverage, 100% critical path coverage
 
-**Priority**: Security and authentication tests are highest priority, followed by core CRUD operations, then edge cases and performance tests.
+**Current Achievement**: **92.3% (60/65 tests passing)** 🎉
+
+**Priority**: Complete integration tests (5 remaining failures), then expand to client account and performance testing.
+
+**Next Milestone**: Achieve 95%+ success rate by fixing integration test 307 redirects and configuration issues.

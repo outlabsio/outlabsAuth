@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-06-21T13:13:25.148165",
+  "timestamp": "2025-06-21T13:21:06.100067",
   "summary": {
     "total_modules": 6,
-    "total_passed": 56,
-    "total_failed": 9,
+    "total_passed": 60,
+    "total_failed": 5,
     "total_skipped": 0,
-    "total_duration": 23.227094650268555
+    "total_duration": 23.163663864135742
   },
   "modules": [
     {
@@ -13,7 +13,7 @@
       "passed": 3,
       "failed": 0,
       "skipped": 0,
-      "duration": 1.4791312217712402,
+      "duration": 1.497068166732788,
       "success_rate": 100.0
     },
     {
@@ -21,31 +21,31 @@
       "passed": 14,
       "failed": 0,
       "skipped": 0,
-      "duration": 5.0623459815979,
+      "duration": 5.037999868392944,
       "success_rate": 100.0
     },
     {
       "module": "tests/test_role_routes.py",
-      "passed": 13,
-      "failed": 3,
+      "passed": 16,
+      "failed": 0,
       "skipped": 0,
-      "duration": 4.48612117767334,
-      "success_rate": 81.25
+      "duration": 4.4212799072265625,
+      "success_rate": 100.0
     },
     {
       "module": "tests/test_permission_routes.py",
-      "passed": 9,
-      "failed": 1,
+      "passed": 10,
+      "failed": 0,
       "skipped": 0,
-      "duration": 3.013298988342285,
-      "success_rate": 90.0
+      "duration": 3.0042760372161865,
+      "success_rate": 100.0
     },
     {
       "module": "tests/test_security_service.py",
       "passed": 15,
       "failed": 0,
       "skipped": 0,
-      "duration": 5.891592264175415,
+      "duration": 5.940109014511108,
       "success_rate": 100.0
     },
     {
@@ -53,7 +53,7 @@
       "passed": 2,
       "failed": 5,
       "skipped": 0,
-      "duration": 3.294605016708374,
+      "duration": 3.2629308700561523,
       "success_rate": 28.57142857142857
     }
   ]
