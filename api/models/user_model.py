@@ -18,14 +18,14 @@ class UserModel(BaseDBModel):
     """
     Pydantic model for the 'users' collection in MongoDB.
     """
-    email: EmailStr = Field(..., index=True, unique=True)
+    email: EmailStr = Field(...)
     password_hash: str
     first_name: Optional[str] = None
     last_name: Optional[str] = None
-    client_account_id: Optional[PyObjectId] = Field(None, index=True)
-    roles: List[str] = Field(default_factory=list, index=True)
+    client_account_id: Optional[PyObjectId] = Field(None)
+    roles: List[str] = Field(default_factory=list)
     is_main_client: bool = False
-    status: UserStatus = Field(UserStatus.PENDING, index=True)
+    status: UserStatus = Field(UserStatus.PENDING)
     last_login_at: Optional[datetime] = None
     locale: Optional[str] = "en-US"
     metadata: Optional[dict] = None

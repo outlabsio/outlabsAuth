@@ -16,7 +16,7 @@ class ClientAccountModel(BaseDBModel):
     """
     Pydantic model for the 'client_accounts' collection.
     """
-    name: str = Field(..., index=True)
+    name: str = Field(...)
     description: Optional[str] = None
     status: ClientAccountStatus = ClientAccountStatus.ACTIVE
     main_contact_user_id: Optional[PyObjectId] = None

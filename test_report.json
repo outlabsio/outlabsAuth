@@ -1,59 +1,59 @@
 {
-  "timestamp": "2025-06-21T14:37:32.790292",
+  "timestamp": "2025-06-21T15:03:44.994318",
   "summary": {
     "total_modules": 8,
-    "total_passed": 91,
-    "total_failed": 6,
+    "total_passed": 41,
+    "total_failed": 42,
     "total_skipped": 0,
-    "total_duration": 29.523581981658936
+    "total_duration": 34.766122341156006
   },
   "modules": [
     {
       "module": "tests/test_auth_routes.py",
-      "passed": 3,
-      "failed": 0,
+      "passed": 2,
+      "failed": 1,
       "skipped": 0,
-      "duration": 1.5150370597839355,
-      "success_rate": 100.0
+      "duration": 1.512308120727539,
+      "success_rate": 66.66666666666666
     },
     {
       "module": "tests/test_user_routes.py",
-      "passed": 14,
-      "failed": 0,
+      "passed": 2,
+      "failed": 12,
       "skipped": 0,
-      "duration": 5.097765207290649,
-      "success_rate": 100.0
+      "duration": 5.887265205383301,
+      "success_rate": 14.285714285714285
     },
     {
       "module": "tests/test_role_routes.py",
-      "passed": 13,
-      "failed": 3,
+      "passed": 2,
+      "failed": 14,
       "skipped": 0,
-      "duration": 4.910540819168091,
-      "success_rate": 81.25
+      "duration": 6.722470045089722,
+      "success_rate": 12.5
     },
     {
       "module": "tests/test_permission_routes.py",
-      "passed": 10,
-      "failed": 0,
+      "passed": 2,
+      "failed": 8,
       "skipped": 0,
-      "duration": 3.000473976135254,
-      "success_rate": 100.0
+      "duration": 4.261074066162109,
+      "success_rate": 20.0
     },
     {
       "module": "tests/test_client_account_routes.py",
-      "passed": 11,
-      "failed": 3,
+      "passed": 0,
+      "failed": 0,
       "skipped": 0,
-      "duration": 4.225990056991577,
-      "success_rate": 78.57142857142857
+      "duration": 6.221381187438965,
+      "success_rate": 0.0
     },
     {
       "module": "tests/test_security_service.py",
       "passed": 15,
       "failed": 0,
       "skipped": 0,
-      "duration": 5.696437835693359,
+      "duration": 5.7660133838653564,
       "success_rate": 100.0
     },
     {
@@ -61,16 +61,16 @@
       "passed": 18,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.591825008392334,
+      "duration": 0.5844001770019531,
       "success_rate": 100.0
     },
     {
       "module": "tests/test_integration.py",
-      "passed": 7,
-      "failed": 0,
+      "passed": 0,
+      "failed": 7,
       "skipped": 0,
-      "duration": 4.485512018203735,
-      "success_rate": 100.0
+      "duration": 3.8112101554870605,
+      "success_rate": 0.0
     }
   ]
 }

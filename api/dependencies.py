@@ -22,6 +22,15 @@ def valid_object_id(id: str):
             detail=f"Invalid ObjectId: {id}"
         )
 
+def valid_account_id(account_id: str):
+    try:
+        return ObjectId(account_id)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail=f"Invalid ObjectId: {account_id}"
+        )
+
 async def get_current_user_with_token(
     token: str = Depends(oauth2_scheme), 
     db: AsyncIOMotorDatabase = Depends(get_database)
