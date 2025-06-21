@@ -1,5 +1,6 @@
 from typing import List, Optional, Set
 from beanie import PydanticObjectId
+from pymongo.errors import DuplicateKeyError
 from fastapi import HTTPException, status
 
 from ..models.group_model import GroupModel
@@ -40,7 +41,21 @@ class GroupService:
         group_dict["client_account"] = client_account
         
         new_group = GroupModel(**group_dict)
-        await new_group.insert()
+        
+        try:
+            await new_group.insert()
+        except DuplicateKeyError as e:
+            # Handle duplicate key errors gracefully
+            if "name" in str(e):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A group with this name already exists in this client account."
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A group with these details already exists."
+                )
         
         return new_group
 
@@ -178,7 +193,7 @@ class GroupService:
         for user_id_str in user_ids:
             try:
                 user_id = PydanticObjectId(user_id_str)
-                user = await UserModel.get(user_id)
+                user = await UserModel.get(user_id, fetch_links=True)
                 if user:
                     valid_users.append(user)
             except Exception:
@@ -187,7 +202,8 @@ class GroupService:
         # Remove group from each user's groups list
         for user in valid_users:
             # Find and remove the group Link from user.groups
-            user.groups = [g for g in user.groups if g.id != group_id]
+            # Compare Link IDs properly
+            user.groups = [g for g in user.groups if g.ref.id != group_id]
             user.update_timestamp()
             await user.save()
         
