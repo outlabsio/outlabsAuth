@@ -5,6 +5,7 @@ This test module ensures that all unique constraints are properly enforced
 across the entire application to maintain data integrity.
 """
 import pytest
+import pytest_asyncio
 import asyncio
 import time
 from bson import ObjectId
@@ -16,13 +17,13 @@ class TestDuplicateConstraints:
         """Generate unique timestamp for test data."""
         return int(time.time() * 1000)
     
-    @pytest.fixture(autouse=True)
+    @pytest_asyncio.fixture(autouse=True)
     async def setup_auth(self, client):
         """Set up authentication for tests."""
         # Login as admin to get token
         login_response = await client.post("/v1/auth/login", data={
             "username": "admin@test.com",
-            "password": "a_very_secure_password"
+            "password": "a_very_secure_password"  # Use the correct password from conftest
         })
         assert login_response.status_code == 200
         self.admin_token = login_response.json()["access_token"]
@@ -81,12 +82,12 @@ class TestDuplicateConstraints:
         """Test that role names must be unique."""
         timestamp = self.get_unique_timestamp()
         
-        # Create first role
+        # Create first role (using _id field based on schema)
         role_data = {
-            "id": f"test_role_{timestamp}",
+            "_id": f"test_role_{timestamp}",
             "name": f"Test Role {timestamp}",
             "description": "First role",
-            "permissions": ["test:read"]
+            "permissions": ["rbac:permission:read"]  # Use an existing permission
         }
         
         response1 = await client.post("/v1/roles/", json=role_data, headers=admin_headers)
@@ -94,10 +95,10 @@ class TestDuplicateConstraints:
         
         # Try to create second role with same name - should fail
         duplicate_role_data = {
-            "id": f"test_role_{timestamp}_2",
+            "_id": f"test_role_{timestamp}_2",
             "name": f"Test Role {timestamp}",  # Same name
             "description": "Second role",
-            "permissions": ["test:write"]
+            "permissions": ["rbac:permission:read"]
         }
         
         response2 = await client.post("/v1/roles/", json=duplicate_role_data, headers=admin_headers)
@@ -108,12 +109,12 @@ class TestDuplicateConstraints:
         """Test that role IDs must be unique."""
         timestamp = self.get_unique_timestamp()
         
-        # Create first role
+        # Create first role (using _id field based on schema)
         role_data = {
-            "id": f"test_role_{timestamp}",
+            "_id": f"test_role_{timestamp}",
             "name": f"Test Role Name {timestamp}",
             "description": "First role",
-            "permissions": ["test:read"]
+            "permissions": ["rbac:permission:read"]  # Use an existing permission
         }
         
         response1 = await client.post("/v1/roles/", json=role_data, headers=admin_headers)
@@ -121,10 +122,10 @@ class TestDuplicateConstraints:
         
         # Try to create second role with same ID - should fail
         duplicate_role_data = {
-            "id": f"test_role_{timestamp}",  # Same ID
+            "_id": f"test_role_{timestamp}",  # Same ID
             "name": f"Different Role Name {timestamp}",
             "description": "Second role",
-            "permissions": ["test:write"]
+            "permissions": ["rbac:permission:read"]
         }
         
         response2 = await client.post("/v1/roles/", json=duplicate_role_data, headers=admin_headers)
@@ -135,11 +136,10 @@ class TestDuplicateConstraints:
         """Test that permission IDs must be unique."""
         timestamp = self.get_unique_timestamp()
         
-        # Create first permission
+        # Create first permission (using _id field based on schema)
         permission_data = {
-            "id": f"test:permission:{timestamp}",
-            "name": f"Test Permission {timestamp}",
-            "description": "First permission"
+            "_id": f"test:permission:{timestamp}",
+            "description": f"Test Permission {timestamp}"
         }
         
         response1 = await client.post("/v1/permissions/", json=permission_data, headers=admin_headers)
@@ -147,9 +147,8 @@ class TestDuplicateConstraints:
         
         # Try to create second permission with same ID - should fail
         duplicate_permission_data = {
-            "id": f"test:permission:{timestamp}",  # Same ID
-            "name": f"Different Permission Name {timestamp}",
-            "description": "Second permission"
+            "_id": f"test:permission:{timestamp}",  # Same ID
+            "description": f"Different Permission Description {timestamp}"
         }
         
         response2 = await client.post("/v1/permissions/", json=duplicate_permission_data, headers=admin_headers)
@@ -186,7 +185,8 @@ class TestDuplicateConstraints:
         # Try to update user2 to have user1's email - should fail
         update_data = {"email": user1_data["email"]}
         
-        user2_id = user2.get("id", user2.get("_id"))
+        # Use the '_id' field from the response (actual field name from Beanie)
+        user2_id = user2["_id"]
         response3 = await client.put(f"/v1/users/{user2_id}", json=update_data, headers=admin_headers)
         assert response3.status_code == 409  # Conflict due to duplicate email
 
