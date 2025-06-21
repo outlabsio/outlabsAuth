@@ -38,12 +38,12 @@ async def login_for_access_token(
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     # Create Refresh Token
     refresh_token, jti, expires_at = security_service.create_refresh_token(
         data={"sub": str(user.id)}
     )
-    
+
     # Store refresh token in DB
     await refresh_token_service.create_refresh_token(
         user_id=user.id,
@@ -56,7 +56,7 @@ async def login_for_access_token(
     # Create Access Token, including client_account_id
     # With fetch_links=True, we can access the linked object directly
     access_token_data = {
-        "sub": str(user.id), 
+        "sub": str(user.id),
         "jti": jti,
         "client_account_id": str(user.client_account.id) if user.client_account else None
     }
@@ -92,7 +92,7 @@ async def refresh_access_token(
     # Issue new tokens (implementing token rotation)
     # Revoke the old refresh token
     await refresh_token_service.revoke_token(jti)
-    
+
     # Create new refresh token
     new_refresh_token, new_jti, new_expires_at = security_service.create_refresh_token(data={"sub": str(user.id)})
     await refresh_token_service.create_refresh_token(
@@ -103,12 +103,12 @@ async def refresh_access_token(
     # Create new access token linked to the new refresh token
     # With fetch_links=True, we can access the linked object directly
     new_access_token_data = {
-        "sub": str(user.id), 
+        "sub": str(user.id),
         "jti": new_jti,
         "client_account_id": str(user.client_account.id) if user.client_account else None
     }
     new_access_token = security_service.create_access_token(new_access_token_data)
-    
+
     return {"access_token": new_access_token, "refresh_token": new_refresh_token, "token_type": "bearer"}
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -122,7 +122,7 @@ async def logout(
     jti = token_data.jti
     if jti:
         await refresh_token_service.revoke_token(jti)
-    
+
     # Optional: Add the access token to a blacklist cache (e.g., Redis)
     # for immediate invalidation before it expires.
 
@@ -145,7 +145,7 @@ async def read_users_me(
     # Convert UserModel to dict and ensure ObjectId fields are strings
     user_dict = current_user.model_dump(by_alias=True)
     user_dict["_id"] = str(user_dict["_id"])
-    
+
     # With fetch_links=True, we can access the linked object directly
     user_dict["client_account_id"] = str(current_user.client_account.id) if current_user.client_account else None
     # Remove the client_account object from response
@@ -165,12 +165,12 @@ async def request_password_reset(
         # In a real application, you would NOT return the token.
         # You would send it in an email.
         token = await security_service.create_password_reset_token(user.id)
-        
+
         # This is where you would call an email service:
         # email_service.send_password_reset_email(user.email, token)
 
         return {"message": "If a user with this email exists, a password reset link has been sent.", "token": token}
-    
+
     # Return a generic response to prevent user enumeration
     return {"message": "If a user with this email exists, a password reset link has been sent."}
 
@@ -182,7 +182,7 @@ async def confirm_password_reset(
     Confirms a password reset using the token from the email.
     """
     token_doc = await security_service.verify_password_reset_token(request_data.token)
-    
+
     if not token_doc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -240,9 +240,9 @@ async def change_password(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Current password is incorrect."
         )
-    
+
     # Update password
     await user_service.update_password(current_user.id, request_data.new_password)
-    
+
     # Revoke all existing sessions for security
     await refresh_token_service.revoke_all_tokens_for_user(current_user.id) 

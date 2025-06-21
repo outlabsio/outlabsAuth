@@ -39,10 +39,13 @@ class TestOrchestrator:
             "tests/test_user_routes.py", 
             "tests/test_role_routes.py",
             "tests/test_permission_routes.py",
+            "tests/test_group_routes.py",
+            "tests/test_group_service.py",
             "tests/test_client_account_routes.py",
             "tests/test_security_service.py",
             "tests/test_user_service.py",
-            "tests/test_integration.py"
+            "tests/test_integration.py",
+            "tests/test_enhanced_access_control.py"
         ]
     
     def run_single_test_module(self, module_path: str) -> TestResult:

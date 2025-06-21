@@ -15,7 +15,7 @@ async def lifespan(app: FastAPI):
     and disconnects on shutdown.
     """
     await db.connect()
-    
+
     # Ensure essential permissions exist (Beanie ODM doesn't require db_session parameter)
     all_permission_ids = []
     essential_permissions = [
@@ -41,7 +41,7 @@ async def lifespan(app: FastAPI):
         PermissionCreateSchema(_id="group:delete", description="Allows deleting a group."),
         PermissionCreateSchema(_id="group:manage_members", description="Allows adding/removing members from groups."),
     ]
-    
+
     for perm_data in essential_permissions:
         all_permission_ids.append(perm_data.id)
         existing_perm = await permission_service.get_permission_by_id(perm_data.id)
@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI):
         description="Grants all permissions in the system.",
         permissions=all_permission_ids
     )
-    
+
     existing_admin_role = await role_service.get_role_by_id("platform_admin")
     if not existing_admin_role:
         await role_service.create_role(platform_admin_role_data)
@@ -85,4 +85,4 @@ async def health_check():
     """
     Basic health check to confirm the service is running.
     """
-    return {"status": "ok"} 
+    return {"status": "ok"}
