@@ -26,6 +26,12 @@ from api.models.group_model import GroupModel
 TEST_DATABASE_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
 TEST_DB_NAME = "outlabs_auth_test"
 
+# Test data constants
+ADMIN_USER_DATA = {
+    "email": "admin@test.com",
+    "password": "a_very_secure_password"
+}
+
 @pytest.fixture(scope="session")
 def event_loop():
     """
@@ -105,4 +111,28 @@ async def admin_headers(client):
     login_response = await client.post("/v1/auth/login", data=login_data)
     assert login_response.status_code == 200
     admin_token = login_response.json()["access_token"]
-    return {"Authorization": f"Bearer {admin_token}"} 
+    return {"Authorization": f"Bearer {admin_token}"}
+
+@pytest_asyncio.fixture
+async def reset_admin_password(test_db):
+    """
+    Ensures the admin user has the correct password before each test.
+    This prevents test isolation issues where password change tests 
+    affect subsequent tests.
+    """
+    from api.services.security_service import security_service
+    
+    # Find the admin user
+    admin_user = await UserModel.find_one(UserModel.email == ADMIN_USER_DATA["email"])
+    if admin_user:
+        # Reset password to the original test password
+        admin_user.password_hash = security_service.get_password_hash(ADMIN_USER_DATA["password"])
+        await admin_user.save()
+    
+    yield
+    
+    # Optionally reset again after the test (for extra safety)
+    admin_user = await UserModel.find_one(UserModel.email == ADMIN_USER_DATA["email"])
+    if admin_user:
+        admin_user.password_hash = security_service.get_password_hash(ADMIN_USER_DATA["password"])
+        await admin_user.save() 

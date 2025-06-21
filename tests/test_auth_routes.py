@@ -670,7 +670,7 @@ async def test_password_reset_request_invalid_email(client: AsyncClient):
     assert "message" in response_data
     assert "password reset link has been sent" in response_data["message"]
 
-async def test_password_reset_confirm_valid_token(client: AsyncClient):
+async def test_password_reset_confirm_valid_token(client: AsyncClient, reset_admin_password):
     """
     Tests password reset confirmation with valid token.
     """
@@ -720,7 +720,7 @@ async def test_password_reset_confirm_invalid_token(client: AsyncClient):
     assert response.status_code == 400
     assert "Invalid or expired password reset token" in response.json()["detail"]
 
-async def test_password_reset_confirm_used_token(client: AsyncClient):
+async def test_password_reset_confirm_used_token(client: AsyncClient, reset_admin_password):
     """
     Tests password reset confirmation with already used token.
     """
@@ -749,7 +749,7 @@ async def test_password_reset_confirm_used_token(client: AsyncClient):
 
 # ==================== PASSWORD CHANGE TESTS ====================
 
-async def test_password_change_correct_current_password(client: AsyncClient):
+async def test_password_change_correct_current_password(client: AsyncClient, reset_admin_password):
     """
     Tests password change with correct current password.
     """
@@ -785,7 +785,7 @@ async def test_password_change_correct_current_password(client: AsyncClient):
     new_login_response = await client.post("/v1/auth/login", data=new_login_data)
     assert new_login_response.status_code == 200
 
-async def test_password_change_incorrect_current_password(client: AsyncClient):
+async def test_password_change_incorrect_current_password(client: AsyncClient, reset_admin_password):
     """
     Tests password change with incorrect current password.
     """
