@@ -208,7 +208,7 @@ async def update_user(
     
     # Enforce data scoping
     if token_data.client_account_id and user_to_update.client_account:
-        if str(user_to_update.client_account.id) != token_data.client_account_id:
+        if str(user_to_update.client_account.ref.id) != token_data.client_account_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
     elif token_data.client_account_id and not user_to_update.client_account:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
@@ -220,7 +220,7 @@ async def update_user(
     user_dict = updated_user.model_dump(by_alias=True)
     user_dict["_id"] = str(user_dict["_id"])
     if updated_user.client_account:
-        user_dict["client_account_id"] = str(updated_user.client_account.id)
+        user_dict["client_account_id"] = str(updated_user.client_account.ref.id)
     else:
         user_dict["client_account_id"] = None
     # Remove the client_account object from response
@@ -251,7 +251,7 @@ async def delete_user(
     
     # Enforce data scoping
     if token_data.client_account_id and user_to_delete.client_account:
-        if str(user_to_delete.client_account.id) != token_data.client_account_id:
+        if str(user_to_delete.client_account.ref.id) != token_data.client_account_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
     elif token_data.client_account_id and not user_to_delete.client_account:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
