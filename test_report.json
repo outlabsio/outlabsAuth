@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-06-21T13:36:08.191751",
+  "timestamp": "2025-06-21T13:39:01.602682",
   "summary": {
-    "total_modules": 6,
-    "total_passed": 65,
-    "total_failed": 0,
+    "total_modules": 8,
+    "total_passed": 75,
+    "total_failed": 8,
     "total_skipped": 0,
-    "total_duration": 24.665396690368652
+    "total_duration": 27.33938694000244
   },
   "modules": [
     {
@@ -13,7 +13,7 @@
       "passed": 3,
       "failed": 0,
       "skipped": 0,
-      "duration": 1.52581787109375,
+      "duration": 1.5134940147399902,
       "success_rate": 100.0
     },
     {
@@ -21,7 +21,7 @@
       "passed": 14,
       "failed": 0,
       "skipped": 0,
-      "duration": 5.140640020370483,
+      "duration": 5.105262041091919,
       "success_rate": 100.0
     },
     {
@@ -29,7 +29,7 @@
       "passed": 16,
       "failed": 0,
       "skipped": 0,
-      "duration": 4.520983934402466,
+      "duration": 4.500654935836792,
       "success_rate": 100.0
     },
     {
@@ -37,23 +37,39 @@
       "passed": 10,
       "failed": 0,
       "skipped": 0,
-      "duration": 3.0150821208953857,
+      "duration": 2.9865000247955322,
       "success_rate": 100.0
+    },
+    {
+      "module": "tests/test_client_account_routes.py",
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "duration": 2.147845983505249,
+      "success_rate": 0.0
     },
     {
       "module": "tests/test_security_service.py",
       "passed": 15,
       "failed": 0,
       "skipped": 0,
-      "duration": 5.874453067779541,
+      "duration": 5.900539875030518,
       "success_rate": 100.0
+    },
+    {
+      "module": "tests/test_user_service.py",
+      "passed": 10,
+      "failed": 8,
+      "skipped": 0,
+      "duration": 0.6418890953063965,
+      "success_rate": 55.55555555555556
     },
     {
       "module": "tests/test_integration.py",
       "passed": 7,
       "failed": 0,
       "skipped": 0,
-      "duration": 4.588419675827026,
+      "duration": 4.543200969696045,
       "success_rate": 100.0
     }
   ]

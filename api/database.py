@@ -19,12 +19,42 @@ class Database:
             # The ismaster command is cheap and does not require auth.
             await self.client.admin.command('ismaster')
             print("Successfully connected to MongoDB.")
+            
+            # Initialize database indexes for data integrity
+            await self._ensure_indexes()
+            print("Database indexes ensured.")
         except Exception as e:
             print(f"Failed to connect to MongoDB: {e}")
             self.client.close()
             self.client = None
             self.db = None
             raise
+
+    async def _ensure_indexes(self):
+        """
+        Creates essential database indexes for data integrity and performance.
+        """
+        if self.db is None:
+            return
+            
+        # Users collection indexes
+        # CRITICAL: Unique email constraint to prevent duplicate users
+        await self.db.users.create_index("email", unique=True)
+        await self.db.users.create_index("client_account_id")
+        await self.db.users.create_index("roles")
+        await self.db.users.create_index("status")
+        
+        # Client accounts collection indexes
+        await self.db.client_accounts.create_index("name", unique=True)
+        
+        # Roles collection indexes  
+        await self.db.roles.create_index("name", unique=True)
+        await self.db.roles.create_index("is_assignable_by_main_client")
+        
+        # Refresh tokens collection indexes
+        await self.db.refresh_tokens.create_index("jti", unique=True)
+        await self.db.refresh_tokens.create_index("user_id")
+        await self.db.refresh_tokens.create_index("expires_at", expireAfterSeconds=0)
 
     async def close(self):
         """
