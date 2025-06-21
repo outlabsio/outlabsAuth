@@ -187,17 +187,28 @@ class UserService:
                     detail="Update conflicts with existing user data."
                 )
         except RevisionIdWasChanged as e:
-            # Beanie wraps DuplicateKeyError in RevisionIdWasChanged during updates
-            # Check if the original error is a duplicate key error
+            # Beanie may wrap DuplicateKeyError in RevisionIdWasChanged during updates
+            # First check if the original error is a duplicate key error
             original_error_str = str(e.__cause__ or e)
             if "duplicate key error" in original_error_str.lower() and "email" in original_error_str:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"User with email '{update_data.get('email', 'this email')}' already exists."
                 )
-            else:
-                # Re-raise if it's an actual revision conflict
-                raise
+            
+            # If we're updating email and got RevisionIdWasChanged, it's likely a duplicate key issue
+            # even if Beanie didn't preserve the original error properly
+            if "email" in update_data:
+                # Verify by checking if a user with this email already exists
+                existing_user = await self.get_user_by_email(update_data["email"])
+                if existing_user and existing_user.id != user.id:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"User with email '{update_data['email']}' already exists."
+                    )
+            
+            # Re-raise if it's an actual revision conflict or other issue
+            raise
 
     async def update_password(self, user_id: PydanticObjectId, new_password: str):
         """
