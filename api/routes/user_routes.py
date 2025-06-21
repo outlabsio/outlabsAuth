@@ -118,11 +118,14 @@ async def get_all_users(
     - Platform admins see all users.
     - Client users only see users within their own client_account_id.
     """
-    _, token_data = user_and_token
+    current_user, token_data = user_and_token
     
-    # Convert client_account_id from string to ObjectId if present
+    # Platform admins can see all users regardless of client_account_id
+    is_platform_admin = "platform_admin" in current_user.roles
     client_account_id = None
-    if token_data.client_account_id:
+    
+    if not is_platform_admin and token_data.client_account_id:
+        # For non-platform admins, enforce client account scoping
         try:
             client_account_id = PydanticObjectId(token_data.client_account_id)
         except Exception:
