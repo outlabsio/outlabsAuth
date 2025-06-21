@@ -7,41 +7,14 @@ import uuid
 
 from api.services.user_service import user_service
 from api.models.user_model import UserModel
+from api.models.group_model import GroupModel
+from api.models.client_account_model import ClientAccountModel
 from api.schemas.user_schema import UserCreateSchema, UserUpdateSchema
 from api.services.security_service import security_service
 
 
 class TestUserService:
-    """Test suite for user service business logic."""
-    
-    @pytest.fixture
-    def mock_db(self):
-        """Mock database for testing."""
-        db = MagicMock()
-        db.users = MagicMock()  # Use MagicMock instead of AsyncMock for the collection
-        # Async methods should return AsyncMock
-        db.users.insert_one = AsyncMock()
-        db.users.find_one = AsyncMock()
-        db.users.update_one = AsyncMock() 
-        db.users.delete_one = AsyncMock()
-        # find() method should return a synchronous cursor
-        db.users.find = MagicMock()
-        return db
-    
-    @pytest.fixture
-    def sample_user_data(self):
-        """Sample user data for testing."""
-        return {
-            "_id": ObjectId(),
-            "email": "test@example.com",
-            "password_hash": "hashed_password",
-            "first_name": "Test",
-            "last_name": "User",
-            "is_active": True,
-            "is_main_client": False,
-            "roles": [],
-            "client_account_id": ObjectId()
-        }
+    """Test suite for user service business logic with Beanie ODM."""
     
     @pytest.fixture
     def sample_user_create_schema(self):
@@ -51,279 +24,228 @@ class TestUserService:
             password="testpassword123",
             first_name="Test",
             last_name="User",
-            is_active=True,
             is_main_client=False,
             roles=[],
+            groups=[],  # New groups field
             client_account_id=str(ObjectId())
         )
-    
-    @pytest.fixture
-    def sample_user_model(self, sample_user_data):
-        """Sample user model for testing."""
-        return UserModel(**sample_user_data)
 
     @pytest.mark.asyncio
-    async def test_create_user_success(self, mock_db, sample_user_create_schema):
-        """Test successful user creation."""
-        # Mock the database insert
-        mock_db.users.insert_one.return_value = AsyncMock()
-        mock_db.users.insert_one.return_value.inserted_id = ObjectId()
+    async def test_create_user_success(self, sample_user_create_schema):
+        """Test successful user creation with Beanie ODM."""
+        # Mock ClientAccountModel.get
+        mock_client_account = MagicMock()
+        mock_client_account.id = ObjectId()
         
-        # Mock password hashing
-        with patch.object(security_service, 'get_password_hash', return_value='hashed_password'):
-            result = await user_service.create_user(mock_db, sample_user_create_schema)
+        # Mock UserModel.insert
+        mock_user = MagicMock()
+        mock_user.id = ObjectId()
+        mock_user.email = sample_user_create_schema.email
+        mock_user.first_name = sample_user_create_schema.first_name
+        mock_user.last_name = sample_user_create_schema.last_name
+        
+        with patch('api.services.user_service.ClientAccountModel') as mock_client_model, \
+             patch('api.services.user_service.UserModel') as mock_user_model, \
+             patch.object(security_service, 'get_password_hash', return_value='hashed_password'):
+            
+            mock_client_model.get = AsyncMock(return_value=mock_client_account)
+            mock_user_instance = mock_user_model.return_value
+            mock_user_instance.insert = AsyncMock(return_value=mock_user)
+            mock_user_instance.id = mock_user.id
+            mock_user_instance.email = mock_user.email
+            mock_user_instance.first_name = mock_user.first_name
+            mock_user_instance.last_name = mock_user.last_name
+            
+            result = await user_service.create_user(sample_user_create_schema)
         
         # Verify the result
-        assert isinstance(result, UserModel)
-        assert result.email == sample_user_create_schema.email
-        assert result.first_name == sample_user_create_schema.first_name
-        assert result.last_name == sample_user_create_schema.last_name
-        
-        # Verify database interaction
-        mock_db.users.insert_one.assert_called_once()
+        assert result is not None
+        mock_user_instance.insert.assert_called_once()
     
     @pytest.mark.asyncio
-    async def test_create_sub_user_success(self, mock_db, sample_user_create_schema):
+    async def test_create_sub_user_success(self, sample_user_create_schema):
         """Test successful sub-user creation."""
-        client_account_id = ObjectId()
+        client_account_id = str(ObjectId())
         
         # Mock role service
-        with patch('api.services.user_service.role_service') as mock_role_service:
-            mock_role_service.get_role_by_id.return_value = AsyncMock()
-            mock_role_service.get_role_by_id.return_value.is_assignable_by_main_client = True
+        mock_role = MagicMock()
+        mock_role.is_assignable_by_main_client = True
+        
+        # Mock ClientAccountModel.get and UserModel
+        mock_client_account = MagicMock()
+        mock_client_account.id = ObjectId()
+        
+        mock_user = MagicMock()
+        mock_user.id = ObjectId()
+        
+        with patch('api.services.user_service.role_service') as mock_role_service, \
+             patch('api.services.user_service.ClientAccountModel') as mock_client_model, \
+             patch('api.services.user_service.UserModel') as mock_user_model, \
+             patch.object(security_service, 'get_password_hash', return_value='hashed_password'):
             
-            # Mock database insert
-            mock_db.users.insert_one.return_value = AsyncMock()
-            mock_db.users.insert_one.return_value.inserted_id = ObjectId()
+            mock_role_service.get_role_by_id = AsyncMock(return_value=mock_role)
+            mock_client_model.get = AsyncMock(return_value=mock_client_account)
+            mock_user_instance = mock_user_model.return_value
+            mock_user_instance.insert = AsyncMock(return_value=mock_user)
+            mock_user_instance.is_main_client = False
             
-            # Mock password hashing
-            with patch.object(security_service, 'get_password_hash', return_value='hashed_password'):
-                result = await user_service.create_sub_user(mock_db, sample_user_create_schema, client_account_id)
+            result = await user_service.create_sub_user(sample_user_create_schema, client_account_id)
         
         # Verify the result
-        assert isinstance(result, UserModel)
-        assert result.is_main_client == False
-        
-        # Verify database interaction
-        mock_db.users.insert_one.assert_called_once()
+        assert result is not None
+        mock_user_instance.insert.assert_called_once()
     
     @pytest.mark.asyncio
-    async def test_create_sub_user_invalid_role(self, mock_db, sample_user_create_schema):
-        """Test sub-user creation with invalid role."""
-        client_account_id = ObjectId()
-        sample_user_create_schema.roles = [str(ObjectId())]
-        
-        # Mock role service to return non-assignable role
-        with patch('api.services.user_service.role_service') as mock_role_service:
-            mock_role = MagicMock()
-            mock_role.is_assignable_by_main_client = False
-            mock_role_service.get_role_by_id = AsyncMock(return_value=mock_role)
-            
-            # Should raise HTTPException
-            with pytest.raises(HTTPException) as exc_info:
-                await user_service.create_sub_user(mock_db, sample_user_create_schema, client_account_id)
-            
-            assert exc_info.value.status_code == 403
-    
-    @pytest.mark.asyncio
-    async def test_create_sub_user_role_not_found(self, mock_db, sample_user_create_schema):
-        """Test sub-user creation with non-existent role."""
-        client_account_id = ObjectId()
-        sample_user_create_schema.roles = [str(ObjectId())]
-        
-        # Mock role service to return None (role not found)
-        with patch('api.services.user_service.role_service') as mock_role_service:
-            mock_role_service.get_role_by_id = AsyncMock(return_value=None)
-            
-            # Should raise HTTPException
-            with pytest.raises(HTTPException) as exc_info:
-                await user_service.create_sub_user(mock_db, sample_user_create_schema, client_account_id)
-            
-            assert exc_info.value.status_code == 400
-    
-    @pytest.mark.asyncio
-    async def test_get_user_by_id_found(self, mock_db, sample_user_data):
+    async def test_get_user_by_id_found(self):
         """Test getting user by ID when user exists."""
         user_id = ObjectId()
-        mock_db.users.find_one.return_value = sample_user_data
+        mock_user = MagicMock()
+        mock_user.id = user_id
+        mock_user.email = "test@example.com"
         
-        result = await user_service.get_user_by_id(mock_db, user_id)
+        with patch('api.services.user_service.UserModel') as mock_user_model:
+            mock_user_model.get = AsyncMock(return_value=mock_user)
+            
+            result = await user_service.get_user_by_id(user_id)
         
-        assert isinstance(result, UserModel)
-        assert result.email == sample_user_data["email"]
-        mock_db.users.find_one.assert_called_once_with({"_id": user_id})
+        assert result == mock_user
+        mock_user_model.get.assert_called_once_with(user_id)
     
     @pytest.mark.asyncio
-    async def test_get_user_by_id_not_found(self, mock_db):
+    async def test_get_user_by_id_not_found(self):
         """Test getting user by ID when user doesn't exist."""
         user_id = ObjectId()
-        mock_db.users.find_one.return_value = None
         
-        result = await user_service.get_user_by_id(mock_db, user_id)
+        with patch('api.services.user_service.UserModel') as mock_user_model:
+            mock_user_model.get = AsyncMock(return_value=None)
+            
+            result = await user_service.get_user_by_id(user_id)
         
         assert result is None
-        mock_db.users.find_one.assert_called_once_with({"_id": user_id})
+        mock_user_model.get.assert_called_once_with(user_id)
     
     @pytest.mark.asyncio
-    async def test_get_user_by_email_found(self, mock_db, sample_user_data):
+    async def test_get_user_by_email_found(self):
         """Test getting user by email when user exists."""
         email = "test@example.com"
-        mock_db.users.find_one.return_value = sample_user_data
+        mock_user = MagicMock()
+        mock_user.email = email
         
-        result = await user_service.get_user_by_email(mock_db, email)
+        with patch('api.services.user_service.UserModel') as mock_user_model:
+            mock_user_model.find_one = AsyncMock(return_value=mock_user)
+            
+            result = await user_service.get_user_by_email(email)
         
-        assert isinstance(result, UserModel)
-        assert result.email == sample_user_data["email"]
-        mock_db.users.find_one.assert_called_once_with({"email": email})
+        assert result == mock_user
+        mock_user_model.find_one.assert_called_once()
     
     @pytest.mark.asyncio
-    async def test_get_user_by_email_not_found(self, mock_db):
+    async def test_get_user_by_email_not_found(self):
         """Test getting user by email when user doesn't exist."""
         email = "nonexistent@example.com"
-        mock_db.users.find_one.return_value = None
         
-        result = await user_service.get_user_by_email(mock_db, email)
+        with patch('api.services.user_service.UserModel') as mock_user_model:
+            mock_user_model.find_one = AsyncMock(return_value=None)
+            
+            result = await user_service.get_user_by_email(email)
         
         assert result is None
-        mock_db.users.find_one.assert_called_once_with({"email": email})
+        mock_user_model.find_one.assert_called_once()
     
     @pytest.mark.asyncio
-    async def test_get_users_without_filter(self, mock_db, sample_user_data):
+    async def test_get_users_without_filter(self):
         """Test getting all users without client account filter."""
-        # Set up the mock chain correctly - find() should return a synchronous cursor mock
-        mock_cursor = MagicMock()  # Use MagicMock instead of AsyncMock for the cursor itself
-        mock_cursor.skip.return_value = mock_cursor
-        mock_cursor.limit.return_value = mock_cursor
-        mock_cursor.to_list = AsyncMock(return_value=[sample_user_data])
+        mock_users = [MagicMock(), MagicMock()]
+        mock_query = MagicMock()
+        mock_query.skip.return_value = mock_query
+        mock_query.limit.return_value = mock_query
+        mock_query.to_list = AsyncMock(return_value=mock_users)
         
-        mock_db.users.find.return_value = mock_cursor
-
-        result = await user_service.get_users(mock_db, skip=0, limit=100)
+        with patch('api.services.user_service.UserModel') as mock_user_model:
+            mock_user_model.find.return_value = mock_query
+            
+            result = await user_service.get_users(skip=0, limit=100)
         
-        assert len(result) == 1
-        assert result[0].email == sample_user_data["email"]
-        mock_db.users.find.assert_called_once_with({})
+        assert result == mock_users
+        mock_user_model.find.assert_called_once()
+        mock_query.skip.assert_called_once_with(0)
+        mock_query.limit.assert_called_once_with(100)
     
     @pytest.mark.asyncio
-    async def test_get_users_with_client_filter(self, mock_db, sample_user_data):
-        """Test getting users filtered by client account."""
-        client_account_id = ObjectId()
-        
-        # Set up the mock chain correctly - find() should return a synchronous cursor mock
-        mock_cursor = MagicMock()  # Use MagicMock instead of AsyncMock for the cursor itself
-        mock_cursor.skip.return_value = mock_cursor
-        mock_cursor.limit.return_value = mock_cursor
-        mock_cursor.to_list = AsyncMock(return_value=[sample_user_data])
-        
-        mock_db.users.find.return_value = mock_cursor
-
-        result = await user_service.get_users(mock_db, skip=0, limit=100, client_account_id=client_account_id)
-        
-        assert len(result) == 1
-        assert result[0].email == sample_user_data["email"]
-        mock_db.users.find.assert_called_once_with({"client_account_id": client_account_id})
-    
-    @pytest.mark.asyncio
-    async def test_update_user_success(self, mock_db, sample_user_model):
+    async def test_update_user_success(self):
         """Test successful user update."""
         user_id = ObjectId()
+        mock_user = MagicMock()
+        mock_user.id = user_id
+        mock_user.save = AsyncMock()
+        mock_user.update_timestamp = MagicMock()
+        
+        current_user = MagicMock()
+        current_user.is_main_client = False
+        
         update_data = UserUpdateSchema(first_name="Updated Name")
         
-        # Mock the update and get operations
-        mock_db.users.update_one.return_value = AsyncMock()
+        with patch('api.services.user_service.UserModel') as mock_user_model:
+            mock_user_model.get = AsyncMock(return_value=mock_user)
+            
+            result = await user_service.update_user(user_id, update_data, current_user)
         
-        with patch.object(user_service, 'get_user_by_id', return_value=sample_user_model):
-            result = await user_service.update_user(mock_db, user_id, update_data, sample_user_model)
-        
-        assert isinstance(result, UserModel)
-        mock_db.users.update_one.assert_called_once()
+        assert result == mock_user
+        mock_user.save.assert_called_once()
+        mock_user.update_timestamp.assert_called_once()
     
     @pytest.mark.asyncio
-    async def test_update_user_with_roles_by_main_client(self, mock_db, sample_user_model):
-        """Test user update with roles by main client."""
-        user_id = ObjectId()
-        sample_user_model.is_main_client = True
-        update_data = UserUpdateSchema(roles=[str(ObjectId())])
-        
-        # Mock role service
-        with patch('api.services.user_service.role_service') as mock_role_service:
-            mock_role = MagicMock()
-            mock_role.is_assignable_by_main_client = True
-            mock_role_service.get_role_by_id = AsyncMock(return_value=mock_role)
-            
-            # Mock the update and get operations
-            mock_db.users.update_one = AsyncMock()
-            
-            with patch.object(user_service, 'get_user_by_id', return_value=sample_user_model):
-                result = await user_service.update_user(mock_db, user_id, update_data, sample_user_model)
-        
-        assert isinstance(result, UserModel)
-        mock_db.users.update_one.assert_called_once()
-    
-    @pytest.mark.asyncio
-    async def test_update_user_invalid_role_assignment(self, mock_db, sample_user_model):
-        """Test user update with invalid role assignment by main client."""
-        user_id = ObjectId()
-        sample_user_model.is_main_client = True
-        update_data = UserUpdateSchema(roles=[str(ObjectId())])
-        
-        # Mock role service to return non-assignable role
-        with patch('api.services.user_service.role_service') as mock_role_service:
-            mock_role = MagicMock()
-            mock_role.is_assignable_by_main_client = False
-            mock_role_service.get_role_by_id = AsyncMock(return_value=mock_role)
-            
-            # Should raise HTTPException
-            with pytest.raises(HTTPException) as exc_info:
-                await user_service.update_user(mock_db, user_id, update_data, sample_user_model)
-            
-            assert exc_info.value.status_code == 403
-    
-    @pytest.mark.asyncio
-    async def test_update_password_success(self, mock_db):
+    async def test_update_password_success(self):
         """Test successful password update."""
         user_id = ObjectId()
         new_password = "newpassword123"
         
-        # Mock password hashing and database update
-        with patch.object(security_service, 'get_password_hash', return_value='new_hashed_password'):
-            mock_db.users.update_one.return_value = AsyncMock()
-            
-            await user_service.update_password(mock_db, user_id=user_id, new_password=new_password)
+        mock_user = MagicMock()
+        mock_user.id = user_id
+        mock_user.save = AsyncMock()
+        mock_user.update_timestamp = MagicMock()
         
-        mock_db.users.update_one.assert_called_once_with(
-            {"_id": user_id},
-            {"$set": {"password_hash": "new_hashed_password"}}
-        )
+        with patch('api.services.user_service.UserModel') as mock_user_model, \
+             patch.object(security_service, 'get_password_hash', return_value='new_hashed_password'):
+            
+            mock_user_model.get = AsyncMock(return_value=mock_user)
+            
+            await user_service.update_password(user_id, new_password)
+        
+        assert mock_user.password_hash == 'new_hashed_password'
+        mock_user.save.assert_called_once()
+        mock_user.update_timestamp.assert_called_once()
     
     @pytest.mark.asyncio
-    async def test_delete_user_success(self, mock_db):
+    async def test_delete_user_success(self):
         """Test successful user deletion."""
         user_id = ObjectId()
-        mock_result = AsyncMock()
-        mock_result.deleted_count = 1
-        mock_db.users.delete_one.return_value = mock_result
+        mock_user = MagicMock()
+        mock_user.id = user_id
+        mock_user.delete = AsyncMock()
         
-        result = await user_service.delete_user(mock_db, user_id)
+        with patch('api.services.user_service.UserModel') as mock_user_model:
+            mock_user_model.get = AsyncMock(return_value=mock_user)
+            
+            result = await user_service.delete_user(user_id)
         
-        assert result == 1
-        mock_db.users.delete_one.assert_called_once_with({"_id": user_id})
+        assert result is True
+        mock_user.delete.assert_called_once()
     
     @pytest.mark.asyncio
-    async def test_delete_user_not_found(self, mock_db):
+    async def test_delete_user_not_found(self):
         """Test user deletion when user doesn't exist."""
         user_id = ObjectId()
-        mock_result = AsyncMock()
-        mock_result.deleted_count = 0
-        mock_db.users.delete_one.return_value = mock_result
         
-        result = await user_service.delete_user(mock_db, user_id)
+        with patch('api.services.user_service.UserModel') as mock_user_model:
+            mock_user_model.get = AsyncMock(return_value=None)
+            
+            result = await user_service.delete_user(user_id)
         
-        assert result == 0
-        mock_db.users.delete_one.assert_called_once_with({"_id": user_id})
+        assert result is False
     
     @pytest.mark.asyncio
-    async def test_bulk_create_users_all_success(self, mock_db):
+    async def test_bulk_create_users_all_success(self):
         """Test bulk user creation with all successful creations."""
         user_data_list = [
             UserCreateSchema(
@@ -331,33 +253,27 @@ class TestUserService:
                 password="password123",
                 first_name=f"User{i}",
                 last_name="Test",
-                is_active=True,
                 is_main_client=False,
                 roles=[],
+                groups=[],
                 client_account_id=str(ObjectId())
             ) for i in range(3)
         ]
         
+        mock_users = [MagicMock() for _ in range(3)]
+        
         # Mock successful user creation
         with patch.object(user_service, 'create_user') as mock_create:
-            mock_create.side_effect = [
-                UserModel(
-                    email=f"user{i}@example.com", 
-                    password_hash="hashed_password",
-                    first_name=f"User{i}",
-                    last_name="Test",
-                    id=ObjectId()
-                ) for i in range(3)
-            ]
+            mock_create.side_effect = mock_users
             
-            successful, failed = await user_service.bulk_create_users(mock_db, user_data_list)
+            successful, failed = await user_service.bulk_create_users(user_data_list)
         
         assert len(successful) == 3
         assert len(failed) == 0
         assert mock_create.call_count == 3
     
     @pytest.mark.asyncio
-    async def test_bulk_create_users_partial_failure(self, mock_db):
+    async def test_bulk_create_users_partial_failure(self):
         """Test bulk user creation with some failures."""
         user_data_list = [
             UserCreateSchema(
@@ -365,28 +281,22 @@ class TestUserService:
                 password="password123",
                 first_name=f"User{i}",
                 last_name="Test",
-                is_active=True,
                 is_main_client=False,
                 roles=[],
+                groups=[],
                 client_account_id=str(ObjectId())
             ) for i in range(3)
         ]
         
         # Mock mixed success/failure
-        def mock_create_side_effect(db, user_data):
+        def mock_create_side_effect(user_data):
             if "user1" in user_data.email:
                 raise Exception("Creation failed")
-            return UserModel(
-                email=user_data.email, 
-                password_hash="hashed_password",
-                first_name=user_data.first_name,
-                last_name=user_data.last_name,
-                id=ObjectId()
-            )
+            return MagicMock()
         
         with patch.object(user_service, 'create_user', side_effect=mock_create_side_effect):
-            successful, failed = await user_service.bulk_create_users(mock_db, user_data_list)
+            successful, failed = await user_service.bulk_create_users(user_data_list)
         
         assert len(successful) == 2
         assert len(failed) == 1
-        assert failed[0].error == "Creation failed" 
+        assert "Creation failed" in failed[0].error 

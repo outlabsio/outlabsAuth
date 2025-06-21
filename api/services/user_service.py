@@ -4,6 +4,7 @@ from fastapi import HTTPException, status
 
 from ..models.user_model import UserModel
 from ..models.client_account_model import ClientAccountModel
+from ..models.group_model import GroupModel
 from ..schemas.user_schema import UserCreateSchema, UserUpdateSchema, FailedUserCreationSchema
 from .security_service import security_service
 from .role_service import role_service
@@ -39,6 +40,20 @@ class UserService:
             user_dict["client_account"] = None
             if "client_account_id" in user_dict:
                 del user_dict["client_account_id"]
+        
+        # Handle groups Links
+        groups_list = []
+        if user_data.groups:
+            for group_id_str in user_data.groups:
+                try:
+                    group_id = PydanticObjectId(group_id_str)
+                    group = await GroupModel.get(group_id)
+                    if group:
+                        groups_list.append(group)
+                except Exception:
+                    continue  # Skip invalid group IDs
+        
+        user_dict["groups"] = groups_list
         
         new_user = UserModel(**user_dict)
         await new_user.insert()
@@ -122,6 +137,19 @@ class UserService:
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Role '{role_id}' not found.")
                 if not role.is_assignable_by_main_client:
                     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Role '{role_id}' cannot be assigned by a client administrator.")
+
+        # Handle groups updates
+        if "groups" in update_data:
+            groups_list = []
+            for group_id_str in update_data["groups"]:
+                try:
+                    group_id = PydanticObjectId(group_id_str)
+                    group = await GroupModel.get(group_id)
+                    if group:
+                        groups_list.append(group)
+                except Exception:
+                    continue  # Skip invalid group IDs
+            update_data["groups"] = groups_list
 
         if not update_data:
             return user

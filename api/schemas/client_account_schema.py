@@ -1,6 +1,7 @@
 from typing import Optional
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_serializer
 from datetime import datetime
+from beanie import PydanticObjectId
 
 from ..models.client_account_model import ClientAccountStatus
 
@@ -27,7 +28,7 @@ class ClientAccountUpdateSchema(BaseModel):
     )
 
 class ClientAccountResponseSchema(BaseModel):
-    id: str = Field(..., alias="_id")
+    id: PydanticObjectId = Field(..., alias="_id")
     name: str
     description: Optional[str] = None
     status: ClientAccountStatus
@@ -35,6 +36,10 @@ class ClientAccountResponseSchema(BaseModel):
     data_retention_policy_days: Optional[int] = None
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer('id')
+    def serialize_id(self, value: PydanticObjectId) -> str:
+        return str(value)
 
     model_config = ConfigDict(
         populate_by_name=True,

@@ -81,7 +81,10 @@ async def refresh_access_token(
     if not db_token or db_token.is_revoked:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token revoked or invalid")
 
-    user = await user_service.get_user_by_id(db_token.user.id)
+    # With Beanie Links, we need to fetch the user reference or access it properly
+    # db_token.user is a Link object, we need to get the referenced user ID
+    user_id = db_token.user.ref.id if hasattr(db_token.user, 'ref') else db_token.user.id
+    user = await user_service.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
@@ -188,10 +191,12 @@ async def confirm_password_reset(
         )
 
     # Update the user's password
-    await user_service.update_password(token_doc.user.id, request_data.new_password)
+    # With Beanie Links, we need to get the user ID properly
+    user_id = token_doc.user.ref.id if hasattr(token_doc.user, 'ref') else token_doc.user.id
+    await user_service.update_password(user_id, request_data.new_password)
 
     # Revoke all of the user's existing sessions for security
-    await refresh_token_service.revoke_all_tokens_for_user(token_doc.user.id)
+    await refresh_token_service.revoke_all_tokens_for_user(user_id)
 
     # Mark the token as used
     token_doc.used_at = datetime.utcnow()

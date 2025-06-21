@@ -147,7 +147,7 @@ class TestSecurityService:
     def test_token_data_schema_validation(self):
         """Test TokenDataSchema validation."""
         user_id = str(ObjectId())
-        client_account_id = ObjectId()
+        client_account_id = str(ObjectId())  # Convert to string
         jti = "test-jti"
         
         # Valid token data

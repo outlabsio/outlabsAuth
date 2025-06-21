@@ -6,6 +6,7 @@ from typing import Tuple
 from .services.security_service import security_service
 from .services.user_service import user_service
 from .services.role_service import role_service
+from .services.group_service import group_service
 from .models.user_model import UserModel
 from .schemas.auth_schema import TokenDataSchema
 
@@ -47,17 +48,15 @@ async def get_current_user_with_token(
 def has_permission(required_permission: str):
     """
     Dependency factory to check if the current user has the required permission.
+    Now includes permissions from both direct roles and group memberships.
     """
     async def _has_permission(
         user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token)
     ):
         current_user, _ = user_and_token
-        user_permissions = set()
-        if current_user.roles:
-            for role_id in current_user.roles:
-                role = await role_service.get_role_by_id(role_id)
-                if role and role.permissions:
-                    user_permissions.update(role.permissions)
+        
+        # Get all effective permissions (direct roles + group roles)
+        user_permissions = await group_service.get_user_effective_permissions(current_user.id)
         
         if required_permission not in user_permissions:
             raise HTTPException(

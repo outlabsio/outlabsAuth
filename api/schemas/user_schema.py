@@ -14,6 +14,7 @@ class UserCreateSchema(BaseModel):
     last_name: Optional[str] = None
     client_account_id: Optional[str] = None  # String ID for client account
     roles: Optional[List[str]] = []
+    groups: Optional[List[str]] = []  # List of group IDs
     is_main_client: Optional[bool] = False
     locale: Optional[str] = None
 
@@ -25,6 +26,7 @@ class UserUpdateSchema(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     roles: Optional[List[str]] = None
+    groups: Optional[List[str]] = None  # List of group IDs
     status: Optional[UserStatus] = None
     locale: Optional[str] = None
 
@@ -39,6 +41,7 @@ class UserResponseSchema(BaseModel):
     last_name: Optional[str] = None
     client_account_id: Optional[str] = None  # Will be populated from Link
     roles: List[str]
+    groups: Optional[List[str]] = []  # List of group IDs
     is_main_client: bool
     status: UserStatus
     created_at: datetime

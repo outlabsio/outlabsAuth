@@ -25,7 +25,8 @@ class UserModel(BaseDocument):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     client_account: Optional[Link["ClientAccountModel"]] = None
-    roles: List[str] = Field(default_factory=list)
+    roles: List[str] = Field(default_factory=list)  # Direct role assignments
+    groups: List[Link["GroupModel"]] = Field(default_factory=list)  # Group memberships
     is_main_client: bool = False
     status: UserStatus = Field(UserStatus.PENDING)
     last_login_at: Optional[datetime] = None

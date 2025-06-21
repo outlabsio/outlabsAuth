@@ -61,11 +61,13 @@ async def test_db():
         'UserModel': UserModel,
         'ClientAccountModel': ClientAccountModel,
         'RefreshTokenModel': RefreshTokenModel,
+        'PasswordResetTokenModel': PasswordResetTokenModel,
     }
     
     UserModel.model_rebuild(_types_namespace=namespace)
     ClientAccountModel.model_rebuild(_types_namespace=namespace)
     RefreshTokenModel.model_rebuild(_types_namespace=namespace)
+    PasswordResetTokenModel.model_rebuild(_types_namespace=namespace)
     
     # Seed the test database
     await seed_database(test_db_instance)
@@ -85,4 +87,18 @@ async def client(test_db):
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            yield ac 
+            yield ac
+
+@pytest_asyncio.fixture
+async def admin_headers(client):
+    """
+    Provides admin authentication headers for tests.
+    """
+    login_data = {
+        "username": "admin@test.com",
+        "password": "a_very_secure_password"
+    }
+    login_response = await client.post("/v1/auth/login", data=login_data)
+    assert login_response.status_code == 200
+    admin_token = login_response.json()["access_token"]
+    return {"Authorization": f"Bearer {admin_token}"} 

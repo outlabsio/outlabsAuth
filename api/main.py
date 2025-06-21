@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from .database import db, get_database
-from .routes import user_routes, permission_routes, role_routes, auth_routes, client_account_routes
+from .routes import user_routes, permission_routes, role_routes, auth_routes, client_account_routes, group_routes
 from .services.permission_service import permission_service
 from .schemas.permission_schema import PermissionCreateSchema
 from .services.role_service import role_service
@@ -35,6 +35,11 @@ async def lifespan(app: FastAPI):
         PermissionCreateSchema(_id="client_account:read", description="Allows reading client account information."),
         PermissionCreateSchema(_id="client_account:update", description="Allows updating a client account."),
         PermissionCreateSchema(_id="client_account:delete", description="Allows deleting a client account."),
+        PermissionCreateSchema(_id="group:create", description="Allows creating a group."),
+        PermissionCreateSchema(_id="group:read", description="Allows reading group information."),
+        PermissionCreateSchema(_id="group:update", description="Allows updating a group."),
+        PermissionCreateSchema(_id="group:delete", description="Allows deleting a group."),
+        PermissionCreateSchema(_id="group:manage_members", description="Allows adding/removing members from groups."),
     ]
     
     for perm_data in essential_permissions:
@@ -73,6 +78,7 @@ app.include_router(user_routes.router)
 app.include_router(permission_routes.router)
 app.include_router(role_routes.router)
 app.include_router(client_account_routes.router)
+app.include_router(group_routes.router)
 
 @app.get("/health", tags=["Health"])
 async def health_check():
