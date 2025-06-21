@@ -107,7 +107,7 @@ async def create_user(
     
     return user_dict
 
-@router.get("/", response_model=List[UserResponseSchema])
+@router.get("/", response_model=List[UserResponseSchema], dependencies=[Depends(has_permission("user:read"))])
 async def get_all_users(
     user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token),
     skip: int = 0,

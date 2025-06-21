@@ -386,7 +386,7 @@ class TestPasswordSecurity:
             if response.status_code == 400:
                 assert "password" in response.json()["detail"].lower()
 
-    async def test_password_history_prevention(self, client: AsyncClient):
+    async def test_password_history_prevention(self, client: AsyncClient, reset_admin_password):
         """Test prevention of password reuse"""
         admin_token = await get_admin_token(client)
 
@@ -438,7 +438,7 @@ class TestPasswordSecurity:
 class TestAuthorizationSecurity:
     """Test authorization and privilege escalation prevention"""
 
-    async def test_privilege_escalation_attempts(self, client: AsyncClient):
+    async def test_privilege_escalation_attempts(self, client: AsyncClient, reset_admin_password):
         """Test prevention of privilege escalation"""
         admin_token = await get_admin_token(client)
 
@@ -472,7 +472,7 @@ class TestAuthorizationSecurity:
                 # Should return 403 (Forbidden) or 401 (Unauthorized)
                 assert response.status_code in [401, 403]
 
-    async def test_role_manipulation_attempts(self, client: AsyncClient):
+    async def test_role_manipulation_attempts(self, client: AsyncClient, reset_admin_password):
         """Test prevention of unauthorized role manipulation"""
         admin_token = await get_admin_token(client)
 
@@ -504,7 +504,7 @@ class TestAuthorizationSecurity:
                 # Should be forbidden
                 assert response.status_code in [401, 403, 404]
 
-    async def test_permission_bypass_attempts(self, client: AsyncClient):
+    async def test_permission_bypass_attempts(self, client: AsyncClient, reset_admin_password):
         """Test prevention of permission bypass attempts"""
         # Test various ways users might try to bypass permissions
 
@@ -534,7 +534,7 @@ class TestAuthorizationSecurity:
 class TestDataProtection:
     """Test data protection and privacy features"""
 
-    async def test_sensitive_data_exposure_prevention(self, client: AsyncClient):
+    async def test_sensitive_data_exposure_prevention(self, client: AsyncClient, reset_admin_password):
         """Test that sensitive data is not exposed in responses"""
         admin_token = await get_admin_token(client)
         headers = {"Authorization": f"Bearer {admin_token}"}
@@ -559,7 +559,7 @@ class TestDataProtection:
             assert "password" not in profile
             assert "password_hash" not in profile
 
-    async def test_audit_log_integrity(self, client: AsyncClient):
+    async def test_audit_log_integrity(self, client: AsyncClient, reset_admin_password):
         """Test that security events are properly logged"""
         # This test would verify that security events are logged
         # For now, we just test that operations complete without errors
