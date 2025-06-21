@@ -2,16 +2,17 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from jose import JWTError
-from datetime import timedelta
-from typing import Tuple
+from datetime import timedelta, datetime
+from typing import Tuple, List
 
 from ..database import get_database
 from ..services.user_service import user_service
 from ..services.security_service import security_service
 from ..services.refresh_token_service import refresh_token_service
 from ..config import settings
-from ..schemas.auth_schema import TokenSchema, TokenDataSchema
+from ..schemas.auth_schema import TokenSchema, TokenDataSchema, SessionResponseSchema
 from ..schemas.user_schema import UserResponseSchema
+from ..schemas.password_reset_schema import PasswordResetRequestSchema, PasswordResetConfirmSchema, PasswordChangeSchema
 from ..dependencies import get_current_user, get_current_user_with_token
 from ..models.user_model import UserModel
 
@@ -40,7 +41,9 @@ async def login_for_access_token(
         )
     
     # Create Refresh Token
-    refresh_token, jti, expires_at = security_service.create_refresh_token(data={"sub": str(user.id)})
+    refresh_token, jti, expires_at = security_service.create_refresh_token(
+        data={"sub": str(user.id)}
+    )
     
     # Store refresh token in DB
     await refresh_token_service.create_refresh_token(
@@ -52,10 +55,13 @@ async def login_for_access_token(
         user_agent=request.headers.get("user-agent")
     )
 
-    # Create Access Token, linked to the refresh token by its JTI
-    access_token = security_service.create_access_token(
-        data={"sub": str(user.id), "jti": jti}
-    )
+    # Create Access Token, including client_account_id
+    access_token_data = {
+        "sub": str(user.id), 
+        "jti": jti,
+        "client_account_id": str(user.client_account_id) if user.client_account_id else None
+    }
+    access_token = security_service.create_access_token(access_token_data)
 
     return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
 
@@ -94,7 +100,12 @@ async def refresh_access_token(
     )
 
     # Create new access token linked to the new refresh token
-    new_access_token = security_service.create_access_token(data={"sub": str(user.id), "jti": new_jti})
+    new_access_token_data = {
+        "sub": str(user.id), 
+        "jti": new_jti,
+        "client_account_id": str(user.client_account_id) if user.client_account_id else None
+    }
+    new_access_token = security_service.create_access_token(new_access_token_data)
     
     return {"access_token": new_access_token, "refresh_token": new_refresh_token, "token_type": "bearer"}
 
@@ -131,4 +142,104 @@ async def read_users_me(
     """
     Get the profile of the currently authenticated user.
     """
-    return current_user 
+    return current_user
+
+@router.post("/password/reset-request", status_code=status.HTTP_200_OK)
+async def request_password_reset(
+    request_data: PasswordResetRequestSchema,
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """
+    Initiates a password reset process. In a real app, this would send an email.
+    For this implementation, it returns the token directly for testing purposes.
+    """
+    user = await user_service.get_user_by_email(db, request_data.email)
+    if user:
+        # In a real application, you would NOT return the token.
+        # You would send it in an email.
+        token = await security_service.create_password_reset_token(db, user_id=user.id)
+        
+        # This is where you would call an email service:
+        # email_service.send_password_reset_email(user.email, token)
+
+        return {"message": "If a user with this email exists, a password reset link has been sent.", "token": token}
+    
+    # Return a generic response to prevent user enumeration
+    return {"message": "If a user with this email exists, a password reset link has been sent."}
+
+@router.post("/password/reset-confirm", status_code=status.HTTP_204_NO_CONTENT)
+async def confirm_password_reset(
+    request_data: PasswordResetConfirmSchema,
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """
+    Confirms a password reset using the token from the email.
+    """
+    token_doc = await security_service.verify_password_reset_token(db, token=request_data.token)
+    
+    if not token_doc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired password reset token."
+        )
+
+    # Update the user's password
+    await user_service.update_password(db, user_id=token_doc.user_id, new_password=request_data.new_password)
+
+    # Revoke all of the user's existing sessions for security
+    await refresh_token_service.revoke_all_tokens_for_user(db, token_doc.user_id)
+
+    # Mark the token as used
+    await db.password_reset_tokens.update_one(
+        {"_id": token_doc.id},
+        {"$set": {"used_at": datetime.utcnow()}}
+    )
+
+@router.get("/sessions", response_model=List[SessionResponseSchema])
+async def get_active_sessions(
+    current_user: UserModel = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """
+    Lists active sessions for the authenticated user.
+    """
+    sessions = await refresh_token_service.get_sessions_for_user(db, current_user.id)
+    return sessions
+
+@router.delete("/sessions/{jti}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_session(
+    jti: str,
+    current_user: UserModel = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """
+    Revokes a specific session (refresh token) by its JTI.
+    """
+    success = await refresh_token_service.revoke_session_by_jti(db, user_id=current_user.id, jti=jti)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found or you do not have permission to revoke it."
+        )
+
+@router.post("/password/change", status_code=status.HTTP_204_NO_CONTENT)
+async def change_password(
+    request_data: PasswordChangeSchema,
+    current_user: UserModel = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """
+    Allows an authenticated user to change their password.
+    """
+    # Verify the current password
+    if not security_service.verify_password(request_data.current_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Incorrect current password."
+        )
+    
+    # Update to the new password
+    await user_service.update_password(db, user_id=current_user.id, new_password=request_data.new_password)
+    
+    # For security, revoke all other sessions when a password is changed
+    await refresh_token_service.revoke_all_tokens_for_user(db, current_user.id) 

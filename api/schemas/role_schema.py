@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List
+from datetime import datetime
 
 class RoleCreateSchema(BaseModel):
     """
@@ -25,11 +26,13 @@ class RoleResponseSchema(BaseModel):
     """
     Schema for returning role data in API responses.
     """
-    id: str = Field(alias="_id")
+    id: str = Field(..., alias="_id")
     name: str
     description: Optional[str] = None
     permissions: List[str]
     is_assignable_by_main_client: bool
+    created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True

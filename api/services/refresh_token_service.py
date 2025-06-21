@@ -1,7 +1,7 @@
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 from ..models.refresh_token_model import RefreshTokenModel
 
@@ -60,5 +60,26 @@ class RefreshTokenService:
             {"$set": {"is_revoked": True}}
         )
         return result.modified_count
+
+    async def get_sessions_for_user(self, db: AsyncIOMotorDatabase, user_id: ObjectId) -> List[RefreshTokenModel]:
+        """
+        Retrieves all active (non-revoked) refresh tokens for a given user.
+        """
+        tokens_cursor = db.refresh_tokens.find({
+            "user_id": user_id,
+            "is_revoked": False,
+            "expires_at": {"$gt": datetime.utcnow()}
+        })
+        return [RefreshTokenModel(**token_data) async for token_data in tokens_cursor]
+
+    async def revoke_session_by_jti(self, db: AsyncIOMotorDatabase, *, user_id: ObjectId, jti: str) -> bool:
+        """
+        Revokes a specific refresh token by its JTI, ensuring it belongs to the user.
+        """
+        result = await db.refresh_tokens.update_one(
+            {"jti": jti, "user_id": user_id},
+            {"$set": {"is_revoked": True}}
+        )
+        return result.modified_count > 0
 
 refresh_token_service = RefreshTokenService() 

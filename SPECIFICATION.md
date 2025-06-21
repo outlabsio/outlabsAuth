@@ -676,20 +676,20 @@ The goal of this phase is to establish the fundamental authentication and author
   - ✅ `roles` collection.
   - ✅ `permissions` collection.
 - **Core Authentication API:**
-  - `POST /v1/auth/register`: A simplified version for admins to create the first users.
-  - `POST /v1/auth/login`: User authentication and JWT generation.
-  - `GET /v1/auth/me`: Retrieve authenticated user's details.
+  - ✅ `POST /v1/auth/register`: A simplified version for admins to create the first users. (Implemented via `POST /v1/users`)
+  - ✅ `POST /v1/auth/login`: User authentication and JWT generation.
+  - ✅ `GET /v1/auth/me`: Retrieve authenticated user's details.
 - **Core Authorization Logic:**
-  - Implement JWT validation middleware.
-  - Create dependency for checking permissions based on roles.
+  - ✅ Implement JWT validation middleware.
+  - ✅ Create dependency for checking permissions based on roles.
   - `POST /v1/auth/authorize`: Internal endpoint for services to verify permissions.
 - **Basic Management APIs (Admin-only):**
-  - **Users:** ✅ `POST /v1/users`, `GET /v1/users`, `GET /v1/users/{user_id}`, `PUT /v1/users/{user_id}`.
-  - **Roles:** `POST /v1/roles`, `GET /v1/roles`, `PUT /v1/roles/{role_id}`.
-  - **Permissions:** `POST /v1/permissions`, `GET /v1/permissions`.
+  - ✅ **Users:** `POST /v1/users`, `GET /v1/users`, `GET /v1/users/{user_id}`, `PUT /v1/users/{user_id}`, `DELETE /v1/users/{user_id}`.
+  - ✅ **Roles:** `POST /v1/roles`, `GET /v1/roles`, `GET /v1/roles/{role_id}`, `PUT /v1/roles/{role_id}`, `DELETE /v1/roles/{role_id}`.
+  - ✅ **Permissions:** `POST /v1/permissions`, `GET /v1/permissions`.
 - **Core Logic Implementation:**
   - ✅ Password hashing with Passlib.
-  - Basic JWT generation (Access Token only) and validation.
+  - ✅ Basic JWT generation (Access Token only) and validation.
 - **Documentation:**
   - ✅ Auto-generated OpenAPI/Swagger docs for the implemented endpoints.
 
@@ -698,20 +698,20 @@ The goal of this phase is to establish the fundamental authentication and author
 This phase builds on the MVP by adding user self-service features and strengthening security.
 
 - **Database Schema:**
-  - `refresh_tokens` collection.
+  - ✅ `refresh_tokens` collection.
   - `token_blacklist` collection (using Redis).
   - Add `failed_login_attempts` and `lockout_until` to `users` collection.
 - **Enhanced Authentication API:**
-  - `POST /v1/auth/refresh`: Implement refresh tokens.
-  - `POST /v1/auth/logout`: Revoke current refresh token.
-  - `POST /v1/auth/logout_all`: Revoke all user's refresh tokens.
+  - ✅ `POST /v1/auth/refresh`: Implement refresh tokens.
+  - ✅ `POST /v1/auth/logout`: Revoke current refresh token.
+  - ✅ `POST /v1/auth/logout_all`: Revoke all user's refresh tokens.
 - **Password Management API:**
   - `POST /v1/auth/password/reset-request`.
   - `POST /v1/auth/password/reset-confirm`.
   - `POST /v1/auth/password/change`.
 - **Security Hardening:**
   - Implement account lockout logic.
-  - Implement token blacklisting for immediate access token revocation on logout.
+  - ✅ Implement token blacklisting for immediate access token revocation on logout. (Implemented via DB-backed refresh token revocation).
   - Implement basic rate limiting on authentication endpoints.
 
 ### Phase 3: Multi-Tenancy and Client Management
@@ -719,15 +719,15 @@ This phase builds on the MVP by adding user self-service features and strengthen
 This phase introduces organizational accounts, a core feature for B2B SaaS applications.
 
 - **Database Schema:**
-  - `client_accounts` collection.
-  - Update `users` schema to include `client_account_id` and `is_main_client`.
-  - Update `roles` schema to include `is_assignable_by_main_client`.
+  - ✅ `client_accounts` collection.
+  - ✅ Update `users` schema to include `client_account_id` and `is_main_client`.
+  - ✅ Update `roles` schema to include `is_assignable_by_main_client`.
 - **Multi-Tenancy Logic:**
-  - Implement data scoping across all relevant APIs to ensure clients can only access their own data.
-  - `POST /v1/users/create_sub_user`: Allow `is_main_client` users to create users within their own organization.
-  - Update user/role management endpoints to respect multi-tenancy rules.
+  - ✅ Implement data scoping across all relevant APIs to ensure clients can only access their own data.
+  - ✅ `POST /v1/users/create_sub_user`: Allow `is_main_client` users to create users within their own organization.
+  - ✅ Update user/role management endpoints to respect multi-tenancy rules.
 - **Client Account Management API (Admin-only):**
-  - Full CRUD for `client_accounts`: `POST`, `GET`, `PUT`, `DELETE`.
+  - ✅ Full CRUD for `client_accounts`: `POST`, `GET`, `PUT`, `DELETE`.
 
 ### Phase 4: Advanced Features
 
@@ -750,9 +750,9 @@ This phase includes features that provide comprehensive security, compliance, an
 This phase focuses on non-functional requirements and making the service easy to operate, scale, and integrate with.
 
 - **Deployment & Scalability:**
-  - Create `Dockerfile` for containerization.
-  - Set up configuration for orchestration (e.g., Docker Compose for local, Kubernetes manifests for prod).
-  - Implement health check endpoints: `/health`, `/health/live`, `/health/ready`.
+  - ✅ Create `Dockerfile` for containerization.
+  - ✅ Set up configuration for orchestration (e.g., Docker Compose for local, Kubernetes manifests for prod).
+  - ✅ Implement health check endpoints: `/health`, `/health/live`, `/health/ready`.
 - **Monitoring & Observability:**
   - Integrate structured logging.
   - Set up metrics collection (e.g., Prometheus) and tracing (e.g., OpenTelemetry).

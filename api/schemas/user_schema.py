@@ -1,5 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List
+from datetime import datetime
 from bson import ObjectId
 
 from ..models.user_model import UserStatus
@@ -31,6 +32,7 @@ class UserUpdateSchema(BaseModel):
     last_name: Optional[str] = None
     roles: Optional[List[str]] = None
     status: Optional[UserStatus] = None
+    is_main_client: Optional[bool] = None
 
     class Config:
         populate_by_name = True
@@ -42,7 +44,7 @@ class UserResponseSchema(BaseModel):
     Schema for returning user data in API responses.
     This schema excludes sensitive information like the password hash.
     """
-    id: PyObjectId = Field(alias="_id")
+    id: PyObjectId = Field(..., alias="_id")
     email: EmailStr
     first_name: Optional[str] = None
     last_name: Optional[str] = None
@@ -50,9 +52,12 @@ class UserResponseSchema(BaseModel):
     roles: List[str]
     is_main_client: bool
     status: UserStatus
+    created_at: datetime
+    updated_at: datetime
+    last_login_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
         populate_by_name = True
         arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str} 
+        json_encoders = {ObjectId: str, PyObjectId: str} 

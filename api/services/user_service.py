@@ -1,10 +1,12 @@
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from typing import List, Optional
 from bson import ObjectId
+from fastapi import HTTPException, status
 
 from ..models.user_model import UserModel
 from ..schemas.user_schema import UserCreateSchema, UserUpdateSchema
 from .security_service import security_service
+from .role_service import role_service
 
 class UserService:
     """
@@ -26,9 +28,30 @@ class UserService:
         
         # Insert the new user into the database
         result = await db.users.insert_one(new_user.model_dump(by_alias=True))
-        created_user = await self.get_user_by_id(db, result.inserted_id)
+        new_user.id = result.inserted_id
         
-        return created_user
+        return new_user
+
+    async def create_sub_user(self, db: AsyncIOMotorDatabase, user_data: UserCreateSchema, client_account_id: ObjectId) -> UserModel:
+        """
+        Creates a new sub-user for a specific client account.
+        Validates that assigned roles are assignable by client admins.
+        """
+        # Ensure all assigned roles are valid and assignable
+        if user_data.roles:
+            for role_id in user_data.roles:
+                role = await role_service.get_role_by_id(db, role_id)
+                if not role:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Role '{role_id}' not found.")
+                if not role.is_assignable_by_main_client:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Role '{role_id}' cannot be assigned by a client administrator.")
+        
+        # Force the client account ID and set is_main_client to False
+        user_data.client_account_id = client_account_id
+        user_data.is_main_client = False
+
+        # Use the existing create_user method to handle the rest
+        return await self.create_user(db, user_data)
 
     async def get_user_by_id(self, db: AsyncIOMotorDatabase, user_id: ObjectId) -> Optional[UserModel]:
         """
@@ -48,20 +71,47 @@ class UserService:
             return UserModel(**user_data)
         return None
 
-    async def get_users(self, db: AsyncIOMotorDatabase, skip: int = 0, limit: int = 100) -> List[UserModel]:
+    async def get_users(
+        self, 
+        db: AsyncIOMotorDatabase, 
+        skip: int = 0, 
+        limit: int = 100, 
+        client_account_id: Optional[ObjectId] = None
+    ) -> List[UserModel]:
         """
         Retrieves a list of users with pagination.
+        If client_account_id is provided, filters users by that account.
         """
-        users_cursor = db.users.find().skip(skip).limit(limit)
+        query = {}
+        if client_account_id:
+            query["client_account_id"] = client_account_id
+            
+        users_cursor = db.users.find(query).skip(skip).limit(limit)
         users = await users_cursor.to_list(length=limit)
         return [UserModel(**user) for user in users]
 
-    async def update_user(self, db: AsyncIOMotorDatabase, user_id: ObjectId, user_data: UserUpdateSchema) -> Optional[UserModel]:
+    async def update_user(
+        self,
+        db: AsyncIOMotorDatabase, 
+        user_id: ObjectId, 
+        user_data: UserUpdateSchema,
+        current_user: UserModel
+    ) -> Optional[UserModel]:
         """
         Updates a user's information.
+        If the updater is a main_client, validates that assigned roles are assignable.
         """
         update_data = user_data.model_dump(exclude_unset=True)
         
+        # If roles are being updated by a main_client, validate them
+        if "roles" in update_data and current_user.is_main_client:
+            for role_id in update_data["roles"]:
+                role = await role_service.get_role_by_id(db, role_id)
+                if not role:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Role '{role_id}' not found.")
+                if not role.is_assignable_by_main_client:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Role '{role_id}' cannot be assigned by a client administrator.")
+
         if not update_data:
             return await self.get_user_by_id(db, user_id)
             
@@ -69,6 +119,16 @@ class UserService:
         
         updated_user = await self.get_user_by_id(db, user_id)
         return updated_user
+
+    async def update_password(self, db: AsyncIOMotorDatabase, *, user_id: ObjectId, new_password: str):
+        """
+        Updates a user's password.
+        """
+        new_password_hash = security_service.get_password_hash(new_password)
+        await db.users.update_one(
+            {"_id": user_id},
+            {"$set": {"password_hash": new_password_hash}}
+        )
 
     async def delete_user(self, db: AsyncIOMotorDatabase, user_id: ObjectId) -> int:
         """
