@@ -1,10 +1,8 @@
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
-from bson import ObjectId
 
 from ..models.user_model import UserStatus
-from ..models.base_model import PyObjectId
 
 class UserCreateSchema(BaseModel):
     """
@@ -14,15 +12,10 @@ class UserCreateSchema(BaseModel):
     password: str
     first_name: Optional[str] = None
     last_name: Optional[str] = None
-    client_account_id: Optional[str] = None
+    client_account_id: Optional[str] = None  # String ID for client account
     roles: Optional[List[str]] = []
     is_main_client: Optional[bool] = False
     locale: Optional[str] = None
-
-    model_config = ConfigDict(
-        arbitrary_types_allowed=True,
-        json_encoders={PyObjectId: str}
-    )
 
 class UserUpdateSchema(BaseModel):
     """
@@ -44,7 +37,7 @@ class UserResponseSchema(BaseModel):
     email: EmailStr
     first_name: Optional[str] = None
     last_name: Optional[str] = None
-    client_account_id: Optional[str] = None
+    client_account_id: Optional[str] = None  # Will be populated from Link
     roles: List[str]
     is_main_client: bool
     status: UserStatus

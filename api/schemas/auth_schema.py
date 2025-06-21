@@ -1,6 +1,5 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional
-from bson import ObjectId
 from datetime import datetime
 
 class TokenSchema(BaseModel):
@@ -17,10 +16,7 @@ class TokenDataSchema(BaseModel):
     """
     user_id: Optional[str] = None
     jti: Optional[str] = None # JTI of the refresh token
-    client_account_id: Optional[ObjectId] = None
-
-    class Config:
-        arbitrary_types_allowed = True
+    client_account_id: Optional[str] = None  # String ID for client account
 
 class SessionResponseSchema(BaseModel):
     """
@@ -32,5 +28,4 @@ class SessionResponseSchema(BaseModel):
     created_at: datetime
     expires_at: datetime
 
-    class Config:
-        arbitrary_types_allowed = True 
+    model_config = ConfigDict(from_attributes=True) 

@@ -1,15 +1,25 @@
 from typing import List, Optional
 from pydantic import Field
-from .base_model import BaseDBModelWithStringID
+from pymongo import IndexModel
 
-class RoleModel(BaseDBModelWithStringID):
+from .base_model import BaseDocument
+
+class RoleModel(BaseDocument):
     """
-    Pydantic model for the 'roles' collection in MongoDB.
+    Beanie Document for the 'roles' collection in MongoDB.
     Uses a string ID (e.g., "platform_admin").
     """
-    name: str = Field(...)
+    id: str = Field(alias="_id")  # String ID instead of ObjectId
+    name: str
     description: Optional[str] = None
     permissions: List[str] = Field(default_factory=list) # List of permission IDs
     is_assignable_by_main_client: bool = Field(False)
-
-    # Collection metadata - handled by services layer 
+    
+    class Settings:
+        name = "roles"  # MongoDB collection name
+        indexes = [
+            IndexModel([("name", 1)], unique=True, name="name_unique"),  # Unique name index
+        ]
+        
+    class Config:
+        populate_by_name = True 

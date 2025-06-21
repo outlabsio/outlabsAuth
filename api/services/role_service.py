@@ -1,4 +1,3 @@
-from motor.motor_asyncio import AsyncIOMotorDatabase
 from typing import List, Optional
 from fastapi import HTTPException, status
 
@@ -8,54 +7,52 @@ from .permission_service import permission_service
 
 class RoleService:
     """
-    Service class for role-related business logic.
+    Service class for role-related business logic using Beanie ODM.
     """
 
-    async def create_role(self, db: AsyncIOMotorDatabase, role_data: RoleCreateSchema) -> RoleModel:
+    async def create_role(self, role_data: RoleCreateSchema) -> RoleModel:
         """
-        Creates a new role in the database.
+        Creates a new role in the database using Beanie ODM.
         """
         # Validate that all permissions exist
         for permission_id in role_data.permissions:
-            permission = await permission_service.get_permission_by_id(db, permission_id)
+            permission = await permission_service.get_permission_by_id(permission_id)
             if not permission:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Permission '{permission_id}' does not exist."
                 )
 
-        role = RoleModel(**role_data.model_dump(by_alias=True))
-        await db.roles.insert_one(role.model_dump(by_alias=True))
-        created_role = await self.get_role_by_id(db, role.id)
-        return created_role
+        role = RoleModel(**role_data.model_dump())
+        await role.insert()
+        return role
 
-    async def get_role_by_id(self, db: AsyncIOMotorDatabase, role_id: str) -> Optional[RoleModel]:
+    async def get_role_by_id(self, role_id: str) -> Optional[RoleModel]:
         """
-        Retrieves a single role by its ID.
+        Retrieves a single role by its ID using Beanie ODM.
         """
-        role_data = await db.roles.find_one({"_id": role_id})
-        if role_data:
-            return RoleModel(**role_data)
-        return None
+        return await RoleModel.get(role_id)
 
-    async def get_roles(self, db: AsyncIOMotorDatabase, skip: int = 0, limit: int = 100) -> List[RoleModel]:
+    async def get_roles(self, skip: int = 0, limit: int = 100) -> List[RoleModel]:
         """
-        Retrieves a list of roles with pagination.
+        Retrieves a list of roles with pagination using Beanie ODM.
         """
-        roles_cursor = db.roles.find().skip(skip).limit(limit)
-        roles = await roles_cursor.to_list(length=limit)
-        return [RoleModel(**role) for role in roles]
+        return await RoleModel.find().skip(skip).limit(limit).to_list()
 
-    async def update_role(self, db: AsyncIOMotorDatabase, role_id: str, role_data: RoleUpdateSchema) -> Optional[RoleModel]:
+    async def update_role(self, role_id: str, role_data: RoleUpdateSchema) -> Optional[RoleModel]:
         """
-        Updates a role's information.
+        Updates a role's information using Beanie ODM.
         """
+        role = await self.get_role_by_id(role_id)
+        if not role:
+            return None
+            
         update_data = role_data.model_dump(exclude_unset=True)
 
         # Validate that all permissions exist if they are being updated
         if "permissions" in update_data:
             for permission_id in update_data["permissions"]:
-                permission = await permission_service.get_permission_by_id(db, permission_id)
+                permission = await permission_service.get_permission_by_id(permission_id)
                 if not permission:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
@@ -63,20 +60,25 @@ class RoleService:
                     )
         
         if not update_data:
-            return await self.get_role_by_id(db, role_id)
+            return role
             
-        await db.roles.update_one({"_id": role_id}, {"$set": update_data})
-        
-        updated_role = await self.get_role_by_id(db, role_id)
-        return updated_role
+        # Update role fields
+        for field, value in update_data.items():
+            setattr(role, field, value)
+            
+        await role.save()
+        return role
 
-    async def delete_role(self, db: AsyncIOMotorDatabase, role_id: str) -> int:
+    async def delete_role(self, role_id: str) -> bool:
         """
-        Deletes a role from the database.
-        Returns the number of roles deleted.
+        Deletes a role from the database using Beanie ODM.
+        Returns True if deleted, False if role not found.
         """
         # TODO: Add logic to check if role is assigned to any users before deletion
-        result = await db.roles.delete_one({"_id": role_id})
-        return result.deleted_count
+        role = await self.get_role_by_id(role_id)
+        if role:
+            await role.delete()
+            return True
+        return False
 
 role_service = RoleService() 

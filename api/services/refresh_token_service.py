@@ -1,85 +1,105 @@
-from motor.motor_asyncio import AsyncIOMotorDatabase
-from bson import ObjectId
+from beanie import PydanticObjectId
 from datetime import datetime
 from typing import Optional, List
 
 from ..models.refresh_token_model import RefreshTokenModel
+from ..models.user_model import UserModel
 
 class RefreshTokenService:
     """
-    Service for refresh token-related business logic.
+    Service for refresh token-related business logic using Beanie ODM.
     """
     async def create_refresh_token(
-        self, 
-        db: AsyncIOMotorDatabase, 
-        *,
-        user_id: ObjectId, 
+        self,
+        user_id: PydanticObjectId, 
         jti: str,
         expires_at: datetime,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None
     ) -> RefreshTokenModel:
         """
-        Creates and stores a new refresh token record.
+        Creates and stores a new refresh token record using Beanie ODM.
         """
+        # Get the user to create the Link
+        user = await UserModel.get(user_id)
+        if not user:
+            raise ValueError(f"User with ID {user_id} not found")
+            
         token_data = RefreshTokenModel(
-            user_id=user_id,
+            user=user,
             jti=jti,
             expires_at=expires_at,
             ip_address=ip_address,
             user_agent=user_agent
         )
-        await db.refresh_tokens.insert_one(token_data.model_dump(by_alias=True))
+        await token_data.insert()
         return token_data
 
-    async def get_refresh_token_by_jti(self, db: AsyncIOMotorDatabase, jti: str) -> Optional[RefreshTokenModel]:
+    async def get_refresh_token_by_jti(self, jti: str) -> Optional[RefreshTokenModel]:
         """
-        Retrieves a refresh token by its JTI.
+        Retrieves a refresh token by its JTI using Beanie ODM.
         """
-        token_data = await db.refresh_tokens.find_one({"jti": jti})
-        if token_data:
-            return RefreshTokenModel(**token_data)
-        return None
+        return await RefreshTokenModel.find_one(RefreshTokenModel.jti == jti)
     
-    async def revoke_token(self, db: AsyncIOMotorDatabase, jti: str) -> bool:
+    async def revoke_token(self, jti: str) -> bool:
         """
-        Marks a specific refresh token as revoked.
+        Marks a specific refresh token as revoked using Beanie ODM.
         """
-        result = await db.refresh_tokens.update_one(
-            {"jti": jti},
-            {"$set": {"is_revoked": True}}
-        )
-        return result.modified_count > 0
+        token = await self.get_refresh_token_by_jti(jti)
+        if token:
+            token.is_revoked = True
+            await token.save()
+            return True
+        return False
 
-    async def revoke_all_tokens_for_user(self, db: AsyncIOMotorDatabase, user_id: ObjectId) -> int:
+    async def revoke_all_tokens_for_user(self, user_id: PydanticObjectId) -> int:
         """
-        Revokes all refresh tokens for a given user.
+        Revokes all refresh tokens for a given user using Beanie ODM.
         """
-        result = await db.refresh_tokens.update_many(
-            {"user_id": user_id, "is_revoked": False},
-            {"$set": {"is_revoked": True}}
-        )
-        return result.modified_count
+        user = await UserModel.get(user_id)
+        if not user:
+            return 0
+            
+        tokens = await RefreshTokenModel.find(
+            RefreshTokenModel.user.id == user_id,
+            RefreshTokenModel.is_revoked == False
+        ).to_list()
+        
+        count = 0
+        for token in tokens:
+            token.is_revoked = True
+            await token.save()
+            count += 1
+            
+        return count
 
-    async def get_sessions_for_user(self, db: AsyncIOMotorDatabase, user_id: ObjectId) -> List[RefreshTokenModel]:
+    async def get_sessions_for_user(self, user_id: PydanticObjectId) -> List[RefreshTokenModel]:
         """
-        Retrieves all active (non-revoked) refresh tokens for a given user.
+        Retrieves all active (non-revoked) refresh tokens for a given user using Beanie ODM.
         """
-        tokens_cursor = db.refresh_tokens.find({
-            "user_id": user_id,
-            "is_revoked": False,
-            "expires_at": {"$gt": datetime.utcnow()}
-        })
-        return [RefreshTokenModel(**token_data) async for token_data in tokens_cursor]
+        user = await UserModel.get(user_id)
+        if not user:
+            return []
+            
+        return await RefreshTokenModel.find(
+            RefreshTokenModel.user.id == user_id,
+            RefreshTokenModel.is_revoked == False,
+            RefreshTokenModel.expires_at > datetime.utcnow()
+        ).to_list()
 
-    async def revoke_session_by_jti(self, db: AsyncIOMotorDatabase, *, user_id: ObjectId, jti: str) -> bool:
+    async def revoke_session_by_jti(self, user_id: PydanticObjectId, jti: str) -> bool:
         """
-        Revokes a specific refresh token by its JTI, ensuring it belongs to the user.
+        Revokes a specific refresh token by its JTI, ensuring it belongs to the user using Beanie ODM.
         """
-        result = await db.refresh_tokens.update_one(
-            {"jti": jti, "user_id": user_id},
-            {"$set": {"is_revoked": True}}
+        token = await RefreshTokenModel.find_one(
+            RefreshTokenModel.jti == jti,
+            RefreshTokenModel.user.id == user_id
         )
-        return result.modified_count > 0
+        
+        if token:
+            token.is_revoked = True
+            await token.save()
+            return True
+        return False
 
 refresh_token_service = RefreshTokenService() 

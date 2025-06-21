@@ -4,14 +4,14 @@ from typing import Optional, Tuple
 from jose import JWTError, jwt
 import uuid
 import secrets
-from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import HTTPException, status
 
-from bson import ObjectId
+from beanie import PydanticObjectId
 
 from ..config import settings
 from ..schemas.auth_schema import TokenDataSchema
 from ..models.password_reset_token_model import PasswordResetTokenModel
+from ..models.user_model import UserModel
 
 # Create a password context using bcrypt, which is a strong hashing algorithm
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -35,10 +35,15 @@ class SecurityService:
         """
         return pwd_context.verify(plain_password, hashed_password)
 
-    async def create_password_reset_token(self, db: AsyncIOMotorDatabase, *, user_id: ObjectId) -> str:
+    async def create_password_reset_token(self, user_id: PydanticObjectId) -> str:
         """
-        Generates a password reset token, stores its hash, and returns the raw token.
+        Generates a password reset token, stores its hash, and returns the raw token using Beanie ODM.
         """
+        # Get the user to create the Link
+        user = await UserModel.get(user_id)
+        if not user:
+            raise ValueError(f"User with ID {user_id} not found")
+        
         # Generate a secure, URL-safe token
         raw_token = secrets.token_urlsafe(32)
         token_hash = self.get_password_hash(raw_token)
@@ -47,29 +52,29 @@ class SecurityService:
         expires_at = datetime.now(timezone.utc) + expires_delta
 
         reset_token_doc = PasswordResetTokenModel(
-            user_id=user_id,
+            user=user,
             token_hash=token_hash,
             expires_at=expires_at
         )
         
-        await db.password_reset_tokens.insert_one(reset_token_doc.model_dump(by_alias=True))
+        await reset_token_doc.insert()
         
         return raw_token
 
-    async def verify_password_reset_token(self, db: AsyncIOMotorDatabase, *, token: str) -> Optional[PasswordResetTokenModel]:
+    async def verify_password_reset_token(self, token: str) -> Optional[PasswordResetTokenModel]:
         """
         Finds a token document by hashing the raw token and checking for a match
-        in the database. Returns the token document if a valid, unexpired, 
-        and unused token is found, else None.
+        in the database using Beanie ODM. Returns the token document if a valid, 
+        unexpired, and unused token is found, else None.
         """
-        # Iterate through all valid tokens to prevent timing attacks.
-        tokens_cursor = db.password_reset_tokens.find({
-            "expires_at": {"$gt": datetime.now(timezone.utc)},
-            "used_at": None
-        })
+        # Get all valid tokens
+        tokens = await PasswordResetTokenModel.find(
+            PasswordResetTokenModel.expires_at > datetime.now(timezone.utc),
+            PasswordResetTokenModel.used_at == None
+        ).to_list()
 
-        async for token_doc_data in tokens_cursor:
-            token_doc = PasswordResetTokenModel(**token_doc_data)
+        # Iterate through all valid tokens to prevent timing attacks.
+        for token_doc in tokens:
             if self.verify_password(token, token_doc.token_hash):
                 return token_doc
         
@@ -124,7 +129,7 @@ class SecurityService:
             token_data = TokenDataSchema(
                 user_id=user_id, 
                 jti=payload.get("jti"),
-                client_account_id=ObjectId(client_account_id_str) if client_account_id_str else None
+                client_account_id=client_account_id_str  # Now using string ID
             )
         except (JWTError, Exception):
             raise credentials_exception

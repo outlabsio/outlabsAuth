@@ -2,8 +2,10 @@ from datetime import datetime
 from typing import List, Optional
 from pydantic import Field, EmailStr
 from enum import Enum
+from beanie import Link
+from pymongo import IndexModel
 
-from ..models.base_model import BaseDBModel, PyObjectId
+from ..models.base_model import BaseDocument
 
 class UserStatus(str, Enum):
     """
@@ -14,15 +16,15 @@ class UserStatus(str, Enum):
     PENDING = "pending"
     SUSPENDED = "suspended"
 
-class UserModel(BaseDBModel):
+class UserModel(BaseDocument):
     """
-    Pydantic model for the 'users' collection in MongoDB.
+    Beanie Document for the 'users' collection in MongoDB.
     """
-    email: EmailStr = Field(...)
+    email: EmailStr
     password_hash: str
     first_name: Optional[str] = None
     last_name: Optional[str] = None
-    client_account_id: Optional[PyObjectId] = Field(None)
+    client_account: Optional[Link["ClientAccountModel"]] = None
     roles: List[str] = Field(default_factory=list)
     is_main_client: bool = False
     status: UserStatus = Field(UserStatus.PENDING)
@@ -33,4 +35,10 @@ class UserModel(BaseDBModel):
     mfa_secret: Optional[str] = None
     recovery_codes: Optional[List[str]] = None
     failed_login_attempts: int = 0
-    lockout_until: Optional[datetime] = None 
+    lockout_until: Optional[datetime] = None
+    
+    class Settings:
+        name = "users"  # MongoDB collection name
+        indexes = [
+            IndexModel([("email", 1)], unique=True, name="email_unique"),  # Unique email index
+        ] 

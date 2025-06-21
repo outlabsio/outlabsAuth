@@ -1,11 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
-from motor.motor_asyncio import AsyncIOMotorDatabase
 from jose import JWTError
 from datetime import timedelta, datetime
 from typing import Tuple, List
+from beanie import PydanticObjectId
 
-from ..database import get_database
 from ..services.user_service import user_service
 from ..services.security_service import security_service
 from ..services.refresh_token_service import refresh_token_service
@@ -15,6 +14,7 @@ from ..schemas.user_schema import UserResponseSchema
 from ..schemas.password_reset_schema import PasswordResetRequestSchema, PasswordResetConfirmSchema, PasswordChangeSchema
 from ..dependencies import get_current_user, get_current_user_with_token
 from ..models.user_model import UserModel
+from ..models.password_reset_token_model import PasswordResetTokenModel
 
 router = APIRouter(
     prefix="/v1/auth",
@@ -26,13 +26,12 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/auth/login", auto_error=False
 @router.post("/login", response_model=TokenSchema)
 async def login_for_access_token(
     request: Request,
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    db: AsyncIOMotorDatabase = Depends(get_database)
+    form_data: OAuth2PasswordRequestForm = Depends()
 ):
     """
     Authenticates a user and returns an access token.
     """
-    user = await user_service.get_user_by_email(db, form_data.username)
+    user = await user_service.get_user_by_email(form_data.username)
     if not user or not security_service.verify_password(form_data.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -47,7 +46,6 @@ async def login_for_access_token(
     
     # Store refresh token in DB
     await refresh_token_service.create_refresh_token(
-        db,
         user_id=user.id,
         jti=jti,
         expires_at=expires_at,
@@ -59,7 +57,7 @@ async def login_for_access_token(
     access_token_data = {
         "sub": str(user.id), 
         "jti": jti,
-        "client_account_id": str(user.client_account_id) if user.client_account_id else None
+        "client_account_id": str(user.client_account.id) if user.client_account else None
     }
     access_token = security_service.create_access_token(access_token_data)
 
@@ -68,8 +66,7 @@ async def login_for_access_token(
 @router.post("/refresh", response_model=TokenSchema)
 async def refresh_access_token(
     request: Request,
-    refresh_token_str: str = Depends(oauth2_scheme),
-    db: AsyncIOMotorDatabase = Depends(get_database)
+    refresh_token_str: str = Depends(oauth2_scheme)
 ):
     if not refresh_token_str:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token not found")
@@ -80,22 +77,22 @@ async def refresh_access_token(
     except JWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
 
-    db_token = await refresh_token_service.get_refresh_token_by_jti(db, jti)
+    db_token = await refresh_token_service.get_refresh_token_by_jti(jti)
     if not db_token or db_token.is_revoked:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token revoked or invalid")
 
-    user = await user_service.get_user_by_id(db, db_token.user_id)
+    user = await user_service.get_user_by_id(db_token.user.id)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
     # Issue new tokens (implementing token rotation)
     # Revoke the old refresh token
-    await refresh_token_service.revoke_token(db, jti)
+    await refresh_token_service.revoke_token(jti)
     
     # Create new refresh token
     new_refresh_token, new_jti, new_expires_at = security_service.create_refresh_token(data={"sub": str(user.id)})
     await refresh_token_service.create_refresh_token(
-        db, user_id=user.id, jti=new_jti, expires_at=new_expires_at,
+        user_id=user.id, jti=new_jti, expires_at=new_expires_at,
         ip_address=request.client.host, user_agent=request.headers.get("user-agent")
     )
 
@@ -103,7 +100,7 @@ async def refresh_access_token(
     new_access_token_data = {
         "sub": str(user.id), 
         "jti": new_jti,
-        "client_account_id": str(user.client_account_id) if user.client_account_id else None
+        "client_account_id": str(user.client_account.id) if user.client_account else None
     }
     new_access_token = security_service.create_access_token(new_access_token_data)
     
@@ -111,8 +108,7 @@ async def refresh_access_token(
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
-    user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token),
-    db: AsyncIOMotorDatabase = Depends(get_database)
+    user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token)
 ):
     """
     Revokes the current user's refresh token.
@@ -120,20 +116,19 @@ async def logout(
     _, token_data = user_and_token
     jti = token_data.jti
     if jti:
-        await refresh_token_service.revoke_token(db, jti)
+        await refresh_token_service.revoke_token(jti)
     
     # Optional: Add the access token to a blacklist cache (e.g., Redis)
     # for immediate invalidation before it expires.
 
 @router.post("/logout_all", status_code=status.HTTP_204_NO_CONTENT)
 async def logout_all(
-    current_user: UserModel = Depends(get_current_user),
-    db: AsyncIOMotorDatabase = Depends(get_database)
+    current_user: UserModel = Depends(get_current_user)
 ):
     """
     Revokes all of the current user's refresh tokens.
     """
-    await refresh_token_service.revoke_all_tokens_for_user(db, current_user.id)
+    await refresh_token_service.revoke_all_tokens_for_user(current_user.id)
 
 @router.get("/me", response_model=UserResponseSchema)
 async def read_users_me(
@@ -145,24 +140,29 @@ async def read_users_me(
     # Convert UserModel to dict and ensure ObjectId fields are strings
     user_dict = current_user.model_dump(by_alias=True)
     user_dict["_id"] = str(user_dict["_id"])
-    if user_dict.get("client_account_id"):
-        user_dict["client_account_id"] = str(user_dict["client_account_id"])
+    if user_dict.get("client_account") and hasattr(user_dict["client_account"], "id"):
+        user_dict["client_account_id"] = str(user_dict["client_account"].id)
+    elif current_user.client_account:
+        user_dict["client_account_id"] = str(current_user.client_account.id)
+    else:
+        user_dict["client_account_id"] = None
+    # Remove the client_account object from response
+    user_dict.pop("client_account", None)
     return user_dict
 
 @router.post("/password/reset-request", status_code=status.HTTP_200_OK)
 async def request_password_reset(
-    request_data: PasswordResetRequestSchema,
-    db: AsyncIOMotorDatabase = Depends(get_database)
+    request_data: PasswordResetRequestSchema
 ):
     """
     Initiates a password reset process. In a real app, this would send an email.
     For this implementation, it returns the token directly for testing purposes.
     """
-    user = await user_service.get_user_by_email(db, request_data.email)
+    user = await user_service.get_user_by_email(request_data.email)
     if user:
         # In a real application, you would NOT return the token.
         # You would send it in an email.
-        token = await security_service.create_password_reset_token(db, user_id=user.id)
+        token = await security_service.create_password_reset_token(user.id)
         
         # This is where you would call an email service:
         # email_service.send_password_reset_email(user.email, token)
@@ -174,13 +174,12 @@ async def request_password_reset(
 
 @router.post("/password/reset-confirm", status_code=status.HTTP_204_NO_CONTENT)
 async def confirm_password_reset(
-    request_data: PasswordResetConfirmSchema,
-    db: AsyncIOMotorDatabase = Depends(get_database)
+    request_data: PasswordResetConfirmSchema
 ):
     """
     Confirms a password reset using the token from the email.
     """
-    token_doc = await security_service.verify_password_reset_token(db, token=request_data.token)
+    token_doc = await security_service.verify_password_reset_token(request_data.token)
     
     if not token_doc:
         raise HTTPException(
@@ -189,62 +188,57 @@ async def confirm_password_reset(
         )
 
     # Update the user's password
-    await user_service.update_password(db, user_id=token_doc.user_id, new_password=request_data.new_password)
+    await user_service.update_password(token_doc.user.id, request_data.new_password)
 
     # Revoke all of the user's existing sessions for security
-    await refresh_token_service.revoke_all_tokens_for_user(db, token_doc.user_id)
+    await refresh_token_service.revoke_all_tokens_for_user(token_doc.user.id)
 
     # Mark the token as used
-    await db.password_reset_tokens.update_one(
-        {"_id": token_doc.id},
-        {"$set": {"used_at": datetime.utcnow()}}
-    )
+    token_doc.used_at = datetime.utcnow()
+    await token_doc.save()
 
 @router.get("/sessions", response_model=List[SessionResponseSchema])
 async def get_active_sessions(
-    current_user: UserModel = Depends(get_current_user),
-    db: AsyncIOMotorDatabase = Depends(get_database)
+    current_user: UserModel = Depends(get_current_user)
 ):
     """
-    Lists active sessions for the authenticated user.
+    Get all active sessions for the current user.
     """
-    sessions = await refresh_token_service.get_sessions_for_user(db, current_user.id)
+    sessions = await refresh_token_service.get_sessions_for_user(current_user.id)
     return sessions
 
 @router.delete("/sessions/{jti}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_session(
     jti: str,
-    current_user: UserModel = Depends(get_current_user),
-    db: AsyncIOMotorDatabase = Depends(get_database)
+    current_user: UserModel = Depends(get_current_user)
 ):
     """
-    Revokes a specific session (refresh token) by its JTI.
+    Revoke a specific session by JTI.
     """
-    success = await refresh_token_service.revoke_session_by_jti(db, user_id=current_user.id, jti=jti)
+    success = await refresh_token_service.revoke_session_by_jti(current_user.id, jti)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Session not found or you do not have permission to revoke it."
+            detail="Session not found or already revoked."
         )
 
 @router.post("/password/change", status_code=status.HTTP_204_NO_CONTENT)
 async def change_password(
     request_data: PasswordChangeSchema,
-    current_user: UserModel = Depends(get_current_user),
-    db: AsyncIOMotorDatabase = Depends(get_database)
+    current_user: UserModel = Depends(get_current_user)
 ):
     """
-    Allows an authenticated user to change their password.
+    Change the current user's password.
     """
-    # Verify the current password
+    # Verify current password
     if not security_service.verify_password(request_data.current_password, current_user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Incorrect current password."
+            detail="Current password is incorrect."
         )
     
-    # Update to the new password
-    await user_service.update_password(db, user_id=current_user.id, new_password=request_data.new_password)
+    # Update password
+    await user_service.update_password(current_user.id, request_data.new_password)
     
-    # For security, revoke all other sessions when a password is changed
-    await refresh_token_service.revoke_all_tokens_for_user(db, current_user.id) 
+    # Revoke all existing sessions for security
+    await refresh_token_service.revoke_all_tokens_for_user(current_user.id) 

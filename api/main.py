@@ -16,11 +16,7 @@ async def lifespan(app: FastAPI):
     """
     await db.connect()
     
-    # Ensure essential permissions exist
-    db_session = db.db
-    if db_session is None:
-        raise RuntimeError("Database connection not established")
-
+    # Ensure essential permissions exist (Beanie ODM doesn't require db_session parameter)
     all_permission_ids = []
     essential_permissions = [
         PermissionCreateSchema(_id="user:create", description="Allows creating a single user."),
@@ -43,9 +39,9 @@ async def lifespan(app: FastAPI):
     
     for perm_data in essential_permissions:
         all_permission_ids.append(perm_data.id)
-        existing_perm = await permission_service.get_permission_by_id(db_session, perm_data.id)
+        existing_perm = await permission_service.get_permission_by_id(perm_data.id)
         if not existing_perm:
-            await permission_service.create_permission(db_session, perm_data)
+            await permission_service.create_permission(perm_data)
 
     # Ensure a platform_admin role exists and has all permissions
     platform_admin_role_data = RoleCreateSchema(
@@ -55,12 +51,12 @@ async def lifespan(app: FastAPI):
         permissions=all_permission_ids
     )
     
-    existing_admin_role = await role_service.get_role_by_id(db_session, "platform_admin")
+    existing_admin_role = await role_service.get_role_by_id("platform_admin")
     if not existing_admin_role:
-        await role_service.create_role(db_session, platform_admin_role_data)
+        await role_service.create_role(platform_admin_role_data)
     else:
         # If role exists, ensure it has all permissions
-        await role_service.update_role(db_session, "platform_admin", platform_admin_role_data)
+        await role_service.update_role("platform_admin", platform_admin_role_data)
 
     yield
     await db.close()

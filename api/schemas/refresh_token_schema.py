@@ -6,7 +6,7 @@ class RefreshTokenCreateSchema(BaseModel):
     This is for internal use and not exposed via an API endpoint.
     """
     jti: str
-    user_id: str
+    user_id: str  # Will be used to create Link to UserModel
     expires_at: int # Store as timestamp
 
 class RefreshTokenUpdateSchema(BaseModel):

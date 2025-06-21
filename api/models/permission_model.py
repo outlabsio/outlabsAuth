@@ -1,9 +1,17 @@
 from typing import Optional
-from .base_model import BaseDBModelWithStringID
+from pydantic import Field
+from beanie import Document
 
-class PermissionModel(BaseDBModelWithStringID):
+class PermissionModel(Document):
     """
-    Pydantic model for the 'permissions' collection in MongoDB.
+    Beanie Document for the 'permissions' collection in MongoDB.
     Uses a string ID (e.g., "user:create").
     """
-    description: Optional[str] = None 
+    id: str = Field(alias="_id")  # String ID instead of ObjectId
+    description: Optional[str] = None
+    
+    class Settings:
+        name = "permissions"  # MongoDB collection name
+        
+    class Config:
+        populate_by_name = True 

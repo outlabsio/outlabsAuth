@@ -1,9 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from motor.motor_asyncio import AsyncIOMotorDatabase
 from typing import List, Union
-from bson import ObjectId
+from beanie import PydanticObjectId
 
-from ..database import get_database
 from ..services.client_account_service import client_account_service
 from ..schemas.client_account_schema import ClientAccountCreateSchema, ClientAccountUpdateSchema, ClientAccountResponseSchema
 from ..dependencies import has_permission, valid_account_id
@@ -19,10 +17,9 @@ router = APIRouter(
     409: {"description": "Client account with this name already exists"}
 })
 async def create_client_account(
-    account_data: ClientAccountCreateSchema,
-    db: AsyncIOMotorDatabase = Depends(get_database)
+    account_data: ClientAccountCreateSchema
 ):
-    new_account = await client_account_service.create_client_account(db, account_data)
+    new_account = await client_account_service.create_client_account(account_data)
     
     # Use the new Pydantic v2 method that automatically handles ObjectId serialization
     return ClientAccountResponseSchema.model_validate(new_account, from_attributes=True)
@@ -31,11 +28,10 @@ async def create_client_account(
     200: {"model": List[ClientAccountResponseSchema]}
 })
 async def get_all_client_accounts(
-    db: AsyncIOMotorDatabase = Depends(get_database),
     skip: int = 0,
     limit: int = 100
 ):
-    accounts = await client_account_service.get_client_accounts(db, skip=skip, limit=limit)
+    accounts = await client_account_service.get_client_accounts(skip=skip, limit=limit)
     
     # Use Pydantic v2 model validation for automatic ObjectId handling
     return [ClientAccountResponseSchema.model_validate(account, from_attributes=True) for account in accounts]
@@ -45,10 +41,9 @@ async def get_all_client_accounts(
     404: {"description": "Client account not found"}
 })
 async def get_client_account_by_id(
-    account_id: ObjectId = Depends(valid_account_id),
-    db: AsyncIOMotorDatabase = Depends(get_database)
+    account_id: PydanticObjectId = Depends(valid_account_id)
 ):
-    account = await client_account_service.get_client_account_by_id(db, account_id)
+    account = await client_account_service.get_client_account_by_id(account_id)
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client account not found")
     
@@ -61,10 +56,9 @@ async def get_client_account_by_id(
 })
 async def update_client_account(
     account_data: ClientAccountUpdateSchema,
-    account_id: ObjectId = Depends(valid_account_id),
-    db: AsyncIOMotorDatabase = Depends(get_database)
+    account_id: PydanticObjectId = Depends(valid_account_id)
 ):
-    updated_account = await client_account_service.update_client_account(db, account_id, account_data)
+    updated_account = await client_account_service.update_client_account(account_id, account_data)
     if updated_account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client account not found")
     
@@ -73,9 +67,8 @@ async def update_client_account(
 
 @router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(has_permission("client_account:delete"))])
 async def delete_client_account(
-    account_id: ObjectId = Depends(valid_account_id),
-    db: AsyncIOMotorDatabase = Depends(get_database)
+    account_id: PydanticObjectId = Depends(valid_account_id)
 ):
-    deleted_count = await client_account_service.delete_client_account(db, account_id)
-    if deleted_count == 0:
+    success = await client_account_service.delete_client_account(account_id)
+    if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client account not found") 

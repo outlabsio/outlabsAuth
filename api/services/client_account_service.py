@@ -1,27 +1,45 @@
-from motor.motor_asyncio import AsyncIOMotorDatabase
 from typing import List, Optional
-from bson import ObjectId
+from beanie import PydanticObjectId
 from pymongo.errors import DuplicateKeyError
 from fastapi import HTTPException, status
 
 from ..models.client_account_model import ClientAccountModel
+from ..models.user_model import UserModel
 from ..schemas.client_account_schema import ClientAccountCreateSchema, ClientAccountUpdateSchema
 
 class ClientAccountService:
     """
-    Service class for client account-related business logic.
+    Service class for client account-related business logic using Beanie ODM.
     """
 
-    async def create_client_account(self, db: AsyncIOMotorDatabase, account_data: ClientAccountCreateSchema) -> ClientAccountModel:
+    async def create_client_account(self, account_data: ClientAccountCreateSchema) -> ClientAccountModel:
         """
-        Creates a new client account.
+        Creates a new client account using Beanie ODM.
         """
-        account = ClientAccountModel(**account_data.model_dump())
+        account_dict = account_data.model_dump()
+        
+        # Handle main_contact_user Link
+        if account_data.main_contact_user_id:
+            try:
+                user = await UserModel.get(PydanticObjectId(account_data.main_contact_user_id))
+                if user:
+                    account_dict["main_contact_user"] = user
+                    del account_dict["main_contact_user_id"]  # Remove the string ID
+            except Exception:
+                # If user not found, set to None
+                account_dict["main_contact_user"] = None
+                del account_dict["main_contact_user_id"]
+        else:
+            account_dict["main_contact_user"] = None
+            if "main_contact_user_id" in account_dict:
+                del account_dict["main_contact_user_id"]
+        
+        account = ClientAccountModel(**account_dict)
         try:
-            await db.client_accounts.insert_one(account.model_dump(by_alias=True))
+            await account.insert()
         except DuplicateKeyError as e:
             # Handle duplicate key errors gracefully
-            if "name_1" in str(e):
+            if "name" in str(e):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="A client account with this name already exists."
@@ -32,39 +50,54 @@ class ClientAccountService:
                     detail="A client account with these details already exists."
                 )
         
-        created_account = await self.get_client_account_by_id(db, account.id)
-        return created_account
+        return account
 
-    async def get_client_account_by_id(self, db: AsyncIOMotorDatabase, account_id: ObjectId) -> Optional[ClientAccountModel]:
+    async def get_client_account_by_id(self, account_id: PydanticObjectId) -> Optional[ClientAccountModel]:
         """
-        Retrieves a single client account by its ID.
+        Retrieves a single client account by its ID using Beanie ODM.
         """
-        account_data = await db.client_accounts.find_one({"_id": account_id})
-        if account_data:
-            return ClientAccountModel(**account_data)
-        return None
+        return await ClientAccountModel.get(account_id)
 
-    async def get_client_accounts(self, db: AsyncIOMotorDatabase, skip: int = 0, limit: int = 100) -> List[ClientAccountModel]:
+    async def get_client_accounts(self, skip: int = 0, limit: int = 100) -> List[ClientAccountModel]:
         """
-        Retrieves a list of client accounts with pagination.
+        Retrieves a list of client accounts with pagination using Beanie ODM.
         """
-        accounts_cursor = db.client_accounts.find().skip(skip).limit(limit)
-        accounts = await accounts_cursor.to_list(length=limit)
-        return [ClientAccountModel(**account) for account in accounts]
+        return await ClientAccountModel.find().skip(skip).limit(limit).to_list()
 
-    async def update_client_account(self, db: AsyncIOMotorDatabase, account_id: ObjectId, account_data: ClientAccountUpdateSchema) -> Optional[ClientAccountModel]:
+    async def update_client_account(self, account_id: PydanticObjectId, account_data: ClientAccountUpdateSchema) -> Optional[ClientAccountModel]:
         """
-        Updates a client account's information.
+        Updates a client account's information using Beanie ODM.
         """
+        account = await self.get_client_account_by_id(account_id)
+        if not account:
+            return None
+            
         update_data = account_data.model_dump(exclude_unset=True)
         if not update_data:
-            return await self.get_client_account_by_id(db, account_id)
+            return account
+        
+        # Handle main_contact_user Link update
+        if "main_contact_user_id" in update_data:
+            user_id = update_data.pop("main_contact_user_id")
+            if user_id:
+                try:
+                    user = await UserModel.get(PydanticObjectId(user_id))
+                    account.main_contact_user = user
+                except Exception:
+                    account.main_contact_user = None
+            else:
+                account.main_contact_user = None
+        
+        # Update other fields
+        for field, value in update_data.items():
+            setattr(account, field, value)
         
         try:
-            await db.client_accounts.update_one({"_id": account_id}, {"$set": update_data})
+            account.update_timestamp()
+            await account.save()
         except DuplicateKeyError as e:
             # Handle duplicate key errors gracefully
-            if "name_1" in str(e):
+            if "name" in str(e):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="A client account with this name already exists."
@@ -75,15 +108,18 @@ class ClientAccountService:
                     detail="A client account with these details already exists."
                 )
                 
-        return await self.get_client_account_by_id(db, account_id)
+        return account
 
-    async def delete_client_account(self, db: AsyncIOMotorDatabase, account_id: ObjectId) -> int:
+    async def delete_client_account(self, account_id: PydanticObjectId) -> bool:
         """
-        Deletes a client account.
+        Deletes a client account using Beanie ODM.
         (Note: In a real-world scenario, this would likely deactivate the account
         and trigger a cleanup process for associated users, rather than a hard delete.)
         """
-        result = await db.client_accounts.delete_one({"_id": account_id})
-        return result.deleted_count
+        account = await self.get_client_account_by_id(account_id)
+        if account:
+            await account.delete()
+            return True
+        return False
 
 client_account_service = ClientAccountService() 

@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 from motor.motor_asyncio import AsyncIOMotorClient
+from beanie import init_beanie
 
 # Add the project root to the Python path to allow importing from 'api'
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -12,6 +13,14 @@ from api.services.permission_service import permission_service
 from api.schemas.user_schema import UserCreateSchema
 from api.schemas.role_schema import RoleCreateSchema
 from api.schemas.permission_schema import PermissionCreateSchema
+
+# Import all document models for Beanie initialization
+from api.models.user_model import UserModel
+from api.models.role_model import RoleModel
+from api.models.permission_model import PermissionModel
+from api.models.client_account_model import ClientAccountModel
+from api.models.refresh_token_model import RefreshTokenModel
+from api.models.password_reset_token_model import PasswordResetTokenModel
 
 # --- Configuration ---
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
@@ -61,27 +70,52 @@ async def seed_database(db):
     
     print(f"--- Seeding test database '{db.name}' ---")
     
-    # 1. Wipe existing data
+    # Initialize Beanie with all document models
+    await init_beanie(
+        database=db,
+        document_models=[
+            UserModel,
+            RoleModel,
+            PermissionModel,
+            ClientAccountModel,
+            RefreshTokenModel,
+            PasswordResetTokenModel,
+        ]
+    )
+    print("Beanie ODM initialized for seeding.")
+    
+    # Rebuild models to resolve circular references with proper namespace
+    namespace = {
+        'UserModel': UserModel,
+        'ClientAccountModel': ClientAccountModel,
+        'RefreshTokenModel': RefreshTokenModel,
+    }
+    UserModel.model_rebuild(_types_namespace=namespace)
+    ClientAccountModel.model_rebuild(_types_namespace=namespace)
+    RefreshTokenModel.model_rebuild(_types_namespace=namespace)
+    print("Model circular references resolved.")
+    
+    # 1. Wipe existing data using Beanie
     print("Wiping existing collections...")
-    await db.users.delete_many({})
-    await db.roles.delete_many({})
-    await db.permissions.delete_many({})
+    await UserModel.delete_all()
+    await RoleModel.delete_all()
+    await PermissionModel.delete_all()
     print("Collections wiped.")
 
-    # 2. Create permissions
+    # 2. Create permissions (no db parameter needed with Beanie)
     print("Creating essential permissions...")
     for perm_data in ESSENTIAL_PERMISSIONS:
-        await permission_service.create_permission(db, perm_data)
+        await permission_service.create_permission(perm_data)
     print(f"{len(ESSENTIAL_PERMISSIONS)} permissions created.")
 
-    # 3. Create platform_admin role
+    # 3. Create platform_admin role (no db parameter needed with Beanie)
     print("Creating platform admin role...")
-    await role_service.create_role(db, PLATFORM_ADMIN_ROLE)
+    await role_service.create_role(PLATFORM_ADMIN_ROLE)
     print(f"Role '{PLATFORM_ADMIN_ROLE.id}' created.")
 
-    # 4. Create admin user
+    # 4. Create admin user (no db parameter needed with Beanie)
     print("Creating admin user...")
-    await user_service.create_user(db, ADMIN_USER)
+    await user_service.create_user(ADMIN_USER)
     print(f"Admin user '{ADMIN_USER.email}' created.")
 
     print("\n--- Seeding complete! ---")
