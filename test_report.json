@@ -1,27 +1,27 @@
 {
-  "timestamp": "2025-06-21T19:32:04.110247",
+  "timestamp": "2025-06-21T19:50:33.931157",
   "summary": {
     "total_modules": 15,
-    "total_passed": 234,
-    "total_failed": 15,
+    "total_passed": 238,
+    "total_failed": 11,
     "total_skipped": 0,
-    "total_duration": 136.49681973457336
+    "total_duration": 137.16937685012817
   },
   "modules": [
     {
       "module": "tests/test_auth_routes.py",
-      "passed": 37,
-      "failed": 3,
+      "passed": 40,
+      "failed": 0,
       "skipped": 0,
-      "duration": 16.701043844223022,
-      "success_rate": 92.5
+      "duration": 19.23931884765625,
+      "success_rate": 100.0
     },
     {
       "module": "tests/test_auth_security.py",
       "passed": 18,
       "failed": 6,
       "skipped": 0,
-      "duration": 21.092234134674072,
+      "duration": 20.72739291191101,
       "success_rate": 75.0
     },
     {
@@ -29,7 +29,7 @@
       "passed": 30,
       "failed": 0,
       "skipped": 0,
-      "duration": 18.931334733963013,
+      "duration": 18.811200857162476,
       "success_rate": 100.0
     },
     {
@@ -37,7 +37,7 @@
       "passed": 14,
       "failed": 0,
       "skipped": 0,
-      "duration": 7.918438196182251,
+      "duration": 7.816252946853638,
       "success_rate": 100.0
     },
     {
@@ -45,7 +45,7 @@
       "passed": 16,
       "failed": 0,
       "skipped": 0,
-      "duration": 7.1126532554626465,
+      "duration": 7.060038805007935,
       "success_rate": 100.0
     },
     {
@@ -53,7 +53,7 @@
       "passed": 10,
       "failed": 0,
       "skipped": 0,
-      "duration": 5.436650991439819,
+      "duration": 5.409460067749023,
       "success_rate": 100.0
     },
     {
@@ -61,23 +61,23 @@
       "passed": 19,
       "failed": 0,
       "skipped": 0,
-      "duration": 8.467777013778687,
+      "duration": 8.273151874542236,
       "success_rate": 100.0
     },
     {
       "module": "tests/test_group_service.py",
-      "passed": 23,
-      "failed": 0,
+      "passed": 22,
+      "failed": 1,
       "skipped": 0,
-      "duration": 0.593048095703125,
-      "success_rate": 100.0
+      "duration": 0.6418051719665527,
+      "success_rate": 95.65217391304348
     },
     {
       "module": "tests/test_client_account_routes.py",
       "passed": 14,
       "failed": 0,
       "skipped": 0,
-      "duration": 6.740749835968018,
+      "duration": 6.719589948654175,
       "success_rate": 100.0
     },
     {
@@ -85,7 +85,7 @@
       "passed": 15,
       "failed": 0,
       "skipped": 0,
-      "duration": 8.14522385597229,
+      "duration": 8.115743637084961,
       "success_rate": 100.0
     },
     {
@@ -93,7 +93,7 @@
       "passed": 13,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.5803170204162598,
+      "duration": 0.5740749835968018,
       "success_rate": 100.0
     },
     {
@@ -101,32 +101,32 @@
       "passed": 2,
       "failed": 4,
       "skipped": 0,
-      "duration": 8.576918125152588,
+      "duration": 8.64126992225647,
       "success_rate": 33.33333333333333
     },
     {
       "module": "tests/test_duplicate_constraints.py",
-      "passed": 9,
-      "failed": 1,
+      "passed": 10,
+      "failed": 0,
       "skipped": 0,
-      "duration": 9.573286056518555,
-      "success_rate": 90.0
+      "duration": 9.10021185874939,
+      "success_rate": 100.0
     },
     {
       "module": "tests/test_integration.py",
       "passed": 7,
       "failed": 0,
       "skipped": 0,
-      "duration": 7.559853792190552,
+      "duration": 7.215970039367676,
       "success_rate": 100.0
     },
     {
       "module": "tests/test_enhanced_access_control.py",
-      "passed": 7,
-      "failed": 1,
+      "passed": 8,
+      "failed": 0,
       "skipped": 0,
-      "duration": 9.067290782928467,
-      "success_rate": 87.5
+      "duration": 8.82389497756958,
+      "success_rate": 100.0
     }
   ]
 }
