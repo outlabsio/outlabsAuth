@@ -312,7 +312,7 @@ class TestGroupRoutes:
             headers=admin_headers
         )
         
-        assert response.status_code == 200
+        assert response.status_code == 201
 
     @pytest.mark.asyncio
     async def test_remove_users_from_group(self, client: AsyncClient, admin_headers, sample_group_data):
@@ -356,7 +356,8 @@ class TestGroupRoutes:
         )
         
         # Remove user from group
-        response = await client.delete(
+        response = await client.request(
+            "DELETE",
             f"/v1/groups/{group_id}/members",
             json=membership_data,
             headers=admin_headers
@@ -388,7 +389,9 @@ class TestGroupRoutes:
         
         assert response.status_code == 200
         data = response.json()
-        assert isinstance(data, list)
+        assert isinstance(data, dict)
+        assert "members" in data
+        assert isinstance(data["members"], list)
 
     @pytest.mark.asyncio
     async def test_get_user_groups(self, client: AsyncClient, admin_headers):
