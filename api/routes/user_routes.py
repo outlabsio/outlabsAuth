@@ -6,7 +6,7 @@ from ..services.user_service import user_service
 from ..schemas.user_schema import UserCreateSchema, UserUpdateSchema, UserResponseSchema, UserBulkCreateResponseSchema
 from ..schemas.auth_schema import TokenDataSchema
 from ..models.user_model import UserModel
-from ..dependencies import valid_object_id, has_permission, get_current_user_with_token
+from ..dependencies import has_permission, get_current_user_with_token
 
 router = APIRouter(
     prefix="/v1/users",

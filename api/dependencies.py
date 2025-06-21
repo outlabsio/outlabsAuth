@@ -12,15 +12,6 @@ from .schemas.auth_schema import TokenDataSchema
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/auth/login")
 
-def valid_object_id(id: str):
-    try:
-        return PydanticObjectId(id)
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail=f"Invalid ObjectId: {id}"
-        )
-
 def valid_account_id(account_id: str):
     try:
         return PydanticObjectId(account_id)

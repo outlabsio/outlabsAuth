@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import List, Optional
 from beanie import PydanticObjectId
+import json
 
-from ..dependencies import has_permission, valid_object_id, get_current_user_with_token
+from ..dependencies import has_permission, get_current_user_with_token
 from ..schemas.group_schema import (
     GroupCreateSchema, GroupUpdateSchema, GroupResponseSchema,
     GroupMembershipSchema, GroupMembersResponseSchema, UserGroupsResponseSchema
@@ -39,11 +40,12 @@ async def create_group(
     try:
         new_group = await group_service.create_group(group_data)
         
-        # Use Beanie's JSON serialization mode for automatic ObjectId conversion
-        response_data = new_group.model_dump(mode="json")
-        response_data["client_account_id"] = str(new_group.client_account.id) if new_group.client_account else None
+        # Use Beanie's model_dump with by_alias=True for proper _id serialization
+        group_dict = new_group.model_dump(by_alias=True)
+        group_dict["_id"] = str(new_group.id)  # Convert ObjectId to string
+        group_dict["client_account_id"] = str(new_group.client_account.id) if new_group.client_account else None
         
-        return GroupResponseSchema.model_validate(response_data)
+        return GroupResponseSchema.model_validate(group_dict)
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -73,16 +75,17 @@ async def list_groups(
     # Convert to response format
     response_groups = []
     for group in groups:
-        response_data = group.model_dump(mode="json")
-        # Convert PydanticObjectId to string for API response  
-        response_data["client_account_id"] = str(group.client_account.id) if group.client_account else None
-        response_groups.append(GroupResponseSchema.model_validate(response_data))
+        # Use Beanie's model_dump with by_alias=True for proper _id serialization
+        group_dict = group.model_dump(by_alias=True)
+        group_dict["_id"] = str(group.id)  # Convert ObjectId to string
+        group_dict["client_account_id"] = str(group.client_account.id) if group.client_account else None
+        response_groups.append(GroupResponseSchema.model_validate(group_dict))
     
     return response_groups
 
 @router.get("/{group_id}", response_model=GroupResponseSchema)
 async def get_group(
-    group_id: PydanticObjectId = Depends(valid_object_id),
+    group_id: str,
     current_user_and_token = Depends(get_current_user_with_token)
 ):
     """
@@ -90,7 +93,7 @@ async def get_group(
     """
     current_user, _ = current_user_and_token
     
-    group = await group_service.get_group_by_id(group_id)
+    group = await group_service.get_group_by_id(PydanticObjectId(group_id))
     if not group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
@@ -102,16 +105,17 @@ async def get_group(
                 detail="You can only access groups within your own client account"
             )
     
-    # Convert to response format
-    response_data = group.model_dump(mode="json")
-    response_data["client_account_id"] = str(group.client_account.id) if group.client_account else None
+    # Use Beanie's model_dump with by_alias=True for proper _id serialization
+    group_dict = group.model_dump(by_alias=True)
+    group_dict["_id"] = str(group.id)  # Convert ObjectId to string
+    group_dict["client_account_id"] = str(group.client_account.id) if group.client_account else None
     
-    return GroupResponseSchema.model_validate(response_data)
+    return GroupResponseSchema.model_validate(group_dict)
 
 @router.put("/{group_id}", response_model=GroupResponseSchema, dependencies=[Depends(has_permission("group:update"))])
 async def update_group(
     group_data: GroupUpdateSchema,
-    group_id: PydanticObjectId = Depends(valid_object_id),
+    group_id: str,
     current_user_and_token = Depends(get_current_user_with_token)
 ):
     """
@@ -120,7 +124,7 @@ async def update_group(
     current_user, _ = current_user_and_token
     
     # Check if group exists and user has access
-    existing_group = await group_service.get_group_by_id(group_id)
+    existing_group = await group_service.get_group_by_id(PydanticObjectId(group_id))
     if not existing_group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
@@ -132,15 +136,16 @@ async def update_group(
             )
     
     try:
-        updated_group = await group_service.update_group(group_id, group_data)
+        updated_group = await group_service.update_group(PydanticObjectId(group_id), group_data)
         if not updated_group:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
         
-        # Convert to response format
-        response_data = updated_group.model_dump(mode="json")
-        response_data["client_account_id"] = str(updated_group.client_account.id) if updated_group.client_account else None
+        # Use Beanie's model_dump with by_alias=True for proper _id serialization
+        group_dict = updated_group.model_dump(by_alias=True)
+        group_dict["_id"] = str(updated_group.id)  # Convert ObjectId to string
+        group_dict["client_account_id"] = str(updated_group.client_account.id) if updated_group.client_account else None
         
-        return GroupResponseSchema.model_validate(response_data)
+        return GroupResponseSchema.model_validate(group_dict)
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -148,7 +153,7 @@ async def update_group(
 
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(has_permission("group:delete"))])
 async def delete_group(
-    group_id: PydanticObjectId = Depends(valid_object_id),
+    group_id: str,
     current_user_and_token = Depends(get_current_user_with_token)
 ):
     """
@@ -157,7 +162,7 @@ async def delete_group(
     current_user, _ = current_user_and_token
     
     # Check if group exists and user has access
-    existing_group = await group_service.get_group_by_id(group_id)
+    existing_group = await group_service.get_group_by_id(PydanticObjectId(group_id))
     if not existing_group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
@@ -168,7 +173,7 @@ async def delete_group(
                 detail="You can only delete groups within your own client account"
             )
     
-    success = await group_service.delete_group(group_id)
+    success = await group_service.delete_group(PydanticObjectId(group_id))
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
 
@@ -177,7 +182,7 @@ async def delete_group(
 @router.post("/{group_id}/members", status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("group:manage_members"))])
 async def add_users_to_group(
     membership_data: GroupMembershipSchema,
-    group_id: PydanticObjectId = Depends(valid_object_id),
+    group_id: str,
     current_user_and_token = Depends(get_current_user_with_token)
 ):
     """
@@ -186,7 +191,7 @@ async def add_users_to_group(
     current_user, _ = current_user_and_token
     
     # Check if group exists and user has access
-    existing_group = await group_service.get_group_by_id(group_id)
+    existing_group = await group_service.get_group_by_id(PydanticObjectId(group_id))
     if not existing_group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
@@ -198,7 +203,7 @@ async def add_users_to_group(
             )
     
     try:
-        await group_service.add_users_to_group(group_id, membership_data.user_ids)
+        await group_service.add_users_to_group(PydanticObjectId(group_id), membership_data.user_ids)
         return {"message": f"Successfully added {len(membership_data.user_ids)} users to group"}
     except HTTPException as e:
         raise e
@@ -208,7 +213,7 @@ async def add_users_to_group(
 @router.delete("/{group_id}/members", status_code=status.HTTP_200_OK, dependencies=[Depends(has_permission("group:manage_members"))])
 async def remove_users_from_group(
     membership_data: GroupMembershipSchema,
-    group_id: PydanticObjectId = Depends(valid_object_id),
+    group_id: str,
     current_user_and_token = Depends(get_current_user_with_token)
 ):
     """
@@ -217,7 +222,7 @@ async def remove_users_from_group(
     current_user, _ = current_user_and_token
     
     # Check if group exists and user has access
-    existing_group = await group_service.get_group_by_id(group_id)
+    existing_group = await group_service.get_group_by_id(PydanticObjectId(group_id))
     if not existing_group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
@@ -229,7 +234,7 @@ async def remove_users_from_group(
             )
     
     try:
-        await group_service.remove_users_from_group(group_id, membership_data.user_ids)
+        await group_service.remove_users_from_group(PydanticObjectId(group_id), membership_data.user_ids)
         return {"message": f"Successfully removed {len(membership_data.user_ids)} users from group"}
     except HTTPException as e:
         raise e
@@ -238,7 +243,7 @@ async def remove_users_from_group(
 
 @router.get("/{group_id}/members", response_model=GroupMembersResponseSchema)
 async def get_group_members(
-    group_id: PydanticObjectId = Depends(valid_object_id),
+    group_id: str,
     current_user_and_token = Depends(get_current_user_with_token)
 ):
     """
@@ -247,7 +252,7 @@ async def get_group_members(
     current_user, _ = current_user_and_token
     
     # Check if group exists and user has access
-    existing_group = await group_service.get_group_by_id(group_id)
+    existing_group = await group_service.get_group_by_id(PydanticObjectId(group_id))
     if not existing_group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
@@ -258,17 +263,19 @@ async def get_group_members(
                 detail="You can only view members of groups within your own client account"
             )
     
-    members = await group_service.get_group_members(group_id)
+    members = await group_service.get_group_members(PydanticObjectId(group_id))
     
     # Convert users to basic response format
     member_data = []
     for member in members:
-        member_dict = member.model_dump(mode="json")
+        # Use Beanie's model_dump with by_alias=True for proper _id serialization
+        member_dict = member.model_dump(by_alias=True)
+        member_dict["_id"] = str(member.id)  # Convert ObjectId to string
         member_dict["client_account_id"] = str(member.client_account.id) if member.client_account else None
         member_data.append(member_dict)
     
     return GroupMembersResponseSchema(
-        group_id=str(group_id),
+        group_id=group_id,
         group_name=existing_group.name,
         members=member_data
     )
@@ -277,7 +284,7 @@ async def get_group_members(
 
 @router.get("/users/{user_id}/groups", response_model=UserGroupsResponseSchema)
 async def get_user_groups(
-    user_id: PydanticObjectId = Depends(valid_object_id),
+    user_id: str,
     current_user_and_token = Depends(get_current_user_with_token)
 ):
     """
@@ -286,12 +293,12 @@ async def get_user_groups(
     current_user, _ = current_user_and_token
     
     # Check if user exists and current user has access
-    target_user = await UserModel.get(user_id)
+    target_user = await UserModel.get(PydanticObjectId(user_id))
     if not target_user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     
     # Users can view their own groups, or admin users can view any user's groups
-    if current_user.id != user_id and not current_user.is_main_client:
+    if str(current_user.id) != user_id and not current_user.is_main_client:
         if current_user.client_account != target_user.client_account:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -299,21 +306,23 @@ async def get_user_groups(
             )
     
     # Get user's groups
-    user_groups = await group_service.get_user_groups(user_id)
+    user_groups = await group_service.get_user_groups(PydanticObjectId(user_id))
     
     # Get effective roles and permissions
-    effective_roles = await group_service.get_user_effective_roles(user_id)
-    effective_permissions = await group_service.get_user_effective_permissions(user_id)
+    effective_roles = await group_service.get_user_effective_roles(PydanticObjectId(user_id))
+    effective_permissions = await group_service.get_user_effective_permissions(PydanticObjectId(user_id))
     
     # Convert groups to response format
     groups_response = []
     for group in user_groups:
-        response_data = group.model_dump(mode="json")
-        response_data["client_account_id"] = str(group.client_account.id) if group.client_account else None
-        groups_response.append(GroupResponseSchema.model_validate(response_data))
+        # Use Beanie's model_dump with by_alias=True for proper _id serialization
+        group_dict = group.model_dump(by_alias=True)
+        group_dict["_id"] = str(group.id)  # Convert ObjectId to string
+        group_dict["client_account_id"] = str(group.client_account.id) if group.client_account else None
+        groups_response.append(GroupResponseSchema.model_validate(group_dict))
     
     return UserGroupsResponseSchema(
-        user_id=str(user_id),
+        user_id=user_id,
         groups=groups_response,
         effective_roles=list(effective_roles),
         effective_permissions=list(effective_permissions)

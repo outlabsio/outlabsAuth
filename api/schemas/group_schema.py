@@ -24,7 +24,7 @@ class GroupResponseSchema(BaseModel):
     """
     Schema for returning group data in API responses.
     """
-    _id: str  # MongoDB native _id field
+    id: str = Field(..., alias="_id")  # MongoDB _id field aliased as id
     name: str
     description: Optional[str] = None
     client_account_id: Optional[str] = None

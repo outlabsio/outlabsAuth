@@ -41,7 +41,7 @@ class TestGroupRoutes:
         assert data["name"] == sample_group_data["name"]
         assert data["description"] == sample_group_data["description"]
         assert data["roles"] == sample_group_data["roles"]
-        assert "id" in data
+        assert "_id" in data
         assert "created_at" in data
 
     @pytest.mark.asyncio
@@ -147,7 +147,7 @@ class TestGroupRoutes:
             headers=admin_headers
         )
         group_data = create_response.json()
-        group_id = group_data["id"]
+        group_id = group_data["_id"]
         
         # Get the group by ID
         response = await client.get(
@@ -157,7 +157,7 @@ class TestGroupRoutes:
         
         assert response.status_code == 200
         data = response.json()
-        assert data["id"] == group_id
+        assert data["_id"] == group_id
         assert data["name"] == sample_group_data["name"]
 
     @pytest.mark.asyncio
@@ -196,7 +196,7 @@ class TestGroupRoutes:
             headers=admin_headers
         )
         group_data = create_response.json()
-        group_id = group_data["id"]
+        group_id = group_data["_id"]
         
         # Update the group
         update_data = {
@@ -245,7 +245,7 @@ class TestGroupRoutes:
             headers=admin_headers
         )
         group_data = create_response.json()
-        group_id = group_data["id"]
+        group_id = group_data["_id"]
         
         # Delete the group
         response = await client.delete(
@@ -281,7 +281,7 @@ class TestGroupRoutes:
             headers=admin_headers
         )
         group_data = create_response.json()
-        group_id = group_data["id"]
+        group_id = group_data["_id"]
         
         # Create a test user first
         user_data = {
@@ -299,7 +299,7 @@ class TestGroupRoutes:
             headers=admin_headers
         )
         user_info = user_response.json()
-        user_id = user_info["id"]
+        user_id = user_info["_id"]
         
         # Add user to group
         membership_data = {
@@ -324,7 +324,7 @@ class TestGroupRoutes:
             headers=admin_headers
         )
         group_data = create_response.json()
-        group_id = group_data["id"]
+        group_id = group_data["_id"]
         
         # Create a test user first
         user_data = {
@@ -342,7 +342,7 @@ class TestGroupRoutes:
             headers=admin_headers
         )
         user_info = user_response.json()
-        user_id = user_info["id"]
+        user_id = user_info["_id"]
         
         # Add user to group first
         membership_data = {
@@ -378,7 +378,7 @@ class TestGroupRoutes:
             headers=admin_headers
         )
         group_data = create_response.json()
-        group_id = group_data["id"]
+        group_id = group_data["_id"]
         
         # Get group members
         response = await client.get(
