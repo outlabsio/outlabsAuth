@@ -114,7 +114,7 @@ class TestGroupService:
             result = await group_service.get_group_by_id(group_id)
         
         assert result == mock_group
-        mock_group_model.get.assert_called_once_with(group_id)
+        mock_group_model.get.assert_called_once_with(group_id, fetch_links=True)
 
     @pytest.mark.asyncio
     async def test_get_group_by_id_not_found(self):
@@ -127,7 +127,7 @@ class TestGroupService:
             result = await group_service.get_group_by_id(group_id)
         
         assert result is None
-        mock_group_model.get.assert_called_once_with(group_id)
+        mock_group_model.get.assert_called_once_with(group_id, fetch_links=True)
 
     @pytest.mark.asyncio
     async def test_get_groups_without_filter(self):
