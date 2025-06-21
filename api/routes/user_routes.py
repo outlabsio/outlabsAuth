@@ -76,4 +76,19 @@ async def update_user(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"User with ID {user_id} not found."
         )
-    return updated_user 
+    return updated_user
+
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(
+    user_id: ObjectId = Depends(valid_object_id),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """
+    Delete a user by their ID.
+    """
+    deleted_count = await user_service.delete_user(db, user_id)
+    if deleted_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User with ID {user_id} not found."
+        )

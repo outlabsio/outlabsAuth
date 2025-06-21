@@ -70,5 +70,13 @@ class UserService:
         updated_user = await self.get_user_by_id(db, user_id)
         return updated_user
 
+    async def delete_user(self, db: AsyncIOMotorDatabase, user_id: ObjectId) -> int:
+        """
+        Deletes a user from the database.
+        Returns the number of users deleted.
+        """
+        result = await db.users.delete_one({"_id": user_id})
+        return result.deleted_count
+
 # Instantiate the service for use in other parts of the application
 user_service = UserService() 
