@@ -1,4 +1,5 @@
 from typing import List, Optional
+from pymongo.errors import DuplicateKeyError
 from fastapi import HTTPException, status
 
 from ..models.role_model import RoleModel
@@ -23,9 +24,22 @@ class RoleService:
                     detail=f"Permission '{permission_id}' does not exist."
                 )
 
-        role = RoleModel(**role_data.model_dump())
-        await role.insert()
-        return role
+        try:
+            role = RoleModel(**role_data.model_dump())
+            await role.insert()
+            return role
+        except DuplicateKeyError as e:
+            # Handle duplicate key violations (role ID or name already exists)
+            if "name" in str(e):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Role with name '{role_data.name}' already exists."
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Role with ID '{role_data.id}' already exists."
+                )
 
     async def get_role_by_id(self, role_id: str) -> Optional[RoleModel]:
         """

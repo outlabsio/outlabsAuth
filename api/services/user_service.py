@@ -1,5 +1,6 @@
 from typing import List, Optional
 from beanie import PydanticObjectId
+from pymongo.errors import DuplicateKeyError
 from fastapi import HTTPException, status
 
 from ..models.user_model import UserModel
@@ -55,10 +56,22 @@ class UserService:
         
         user_dict["groups"] = groups_list
         
-        new_user = UserModel(**user_dict)
-        await new_user.insert()
-        
-        return new_user
+        try:
+            new_user = UserModel(**user_dict)
+            await new_user.insert()
+            return new_user
+        except DuplicateKeyError as e:
+            # Handle duplicate email constraint
+            if "email" in str(e):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"User with email '{user_data.email}' already exists."
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="User with this information already exists."
+                )
 
     async def create_sub_user(self, user_data: UserCreateSchema, client_account_id: str) -> UserModel:
         """
@@ -156,10 +169,22 @@ class UserService:
         for field, value in update_data.items():
             setattr(user, field, value)
             
-        user.update_timestamp()
-        await user.save()
-        
-        return user
+        try:
+            user.update_timestamp()
+            await user.save()
+            return user
+        except DuplicateKeyError as e:
+            # Handle duplicate email constraint on updates
+            if "email" in str(e):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"User with email '{update_data.get('email', 'this email')}' already exists."
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Update conflicts with existing user data."
+                )
 
     async def update_password(self, user_id: PydanticObjectId, new_password: str):
         """
