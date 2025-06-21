@@ -85,13 +85,13 @@ class UserService:
         """
         Retrieves a single user by their ID using Beanie ODM.
         """
-        return await UserModel.get(user_id)
+        return await UserModel.get(user_id, fetch_links=True)
 
     async def get_user_by_email(self, email: str) -> Optional[UserModel]:
         """
         Retrieves a single user by their email address using Beanie ODM.
         """
-        return await UserModel.find_one(UserModel.email == email)
+        return await UserModel.find_one(UserModel.email == email, fetch_links=True)
 
     async def get_users(
         self, 
@@ -103,7 +103,7 @@ class UserService:
         Retrieves a list of users with pagination using Beanie ODM.
         If client_account_id is provided, filters users by that account.
         """
-        query = UserModel.find()
+        query = UserModel.find(fetch_links=True)
         
         if client_account_id:
             # Get the client account first

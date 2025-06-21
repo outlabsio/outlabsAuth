@@ -20,6 +20,7 @@ from api.models.permission_model import PermissionModel
 from api.models.client_account_model import ClientAccountModel
 from api.models.refresh_token_model import RefreshTokenModel
 from api.models.password_reset_token_model import PasswordResetTokenModel
+from api.models.group_model import GroupModel
 
 # Use a separate database for testing
 TEST_DATABASE_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
@@ -53,6 +54,7 @@ async def test_db():
             ClientAccountModel,
             RefreshTokenModel,
             PasswordResetTokenModel,
+            GroupModel,
         ]
     )
     
@@ -62,12 +64,14 @@ async def test_db():
         'ClientAccountModel': ClientAccountModel,
         'RefreshTokenModel': RefreshTokenModel,
         'PasswordResetTokenModel': PasswordResetTokenModel,
+        'GroupModel': GroupModel,
     }
     
     UserModel.model_rebuild(_types_namespace=namespace)
     ClientAccountModel.model_rebuild(_types_namespace=namespace)
     RefreshTokenModel.model_rebuild(_types_namespace=namespace)
     PasswordResetTokenModel.model_rebuild(_types_namespace=namespace)
+    GroupModel.model_rebuild(_types_namespace=namespace)
     
     # Seed the test database
     await seed_database(test_db_instance)

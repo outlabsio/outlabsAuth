@@ -32,13 +32,15 @@ async def create_sub_user(
             detail="You do not have permission to create sub-users."
         )
     
-    new_user = await user_service.create_sub_user(user_data, str(current_user.client_account.id))
+    # Proper Beanie way: access Link ID via ref.id
+    client_account_id = str(current_user.client_account.ref.id)
+    new_user = await user_service.create_sub_user(user_data, client_account_id)
     
     # Convert to response format
     user_dict = new_user.model_dump(by_alias=True)
     user_dict["_id"] = str(user_dict["_id"])
     if new_user.client_account:
-        user_dict["client_account_id"] = str(new_user.client_account.id)
+        user_dict["client_account_id"] = str(new_user.client_account.ref.id)
     else:
         user_dict["client_account_id"] = None
     # Remove the client_account object from response
@@ -63,7 +65,7 @@ async def bulk_create_users(
         user_dict = user.model_dump(by_alias=True)
         user_dict["_id"] = str(user_dict["_id"])
         if user.client_account:
-            user_dict["client_account_id"] = str(user.client_account.id)
+            user_dict["client_account_id"] = str(user.client_account.ref.id)
         else:
             user_dict["client_account_id"] = None
         # Remove the client_account object from response
@@ -97,7 +99,7 @@ async def create_user(
     user_dict = new_user.model_dump(by_alias=True)
     user_dict["_id"] = str(user_dict["_id"])
     if new_user.client_account:
-        user_dict["client_account_id"] = str(new_user.client_account.id)
+        user_dict["client_account_id"] = str(new_user.client_account.ref.id)
     else:
         user_dict["client_account_id"] = None
     # Remove the client_account object from response
@@ -134,7 +136,7 @@ async def get_all_users(
         user_dict = user.model_dump(by_alias=True)
         user_dict["_id"] = str(user_dict["_id"])
         if user.client_account:
-            user_dict["client_account_id"] = str(user.client_account.id)
+            user_dict["client_account_id"] = str(user.client_account.ref.id)
         else:
             user_dict["client_account_id"] = None
         # Remove the client_account object from response
@@ -165,7 +167,7 @@ async def get_user_by_id(
         
     # Enforce data scoping - compare client account IDs
     if token_data.client_account_id and user.client_account:
-        if str(user.client_account.id) != token_data.client_account_id:
+        if str(user.client_account.ref.id) != token_data.client_account_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
     elif token_data.client_account_id and not user.client_account:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
@@ -174,7 +176,7 @@ async def get_user_by_id(
     user_dict = user.model_dump(by_alias=True)
     user_dict["_id"] = str(user_dict["_id"])
     if user.client_account:
-        user_dict["client_account_id"] = str(user.client_account.id)
+        user_dict["client_account_id"] = str(user.client_account.ref.id)
     else:
         user_dict["client_account_id"] = None
     # Remove the client_account object from response

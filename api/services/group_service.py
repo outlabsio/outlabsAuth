@@ -48,7 +48,7 @@ class GroupService:
         """
         Retrieves a single group by its ID using Beanie ODM.
         """
-        return await GroupModel.get(group_id)
+        return await GroupModel.get(group_id, fetch_links=True)
 
     async def get_groups(
         self, 
@@ -60,7 +60,7 @@ class GroupService:
         Retrieves a list of groups with pagination using Beanie ODM.
         If client_account_id is provided, filters groups by that account.
         """
-        query = GroupModel.find()
+        query = GroupModel.find(fetch_links=True)
         
         if client_account_id:
             # Get the client account first

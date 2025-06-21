@@ -54,6 +54,7 @@ async def login_for_access_token(
     )
 
     # Create Access Token, including client_account_id
+    # With fetch_links=True, we can access the linked object directly
     access_token_data = {
         "sub": str(user.id), 
         "jti": jti,
@@ -100,6 +101,7 @@ async def refresh_access_token(
     )
 
     # Create new access token linked to the new refresh token
+    # With fetch_links=True, we can access the linked object directly
     new_access_token_data = {
         "sub": str(user.id), 
         "jti": new_jti,
@@ -143,12 +145,9 @@ async def read_users_me(
     # Convert UserModel to dict and ensure ObjectId fields are strings
     user_dict = current_user.model_dump(by_alias=True)
     user_dict["_id"] = str(user_dict["_id"])
-    if user_dict.get("client_account") and hasattr(user_dict["client_account"], "id"):
-        user_dict["client_account_id"] = str(user_dict["client_account"].id)
-    elif current_user.client_account:
-        user_dict["client_account_id"] = str(current_user.client_account.id)
-    else:
-        user_dict["client_account_id"] = None
+    
+    # With fetch_links=True, we can access the linked object directly
+    user_dict["client_account_id"] = str(current_user.client_account.id) if current_user.client_account else None
     # Remove the client_account object from response
     user_dict.pop("client_account", None)
     return user_dict

@@ -74,6 +74,8 @@ async def list_groups(
     response_groups = []
     for group in groups:
         response_data = group.model_dump()
+        # Convert PydanticObjectId to string for API response
+        response_data["id"] = str(group.id)
         response_data["client_account_id"] = str(group.client_account.id) if group.client_account else None
         response_groups.append(GroupResponseSchema(**response_data))
     

@@ -109,7 +109,7 @@ class TestUserService:
             result = await user_service.get_user_by_id(user_id)
         
         assert result == mock_user
-        mock_user_model.get.assert_called_once_with(user_id)
+        mock_user_model.get.assert_called_once_with(user_id, fetch_links=True)
     
     @pytest.mark.asyncio
     async def test_get_user_by_id_not_found(self):
@@ -122,7 +122,7 @@ class TestUserService:
             result = await user_service.get_user_by_id(user_id)
         
         assert result is None
-        mock_user_model.get.assert_called_once_with(user_id)
+        mock_user_model.get.assert_called_once_with(user_id, fetch_links=True)
     
     @pytest.mark.asyncio
     async def test_get_user_by_email_found(self):
