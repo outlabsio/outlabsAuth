@@ -87,7 +87,7 @@ class TestDuplicateConstraints:
             "_id": f"test_role_{timestamp}",
             "name": f"Test Role {timestamp}",
             "description": "First role",
-            "permissions": ["rbac:permission:read"]  # Use an existing permission
+            "permissions": ["user:read"]  # Use a valid existing permission
         }
         
         response1 = await client.post("/v1/roles/", json=role_data, headers=admin_headers)
@@ -98,7 +98,7 @@ class TestDuplicateConstraints:
             "_id": f"test_role_{timestamp}_2",
             "name": f"Test Role {timestamp}",  # Same name
             "description": "Second role",
-            "permissions": ["rbac:permission:read"]
+            "permissions": ["user:read"]
         }
         
         response2 = await client.post("/v1/roles/", json=duplicate_role_data, headers=admin_headers)
@@ -114,7 +114,7 @@ class TestDuplicateConstraints:
             "_id": f"test_role_{timestamp}",
             "name": f"Test Role Name {timestamp}",
             "description": "First role",
-            "permissions": ["rbac:permission:read"]  # Use an existing permission
+            "permissions": ["user:read"]  # Use a valid existing permission
         }
         
         response1 = await client.post("/v1/roles/", json=role_data, headers=admin_headers)
@@ -125,7 +125,7 @@ class TestDuplicateConstraints:
             "_id": f"test_role_{timestamp}",  # Same ID
             "name": f"Different Role Name {timestamp}",
             "description": "Second role",
-            "permissions": ["rbac:permission:read"]
+            "permissions": ["user:read"]
         }
         
         response2 = await client.post("/v1/roles/", json=duplicate_role_data, headers=admin_headers)
