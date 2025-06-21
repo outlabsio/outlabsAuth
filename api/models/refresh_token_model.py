@@ -17,11 +17,4 @@ class RefreshTokenModel(BaseDBModel):
     ip_address: Optional[str] = None
     user_agent: Optional[str] = None
 
-    class Config(BaseDBModel.Config):
-        collection = "refresh_tokens"
-        # Indexes ensure fast lookups by jti and automatic cleanup of expired/revoked tokens
-        indexes = [
-            "jti",
-            ("expires_at", {"expireAfterSeconds": 0}),
-            ("user_id",),
-        ] 
+    # Collection metadata - handled by services layer 

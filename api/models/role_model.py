@@ -12,5 +12,4 @@ class RoleModel(BaseDBModelWithStringID):
     permissions: List[str] = Field(default_factory=list) # List of permission IDs
     is_assignable_by_main_client: bool = Field(False, index=True)
 
-    class Config(BaseDBModelWithStringID.Config):
-        collection = "roles" 
+    # Collection metadata - handled by services layer 

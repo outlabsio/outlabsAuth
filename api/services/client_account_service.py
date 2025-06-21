@@ -1,6 +1,8 @@
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from typing import List, Optional
 from bson import ObjectId
+from pymongo.errors import DuplicateKeyError
+from fastapi import HTTPException, status
 
 from ..models.client_account_model import ClientAccountModel
 from ..schemas.client_account_schema import ClientAccountCreateSchema, ClientAccountUpdateSchema
@@ -15,7 +17,21 @@ class ClientAccountService:
         Creates a new client account.
         """
         account = ClientAccountModel(**account_data.model_dump())
-        await db.client_accounts.insert_one(account.model_dump(by_alias=True))
+        try:
+            await db.client_accounts.insert_one(account.model_dump(by_alias=True))
+        except DuplicateKeyError as e:
+            # Handle duplicate key errors gracefully
+            if "name_1" in str(e):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A client account with this name already exists."
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A client account with these details already exists."
+                )
+        
         created_account = await self.get_client_account_by_id(db, account.id)
         return created_account
 
@@ -43,8 +59,22 @@ class ClientAccountService:
         update_data = account_data.model_dump(exclude_unset=True)
         if not update_data:
             return await self.get_client_account_by_id(db, account_id)
-            
-        await db.client_accounts.update_one({"_id": account_id}, {"$set": update_data})
+        
+        try:
+            await db.client_accounts.update_one({"_id": account_id}, {"$set": update_data})
+        except DuplicateKeyError as e:
+            # Handle duplicate key errors gracefully
+            if "name_1" in str(e):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A client account with this name already exists."
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="A client account with these details already exists."
+                )
+                
         return await self.get_client_account_by_id(db, account_id)
 
     async def delete_client_account(self, db: AsyncIOMotorDatabase, account_id: ObjectId) -> int:

@@ -22,6 +22,4 @@ class ClientAccountModel(BaseDBModel):
     main_contact_user_id: Optional[PyObjectId] = None
     data_retention_policy_days: Optional[int] = None
 
-    class Config(BaseDBModel.Config):
-        collection = "client_accounts"
-        indexes = ["name"] 
+    # Collection metadata - handled by services layer 

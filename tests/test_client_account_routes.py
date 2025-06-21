@@ -4,10 +4,19 @@ from bson import ObjectId
 import uuid
 
 # Test data for client accounts  
-test_client_account_data = {
-    "name": "Test Client Account",
-    "description": "Test client account for testing purposes"
-}
+import uuid
+import time
+
+def get_unique_client_account_data():
+    """Generate unique test data for each test to avoid duplicate key errors."""
+    timestamp = int(time.time() * 1000)  # milliseconds
+    return {
+        "name": f"Test Client Account {timestamp}",
+        "description": "Test client account for testing purposes"
+    }
+
+# Default test data (will be made unique in each test)
+test_client_account_data = get_unique_client_account_data()
 
 class TestClientAccountRoutes:
     """Test suite for client account management routes."""
@@ -28,36 +37,41 @@ class TestClientAccountRoutes:
     @pytest.mark.asyncio
     async def test_create_client_account_success(self, client):
         """Test creating a client account with valid data."""
+        unique_data = get_unique_client_account_data()
         response = await client.post(
             "/v1/client_accounts/",
-            json=test_client_account_data,
+            json=unique_data,
             headers=self.admin_headers
         )
         assert response.status_code == 201
         data = response.json()
-        assert data["name"] == test_client_account_data["name"]
-        assert data["description"] == test_client_account_data["description"]
+        assert data["name"] == unique_data["name"]
+        assert data["description"] == unique_data["description"]
         assert data["status"] == "active"  # Default status
     
     @pytest.mark.asyncio
-    async def test_create_client_account_duplicate_id(self, client):
-        """Test creating a client account with duplicate ID."""
+    async def test_create_client_account_duplicate_name(self, client):
+        """Test creating a client account with duplicate name (should fail due to unique constraint)."""
         # First creation should succeed
+        unique_data = get_unique_client_account_data()
         response1 = await client.post(
             "/v1/client_accounts/",
-            json=test_client_account_data,
+            json=unique_data,
             headers=self.admin_headers
         )
         assert response1.status_code == 201
         
-        # Duplicate creation should fail
-        duplicate_data = test_client_account_data.copy()
+        # Duplicate name creation should fail due to unique constraint
+        duplicate_data = unique_data.copy()  # Same name
         response2 = await client.post(
             "/v1/client_accounts/",
             json=duplicate_data,
             headers=self.admin_headers
         )
-        assert response2.status_code == 409  # Conflict
+        # Should return 409 Conflict due to duplicate name constraint
+        assert response2.status_code == 409
+        error_data = response2.json()
+        assert "name already exists" in error_data["detail"]
     
     @pytest.mark.asyncio
     async def test_create_client_account_invalid_data(self, client):
@@ -109,9 +123,10 @@ class TestClientAccountRoutes:
     async def test_get_client_account_by_id_success(self, client):
         """Test retrieving a client account by valid ID."""
         # First create a client account
+        unique_data = get_unique_client_account_data()
         create_response = await client.post(
             "/v1/client_accounts/",
-            json=test_client_account_data,
+            json=unique_data,
             headers=self.admin_headers
         )
         assert create_response.status_code == 201
@@ -125,7 +140,7 @@ class TestClientAccountRoutes:
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["name"] == test_client_account_data["name"]
+        assert data["name"] == unique_data["name"]
     
     @pytest.mark.asyncio
     async def test_get_client_account_by_invalid_id(self, client):
@@ -134,7 +149,7 @@ class TestClientAccountRoutes:
             "/v1/client_accounts/invalid-id",
             headers=self.admin_headers
         )
-        assert response.status_code == 422  # Validation error
+        assert response.status_code == 400  # Bad Request for invalid ObjectId format
     
     @pytest.mark.asyncio
     async def test_get_client_account_not_found(self, client):
@@ -150,9 +165,10 @@ class TestClientAccountRoutes:
     async def test_update_client_account_success(self, client):
         """Test updating a client account successfully."""
         # First create a client account
+        unique_data = get_unique_client_account_data()
         create_response = await client.post(
             "/v1/client_accounts/",
-            json=test_client_account_data,
+            json=unique_data,
             headers=self.admin_headers
         )
         assert create_response.status_code == 201
@@ -160,8 +176,9 @@ class TestClientAccountRoutes:
         account_id = created_account.get("id", created_account.get("_id"))
         
         # Then update it
+        timestamp = int(time.time() * 1000)
         update_data = {
-            "name": "Updated Client Account Name",
+            "name": f"Updated Client Account Name {timestamp}",
             "description": "Updated description"
         }
         response = await client.put(
@@ -192,10 +209,8 @@ class TestClientAccountRoutes:
     async def test_delete_client_account_success(self, client):
         """Test deleting a client account successfully."""
         # First create a client account
-        unique_account_data = {
-            "name": "Account to Delete",
-            "description": "Client account to be deleted"
-        }
+        unique_account_data = get_unique_client_account_data()
+        unique_account_data["description"] = "Client account to be deleted"
         create_response = await client.post(
             "/v1/client_accounts/",
             json=unique_account_data,

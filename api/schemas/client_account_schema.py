@@ -5,7 +5,7 @@ from datetime import datetime
 from ..models.client_account_model import ClientAccountStatus
 
 class ClientAccountCreateSchema(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=100)  # Require non-empty name
     description: Optional[str] = None
     main_contact_user_id: Optional[str] = None
 
@@ -14,7 +14,7 @@ class ClientAccountCreateSchema(BaseModel):
     )
 
 class ClientAccountUpdateSchema(BaseModel):
-    name: Optional[str] = None
+    name: Optional[str] = Field(None, min_length=1, max_length=100)  # If provided, require non-empty name
     description: Optional[str] = None
     status: Optional[ClientAccountStatus] = None
     main_contact_user_id: Optional[str] = None
