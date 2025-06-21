@@ -2,6 +2,7 @@ from passlib.context import CryptContext
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from jose import JWTError, jwt
+import uuid
 
 from ..config import settings
 from ..schemas.auth_schema import TokenDataSchema
@@ -38,9 +39,24 @@ class SecurityService:
         else:
             expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         
-        to_encode.update({"exp": expire})
+        to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc)})
         encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
         return encoded_jwt
+
+    def create_refresh_token(self, data: dict, expires_delta: Optional[timedelta] = None):
+        to_encode = data.copy()
+        if expires_delta:
+            expire = datetime.now(timezone.utc) + expires_delta
+        else:
+            expire = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+
+        to_encode.update({
+            "exp": expire,
+            "iat": datetime.now(timezone.utc),
+            "jti": str(uuid.uuid4()) # Unique ID for this token
+        })
+        encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+        return encoded_jwt, to_encode["jti"], expire
 
     def decode_access_token(self, token: str) -> TokenDataSchema:
         """
@@ -56,7 +72,7 @@ class SecurityService:
             user_id: str = payload.get("sub")
             if user_id is None:
                 raise credentials_exception
-            token_data = TokenDataSchema(user_id=user_id)
+            token_data = TokenDataSchema(user_id=user_id, jti=payload.get("jti"))
         except JWTError:
             raise credentials_exception
         return token_data

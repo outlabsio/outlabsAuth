@@ -5,13 +5,15 @@ from typing import List
 from ..database import get_database
 from ..services.permission_service import permission_service
 from ..schemas.permission_schema import PermissionCreateSchema, PermissionResponseSchema
+from ..dependencies import has_permission
 
 router = APIRouter(
     prefix="/v1/permissions",
-    tags=["Permission Management"]
+    tags=["Permission Management"],
+    dependencies=[Depends(has_permission("permission:read"))]
 )
 
-@router.post("/", response_model=PermissionResponseSchema, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=PermissionResponseSchema, status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("permission:create"))])
 async def create_permission(
     permission_data: PermissionCreateSchema,
     db: AsyncIOMotorDatabase = Depends(get_database)

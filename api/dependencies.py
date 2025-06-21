@@ -2,11 +2,14 @@ from bson import ObjectId
 from fastapi import HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from typing import Tuple
 
 from .database import get_database
 from .services.security_service import security_service
 from .services.user_service import user_service
+from .services.role_service import role_service
 from .models.user_model import UserModel
+from .schemas.auth_schema import TokenDataSchema
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/auth/login")
 
@@ -19,13 +22,12 @@ def valid_object_id(id: str):
             detail=f"Invalid ObjectId: {id}"
         )
 
-async def get_current_user(
+async def get_current_user_with_token(
     token: str = Depends(oauth2_scheme), 
     db: AsyncIOMotorDatabase = Depends(get_database)
-) -> UserModel:
+) -> Tuple[UserModel, TokenDataSchema]:
     """
-    Decodes JWT token to get user_id, then retrieves user from DB.
-    This is the primary dependency for endpoint authorization.
+    Decodes JWT, then retrieves user from DB. Returns user and token payload.
     """
     token_data = security_service.decode_access_token(token)
     user = await user_service.get_user_by_id(db, ObjectId(token_data.user_id))
@@ -34,4 +36,34 @@ async def get_current_user(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found.",
         )
-    return user 
+    return user, token_data
+
+def has_permission(required_permission: str):
+    """
+    Dependency factory to check if the current user has the required permission.
+    """
+    async def _has_permission(
+        user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token),
+        db: AsyncIOMotorDatabase = Depends(get_database)
+    ):
+        current_user, _ = user_and_token
+        user_permissions = set()
+        if current_user.roles:
+            for role_id in current_user.roles:
+                role = await role_service.get_role_by_id(db, role_id)
+                if role and role.permissions:
+                    user_permissions.update(role.permissions)
+        
+        if required_permission not in user_permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to perform this action."
+            )
+        return current_user # Keep returning just the user for compatibility
+    return _has_permission
+
+# A simpler dependency that just returns the user, for endpoints that don't need the token data
+async def get_current_user(
+    user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token)
+) -> UserModel:
+    return user_and_token[0] 

@@ -5,13 +5,15 @@ from typing import List
 from ..database import get_database
 from ..services.role_service import role_service
 from ..schemas.role_schema import RoleCreateSchema, RoleUpdateSchema, RoleResponseSchema
+from ..dependencies import has_permission
 
 router = APIRouter(
     prefix="/v1/roles",
-    tags=["Role Management"]
+    tags=["Role Management"],
+    dependencies=[Depends(has_permission("role:read"))]
 )
 
-@router.post("/", response_model=RoleResponseSchema, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=RoleResponseSchema, status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("role:create"))])
 async def create_role(
     role_data: RoleCreateSchema,
     db: AsyncIOMotorDatabase = Depends(get_database)
@@ -59,7 +61,7 @@ async def get_role_by_id(
         )
     return role
 
-@router.put("/{role_id}", response_model=RoleResponseSchema)
+@router.put("/{role_id}", response_model=RoleResponseSchema, dependencies=[Depends(has_permission("role:update"))])
 async def update_role(
     role_id: str,
     role_data: RoleUpdateSchema,
@@ -76,7 +78,7 @@ async def update_role(
         )
     return updated_role
 
-@router.delete("/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{role_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(has_permission("role:delete"))])
 async def delete_role(
     role_id: str,
     db: AsyncIOMotorDatabase = Depends(get_database)

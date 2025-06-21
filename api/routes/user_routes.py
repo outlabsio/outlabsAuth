@@ -6,14 +6,15 @@ from bson import ObjectId
 from ..database import get_database
 from ..services.user_service import user_service
 from ..schemas.user_schema import UserCreateSchema, UserUpdateSchema, UserResponseSchema
-from ..dependencies import valid_object_id
+from ..dependencies import valid_object_id, has_permission
 
 router = APIRouter(
     prefix="/v1/users",
-    tags=["User Management"]
+    tags=["User Management"],
+    dependencies=[Depends(has_permission("user:read"))]
 )
 
-@router.post("/", response_model=UserResponseSchema, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=UserResponseSchema, status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("user:create"))])
 async def create_user(
     user_data: UserCreateSchema,
     db: AsyncIOMotorDatabase = Depends(get_database)
@@ -61,7 +62,7 @@ async def get_user_by_id(
         )
     return user
 
-@router.put("/{user_id}", response_model=UserResponseSchema)
+@router.put("/{user_id}", response_model=UserResponseSchema, dependencies=[Depends(has_permission("user:update"))])
 async def update_user(
     user_data: UserUpdateSchema,
     user_id: ObjectId = Depends(valid_object_id),
@@ -78,7 +79,7 @@ async def update_user(
         )
     return updated_user
 
-@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(has_permission("user:delete"))])
 async def delete_user(
     user_id: ObjectId = Depends(valid_object_id),
     db: AsyncIOMotorDatabase = Depends(get_database)
