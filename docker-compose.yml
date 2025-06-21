@@ -5,18 +5,22 @@ services:
     build: .
     container_name: outlabs_auth_api
     ports:
-      - "8000:8000"
+      - "8030:8030"
     volumes:
       - .:/app
     environment:
       - DATABASE_URL=mongodb://mongo:27017
-      - MONGO_INITDB_DATABASE=outlabsAuth
+      - MONGO_DATABASE=outlabsAuth
+      - SECRET_KEY=a_very_secret_key_that_should_be_changed_in_production
+      - ACCESS_TOKEN_EXPIRE_MINUTES=30
+      - REFRESH_TOKEN_EXPIRE_DAYS=7
+      - ALGORITHM=HS256
     depends_on:
       - mongo
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8030 --reload
 
   mongo:
-    image: mongo:latest
+    image: mongo:8.0
     container_name: outlabs_auth_mongo
     ports:
       - "27017:27017"

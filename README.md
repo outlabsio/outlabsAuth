@@ -31,9 +31,9 @@ This repository contains a standalone, generic Role-Based Access Control (RBAC) 
     docker compose up -d --build
     ```
 
-    - The FastAPI application will be running and available at `http://localhost:8000`.
-    - The interactive API documentation (Swagger UI) will be at `http://localhost:8000/docs`.
-    - The basic health check endpoint is at `http://localhost:8000/health`.
+    - The FastAPI application will be running and available at `http://localhost:8030`.
+    - The interactive API documentation (Swagger UI) will be at `http://localhost:8030/docs`.
+    - The basic health check endpoint is at `http://localhost:8030/health`.
 
 ### Local Development with `uv` (Optional)
 
@@ -61,5 +61,5 @@ If you prefer to run the application locally without Docker for certain tasks, y
 
 5.  **Run the development server:**
     ```bash
-    uvicorn api.main:app --reload
+    uvicorn api.main:app --port 8030 --reload
     ```

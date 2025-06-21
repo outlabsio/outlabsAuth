@@ -21,7 +21,7 @@ To provide a single, secure, and scalable source of truth for user identity, aut
 
 ### Technology Stack
 
-- **Backend Framework**: FastAPI (Python)
+- **Backend Framework**: FastAPI (Python, using Pydantic V2)
 - **Database**: MongoDB
 - **Caching/Blacklisting**: Redis (Recommended for performance-critical components)
 - **Authentication**: JSON Web Tokens (JWT) with Refresh Tokens
@@ -669,12 +669,12 @@ This project will be developed in phases to ensure the most critical components 
 The goal of this phase is to establish the fundamental authentication and authorization capabilities.
 
 - **Technology Stack Setup:**
-  - Initialize FastAPI project structure.
-  - Connect to MongoDB.
+  - ✅ Initialize FastAPI project structure.
+  - ✅ Connect to MongoDB.
 - **Core Database Schema:**
-  - `users` collection (core fields only: `email`, `password_hash`, `roles`).
-  - `roles` collection.
-  - `permissions` collection.
+  - ✅ `users` collection.
+  - ✅ `roles` collection.
+  - ✅ `permissions` collection.
 - **Core Authentication API:**
   - `POST /v1/auth/register`: A simplified version for admins to create the first users.
   - `POST /v1/auth/login`: User authentication and JWT generation.
@@ -684,14 +684,14 @@ The goal of this phase is to establish the fundamental authentication and author
   - Create dependency for checking permissions based on roles.
   - `POST /v1/auth/authorize`: Internal endpoint for services to verify permissions.
 - **Basic Management APIs (Admin-only):**
-  - **Users:** `POST /v1/users` (Admin create), `GET /v1/users`, `GET /v1/users/{user_id}`, `PUT /v1/users/{user_id}` (role assignment).
+  - **Users:** ✅ `POST /v1/users`, `GET /v1/users`, `GET /v1/users/{user_id}`, `PUT /v1/users/{user_id}`.
   - **Roles:** `POST /v1/roles`, `GET /v1/roles`, `PUT /v1/roles/{role_id}`.
   - **Permissions:** `POST /v1/permissions`, `GET /v1/permissions`.
 - **Core Logic Implementation:**
-  - Password hashing with Passlib.
+  - ✅ Password hashing with Passlib.
   - Basic JWT generation (Access Token only) and validation.
 - **Documentation:**
-  - Auto-generated OpenAPI/Swagger docs for the implemented endpoints.
+  - ✅ Auto-generated OpenAPI/Swagger docs for the implemented endpoints.
 
 ### Phase 2: Enhanced User Experience & Security
 
