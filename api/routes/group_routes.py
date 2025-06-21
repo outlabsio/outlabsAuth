@@ -30,7 +30,7 @@ async def create_group(
     
     # Ensure non-admin users can only create groups in their own client account
     if not current_user.is_main_client:
-        if current_user.client_account and str(current_user.client_account.id) != group_data.client_account_id:
+        if current_user.client_account and str(current_user.client_account.ref.id) != group_data.client_account_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only create groups within your own client account"
@@ -41,7 +41,7 @@ async def create_group(
         
         # Convert to response format
         response_data = new_group.model_dump()
-        response_data["client_account_id"] = str(new_group.client_account.id) if new_group.client_account else None
+        response_data["client_account_id"] = str(str(new_group.client_account.id).ref.id) if new_group.client_account else None
         
         return GroupResponseSchema(**response_data)
     except HTTPException as e:
@@ -76,7 +76,7 @@ async def list_groups(
         response_data = group.model_dump()
         # Convert PydanticObjectId to string for API response
         response_data["id"] = str(group.id)
-        response_data["client_account_id"] = str(group.client_account.id) if group.client_account else None
+        response_data["client_account_id"] = str(str(group.client_account.id).ref.id) if group.client_account else None
         response_groups.append(GroupResponseSchema(**response_data))
     
     return response_groups
@@ -105,7 +105,7 @@ async def get_group(
     
     # Convert to response format
     response_data = group.model_dump()
-    response_data["client_account_id"] = str(group.client_account.id) if group.client_account else None
+    response_data["client_account_id"] = str(str(group.client_account.id).ref.id) if group.client_account else None
     
     return GroupResponseSchema(**response_data)
 
@@ -139,7 +139,7 @@ async def update_group(
         
         # Convert to response format
         response_data = updated_group.model_dump()
-        response_data["client_account_id"] = str(updated_group.client_account.id) if updated_group.client_account else None
+        response_data["client_account_id"] = str(str(updated_group.client_account.id).ref.id) if updated_group.client_account else None
         
         return GroupResponseSchema(**response_data)
     except HTTPException as e:
@@ -265,7 +265,7 @@ async def get_group_members(
     member_data = []
     for member in members:
         member_dict = member.model_dump()
-        member_dict["client_account_id"] = str(member.client_account.id) if member.client_account else None
+        member_dict["client_account_id"] = str(str(member.client_account.id).ref.id) if member.client_account else None
         member_data.append(member_dict)
     
     return GroupMembersResponseSchema(
@@ -310,7 +310,7 @@ async def get_user_groups(
     groups_response = []
     for group in user_groups:
         response_data = group.model_dump()
-        response_data["client_account_id"] = str(group.client_account.id) if group.client_account else None
+        response_data["client_account_id"] = str(str(group.client_account.id).ref.id) if group.client_account else None
         groups_response.append(GroupResponseSchema(**response_data))
     
     return UserGroupsResponseSchema(
