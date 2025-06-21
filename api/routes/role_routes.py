@@ -31,7 +31,10 @@ async def create_role(
         )
     
     new_role = await role_service.create_role(db, role_data)
-    return new_role
+    # Convert to dict and ensure proper field mapping for response
+    role_dict = new_role.model_dump(by_alias=True)
+    role_dict["id"] = role_dict.pop("_id", role_dict.get("id"))
+    return role_dict
 
 @router.get("/", response_model=List[RoleResponseSchema])
 async def get_all_roles(
@@ -43,7 +46,13 @@ async def get_all_roles(
     Retrieve a list of all roles.
     """
     roles = await role_service.get_roles(db, skip=skip, limit=limit)
-    return roles
+    # Convert each role to dict and ensure proper field mapping
+    role_dicts = []
+    for role in roles:
+        role_dict = role.model_dump(by_alias=True)
+        role_dict["id"] = role_dict.pop("_id", role_dict.get("id"))
+        role_dicts.append(role_dict)
+    return role_dicts
 
 @router.get("/{role_id}", response_model=RoleResponseSchema)
 async def get_role_by_id(
@@ -59,7 +68,10 @@ async def get_role_by_id(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Role with ID '{role_id}' not found."
         )
-    return role
+    # Convert to dict and ensure proper field mapping for response
+    role_dict = role.model_dump(by_alias=True)
+    role_dict["id"] = role_dict.pop("_id", role_dict.get("id"))
+    return role_dict
 
 @router.put("/{role_id}", response_model=RoleResponseSchema, dependencies=[Depends(has_permission("role:update"))])
 async def update_role(
@@ -76,7 +88,10 @@ async def update_role(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Role with ID '{role_id}' not found."
         )
-    return updated_role
+    # Convert to dict and ensure proper field mapping for response
+    role_dict = updated_role.model_dump(by_alias=True)
+    role_dict["id"] = role_dict.pop("_id", role_dict.get("id"))
+    return role_dict
 
 @router.delete("/{role_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(has_permission("role:delete"))])
 async def delete_role(

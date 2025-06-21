@@ -34,7 +34,10 @@ async def create_permission(
         )
     
     new_permission = await permission_service.create_permission(db, permission_data)
-    return new_permission
+    # Convert to dict and ensure proper field mapping for response
+    perm_dict = new_permission.model_dump(by_alias=True)
+    perm_dict["id"] = perm_dict.pop("_id", perm_dict.get("id"))
+    return perm_dict
 
 @router.get("/", response_model=List[PermissionResponseSchema])
 async def get_all_permissions(
@@ -46,4 +49,29 @@ async def get_all_permissions(
     Retrieve a list of all permissions.
     """
     permissions = await permission_service.get_permissions(db, skip=skip, limit=limit)
-    return permissions 
+    # Convert each permission to dict and ensure proper field mapping
+    perm_dicts = []
+    for permission in permissions:
+        perm_dict = permission.model_dump(by_alias=True)
+        perm_dict["id"] = perm_dict.pop("_id", perm_dict.get("id"))
+        perm_dicts.append(perm_dict)
+    return perm_dicts
+
+@router.get("/{permission_id}", response_model=PermissionResponseSchema)
+async def get_permission_by_id(
+    permission_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """
+    Retrieve a single permission by its ID.
+    """
+    permission = await permission_service.get_permission_by_id(db, permission_id)
+    if permission is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Permission with ID '{permission_id}' not found."
+        )
+    # Convert to dict and ensure proper field mapping for response
+    perm_dict = permission.model_dump(by_alias=True)
+    perm_dict["id"] = perm_dict.pop("_id", perm_dict.get("id"))
+    return perm_dict 

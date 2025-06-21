@@ -14,7 +14,7 @@ class UserCreateSchema(BaseModel):
     password: str
     first_name: Optional[str] = None
     last_name: Optional[str] = None
-    client_account_id: Optional[PyObjectId] = None
+    client_account_id: Optional[str] = None
     roles: Optional[List[str]] = []
     is_main_client: Optional[bool] = False
     locale: Optional[str] = None

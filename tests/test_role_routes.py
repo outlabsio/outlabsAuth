@@ -1,5 +1,6 @@
 import pytest
 from httpx import AsyncClient
+import uuid
 
 # Mark all tests in this file as async
 pytestmark = pytest.mark.asyncio
@@ -10,8 +11,10 @@ ADMIN_USER_DATA = {
     "password": "a_very_secure_password"
 }
 
+# Generate unique test role ID to avoid conflicts
+TEST_ROLE_ID = f"test_role_{str(uuid.uuid4())[:8]}"
 TEST_ROLE_DATA = {
-    "id": "test_role",
+    "_id": TEST_ROLE_ID,
     "name": "Test Role",
     "description": "A test role for unit testing",
     "permissions": ["user:read", "user:create"],
@@ -35,11 +38,16 @@ class TestRoleRoutes:
         token = await get_admin_token(client)
         headers = {"Authorization": f"Bearer {token}"}
         
-        response = await client.post("/v1/roles", json=TEST_ROLE_DATA, headers=headers)
+        response = await client.post("/v1/roles/", json=TEST_ROLE_DATA, headers=headers)
+        
+        # Debug: print the response if it's not 201
+        if response.status_code != 201:
+            print(f"DEBUG: Role creation failed with status {response.status_code}")
+            print(f"DEBUG: Response body: {response.text}")
         
         assert response.status_code == 201
         role_data = response.json()
-        assert role_data["id"] == TEST_ROLE_DATA["id"]
+        assert role_data["_id"] == TEST_ROLE_DATA["_id"]
         assert role_data["name"] == TEST_ROLE_DATA["name"]
         assert role_data["description"] == TEST_ROLE_DATA["description"]
         assert role_data["permissions"] == TEST_ROLE_DATA["permissions"]
@@ -52,13 +60,13 @@ class TestRoleRoutes:
         
         # Try to create platform_admin role again (should fail)
         duplicate_role = {
-            "id": "platform_admin",
+            "_id": "platform_admin",
             "name": "Another Platform Admin",
             "description": "Duplicate role",
             "permissions": ["user:read"]
         }
         
-        response = await client.post("/v1/roles", json=duplicate_role, headers=headers)
+        response = await client.post("/v1/roles/", json=duplicate_role, headers=headers)
         assert response.status_code == 409
         assert "already exists" in response.json()["detail"]
     
@@ -68,20 +76,20 @@ class TestRoleRoutes:
         headers = {"Authorization": f"Bearer {token}"}
         
         invalid_role = {
-            "id": "invalid_role",
+            "_id": "invalid_role",
             "name": "Invalid Role",
             "description": "Role with invalid permissions",
             "permissions": ["nonexistent:permission", "another:invalid"]
         }
         
-        response = await client.post("/v1/roles", json=invalid_role, headers=headers)
+        response = await client.post("/v1/roles/", json=invalid_role, headers=headers)
         assert response.status_code == 400
         assert "permission" in response.json()["detail"].lower()
     
     async def test_create_role_without_permission(self, client: AsyncClient):
         """Test role creation without proper permissions fails."""
         # Test without any token
-        response = await client.post("/v1/roles", json=TEST_ROLE_DATA)
+        response = await client.post("/v1/roles/", json=TEST_ROLE_DATA)
         assert response.status_code == 401
     
     async def test_get_all_roles(self, client: AsyncClient):
@@ -89,7 +97,7 @@ class TestRoleRoutes:
         token = await get_admin_token(client)
         headers = {"Authorization": f"Bearer {token}"}
         
-        response = await client.get("/v1/roles", headers=headers)
+        response = await client.get("/v1/roles/", headers=headers)
         
         assert response.status_code == 200
         roles = response.json()
@@ -97,7 +105,7 @@ class TestRoleRoutes:
         assert len(roles) >= 1  # At least platform_admin should exist
         
         # Check that platform_admin role is in the list
-        role_ids = [role["id"] for role in roles]
+        role_ids = [role["_id"] for role in roles]
         assert "platform_admin" in role_ids
     
     async def test_get_roles_with_pagination(self, client: AsyncClient):
@@ -105,7 +113,7 @@ class TestRoleRoutes:
         token = await get_admin_token(client)
         headers = {"Authorization": f"Bearer {token}"}
         
-        response = await client.get("/v1/roles?skip=0&limit=10", headers=headers)
+        response = await client.get("/v1/roles/?skip=0&limit=10", headers=headers)
         
         assert response.status_code == 200
         roles = response.json()
@@ -122,7 +130,7 @@ class TestRoleRoutes:
         
         assert response.status_code == 200
         role_data = response.json()
-        assert role_data["id"] == "platform_admin"
+        assert role_data["_id"] == "platform_admin"
         assert role_data["name"] == "Platform Administrator"
         assert isinstance(role_data["permissions"], list)
         assert len(role_data["permissions"]) > 0
@@ -141,12 +149,12 @@ class TestRoleRoutes:
         headers = {"Authorization": f"Bearer {token}"}
         
         # First create a role to update
-        create_response = await client.post("/v1/roles", json=TEST_ROLE_DATA, headers=headers)
+        create_response = await client.post("/v1/roles/", json=TEST_ROLE_DATA, headers=headers)
         if create_response.status_code == 409:  # Role already exists
-            role_id = TEST_ROLE_DATA["id"]
+            role_id = TEST_ROLE_DATA["_id"]
         else:
             assert create_response.status_code == 201
-            role_id = create_response.json()["id"]
+            role_id = create_response.json()["_id"]
         
         # Update the role
         update_data = {
@@ -162,7 +170,7 @@ class TestRoleRoutes:
         assert updated_role["name"] == "Updated Test Role"
         assert updated_role["description"] == "Updated description"
         assert updated_role["permissions"] == ["user:read"]
-        assert updated_role["id"] == role_id  # ID should remain unchanged
+        assert updated_role["_id"] == role_id  # ID should remain unchanged
     
     async def test_update_nonexistent_role(self, client: AsyncClient):
         """Test updating a role that doesn't exist."""
@@ -181,18 +189,18 @@ class TestRoleRoutes:
         
         # First create a role to delete
         delete_role_data = {
-            "id": "deletable_role",
+            "_id": "deletable_role",
             "name": "Deletable Role",
             "description": "A role that can be deleted",
             "permissions": ["user:read"]
         }
         
-        create_response = await client.post("/v1/roles", json=delete_role_data, headers=headers)
+        create_response = await client.post("/v1/roles/", json=delete_role_data, headers=headers)
         if create_response.status_code == 409:  # Role already exists
-            role_id = delete_role_data["id"]
+            role_id = delete_role_data["_id"]
         else:
             assert create_response.status_code == 201
-            role_id = create_response.json()["id"]
+            role_id = create_response.json()["_id"]
         
         # Delete the role
         response = await client.delete(f"/v1/roles/{role_id}", headers=headers)
@@ -232,13 +240,13 @@ class TestRoleRoutes:
         
         # Create role with valid permissions
         valid_role = {
-            "id": "valid_perm_role",
+            "_id": "valid_perm_role",
             "name": "Valid Permission Role",
             "description": "Role with valid permissions",
             "permissions": existing_permissions[:2] if len(existing_permissions) >= 2 else existing_permissions
         }
         
-        response = await client.post("/v1/roles", json=valid_role, headers=headers)
+        response = await client.post("/v1/roles/", json=valid_role, headers=headers)
         assert response.status_code == 201
     
     async def test_role_assignability_flag(self, client: AsyncClient):
@@ -248,14 +256,14 @@ class TestRoleRoutes:
         
         # Create role that is assignable by main client
         assignable_role = {
-            "id": "assignable_role",
+            "_id": "assignable_role",
             "name": "Assignable Role",
             "description": "Role that can be assigned by main clients",
             "permissions": ["user:read"],
             "is_assignable_by_main_client": True
         }
         
-        response = await client.post("/v1/roles", json=assignable_role, headers=headers)
+        response = await client.post("/v1/roles/", json=assignable_role, headers=headers)
         assert response.status_code == 201
         
         role_data = response.json()
@@ -263,14 +271,14 @@ class TestRoleRoutes:
         
         # Create role that is NOT assignable by main client
         non_assignable_role = {
-            "id": "non_assignable_role",
+            "_id": "non_assignable_role",
             "name": "Non-Assignable Role",
             "description": "Role that cannot be assigned by main clients",
             "permissions": ["user:read"],
             "is_assignable_by_main_client": False
         }
         
-        response = await client.post("/v1/roles", json=non_assignable_role, headers=headers)
+        response = await client.post("/v1/roles/", json=non_assignable_role, headers=headers)
         assert response.status_code == 201
         
         role_data = response.json()
@@ -279,10 +287,10 @@ class TestRoleRoutes:
     async def test_unauthorized_access(self, client: AsyncClient):
         """Test that endpoints require proper authentication."""
         # Test without any token
-        response = await client.get("/v1/roles")
+        response = await client.get("/v1/roles/")
         assert response.status_code == 401
         
-        response = await client.post("/v1/roles", json=TEST_ROLE_DATA)
+        response = await client.post("/v1/roles/", json=TEST_ROLE_DATA)
         assert response.status_code == 401
         
         response = await client.get("/v1/roles/test_role")
