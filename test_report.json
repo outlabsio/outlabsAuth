@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-06-21T20:04:48.669299",
+  "timestamp": "2025-06-21T20:47:08.798240",
   "summary": {
     "total_modules": 15,
-    "total_passed": 249,
+    "total_passed": 64,
     "total_failed": 0,
     "total_skipped": 0,
-    "total_duration": 143.85489201545715
+    "total_duration": 55.39535069465637
   },
   "modules": [
     {
@@ -13,7 +13,7 @@
       "passed": 40,
       "failed": 0,
       "skipped": 0,
-      "duration": 19.571446895599365,
+      "duration": 19.329613208770752,
       "success_rate": 100.0
     },
     {
@@ -21,112 +21,112 @@
       "passed": 24,
       "failed": 0,
       "skipped": 0,
-      "duration": 26.25964903831482,
+      "duration": 25.21441888809204,
       "success_rate": 100.0
     },
     {
       "module": "tests/test_auth_comprehensive.py",
-      "passed": 30,
+      "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 18.955960750579834,
-      "success_rate": 100.0
+      "duration": 3.4175498485565186,
+      "success_rate": 0.0
     },
     {
       "module": "tests/test_user_routes.py",
-      "passed": 14,
+      "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 7.858083724975586,
-      "success_rate": 100.0
+      "duration": 0.6063008308410645,
+      "success_rate": 0.0
     },
     {
       "module": "tests/test_role_routes.py",
-      "passed": 16,
+      "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 7.04287314414978,
-      "success_rate": 100.0
+      "duration": 0.6429369449615479,
+      "success_rate": 0.0
     },
     {
       "module": "tests/test_permission_routes.py",
-      "passed": 10,
+      "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 5.390086889266968,
-      "success_rate": 100.0
+      "duration": 0.601978063583374,
+      "success_rate": 0.0
     },
     {
       "module": "tests/test_group_routes.py",
-      "passed": 19,
+      "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 8.433223009109497,
-      "success_rate": 100.0
+      "duration": 0.6234438419342041,
+      "success_rate": 0.0
     },
     {
       "module": "tests/test_group_service.py",
-      "passed": 23,
+      "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.57010817527771,
-      "success_rate": 100.0
+      "duration": 0.5880279541015625,
+      "success_rate": 0.0
     },
     {
       "module": "tests/test_client_account_routes.py",
-      "passed": 14,
+      "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 6.767155885696411,
-      "success_rate": 100.0
+      "duration": 0.6535470485687256,
+      "success_rate": 0.0
     },
     {
       "module": "tests/test_security_service.py",
-      "passed": 15,
+      "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 8.136273860931396,
-      "success_rate": 100.0
+      "duration": 0.6056828498840332,
+      "success_rate": 0.0
     },
     {
       "module": "tests/test_user_service.py",
-      "passed": 13,
+      "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.6129319667816162,
-      "success_rate": 100.0
+      "duration": 0.6294326782226562,
+      "success_rate": 0.0
     },
     {
       "module": "tests/test_access_control.py",
-      "passed": 6,
+      "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 8.590708017349243,
-      "success_rate": 100.0
+      "duration": 0.6195518970489502,
+      "success_rate": 0.0
     },
     {
       "module": "tests/test_duplicate_constraints.py",
-      "passed": 10,
+      "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 9.19375491142273,
-      "success_rate": 100.0
+      "duration": 0.6326870918273926,
+      "success_rate": 0.0
     },
     {
       "module": "tests/test_integration.py",
-      "passed": 7,
+      "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 7.589475870132446,
-      "success_rate": 100.0
+      "duration": 0.5956647396087646,
+      "success_rate": 0.0
     },
     {
       "module": "tests/test_enhanced_access_control.py",
-      "passed": 8,
+      "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 8.883159875869751,
-      "success_rate": 100.0
+      "duration": 0.6345148086547852,
+      "success_rate": 0.0
     }
   ]
 }

@@ -15,26 +15,57 @@ This stress test suite will:
 
 ## 🚀 **QUICK START - DESTROY YOUR SYSTEM NOW!**
 
-### 1. **Start Your API**
+### 1. **Setup Containers with Resource Constraints**
 
 ```bash
-# Make sure your API is running
-uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+# Start containers with production-like resource limits (8GB RAM, 4 CPU cores)
+./stress_test/setup_containers.sh
 ```
 
-### 2. **Install Dependencies**
+This will:
+
+- **🔥 Constrain API container**: 8GB RAM, 4 CPU cores, 4 workers
+- **🗄️ Constrain MongoDB**: 4GB RAM, 2 CPU cores
+- **📊 Show real-time resource usage**
+- **🎯 API available at**: http://localhost:8030
+
+### 2. **Seed Database with Realistic Test Data**
+
+```bash
+# Create foundation data (admin user, roles, permissions, basic client accounts)
+python scripts/seed_main.py
+
+# Add realistic companies and users via API calls (simulates real usage)
+python scripts/seed_via_api.py
+```
+
+This creates:
+
+- **🏢 6 Client Accounts**: GreenTech Industries, MedCorp Healthcare, RetailPlus, etc.
+- **👤 20+ Users**: Platform admin, client admins, managers, employees
+- **👥 9 Groups**: Engineering teams, management teams, operational groups
+- **🔐 Realistic Permissions**: Proper role hierarchies and access control
+
+**Test Credentials Created:**
+
+- Platform admin: `admin@test.com` / `admin123`
+- GreenTech admin: `admin@greentech.com` / `greentech123`
+- MedCorp admin: `admin@medcorp.com` / `medcorp123`
+- RetailPlus admin: `admin@retailplus.com` / `retail123`
+
+### 3. **Install Dependencies**
 
 ```bash
 pip install -r stress_test/requirements.txt
 ```
 
-### 3. **Launch the Orchestrator**
+### 4. **Launch the Orchestrator**
 
 ```bash
 ./stress_test/run_stress_tests.sh
 ```
 
-### 4. **Choose Your Destruction Level**
+### 5. **Choose Your Destruction Level**
 
 - 🔥 **Warmup** (50 users) - Light stress
 - 🔥🔥 **Medium** (200 users) - Moderate punishment
@@ -49,20 +80,20 @@ pip install -r stress_test/requirements.txt
 
 ```bash
 # Basic assault
-locust -f stress_test/locust_ddos.py --host=http://localhost:8000
+locust -f stress_test/locust_ddos.py --host=http://localhost:8030
 
 # Hardcore assault (1000 concurrent users)
-locust -f stress_test/locust_ddos.py --host=http://localhost:8000 -u 1000 -r 50
+locust -f stress_test/locust_ddos.py --host=http://localhost:8030 -u 1000 -r 50
 
 # Sustained attack (5 minutes of hell)
-locust -f stress_test/locust_ddos.py --host=http://localhost:8000 -u 500 -r 25 -t 300s
+locust -f stress_test/locust_ddos.py --host=http://localhost:8030 -u 500 -r 25 -t 300s
 
 # Distributed attack (multiple machines)
 # Master:
-locust -f stress_test/locust_ddos.py --host=http://localhost:8000 --master
+locust -f stress_test/locust_ddos.py --host=http://localhost:8030 --master
 
 # Workers:
-locust -f stress_test/locust_ddos.py --host=http://localhost:8000 --worker --master-host=<master-ip>
+locust -f stress_test/locust_ddos.py --host=http://localhost:8030 --worker --master-host=<master-ip>
 ```
 
 **Features:**
@@ -105,6 +136,29 @@ python ddos_stress_test.py
 - **Results aggregation**
 - **System health checking**
 - **Beautiful colored output**
+
+### 📊 **4. Container Resource Monitor (`monitor_container.py`)**
+
+**Real-time Docker container monitoring during stress tests**
+
+```bash
+# Run in separate terminal while stress testing
+python stress_test/monitor_container.py
+```
+
+**Features:**
+
+- **Real-time resource dashboard** with live updates
+- **CPU, Memory, Network, Disk I/O monitoring**
+- **Color-coded status indicators** (🟢 healthy, 🟡 stressed, 🔥 choking)
+- **Process count tracking**
+- **Resource limit awareness**
+
+**Monitor shows:**
+
+- **API Container**: 8GB RAM limit, 4 CPU cores, process count
+- **MongoDB Container**: 4GB RAM limit, 2 CPU cores, I/O stats
+- **Network traffic** and **disk usage** in real-time
 
 ## 📊 **ATTACK PATTERNS**
 
@@ -252,14 +306,84 @@ stress_test_results/
 - **Only** for robust production systems
 - **BACKUP YOUR DATA** before running
 
+## 🗄️ **DATABASE SEEDING REQUIREMENTS**
+
+**⚠️ CRITICAL: You MUST seed the database before running stress tests!**
+
+### **Why Seeding is Essential**
+
+Without seeded data, stress tests will **fail** because:
+
+- **🔐 No admin user** to authenticate with
+- **👥 No test users** to create realistic load patterns
+- **🏢 No client accounts** to test authorization under load
+- **📊 No baseline data** to stress database queries
+
+### **Seeding Process**
+
+```bash
+# 1. Foundation seeding (creates admin, roles, permissions)
+python scripts/seed_main.py
+
+# 2. Realistic API-based seeding (creates companies, users, groups)
+python scripts/seed_via_api.py
+```
+
+### **What Gets Created**
+
+- **🏢 6 Client Accounts**: Test Organization, ACME, Tech Startup, GreenTech, MedCorp, RetailPlus
+- **👤 20+ Users**: Platform admin, client admins, managers, employees across companies
+- **👥 9 Groups**: Engineering teams, management teams, operational groups
+- **🔐 Realistic Permissions**: Proper RBAC hierarchies for testing
+
+### **Test Credentials**
+
+Use these for manual testing or custom stress scenarios:
+
+- **Platform Admin**: `admin@test.com` / `admin123`
+- **GreenTech Admin**: `admin@greentech.com` / `greentech123`
+- **MedCorp Admin**: `admin@medcorp.com` / `medcorp123`
+- **RetailPlus Admin**: `admin@retailplus.com` / `retail123`
+- **All other users**: Password matches company (e.g., `green123`, `med123`, `retail123`)
+
+## 🐳 **CONTAINER RESOURCE CONSTRAINTS**
+
+### **Production-Like Limits**
+
+The stress tests run against **resource-constrained containers** to simulate realistic production environments:
+
+**API Container:**
+
+- **Memory**: 8GB limit, 2GB reserved
+- **CPU**: 4 cores
+- **Workers**: 4 uvicorn workers
+- **File Descriptors**: 8192 soft, 16384 hard
+- **Processes**: 500 limit
+
+**MongoDB Container:**
+
+- **Memory**: 4GB limit, 1GB reserved
+- **CPU**: 2 cores
+- **File Descriptors**: 16384 soft, 32768 hard
+- **Processes**: 1000 limit
+
+### **Why Resource Constraints Matter**
+
+- **🎯 Realistic Testing**: Simulates actual production resource limits
+- **💀 Find Breaking Points**: See where system chokes under pressure
+- **📊 Performance Baseline**: Establish realistic performance expectations
+- **🔍 Bottleneck Discovery**: Identify CPU vs memory vs I/O constraints
+
 ## 🛡️ **SAFETY MEASURES**
 
 ### **Before Running Tests**
 
-1. **Backup your database**
-2. **Close unnecessary applications**
-3. **Monitor system resources**
-4. **Have a recovery plan**
+1. **✅ Seed the database** (see above section)
+2. **✅ Setup container constraints** (`./stress_test/setup_containers.sh`)
+3. **Backup your database** (if important data exists)
+4. **Close unnecessary applications**
+5. **Monitor system resources**
+6. **Have a recovery plan**
 
 ### **During Tests**
 
@@ -286,10 +410,10 @@ Run tests across multiple machines for **maximum destruction**:
 
 ```bash
 # Machine 1 (Master)
-locust -f stress_test/locust_ddos.py --host=http://target-server:8000 --master
+locust -f stress_test/locust_ddos.py --host=http://target-server:8030 --master
 
 # Machine 2-N (Workers)
-locust -f stress_test/locust_ddos.py --host=http://target-server:8000 --worker --master-host=machine1-ip
+locust -f stress_test/locust_ddos.py --host=http://target-server:8030 --worker --master-host=machine1-ip
 ```
 
 ### **Custom Attack Scenarios**
@@ -325,7 +449,7 @@ Integrate stress tests into your pipeline:
 #### **"Connection refused"**
 
 - **Solution**: Make sure your API is running on the correct port
-- **Check**: `curl http://localhost:8000/docs`
+- **Check**: `curl http://localhost:8030/docs`
 
 #### **"Too many open files"**
 
@@ -374,11 +498,28 @@ uvloop==0.19.0          # High-performance event loop
 psutil==5.9.6           # System monitoring
 faker==20.1.0           # Test data generation
 rich==13.7.0            # Beautiful terminal output
+docker==6.1.3           # Docker container monitoring
 ```
 
 ## 🎉 **CONCLUSION**
 
 This stress test suite will **absolutely destroy your system** with the most brutal load testing ever created. If your outlabsAuth system survives the **💀 Extreme DDoS test**, you can be confident it's ready for **enterprise production deployment**.
+
+### **What Makes This Suite Special**
+
+- **🐳 Production-like constraints**: 8GB RAM + 4 CPU cores for realistic testing
+- **🗄️ Realistic data**: 20+ users across 6 companies with proper RBAC hierarchies
+- **📊 Real-time monitoring**: Live container resource dashboard during attacks
+- **🎯 Multiple attack vectors**: Web UI, async Python, orchestrated suites
+- **⚡ Extreme performance**: 1000+ concurrent users with uvloop optimization
+
+### **Pro Tips for Maximum Destruction**
+
+1. **Run the monitor** (`python stress_test/monitor_container.py`) in a separate terminal
+2. **Watch the resource dashboard** to see exactly when your system starts choking
+3. **Use distributed testing** across multiple machines for ultimate DDoS simulation
+4. **Start with warmup tests** and gradually increase to extreme levels
+5. **Have fun watching your system suffer** under realistic enterprise load! 🔥
 
 **Remember**: The goal is not to break your system, but to **find its limits** and ensure it can handle **real-world enterprise load** with grace and performance.
 

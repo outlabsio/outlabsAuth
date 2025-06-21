@@ -8,7 +8,7 @@ from typing import Dict, Any, List
 class APISeedingClient:
     """Client to seed data through the API endpoints, simulating real user behavior."""
     
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = "http://localhost:8030"):
         self.base_url = base_url
         self.tokens: Dict[str, str] = {}  # Store access tokens for different users
         
@@ -59,12 +59,33 @@ class APISeedingClient:
     async def create_client_account(self, admin_email: str, account_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a client account as platform admin."""
         response = await self.make_authenticated_request(
-            "POST", "/v1/client_accounts", admin_email, account_data
+            "POST", "/v1/client_accounts/", admin_email, account_data
         )
         if response.status_code == 201:
             account = response.json()
-            print(f"✓ Created client account: {account['name']} (ID: {account['id']})")
+            # Handle both 'id' and '_id' field names
+            account_id = account.get('id', account.get('_id'))
+            print(f"✓ Created client account: {account['name']} (ID: {account_id})")
+            # Ensure 'id' field exists for compatibility
+            if 'id' not in account and '_id' in account:
+                account['id'] = account['_id']
             return account
+        elif response.status_code == 409:  # Conflict - already exists
+            # Get existing accounts and find the one with matching name
+            existing_response = await self.make_authenticated_request(
+                "GET", "/v1/client_accounts/", admin_email
+            )
+            if existing_response.status_code == 200:
+                accounts = existing_response.json()
+                for account in accounts:
+                    if account['name'] == account_data['name']:
+                        # Ensure 'id' field exists for compatibility
+                        if 'id' not in account and '_id' in account:
+                            account['id'] = account['_id']
+                        print(f"✓ Found existing client account: {account['name']} (ID: {account.get('id', account.get('_id'))})")
+                        return account
+            print(f"✗ Failed to create client account: {response.text}")
+            raise Exception(f"Failed to create client account: {response.text}")
         else:
             print(f"✗ Failed to create client account: {response.text}")
             raise Exception(f"Failed to create client account: {response.text}")
@@ -72,12 +93,31 @@ class APISeedingClient:
     async def create_user(self, creator_email: str, user_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a user."""
         response = await self.make_authenticated_request(
-            "POST", "/v1/users", creator_email, user_data
+            "POST", "/v1/users/", creator_email, user_data
         )
         if response.status_code == 201:
             user = response.json()
             print(f"✓ Created user: {user['email']} ({user['first_name']} {user['last_name']})")
+            # Ensure 'id' field exists for compatibility
+            if 'id' not in user and '_id' in user:
+                user['id'] = user['_id']
             return user
+        elif response.status_code == 409:  # Conflict - already exists
+            # Get existing users and find the one with matching email
+            existing_response = await self.make_authenticated_request(
+                "GET", "/v1/users/", creator_email
+            )
+            if existing_response.status_code == 200:
+                users = existing_response.json()
+                for user in users:
+                    if user['email'] == user_data['email']:
+                        # Ensure 'id' field exists for compatibility
+                        if 'id' not in user and '_id' in user:
+                            user['id'] = user['_id']
+                        print(f"✓ Found existing user: {user['email']} ({user['first_name']} {user['last_name']})")
+                        return user
+            print(f"✗ Failed to create user: {response.text}")
+            raise Exception(f"Failed to create user: {response.text}")
         else:
             print(f"✗ Failed to create user: {response.text}")
             raise Exception(f"Failed to create user: {response.text}")
@@ -85,11 +125,16 @@ class APISeedingClient:
     async def create_group(self, creator_email: str, group_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a group."""
         response = await self.make_authenticated_request(
-            "POST", "/v1/groups", creator_email, group_data
+            "POST", "/v1/groups/", creator_email, group_data
         )
         if response.status_code == 201:
             group = response.json()
-            print(f"✓ Created group: {group['name']} (ID: {group['id']})")
+            # Handle both 'id' and '_id' field names
+            group_id = group.get('id', group.get('_id'))
+            print(f"✓ Created group: {group['name']} (ID: {group_id})")
+            # Ensure 'id' field exists for compatibility
+            if 'id' not in group and '_id' in group:
+                group['id'] = group['_id']
             return group
         else:
             print(f"✗ Failed to create group: {response.text}")
@@ -98,11 +143,15 @@ class APISeedingClient:
     async def get_users(self, requester_email: str) -> List[Dict[str, Any]]:
         """Get users list."""
         response = await self.make_authenticated_request(
-            "GET", "/v1/users", requester_email
+            "GET", "/v1/users/", requester_email
         )
         if response.status_code == 200:
             users = response.json()
             print(f"✓ Retrieved {len(users)} users for {requester_email}")
+            # Ensure 'id' field exists for compatibility
+            for user in users:
+                if 'id' not in user and '_id' in user:
+                    user['id'] = user['_id']
             return users
         else:
             print(f"✗ Failed to get users: {response.text}")
@@ -123,7 +172,7 @@ async def seed_via_api():
     print("This script simulates real client behavior by making HTTP requests\n")
     
     # Ensure the API server is running
-    print("⚠️  Make sure the API server is running on http://localhost:8000")
+    print("⚠️  Make sure the API server is running on http://localhost:8030")
     print("⚠️  Make sure the database has been seeded with basic data (run seed_main.py first)\n")
     
     client = APISeedingClient()

@@ -2,7 +2,7 @@
 """
 🚀 LOCUST DDoS STRESS TEST 🚀
 Web-based stress testing with distributed capabilities
-Run with: locust -f locust_ddos.py --host=http://localhost:8000
+Run with: locust -f locust_ddos.py --host=http://localhost:8030
 """
 
 import random
@@ -36,11 +36,14 @@ class DDosUser(HttpUser):
         """Authenticate as admin"""
         response = self.client.post("/v1/auth/login", data={
             "username": "admin@test.com",
-            "password": "a_very_secure_password"
+            "password": "admin123"
         })
         
         if response.status_code == 200:
             self.admin_token = response.json().get("access_token")
+        else:
+            print(f"Admin login failed in DDosUser: {response.status_code} - {response.text}")
+            self.admin_token = None
     
     def create_and_authenticate_user(self):
         """Create and authenticate a test user"""
@@ -188,11 +191,14 @@ class AdminDDosUser(HttpUser):
         """Authenticate as admin"""
         response = self.client.post("/v1/auth/login", data={
             "username": "admin@test.com",
-            "password": "a_very_secure_password"
+            "password": "admin123"
         })
         
         if response.status_code == 200:
             self.admin_token = response.json().get("access_token")
+        else:
+            print(f"Admin login failed: {response.status_code} - {response.text}")
+            self.admin_token = None
     
     @task(10)
     def admin_list_users(self):
@@ -297,17 +303,17 @@ if __name__ == "__main__":
     Run with different configurations:
     
     1. Basic DDoS:
-       locust -f locust_ddos.py --host=http://localhost:8000
+       locust -f locust_ddos.py --host=http://localhost:8030
     
     2. Hardcore assault (1000 users):
-       locust -f locust_ddos.py --host=http://localhost:8000 -u 1000 -r 50
+       locust -f locust_ddos.py --host=http://localhost:8030 -u 1000 -r 50
     
     3. Sustained attack (5 minutes):
-       locust -f locust_ddos.py --host=http://localhost:8000 -u 500 -r 25 -t 300s
+       locust -f locust_ddos.py --host=http://localhost:8030 -u 500 -r 25 -t 300s
     
     4. Distributed attack (multiple machines):
-       Master: locust -f locust_ddos.py --host=http://localhost:8000 --master
-       Worker: locust -f locust_ddos.py --host=http://localhost:8000 --worker --master-host=<master-ip>
+       Master: locust -f locust_ddos.py --host=http://localhost:8030 --master
+       Worker: locust -f locust_ddos.py --host=http://localhost:8030 --worker --master-host=<master-ip>
     
     Open http://localhost:8089 for the web UI
     """) 

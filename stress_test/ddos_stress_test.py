@@ -34,7 +34,7 @@ fake = Faker()
 @dataclass
 class StressTestConfig:
     """Configuration for our hardcore stress test"""
-    base_url: str = "http://localhost:8000"
+    base_url: str = "http://localhost:8030"
     
     # DDoS-level configuration
     max_concurrent_users: int = 1000
@@ -178,7 +178,7 @@ class HardcoreStressTester:
         try:
             login_data = {
                 "username": "admin@test.com",
-                "password": "a_very_secure_password"
+                "password": "admin123"
             }
             
             async with self.session.post(
