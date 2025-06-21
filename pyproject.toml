@@ -1,0 +1,22 @@
+[project]
+name = "outlabsAuth"
+version = "0.1.0"
+description = "A standalone, generic Role-Based Access Control (RBAC) microservice."
+authors = []
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "pydantic>=2.0.0",
+    "uvicorn[standard]",
+    "motor",
+    "passlib[bcrypt]",
+    "python-jose[cryptography]",
+    "python-multipart",
+    "redis",
+    "email-validator",
+    "pydantic-settings",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build" 
