@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from jose import JWTError
 from datetime import timedelta, datetime
@@ -67,16 +67,18 @@ async def login_for_access_token(
 @router.post("/refresh", response_model=TokenSchema)
 async def refresh_access_token(
     request: Request,
-    refresh_token_str: str = Depends(oauth2_scheme)
+    authorization: str = Header(None)
 ):
+    # Extract token from Authorization header manually to provide specific error messages
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token not found")
+    
+    refresh_token_str = authorization.split(" ")[1]
     if not refresh_token_str:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token not found")
 
-    try:
-        payload = security_service.decode_access_token(refresh_token_str)
-        jti = payload.jti
-    except JWTError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+    payload = security_service.decode_refresh_token(refresh_token_str)
+    jti = payload.jti
 
     db_token = await refresh_token_service.get_refresh_token_by_jti(jti)
     if not db_token or db_token.is_revoked:

@@ -134,6 +134,32 @@ class SecurityService:
         except (JWTError, Exception):
             raise credentials_exception
         return token_data
+    
+    def decode_refresh_token(self, token: str) -> TokenDataSchema:
+        """
+        Decodes the refresh token and returns the payload.
+        """
+        refresh_token_exception = HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            user_id: str = payload.get("sub")
+            if user_id is None:
+                raise refresh_token_exception
+            
+            client_account_id_str = payload.get("client_account_id")
+            
+            token_data = TokenDataSchema(
+                user_id=user_id, 
+                jti=payload.get("jti"),
+                client_account_id=client_account_id_str
+            )
+        except (JWTError, Exception):
+            raise refresh_token_exception
+        return token_data
 
 # Instantiate the service for use in other parts of the application
 security_service = SecurityService() 
