@@ -159,18 +159,22 @@ async def get_user_by_id(
     except Exception:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Invalid ObjectId: {user_id}")
     
-    _, token_data = user_and_token
+    current_user, token_data = user_and_token
     user = await user_service.get_user_by_id(user_object_id)
     
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
         
-    # Enforce data scoping - compare client account IDs
-    if token_data.client_account_id and user.client_account:
-        if str(user.client_account.id) != token_data.client_account_id:
+    # Enforce data scoping - but allow platform admins to access all users
+    is_platform_admin = "platform_admin" in current_user.roles
+    if not is_platform_admin and token_data.client_account_id:
+        # For non-platform admins, enforce client account scoping
+        if user.client_account:
+            if str(user.client_account.id) != token_data.client_account_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
+        else:
+            # User has no client account but admin does - not allowed to access
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
-    elif token_data.client_account_id and not user.client_account:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
 
     # Convert to response format
     user_dict = user.model_dump(by_alias=True)
@@ -199,21 +203,24 @@ async def update_user(
     except Exception:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Invalid ObjectId: {user_id}")
     
-    _, token_data = user_and_token
+    current_user, token_data = user_and_token
     
-    # First, verify the user to be updated exists and belongs to the client account if necessary
+    # First, verify the user to be updated exists
     user_to_update = await user_service.get_user_by_id(user_object_id)
     if user_to_update is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
     
-    # Enforce data scoping
-    if token_data.client_account_id and user_to_update.client_account:
-        if str(user_to_update.client_account.id) != token_data.client_account_id:
+    # Enforce data scoping - but allow platform admins to access all users
+    is_platform_admin = "platform_admin" in current_user.roles
+    if not is_platform_admin and token_data.client_account_id:
+        # For non-platform admins, enforce client account scoping
+        if user_to_update.client_account:
+            if str(user_to_update.client_account.id) != token_data.client_account_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
+        else:
+            # User has no client account but admin does - not allowed to access
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
-    elif token_data.client_account_id and not user_to_update.client_account:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
 
-    current_user, _ = user_and_token
     updated_user = await user_service.update_user(user_object_id, user_data, current_user)
     
     # Convert to response format
@@ -242,19 +249,23 @@ async def delete_user(
     except Exception:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Invalid ObjectId: {user_id}")
     
-    _, token_data = user_and_token
+    current_user, token_data = user_and_token
     
-    # First, verify the user to be deleted exists and belongs to the client account if necessary
+    # First, verify the user to be deleted exists
     user_to_delete = await user_service.get_user_by_id(user_object_id)
     if user_to_delete is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
     
-    # Enforce data scoping
-    if token_data.client_account_id and user_to_delete.client_account:
-        if str(user_to_delete.client_account.id) != token_data.client_account_id:
+    # Enforce data scoping - but allow platform admins to access all users
+    is_platform_admin = "platform_admin" in current_user.roles
+    if not is_platform_admin and token_data.client_account_id:
+        # For non-platform admins, enforce client account scoping
+        if user_to_delete.client_account:
+            if str(user_to_delete.client_account.id) != token_data.client_account_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
+        else:
+            # User has no client account but admin does - not allowed to access
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
-    elif token_data.client_account_id and not user_to_delete.client_account:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
 
     success = await user_service.delete_user(user_object_id)
     if not success:

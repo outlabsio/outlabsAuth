@@ -1,5 +1,6 @@
 from typing import List, Optional
 from beanie import PydanticObjectId
+from beanie.exceptions import RevisionIdWasChanged
 from pymongo.errors import DuplicateKeyError
 from fastapi import HTTPException, status
 
@@ -185,6 +186,18 @@ class UserService:
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Update conflicts with existing user data."
                 )
+        except RevisionIdWasChanged as e:
+            # Beanie wraps DuplicateKeyError in RevisionIdWasChanged during updates
+            # Check if the original error is a duplicate key error
+            original_error_str = str(e.__cause__ or e)
+            if "duplicate key error" in original_error_str.lower() and "email" in original_error_str:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"User with email '{update_data.get('email', 'this email')}' already exists."
+                )
+            else:
+                # Re-raise if it's an actual revision conflict
+                raise
 
     async def update_password(self, user_id: PydanticObjectId, new_password: str):
         """
