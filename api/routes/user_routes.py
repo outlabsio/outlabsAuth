@@ -168,10 +168,17 @@ async def get_user_by_id(
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
         
-    # Enforce data scoping - but allow platform admins to access all users
+    # Enforce data scoping and self-access restrictions
     is_platform_admin = "platform_admin" in current_user.roles
+    is_client_admin = "client_admin" in current_user.roles
+    
+    # Regular users can only access their own data
+    if not is_platform_admin and not is_client_admin:
+        if str(current_user.id) != user_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only access your own user data.")
+    
+    # For non-platform admins, enforce client account scoping
     if not is_platform_admin and token_data.client_account_id:
-        # For non-platform admins, enforce client account scoping
         if user.client_account:
             if str(user.client_account.id) != token_data.client_account_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")

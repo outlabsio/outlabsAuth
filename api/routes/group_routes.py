@@ -103,10 +103,10 @@ async def get_group(
     
     # Check if user has access to this group
     if current_user.client_account and not current_user.is_main_client:
-        if group.client_account.id != current_user.client_account.ref.id:
+        if group.client_account.id != current_user.client_account.id:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only access groups within your own client account"
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Group not found"
             )
     
     # Use Beanie's model_dump with by_alias=True for proper _id serialization
@@ -133,7 +133,7 @@ async def update_group(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
     if current_user.client_account and not current_user.is_main_client:
-        if existing_group.client_account.id != current_user.client_account.ref.id:
+        if existing_group.client_account.id != current_user.client_account.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only update groups within your own client account"
@@ -171,7 +171,7 @@ async def delete_group(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
     if current_user.client_account and not current_user.is_main_client:
-        if existing_group.client_account.id != current_user.client_account.ref.id:
+        if existing_group.client_account.id != current_user.client_account.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only delete groups within your own client account"
@@ -200,7 +200,7 @@ async def add_users_to_group(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
     if current_user.client_account and not current_user.is_main_client:
-        if existing_group.client_account.id != current_user.client_account.ref.id:
+        if existing_group.client_account.id != current_user.client_account.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only manage members of groups within your own client account"
@@ -231,7 +231,7 @@ async def remove_users_from_group(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
     if current_user.client_account and not current_user.is_main_client:
-        if existing_group.client_account.id != current_user.client_account.ref.id:
+        if existing_group.client_account.id != current_user.client_account.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only manage members of groups within your own client account"
@@ -261,7 +261,7 @@ async def get_group_members(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
     if current_user.client_account and not current_user.is_main_client:
-        if existing_group.client_account.id != current_user.client_account.ref.id:
+        if existing_group.client_account.id != current_user.client_account.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only view members of groups within your own client account"
