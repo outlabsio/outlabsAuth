@@ -120,11 +120,11 @@ async def get_all_users(
     """
     current_user, token_data = user_and_token
     
-    # Platform admins can see all users regardless of client_account_id
-    is_platform_admin = "platform_admin" in current_user.roles
+    # Super admins can see all users regardless of client_account_id
+    is_super_admin = "super_admin" in current_user.roles
     client_account_id = None
     
-    if not is_platform_admin and token_data.client_account_id:
+    if not is_super_admin and token_data.client_account_id:
         # For non-platform admins, enforce client account scoping
         try:
             client_account_id = PydanticObjectId(token_data.client_account_id)
@@ -169,16 +169,16 @@ async def get_user_by_id(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
         
     # Enforce data scoping and self-access restrictions
-    is_platform_admin = "platform_admin" in current_user.roles
+    is_super_admin = "super_admin" in current_user.roles
     is_client_admin = "client_admin" in current_user.roles
     
     # Regular users can only access their own data
-    if not is_platform_admin and not is_client_admin:
+    if not is_super_admin and not is_client_admin:
         if str(current_user.id) != user_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only access your own user data.")
     
-    # For non-platform admins, enforce client account scoping
-    if not is_platform_admin and token_data.client_account_id:
+    # For non-super admins, enforce client account scoping
+    if not is_super_admin and token_data.client_account_id:
         if user.client_account:
             if str(user.client_account.id) != token_data.client_account_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
@@ -220,9 +220,9 @@ async def update_user(
     if user_to_update is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
     
-    # Enforce data scoping - but allow platform admins to access all users
-    is_platform_admin = "platform_admin" in current_user.roles
-    if not is_platform_admin and token_data.client_account_id:
+    # Enforce data scoping - but allow super admins to access all users
+    is_super_admin = "super_admin" in current_user.roles
+    if not is_super_admin and token_data.client_account_id:
         # For non-platform admins, enforce client account scoping
         if user_to_update.client_account:
             if str(user_to_update.client_account.id) != token_data.client_account_id:
@@ -266,9 +266,9 @@ async def delete_user(
     if user_to_delete is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
     
-    # Enforce data scoping - but allow platform admins to access all users
-    is_platform_admin = "platform_admin" in current_user.roles
-    if not is_platform_admin and token_data.client_account_id:
+    # Enforce data scoping - but allow super admins to access all users
+    is_super_admin = "super_admin" in current_user.roles
+    if not is_super_admin and token_data.client_account_id:
         # For non-platform admins, enforce client account scoping
         if user_to_delete.client_account:
             if str(user_to_delete.client_account.id) != token_data.client_account_id:

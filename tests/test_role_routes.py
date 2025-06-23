@@ -131,7 +131,7 @@ class TestRoleRoutes:
         assert response.status_code == 200
         role_data = response.json()
         assert role_data["_id"] == "super_admin"
-        assert role_data["name"] == "Platform Administrator"
+        assert role_data["name"] == "Super Administrator"
         assert isinstance(role_data["permissions"], list)
         assert len(role_data["permissions"]) > 0
     
