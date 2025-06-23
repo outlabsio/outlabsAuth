@@ -48,13 +48,8 @@ class ClientAccountService:
         account = ClientAccountModel(**account_dict)
         try:
             await account.insert()
-            
-            # Update parent's child_clients list if this is a sub-client
-            if created_by_client_id:
-                parent_client = await self.get_client_account_by_id(PydanticObjectId(created_by_client_id))
-                if parent_client:
-                    parent_client.child_clients.append(str(account.id))
-                    await parent_client.save()
+            # Note: No longer need to update parent's child_clients array
+            # Children are found via reverse query: created_by_client_id == parent_id
                     
         except DuplicateKeyError as e:
             # Handle duplicate key errors gracefully
@@ -219,12 +214,8 @@ class ClientAccountService:
         if not account:
             return False
             
-        # Remove from parent's child_clients list if this is a sub-client
-        if account.created_by_client_id:
-            parent_client = await self.get_client_account_by_id(PydanticObjectId(account.created_by_client_id))
-            if parent_client and str(account.id) in parent_client.child_clients:
-                parent_client.child_clients.remove(str(account.id))
-                await parent_client.save()
+        # Note: No longer need to remove from parent's child_clients array
+        # since we're using reverse queries via created_by_client_id
         
         # Note: In a real implementation, you'd also need to handle cascading
         # deletion of sub-clients or prevent deletion if sub-clients exist

@@ -32,7 +32,7 @@ class ClientAccountUpdateSchema(BaseModel):
     is_platform_root: Optional[bool] = None
     
     # Note: created_by_client_id is not updatable for security reasons
-    # Note: child_clients is managed through service layer, not direct updates
+    # Note: child clients found via reverse queries, not stored as array
 
     model_config = ConfigDict(
         str_strip_whitespace=True,
@@ -51,7 +51,7 @@ class ClientAccountResponseSchema(BaseModel):
     platform_id: Optional[str] = None
     created_by_client_id: Optional[str] = None
     is_platform_root: bool = False
-    child_clients: List[str] = Field(default_factory=list)
+    # Note: child_clients removed for scalability - use /my-sub-clients endpoint instead
     
     created_at: datetime
     updated_at: datetime

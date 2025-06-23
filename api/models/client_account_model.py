@@ -29,7 +29,9 @@ class ClientAccountModel(BaseDocument):
     platform_id: Optional[str] = None          # Which platform owns this client
     created_by_client_id: Optional[str] = None # Parent client relationship  
     is_platform_root: bool = False             # Can create sub-clients
-    child_clients: List[str] = Field(default_factory=list)  # Reverse relationship to sub-clients
+    
+    # Removed child_clients array for scalability - use reverse queries instead
+    # To get children: ClientAccountModel.find(ClientAccountModel.created_by_client_id == parent_id)
     
     # BackLink to get all users for this client account
     users: Optional[List[BackLink["UserModel"]]] = Field(original_field="client_account", default_factory=list)
@@ -39,6 +41,6 @@ class ClientAccountModel(BaseDocument):
         indexes = [
             IndexModel([("name", 1)], unique=True, name="client_name_unique"),  # Unique name index
             IndexModel([("platform_id", 1)], name="platform_id_index"),  # Platform lookup optimization
-            IndexModel([("created_by_client_id", 1)], name="created_by_client_index"),  # Parent-child queries
+            IndexModel([("created_by_client_id", 1)], name="created_by_client_index"),  # Parent-child queries - CRITICAL for performance
             IndexModel([("is_platform_root", 1)], name="platform_root_index"),  # Platform root lookups
         ] 

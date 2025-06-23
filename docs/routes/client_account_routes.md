@@ -16,6 +16,15 @@ This API supports a three-tier permission hierarchy:
 - **Platform Viewers**: Can only access clients they created within their platform
 - **Client Admins**: Access only their own client account (standard behavior)
 
+## 🔄 **Scalable Hierarchical Design**
+
+The system uses a **reverse reference architecture** for optimal performance:
+
+- **Parent-Child Relationships**: Children reference their parent via `created_by_client_id`
+- **No Arrays in Parents**: Parent documents don't store child lists (avoids MongoDB document size limits)
+- **Unlimited Children**: Platform roots can have thousands of sub-clients without performance degradation
+- **Efficient Queries**: Child lookups use indexed queries for O(log n) performance
+
 ## Authentication & Authorization
 
 All endpoints require authentication and specific permissions:
@@ -65,7 +74,6 @@ Creates a new top-level client account in the system. This is typically used for
   "platform_id": "string",
   "created_by_client_id": null,
   "is_platform_root": false,
-  "child_clients": [],
   "created_at": "2023-01-01T00:00:00Z",
   "updated_at": "2023-01-01T00:00:00Z"
 }
@@ -125,7 +133,6 @@ Creates a sub-client account under the current user's client account. Available 
   "platform_id": "inherited_from_parent",
   "created_by_client_id": "parent_client_id",
   "is_platform_root": false,
-  "child_clients": [],
   "created_at": "2023-01-01T00:00:00Z",
   "updated_at": "2023-01-01T00:00:00Z"
 }
@@ -187,12 +194,13 @@ Retrieves a paginated list of client accounts with automatic hierarchical filter
     "platform_id": "string",
     "created_by_client_id": "string",
     "is_platform_root": false,
-    "child_clients": ["child_id_1", "child_id_2"],
     "created_at": "2023-01-01T00:00:00Z",
     "updated_at": "2023-01-01T00:00:00Z"
   }
 ]
 ```
+
+**Note:** Child client relationships are not included in list responses for performance. Use the `/my-sub-clients` endpoint to get children.
 
 **Example Request:**
 
@@ -203,7 +211,7 @@ curl -X GET "https://api.example.com/v1/client_accounts/?skip=0&limit=50" \
 
 ### 4. Get My Sub-Clients
 
-Retrieves all sub-clients created by the current user's client account.
+Retrieves all sub-clients created by the current user's client account using efficient reverse queries.
 
 **Endpoint:** `GET /v1/client_accounts/my-sub-clients`
 
@@ -213,6 +221,8 @@ Retrieves all sub-clients created by the current user's client account.
 
 - `skip` (optional, integer, default: 0) - Number of records to skip for pagination
 - `limit` (optional, integer, default: 100) - Maximum number of records to return
+
+**Performance Note:** This endpoint uses an indexed query on `created_by_client_id` for optimal performance even with thousands of sub-clients.
 
 **Response:**
 
@@ -230,7 +240,6 @@ Retrieves all sub-clients created by the current user's client account.
     "platform_id": "string",
     "created_by_client_id": "current_user_client_id",
     "is_platform_root": false,
-    "child_clients": [],
     "created_at": "2023-01-01T00:00:00Z",
     "updated_at": "2023-01-01T00:00:00Z"
   }
@@ -274,11 +283,12 @@ Retrieves a specific client account by its ID with hierarchical access control.
   "platform_id": "string",
   "created_by_client_id": "string",
   "is_platform_root": false,
-  "child_clients": ["child_id_1", "child_id_2"],
   "created_at": "2023-01-01T00:00:00Z",
   "updated_at": "2023-01-01T00:00:00Z"
 }
 ```
+
+**Note:** To get sub-clients of this account, use the `/my-sub-clients` endpoint or filter the main listing by `created_by_client_id`.
 
 **Error Responses:**
 
@@ -320,7 +330,7 @@ Updates an existing client account with hierarchical access control.
 }
 ```
 
-**Note:** `created_by_client_id` and `child_clients` are not directly updatable for security reasons.
+**Note:** `created_by_client_id` is not updatable for security reasons. Child relationships are managed automatically through reverse references.
 
 **Response:**
 
@@ -338,7 +348,6 @@ Updates an existing client account with hierarchical access control.
   "platform_id": "string",
   "created_by_client_id": "string",
   "is_platform_root": false,
-  "child_clients": ["child_id_1"],
   "created_at": "2023-01-01T00:00:00Z",
   "updated_at": "2023-01-01T00:00:00Z"
 }
@@ -379,7 +388,7 @@ Deletes a client account from the system with hierarchical access control.
 
 **Authorization:** Uses hierarchical access control to ensure users can only delete accounts they have permission to access.
 
-**Note:** Deleting a client account will also remove it from the parent's `child_clients` list if it's a sub-client.
+**Note:** Parent-child relationships are automatically maintained through reverse references - no additional cleanup needed.
 
 **Response:**
 
@@ -454,7 +463,7 @@ curl -X DELETE "https://api.example.com/v1/client_accounts/507f1f77bcf86cd799439
 }
 ```
 
-**Note:** `created_by_client_id` and `child_clients` are managed automatically and not directly updatable.
+**Note:** `created_by_client_id` is managed automatically and not directly updatable for security reasons.
 
 ### ClientAccountResponseSchema
 
@@ -469,11 +478,12 @@ curl -X DELETE "https://api.example.com/v1/client_accounts/507f1f77bcf86cd799439
   "platform_id": "string",
   "created_by_client_id": "string",
   "is_platform_root": "boolean",
-  "child_clients": ["string"],
   "created_at": "datetime",
   "updated_at": "datetime"
 }
 ```
+
+**Performance Note:** Child client lists are not included in individual responses. Use the `/my-sub-clients` endpoint for efficient child queries.
 
 ## 🔒 **Security & Access Control**
 
@@ -492,6 +502,40 @@ The API implements sophisticated hierarchical access control:
 - **Platform Creator Access**: Can access all accounts within their `platform_id`
 - **Platform Viewer Access**: Can access only accounts where `created_by_client_id` matches their client account
 - **Regular User Access**: Can access only their own client account
+
+## 🚀 **Performance & Scalability**
+
+### Reverse Reference Architecture
+
+The system uses a **reverse reference design** for optimal MongoDB performance:
+
+- **No Document Size Limits**: Parent documents don't store child arrays, avoiding MongoDB's 16MB document limit
+- **Concurrent Write Performance**: Multiple sub-clients can be created simultaneously without write contention
+- **Indexed Queries**: Child lookups use the `created_by_client_id` index for O(log n) performance
+- **Efficient Pagination**: Child listing supports proper pagination even with thousands of sub-clients
+
+### Query Performance
+
+```json
+// Fast child lookup using indexed field
+{
+  "created_by_client_id": "parent_id"
+}
+
+// Compound queries for filtered results
+{
+  "created_by_client_id": "parent_id",
+  "status": "active",
+  "platform_id": "real_estate"
+}
+```
+
+### Scalability Metrics
+
+- **Unlimited Children**: Platform roots can have thousands of sub-clients
+- **Fast Child Queries**: O(log n) lookup performance with proper indexing
+- **Concurrent Creation**: No parent document locking during sub-client creation
+- **Efficient Pagination**: Full pagination support for large child sets
 
 ## Error Handling
 
@@ -519,7 +563,7 @@ All endpoints are subject to rate limiting middleware. Exceeding rate limits wil
 
 This module depends on:
 
-- `client_account_service`: Enhanced business logic for hierarchical client account operations
+- `client_account_service`: Enhanced business logic for hierarchical client account operations with reverse reference queries
 - `has_permission`: Authorization dependency for permission checking
 - `has_hierarchical_client_access`: Hierarchical access control dependency
 - `get_current_user`: User context for authorization decisions
@@ -532,8 +576,8 @@ This module depends on:
 
 - When creating sub-clients via `/sub-clients`, the `platform_id` is automatically inherited from the parent
 - The `created_by_client_id` is automatically set to the current user's client account ID
-- Parent accounts automatically have the sub-client ID added to their `child_clients` array
-- Deleting a sub-client automatically removes it from the parent's `child_clients` array
+- Child relationships are maintained through reverse references for optimal performance
+- Use `/my-sub-clients` endpoint to efficiently query child accounts
 
 ### Platform Scoping
 
@@ -549,9 +593,16 @@ This module depends on:
 1. Create platform root: `POST /v1/client_accounts/` with `platform_id: "real_estate"`
 2. Platform admin creates property companies: `POST /v1/client_accounts/sub-clients`
 3. Platform admin views all real estate clients: `GET /v1/client_accounts/`
+4. Platform admin views their sub-clients: `GET /v1/client_accounts/my-sub-clients`
 
 **CRM Platform Scenario:**
 
 1. Create platform root: `POST /v1/client_accounts/` with `platform_id: "crm_platform"`
 2. Platform admin creates business clients: `POST /v1/client_accounts/sub-clients`
 3. Platform admin views only their created clients: `GET /v1/client_accounts/my-sub-clients`
+
+**Large Scale Example:**
+
+- Platform with 5,000+ sub-clients: `/my-sub-clients?skip=0&limit=50` provides efficient pagination
+- Child count queries: Use MongoDB aggregation for counting without loading all documents
+- Filtered searches: Combine `created_by_client_id` with other filters for targeted results
