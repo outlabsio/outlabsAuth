@@ -49,7 +49,8 @@ class TestOrchestrator:
             "tests/test_access_control.py",
             "tests/test_duplicate_constraints.py",
             "tests/test_integration.py",
-            "tests/test_enhanced_access_control.py"
+            "tests/test_enhanced_access_control.py",
+            "tests/test_propertyhub_three_tier.py"
         ]
     
     def run_single_test_module(self, module_path: str) -> TestResult:

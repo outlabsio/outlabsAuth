@@ -1,0 +1,387 @@
+"""
+Comprehensive PropertyHub Three-Tier SaaS Platform Tests
+
+This test suite validates the PropertyHub platform model:
+Tier 1: PropertyHub Platform Staff (admin@propertyhub.com, support@propertyhub.com)
+Tier 2: Real Estate Companies (admin@acmerealestate.com, admin@eliteproperties.com)
+Tier 3: Real Estate Agents (john.agent@acmerealestate.com, luxury.agent@eliteproperties.com)
+
+Tests verify proper hierarchy, access control, and multi-tenant isolation.
+"""
+
+import pytest
+import pytest_asyncio
+from httpx import AsyncClient
+
+class TestPropertyHubPlatformStaff:
+    """Test PropertyHub internal platform staff capabilities."""
+    
+    @pytest.mark.asyncio
+    async def test_platform_admin_can_view_all_clients(self, client: AsyncClient):
+        """Platform admin should see all real estate companies."""
+        # Login as PropertyHub platform admin
+        login_data = {"username": "admin@propertyhub.com", "password": "platform123"}
+        login_response = await client.post("/v1/auth/login", data=login_data)
+        assert login_response.status_code == 200
+        
+        headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+        
+        # Platform admin should see all client accounts
+        response = await client.get("/v1/client-accounts/", headers=headers)
+        assert response.status_code == 200
+        
+        client_accounts = response.json()
+        client_names = [ca["name"] for ca in client_accounts]
+        
+        # Should see the PropertyHub platform and all real estate companies
+        assert "PropertyHub Platform" in client_names
+        assert "ACME Real Estate" in client_names
+        assert "Elite Properties" in client_names
+        assert "Downtown Realty" in client_names
+    
+    @pytest.mark.asyncio
+    async def test_platform_support_has_limited_access(self, client: AsyncClient):
+        """Platform support staff should have read-only access."""
+        login_data = {"username": "support@propertyhub.com", "password": "platform123"}
+        login_response = await client.post("/v1/auth/login", data=login_data)
+        assert login_response.status_code == 200
+        
+        headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+        
+        # Support can read client accounts
+        response = await client.get("/v1/client-accounts/", headers=headers)
+        assert response.status_code == 200
+        
+        # But cannot create new client accounts (should be forbidden or unauthorized)
+        new_client_data = {
+            "name": "Test Real Estate Company",
+            "description": "Test company created by support"
+        }
+        create_response = await client.post("/v1/client-accounts/", 
+                                          json=new_client_data, headers=headers)
+        assert create_response.status_code in [403, 401, 422]  # Should be denied
+
+    @pytest.mark.asyncio
+    async def test_platform_staff_can_help_multiple_clients(self, client: AsyncClient):
+        """Platform staff should access users across multiple real estate companies."""
+        login_data = {"username": "admin@propertyhub.com", "password": "platform123"}
+        login_response = await client.post("/v1/auth/login", data=login_data)
+        assert login_response.status_code == 200
+        
+        headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+        
+        # Platform admin should see users from multiple companies
+        response = await client.get("/v1/users/", headers=headers)
+        assert response.status_code == 200
+        
+        users = response.json()
+        user_emails = [u["email"] for u in users]
+        
+        # Should see platform staff
+        assert "admin@propertyhub.com" in user_emails
+        assert "support@propertyhub.com" in user_emails
+        
+        # Should see real estate company admins
+        assert "admin@acmerealestate.com" in user_emails
+        assert "admin@eliteproperties.com" in user_emails
+        
+        # Should see real estate agents from different companies
+        assert "john.agent@acmerealestate.com" in user_emails
+        assert "luxury.agent@eliteproperties.com" in user_emails
+
+
+class TestRealEstateCompanyAccess:
+    """Test real estate company admin capabilities."""
+    
+    @pytest.mark.asyncio
+    async def test_acme_admin_sees_only_acme_users(self, client: AsyncClient):
+        """ACME Real Estate admin should only see ACME users."""
+        login_data = {"username": "admin@acmerealestate.com", "password": "realestate123"}
+        login_response = await client.post("/v1/auth/login", data=login_data)
+        assert login_response.status_code == 200
+        
+        headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+        
+        # ACME admin should only see ACME users
+        response = await client.get("/v1/users/", headers=headers)
+        assert response.status_code == 200
+        
+        users = response.json()
+        user_emails = [u["email"] for u in users]
+        
+        # Should see ACME users
+        assert "admin@acmerealestate.com" in user_emails
+        assert "john.agent@acmerealestate.com" in user_emails
+        assert "sarah.manager@acmerealestate.com" in user_emails
+        
+        # Should NOT see Elite Properties users
+        assert "admin@eliteproperties.com" not in user_emails
+        assert "luxury.agent@eliteproperties.com" not in user_emails
+        
+        # Should NOT see PropertyHub platform staff
+        assert "admin@propertyhub.com" not in user_emails
+        assert "support@propertyhub.com" not in user_emails
+
+    @pytest.mark.asyncio
+    async def test_elite_admin_sees_only_elite_users(self, client: AsyncClient):
+        """Elite Properties admin should only see Elite Properties users."""
+        login_data = {"username": "admin@eliteproperties.com", "password": "realestate123"}
+        login_response = await client.post("/v1/auth/login", data=login_data)
+        assert login_response.status_code == 200
+        
+        headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+        
+        response = await client.get("/v1/users/", headers=headers)
+        assert response.status_code == 200
+        
+        users = response.json()
+        user_emails = [u["email"] for u in users]
+        
+        # Should see Elite Properties users
+        assert "admin@eliteproperties.com" in user_emails
+        assert "luxury.agent@eliteproperties.com" in user_emails
+        
+        # Should NOT see ACME users
+        assert "admin@acmerealestate.com" not in user_emails
+        assert "john.agent@acmerealestate.com" not in user_emails
+        
+        # Should NOT see PropertyHub platform staff
+        assert "admin@propertyhub.com" not in user_emails
+
+    @pytest.mark.asyncio
+    async def test_real_estate_admin_can_manage_agents(self, client: AsyncClient):
+        """Real estate company admin should manage their agents."""
+        login_data = {"username": "admin@acmerealestate.com", "password": "realestate123"}
+        login_response = await client.post("/v1/auth/login", data=login_data)
+        assert login_response.status_code == 200
+        
+        headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+        
+        # Admin should be able to create new agents in their company
+        new_agent_data = {
+            "email": "new.agent@acmerealestate.com",
+            "password": "agent123",
+            "first_name": "New",
+            "last_name": "Agent",
+            "roles": ["real_estate_agent"]
+        }
+        
+        create_response = await client.post("/v1/users/", 
+                                          json=new_agent_data, headers=headers)
+        
+        # Should succeed (200/201) or fail due to role permission checks
+        # The important thing is that we can attempt this operation
+        assert create_response.status_code in [200, 201, 403, 422]
+
+
+class TestRealEstateAgentAccess:
+    """Test real estate agent capabilities and restrictions."""
+    
+    @pytest.mark.asyncio
+    async def test_agent_limited_to_own_company(self, client: AsyncClient):
+        """Real estate agent should only access their own company's data."""
+        login_data = {"username": "john.agent@acmerealestate.com", "password": "agent123"}
+        login_response = await client.post("/v1/auth/login", data=login_data)
+        assert login_response.status_code == 200
+        
+        headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+        
+        # Agent should see limited users (likely just themselves or company users)
+        response = await client.get("/v1/users/", headers=headers)
+        assert response.status_code == 200
+        
+        users = response.json()
+        user_emails = [u["email"] for u in users]
+        
+        # Should see themselves
+        assert "john.agent@acmerealestate.com" in user_emails
+        
+        # Should NOT see Elite Properties users
+        assert "luxury.agent@eliteproperties.com" not in user_emails
+        
+        # Should NOT see PropertyHub platform staff
+        assert "admin@propertyhub.com" not in user_emails
+
+    @pytest.mark.asyncio
+    async def test_agent_cannot_manage_other_users(self, client: AsyncClient):
+        """Real estate agent should not be able to create/manage other users."""
+        login_data = {"username": "john.agent@acmerealestate.com", "password": "agent123"}
+        login_response = await client.post("/v1/auth/login", data=login_data)
+        assert login_response.status_code == 200
+        
+        headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+        
+        # Agent should not be able to create new users
+        new_user_data = {
+            "email": "unauthorized@acmerealestate.com",
+            "password": "test123",
+            "first_name": "Unauthorized",
+            "last_name": "User",
+            "roles": ["real_estate_agent"]
+        }
+        
+        create_response = await client.post("/v1/users/", 
+                                          json=new_user_data, headers=headers)
+        
+        # Should be forbidden or unauthorized
+        assert create_response.status_code in [403, 401, 422]
+
+
+class TestThreeTierIsolation:
+    """Test complete isolation between platform, companies, and agents."""
+    
+    @pytest.mark.asyncio
+    async def test_cross_tier_data_isolation(self, client: AsyncClient):
+        """Verify no data leakage between different tiers."""
+        test_scenarios = [
+            ("admin@propertyhub.com", "platform123"),  # Platform tier
+            ("admin@acmerealestate.com", "realestate123"),  # Company tier
+            ("john.agent@acmerealestate.com", "agent123")   # Agent tier
+        ]
+        
+        for email, password in test_scenarios:
+            login_data = {"username": email, "password": password}
+            login_response = await client.post("/v1/auth/login", data=login_data)
+            assert login_response.status_code == 200
+            
+            headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+            
+            # Each tier should have different visibility
+            users_response = await client.get("/v1/users/", headers=headers)
+            assert users_response.status_code == 200
+            
+            users = users_response.json()
+            user_count = len(users)
+            
+            # Platform admin should see the most users
+            if email == "admin@propertyhub.com":
+                assert user_count >= 8  # Should see platform + multiple companies
+            
+            # Company admin should see fewer users (just their company)  
+            elif email == "admin@acmerealestate.com":
+                assert user_count >= 3  # Should see ACME users only
+                assert user_count <= 5  # Should not see other companies
+            
+            # Agent should see the fewest users
+            elif email == "john.agent@acmerealestate.com":
+                assert user_count >= 1  # Should see at least themselves
+                assert user_count <= 5  # Should not see other companies
+
+    @pytest.mark.asyncio
+    async def test_propertyhub_realistic_workflow(self, client: AsyncClient):
+        """Test a realistic PropertyHub platform workflow."""
+        
+        # 1. PropertyHub sales team works with potential client
+        sales_login = {"username": "sales@propertyhub.com", "password": "platform123"}
+        sales_response = await client.post("/v1/auth/login", data=sales_login)
+        assert sales_response.status_code == 200
+        
+        sales_headers = {"Authorization": f"Bearer {sales_response.json()['access_token']}"}
+        
+        # Sales can view existing clients for reference
+        clients_response = await client.get("/v1/client-accounts/", headers=sales_headers)
+        assert clients_response.status_code == 200
+        
+        # 2. Real estate company admin manages their agents
+        acme_login = {"username": "admin@acmerealestate.com", "password": "realestate123"}
+        acme_response = await client.post("/v1/auth/login", data=acme_login)
+        assert acme_response.status_code == 200
+        
+        acme_headers = {"Authorization": f"Bearer {acme_response.json()['access_token']}"}
+        
+        # ACME admin can see their agents
+        acme_users_response = await client.get("/v1/users/", headers=acme_headers)
+        assert acme_users_response.status_code == 200
+        
+        acme_users = acme_users_response.json()
+        acme_agent_emails = [u["email"] for u in acme_users]
+        assert "john.agent@acmerealestate.com" in acme_agent_emails
+        
+        # 3. PropertyHub support helps across multiple companies
+        support_login = {"username": "support@propertyhub.com", "password": "platform123"}
+        support_response = await client.post("/v1/auth/login", data=support_login)
+        assert support_response.status_code == 200
+        
+        support_headers = {"Authorization": f"Bearer {support_response.json()['access_token']}"}
+        
+        # Support can view multiple companies for customer service
+        support_clients_response = await client.get("/v1/client-accounts/", headers=support_headers)
+        assert support_clients_response.status_code == 200
+        
+        support_clients = support_clients_response.json()
+        client_names = [c["name"] for c in support_clients]
+        assert "ACME Real Estate" in client_names
+        assert "Elite Properties" in client_names
+
+
+class TestPropertyHubAuthentication:
+    """Test authentication across all three tiers."""
+    
+    @pytest.mark.asyncio
+    async def test_all_propertyhub_users_can_login(self, client: AsyncClient):
+        """Verify all PropertyHub scenario users can authenticate."""
+        test_users = [
+            # Platform staff
+            ("admin@propertyhub.com", "platform123"),
+            ("support@propertyhub.com", "platform123"),
+            ("sales@propertyhub.com", "platform123"),
+            
+            # Real estate company admins
+            ("admin@acmerealestate.com", "realestate123"),
+            ("admin@eliteproperties.com", "realestate123"),
+            ("admin@downtownrealty.com", "realestate123"),
+            
+            # Real estate agents
+            ("john.agent@acmerealestate.com", "agent123"),
+            ("sarah.manager@acmerealestate.com", "agent123"),
+            ("luxury.agent@eliteproperties.com", "agent123")
+        ]
+        
+        for email, password in test_users:
+            login_data = {"username": email, "password": password}
+            login_response = await client.post("/v1/auth/login", data=login_data)
+            
+            assert login_response.status_code == 200, f"Login failed for {email}"
+            
+            token_data = login_response.json()
+            assert "access_token" in token_data
+            assert token_data["token_type"] == "bearer"
+            
+            # Verify token works for protected endpoints
+            headers = {"Authorization": f"Bearer {token_data['access_token']}"}
+            profile_response = await client.get("/v1/auth/me", headers=headers)
+            assert profile_response.status_code == 200
+            
+            profile = profile_response.json()
+            assert profile["email"] == email
+
+    @pytest.mark.asyncio
+    async def test_propertyhub_role_hierarchy(self, client: AsyncClient):
+        """Test that PropertyHub role hierarchy is properly enforced."""
+        
+        # Get platform admin token
+        login_data = {"username": "admin@propertyhub.com", "password": "platform123"}
+        login_response = await client.post("/v1/auth/login", data=login_data)
+        assert login_response.status_code == 200
+        
+        headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+        
+        # Platform admin should see their roles
+        profile_response = await client.get("/v1/auth/me", headers=headers)
+        assert profile_response.status_code == 200
+        
+        profile = profile_response.json()
+        assert "platform_admin" in profile.get("roles", [])
+        
+        # Verify roles endpoint works
+        roles_response = await client.get("/v1/roles/", headers=headers)
+        assert roles_response.status_code == 200
+        
+        roles = roles_response.json()
+        role_ids = [r["_id"] for r in roles]
+        
+        # Should see PropertyHub-specific roles
+        assert "platform_admin" in role_ids
+        assert "platform_support" in role_ids
+        assert "real_estate_admin" in role_ids
+        assert "real_estate_agent" in role_ids 

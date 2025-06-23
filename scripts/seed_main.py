@@ -368,6 +368,209 @@ async def seed_hierarchical_scenario():
     print("  - admin@acme-properties.com (Client Admin)")
 
 
+async def seed_propertyhub_scenario():
+    """
+    Seeds data for testing the PropertyHub three-tier SaaS platform model:
+    1. PropertyHub Platform Staff (internal team)
+    2. Real Estate Companies (clients)  
+    3. Real Estate Agents (end users)
+    """
+    print("\n--- Seeding: PROPERTYHUB Scenario ---")
+    
+    # Create PropertyHub platform roles
+    print("Creating PropertyHub platform roles...")
+    platform_roles = [
+        RoleCreateSchema(
+            _id="platform_admin", name="Platform Administrator",
+            description="PropertyHub internal administrator",
+            permissions=["client_account:create", "client_account:read", "client_account:update", 
+                        "user:create", "user:read", "user:update", "user:delete",
+                        "group:create", "group:read", "group:update", "group:delete"],
+            is_assignable_by_main_client=True
+        ),
+        RoleCreateSchema(
+            _id="platform_support", name="Platform Support",
+            description="PropertyHub customer success team",
+            permissions=["client_account:read", "user:read", "group:read"],
+            is_assignable_by_main_client=True
+        ),
+        RoleCreateSchema(
+            _id="platform_sales", name="Platform Sales",
+            description="PropertyHub sales team",
+            permissions=["client_account:create", "client_account:read", "user:read"],
+            is_assignable_by_main_client=True
+        ),
+        RoleCreateSchema(
+            _id="real_estate_admin", name="Real Estate Company Admin",
+            description="Real estate company administrator",
+            permissions=["user:create", "user:read", "user:update", "user:add_member",
+                        "group:create", "group:read", "group:update", "group:manage_members"],
+            is_assignable_by_main_client=True
+        ),
+        RoleCreateSchema(
+            _id="real_estate_agent", name="Real Estate Agent",
+            description="Real estate agent or sales person",
+            permissions=["user:read", "group:read"],
+            is_assignable_by_main_client=True
+        )
+    ]
+    
+    for role_data in platform_roles:
+        if not await role_service.get_role_by_id(role_data.id):
+            await role_service.create_role(role_data)
+    print(f"{len(platform_roles)} PropertyHub roles created.")
+
+    # Create PropertyHub platform account
+    print("Creating PropertyHub platform account...")
+    propertyhub_platform = await client_account_service.create_client_account(
+        ClientAccountCreateSchema(
+            name="PropertyHub Platform", 
+            description="PropertyHub SaaS platform for real estate management",
+            is_platform_root=True
+        )
+    )
+    
+    # Create PropertyHub internal staff
+    print("Creating PropertyHub internal staff...")
+    await user_service.create_user(UserCreateSchema(
+        email="admin@propertyhub.com", password="platform123", 
+        first_name="Admin", last_name="PropertyHub",
+        is_main_client=True, roles=["platform_admin"], 
+        client_account_id=str(propertyhub_platform.id)
+    ))
+    
+    await user_service.create_user(UserCreateSchema(
+        email="support@propertyhub.com", password="platform123",
+        first_name="Support", last_name="Team", 
+        is_main_client=False, roles=["platform_support"],
+        client_account_id=str(propertyhub_platform.id)
+    ))
+    
+    await user_service.create_user(UserCreateSchema(
+        email="sales@propertyhub.com", password="platform123",
+        first_name="Sales", last_name="Team",
+        is_main_client=False, roles=["platform_sales"],
+        client_account_id=str(propertyhub_platform.id)
+    ))
+
+    # Create real estate company clients
+    print("Creating real estate company clients...")
+    acme_realestate = await client_account_service.create_client_account(
+        ClientAccountCreateSchema(
+            name="ACME Real Estate", 
+            description="Independent real estate brokerage using PropertyHub"
+        ),
+        created_by_client_id=str(propertyhub_platform.id)
+    )
+    
+    elite_properties = await client_account_service.create_client_account(
+        ClientAccountCreateSchema(
+            name="Elite Properties", 
+            description="Luxury real estate firm using PropertyHub"
+        ),
+        created_by_client_id=str(propertyhub_platform.id)
+    )
+    
+    downtown_realty = await client_account_service.create_client_account(
+        ClientAccountCreateSchema(
+            name="Downtown Realty", 
+            description="Urban real estate specialists using PropertyHub"
+        ),
+        created_by_client_id=str(propertyhub_platform.id)
+    )
+
+    # Create real estate company admins
+    print("Creating real estate company admins...")
+    await user_service.create_user(UserCreateSchema(
+        email="admin@acmerealestate.com", password="realestate123",
+        first_name="Alice", last_name="Johnson",
+        is_main_client=True, roles=["real_estate_admin"],
+        client_account_id=str(acme_realestate.id)
+    ))
+    
+    await user_service.create_user(UserCreateSchema(
+        email="admin@eliteproperties.com", password="realestate123",
+        first_name="Bob", last_name="Smith", 
+        is_main_client=True, roles=["real_estate_admin"],
+        client_account_id=str(elite_properties.id)
+    ))
+    
+    await user_service.create_user(UserCreateSchema(
+        email="admin@downtownrealty.com", password="realestate123",
+        first_name="Carol", last_name="Brown",
+        is_main_client=True, roles=["real_estate_admin"],
+        client_account_id=str(downtown_realty.id)
+    ))
+
+    # Create real estate agents for ACME Real Estate
+    print("Creating real estate agents...")
+    await user_service.create_user(UserCreateSchema(
+        email="john.agent@acmerealestate.com", password="agent123",
+        first_name="John", last_name="Agent",
+        is_main_client=False, roles=["real_estate_agent"],
+        client_account_id=str(acme_realestate.id)
+    ))
+    
+    await user_service.create_user(UserCreateSchema(
+        email="sarah.manager@acmerealestate.com", password="agent123",
+        first_name="Sarah", last_name="Manager",
+        is_main_client=False, roles=["real_estate_agent"], 
+        client_account_id=str(acme_realestate.id)
+    ))
+    
+    await user_service.create_user(UserCreateSchema(
+        email="mike.assistant@acmerealestate.com", password="agent123",
+        first_name="Mike", last_name="Assistant",
+        is_main_client=False, roles=["real_estate_agent"],
+        client_account_id=str(acme_realestate.id)
+    ))
+
+    # Create agents for Elite Properties  
+    await user_service.create_user(UserCreateSchema(
+        email="luxury.agent@eliteproperties.com", password="agent123",
+        first_name="Luxury", last_name="Agent",
+        is_main_client=False, roles=["real_estate_agent"],
+        client_account_id=str(elite_properties.id)
+    ))
+
+    # Create PropertyHub team groups
+    print("Creating PropertyHub platform groups...")
+    platform_users = await UserModel.find(UserModel.client_account.id == propertyhub_platform.id).to_list()
+    platform_user_ids = [str(u.id) for u in platform_users]
+    await group_service.create_group(GroupCreateSchema(
+        name="PropertyHub Internal Team", 
+        description="PropertyHub platform staff",
+        client_account_id=str(propertyhub_platform.id), 
+        members=platform_user_ids,
+        roles=["platform_admin"]
+    ))
+
+    # Create real estate company groups
+    acme_users = await UserModel.find(UserModel.client_account.id == acme_realestate.id).to_list()
+    acme_user_ids = [str(u.id) for u in acme_users]
+    await group_service.create_group(GroupCreateSchema(
+        name="ACME Sales Team",
+        description="ACME Real Estate sales team",
+        client_account_id=str(acme_realestate.id),
+        members=acme_user_ids,
+        roles=["real_estate_agent"]
+    ))
+    
+    print("\n--- PROPERTYHUB Scenario Seeding Complete! ---")
+    print("PropertyHub Platform Staff:")
+    print("  - admin@propertyhub.com (Platform Admin)")
+    print("  - support@propertyhub.com (Customer Success)")
+    print("  - sales@propertyhub.com (Sales Team)")
+    print("\nReal Estate Company Admins:")
+    print("  - admin@acmerealestate.com (ACME Real Estate)")
+    print("  - admin@eliteproperties.com (Elite Properties)")
+    print("  - admin@downtownrealty.com (Downtown Realty)")
+    print("\nReal Estate Agents:")
+    print("  - john.agent@acmerealestate.com (ACME Agent)")
+    print("  - sarah.manager@acmerealestate.com (ACME Manager)")
+    print("  - luxury.agent@eliteproperties.com (Elite Agent)")
+
+
 async def main():
     """
     Main function to execute the seeding process based on command-line arguments.
@@ -387,7 +590,7 @@ async def main():
     parser.add_argument(
         "--scenario",
         type=str,
-        choices=['comprehensive', 'hierarchical'],
+        choices=['comprehensive', 'hierarchical', 'propertyhub'],
         default='comprehensive',
         help="The seeding scenario to run. Defaults to 'comprehensive'."
     )
@@ -441,6 +644,8 @@ async def main():
             await seed_comprehensive_scenario()
         elif args.scenario == 'hierarchical':
             await seed_hierarchical_scenario()
+        elif args.scenario == 'propertyhub':
+            await seed_propertyhub_scenario()
 
         print(f"\n✅ Successfully seeded database '{db_name}' with '{args.scenario}' scenario.")
 

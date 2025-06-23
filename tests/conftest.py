@@ -77,6 +77,20 @@ def run_seed_script():
         print(e.stdout)
         print(e.stderr)
         pytest.fail(f"Seeding script failed, cannot proceed. Error: {e}", pytrace=False)
+    
+    # Third, run the PropertyHub scenario without wiping the database
+    print("\n--- Running seed script for 'propertyhub' scenario (no wipe) ---")
+    try:
+        subprocess.run(
+            [sys.executable, script_path, "--scenario", "propertyhub", "--db", db_name, "--no-wipe"],
+            capture_output=True, text=True, check=True, timeout=90
+        )
+        print("--- 'propertyhub' scenario completed successfully ---")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        print("--- !!! SEED SCRIPT FAILED for 'propertyhub' scenario !!! ---")
+        print(e.stdout)
+        print(e.stderr)
+        pytest.fail(f"Seeding script failed, cannot proceed. Error: {e}", pytrace=False)
 
 
 @pytest_asyncio.fixture(scope="session")
