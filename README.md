@@ -23,33 +23,78 @@ A standalone, production-ready Role-Based Access Control (RBAC) microservice wit
 
 ## 🏢 **Hierarchical Multi-Platform Architecture**
 
+### **Real-World SaaS Platform Example: PropTech Real Estate Platform**
+
+Imagine a SaaS platform called **"PropertyHub"** that provides real estate management software:
+
+#### **🏗️ Platform Level (PropertyHub Internal Team)**
+
+- **Platform Owner/CEO**: `ceo@propertyhub.com` - Complete system oversight
+- **Platform Admins**: `admin@propertyhub.com` - Manage platform operations
+- **Customer Success**: `support@propertyhub.com` - Help clients with platform
+- **Developers**: `dev@propertyhub.com` - Maintain and improve the platform
+- **Sales Team**: `sales@propertyhub.com` - Onboard new real estate companies
+
+#### **🏢 Client Level (Real Estate Companies)**
+
+- **ACME Real Estate**: Independent real estate brokerage using PropertyHub
+  - Client Admin: `admin@acmerealestate.com` - Manages their company account
+- **Elite Properties**: Luxury real estate firm using PropertyHub
+  - Client Admin: `admin@eliteproperties.com` - Manages their company account
+- **Downtown Realty**: Urban real estate specialists using PropertyHub
+  - Client Admin: `admin@downtownrealty.com` - Manages their company account
+
+#### **👥 Sub-Client Level (Real Estate Agents & Staff)**
+
+- **ACME Real Estate Employees**:
+  - `john.agent@acmerealestate.com` - Real estate agent
+  - `sarah.manager@acmerealestate.com` - Sales manager
+  - `mike.assistant@acmerealestate.com` - Administrative assistant
+
 ### **Three-Tier Permission System**
 
-- **Super Admins**: Complete system access across all platforms
-- **Platform Creators**: Create sub-clients and manage all clients within their platform
-- **Platform Viewers**: Access only clients they created within their platform
-- **Client Admins**: Access only their own client account (standard behavior)
+- **🔑 Super Admins** (`ceo@propertyhub.com`): Complete system access across all platforms
+- **🏗️ Platform Staff** (`admin@propertyhub.com`): Manage platform operations, onboard clients, platform-level analytics
+- **🏢 Client Admins** (`admin@acmerealestate.com`): Manage their real estate company's account and employees
+- **👤 End Users** (`john.agent@acmerealestate.com`): Use the platform for daily real estate activities
 
-### **Real-World Use Cases**
+### **📋 Typical Platform Workflow**
 
-Multiple platforms using central auth service:
-
-- **Real Estate Platform**: Property management companies as sub-clients
-- **CRM Platform**: Individual businesses with platform-scoped administration
-- **Billing Platform**: Service providers with secure cross-platform isolation
+1. **🏗️ Platform Setup**: PropertyHub hires internal staff (`admin@propertyhub.com`, `support@propertyhub.com`)
+2. **🏢 Client Onboarding**: Platform admin creates account for ACME Real Estate
+3. **👤 Client Setup**: ACME admin (`admin@acmerealestate.com`) logs in and sets up their company
+4. **👥 Agent Onboarding**: ACME admin adds their agents (`john.agent@acmerealestate.com`)
+5. **🎯 Daily Operations**: Agents list properties, platform staff monitors usage, client admins manage teams
+6. **📊 Analytics**: Platform staff sees cross-client metrics, ACME admin sees only their company metrics
 
 ### **Key Features**
 
-- **Platform-Scoped Client Creation**: Platform admins can create sub-clients within their scope
-- **Hierarchical Relationships**: Parent-child client relationships with automatic inheritance
-- **Secure Isolation**: Cross-platform access prevention with information disclosure protection
-- **Scalable Design**: Reverse reference architecture supporting unlimited sub-clients
+- **🏗️ Platform Staff Management**: Platform can hire and manage its own internal team
+- **🏢 Client Onboarding**: Platform admins onboard real estate companies as clients
+- **👥 Sub-User Creation**: Client admins create accounts for their agents and staff
+- **🔒 Secure Multi-Tenancy**: Complete data isolation between real estate companies
+- **📊 Platform Analytics**: Platform staff can view cross-client analytics and metrics
+- **🎯 Role-Based Access**: Granular permissions from platform level to individual agents
 
-### **Platform-Scoped Permissions**
+### **Real-World Permission Examples**
 
-- `client_account:create_sub` - Create sub-clients within platform scope
-- `client_account:read_platform` - Read all clients within platform scope
-- `client_account:read_created` - Read only clients you created
+**Platform Level Permissions**:
+
+- `platform:manage_clients` - Onboard new real estate companies
+- `platform:view_analytics` - See platform-wide metrics and usage
+- `platform:manage_staff` - Hire platform employees (support, sales, etc.)
+
+**Client Level Permissions**:
+
+- `client:manage_agents` - Add/remove real estate agents in their company
+- `client:view_properties` - Access their company's property listings
+- `client:manage_roles` - Create custom roles for their agents
+
+**Agent Level Permissions**:
+
+- `property:create` - List new properties for sale/rent
+- `client:contact` - Interact with potential buyers/renters
+- `report:view` - See their individual sales performance
 
 ## 🎯 **API Endpoints**
 
@@ -102,12 +147,28 @@ Run `python scripts/seed.py` to create:
 - **Hierarchical Users**: Platform admins with different permission levels
 - **Real-World Scenarios**: Cross-platform isolation testing
 
-### **Test Users**
+### **Test Users - PropertyHub Platform Example**
 
-- `admin@test.com` - Super Admin (full system access)
-- `platform1.creator@test.com` - Platform Creator (can create sub-clients)
-- `platform2.viewer@test.com` - Platform Viewer (limited scope)
-- `admin@acme-properties.com` - Sub-client Admin
+**🔑 Super Admin**:
+
+- `admin@test.com` - System super admin (full cross-platform access)
+
+**🏗️ Platform Staff (PropertyHub Internal Team)**:
+
+- `admin@propertyhub.com` - Platform admin (onboard clients, manage platform)
+- `support@propertyhub.com` - Customer success (help real estate companies)
+- `sales@propertyhub.com` - Sales team (prospect new real estate companies)
+
+**🏢 Client Admins (Real Estate Company Owners)**:
+
+- `admin@acme.com` - ACME Real Estate admin
+- `admin@techstartup.com` - Elite Properties admin
+
+**👥 End Users (Real Estate Agents & Staff)**:
+
+- `employee1@acme.com` - ACME real estate agent
+- `employee2@acme.com` - ACME sales manager
+- `dev1@techstartup.com` - Elite Properties agent
 
 ### **Comprehensive Test Suite**
 
