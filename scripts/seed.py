@@ -49,6 +49,9 @@ ESSENTIAL_PERMISSIONS = [
     PermissionCreateSchema(_id="client_account:read", description="Allows reading client account information."),
     PermissionCreateSchema(_id="client_account:update", description="Allows updating a client account."),
     PermissionCreateSchema(_id="client_account:delete", description="Allows deleting a client account."),
+    PermissionCreateSchema(_id="client_account:create_sub", description="Allows creating sub-clients within platform scope."),
+    PermissionCreateSchema(_id="client_account:read_platform", description="Allows reading all clients within platform scope."),
+    PermissionCreateSchema(_id="client_account:read_created", description="Allows reading only clients you created."),
     PermissionCreateSchema(_id="group:create", description="Allows creating a group."),
     PermissionCreateSchema(_id="group:read", description="Allows reading group information."),
     PermissionCreateSchema(_id="group:update", description="Allows updating a group."),
@@ -61,6 +64,31 @@ PLATFORM_ADMIN_ROLE = RoleCreateSchema(
     name="Platform Administrator",
     description="Grants all permissions in the system.",
     permissions=[p.id for p in ESSENTIAL_PERMISSIONS]
+)
+
+# New roles for hierarchical multi-platform tenancy
+PLATFORM_CREATOR_ROLE = RoleCreateSchema(
+    _id="platform_creator",
+    name="Platform Creator",
+    description="Can create sub-clients within their platform scope and access all platform clients.",
+    permissions=[
+        "user:read", "user:create", "user:update", "user:create_sub",
+        "client_account:read", "client_account:create_sub", "client_account:read_platform", "client_account:update",
+        "group:read", "group:create", "group:update", "group:manage_members",
+        "role:read", "permission:read"
+    ]
+)
+
+PLATFORM_VIEWER_ROLE = RoleCreateSchema(
+    _id="platform_viewer", 
+    name="Platform Viewer",
+    description="Can only view clients they created within their platform scope.",
+    permissions=[
+        "user:read", "user:create", "user:update", "user:create_sub",
+        "client_account:read", "client_account:read_created", "client_account:update",
+        "group:read", "group:create", "group:update", "group:manage_members",
+        "role:read", "permission:read"
+    ]
 )
 
 # Test client account for the admin user
@@ -122,10 +150,18 @@ async def seed_database(db):
         await permission_service.create_permission(perm_data)
     print(f"{len(ESSENTIAL_PERMISSIONS)} permissions created.")
 
-    # 3. Create platform_admin role
+    # 3. Create platform_admin role and new hierarchical roles
     print("Creating platform admin role...")
     await role_service.create_role(PLATFORM_ADMIN_ROLE)
     print(f"Role '{PLATFORM_ADMIN_ROLE.id}' created.")
+    
+    print("Creating platform creator role...")
+    await role_service.create_role(PLATFORM_CREATOR_ROLE)
+    print(f"Role '{PLATFORM_CREATOR_ROLE.id}' created.")
+    
+    print("Creating platform viewer role...")
+    await role_service.create_role(PLATFORM_VIEWER_ROLE)
+    print(f"Role '{PLATFORM_VIEWER_ROLE.id}' created.")
 
     # 4. Create test client account
     print("Creating test client account...")
@@ -146,160 +182,139 @@ async def seed_database(db):
     admin_user = await user_service.create_user(admin_user_data)
     print(f"Admin user '{admin_user.email}' created.")
 
-    # 6. Create additional roles for testing
-    print("Creating additional test roles...")
-    test_roles = [
-        RoleCreateSchema(
-            _id="client_admin",
-            name="Client Administrator",
-            description="Administrative role for client account",
-            permissions=["user:create", "user:read", "user:update", "user:delete", "user:create_sub", "group:create", "group:read", "group:update", "group:delete", "group:manage_members"],
-            is_assignable_by_main_client=True
-        ),
-        RoleCreateSchema(
-            _id="manager",
-            name="Manager",
-            description="Manager role with limited permissions",
-            permissions=["user:read", "group:read", "group:update", "group:manage_members"],
-            is_assignable_by_main_client=True
-        ),
-        RoleCreateSchema(
-            _id="employee",
-            name="Employee",
-            description="Basic employee role",
-            permissions=["user:read", "group:read"],
-            is_assignable_by_main_client=True
-        )
+    # Additional roles for testing
+    ADDITIONAL_ROLES = [
+        RoleCreateSchema(_id="client_admin", name="Client Administrator", description="Administrator for a specific client account"),
+        RoleCreateSchema(_id="manager", name="Manager", description="Management role with limited permissions"),
+        RoleCreateSchema(_id="employee", name="Employee", description="Basic employee access")
     ]
-    
-    for role_data in test_roles:
+
+    print("Creating additional test roles...")
+    for role_data in ADDITIONAL_ROLES:
         await role_service.create_role(role_data)
         print(f"Role '{role_data.id}' created.")
 
-    # 7. Create additional client accounts
-    print("Creating additional client accounts...")
-    acme_corp = await client_account_service.create_client_account(
-        ClientAccountCreateSchema(
-            name="ACME Corporation",
-            description="Large enterprise client"
-        )
-    )
-    print(f"Client account '{acme_corp.name}' created with ID: {acme_corp.id}")
-
-    tech_startup = await client_account_service.create_client_account(
-        ClientAccountCreateSchema(
-            name="Tech Startup Inc",
-            description="Small tech startup client"
-        )
-    )
-    print(f"Client account '{tech_startup.name}' created with ID: {tech_startup.id}")
-
-    # 8. Create users for different client accounts
-    print("Creating additional users...")
+    # 7. Create additional client accounts with hierarchical relationships
+    print("Creating platform root client accounts...")
     
-    # ACME Corporation users
-    acme_admin = await user_service.create_user(UserCreateSchema(
-        email="admin@acme.com",
-        password="secure_password_123",
+    # Platform 1: Real Estate Platform
+    platform1_root = ClientAccountCreateSchema(
+        name="Real Estate Platform Root",
+        description="Root client for real estate platform",
+        platform_id="real_estate_platform",
+        is_platform_root=True
+    )
+    platform1_client = await client_account_service.create_client_account(platform1_root)
+    print(f"Platform 1 root client '{platform1_client.name}' created with ID: {platform1_client.id}")
+
+    # Platform 2: CRM Platform  
+    platform2_root = ClientAccountCreateSchema(
+        name="CRM Platform Root",
+        description="Root client for CRM platform",
+        platform_id="crm_platform", 
+        is_platform_root=True
+    )
+    platform2_client = await client_account_service.create_client_account(platform2_root)
+    print(f"Platform 2 root client '{platform2_client.name}' created with ID: {platform2_client.id}")
+
+    # Create platform admin users
+    print("Creating platform admin users...")
+    
+    # Platform 1 Creator Admin
+    platform1_creator_data = UserCreateSchema(
+        email="platform1.creator@test.com",
+        password="platform123",
+        first_name="Platform1",
+        last_name="Creator",
+        is_main_client=True,
+        roles=["platform_creator"],
+        client_account_id=str(platform1_client.id)
+    )
+    platform1_creator = await user_service.create_user(platform1_creator_data)
+    print(f"Platform 1 creator '{platform1_creator.email}' created.")
+
+    # Platform 2 Viewer Admin  
+    platform2_viewer_data = UserCreateSchema(
+        email="platform2.viewer@test.com",
+        password="platform123",
+        first_name="Platform2", 
+        last_name="Viewer",
+        is_main_client=True,
+        roles=["platform_viewer"],
+        client_account_id=str(platform2_client.id)
+    )
+    platform2_viewer = await user_service.create_user(platform2_viewer_data)
+    print(f"Platform 2 viewer '{platform2_viewer.email}' created.")
+
+    # Create sub-clients for platforms
+    print("Creating sub-clients for platform testing...")
+    
+    # Sub-clients for Platform 1 (Real Estate)
+    acme_properties = ClientAccountCreateSchema(
+        name="ACME Properties",
+        description="Real estate company under platform 1"
+    )
+    acme_client = await client_account_service.create_client_account(
+        acme_properties, 
+        created_by_client_id=str(platform1_client.id)
+    )
+    print(f"Sub-client 'ACME Properties' created under Platform 1")
+
+    # Sub-clients for Platform 2 (CRM)
+    tech_startup = ClientAccountCreateSchema(
+        name="Tech Startup Inc",
+        description="Technology startup using CRM platform"
+    )
+    tech_client = await client_account_service.create_client_account(
+        tech_startup,
+        created_by_client_id=str(platform2_client.id)
+    )
+    print(f"Sub-client 'Tech Startup Inc' created under Platform 2")
+
+    # Create users for sub-clients
+    print("Creating users for sub-clients...")
+    
+    # ACME Properties users
+    acme_admin_data = UserCreateSchema(
+        email="admin@acme-properties.com",
+        password="acme123",
         first_name="John",
-        last_name="Admin",
+        last_name="ACME",
         is_main_client=True,
         roles=["client_admin"],
-        client_account_id=str(acme_corp.id)
-    ))
-    print(f"ACME admin user '{acme_admin.email}' created.")
-
-    acme_manager = await user_service.create_user(UserCreateSchema(
-        email="manager@acme.com",
-        password="secure_password_123",
-        first_name="Jane",
-        last_name="Manager",
-        is_main_client=False,
-        roles=["manager"],
-        client_account_id=str(acme_corp.id)
-    ))
-    print(f"ACME manager user '{acme_manager.email}' created.")
-
-    acme_employees = []
-    for i in range(1, 4):
-        employee = await user_service.create_user(UserCreateSchema(
-            email=f"employee{i}@acme.com",
-            password="secure_password_123",
-            first_name=f"Employee{i}",
-            last_name="Acme",
-            is_main_client=False,
-            roles=["employee"],
-            client_account_id=str(acme_corp.id)
-        ))
-        acme_employees.append(employee)
-        print(f"ACME employee '{employee.email}' created.")
+        client_account_id=str(acme_client.id)
+    )
+    await user_service.create_user(acme_admin_data)
+    print("ACME Properties admin user created.")
 
     # Tech Startup users
-    startup_admin = await user_service.create_user(UserCreateSchema(
-        email="admin@techstartup.com",
-        password="secure_password_123",
-        first_name="Alice",
+    tech_admin_data = UserCreateSchema(
+        email="admin@techstartup.com", 
+        password="tech123",
+        first_name="Jane",
         last_name="Tech",
         is_main_client=True,
         roles=["client_admin"],
-        client_account_id=str(tech_startup.id)
-    ))
-    print(f"Startup admin user '{startup_admin.email}' created.")
+        client_account_id=str(tech_client.id)
+    )
+    await user_service.create_user(tech_admin_data)
+    print("Tech Startup admin user created.")
 
-    startup_employees = []
-    for i in range(1, 3):
-        employee = await user_service.create_user(UserCreateSchema(
-            email=f"dev{i}@techstartup.com",
-            password="secure_password_123",
-            first_name=f"Developer{i}",
-            last_name="Tech",
-            is_main_client=False,
-            roles=["employee"],
-            client_account_id=str(tech_startup.id)
-        ))
-        startup_employees.append(employee)
-        print(f"Startup employee '{employee.email}' created.")
-
-    # 9. Create groups for testing
-    print("Creating test groups...")
-    
-    # ACME groups
-    acme_dev_group = await group_service.create_group(GroupCreateSchema(
-        name="Development Team",
-        description="ACME development team",
-        client_account_id=str(acme_corp.id),
-        roles=["employee"],
-        members=[str(acme_employees[0].id), str(acme_employees[1].id)]
-    ))
-    print(f"ACME Development Team group created with ID: {acme_dev_group.id}")
-
-    acme_mgmt_group = await group_service.create_group(GroupCreateSchema(
-        name="Management Team",
-        description="ACME management team",
-        client_account_id=str(acme_corp.id),
-        roles=["manager"],
-        members=[str(acme_manager.id)]
-    ))
-    print(f"ACME Management Team group created with ID: {acme_mgmt_group.id}")
-
-    # Tech Startup groups
-    startup_all_group = await group_service.create_group(GroupCreateSchema(
-        name="All Hands",
-        description="Everyone at the startup",
-        client_account_id=str(tech_startup.id),
-        roles=["employee"],
-        members=[str(startup_employees[0].id), str(startup_employees[1].id)]
-    ))
-    print(f"Startup All Hands group created with ID: {startup_all_group.id}")
-
-    print(f"\n--- Enhanced seeding complete! ---")
-    print(f"Created:")
-    print(f"  - {len(ESSENTIAL_PERMISSIONS)} permissions")
-    print(f"  - {len(test_roles) + 1} roles") 
-    print(f"  - 3 client accounts")
-    print(f"  - 8 users across different organizations")
-    print(f"  - 3 groups with members")
-    print(f"Now you have real data to test with!")
+    print("\n--- Hierarchical Multi-Platform Tenancy Setup Complete! ---")
+    print("Created:")
+    print(f"  - {len(ESSENTIAL_PERMISSIONS)} permissions (including new platform-scoped)")
+    print(f"  - 6 roles (including platform_creator and platform_viewer)")
+    print(f"  - 5 client accounts (1 original + 2 platform roots + 2 sub-clients)")
+    print(f"  - Platform relationships and hierarchical permissions")
+    print("  - Platform admin users with scoped access")
+    print("  - Real-world multi-platform test scenario")
+    print("\nTest Users:")
+    print("  - admin@test.com (Super Admin) - Full system access")
+    print("  - platform1.creator@test.com (Platform Creator) - Can create sub-clients, see all in platform")
+    print("  - platform2.viewer@test.com (Platform Viewer) - Can only see clients they created") 
+    print("  - admin@acme-properties.com (Client Admin) - Real estate platform sub-client")
+    print("  - admin@techstartup.com (Client Admin) - CRM platform sub-client")
+    print("Now you can test the hierarchical multi-platform tenancy system!")
 
 
 if __name__ == "__main__":

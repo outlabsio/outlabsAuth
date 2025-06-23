@@ -7,6 +7,7 @@ from .services.security_service import security_service
 from .services.user_service import user_service
 from .services.role_service import role_service
 from .services.group_service import group_service
+from .services.client_account_service import client_account_service
 from .models.user_model import UserModel
 from .schemas.auth_schema import TokenDataSchema
 
@@ -79,6 +80,59 @@ def has_permission(required_permission: str):
             )
         return current_user
     return _has_permission
+
+def has_hierarchical_client_access(target_client_field: str = "account_id"):
+    """
+    Dependency factory for hierarchical client account access control.
+    Validates that the user can access the target client account based on:
+    - Super admins: Access everything
+    - Platform admins: Access clients in their platform scope
+    - Regular users: Access only their own client account
+    
+    Args:
+        target_client_field: The path parameter or field name containing the target client ID
+    """
+    async def _has_hierarchical_access(
+        request: Request,
+        current_user: UserModel = Depends(get_current_user)
+    ):
+        # Extract target client ID from path parameters
+        target_client_id = request.path_params.get(target_client_field)
+        if not target_client_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Missing required parameter: {target_client_field}"
+            )
+        
+        # Get user's effective permissions
+        user_permissions = await group_service.get_user_effective_permissions(current_user.id)
+        
+        # Check if user is super admin (has all permissions)
+        is_super_admin = "client_account:create" in user_permissions and "client_account:delete" in user_permissions
+        
+        # Use the enhanced service method to check access
+        user_client_id = str(current_user.client_account.id) if current_user.client_account else None
+        if not user_client_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User not associated with any client account."
+            )
+        
+        can_access = await client_account_service.can_user_access_client_account(
+            user_client_id=user_client_id,
+            target_client_id=target_client_id,
+            user_permissions=user_permissions,
+            is_super_admin=is_super_admin
+        )
+        
+        if not can_access:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,  # Return 404 to prevent information disclosure
+                detail="Client account not found"
+            )
+        
+        return current_user
+    return _has_hierarchical_access
 
 async def get_current_user(
     user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token)

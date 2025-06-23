@@ -33,7 +33,7 @@ MAIN_DB_NAME = os.getenv("MONGO_DATABASE", "outlabsAuth")
 
 # Super Admin Details
 SUPER_ADMIN_EMAIL = "system@outlabs.io"
-SUPER_ADMIN_FIRST_NAME = "Andrew"
+SUPER_ADMIN_FIRST_NAME = "Outlabs"
 SUPER_ADMIN_LAST_NAME = "System"
 
 # --- Essential Data Definitions ---
@@ -54,6 +54,10 @@ ESSENTIAL_PERMISSIONS = [
     PermissionCreateSchema(_id="client_account:read", description="Allows reading client account information."),
     PermissionCreateSchema(_id="client_account:update", description="Allows updating a client account."),
     PermissionCreateSchema(_id="client_account:delete", description="Allows deleting a client account."),
+    # New platform-scoped permissions for hierarchical multi-platform tenancy
+    PermissionCreateSchema(_id="client_account:create_sub", description="Allows creating sub-clients within platform scope."),
+    PermissionCreateSchema(_id="client_account:read_platform", description="Allows reading all clients within platform scope."),
+    PermissionCreateSchema(_id="client_account:read_created", description="Allows reading only clients you created."),
     PermissionCreateSchema(_id="group:create", description="Allows creating a group."),
     PermissionCreateSchema(_id="group:read", description="Allows reading group information."),
     PermissionCreateSchema(_id="group:update", description="Allows updating a group."),

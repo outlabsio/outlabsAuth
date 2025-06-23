@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, Field, ConfigDict, field_serializer
 from datetime import datetime
 from beanie import PydanticObjectId
@@ -9,6 +9,11 @@ class ClientAccountCreateSchema(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)  # Require non-empty name
     description: Optional[str] = None
     main_contact_user_id: Optional[str] = None  # String ID for user
+    
+    # Hierarchical Multi-Platform Tenancy fields
+    platform_id: Optional[str] = None          # Platform this client belongs to
+    created_by_client_id: Optional[str] = None # Parent client creating this account
+    is_platform_root: bool = False             # Whether this client can create sub-clients
 
     model_config = ConfigDict(
         str_strip_whitespace=True,
@@ -21,6 +26,13 @@ class ClientAccountUpdateSchema(BaseModel):
     status: Optional[ClientAccountStatus] = None
     main_contact_user_id: Optional[str] = None  # String ID for user
     data_retention_policy_days: Optional[int] = None
+    
+    # Hierarchical Multi-Platform Tenancy fields
+    platform_id: Optional[str] = None
+    is_platform_root: Optional[bool] = None
+    
+    # Note: created_by_client_id is not updatable for security reasons
+    # Note: child_clients is managed through service layer, not direct updates
 
     model_config = ConfigDict(
         str_strip_whitespace=True,
@@ -34,6 +46,13 @@ class ClientAccountResponseSchema(BaseModel):
     status: ClientAccountStatus
     main_contact_user_id: Optional[str] = None  # Will be populated from Link
     data_retention_policy_days: Optional[int] = None
+    
+    # Hierarchical Multi-Platform Tenancy fields
+    platform_id: Optional[str] = None
+    created_by_client_id: Optional[str] = None
+    is_platform_root: bool = False
+    child_clients: List[str] = Field(default_factory=list)
+    
     created_at: datetime
     updated_at: datetime
 
