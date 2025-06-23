@@ -16,6 +16,8 @@ class UserCreateSchema(BaseModel):
     roles: Optional[List[str]] = []
     groups: Optional[List[str]] = []  # List of group IDs
     is_main_client: Optional[bool] = False
+    is_platform_staff: Optional[bool] = False
+    platform_scope: Optional[str] = None
     locale: Optional[str] = None
 
 class UserUpdateSchema(BaseModel):
@@ -43,6 +45,8 @@ class UserResponseSchema(BaseModel):
     roles: List[str]
     groups: Optional[List[str]] = []  # List of group IDs
     is_main_client: bool
+    is_platform_staff: Optional[bool] = False
+    platform_scope: Optional[str] = None
     status: UserStatus
     created_at: datetime
     updated_at: datetime

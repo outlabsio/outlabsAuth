@@ -9,8 +9,8 @@ from ..services.group_service import group_service
 
 router = APIRouter(
     prefix="/v1/client_accounts",
-    tags=["Client Account Management"],
-    dependencies=[Depends(has_permission("client_account:read"))]
+    tags=["Client Account Management"]
+    # Removed global permission dependency - handle per endpoint instead
 )
 
 @router.post("/", status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("client_account:create"))], responses={
@@ -70,14 +70,27 @@ async def get_all_client_accounts(
     - Platform admins with read_created: See only accounts they created
     - Regular users: See only their own account
     """
+    # Check if user has client_account:read permission
     user_permissions = await group_service.get_user_effective_permissions(current_user.id)
+    
+    if "client_account:read" not in user_permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to read client accounts."
+        )
+    
     user_client_id = str(current_user.client_account.id) if current_user.client_account else None
     
-    # Check if user is super admin
+    # Check if user is super admin or platform staff
     is_super_admin = "client_account:create" in user_permissions and "client_account:delete" in user_permissions
+    is_platform_staff = getattr(current_user, 'is_platform_staff', False)
+    platform_scope = getattr(current_user, 'platform_scope', None)
     
     if is_super_admin:
         # Super admin sees everything
+        accounts = await client_account_service.get_client_accounts(skip=skip, limit=limit)
+    elif is_platform_staff and platform_scope == "all":
+        # Platform staff with "all" scope sees all client accounts
         accounts = await client_account_service.get_client_accounts(skip=skip, limit=limit)
     elif "client_account:read_platform" in user_permissions and user_client_id:
         # Platform admin with platform scope

@@ -6,6 +6,7 @@ from beanie import Link
 from pymongo import IndexModel
 
 from ..models.base_model import BaseDocument
+from .client_account_model import ClientAccountModel
 
 class UserStatus(str, Enum):
     """
@@ -38,8 +39,22 @@ class UserModel(BaseDocument):
     failed_login_attempts: int = 0
     lockout_until: Optional[datetime] = None
     
+    # Platform hierarchy fields
+    is_platform_staff: bool = False
+    platform_scope: Optional[str] = None
+    
     class Settings:
         name = "users"  # MongoDB collection name
         indexes = [
             IndexModel([("email", 1)], unique=True, name="email_unique"),  # Unique email index
+            IndexModel([("client_account.id", 1)], name="client_account_index"),
+            IndexModel([("is_platform_staff", 1)], name="platform_staff_index"),
+            IndexModel([("roles", 1)], name="roles_index"),
         ] 
+
+    # Pydantic v2 model configuration
+    class Config:
+        # Allow population by field name or alias
+        populate_by_name = True
+        # Validate default values
+        validate_default = True 

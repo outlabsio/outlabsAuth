@@ -437,21 +437,24 @@ async def seed_propertyhub_scenario():
         email="admin@propertyhub.com", password="platform123", 
         first_name="Admin", last_name="PropertyHub",
         is_main_client=True, roles=["platform_admin"], 
-        client_account_id=str(propertyhub_platform.id)
+        client_account_id=str(propertyhub_platform.id),
+        is_platform_staff=True, platform_scope="all"
     ))
     
     await user_service.create_user(UserCreateSchema(
         email="support@propertyhub.com", password="platform123",
         first_name="Support", last_name="Team", 
         is_main_client=False, roles=["platform_support"],
-        client_account_id=str(propertyhub_platform.id)
+        client_account_id=str(propertyhub_platform.id),
+        is_platform_staff=True, platform_scope="all"
     ))
     
     await user_service.create_user(UserCreateSchema(
         email="sales@propertyhub.com", password="platform123",
         first_name="Sales", last_name="Team",
         is_main_client=False, roles=["platform_sales"],
-        client_account_id=str(propertyhub_platform.id)
+        client_account_id=str(propertyhub_platform.id),
+        is_platform_staff=True, platform_scope="created"
     ))
 
     # Create real estate company clients

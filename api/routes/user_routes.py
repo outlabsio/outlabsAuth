@@ -115,17 +115,27 @@ async def get_all_users(
 ):
     """
     Retrieve a list of users.
-    - Platform admins see all users.
+    - Super admins see all users.
+    - Platform staff with "all" scope see all users.
+    - Platform staff with "created" scope see their platform users only.
     - Client users only see users within their own client_account_id.
     """
     current_user, token_data = user_and_token
     
-    # Super admins can see all users regardless of client_account_id
+    # Check user privileges
     is_super_admin = "super_admin" in current_user.roles
+    is_platform_staff = getattr(current_user, 'is_platform_staff', False)
+    platform_scope = getattr(current_user, 'platform_scope', None)
     client_account_id = None
     
-    if not is_super_admin and token_data.client_account_id:
-        # For non-platform admins, enforce client account scoping
+    if is_super_admin:
+        # Super admin sees all users
+        pass
+    elif is_platform_staff and platform_scope == "all":
+        # Platform staff with "all" scope sees all users
+        pass
+    elif token_data.client_account_id:
+        # For regular users, enforce client account scoping
         try:
             client_account_id = PydanticObjectId(token_data.client_account_id)
         except Exception:
