@@ -270,6 +270,30 @@ async def seed_comprehensive_scenario():
         email="admin@techstartup.com", password="admin123", first_name="Charlie", last_name="Founder",
         is_main_client=True, roles=["client_admin"], client_account_id=str(tech_startup.id)
     ))
+    
+    # Create employee users for ACME
+    await user_service.create_user(UserCreateSchema(
+        email="employee1@acme.com", password="secure_password_123", first_name="Employee1", last_name="Acme",
+        is_main_client=False, roles=["employee"], client_account_id=str(acme_corp.id)
+    ))
+    await user_service.create_user(UserCreateSchema(
+        email="employee2@acme.com", password="secure_password_123", first_name="Employee2", last_name="Acme",
+        is_main_client=False, roles=["employee"], client_account_id=str(acme_corp.id)
+    ))
+    await user_service.create_user(UserCreateSchema(
+        email="employee3@acme.com", password="secure_password_123", first_name="Employee3", last_name="Acme",
+        is_main_client=False, roles=["employee"], client_account_id=str(acme_corp.id)
+    ))
+    
+    # Create employee users for Tech Startup
+    await user_service.create_user(UserCreateSchema(
+        email="dev1@techstartup.com", password="secure_password_123", first_name="Developer1", last_name="Tech",
+        is_main_client=False, roles=["employee"], client_account_id=str(tech_startup.id)
+    ))
+    await user_service.create_user(UserCreateSchema(
+        email="dev2@techstartup.com", password="secure_password_123", first_name="Developer2", last_name="Tech",
+        is_main_client=False, roles=["employee"], client_account_id=str(tech_startup.id)
+    ))
 
     # Create test groups
     print("Creating test groups...")

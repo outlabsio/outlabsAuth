@@ -16,7 +16,7 @@ class TestDataHelper:
     # Platform admin credentials
     PLATFORM_ADMIN = {
         "email": "admin@test.com",
-        "password": "a_very_secure_password",
+        "password": "admin123",
         "role": "platform_admin",
         "description": "Platform administrator with full system access"
     }
@@ -25,14 +25,14 @@ class TestDataHelper:
     CLIENT_ADMINS = {
         "acme": {
             "email": "admin@acme.com",
-            "password": "secure_password_123",
+            "password": "admin123",
             "role": "client_admin",
             "company": "ACME Corporation",
             "description": "ACME client administrator"
         },
         "techstartup": {
             "email": "admin@techstartup.com",
-            "password": "secure_password_123",
+            "password": "admin123",
             "role": "client_admin",
             "company": "Tech Startup Inc",
             "description": "Tech Startup client administrator"
@@ -43,7 +43,7 @@ class TestDataHelper:
     MANAGERS = {
         "acme": {
             "email": "manager@acme.com",
-            "password": "secure_password_123",
+            "password": "manager123",
             "role": "manager",
             "company": "ACME Corporation",
             "description": "ACME manager"
