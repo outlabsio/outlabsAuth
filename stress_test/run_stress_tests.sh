@@ -26,7 +26,7 @@ echo "🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥�
 echo -e "${NC}"
 
 # Configuration
-API_HOST="http://localhost:8000"
+API_HOST="http://localhost:8030"
 RESULTS_DIR="stress_test_results"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
@@ -199,8 +199,9 @@ show_menu() {
     echo "5) 🚀 Async Stress Test - Custom async implementation"
     echo "6) 🎪 Full Test Suite - Run all tests sequentially"
     echo "7) 📊 Generate Report Only"
-    echo "8) 🛠️ Install Dependencies"
-    echo "9) 🚪 Exit"
+    echo "8) 📊 Start Container Monitor"
+    echo "9) 🛠️ Install Dependencies"
+    echo "10) 🚪 Exit"
     echo -e "${NC}"
 }
 
@@ -213,7 +214,7 @@ main() {
 
     while true; do
         show_menu
-        read -p "Enter your choice (1-9): " choice
+        read -p "Enter your choice (1-10): " choice
         
         case $choice in
             1)
@@ -247,14 +248,20 @@ main() {
                 generate_report
                 ;;
             8)
-                install_deps
+                echo -e "${CYAN}📊 Starting Container Monitor...${NC}"
+                echo -e "${YELLOW}This will open a real-time dashboard of container resources${NC}"
+                echo -e "${YELLOW}Run this in a separate terminal while stress testing${NC}"
+                python stress_test/monitor_container.py
                 ;;
             9)
+                install_deps
+                ;;
+            10)
                 echo -e "${GREEN}👋 Exiting stress test suite${NC}"
                 exit 0
                 ;;
             *)
-                echo -e "${RED}❌ Invalid choice. Please select 1-9.${NC}"
+                echo -e "${RED}❌ Invalid choice. Please select 1-10.${NC}"
                 ;;
         esac
         

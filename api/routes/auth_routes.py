@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Header, Response, Query
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from jose import JWTError
 from datetime import timedelta, datetime
-from typing import Tuple, List
+from typing import Tuple, List, Optional, Union
 from beanie import PydanticObjectId
 
 from ..services.user_service import user_service
@@ -23,13 +23,16 @@ router = APIRouter(
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/auth/login", auto_error=False)
 
-@router.post("/login", response_model=TokenSchema)
+@router.post("/login")
 async def login_for_access_token(
     request: Request,
-    form_data: OAuth2PasswordRequestForm = Depends()
-):
+    response: Response,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    use_cookies: Optional[bool] = Query(False, description="Use HTTP-only cookies instead of JSON response")
+) -> Union[TokenSchema, dict]:
     """
     Authenticates a user and returns an access token.
+    If use_cookies=true, sets HTTP-only cookies instead of JSON response.
     """
     user = await user_service.get_user_by_email(form_data.username)
     if not user or not security_service.verify_password(form_data.password, user.password_hash):
@@ -62,20 +65,54 @@ async def login_for_access_token(
     }
     access_token = security_service.create_access_token(access_token_data)
 
-    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
+    if use_cookies:
+        # Set HTTP-only cookies
+        # Use secure=False for local development (HTTP), secure=True for production (HTTPS)
+        is_secure = not (request.url.hostname in ["localhost", "127.0.0.1"] or request.url.scheme == "http")
+        
+        response.set_cookie(
+            key="access_token",
+            value=access_token,
+            max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # Convert to seconds
+            httponly=True,
+            secure=is_secure,  # Dynamic based on environment
+            samesite="strict"
+        )
+        response.set_cookie(
+            key="refresh_token",
+            value=refresh_token,
+            max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,  # Convert to seconds
+            httponly=True,
+            secure=is_secure,  # Dynamic based on environment
+            samesite="strict"
+        )
+        return {"message": "Login successful", "token_type": "cookie"}
+    else:
+        # Return JSON tokens (current behavior)
+        return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
 
-@router.post("/refresh", response_model=TokenSchema)
+@router.post("/refresh")
 async def refresh_access_token(
     request: Request,
-    authorization: str = Header(None)
-):
-    # Extract token from Authorization header manually to provide specific error messages
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token not found")
+    response: Response,
+    authorization: str = Header(None),
+    use_cookies: Optional[bool] = Query(False, description="Use HTTP-only cookies")
+) -> Union[TokenSchema, dict]:
+    # Try to get refresh token from cookies first, then from header
+    refresh_token_str = None
     
-    refresh_token_str = authorization.split(" ")[1]
-    if not refresh_token_str:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token not found")
+    if use_cookies:
+        refresh_token_str = request.cookies.get("refresh_token")
+        if not refresh_token_str:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token not found in cookies")
+    else:
+        # Extract token from Authorization header manually to provide specific error messages
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token not found")
+        
+        refresh_token_str = authorization.split(" ")[1]
+        if not refresh_token_str:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token not found")
 
     payload = security_service.decode_refresh_token(refresh_token_str)
     jti = payload.jti
@@ -111,19 +148,50 @@ async def refresh_access_token(
     }
     new_access_token = security_service.create_access_token(new_access_token_data)
 
-    return {"access_token": new_access_token, "refresh_token": new_refresh_token, "token_type": "bearer"}
+    if use_cookies:
+        # Update HTTP-only cookies
+        # Use secure=False for local development (HTTP), secure=True for production (HTTPS)
+        is_secure = not (request.url.hostname in ["localhost", "127.0.0.1"] or request.url.scheme == "http")
+        
+        response.set_cookie(
+            key="access_token",
+            value=new_access_token,
+            max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            httponly=True,
+            secure=is_secure,  # Dynamic based on environment
+            samesite="strict"
+        )
+        response.set_cookie(
+            key="refresh_token",
+            value=new_refresh_token,
+            max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+            httponly=True,
+            secure=is_secure,  # Dynamic based on environment
+            samesite="strict"
+        )
+        return {"message": "Tokens refreshed", "token_type": "cookie"}
+    else:
+        return {"access_token": new_access_token, "refresh_token": new_refresh_token, "token_type": "bearer"}
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
-    user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token)
+    response: Response,
+    user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token),
+    use_cookies: Optional[bool] = Query(False, description="Clear HTTP-only cookies")
 ):
     """
     Revokes the current user's refresh token.
+    If use_cookies=true, also clears the HTTP-only cookies.
     """
     _, token_data = user_and_token
     jti = token_data.jti
     if jti:
         await refresh_token_service.revoke_token(jti)
+
+    if use_cookies:
+        # Clear HTTP-only cookies
+        response.delete_cookie(key="access_token", httponly=True, secure=True, samesite="strict")
+        response.delete_cookie(key="refresh_token", httponly=True, secure=True, samesite="strict")
 
     # Optional: Add the access token to a blacklist cache (e.g., Redis)
     # for immediate invalidation before it expires.

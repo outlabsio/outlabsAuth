@@ -413,6 +413,71 @@ With the core RBAC foundation now **rock-solid and production-ready**, plus **pr
 - **Admin UI Development**: Web-based management interface
 - **Monitoring & Observability**: Metrics collection, structured logging, health checks
 
+## 🚨 **KNOWN ARCHITECTURAL LIMITATION: MULTI-PLATFORM TENANCY**
+
+### **Current Architecture Gap**
+
+The current system implements a **binary permission structure** that doesn't support real-world multi-platform scenarios:
+
+**Current Limitation:**
+
+- **Regular Client Users**: Can only access their own client data
+- **Super Admins**: Can access ALL client data across ALL platforms
+
+**Missing Tier:**
+
+- **Platform Admins**: Should be able to create clients but with scoped visibility to only their platform/created clients
+
+### **Real-World Use Case Requiring Enhancement**
+
+**Scenario**: Multiple platforms using central auth service
+
+- **Real Estate Platform** (multi-tenant): Property management companies as clients
+- **CRM Platform** (single-tenant): Individual businesses as clients
+- **Billing Platform** (multi-tenant): Service providers as clients
+
+**Problem**: Real estate platform admin needs to:
+
+- ✅ Create property management company clients (requires client creation permissions)
+- ✅ See only clients they created on their platform (scoped visibility)
+- ❌ **CURRENT SYSTEM**: Must be super admin to create clients = sees ALL clients from ALL platforms
+
+### **Planned Enhancement: Hierarchical Multi-Platform Tenancy**
+
+**1. Enhanced ClientAccountModel Structure:**
+
+```python
+class ClientAccountModel(Document):
+    # Existing fields...
+    platform_id: Optional[str] = None          # Which platform owns this client
+    created_by_client_id: Optional[str] = None # Parent client relationship
+    is_platform_root: bool = False             # Can create sub-clients
+    child_clients: List[str] = []              # Reverse relationship
+```
+
+**2. Three-Tier Permission Hierarchy:**
+
+- **Super Admins**: Access to everything (current behavior)
+- **Platform Admins**: Create/manage clients within their platform scope
+- **Client Admins**: Access only their own client data (current behavior)
+
+**3. New Scoped Permissions:**
+
+```python
+# Platform-scoped permissions
+"client_account:create_sub"     # Create sub-clients within platform
+"client_account:read_platform"  # Read all clients within platform
+"client_account:read_created"   # Read only clients you created
+```
+
+**4. Enhanced Authorization Logic:**
+
+- Platform-scoped queries: `filter by platform_id AND created_by_client_id`
+- Hierarchical visibility: Platform admins see their tree branch only
+- Maintains current isolation for regular client users
+
+**Status**: 📋 **PLANNED ENHANCEMENT** - Core RBAC foundation is complete and production-ready. This enhancement will extend the current architecture to support multi-platform hierarchical tenancy.
+
 ## 🎉 **CELEBRATION: TECHNICAL EXCELLENCE ACHIEVED**
 
 ### **What We Built: Enterprise-Grade Authentication Microservice**

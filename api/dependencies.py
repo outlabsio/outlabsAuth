@@ -1,7 +1,7 @@
 from beanie import PydanticObjectId
-from fastapi import HTTPException, status, Depends
+from fastapi import HTTPException, status, Depends, Request
 from fastapi.security import OAuth2PasswordBearer
-from typing import Tuple
+from typing import Tuple, Optional
 
 from .services.security_service import security_service
 from .services.user_service import user_service
@@ -10,7 +10,7 @@ from .services.group_service import group_service
 from .models.user_model import UserModel
 from .schemas.auth_schema import TokenDataSchema
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/auth/login", auto_error=False)
 
 def valid_account_id(account_id: str):
     try:
@@ -21,8 +21,31 @@ def valid_account_id(account_id: str):
             detail=f"Invalid ObjectId: {account_id}"
         )
 
+async def get_token_from_request(
+    request: Request,
+    token: Optional[str] = Depends(oauth2_scheme)
+) -> str:
+    """
+    Extract token from either Authorization header or HTTP-only cookie.
+    """
+    # Try Authorization header first
+    if token:
+        return token
+    
+    # Try HTTP-only cookie
+    cookie_token = request.cookies.get("access_token")
+    if cookie_token:
+        return cookie_token
+    
+    # No token found
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
 async def get_current_user_with_token(
-    token: str = Depends(oauth2_scheme)
+    token: str = Depends(get_token_from_request)
 ) -> Tuple[UserModel, TokenDataSchema]:
     """
     Decodes JWT, then retrieves user from DB using Beanie ODM. Returns user and token payload.
