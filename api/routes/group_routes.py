@@ -64,12 +64,13 @@ async def list_groups(
     """
     current_user, _ = current_user_and_token
     
-    # For non-admin users, automatically filter by their client account
+    # For non-super-admin users, automatically filter by their client account
     filter_client_id = None
     if client_account_id:
         filter_client_id = PydanticObjectId(client_account_id)
-    elif current_user.client_account and not current_user.is_main_client and "super_admin" not in current_user.roles:
-        # When using fetch_links=True, Beanie returns fully loaded objects, not Link references
+    elif current_user.client_account and "super_admin" not in current_user.roles:
+        # All users except super admins should only see groups from their own client account
+        # This includes both main and non-main client users
         filter_client_id = current_user.client_account.id
     
     groups = await group_service.get_groups(skip=skip, limit=limit, client_account_id=filter_client_id)
@@ -104,7 +105,8 @@ async def get_group(
     
     # Check if user has access to this group
     is_super_admin = "super_admin" in current_user.roles
-    if current_user.client_account and not current_user.is_main_client and not is_super_admin:
+    if current_user.client_account and not is_super_admin:
+        # All users except super admins should only access groups from their own client account
         if group.client_account.id != current_user.client_account.id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -135,7 +137,8 @@ async def update_group(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
     is_super_admin = "super_admin" in current_user.roles
-    if current_user.client_account and not current_user.is_main_client and not is_super_admin:
+    if current_user.client_account and not is_super_admin:
+        # All users except super admins should only update groups from their own client account
         if existing_group.client_account.id != current_user.client_account.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -174,7 +177,8 @@ async def delete_group(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
     is_super_admin = "super_admin" in current_user.roles
-    if current_user.client_account and not current_user.is_main_client and not is_super_admin:
+    if current_user.client_account and not is_super_admin:
+        # All users except super admins should only delete groups from their own client account
         if existing_group.client_account.id != current_user.client_account.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -204,7 +208,8 @@ async def add_users_to_group(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
     is_super_admin = "super_admin" in current_user.roles
-    if current_user.client_account and not current_user.is_main_client and not is_super_admin:
+    if current_user.client_account and not is_super_admin:
+        # All users except super admins should only manage members of groups from their own client account
         if existing_group.client_account.id != current_user.client_account.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -236,7 +241,8 @@ async def remove_users_from_group(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
     is_super_admin = "super_admin" in current_user.roles
-    if current_user.client_account and not current_user.is_main_client and not is_super_admin:
+    if current_user.client_account and not is_super_admin:
+        # All users except super admins should only manage members of groups from their own client account
         if existing_group.client_account.id != current_user.client_account.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -267,7 +273,8 @@ async def get_group_members(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
     is_super_admin = "super_admin" in current_user.roles
-    if current_user.client_account and not current_user.is_main_client and not is_super_admin:
+    if current_user.client_account and not is_super_admin:
+        # All users except super admins should only view members of groups from their own client account
         if existing_group.client_account.id != current_user.client_account.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

@@ -385,7 +385,8 @@ async def seed_propertyhub_scenario():
             description="PropertyHub internal administrator",
             permissions=["client_account:create", "client_account:read", "client_account:update", 
                         "user:create", "user:read", "user:update", "user:delete",
-                        "group:create", "group:read", "group:update", "group:delete"],
+                        "group:create", "group:read", "group:update", "group:delete",
+                        "role:read", "permission:read"],
             is_assignable_by_main_client=True
         ),
         RoleCreateSchema(
@@ -410,7 +411,7 @@ async def seed_propertyhub_scenario():
         RoleCreateSchema(
             _id="real_estate_agent", name="Real Estate Agent",
             description="Real estate agent or sales person",
-            permissions=["user:read", "group:read"],
+            permissions=["user:read", "group:read", "client_account:read"],
             is_assignable_by_main_client=True
         )
     ]
