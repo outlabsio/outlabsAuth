@@ -27,7 +27,7 @@ class TestClientAccountRoutes:
         # Login as admin to get auth token
         login_data = {
             "username": "admin@test.com",
-            "password": "a_very_secure_password"
+            "password": "admin123"
         }
         login_response = await client.post("/v1/auth/login", data=login_data)
         assert login_response.status_code == 200

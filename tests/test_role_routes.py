@@ -8,7 +8,7 @@ pytestmark = pytest.mark.asyncio
 # Test data
 ADMIN_USER_DATA = {
     "email": "admin@test.com",
-    "password": "a_very_secure_password"
+    "password": "admin123"
 }
 
 # Generate unique test role ID to avoid conflicts
@@ -58,9 +58,9 @@ class TestRoleRoutes:
         token = await get_admin_token(client)
         headers = {"Authorization": f"Bearer {token}"}
         
-        # Try to create platform_admin role again (should fail)
+        # Try to create super_admin role again (should fail)
         duplicate_role = {
-            "_id": "platform_admin",
+            "_id": "super_admin",
             "name": "Another Platform Admin",
             "description": "Duplicate role",
             "permissions": ["user:read"]
@@ -102,11 +102,11 @@ class TestRoleRoutes:
         assert response.status_code == 200
         roles = response.json()
         assert isinstance(roles, list)
-        assert len(roles) >= 1  # At least platform_admin should exist
+        assert len(roles) >= 1  # At least super_admin should exist
         
-        # Check that platform_admin role is in the list
+        # Check that super_admin role is in the list
         role_ids = [role["_id"] for role in roles]
-        assert "platform_admin" in role_ids
+        assert "super_admin" in role_ids
     
     async def test_get_roles_with_pagination(self, client: AsyncClient):
         """Test role retrieval with pagination parameters."""
@@ -125,12 +125,12 @@ class TestRoleRoutes:
         token = await get_admin_token(client)
         headers = {"Authorization": f"Bearer {token}"}
         
-        # Get the platform_admin role
-        response = await client.get("/v1/roles/platform_admin", headers=headers)
+        # Get the super_admin role
+        response = await client.get("/v1/roles/super_admin", headers=headers)
         
         assert response.status_code == 200
         role_data = response.json()
-        assert role_data["_id"] == "platform_admin"
+        assert role_data["_id"] == "super_admin"
         assert role_data["name"] == "Platform Administrator"
         assert isinstance(role_data["permissions"], list)
         assert len(role_data["permissions"]) > 0
@@ -224,8 +224,8 @@ class TestRoleRoutes:
         token = await get_admin_token(client)
         headers = {"Authorization": f"Bearer {token}"}
         
-        # Try to delete platform_admin role (should fail, but may not be implemented yet)
-        response = await client.delete("/v1/roles/platform_admin", headers=headers)
+        # Try to delete super_admin role (should fail, but may not be implemented yet)
+        response = await client.delete("/v1/roles/super_admin", headers=headers)
         # Accept current behavior - system role protection may not be implemented yet
         assert response.status_code in [204, 400, 403]  # 204 if protection not implemented, 400/403 if implemented
     

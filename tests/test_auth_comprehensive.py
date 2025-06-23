@@ -11,7 +11,7 @@ pytestmark = pytest.mark.asyncio
 # Test data for various scenarios
 ADMIN_USER_DATA = {
     "email": "admin@test.com",
-    "password": "a_very_secure_password"
+    "password": "admin123"
 }
 
 VALID_TEST_USER = {

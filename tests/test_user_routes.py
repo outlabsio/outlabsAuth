@@ -9,7 +9,7 @@ pytestmark = pytest.mark.asyncio
 # Test data
 ADMIN_USER_DATA = {
     "email": "admin@test.com",
-    "password": "a_very_secure_password"
+    "password": "admin123"
 }
 
 TEST_USER_DATA = {

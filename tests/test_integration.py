@@ -7,7 +7,7 @@ pytestmark = pytest.mark.asyncio
 # Test data
 ADMIN_USER_DATA = {
     "email": "admin@test.com",
-    "password": "a_very_secure_password"
+    "password": "admin123"
 }
 
 async def get_admin_token(client: AsyncClient) -> str:
@@ -33,7 +33,7 @@ class TestIntegrationWorkflows:
             "password": "password123",
             "first_name": "Lifecycle",
             "last_name": "Test",
-            "roles": ["platform_admin"]
+            "roles": ["super_admin"]
         }
         
         create_response = await client.post("/v1/users/", json=user_data, headers=headers)

@@ -23,7 +23,7 @@ async def lifespan(app: FastAPI):
         PermissionCreateSchema(_id="user:read", description="Allows reading user information."),
         PermissionCreateSchema(_id="user:update", description="Allows updating a user."),
         PermissionCreateSchema(_id="user:delete", description="Allows deleting a user."),
-        PermissionCreateSchema(_id="user:create_sub", description="Allows a main client to create a sub-user."),
+        PermissionCreateSchema(_id="user:add_member", description="Allows adding a new user to one's own client account."),
         PermissionCreateSchema(_id="user:bulk_create", description="Allows bulk creation of users."),
         PermissionCreateSchema(_id="role:create", description="Allows creating a role."),
         PermissionCreateSchema(_id="role:read", description="Allows reading role information."),
@@ -51,20 +51,20 @@ async def lifespan(app: FastAPI):
         if not existing_perm:
             await permission_service.create_permission(perm_data)
 
-    # Ensure a platform_admin role exists and has all permissions
-    platform_admin_role_data = RoleCreateSchema(
-        _id="platform_admin",
-        name="Platform Administrator",
-        description="Grants all permissions in the system.",
+    # Ensure a super_admin role exists and has all permissions
+    super_admin_role_data = RoleCreateSchema(
+        _id="super_admin",
+        name="Super Administrator",
+        description="Grants complete system-wide access.",
         permissions=all_permission_ids
     )
 
-    existing_admin_role = await role_service.get_role_by_id("platform_admin")
+    existing_admin_role = await role_service.get_role_by_id("super_admin")
     if not existing_admin_role:
-        await role_service.create_role(platform_admin_role_data)
+        await role_service.create_role(super_admin_role_data)
     else:
         # If role exists, ensure it has all permissions
-        await role_service.update_role("platform_admin", platform_admin_role_data)
+        await role_service.update_role("super_admin", super_admin_role_data)
 
     yield
     await db.close()

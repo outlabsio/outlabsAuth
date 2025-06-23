@@ -25,7 +25,7 @@ class TestAccessControl:
         # Login as admin to get auth token for setup
         login_response = await client.post("/v1/auth/login", data={
             "username": "admin@test.com",
-            "password": "a_very_secure_password"
+            "password": "admin123"
         })
         assert login_response.status_code == 200
         token_data = login_response.json()

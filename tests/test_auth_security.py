@@ -12,7 +12,7 @@ pytestmark = pytest.mark.asyncio
 # Test data
 ADMIN_USER_DATA = {
     "email": "admin@test.com",
-    "password": "a_very_secure_password"
+    "password": "admin123"
 }
 
 VALID_TEST_USER = {
@@ -497,7 +497,7 @@ class TestAuthorizationSecurity:
 
                 # Try to modify own roles (if endpoint exists)
                 role_update_data = {
-                    "roles": ["platform_admin", "client_admin"]
+                    "roles": ["super_admin", "client_admin"]
                 }
 
                 response = await client.put(f"/v1/users/{user_id}", json=role_update_data, headers=user_headers)

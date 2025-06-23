@@ -1,6 +1,40 @@
+"""
+Seed Script for Development and Comprehensive Testing
+
+Purpose:
+This script is designed for developers to populate the database with a rich set of
+test data. It wipes the target database and creates a realistic multi-tenant environment,
+including:
+- Multiple client accounts (e.g., "ACME Corporation", "Tech Startup Inc").
+- A super admin user with full system access.
+- Various roles with different permission levels (e.g., "Client Admin", "Manager").
+- Users within each client account.
+- Groups with members.
+
+This is the primary script to use during development to ensure all features
+can be tested thoroughly.
+
+Usage:
+The script can target different databases using command-line arguments.
+
+1. Seed the default test database (`outlabsAuth_test`):
+   python scripts/seed_main.py
+
+2. Seed a specific database by name:
+   python scripts/seed_main.py --db my_custom_db_name
+
+3. Seed the main production/staging database (`outlabsAuth`):
+   python scripts/seed_main.py --prod
+
+Note:
+This script DELETES all existing data in the target database before seeding.
+It is intended for development and testing environments. For initializing a
+production environment, consider using `scripts/seed_super_admin.py`.
+"""
 import asyncio
 import os
 import sys
+import argparse
 from motor.motor_asyncio import AsyncIOMotorClient
 from beanie import init_beanie
 
@@ -29,7 +63,7 @@ from api.models.group_model import GroupModel
 
 # --- Configuration ---
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
-MAIN_DB_NAME = "outlabsAuth"  # Main database instead of test
+# The database name is now handled via command-line arguments.
 
 # --- Essential Data Definitions ---
 ESSENTIAL_PERMISSIONS = [
@@ -37,7 +71,7 @@ ESSENTIAL_PERMISSIONS = [
     PermissionCreateSchema(_id="user:read", description="Allows reading user information."),
     PermissionCreateSchema(_id="user:update", description="Allows updating a user."),
     PermissionCreateSchema(_id="user:delete", description="Allows deleting a user."),
-    PermissionCreateSchema(_id="user:create_sub", description="Allows a main client to create a sub-user."),
+    PermissionCreateSchema(_id="user:add_member", description="Allows adding a new user to one's own client account."),
     PermissionCreateSchema(_id="user:bulk_create", description="Allows bulk creation of users."),
     PermissionCreateSchema(_id="role:create", description="Allows creating a role."),
     PermissionCreateSchema(_id="role:read", description="Allows reading role information."),
@@ -60,11 +94,36 @@ ESSENTIAL_PERMISSIONS = [
     PermissionCreateSchema(_id="group:manage_members", description="Allows adding/removing members from groups."),
 ]
 
-PLATFORM_ADMIN_ROLE = RoleCreateSchema(
-    _id="platform_admin",
-    name="Platform Administrator",
-    description="Grants all permissions in the system.",
+SUPER_ADMIN_ROLE = RoleCreateSchema(
+    _id="super_admin",
+    name="Super Administrator",
+    description="Grants complete system-wide access.",
     permissions=[p.id for p in ESSENTIAL_PERMISSIONS]
+)
+
+# New roles for hierarchical multi-platform tenancy
+PLATFORM_CREATOR_ROLE = RoleCreateSchema(
+    _id="platform_creator",
+    name="Platform Creator",
+    description="Can create sub-clients within their platform scope and access all platform clients.",
+    permissions=[
+        "user:read", "user:create", "user:update", "user:add_member",
+        "client_account:read", "client_account:create_sub", "client_account:read_platform", "client_account:update",
+        "group:read", "group:create", "group:update", "group:manage_members",
+        "role:read", "permission:read"
+    ]
+)
+
+PLATFORM_VIEWER_ROLE = RoleCreateSchema(
+    _id="platform_viewer", 
+    name="Platform Viewer",
+    description="Can only view clients they created within their platform scope.",
+    permissions=[
+        "user:read", "user:create", "user:update", "user:add_member",
+        "client_account:read", "client_account:read_created", "client_account:update",
+        "group:read", "group:create", "group:update", "group:manage_members",
+        "role:read", "permission:read"
+    ]
 )
 
 # Test client account for the admin user
@@ -74,12 +133,11 @@ TEST_CLIENT_ACCOUNT = ClientAccountCreateSchema(
 )
 
 
-async def seed_database(db):
+async def initialize_and_wipe(db):
     """
-    Connects to the main database, wipes it, and seeds it with essential data.
+    Initializes Beanie, resolves model references, and wipes all relevant collections.
     """
-    
-    print(f"--- Seeding MAIN database '{db.name}' ---")
+    print(f"--- Initializing and wiping database '{db.name}' ---")
     
     # Initialize Beanie with all document models
     await init_beanie(
@@ -94,9 +152,8 @@ async def seed_database(db):
             GroupModel,
         ]
     )
-    print("Beanie ODM initialized for seeding.")
     
-    # Rebuild models to resolve circular references with proper namespace
+    # Rebuild models to resolve circular references
     namespace = {
         'UserModel': UserModel,
         'ClientAccountModel': ClientAccountModel,
@@ -109,9 +166,8 @@ async def seed_database(db):
     RefreshTokenModel.model_rebuild(_types_namespace=namespace)
     PasswordResetTokenModel.model_rebuild(_types_namespace=namespace)
     GroupModel.model_rebuild(_types_namespace=namespace)
-    print("Model circular references resolved.")
     
-    # 1. Wipe existing data using Beanie
+    # Wipe existing data
     print("Wiping existing collections...")
     await UserModel.delete_all()
     await RoleModel.delete_all()
@@ -120,205 +176,250 @@ async def seed_database(db):
     await GroupModel.delete_all()
     print("Collections wiped.")
 
+async def seed_permissions_and_super_admin_role():
+    """
+    Seeds essential permissions and the super admin role.
+    """
     # 2. Create permissions
     print("Creating essential permissions...")
     for perm_data in ESSENTIAL_PERMISSIONS:
-        await permission_service.create_permission(perm_data)
-    print(f"{len(ESSENTIAL_PERMISSIONS)} permissions created.")
+        # Using a simple check to avoid errors if already exists
+        if not await permission_service.get_permission_by_id(perm_data.id):
+            await permission_service.create_permission(perm_data)
+    print(f"{len(ESSENTIAL_PERMISSIONS)} permissions seeded.")
 
-    # 3. Create platform_admin role
-    print("Creating platform admin role...")
-    await role_service.create_role(PLATFORM_ADMIN_ROLE)
-    print(f"Role '{PLATFORM_ADMIN_ROLE.id}' created.")
+    # 3. Create super_admin role
+    print("Creating super admin role...")
+    if not await role_service.get_role_by_id(SUPER_ADMIN_ROLE.id):
+        await role_service.create_role(SUPER_ADMIN_ROLE)
+    print(f"Role '{SUPER_ADMIN_ROLE.id}' seeded.")
 
-    # 4. Create test client account
-    print("Creating test client account...")
-    client_account = await client_account_service.create_client_account(TEST_CLIENT_ACCOUNT)
-    print(f"Client account '{client_account.name}' created with ID: {client_account.id}")
 
-    # 5. Create admin user with proper client account and simple password for dev
-    print("Creating admin user...")
+async def seed_comprehensive_scenario():
+    """
+    Seeds a comprehensive set of data for general development and testing.
+    Includes multiple clients, users, roles, and groups.
+    """
+    print("\n--- Seeding: COMPREHENSIVE Scenario ---")
+
+    # Create test client account for the main admin
+    print("Creating test client account for super admin...")
+    test_client = await client_account_service.create_client_account(TEST_CLIENT_ACCOUNT)
+
+    # Create super admin user
+    print("Creating super admin user...")
     admin_user_data = UserCreateSchema(
         email="admin@test.com",
-        password="admin123",  # Simple password for dev
+        password="admin123",
         first_name="Admin",
         last_name="User",
-        is_main_client=True,  # Make them a main client user
-        roles=["platform_admin"],
-        client_account_id=str(client_account.id)
+        is_main_client=True,
+        roles=["super_admin"],
+        client_account_id=str(test_client.id)
     )
-    admin_user = await user_service.create_user(admin_user_data)
-    print(f"Admin user '{admin_user.email}' created.")
+    await user_service.create_user(admin_user_data)
+    print("Super admin user 'admin@test.com' created.")
 
-    # 6. Create additional roles for testing
+    # Create additional roles for testing
     print("Creating additional test roles...")
     test_roles = [
         RoleCreateSchema(
-            _id="client_admin",
-            name="Client Administrator",
+            _id="client_admin", name="Client Administrator",
             description="Administrative role for client account",
-            permissions=["user:create", "user:read", "user:update", "user:delete", "user:create_sub", "group:create", "group:read", "group:update", "group:delete", "group:manage_members"],
+            permissions=["user:create", "user:read", "user:update", "user:delete", "user:add_member", "group:create", "group:read", "group:update", "group:delete", "group:manage_members"],
             is_assignable_by_main_client=True
         ),
         RoleCreateSchema(
-            _id="manager",
-            name="Manager",
+            _id="manager", name="Manager",
             description="Manager role with limited permissions",
             permissions=["user:read", "group:read", "group:update", "group:manage_members"],
             is_assignable_by_main_client=True
         ),
         RoleCreateSchema(
-            _id="employee",
-            name="Employee",
+            _id="employee", name="Employee",
             description="Basic employee role",
             permissions=["user:read", "group:read"],
             is_assignable_by_main_client=True
         )
     ]
-    
     for role_data in test_roles:
-        await role_service.create_role(role_data)
-        print(f"Role '{role_data.id}' created.")
+        if not await role_service.get_role_by_id(role_data.id):
+            await role_service.create_role(role_data)
+    print(f"{len(test_roles)} additional roles created.")
 
-    # 7. Create additional client accounts
+    # Create additional client accounts
     print("Creating additional client accounts...")
     acme_corp = await client_account_service.create_client_account(
-        ClientAccountCreateSchema(
-            name="ACME Corporation",
-            description="Large enterprise client"
-        )
+        ClientAccountCreateSchema(name="ACME Corporation", description="Large enterprise client")
     )
-    print(f"Client account '{acme_corp.name}' created with ID: {acme_corp.id}")
-
     tech_startup = await client_account_service.create_client_account(
-        ClientAccountCreateSchema(
-            name="Tech Startup Inc",
-            description="Small tech startup client"
-        )
+        ClientAccountCreateSchema(name="Tech Startup Inc", description="Small tech startup client")
     )
-    print(f"Client account '{tech_startup.name}' created with ID: {tech_startup.id}")
 
-    # 8. Create users for different client accounts
+    # Create users for different client accounts
     print("Creating additional users...")
-    
-    # ACME Corporation users
-    acme_admin = await user_service.create_user(UserCreateSchema(
-        email="admin@acme.com",
-        password="admin123",
-        first_name="Alice",
-        last_name="Admin",
-        is_main_client=True,
-        roles=["client_admin"],
-        client_account_id=str(acme_corp.id)
+    await user_service.create_user(UserCreateSchema(
+        email="admin@acme.com", password="admin123", first_name="Alice", last_name="Admin",
+        is_main_client=True, roles=["client_admin"], client_account_id=str(acme_corp.id)
     ))
-    print(f"ACME admin user '{acme_admin.email}' created.")
-
-    acme_manager = await user_service.create_user(UserCreateSchema(
-        email="manager@acme.com",
-        password="manager123",
-        first_name="Bob",
-        last_name="Manager",
-        is_main_client=False,
-        roles=["manager"],
-        client_account_id=str(acme_corp.id)
+    await user_service.create_user(UserCreateSchema(
+        email="manager@acme.com", password="manager123", first_name="Bob", last_name="Manager",
+        is_main_client=False, roles=["manager"], client_account_id=str(acme_corp.id)
     ))
-    print(f"ACME manager user '{acme_manager.email}' created.")
-
-    # ACME employees
-    for i in range(1, 4):
-        employee = await user_service.create_user(UserCreateSchema(
-            email=f"employee{i}@acme.com",
-            password="employee123",
-            first_name=f"Employee{i}",
-            last_name="User",
-            is_main_client=False,
-            roles=["employee"],
-            client_account_id=str(acme_corp.id)
-        ))
-        print(f"ACME employee '{employee.email}' created.")
-
-    # Tech Startup users
-    startup_admin = await user_service.create_user(UserCreateSchema(
-        email="admin@techstartup.com",
-        password="admin123",
-        first_name="Charlie",
-        last_name="Founder",
-        is_main_client=True,
-        roles=["client_admin"],
-        client_account_id=str(tech_startup.id)
+    await user_service.create_user(UserCreateSchema(
+        email="admin@techstartup.com", password="admin123", first_name="Charlie", last_name="Founder",
+        is_main_client=True, roles=["client_admin"], client_account_id=str(tech_startup.id)
     ))
-    print(f"Startup admin user '{startup_admin.email}' created.")
 
-    # Startup developers
-    for i in range(1, 3):
-        dev = await user_service.create_user(UserCreateSchema(
-            email=f"dev{i}@techstartup.com",
-            password="dev123",
-            first_name=f"Dev{i}",
-            last_name="Developer",
-            is_main_client=False,
-            roles=["employee"],
-            client_account_id=str(tech_startup.id)
-        ))
-        print(f"Startup employee '{dev.email}' created.")
-
-    # 9. Create test groups
+    # Create test groups
     print("Creating test groups...")
-    
-    # Get ACME users for group membership
     acme_users = await UserModel.find(UserModel.client_account.id == acme_corp.id).to_list()
-    acme_employee_ids = [str(user.id) for user in acme_users if "employee" in user.email]
-    acme_manager_ids = [str(user.id) for user in acme_users if "manager" in user.email or "admin" in user.email]
-
-    # ACME Development Team
-    dev_group = await group_service.create_group(GroupCreateSchema(
-        name="Development Team",
-        description="ACME Corporation development team",
-        client_account_id=str(acme_corp.id),
-        members=acme_employee_ids
+    acme_user_ids = [str(u.id) for u in acme_users]
+    await group_service.create_group(GroupCreateSchema(
+        name="ACME Team", description="ACME Corporation Team",
+        client_account_id=str(acme_corp.id), members=acme_user_ids
     ))
-    print(f"ACME Development Team group created with ID: {dev_group.id}")
-
-    # ACME Management Team
-    mgmt_group = await group_service.create_group(GroupCreateSchema(
-        name="Management Team",
-        description="ACME Corporation management team",
-        client_account_id=str(acme_corp.id),
-        members=acme_manager_ids
-    ))
-    print(f"ACME Management Team group created with ID: {mgmt_group.id}")
-
-    # Tech Startup All Hands
-    startup_users = await UserModel.find(UserModel.client_account.id == tech_startup.id).to_list()
-    startup_user_ids = [str(user.id) for user in startup_users]
     
-    all_hands_group = await group_service.create_group(GroupCreateSchema(
-        name="All Hands",
-        description="Tech Startup Inc all hands group",
-        client_account_id=str(tech_startup.id),
-        members=startup_user_ids
-    ))
-    print(f"Startup All Hands group created with ID: {all_hands_group.id}")
+    print("\n--- COMPREHENSIVE Scenario Seeding Complete! ---")
 
-    print("\n--- Enhanced seeding complete! ---")
-    print("Created:")
-    print(f"  - {len(ESSENTIAL_PERMISSIONS)} permissions")
-    print(f"  - 4 roles")
-    print(f"  - 3 client accounts")
-    print(f"  - 8 users across different organizations")
-    print(f"  - 3 groups with members")
-    print("Now you have real data to test with!")
+
+async def seed_hierarchical_scenario():
+    """
+    Seeds data for testing hierarchical multi-platform tenancy.
+    """
+    print("\n--- Seeding: HIERARCHICAL Scenario ---")
+    
+    # Create platform-specific roles
+    print("Creating platform-specific roles...")
+    if not await role_service.get_role_by_id(PLATFORM_CREATOR_ROLE.id):
+        await role_service.create_role(PLATFORM_CREATOR_ROLE)
+    if not await role_service.get_role_by_id(PLATFORM_VIEWER_ROLE.id):
+        await role_service.create_role(PLATFORM_VIEWER_ROLE)
+    print("Platform roles 'platform_creator' and 'platform_viewer' seeded.")
+
+    # Create platform root client accounts
+    print("Creating platform root client accounts...")
+    platform1_client = await client_account_service.create_client_account(
+        ClientAccountCreateSchema(name="Real Estate Platform", is_platform_root=True)
+    )
+    platform2_client = await client_account_service.create_client_account(
+        ClientAccountCreateSchema(name="CRM Platform", is_platform_root=True)
+    )
+
+    # Create platform admin users
+    print("Creating platform admin users...")
+    await user_service.create_user(UserCreateSchema(
+        email="platform1.creator@test.com", password="platform123", first_name="Platform1", last_name="Creator",
+        is_main_client=True, roles=["platform_creator"], client_account_id=str(platform1_client.id)
+    ))
+    await user_service.create_user(UserCreateSchema(
+        email="platform2.viewer@test.com", password="platform123", first_name="Platform2", last_name="Viewer",
+        is_main_client=True, roles=["platform_viewer"], client_account_id=str(platform2_client.id)
+    ))
+
+    # Create sub-clients for platforms
+    print("Creating sub-clients for platform testing...")
+    acme_client = await client_account_service.create_client_account(
+        ClientAccountCreateSchema(name="ACME Properties", description="Sub-client of Real Estate Platform"),
+        created_by_client_id=str(platform1_client.id)
+    )
+    
+    # Create client_admin role if it doesn't exist
+    if not await role_service.get_role_by_id("client_admin"):
+        await role_service.create_role(RoleCreateSchema(
+            _id="client_admin", name="Client Administrator", is_assignable_by_main_client=True,
+            permissions=["user:read", "user:update"] # Basic permissions for this test
+        ))
+
+    # Create users for sub-clients
+    await user_service.create_user(UserCreateSchema(
+        email="admin@acme-properties.com", password="acme123", first_name="John", last_name="ACME",
+        is_main_client=True, roles=["client_admin"], client_account_id=str(acme_client.id)
+    ))
+
+    print("\n--- HIERARCHICAL Scenario Seeding Complete! ---")
+    print("Test Users:")
+    print("  - platform1.creator@test.com (Platform Creator)")
+    print("  - platform2.viewer@test.com (Platform Viewer)")
+    print("  - admin@acme-properties.com (Client Admin)")
 
 
 async def main():
     """
-    Main function to execute the seeding process.
+    Main function to execute the seeding process based on command-line arguments.
     """
+    parser = argparse.ArgumentParser(description="Seed the database with test data.")
+    parser.add_argument(
+        "--db",
+        type=str,
+        default="outlabsAuth_test",
+        help="The name of the database to seed. Defaults to 'outlabsAuth_test'."
+    )
+    parser.add_argument(
+        "--prod",
+        action="store_true",
+        help="If specified, seeds the 'outlabsAuth' database. Overrides --db."
+    )
+    parser.add_argument(
+        "--scenario",
+        type=str,
+        choices=['comprehensive', 'hierarchical'],
+        default='comprehensive',
+        help="The seeding scenario to run. Defaults to 'comprehensive'."
+    )
+    parser.add_argument(
+        "--no-wipe",
+        action="store_true",
+        help="If specified, does not wipe the database before seeding. Useful for adding data."
+    )
+    args = parser.parse_args()
+
+    db_name = "outlabsAuth" if args.prod else args.db
+    
+    print(f"--- Target database: '{db_name}' ---")
+    print(f"--- Scenario: '{args.scenario}' ---")
+    print("!!! WARNING: This will wipe all data in the target database. !!!")
+    
+    # Give user a chance to cancel
+    try:
+        import time
+        for i in range(5, 0, -1):
+            print(f"Starting in {i}...", end="\r")
+            time.sleep(1)
+        print("\nStarting seeding process...")
+    except KeyboardInterrupt:
+        print("\n❌ Seeding cancelled by user.")
+        sys.exit(1)
+
     client = AsyncIOMotorClient(MONGO_URL)
-    db = client[MAIN_DB_NAME]  # Use main database
+    db = client[db_name]
     
     try:
-        await seed_database(db)
+        # Step 1: Initialize DB and optionally wipe collections
+        if not args.no_wipe:
+            await initialize_and_wipe(db)
+        else:
+            print(f"--- Skipping database wipe for '{db_name}' ---")
+            # Still need to initialize beanie for services to work
+            await init_beanie(
+                database=db,
+                document_models=[
+                    UserModel, RoleModel, PermissionModel, ClientAccountModel,
+                    RefreshTokenModel, PasswordResetTokenModel, GroupModel
+                ]
+            )
+
+        # Step 2: Seed common data (permissions, super_admin role)
+        await seed_permissions_and_super_admin_role()
+
+        # Step 3: Run the selected scenario
+        if args.scenario == 'comprehensive':
+            await seed_comprehensive_scenario()
+        elif args.scenario == 'hierarchical':
+            await seed_hierarchical_scenario()
+
+        print(f"\n✅ Successfully seeded database '{db_name}' with '{args.scenario}' scenario.")
+
     finally:
         client.close()
 

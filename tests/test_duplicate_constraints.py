@@ -23,7 +23,7 @@ class TestDuplicateConstraints:
         # Login as admin to get token
         login_response = await client.post("/v1/auth/login", data={
             "username": "admin@test.com",
-            "password": "a_very_secure_password"  # Use the correct password from conftest
+            "password": "admin123"  # Use the correct password from conftest
         })
         assert login_response.status_code == 200
         self.admin_token = login_response.json()["access_token"]

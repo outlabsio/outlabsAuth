@@ -42,7 +42,7 @@ ESSENTIAL_PERMISSIONS = [
     PermissionCreateSchema(_id="user:read", description="Allows reading user information."),
     PermissionCreateSchema(_id="user:update", description="Allows updating a user."),
     PermissionCreateSchema(_id="user:delete", description="Allows deleting a user."),
-    PermissionCreateSchema(_id="user:create_sub", description="Allows a main client to create a sub-user."),
+    PermissionCreateSchema(_id="user:add_member", description="Allows adding a new user to one's own client account."),
     PermissionCreateSchema(_id="user:bulk_create", description="Allows bulk creation of users."),
     PermissionCreateSchema(_id="role:create", description="Allows creating a role."),
     PermissionCreateSchema(_id="role:read", description="Allows reading role information."),
@@ -65,10 +65,10 @@ ESSENTIAL_PERMISSIONS = [
     PermissionCreateSchema(_id="group:manage_members", description="Allows adding/removing members from groups."),
 ]
 
-PLATFORM_ADMIN_ROLE = RoleCreateSchema(
-    _id="platform_admin",
-    name="Platform Administrator",
-    description="Grants all permissions in the system.",
+SUPER_ADMIN_ROLE = RoleCreateSchema(
+    _id="super_admin",
+    name="Super Administrator",
+    description="Grants complete system-wide access.",
     permissions=[p.id for p in ESSENTIAL_PERMISSIONS]
 )
 
@@ -139,21 +139,23 @@ async def ensure_permissions_exist():
     return created_count
 
 
-async def ensure_platform_admin_role_exists():
+async def ensure_super_admin_role_exists():
     """
-    Ensure the platform_admin role exists with all permissions.
+    Ensure the super_admin role exists with all permissions.
     """
-    print("Ensuring platform_admin role exists...")
+    print("Ensuring super_admin role exists...")
 
-    existing_role = await role_service.get_role_by_id("platform_admin")
+    existing_role = await role_service.get_role_by_id("super_admin")
     if not existing_role:
-        await role_service.create_role(PLATFORM_ADMIN_ROLE)
-        print("  ✓ Created platform_admin role")
+        await role_service.create_role(SUPER_ADMIN_ROLE)
+        print("  ✓ Created super_admin role")
         return True
     else:
         # Update existing role to ensure it has all permissions
-        await role_service.update_role("platform_admin", PLATFORM_ADMIN_ROLE)
-        print("  ✓ Updated platform_admin role with all permissions")
+        all_permission_ids = [p.id for p in ESSENTIAL_PERMISSIONS]
+        update_data = {"permissions": all_permission_ids}
+        await role_service.update_role("super_admin", update_data)
+        print("  ✓ Updated super_admin role with all permissions")
         return False
 
 
@@ -194,8 +196,8 @@ async def create_or_update_super_admin(client_account_id):
         print(f"  - Super admin user already exists with ID: {existing_user.id}")
 
         # Update user to ensure they have the correct role and client account
-        if "platform_admin" not in existing_user.roles:
-            existing_user.roles.append("platform_admin")
+        if "super_admin" not in existing_user.roles:
+            existing_user.roles.append("super_admin")
 
         # Update client account if it's different
         current_client_id = str(existing_user.client_account.ref.id) if hasattr(existing_user.client_account, 'ref') else str(existing_user.client_account.id)
@@ -220,7 +222,7 @@ async def create_or_update_super_admin(client_account_id):
             first_name=SUPER_ADMIN_FIRST_NAME,
             last_name=SUPER_ADMIN_LAST_NAME,
             is_main_client=True,
-            roles=["platform_admin"],
+            roles=["super_admin"],
             client_account_id=str(client_account_id)
         )
 
@@ -253,8 +255,8 @@ async def seed_super_admin():
         # Step 1: Ensure permissions exist
         await ensure_permissions_exist()
 
-        # Step 2: Ensure platform admin role exists
-        await ensure_platform_admin_role_exists()
+        # Step 2: Ensure super admin role exists
+        await ensure_super_admin_role_exists()
 
         # Step 3: Ensure Outlabs client account exists
         client_account, account_created = await ensure_outlabs_client_account_exists()

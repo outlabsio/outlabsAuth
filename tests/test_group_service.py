@@ -23,7 +23,7 @@ class TestGroupService:
             name="Test Group",
             description="A test group for unit testing",
             client_account_id=str(ObjectId()),
-            roles=["platform_admin"]
+            roles=["super_admin"]
         )
 
     # ========================================
@@ -39,7 +39,7 @@ class TestGroupService:
         
         # Mock role validation
         mock_role = MagicMock()
-        mock_role.id = "platform_admin"
+        mock_role.id = "super_admin"
         
         # Mock GroupModel
         mock_group = MagicMock()
@@ -381,7 +381,7 @@ class TestGroupService:
         user_id = ObjectId()
         mock_user = MagicMock()
         mock_user.id = user_id
-        mock_user.roles = ["platform_admin"]
+        mock_user.roles = ["super_admin"]
         mock_user.groups = []  # No groups for this test
         
         with patch('api.services.group_service.UserModel') as mock_user_model:
@@ -390,7 +390,7 @@ class TestGroupService:
             result = await group_service.get_user_effective_roles(user_id)
         
         # Should return user's direct roles as a set
-        assert "platform_admin" in result
+        assert "super_admin" in result
         assert isinstance(result, set)
 
     @pytest.mark.asyncio
@@ -399,7 +399,7 @@ class TestGroupService:
         user_id = ObjectId()
         mock_user = MagicMock()
         mock_user.id = user_id
-        mock_user.roles = ["platform_admin"]
+        mock_user.roles = ["super_admin"]
         
         # Mock group with additional roles
         mock_group_link = MagicMock()
@@ -415,7 +415,7 @@ class TestGroupService:
             result = await group_service.get_user_effective_roles(user_id)
         
         # Should combine user roles and group roles
-        assert "platform_admin" in result
+        assert "super_admin" in result
         assert "client_admin" in result
         assert "basic_user" in result
         assert isinstance(result, set)
@@ -424,7 +424,7 @@ class TestGroupService:
     async def test_get_user_effective_permissions(self):
         """Test getting user's effective permissions (from all effective roles)."""
         user_id = ObjectId()
-        mock_effective_roles = {"platform_admin", "client_admin"}
+        mock_effective_roles = {"super_admin", "client_admin"}
         
         with patch.object(group_service, 'get_user_effective_roles') as mock_get_roles, \
              patch('api.services.group_service.role_service') as mock_role_service:

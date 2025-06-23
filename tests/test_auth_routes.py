@@ -45,7 +45,7 @@ all edge cases properly while maintaining consistent security practices.
 # This data corresponds to the user created in the seed script
 ADMIN_USER_DATA = {
     "email": "admin@test.com",
-    "password": "a_very_secure_password"
+    "password": "admin123"
 }
 
 async def test_successful_login(client: AsyncClient):

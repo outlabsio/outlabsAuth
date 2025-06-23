@@ -5,13 +5,14 @@ from httpx import AsyncClient, ASGITransport
 from motor.motor_asyncio import AsyncIOMotorClient
 from beanie import init_beanie
 import os
+import subprocess
+import sys
 
 # Set environment variables for testing
 os.environ["TESTING"] = "1"
 os.environ["MONGO_DATABASE"] = "outlabs_auth_test"
 
 from api.main import app
-from scripts.seed import seed_database
 
 # Import all document models for Beanie initialization
 from api.models.user_model import UserModel
@@ -29,7 +30,7 @@ TEST_DB_NAME = "outlabs_auth_test"
 # Test data constants
 ADMIN_USER_DATA = {
     "email": "admin@test.com",
-    "password": "a_very_secure_password"
+    "password": "admin123"
 }
 
 @pytest.fixture(scope="session")
@@ -41,6 +42,43 @@ def event_loop():
     yield loop
     loop.close()
 
+def run_seed_script():
+    """
+    Executes the seeding script for both comprehensive and hierarchical scenarios
+    to create a complete dataset for all tests.
+    """
+    script_path = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'seed_main.py')
+    db_name = os.getenv("MONGO_DATABASE", "outlabs_auth_test")
+    
+    # First, run the comprehensive scenario, which will wipe the database
+    print("\n--- Running seed script for 'comprehensive' scenario (with wipe) ---")
+    try:
+        subprocess.run(
+            [sys.executable, script_path, "--scenario", "comprehensive", "--db", db_name],
+            capture_output=True, text=True, check=True, timeout=90
+        )
+        print("--- 'comprehensive' scenario completed successfully ---")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        print("--- !!! SEED SCRIPT FAILED for 'comprehensive' scenario !!! ---")
+        print(e.stdout)
+        print(e.stderr)
+        pytest.fail(f"Seeding script failed, cannot proceed. Error: {e}", pytrace=False)
+
+    # Second, run the hierarchical scenario without wiping the database
+    print("\n--- Running seed script for 'hierarchical' scenario (no wipe) ---")
+    try:
+        subprocess.run(
+            [sys.executable, script_path, "--scenario", "hierarchical", "--db", db_name, "--no-wipe"],
+            capture_output=True, text=True, check=True, timeout=90
+        )
+        print("--- 'hierarchical' scenario completed successfully ---")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        print("--- !!! SEED SCRIPT FAILED for 'hierarchical' scenario !!! ---")
+        print(e.stdout)
+        print(e.stderr)
+        pytest.fail(f"Seeding script failed, cannot proceed. Error: {e}", pytrace=False)
+
+
 @pytest_asyncio.fixture(scope="session")
 async def test_db():
     """
@@ -50,7 +88,14 @@ async def test_db():
     test_db_client = AsyncIOMotorClient(TEST_DATABASE_URL)
     test_db_instance = test_db_client[TEST_DB_NAME]
     
-    # Initialize Beanie for the test database
+    # The seeding is now handled by an external script to ensure consistency.
+    # First, drop the database to ensure a clean slate.
+    await test_db_client.drop_database(TEST_DB_NAME)
+    
+    # Run the seed script
+    run_seed_script()
+
+    # Initialize Beanie for the test database *after* seeding
     await init_beanie(
         database=test_db_instance,
         document_models=[
@@ -79,9 +124,6 @@ async def test_db():
     PasswordResetTokenModel.model_rebuild(_types_namespace=namespace)
     GroupModel.model_rebuild(_types_namespace=namespace)
     
-    # Seed the test database
-    await seed_database(test_db_instance)
-    
     yield test_db_instance
     
     # Clean up - drop database first, then close client
@@ -103,13 +145,14 @@ async def client(test_db):
 async def admin_headers(client):
     """
     Provides admin authentication headers for tests.
+    Logs in as the main super_admin from the comprehensive dataset.
     """
     login_data = {
         "username": "admin@test.com",
-        "password": "a_very_secure_password"
+        "password": "admin123"
     }
     login_response = await client.post("/v1/auth/login", data=login_data)
-    assert login_response.status_code == 200
+    assert login_response.status_code == 200, f"Failed to log in admin user. Response: {login_response.text}"
     admin_token = login_response.json()["access_token"]
     return {"Authorization": f"Bearer {admin_token}"}
 
@@ -135,4 +178,4 @@ async def reset_admin_password(test_db):
     admin_user = await UserModel.find_one(UserModel.email == ADMIN_USER_DATA["email"])
     if admin_user:
         admin_user.password_hash = security_service.get_password_hash(ADMIN_USER_DATA["password"])
-        await admin_user.save() 
+        await admin_user.save()

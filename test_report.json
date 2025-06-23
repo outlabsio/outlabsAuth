@@ -1,35 +1,35 @@
 {
-  "timestamp": "2025-06-21T20:47:08.798240",
+  "timestamp": "2025-06-23T05:38:23.597971",
   "summary": {
     "total_modules": 15,
-    "total_passed": 64,
+    "total_passed": 0,
     "total_failed": 0,
     "total_skipped": 0,
-    "total_duration": 55.39535069465637
+    "total_duration": 0.1644909381866455
   },
   "modules": [
     {
       "module": "tests/test_auth_routes.py",
-      "passed": 40,
+      "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 19.329613208770752,
-      "success_rate": 100.0
+      "duration": 0.013082742691040039,
+      "success_rate": 0.0
     },
     {
       "module": "tests/test_auth_security.py",
-      "passed": 24,
+      "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 25.21441888809204,
-      "success_rate": 100.0
+      "duration": 0.010888338088989258,
+      "success_rate": 0.0
     },
     {
       "module": "tests/test_auth_comprehensive.py",
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 3.4175498485565186,
+      "duration": 0.010275125503540039,
       "success_rate": 0.0
     },
     {
@@ -37,7 +37,7 @@
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.6063008308410645,
+      "duration": 0.011012792587280273,
       "success_rate": 0.0
     },
     {
@@ -45,7 +45,7 @@
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.6429369449615479,
+      "duration": 0.01091313362121582,
       "success_rate": 0.0
     },
     {
@@ -53,7 +53,7 @@
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.601978063583374,
+      "duration": 0.010451316833496094,
       "success_rate": 0.0
     },
     {
@@ -61,7 +61,7 @@
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.6234438419342041,
+      "duration": 0.011734962463378906,
       "success_rate": 0.0
     },
     {
@@ -69,7 +69,7 @@
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.5880279541015625,
+      "duration": 0.01162409782409668,
       "success_rate": 0.0
     },
     {
@@ -77,7 +77,7 @@
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.6535470485687256,
+      "duration": 0.010890960693359375,
       "success_rate": 0.0
     },
     {
@@ -85,7 +85,7 @@
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.6056828498840332,
+      "duration": 0.011038064956665039,
       "success_rate": 0.0
     },
     {
@@ -93,7 +93,7 @@
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.6294326782226562,
+      "duration": 0.010766267776489258,
       "success_rate": 0.0
     },
     {
@@ -101,7 +101,7 @@
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.6195518970489502,
+      "duration": 0.011071920394897461,
       "success_rate": 0.0
     },
     {
@@ -109,7 +109,7 @@
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.6326870918273926,
+      "duration": 0.010571002960205078,
       "success_rate": 0.0
     },
     {
@@ -117,7 +117,7 @@
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.5956647396087646,
+      "duration": 0.010381937026977539,
       "success_rate": 0.0
     },
     {
@@ -125,7 +125,7 @@
       "passed": 0,
       "failed": 0,
       "skipped": 0,
-      "duration": 0.6345148086547852,
+      "duration": 0.009788274765014648,
       "success_rate": 0.0
     }
   ]
