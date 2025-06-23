@@ -30,7 +30,8 @@ async def create_group(
     current_user, _ = current_user_and_token
     
     # Ensure non-admin users can only create groups in their own client account
-    if not current_user.is_main_client:
+    is_super_admin = "super_admin" in current_user.roles
+    if not current_user.is_main_client and not is_super_admin:
         if current_user.client_account and str(current_user.client_account.ref.id) != group_data.client_account_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -67,7 +68,7 @@ async def list_groups(
     filter_client_id = None
     if client_account_id:
         filter_client_id = PydanticObjectId(client_account_id)
-    elif current_user.client_account and not current_user.is_main_client:
+    elif current_user.client_account and not current_user.is_main_client and "super_admin" not in current_user.roles:
         # When using fetch_links=True, Beanie returns fully loaded objects, not Link references
         filter_client_id = current_user.client_account.id
     
@@ -102,7 +103,8 @@ async def get_group(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
     # Check if user has access to this group
-    if current_user.client_account and not current_user.is_main_client:
+    is_super_admin = "super_admin" in current_user.roles
+    if current_user.client_account and not current_user.is_main_client and not is_super_admin:
         if group.client_account.id != current_user.client_account.id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -132,7 +134,8 @@ async def update_group(
     if not existing_group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
-    if current_user.client_account and not current_user.is_main_client:
+    is_super_admin = "super_admin" in current_user.roles
+    if current_user.client_account and not current_user.is_main_client and not is_super_admin:
         if existing_group.client_account.id != current_user.client_account.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -170,7 +173,8 @@ async def delete_group(
     if not existing_group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
-    if current_user.client_account and not current_user.is_main_client:
+    is_super_admin = "super_admin" in current_user.roles
+    if current_user.client_account and not current_user.is_main_client and not is_super_admin:
         if existing_group.client_account.id != current_user.client_account.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -199,7 +203,8 @@ async def add_users_to_group(
     if not existing_group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
-    if current_user.client_account and not current_user.is_main_client:
+    is_super_admin = "super_admin" in current_user.roles
+    if current_user.client_account and not current_user.is_main_client and not is_super_admin:
         if existing_group.client_account.id != current_user.client_account.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -230,7 +235,8 @@ async def remove_users_from_group(
     if not existing_group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
-    if current_user.client_account and not current_user.is_main_client:
+    is_super_admin = "super_admin" in current_user.roles
+    if current_user.client_account and not current_user.is_main_client and not is_super_admin:
         if existing_group.client_account.id != current_user.client_account.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -260,7 +266,8 @@ async def get_group_members(
     if not existing_group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
-    if current_user.client_account and not current_user.is_main_client:
+    is_super_admin = "super_admin" in current_user.roles
+    if current_user.client_account and not current_user.is_main_client and not is_super_admin:
         if existing_group.client_account.id != current_user.client_account.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -302,7 +309,8 @@ async def get_user_groups(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     
     # Users can view their own groups, or admin users can view any user's groups
-    if str(current_user.id) != user_id and not current_user.is_main_client:
+    is_super_admin = "super_admin" in current_user.roles
+    if str(current_user.id) != user_id and not current_user.is_main_client and not is_super_admin:
         if current_user.client_account != target_user.client_account:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

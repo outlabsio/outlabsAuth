@@ -20,7 +20,7 @@ class TestGroupRoutes:
             "name": f"Test Group {unique_suffix}",
             "description": "A test group for unit testing",
             "client_account_id": str(client_account.id) if client_account else str(ObjectId()),
-            "roles": ["platform_admin"]
+            "roles": ["super_admin"]
         }
 
     # ========================================
@@ -70,7 +70,7 @@ class TestGroupRoutes:
             "name": "Invalid Group",
             "description": "A group with invalid client account",
             "client_account_id": str(ObjectId()),  # Non-existent client account
-            "roles": ["platform_admin"]
+            "roles": ["super_admin"]
         }
         
         response = await client.post(
