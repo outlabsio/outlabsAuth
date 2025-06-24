@@ -588,6 +588,79 @@ async def seed_hierarchical_scenario():
     print("  - admin@acme-properties.com (Client Admin)")
 
 
+async def convert_permission_names_to_ids(permission_names: list[str], scope_id: str = None) -> list[str]:
+    """
+    Convert a list of permission names to ObjectIds.
+    For platform permissions, provide scope_id. For system permissions, leave scope_id as None.
+    """
+    permission_ids = []
+    
+    for perm_name in permission_names:
+        # First try to find system permission
+        perm = await PermissionModel.find_one(
+            PermissionModel.name == perm_name,
+            PermissionModel.scope == "system",
+            PermissionModel.scope_id == None
+        )
+        
+        # If not found and we have a scope_id, try platform permission
+        if not perm and scope_id:
+            perm = await PermissionModel.find_one(
+                PermissionModel.name == perm_name,
+                PermissionModel.scope == "platform",
+                PermissionModel.scope_id == scope_id
+            )
+            
+        if perm:
+            permission_ids.append(str(perm.id))
+        else:
+            print(f"  ⚠️  Permission not found: {perm_name}")
+            
+    return permission_ids
+
+
+async def ensure_platform_permissions_exist(platform_id: str):
+    """
+    Ensure all essential PLATFORM permissions exist for a specific platform.
+    """
+    print(f"Ensuring essential platform permissions exist for platform {platform_id}...")
+    created_count = 0
+
+    # Define platform permissions inline since they're not imported
+    platform_permissions = [
+        PermissionCreateSchema(name="client_account:create_sub", display_name="Create Sub-Clients", description="Allows creating sub-client accounts within platform scope.", scope="platform"),
+        PermissionCreateSchema(name="client_account:read_platform", display_name="Read Platform Clients", description="Allows reading all clients within platform scope.", scope="platform"),
+        PermissionCreateSchema(name="client_account:read_created", display_name="Read Created Clients", description="Allows reading only clients created by the user/platform.", scope="platform")
+    ]
+
+    for perm_data in platform_permissions:
+        # Check if permission exists by querying directly
+        existing_perm = await PermissionModel.find_one(
+            PermissionModel.name == perm_data.name,
+            PermissionModel.scope == perm_data.scope,
+            PermissionModel.scope_id == platform_id
+        )
+        if not existing_perm:
+            try:
+                # Create platform-scoped permission with platform ID as scope_id
+                perm_data_with_id = perm_data.model_copy()
+                await permission_service.create_permission(
+                    perm_data_with_id,
+                    current_user_id="system_seed",
+                    current_client_id=None,
+                    scope_id=platform_id  # Use scope_id instead of platform_id
+                )
+                created_count += 1
+                print(f"  ✓ Created platform permission: {perm_data.name} (platform: {platform_id})")
+            except Exception as e:
+                print(f"  ❌ Failed to create platform permission {perm_data.name}: {e}")
+        else:
+            print(f"  - Platform permission already exists: {perm_data.name} (platform: {platform_id})")
+
+    print(f"Platform permissions check complete. Created {created_count} new permissions.")
+    return created_count
+
+
 async def seed_propertyhub_scenario():
     """
     Seeds data for testing the PropertyHub three-tier SaaS platform model:
@@ -607,19 +680,32 @@ async def seed_propertyhub_scenario():
         )
     )
     
+    # Create platform-scoped permissions for PropertyHub platform
+    print("Creating platform permissions for PropertyHub...")
+    await ensure_platform_permissions_exist(str(propertyhub_platform.id))
+    
     # Create PropertyHub platform roles for the platform
     print("Creating PropertyHub platform roles...")
+    
+    # Convert permission names to ObjectIds for platform admin
+    platform_admin_permission_names = [
+        "client_account:create", "client_account:read", "client_account:update", 
+        "client_account:create_sub", "client_account:read_platform", "client_account:read_created",
+        "user:create", "user:read", "user:update", "user:delete", "user:add_member",
+        "group:create", "group:read", "group:update", "group:delete", "group:manage_members",
+        "role:read", "permission:read"
+    ]
+    platform_admin_permission_ids = await convert_permission_names_to_ids(
+        platform_admin_permission_names, 
+        str(propertyhub_platform.id)
+    )
+    
     platform_admin_role = await role_service.create_role(
         role_data=RoleCreateSchema(
             name="admin",
             display_name="Platform Administrator",
             description="PropertyHub internal administrator",
-            permissions=["client_account:create", "client_account:read", "client_account:update", 
-                        "user:create", "user:read", "user:update", "user:delete",
-                        "group:create", "group:read", "group:update", "group:delete",
-                        "role:read", "permission:read",
-                        "clients:manage", "analytics:view", 
-                        "support:cross_client", "clients:onboard"],
+            permissions=platform_admin_permission_ids,
             scope=RoleScope.PLATFORM,
             is_assignable_by_main_client=True
         ),
@@ -627,12 +713,22 @@ async def seed_propertyhub_scenario():
         scope_id=str(propertyhub_platform.id)
     )
 
+    # Convert permission names to ObjectIds for platform support
+    platform_support_permission_names = [
+        "client_account:read", "client_account:read_platform", 
+        "user:read", "group:read"
+    ]
+    platform_support_permission_ids = await convert_permission_names_to_ids(
+        platform_support_permission_names, 
+        str(propertyhub_platform.id)
+    )
+    
     platform_support_role = await role_service.create_role(
         role_data=RoleCreateSchema(
             name="support",
             display_name="Platform Support",
             description="PropertyHub customer success team",
-            permissions=["client_account:read", "user:read", "group:read"],
+            permissions=platform_support_permission_ids,
             scope=RoleScope.PLATFORM,
             is_assignable_by_main_client=True
         ),
@@ -645,7 +741,8 @@ async def seed_propertyhub_scenario():
             name="sales",
             display_name="Platform Sales",
             description="PropertyHub sales team",
-            permissions=["client_account:create", "client_account:read", "user:read"],
+            permissions=["client_account:create", "client_account:read", "client_account:read_created",
+                        "user:read"],
             scope=RoleScope.PLATFORM,
             is_assignable_by_main_client=True
         ),
@@ -842,24 +939,37 @@ async def seed_propertyhub_scenario():
     print("Creating PropertyHub platform groups...")
     platform_users = await UserModel.find(UserModel.client_account.id == propertyhub_platform.id).to_list()
     platform_user_ids = [str(u.id) for u in platform_users]
-    await group_service.create_group(GroupCreateSchema(
-        name="PropertyHub Internal Team", 
-        description="PropertyHub platform staff",
-        client_account_id=str(propertyhub_platform.id), 
-        members=platform_user_ids,
-        roles=[str(platform_admin_role.id)]
-    ))
+    await group_service.create_group(
+        group_data=GroupCreateSchema(
+            name="PropertyHub Internal Team",
+            display_name="PropertyHub Internal Team", 
+            description="PropertyHub platform staff",
+            scope="platform",
+            client_account_id=str(propertyhub_platform.id), 
+            members=platform_user_ids,
+            roles=[str(platform_admin_role.id)]
+        ),
+        current_user_id="system",
+        current_client_id=str(propertyhub_platform.id),
+        scope_id=str(propertyhub_platform.id)  # Platform ID required for platform-scoped groups
+    )
 
     # Create real estate company groups
     acme_users = await UserModel.find(UserModel.client_account.id == acme_realestate.id).to_list()
     acme_user_ids = [str(u.id) for u in acme_users]
-    await group_service.create_group(GroupCreateSchema(
-        name="ACME Sales Team",
-        description="ACME Real Estate sales team",
-        client_account_id=str(acme_realestate.id),
-        members=acme_user_ids,
-        roles=[str(acme_agent_role.id)]
-    ))
+    await group_service.create_group(
+        group_data=GroupCreateSchema(
+            name="ACME Sales Team",
+            display_name="ACME Sales Team",
+            description="ACME Real Estate sales team",
+            scope="client",
+            client_account_id=str(acme_realestate.id),
+            members=acme_user_ids,
+            roles=[str(acme_agent_role.id)]
+        ),
+        current_user_id="system",
+        current_client_id=str(acme_realestate.id)
+    )
     
     print("\n--- PROPERTYHUB Scenario Seeding Complete! ---")
     print("PropertyHub Platform Staff:")
