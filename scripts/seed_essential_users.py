@@ -1,3 +1,45 @@
+"""
+Essential Users Seeding Script for Production/Staging
+
+Purpose:
+This script creates the essential three-tier system architecture with the core admin users
+needed for production or staging environments. It sets up:
+
+Three-Tier Architecture:
+1. System Level - Outlabs (super_admin): System-wide control and administration
+2. Platform Level - Qdarte (platform_admin): Platform operations and client management  
+3. Client Level - PropertyHub (client_admin): Optional client example
+
+Essential Users Created:
+- system@outlabs.io (super_admin) - Complete system access
+- admin@qdarte.com (platform_admin) - Platform operations only
+- admin@propertyhub.com (client_admin) - Optional with --propertyhub flag
+
+Features:
+- Creates essential system and platform permissions
+- Sets up proper role hierarchy with distinct roles per tier
+- Configurable database targeting (test vs production)
+- Optional PropertyHub client creation
+- Safe for production use - only creates necessary admin accounts
+
+Usage:
+1. Seed test database with essential users:
+   python scripts/seed_essential_users.py --test
+
+2. Seed production database with essential users:
+   python scripts/seed_essential_users.py --prod
+
+3. Include optional PropertyHub client:
+   python scripts/seed_essential_users.py --test --propertyhub
+
+4. Seed custom database:
+   python scripts/seed_essential_users.py --db my_database_name
+
+Note:
+This script is safe for production use and only creates essential admin accounts.
+For comprehensive test data, use scripts/seed_test_environment.py instead.
+"""
+
 import asyncio
 import os
 import sys

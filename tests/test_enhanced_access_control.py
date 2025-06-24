@@ -507,4 +507,4 @@ async def test_verify_seeded_data_exists(client: AsyncClient):
             pytest.fail(f"Required test user {user['email']} not found. Please run seed_via_api.py first. Error: {e}")
     
     print("   ✅ All required test data verified!")
-    print("\n💡 To create test data, run: python scripts/seed_main.py && python scripts/seed_via_api.py") 
+    print("\n💡 To create test data, run: python scripts/seed_test_environment.py && python scripts/seed_via_api.py") 

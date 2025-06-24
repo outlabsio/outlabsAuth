@@ -15,7 +15,7 @@ This approach is perfect for testing access control, data scoping, and permissio
 
 ## Available Scripts
 
-### 1. `seed_main.py` - Foundation Data
+### 1. `seed_test_environment.py` - Foundation Data
 
 **Purpose**: Sets up essential system data in the main database
 
@@ -26,7 +26,7 @@ This approach is perfect for testing access control, data scoping, and permissio
 **Usage**:
 
 ```bash
-python scripts/seed_main.py
+python scripts/seed_test_environment.py
 ```
 
 **Creates**:
@@ -40,7 +40,7 @@ python scripts/seed_main.py
 
 **Purpose**: Sets up test data in the test database
 
-- Similar to `seed_main.py` but for testing
+- Similar to `seed_test_environment.py` but for testing
 - Uses test database instead of main database
 
 **Usage**:
@@ -61,7 +61,7 @@ python scripts/seed.py
 **Prerequisites**:
 
 - API server must be running: `uvicorn api.main:app --reload`
-- Foundation data must exist: `python scripts/seed_main.py`
+- Foundation data must exist: `python scripts/seed_test_environment.py`
 
 **Usage**:
 
@@ -109,7 +109,7 @@ admin, manager, employee = get_hierarchy_scenario("greentech")
 
 ```bash
 # 1. Seed foundation data
-python scripts/seed_main.py
+python scripts/seed_test_environment.py
 
 # 2. Start API server
 uvicorn api.main:app --reload
@@ -236,7 +236,7 @@ def test_cross_company_access():
 
 1. **"Authentication failed"** when running `seed_via_api.py`
 
-   - Make sure you ran `seed_main.py` first
+   - Make sure you ran `seed_test_environment.py` first
    - Check that the API server is running on http://localhost:8000
 
 2. **"Connection refused"** errors

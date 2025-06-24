@@ -173,7 +173,7 @@ async def seed_via_api():
     
     # Ensure the API server is running
     print("⚠️  Make sure the API server is running on http://localhost:8030")
-    print("⚠️  Make sure the database has been seeded with basic data (run seed_main.py first)\n")
+    print("⚠️  Make sure the database has been seeded with basic data (run seed_test_environment.py first)\n")
     
     client = APISeedingClient()
     
@@ -184,7 +184,7 @@ async def seed_via_api():
         await client.authenticate(platform_admin_email, "admin123")
     except Exception as e:
         print(f"❌ Platform admin authentication failed: {e}")
-        print("💡 Run scripts/seed_main.py first to create the platform admin user")
+        print("💡 Run scripts/seed_test_environment.py first to create the platform admin user")
         return
     
     print("\n🏢 Step 2: Platform Admin Creates Client Accounts")
@@ -493,5 +493,5 @@ if __name__ == "__main__":
         print(f"\n❌ Seeding failed: {e}")
         print("\n💡 Troubleshooting tips:")
         print("1. Make sure the API server is running: uvicorn api.main:app --reload")
-        print("2. Make sure the database is seeded with basic data: python scripts/seed_main.py")
+        print("2. Make sure the database is seeded with basic data: python scripts/seed_test_environment.py")
         print("3. Check if the database is accessible") 

@@ -52,7 +52,7 @@ def run_seed_script():
     Executes the seeding script for both comprehensive and hierarchical scenarios
     to create a complete dataset for all tests.
     """
-    script_path = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'seed_main.py')
+    script_path = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'seed_test_environment.py')
     db_name = os.getenv("MONGO_DATABASE", "outlabsAuth_test")
     
     # First, run the comprehensive scenario, which will wipe the database

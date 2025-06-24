@@ -323,7 +323,7 @@ uvicorn api.main:app --port 8030 --reload
 
 ### **Complete PropertyHub Dataset**
 
-Run `python scripts/seed_main.py --scenario propertyhub` to create the full three-tier system:
+Run `python scripts/seed_test_environment.py --scenario propertyhub` to create the full three-tier system:
 
 - **Platform Staff**: PropertyHub internal team with cross-client access
 - **Real Estate Companies**: Multiple client accounts with isolation

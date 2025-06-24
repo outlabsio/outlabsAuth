@@ -1,35 +1,46 @@
 """
-Seed Script for Development and Comprehensive Testing
+Comprehensive Test Environment Seeding Script
 
 Purpose:
-This script is designed for developers to populate the database with a rich set of
-test data. It wipes the target database and creates a realistic multi-tenant environment,
-including:
-- Multiple client accounts (e.g., "ACME Corporation", "Tech Startup Inc").
-- A super admin user with full system access.
-- Various roles with different permission levels (e.g., "Client Admin", "Manager").
-- Users within each client account.
-- Groups with members.
+This script creates a rich, comprehensive test environment with multiple scenarios
+for development and testing. It completely wipes the target database and creates:
 
-This is the primary script to use during development to ensure all features
-can be tested thoroughly.
+Available Test Scenarios:
+1. 'comprehensive' - General multi-tenant testing with various companies and users
+2. 'hierarchical' - Platform-level hierarchy testing with sub-clients  
+3. 'propertyhub' - Complete PropertyHub three-tier SaaS platform scenario
+
+PropertyHub Scenario includes:
+- PropertyHub Platform Staff (admin@propertyhub.com, support@propertyhub.com, sales@propertyhub.com)
+- Real Estate Companies (ACME Real Estate, Elite Properties, Downtown Realty)
+- Real Estate Agents and company admins
+- Complete three-tier isolation testing
+- Cross-platform access control scenarios
+
+Features:
+- Multiple realistic test scenarios
+- Comprehensive user roles and permissions
+- Groups and team structures
+- Multi-tenant isolation testing
+- Realistic business scenarios
 
 Usage:
-The script can target different databases using command-line arguments.
+1. Seed with PropertyHub scenario (for three-tier tests):
+   python scripts/seed_test_environment.py --scenario propertyhub
 
-1. Seed the default test database (`outlabsAuth_test`):
-   python scripts/seed_main.py
+2. Seed with comprehensive scenario:
+   python scripts/seed_test_environment.py --scenario comprehensive
 
-2. Seed a specific database by name:
-   python scripts/seed_main.py --db my_custom_db_name
+3. Target specific database:
+   python scripts/seed_test_environment.py --db outlabsAuth_test --scenario propertyhub
 
-3. Seed the main production/staging database (`outlabsAuth`):
-   python scripts/seed_main.py --prod
+4. Add data without wiping:
+   python scripts/seed_test_environment.py --no-wipe --scenario hierarchical
 
 Note:
-This script DELETES all existing data in the target database before seeding.
-It is intended for development and testing environments. For initializing a
-production environment, consider using `scripts/seed_super_admin.py`.
+⚠️  This script DELETES all existing data in the target database before seeding.
+It is intended for development and testing environments only.
+For production setup, use scripts/seed_essential_users.py instead.
 """
 import asyncio
 import os

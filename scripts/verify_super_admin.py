@@ -233,7 +233,7 @@ async def main(db_name=DEFAULT_DB_NAME):
                 print("   2. Check database permissions and connectivity")
             if warnings:
                 print("   3. Review and update user details if needed")
-                print("   4. Consider running: python scripts/seed_super_admin.py")
+                print("   4. Consider running: python scripts/seed_essential_users.py")
 
         print("\n📋 NEXT STEPS:")
         print("   1. Test login with the super admin credentials")

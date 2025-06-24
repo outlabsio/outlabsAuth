@@ -33,7 +33,7 @@ This will:
 
 ```bash
 # Create foundation data (admin user, roles, permissions, basic client accounts)
-python scripts/seed_main.py
+python scripts/seed_test_environment.py
 
 # Add realistic companies and users via API calls (simulates real usage)
 python scripts/seed_via_api.py
@@ -323,7 +323,7 @@ Without seeded data, stress tests will **fail** because:
 
 ```bash
 # 1. Foundation seeding (creates admin, roles, permissions)
-python scripts/seed_main.py
+python scripts/seed_test_environment.py
 
 # 2. Realistic API-based seeding (creates companies, users, groups)
 python scripts/seed_via_api.py

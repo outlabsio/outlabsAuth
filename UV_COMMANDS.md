@@ -27,7 +27,7 @@ uv sync --extra stress
 uv run uvicorn api.main:app --reload
 
 # Run the seeding script
-uv run python scripts/seed_main.py
+uv run python scripts/seed_test_environment.py
 
 # Run tests
 uv run pytest
