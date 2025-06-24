@@ -1,98 +1,282 @@
-from typing import List, Optional
-from pymongo.errors import DuplicateKeyError
+from typing import List, Optional, Dict, Any
+from beanie import PydanticObjectId
 from fastapi import HTTPException, status
 
-from ..models.role_model import RoleModel
-from ..schemas.role_schema import RoleCreateSchema, RoleUpdateSchema
-from .permission_service import permission_service
+from ..models.role_model import RoleModel, RoleScope
+from ..schemas.role_schema import (
+    RoleCreateSchema, 
+    RoleUpdateSchema, 
+    RoleResponseSchema,
+    AvailableRolesResponseSchema
+)
 
 class RoleService:
     """
-    Service class for role-related business logic using Beanie ODM.
+    Service class for role-related operations with scoped role support.
     """
 
-    async def create_role(self, role_data: RoleCreateSchema) -> RoleModel:
+    async def create_role(
+        self, 
+        role_data: RoleCreateSchema, 
+        current_user_id: str,
+        current_client_id: Optional[str] = None,
+        scope_id: Optional[str] = None
+    ) -> RoleModel:
         """
-        Creates a new role in the database using Beanie ODM.
+        Create a new role with proper scoping.
+        
+        Args:
+            role_data: Role creation data
+            current_user_id: ID of user creating the role
+            current_client_id: Client ID of current user
+            scope_id: Explicit scope ID (platform_id or client_account_id)
         """
-        # Validate that all permissions exist
-        for permission_id in role_data.permissions:
-            permission = await permission_service.get_permission_by_id(permission_id)
-            if not permission:
+        # Determine scope_id based on role scope
+        if role_data.scope == RoleScope.SYSTEM:
+            final_scope_id = None
+        elif role_data.scope == RoleScope.CLIENT:
+            final_scope_id = scope_id or current_client_id
+            if not final_scope_id:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Permission '{permission_id}' does not exist."
+                    detail="Client ID required for client-scoped roles"
                 )
-
-        try:
-            role = RoleModel(**role_data.model_dump())
-            await role.insert()
-            return role
-        except DuplicateKeyError as e:
-            # Handle duplicate key violations (role ID or name already exists)
-            if "name" in str(e):
+        elif role_data.scope == RoleScope.PLATFORM:
+            if not scope_id:
                 raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Role with name '{role_data.name}' already exists."
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Platform ID required for platform-scoped roles"
                 )
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Role with ID '{role_data.id}' already exists."
-                )
+            final_scope_id = scope_id
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid scope: {role_data.scope}"
+            )
 
-    async def get_role_by_id(self, role_id: str) -> Optional[RoleModel]:
-        """
-        Retrieves a single role by its ID using Beanie ODM.
-        """
+        # Check if role name already exists in this scope
+        existing_role = await RoleModel.find_one(
+            RoleModel.name == role_data.name,
+            RoleModel.scope == role_data.scope,
+            RoleModel.scope_id == final_scope_id
+        )
+        
+        if existing_role:
+            scope_desc = f"{role_data.scope} scope"
+            if final_scope_id:
+                scope_desc += f" ({final_scope_id})"
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Role '{role_data.name}' already exists in {scope_desc}"
+            )
+
+        # Create role
+        role = RoleModel(
+            name=role_data.name,
+            display_name=role_data.display_name,
+            description=role_data.description,
+            permissions=role_data.permissions,
+            scope=role_data.scope,
+            scope_id=final_scope_id,
+            is_assignable_by_main_client=role_data.is_assignable_by_main_client,
+            created_by_user_id=current_user_id,
+            created_by_client_id=current_client_id
+        )
+        
+        await role.insert()
+        return role
+
+    async def get_role_by_id(self, role_id: PydanticObjectId) -> Optional[RoleModel]:
+        """Get a role by its MongoDB ObjectId."""
         return await RoleModel.get(role_id)
 
-    async def get_roles(self, skip: int = 0, limit: int = 100) -> List[RoleModel]:
-        """
-        Retrieves a list of roles with pagination using Beanie ODM.
-        """
-        return await RoleModel.find().skip(skip).limit(limit).to_list()
+    async def get_roles_by_scope(
+        self, 
+        scope: RoleScope, 
+        scope_id: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 100
+    ) -> List[RoleModel]:
+        """Get all roles for a specific scope."""
+        if scope == RoleScope.SYSTEM:
+            # For system roles, just query by scope since scope_id should be None
+            roles = await RoleModel.find(
+                RoleModel.scope == scope
+            ).skip(skip).limit(limit).to_list()
+        else:
+            # For platform/client roles, filter by scope_id if provided
+            if scope_id is not None:
+                roles = await RoleModel.find(
+                    RoleModel.scope == scope,
+                    RoleModel.scope_id == scope_id
+                ).skip(skip).limit(limit).to_list()
+            else:
+                roles = await RoleModel.find(
+                    RoleModel.scope == scope
+                ).skip(skip).limit(limit).to_list()
+            
+        return roles
 
-    async def update_role(self, role_id: str, role_data: RoleUpdateSchema) -> Optional[RoleModel]:
+    async def get_available_roles_for_user(
+        self,
+        current_user_client_id: Optional[str] = None,
+        current_user_platform_id: Optional[str] = None,
+        is_super_admin: bool = False,
+        is_platform_admin: bool = False
+    ) -> AvailableRolesResponseSchema:
         """
-        Updates a role's information using Beanie ODM.
+        Get roles that a user can assign to others, grouped by scope.
         """
+        available_roles = AvailableRolesResponseSchema()
+
+        # System roles (only super admins can assign these, or assignable ones for client admins)
+        if is_super_admin:
+            system_roles = await self.get_roles_by_scope(RoleScope.SYSTEM)
+            available_roles.system_roles = [
+                RoleResponseSchema.model_validate(role) for role in system_roles
+            ]
+        elif current_user_client_id:
+            # Client admins can assign system roles marked as assignable
+            assignable_system_roles = await RoleModel.find(
+                RoleModel.scope == RoleScope.SYSTEM,
+                RoleModel.is_assignable_by_main_client == True
+            ).to_list()
+            available_roles.system_roles = [
+                RoleResponseSchema.model_validate(role) for role in assignable_system_roles
+            ]
+
+        # Platform roles (platform admins can assign within their platform)
+        if is_super_admin or (is_platform_admin and current_user_platform_id):
+            platform_roles = await self.get_roles_by_scope(
+                RoleScope.PLATFORM, 
+                current_user_platform_id
+            )
+            available_roles.platform_roles = [
+                RoleResponseSchema.model_validate(role) for role in platform_roles
+            ]
+
+        # Client roles (client admins can assign within their client)
+        if current_user_client_id:
+            client_roles = await self.get_roles_by_scope(
+                RoleScope.CLIENT,
+                current_user_client_id
+            )
+            available_roles.client_roles = [
+                RoleResponseSchema.model_validate(role) for role in client_roles
+            ]
+
+        return available_roles
+
+    async def update_role(self, role_id: PydanticObjectId, role_data: RoleUpdateSchema) -> Optional[RoleModel]:
+        """Update a role by ID."""
         role = await self.get_role_by_id(role_id)
         if not role:
             return None
-            
-        update_data = role_data.model_dump(exclude_unset=True)
 
-        # Validate that all permissions exist if they are being updated
-        if "permissions" in update_data:
-            for permission_id in update_data["permissions"]:
-                permission = await permission_service.get_permission_by_id(permission_id)
-                if not permission:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Permission '{permission_id}' does not exist."
-                    )
+        update_data = role_data.model_dump(exclude_unset=True)
         
-        if not update_data:
-            return role
+        if update_data:
+            for field, value in update_data.items():
+                setattr(role, field, value)
+            await role.save()
             
-        # Update role fields
-        for field, value in update_data.items():
-            setattr(role, field, value)
-            
-        await role.save()
         return role
 
-    async def delete_role(self, role_id: str) -> bool:
-        """
-        Deletes a role from the database using Beanie ODM.
-        Returns True if deleted, False if role not found.
-        """
-        # TODO: Add logic to check if role is assigned to any users before deletion
+    async def delete_role(self, role_id: PydanticObjectId) -> bool:
+        """Delete a role by ID."""
         role = await self.get_role_by_id(role_id)
-        if role:
-            await role.delete()
+        if not role:
+            return False
+
+        await role.delete()
+        return True
+
+    async def user_can_manage_role(
+        self,
+        user_role_ids: List[str],
+        user_client_id: Optional[str],
+        target_role: RoleModel
+    ) -> bool:
+        """
+        Check if a user can manage (create/update/delete) a specific role.
+        """
+        # Get user roles by ObjectIds to check for super_admin
+        user_roles = []
+        for role_id in user_role_ids:
+            role = await self.get_role_by_id(role_id)
+            if role:
+                user_roles.append(role)
+
+        # Super admins can manage everything
+        if any(role.name == "super_admin" and role.scope == RoleScope.SYSTEM for role in user_roles):
             return True
+
+        # System roles - only super admins can manage
+        if target_role.scope == RoleScope.SYSTEM:
+            return False
+        
+        # Platform roles - platform admins for that platform can manage
+        if target_role.scope == RoleScope.PLATFORM:
+            platform_admin_roles = [
+                role for role in user_roles 
+                if (role.name == "admin" and 
+                    role.scope == RoleScope.PLATFORM and 
+                    role.scope_id == target_role.scope_id)
+            ]
+            return len(platform_admin_roles) > 0
+            
+        # Client roles - client admins for that client can manage
+        if target_role.scope == RoleScope.CLIENT:
+            if user_client_id != target_role.scope_id:
+                return False
+            client_admin_roles = [
+                role for role in user_roles 
+                if (role.name == "admin" and 
+                    role.scope == RoleScope.CLIENT and 
+                    role.scope_id == target_role.scope_id)
+            ]
+            return len(client_admin_roles) > 0
+        
         return False
 
+    async def user_can_view_role(
+        self,
+        user_role_ids: List[str],
+        user_client_id: Optional[str],
+        target_role: RoleModel
+    ) -> bool:
+        """
+        Check if a user can view a specific role.
+        """
+        # Get user roles by ObjectIds to check for super_admin
+        user_roles = []
+        for role_id in user_role_ids:
+            role = await self.get_role_by_id(role_id)
+            if role:
+                user_roles.append(role)
+
+        # Super admins can view everything
+        if any(role.name == "super_admin" and role.scope == RoleScope.SYSTEM for role in user_roles):
+            return True
+        
+        # System roles - everyone can view
+        if target_role.scope == RoleScope.SYSTEM:
+            return True
+        
+        # Platform roles - platform users can view their platform roles
+        if target_role.scope == RoleScope.PLATFORM:
+            user_platform_roles = [
+                role for role in user_roles 
+                if (role.scope == RoleScope.PLATFORM and 
+                    role.scope_id == target_role.scope_id)
+            ]
+            return len(user_platform_roles) > 0
+            
+        # Client roles - users in that client can view
+        if target_role.scope == RoleScope.CLIENT:
+            return user_client_id == target_role.scope_id
+        
+        return False
+
+# Create service instance
 role_service = RoleService() 

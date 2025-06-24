@@ -5,7 +5,8 @@ from .routes import user_routes, permission_routes, role_routes, auth_routes, cl
 from .services.permission_service import permission_service
 from .schemas.permission_schema import PermissionCreateSchema
 from .services.role_service import role_service
-from .schemas.role_schema import RoleCreateSchema
+from .schemas.role_schema import RoleCreateSchema, RoleScope
+from .models.role_model import RoleModel
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -58,65 +59,47 @@ async def lifespan(app: FastAPI):
 
     # Ensure essential roles exist
     essential_roles = [
-        # Super Admin Role
-        RoleCreateSchema(
-            _id="super_admin",
-            name="Super Administrator",
-            description="Grants complete system-wide access.",
-            permissions=all_permission_ids
-        ),
-        # Client Admin Role - for managing users within a client organization  
-        RoleCreateSchema(
-            _id="client_admin",
-            name="Client Administrator",
-            description="Administrative access for managing users, groups, and roles within a client organization",
-            permissions=[
-                "user:create", "user:read", "user:update", "user:delete", "user:add_member",
-                "group:create", "group:read", "group:update", "group:delete", "group:manage_members",
-                "role:create", "role:read", "role:update", "role:delete",
-                "permission:read", "client_account:read"
-            ],
-            is_assignable_by_main_client=True
-        ),
-        # Platform Admin Role - for platform-level administration
-        RoleCreateSchema(
-            _id="platform_admin",
-            name="Platform Administrator", 
-            description="Administrative access for managing platform-level operations and multiple client accounts",
-            permissions=[
-                "user:create", "user:read", "user:update", "user:delete", "user:add_member", "user:bulk_create",
-                "role:create", "role:read", "role:update", "role:delete",
-                "permission:create", "permission:read",
-                "client_account:create", "client_account:read", "client_account:update", "client_account:delete",
-                "client_account:create_sub", "client_account:read_platform", "client_account:read_created",
-                "group:create", "group:read", "group:update", "group:delete", "group:manage_members"
-            ],
-            is_assignable_by_main_client=False
-        ),
-        # Basic User Role - for standard users with minimal permissions
-        RoleCreateSchema(
-            _id="basic_user",
-            name="Basic User",
-            description="Standard user with basic read permissions",
-            permissions=["user:read", "group:read", "client_account:read"],
-            is_assignable_by_main_client=True
-        )
+        # Super Admin Role (System Scope)
+        {
+            "name": "super_admin",
+            "display_name": "Super Administrator",
+            "description": "Grants complete system-wide access.",
+            "permissions": all_permission_ids,
+            "scope": RoleScope.SYSTEM,
+            "scope_id": None,
+            "is_assignable_by_main_client": False
+        },
+        # Basic User Role (System Scope) 
+        {
+            "name": "basic_user",
+            "display_name": "Basic User",
+            "description": "Basic user access with minimal permissions",
+            "permissions": ["user:read"],
+            "scope": RoleScope.SYSTEM,
+            "scope_id": None,
+            "is_assignable_by_main_client": True
+        }
     ]
-
+    
     for role_data in essential_roles:
-        existing_role = await role_service.get_role_by_id(role_data.id)
+        # Check if role exists (by name and scope)
+        existing_role = await RoleModel.find_one(
+            RoleModel.name == role_data["name"],
+            RoleModel.scope == role_data["scope"],
+            RoleModel.scope_id == role_data["scope_id"]
+        )
+        
         if not existing_role:
-            await role_service.create_role(role_data)
+            # Create new role
+            role = RoleModel(**role_data)
+            await role.insert()
         else:
-            # Update existing role to ensure it has current permissions and settings
-            from .schemas.role_schema import RoleUpdateSchema
-            update_data = RoleUpdateSchema(
-                name=role_data.name,
-                description=role_data.description,
-                permissions=role_data.permissions,
-                is_assignable_by_main_client=role_data.is_assignable_by_main_client
-            )
-            await role_service.update_role(role_data.id, update_data)
+            # Update existing role permissions
+            existing_role.display_name = role_data["display_name"]
+            existing_role.description = role_data["description"]
+            existing_role.permissions = role_data["permissions"]
+            existing_role.is_assignable_by_main_client = role_data["is_assignable_by_main_client"]
+            await existing_role.save()
 
     yield
     await db.close()

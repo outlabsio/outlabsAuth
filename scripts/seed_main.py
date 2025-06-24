@@ -47,7 +47,7 @@ from api.services.permission_service import permission_service
 from api.services.client_account_service import client_account_service
 from api.services.group_service import group_service
 from api.schemas.user_schema import UserCreateSchema
-from api.schemas.role_schema import RoleCreateSchema
+from api.schemas.role_schema import RoleCreateSchema, RoleScope
 from api.schemas.permission_schema import PermissionCreateSchema
 from api.schemas.client_account_schema import ClientAccountCreateSchema
 from api.schemas.group_schema import GroupCreateSchema
@@ -99,37 +99,9 @@ ESSENTIAL_PERMISSIONS = [
     PermissionCreateSchema(_id="platform:onboard_clients", description="Allows onboarding new clients to the platform."),
 ]
 
-SUPER_ADMIN_ROLE = RoleCreateSchema(
-    _id="super_admin",
-    name="Super Administrator",
-    description="Grants complete system-wide access.",
-    permissions=[p.id for p in ESSENTIAL_PERMISSIONS]
-)
+# System roles will be created in the seeding function
 
-# New roles for hierarchical multi-platform tenancy
-PLATFORM_CREATOR_ROLE = RoleCreateSchema(
-    _id="platform_creator",
-    name="Platform Creator",
-    description="Can create sub-clients within their platform scope and access all platform clients.",
-    permissions=[
-        "user:read", "user:create", "user:update", "user:add_member",
-        "client_account:read", "client_account:create_sub", "client_account:read_platform", "client_account:update",
-        "group:read", "group:create", "group:update", "group:manage_members",
-        "role:read", "permission:read"
-    ]
-)
-
-PLATFORM_VIEWER_ROLE = RoleCreateSchema(
-    _id="platform_viewer", 
-    name="Platform Viewer",
-    description="Can only view clients they created within their platform scope.",
-    permissions=[
-        "user:read", "user:create", "user:update", "user:add_member",
-        "client_account:read", "client_account:read_created", "client_account:update",
-        "group:read", "group:create", "group:update", "group:manage_members",
-        "role:read", "permission:read"
-    ]
-)
+# Platform roles will be created in the hierarchical scenario
 
 # Test client account for the admin user
 TEST_CLIENT_ACCOUNT = ClientAccountCreateSchema(
@@ -183,9 +155,9 @@ async def initialize_and_wipe(db):
 
 async def seed_permissions_and_super_admin_role():
     """
-    Seeds essential permissions and the super admin role.
+    Seeds essential permissions and system roles.
     """
-    # 2. Create permissions
+    # Create permissions
     print("Creating essential permissions...")
     for perm_data in ESSENTIAL_PERMISSIONS:
         # Using a simple check to avoid errors if already exists
@@ -193,11 +165,49 @@ async def seed_permissions_and_super_admin_role():
             await permission_service.create_permission(perm_data)
     print(f"{len(ESSENTIAL_PERMISSIONS)} permissions seeded.")
 
-    # 3. Create super_admin role
-    print("Creating super admin role...")
-    if not await role_service.get_role_by_id(SUPER_ADMIN_ROLE.id):
-        await role_service.create_role(SUPER_ADMIN_ROLE)
-    print(f"Role '{SUPER_ADMIN_ROLE.id}' seeded.")
+    # Create system roles
+    print("Creating system roles...")
+    
+    # Check if super_admin role exists
+    system_roles = await role_service.get_roles_by_scope(scope=RoleScope.SYSTEM)
+    super_admin_exists = any(role.name == "super_admin" for role in system_roles)
+    
+    if not super_admin_exists:
+        super_admin_role_data = RoleCreateSchema(
+            name="super_admin",
+            display_name="Super Administrator",
+            description="Grants complete system-wide access.",
+            permissions=[p.id for p in ESSENTIAL_PERMISSIONS],
+            scope=RoleScope.SYSTEM,
+            is_assignable_by_main_client=False
+        )
+        await role_service.create_role(
+            role_data=super_admin_role_data,
+            current_user_id="system"
+        )
+        print("Super admin role created.")
+    else:
+        print("Super admin role already exists.")
+    
+    # Create basic_user role  
+    basic_user_exists = any(role.name == "basic_user" for role in system_roles)
+    
+    if not basic_user_exists:
+        basic_user_role_data = RoleCreateSchema(
+            name="basic_user",
+            display_name="Basic User",
+            description="Basic user access with minimal permissions",
+            permissions=["user:read", "group:read"],
+            scope=RoleScope.SYSTEM,
+            is_assignable_by_main_client=True
+        )
+        await role_service.create_role(
+            role_data=basic_user_role_data,
+            current_user_id="system"
+        )
+        print("Basic user role created.")
+    else:
+        print("Basic user role already exists.")
 
 
 async def seed_comprehensive_scenario():
@@ -213,44 +223,72 @@ async def seed_comprehensive_scenario():
 
     # Create super admin user
     print("Creating super admin user...")
+    # Find the super_admin role
+    system_roles = await role_service.get_roles_by_scope(scope=RoleScope.SYSTEM)
+    super_admin_role = next((role for role in system_roles if role.name == "super_admin"), None)
+    if not super_admin_role:
+        raise Exception("Super admin role not found. This should not happen.")
+    
     admin_user_data = UserCreateSchema(
         email="admin@test.com",
         password="admin123",
         first_name="Admin",
         last_name="User",
         is_main_client=True,
-        roles=["super_admin"],
+        roles=[str(super_admin_role.id)],
         client_account_id=str(test_client.id)
     )
     await user_service.create_user(admin_user_data)
     print("Super admin user 'admin@test.com' created.")
 
-    # Create additional roles for testing
-    print("Creating additional test roles...")
-    test_roles = [
-        RoleCreateSchema(
-            _id="client_admin", name="Client Administrator",
+    # Create additional client-scoped roles for testing
+    print("Creating client-scoped test roles...")
+    
+    # Create client admin role for test client
+    client_admin_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="admin",
+            display_name="Client Administrator",
             description="Administrative role for client account",
-            permissions=["user:create", "user:read", "user:update", "user:delete", "user:add_member", "group:create", "group:read", "group:update", "group:delete", "group:manage_members"],
+            permissions=["user:create", "user:read", "user:update", "user:delete", "user:add_member", 
+                        "group:create", "group:read", "group:update", "group:delete", "group:manage_members",
+                        "role:create", "role:read", "role:update", "role:delete"],
+            scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
         ),
-        RoleCreateSchema(
-            _id="manager", name="Manager",
+        current_user_id="system",
+        scope_id=str(test_client.id)
+    )
+    
+    # Create manager role for test client
+    manager_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="manager",
+            display_name="Manager",
             description="Manager role with limited permissions",
             permissions=["user:read", "group:read", "group:update", "group:manage_members"],
+            scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
         ),
-        RoleCreateSchema(
-            _id="employee", name="Employee",
+        current_user_id="system",
+        scope_id=str(test_client.id)
+    )
+    
+    # Create employee role for test client
+    employee_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="employee",
+            display_name="Employee",
             description="Basic employee role",
             permissions=["user:read", "group:read"],
+            scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
-        )
-    ]
-    for role_data in test_roles:
-        if not await role_service.get_role_by_id(role_data.id):
-            await role_service.create_role(role_data)
-    print(f"{len(test_roles)} additional roles created.")
+        ),
+        current_user_id="system",
+        scope_id=str(test_client.id)
+    )
+    
+    print("Client-scoped test roles created.")
 
     # Create additional client accounts
     print("Creating additional client accounts...")
@@ -261,43 +299,104 @@ async def seed_comprehensive_scenario():
         ClientAccountCreateSchema(name="Tech Startup Inc", description="Small tech startup client")
     )
 
+    # Create client-specific roles for each organization
+    print("Creating client-specific roles...")
+    
+    # ACME Corporation roles
+    acme_admin_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="admin",
+            display_name="Client Administrator",
+            description="Administrative role for ACME Corporation",
+            permissions=["user:create", "user:read", "user:update", "user:delete", "user:add_member", 
+                        "group:create", "group:read", "group:update", "group:delete", "group:manage_members",
+                        "role:create", "role:read", "role:update", "role:delete"],
+            scope=RoleScope.CLIENT,
+            is_assignable_by_main_client=True
+        ),
+        current_user_id="system",
+        scope_id=str(acme_corp.id)
+    )
+    
+    acme_employee_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="employee",
+            display_name="Employee",
+            description="Basic employee role for ACME Corporation",
+            permissions=["user:read", "group:read"],
+            scope=RoleScope.CLIENT,
+            is_assignable_by_main_client=True
+        ),
+        current_user_id="system",
+        scope_id=str(acme_corp.id)
+    )
+    
+    # Tech Startup roles
+    tech_admin_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="admin",
+            display_name="Client Administrator",
+            description="Administrative role for Tech Startup Inc",
+            permissions=["user:create", "user:read", "user:update", "user:delete", "user:add_member",
+                        "group:create", "group:read", "group:update", "group:delete", "group:manage_members",
+                        "role:create", "role:read", "role:update", "role:delete"],
+            scope=RoleScope.CLIENT,
+            is_assignable_by_main_client=True
+        ),
+        current_user_id="system",
+        scope_id=str(tech_startup.id)
+    )
+    
+    tech_employee_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="employee",
+            display_name="Employee",
+            description="Basic employee role for Tech Startup Inc",
+            permissions=["user:read", "group:read"],
+            scope=RoleScope.CLIENT,
+            is_assignable_by_main_client=True
+        ),
+        current_user_id="system",
+        scope_id=str(tech_startup.id)
+    )
+
     # Create users for different client accounts
     print("Creating additional users...")
     await user_service.create_user(UserCreateSchema(
         email="admin@acme.com", password="admin123", first_name="Alice", last_name="Admin",
-        is_main_client=True, roles=["client_admin"], client_account_id=str(acme_corp.id)
+        is_main_client=True, roles=[str(acme_admin_role.id)], client_account_id=str(acme_corp.id)
     ))
     await user_service.create_user(UserCreateSchema(
         email="manager@acme.com", password="manager123", first_name="Bob", last_name="Manager",
-        is_main_client=False, roles=["manager"], client_account_id=str(acme_corp.id)
+        is_main_client=False, roles=[str(manager_role.id)], client_account_id=str(test_client.id)
     ))
     await user_service.create_user(UserCreateSchema(
         email="admin@techstartup.com", password="admin123", first_name="Charlie", last_name="Founder",
-        is_main_client=True, roles=["client_admin"], client_account_id=str(tech_startup.id)
+        is_main_client=True, roles=[str(tech_admin_role.id)], client_account_id=str(tech_startup.id)
     ))
     
     # Create employee users for ACME
     await user_service.create_user(UserCreateSchema(
         email="employee1@acme.com", password="secure_password_123", first_name="Employee1", last_name="Acme",
-        is_main_client=False, roles=["employee"], client_account_id=str(acme_corp.id)
+        is_main_client=False, roles=[str(acme_employee_role.id)], client_account_id=str(acme_corp.id)
     ))
     await user_service.create_user(UserCreateSchema(
         email="employee2@acme.com", password="secure_password_123", first_name="Employee2", last_name="Acme",
-        is_main_client=False, roles=["employee"], client_account_id=str(acme_corp.id)
+        is_main_client=False, roles=[str(acme_employee_role.id)], client_account_id=str(acme_corp.id)
     ))
     await user_service.create_user(UserCreateSchema(
         email="employee3@acme.com", password="secure_password_123", first_name="Employee3", last_name="Acme",
-        is_main_client=False, roles=["employee"], client_account_id=str(acme_corp.id)
+        is_main_client=False, roles=[str(acme_employee_role.id)], client_account_id=str(acme_corp.id)
     ))
     
     # Create employee users for Tech Startup
     await user_service.create_user(UserCreateSchema(
         email="dev1@techstartup.com", password="secure_password_123", first_name="Developer1", last_name="Tech",
-        is_main_client=False, roles=["employee"], client_account_id=str(tech_startup.id)
+        is_main_client=False, roles=[str(tech_employee_role.id)], client_account_id=str(tech_startup.id)
     ))
     await user_service.create_user(UserCreateSchema(
         email="dev2@techstartup.com", password="secure_password_123", first_name="Developer2", last_name="Tech",
-        is_main_client=False, roles=["employee"], client_account_id=str(tech_startup.id)
+        is_main_client=False, roles=[str(tech_employee_role.id)], client_account_id=str(tech_startup.id)
     ))
 
     # Create test groups
@@ -317,14 +416,6 @@ async def seed_hierarchical_scenario():
     Seeds data for testing hierarchical multi-platform tenancy.
     """
     print("\n--- Seeding: HIERARCHICAL Scenario ---")
-    
-    # Create platform-specific roles
-    print("Creating platform-specific roles...")
-    if not await role_service.get_role_by_id(PLATFORM_CREATOR_ROLE.id):
-        await role_service.create_role(PLATFORM_CREATOR_ROLE)
-    if not await role_service.get_role_by_id(PLATFORM_VIEWER_ROLE.id):
-        await role_service.create_role(PLATFORM_VIEWER_ROLE)
-    print("Platform roles 'platform_creator' and 'platform_viewer' seeded.")
 
     # Create platform root client accounts
     print("Creating platform root client accounts...")
@@ -334,16 +425,55 @@ async def seed_hierarchical_scenario():
     platform2_client = await client_account_service.create_client_account(
         ClientAccountCreateSchema(name="CRM Platform", is_platform_root=True)
     )
+    
+    # Create platform-specific roles for Platform 1 (Real Estate)
+    print("Creating platform-specific roles...")
+    platform1_creator_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="creator",
+            display_name="Platform Creator",
+            description="Can create sub-clients within their platform scope and access all platform clients.",
+            permissions=[
+                "user:read", "user:create", "user:update", "user:add_member",
+                "client_account:read", "client_account:create_sub", "client_account:read_platform", "client_account:update",
+                "group:read", "group:create", "group:update", "group:manage_members",
+                "role:read", "permission:read"
+            ],
+            scope=RoleScope.PLATFORM,
+            is_assignable_by_main_client=True
+        ),
+        current_user_id="system",
+        scope_id=str(platform1_client.id)
+    )
+
+    # Create platform-specific roles for Platform 2 (CRM)
+    platform2_viewer_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="viewer",
+            display_name="Platform Viewer",
+            description="Can only view clients they created within their platform scope.",
+            permissions=[
+                "user:read", "user:create", "user:update", "user:add_member",
+                "client_account:read", "client_account:read_created", "client_account:update",
+                "group:read", "group:create", "group:update", "group:manage_members",
+                "role:read", "permission:read"
+            ],
+            scope=RoleScope.PLATFORM,
+            is_assignable_by_main_client=True
+        ),
+        current_user_id="system",
+        scope_id=str(platform2_client.id)
+    )
 
     # Create platform admin users
     print("Creating platform admin users...")
     await user_service.create_user(UserCreateSchema(
         email="platform1.creator@test.com", password="platform123", first_name="Platform1", last_name="Creator",
-        is_main_client=True, roles=["platform_creator"], client_account_id=str(platform1_client.id)
+        is_main_client=True, roles=[str(platform1_creator_role.id)], client_account_id=str(platform1_client.id)
     ))
     await user_service.create_user(UserCreateSchema(
         email="platform2.viewer@test.com", password="platform123", first_name="Platform2", last_name="Viewer",
-        is_main_client=True, roles=["platform_viewer"], client_account_id=str(platform2_client.id)
+        is_main_client=True, roles=[str(platform2_viewer_role.id)], client_account_id=str(platform2_client.id)
     ))
 
     # Create sub-clients for platforms
@@ -353,17 +483,25 @@ async def seed_hierarchical_scenario():
         created_by_client_id=str(platform1_client.id)
     )
     
-    # Create client_admin role if it doesn't exist
-    if not await role_service.get_role_by_id("client_admin"):
-        await role_service.create_role(RoleCreateSchema(
-            _id="client_admin", name="Client Administrator", is_assignable_by_main_client=True,
-            permissions=["user:read", "user:update"] # Basic permissions for this test
-        ))
+    # Create client admin role for ACME Properties
+    acme_admin_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="admin",
+            display_name="Client Administrator",
+            description="Administrative role for ACME Properties",
+            permissions=["user:read", "user:update", "user:create", "user:add_member",
+                        "group:read", "group:create", "group:update", "group:manage_members"],
+            scope=RoleScope.CLIENT,
+            is_assignable_by_main_client=True
+        ),
+        current_user_id="system",
+        scope_id=str(acme_client.id)
+    )
 
     # Create users for sub-clients
     await user_service.create_user(UserCreateSchema(
         email="admin@acme-properties.com", password="acme123", first_name="John", last_name="ACME",
-        is_main_client=True, roles=["client_admin"], client_account_id=str(acme_client.id)
+        is_main_client=True, roles=[str(acme_admin_role.id)], client_account_id=str(acme_client.id)
     ))
 
     print("\n--- HIERARCHICAL Scenario Seeding Complete! ---")
@@ -381,53 +519,6 @@ async def seed_propertyhub_scenario():
     3. Real Estate Agents (end users)
     """
     print("\n--- Seeding: PROPERTYHUB Scenario ---")
-    
-    # Create PropertyHub platform roles
-    print("Creating PropertyHub platform roles...")
-    platform_roles = [
-        RoleCreateSchema(
-            _id="platform_admin", name="Platform Administrator",
-            description="PropertyHub internal administrator",
-            permissions=["client_account:create", "client_account:read", "client_account:update", 
-                        "user:create", "user:read", "user:update", "user:delete",
-                        "group:create", "group:read", "group:update", "group:delete",
-                        "role:read", "permission:read",
-                        "platform:manage_clients", "platform:view_analytics", 
-                        "platform:support_users", "platform:onboard_clients"],
-            is_assignable_by_main_client=True
-        ),
-        RoleCreateSchema(
-            _id="platform_support", name="Platform Support",
-            description="PropertyHub customer success team",
-            permissions=["client_account:read", "user:read", "group:read"],
-            is_assignable_by_main_client=True
-        ),
-        RoleCreateSchema(
-            _id="platform_sales", name="Platform Sales",
-            description="PropertyHub sales team",
-            permissions=["client_account:create", "client_account:read", "user:read"],
-            is_assignable_by_main_client=True
-        ),
-        RoleCreateSchema(
-            _id="real_estate_admin", name="Real Estate Company Admin",
-            description="Real estate company administrator",
-            permissions=["user:create", "user:read", "user:update", "user:add_member",
-                        "group:create", "group:read", "group:update", "group:manage_members",
-                        "client_account:read"],
-            is_assignable_by_main_client=True
-        ),
-        RoleCreateSchema(
-            _id="real_estate_agent", name="Real Estate Agent",
-            description="Real estate agent or sales person",
-            permissions=["user:read", "group:read", "client_account:read"],
-            is_assignable_by_main_client=True
-        )
-    ]
-    
-    for role_data in platform_roles:
-        if not await role_service.get_role_by_id(role_data.id):
-            await role_service.create_role(role_data)
-    print(f"{len(platform_roles)} PropertyHub roles created.")
 
     # Create PropertyHub platform account
     print("Creating PropertyHub platform account...")
@@ -439,12 +530,60 @@ async def seed_propertyhub_scenario():
         )
     )
     
+    # Create PropertyHub platform roles for the platform
+    print("Creating PropertyHub platform roles...")
+    platform_admin_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="admin",
+            display_name="Platform Administrator",
+            description="PropertyHub internal administrator",
+            permissions=["client_account:create", "client_account:read", "client_account:update", 
+                        "user:create", "user:read", "user:update", "user:delete",
+                        "group:create", "group:read", "group:update", "group:delete",
+                        "role:read", "permission:read",
+                        "platform:manage_clients", "platform:view_analytics", 
+                        "platform:support_users", "platform:onboard_clients"],
+            scope=RoleScope.PLATFORM,
+            is_assignable_by_main_client=True
+        ),
+        current_user_id="system",
+        scope_id=str(propertyhub_platform.id)
+    )
+
+    platform_support_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="support",
+            display_name="Platform Support",
+            description="PropertyHub customer success team",
+            permissions=["client_account:read", "user:read", "group:read"],
+            scope=RoleScope.PLATFORM,
+            is_assignable_by_main_client=True
+        ),
+        current_user_id="system",
+        scope_id=str(propertyhub_platform.id)
+    )
+
+    platform_sales_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="sales",
+            display_name="Platform Sales",
+            description="PropertyHub sales team",
+            permissions=["client_account:create", "client_account:read", "user:read"],
+            scope=RoleScope.PLATFORM,
+            is_assignable_by_main_client=True
+        ),
+        current_user_id="system",
+        scope_id=str(propertyhub_platform.id)
+    )
+
+    print("3 PropertyHub platform roles created.")
+    
     # Create PropertyHub internal staff
     print("Creating PropertyHub internal staff...")
     await user_service.create_user(UserCreateSchema(
         email="admin@propertyhub.com", password="platform123", 
         first_name="Admin", last_name="PropertyHub",
-        is_main_client=True, roles=["platform_admin"], 
+        is_main_client=True, roles=[str(platform_admin_role.id)], 
         client_account_id=str(propertyhub_platform.id),
         is_platform_staff=True, platform_scope="all"
     ))
@@ -452,7 +591,7 @@ async def seed_propertyhub_scenario():
     await user_service.create_user(UserCreateSchema(
         email="support@propertyhub.com", password="platform123",
         first_name="Support", last_name="Team", 
-        is_main_client=False, roles=["platform_support"],
+        is_main_client=False, roles=[str(platform_support_role.id)],
         client_account_id=str(propertyhub_platform.id),
         is_platform_staff=True, platform_scope="all"
     ))
@@ -460,7 +599,7 @@ async def seed_propertyhub_scenario():
     await user_service.create_user(UserCreateSchema(
         email="sales@propertyhub.com", password="platform123",
         first_name="Sales", last_name="Team",
-        is_main_client=False, roles=["platform_sales"],
+        is_main_client=False, roles=[str(platform_sales_role.id)],
         client_account_id=str(propertyhub_platform.id),
         is_platform_staff=True, platform_scope="created"
     ))
@@ -491,26 +630,103 @@ async def seed_propertyhub_scenario():
         created_by_client_id=str(propertyhub_platform.id)
     )
 
+    # Create client-specific roles for each real estate company
+    print("Creating client-specific roles...")
+    
+    # ACME Real Estate roles
+    acme_admin_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="admin",
+            display_name="Real Estate Company Admin",
+            description="Real estate company administrator",
+            permissions=["user:create", "user:read", "user:update", "user:add_member",
+                        "group:create", "group:read", "group:update", "group:manage_members",
+                        "client_account:read"],
+            scope=RoleScope.CLIENT,
+            is_assignable_by_main_client=True
+        ),
+        current_user_id="system",
+        scope_id=str(acme_realestate.id)
+    )
+
+    acme_agent_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="agent",
+            display_name="Real Estate Agent",
+            description="Real estate agent or sales person",
+            permissions=["user:read", "group:read", "client_account:read"],
+            scope=RoleScope.CLIENT,
+            is_assignable_by_main_client=True
+        ),
+        current_user_id="system",
+        scope_id=str(acme_realestate.id)
+    )
+
+    # Elite Properties roles
+    elite_admin_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="admin",
+            display_name="Real Estate Company Admin",
+            description="Real estate company administrator",
+            permissions=["user:create", "user:read", "user:update", "user:add_member",
+                        "group:create", "group:read", "group:update", "group:manage_members",
+                        "client_account:read"],
+            scope=RoleScope.CLIENT,
+            is_assignable_by_main_client=True
+        ),
+        current_user_id="system",
+        scope_id=str(elite_properties.id)
+    )
+
+    elite_agent_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="agent",
+            display_name="Real Estate Agent",
+            description="Real estate agent or sales person",
+            permissions=["user:read", "group:read", "client_account:read"],
+            scope=RoleScope.CLIENT,
+            is_assignable_by_main_client=True
+        ),
+        current_user_id="system",
+        scope_id=str(elite_properties.id)
+    )
+
+    # Downtown Realty roles
+    downtown_admin_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="admin",
+            display_name="Real Estate Company Admin",
+            description="Real estate company administrator",
+            permissions=["user:create", "user:read", "user:update", "user:add_member",
+                        "group:create", "group:read", "group:update", "group:manage_members",
+                        "client_account:read"],
+            scope=RoleScope.CLIENT,
+            is_assignable_by_main_client=True
+        ),
+        current_user_id="system",
+        scope_id=str(downtown_realty.id)
+    )
+
     # Create real estate company admins
     print("Creating real estate company admins...")
     await user_service.create_user(UserCreateSchema(
         email="admin@acmerealestate.com", password="realestate123",
         first_name="Alice", last_name="Johnson",
-        is_main_client=True, roles=["real_estate_admin"],
+        is_main_client=True, roles=[str(acme_admin_role.id)],
         client_account_id=str(acme_realestate.id)
     ))
     
     await user_service.create_user(UserCreateSchema(
         email="admin@eliteproperties.com", password="realestate123",
         first_name="Bob", last_name="Smith", 
-        is_main_client=True, roles=["real_estate_admin"],
+        is_main_client=True, roles=[str(elite_admin_role.id)],
         client_account_id=str(elite_properties.id)
     ))
     
     await user_service.create_user(UserCreateSchema(
         email="admin@downtownrealty.com", password="realestate123",
         first_name="Carol", last_name="Brown",
-        is_main_client=True, roles=["real_estate_admin"],
+        is_main_client=True, roles=[str(downtown_admin_role.id)],
         client_account_id=str(downtown_realty.id)
     ))
 
@@ -519,21 +735,21 @@ async def seed_propertyhub_scenario():
     await user_service.create_user(UserCreateSchema(
         email="john.agent@acmerealestate.com", password="agent123",
         first_name="John", last_name="Agent",
-        is_main_client=False, roles=["real_estate_agent"],
+        is_main_client=False, roles=[str(acme_agent_role.id)],
         client_account_id=str(acme_realestate.id)
     ))
     
     await user_service.create_user(UserCreateSchema(
         email="sarah.manager@acmerealestate.com", password="agent123",
         first_name="Sarah", last_name="Manager",
-        is_main_client=False, roles=["real_estate_agent"], 
+        is_main_client=False, roles=[str(acme_agent_role.id)], 
         client_account_id=str(acme_realestate.id)
     ))
     
     await user_service.create_user(UserCreateSchema(
         email="mike.assistant@acmerealestate.com", password="agent123",
         first_name="Mike", last_name="Assistant",
-        is_main_client=False, roles=["real_estate_agent"],
+        is_main_client=False, roles=[str(acme_agent_role.id)],
         client_account_id=str(acme_realestate.id)
     ))
 
@@ -541,7 +757,7 @@ async def seed_propertyhub_scenario():
     await user_service.create_user(UserCreateSchema(
         email="luxury.agent@eliteproperties.com", password="agent123",
         first_name="Luxury", last_name="Agent",
-        is_main_client=False, roles=["real_estate_agent"],
+        is_main_client=False, roles=[str(elite_agent_role.id)],
         client_account_id=str(elite_properties.id)
     ))
 
@@ -554,7 +770,7 @@ async def seed_propertyhub_scenario():
         description="PropertyHub platform staff",
         client_account_id=str(propertyhub_platform.id), 
         members=platform_user_ids,
-        roles=["platform_admin"]
+        roles=[str(platform_admin_role.id)]
     ))
 
     # Create real estate company groups
@@ -565,7 +781,7 @@ async def seed_propertyhub_scenario():
         description="ACME Real Estate sales team",
         client_account_id=str(acme_realestate.id),
         members=acme_user_ids,
-        roles=["real_estate_agent"]
+        roles=[str(acme_agent_role.id)]
     ))
     
     print("\n--- PROPERTYHUB Scenario Seeding Complete! ---")
