@@ -15,6 +15,14 @@ class UserCreateSchema(BaseModel):
     first_name: str = Field(..., description="User's first name")
     last_name: str = Field(..., description="User's last name")
     is_active: bool = Field(True, description="Whether the user account is active")
+    
+    # Optional fields for advanced user creation
+    client_account_id: Optional[str] = Field(None, description="Client account ID")
+    roles: Optional[List[str]] = Field(default_factory=list, description="List of role IDs")
+    groups: Optional[List[str]] = Field(default_factory=list, description="List of group IDs")
+    is_main_client: Optional[bool] = Field(False, description="Whether user is main client admin")
+    is_platform_staff: Optional[bool] = Field(False, description="Whether user is platform staff")
+    platform_scope: Optional[str] = Field(None, description="Platform scope for staff members")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -23,7 +31,10 @@ class UserCreateSchema(BaseModel):
                 "password": "securepassword123",
                 "first_name": "John",
                 "last_name": "Doe",
-                "is_active": True
+                "is_active": True,
+                "client_account_id": "optional_client_id",
+                "roles": ["role_id_1", "role_id_2"],
+                "groups": ["group_id_1"]
             }
         }
     )

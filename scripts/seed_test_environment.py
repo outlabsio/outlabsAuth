@@ -204,22 +204,14 @@ async def seed_permissions_and_super_admin_role():
     super_admin_exists = any(role.name == "super_admin" for role in system_roles)
     
     if not super_admin_exists:
-        # Get actual permission IDs from database
-        actual_permission_ids = []
-        for perm_data in ESSENTIAL_PERMISSIONS:
-            perm = await PermissionModel.find_one(
-                PermissionModel.name == perm_data.name,
-                PermissionModel.scope == perm_data.scope,
-                PermissionModel.scope_id == None
-            )
-            if perm:
-                actual_permission_ids.append(str(perm.id))
+        # Use permission names directly - service will convert to ObjectIds
+        super_admin_permission_names = [perm.name for perm in ESSENTIAL_PERMISSIONS]
         
         super_admin_role_data = RoleCreateSchema(
             name="super_admin",
             display_name="Super Administrator",
             description="Grants complete system-wide access.",
-            permissions=actual_permission_ids,  # Use actual permission IDs
+            permissions=super_admin_permission_names,  # Use permission names directly
             scope=RoleScope.SYSTEM,
             is_assignable_by_main_client=False
         )
@@ -235,23 +227,14 @@ async def seed_permissions_and_super_admin_role():
     basic_user_exists = any(role.name == "basic_user" for role in system_roles)
     
     if not basic_user_exists:
-        # Get actual permission IDs for basic user
+        # Use permission names directly - service will convert to ObjectIds
         basic_permission_names = ["user:read", "group:read"]
-        basic_permission_ids = []
-        for perm_name in basic_permission_names:
-            perm = await PermissionModel.find_one(
-                PermissionModel.name == perm_name,
-                PermissionModel.scope == "system",
-                PermissionModel.scope_id == None
-            )
-            if perm:
-                basic_permission_ids.append(str(perm.id))
         
         basic_user_role_data = RoleCreateSchema(
             name="basic_user",
             display_name="Basic User",
             description="Basic user access with minimal permissions",
-            permissions=basic_permission_ids,  # Use actual permission IDs
+            permissions=basic_permission_names,  # Use permission names directly
             scope=RoleScope.SYSTEM,
             is_assignable_by_main_client=True
         )
@@ -453,32 +436,15 @@ async def seed_comprehensive_scenario():
         is_main_client=False, roles=[str(tech_employee_role.id)], client_account_id=str(tech_startup.id)
     ))
 
-    # Create test groups
+    # Create test groups with direct permissions
     print("Creating test groups...")
-    acme_users = await UserModel.find(UserModel.client_account.id == acme_corp.id).to_list()
-    
-    # Get permission IDs for group
-    user_read_perm = await PermissionModel.find_one(
-        PermissionModel.name == "user:read",
-        PermissionModel.scope == "system"
-    )
-    group_read_perm = await PermissionModel.find_one(
-        PermissionModel.name == "group:read", 
-        PermissionModel.scope == "system"
-    )
-    
-    permission_ids = []
-    if user_read_perm:
-        permission_ids.append(str(user_read_perm.id))
-    if group_read_perm:
-        permission_ids.append(str(group_read_perm.id))
     
     await group_service.create_group(
         group_data=GroupCreateSchema(
             name="acme_team",
             display_name="ACME Team", 
             description="ACME Corporation Team",
-            permissions=permission_ids,  # Use actual permission IDs
+            permissions=["user:read", "group:read"],  # Use permission names directly
             scope="client"
         ),
         current_user_id="system",
@@ -588,37 +554,6 @@ async def seed_hierarchical_scenario():
     print("  - admin@acme-properties.com (Client Admin)")
 
 
-async def convert_permission_names_to_ids(permission_names: list[str], scope_id: str = None) -> list[str]:
-    """
-    Convert a list of permission names to ObjectIds.
-    For platform permissions, provide scope_id. For system permissions, leave scope_id as None.
-    """
-    permission_ids = []
-    
-    for perm_name in permission_names:
-        # First try to find system permission
-        perm = await PermissionModel.find_one(
-            PermissionModel.name == perm_name,
-            PermissionModel.scope == "system",
-            PermissionModel.scope_id == None
-        )
-        
-        # If not found and we have a scope_id, try platform permission
-        if not perm and scope_id:
-            perm = await PermissionModel.find_one(
-                PermissionModel.name == perm_name,
-                PermissionModel.scope == "platform",
-                PermissionModel.scope_id == scope_id
-            )
-            
-        if perm:
-            permission_ids.append(str(perm.id))
-        else:
-            print(f"  ⚠️  Permission not found: {perm_name}")
-            
-    return permission_ids
-
-
 async def ensure_platform_permissions_exist(platform_id: str):
     """
     Ensure all essential PLATFORM permissions exist for a specific platform.
@@ -687,7 +622,7 @@ async def seed_propertyhub_scenario():
     # Create PropertyHub platform roles for the platform
     print("Creating PropertyHub platform roles...")
     
-    # Convert permission names to ObjectIds for platform admin
+    # Platform admin role with permission names
     platform_admin_permission_names = [
         "client_account:create", "client_account:read", "client_account:update", 
         "client_account:create_sub", "client_account:read_platform", "client_account:read_created",
@@ -695,17 +630,13 @@ async def seed_propertyhub_scenario():
         "group:create", "group:read", "group:update", "group:delete", "group:manage_members",
         "role:read", "permission:read"
     ]
-    platform_admin_permission_ids = await convert_permission_names_to_ids(
-        platform_admin_permission_names, 
-        str(propertyhub_platform.id)
-    )
     
     platform_admin_role = await role_service.create_role(
         role_data=RoleCreateSchema(
             name="admin",
             display_name="Platform Administrator",
             description="PropertyHub internal administrator",
-            permissions=platform_admin_permission_ids,
+            permissions=platform_admin_permission_names,  # Use permission names directly
             scope=RoleScope.PLATFORM,
             is_assignable_by_main_client=True
         ),
@@ -713,22 +644,18 @@ async def seed_propertyhub_scenario():
         scope_id=str(propertyhub_platform.id)
     )
 
-    # Convert permission names to ObjectIds for platform support
+    # Platform support role with permission names
     platform_support_permission_names = [
         "client_account:read", "client_account:read_platform", 
         "user:read", "group:read"
     ]
-    platform_support_permission_ids = await convert_permission_names_to_ids(
-        platform_support_permission_names, 
-        str(propertyhub_platform.id)
-    )
     
     platform_support_role = await role_service.create_role(
         role_data=RoleCreateSchema(
             name="support",
             display_name="Platform Support",
             description="PropertyHub customer success team",
-            permissions=platform_support_permission_ids,
+            permissions=platform_support_permission_names,  # Use permission names directly
             scope=RoleScope.PLATFORM,
             is_assignable_by_main_client=True
         ),
@@ -742,7 +669,7 @@ async def seed_propertyhub_scenario():
             display_name="Platform Sales",
             description="PropertyHub sales team",
             permissions=["client_account:create", "client_account:read", "client_account:read_created",
-                        "user:read"],
+                        "user:read"],  # Use permission names directly
             scope=RoleScope.PLATFORM,
             is_assignable_by_main_client=True
         ),
@@ -937,17 +864,13 @@ async def seed_propertyhub_scenario():
 
     # Create PropertyHub team groups
     print("Creating PropertyHub platform groups...")
-    platform_users = await UserModel.find(UserModel.client_account.id == propertyhub_platform.id).to_list()
-    platform_user_ids = [str(u.id) for u in platform_users]
     await group_service.create_group(
         group_data=GroupCreateSchema(
             name="PropertyHub Internal Team",
             display_name="PropertyHub Internal Team", 
             description="PropertyHub platform staff",
-            scope="platform",
-            client_account_id=str(propertyhub_platform.id), 
-            members=platform_user_ids,
-            roles=[str(platform_admin_role.id)]
+            permissions=["client_account:read", "user:read", "group:read"],  # Use permission names directly
+            scope="platform"
         ),
         current_user_id="system",
         current_client_id=str(propertyhub_platform.id),
@@ -955,17 +878,13 @@ async def seed_propertyhub_scenario():
     )
 
     # Create real estate company groups
-    acme_users = await UserModel.find(UserModel.client_account.id == acme_realestate.id).to_list()
-    acme_user_ids = [str(u.id) for u in acme_users]
     await group_service.create_group(
         group_data=GroupCreateSchema(
             name="ACME Sales Team",
             display_name="ACME Sales Team",
             description="ACME Real Estate sales team",
-            scope="client",
-            client_account_id=str(acme_realestate.id),
-            members=acme_user_ids,
-            roles=[str(acme_agent_role.id)]
+            permissions=["user:read", "group:read", "client_account:read"],  # Use permission names directly
+            scope="client"
         ),
         current_user_id="system",
         current_client_id=str(acme_realestate.id)
