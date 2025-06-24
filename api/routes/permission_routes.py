@@ -1,62 +1,93 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from typing import List
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from typing import List, Optional
 
 from ..services.permission_service import permission_service
-from ..schemas.permission_schema import PermissionCreateSchema, PermissionResponseSchema
-from ..dependencies import has_permission
+from ..schemas.permission_schema import (
+    PermissionCreateSchema, 
+    PermissionUpdateSchema,
+    PermissionResponseSchema,
+    AvailablePermissionsResponseSchema
+)
+from ..models.scopes import PermissionScope
+from ..dependencies import has_permission, get_current_user
+from ..models.user_model import UserModel
 
 router = APIRouter(
     prefix="/v1/permissions",
     tags=["Permission Management"],
-    dependencies=[Depends(has_permission("permission:read"))]
+    dependencies=[Depends(has_permission("system:permission:read"))]
 )
 
-@router.post("/", response_model=PermissionResponseSchema, status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("permission:create"))])
+@router.post("/", response_model=PermissionResponseSchema, status_code=status.HTTP_201_CREATED)
 async def create_permission(
-    permission_data: PermissionCreateSchema
+    permission_data: PermissionCreateSchema,
+    current_user: UserModel = Depends(get_current_user),
+    scope_id: Optional[str] = Query(None, description="Platform ID or Client ID for scoped permissions")
 ):
     """
-    Create a new permission.
+    Create a new scoped permission.
     
-    Permissions should follow a convention like:
-    `service:<resource>:<action>` (e.g., `billing:invoice:read`).
+    Scope ID requirements:
+    - System permissions: scope_id not needed (ignored)
+    - Platform permissions: scope_id must be platform_id
+    - Client permissions: scope_id must be client_account_id (or auto-determined from user)
     
-    This endpoint is for seeding and administrative purposes.
+    Examples:
+    - System: {"name": "user:create", "scope": "system"}
+    - Platform: {"name": "analytics:view", "scope": "platform"} + scope_id=platform_id
+    - Client: {"name": "listing:create", "scope": "client"} + scope_id=client_id
     """
-    existing_permission = await permission_service.get_permission_by_id(permission_data.id)
-    if existing_permission:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Permission with ID '{permission_data.id}' already exists."
-        )
+    current_client_id = str(current_user.client_account.id) if current_user.client_account else None
     
-    new_permission = await permission_service.create_permission(permission_data)
-    # Convert to dict and ensure proper field mapping for response
-    perm_dict = new_permission.model_dump(by_alias=True)
-    perm_dict["id"] = perm_dict.pop("_id", perm_dict.get("id"))
-    return perm_dict
+    new_permission = await permission_service.create_permission(
+        permission_data=permission_data,
+        current_user_id=str(current_user.id),
+        current_client_id=current_client_id,
+        scope_id=scope_id
+    )
+    return PermissionResponseSchema.model_validate(new_permission)
 
 @router.get("/", response_model=List[PermissionResponseSchema])
-async def get_all_permissions(
-    skip: int = 0,
-    limit: int = 100
+async def get_permissions(
+    skip: int = Query(0, ge=0, description="Number of permissions to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Number of permissions to return"),
+    scope: Optional[PermissionScope] = Query(None, description="Filter by permission scope"),
+    scope_id: Optional[str] = Query(None, description="Filter by specific scope ID")
 ):
     """
-    Retrieve a list of all permissions.
+    Retrieve permissions with optional filtering by scope.
     """
-    permissions = await permission_service.get_permissions(skip=skip, limit=limit)
-    # Convert each permission to dict and ensure proper field mapping
-    perm_dicts = []
-    for permission in permissions:
-        perm_dict = permission.model_dump(by_alias=True)
-        perm_dict["id"] = perm_dict.pop("_id", perm_dict.get("id"))
-        perm_dicts.append(perm_dict)
-    return perm_dicts
+    permissions = await permission_service.get_permissions(
+        skip=skip, 
+        limit=limit,
+        scope=scope,
+        scope_id=scope_id
+    )
+    return [PermissionResponseSchema.model_validate(perm) for perm in permissions]
+
+@router.get("/available", response_model=AvailablePermissionsResponseSchema)
+async def get_available_permissions(
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Get permissions that the current user can assign to others, grouped by scope.
+    """
+    current_client_id = str(current_user.client_account.id) if current_user.client_account else None
+    current_platform_id = current_user.platform_scope  # From user model
+    
+    # Determine user permissions (simplified - in real implementation, check roles)
+    is_super_admin = "super_admin" in [role for role in current_user.roles]
+    is_platform_admin = current_user.is_platform_staff
+    
+    return await permission_service.get_available_permissions_for_user(
+        current_user_client_id=current_client_id,
+        current_user_platform_id=current_platform_id,
+        is_super_admin=is_super_admin,
+        is_platform_admin=is_platform_admin
+    )
 
 @router.get("/{permission_id}", response_model=PermissionResponseSchema)
-async def get_permission_by_id(
-    permission_id: str
-):
+async def get_permission_by_id(permission_id: str):
     """
     Retrieve a single permission by its ID.
     """
@@ -66,7 +97,39 @@ async def get_permission_by_id(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Permission with ID '{permission_id}' not found."
         )
-    # Convert to dict and ensure proper field mapping for response
-    perm_dict = permission.model_dump(by_alias=True)
-    perm_dict["id"] = perm_dict.pop("_id", perm_dict.get("id"))
-    return perm_dict 
+    return PermissionResponseSchema.model_validate(permission)
+
+@router.put("/{permission_id}", response_model=PermissionResponseSchema)
+async def update_permission(
+    permission_id: str,
+    permission_data: PermissionUpdateSchema,
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Update a permission by ID.
+    """
+    updated_permission = await permission_service.update_permission(
+        permission_id=permission_id,
+        permission_data=permission_data
+    )
+    if updated_permission is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Permission with ID '{permission_id}' not found."
+        )
+    return PermissionResponseSchema.model_validate(updated_permission)
+
+@router.delete("/{permission_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_permission(
+    permission_id: str,
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Delete a permission by ID.
+    """
+    deleted = await permission_service.delete_permission(permission_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Permission with ID '{permission_id}' not found."
+        ) 

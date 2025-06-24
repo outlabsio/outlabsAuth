@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List
-from ..models.permission_model import PermissionScope
+from ..models.scopes import PermissionScope
 
 class PermissionCreateSchema(BaseModel):
     """

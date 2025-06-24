@@ -3,7 +3,8 @@ from beanie import PydanticObjectId
 from pymongo.errors import DuplicateKeyError
 from fastapi import HTTPException, status
 
-from ..models.group_model import GroupModel, GroupScope
+from ..models.group_model import GroupModel
+from ..models.scopes import GroupScope
 from ..models.client_account_model import ClientAccountModel
 from ..models.user_model import UserModel
 from ..schemas.group_schema import (

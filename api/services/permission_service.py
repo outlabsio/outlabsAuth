@@ -1,7 +1,8 @@
 from typing import List, Optional
 from fastapi import HTTPException, status
 
-from ..models.permission_model import PermissionModel, PermissionScope
+from ..models.permission_model import PermissionModel
+from ..models.scopes import PermissionScope
 from ..schemas.permission_schema import (
     PermissionCreateSchema,
     PermissionUpdateSchema,

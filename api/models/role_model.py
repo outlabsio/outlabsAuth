@@ -1,16 +1,10 @@
 from typing import List, Optional
 from pydantic import Field
 from pymongo import IndexModel
-from enum import Enum
 from beanie import PydanticObjectId
 
 from .base_model import BaseDocument
-
-class RoleScope(str, Enum):
-    """Role scope enumeration"""
-    SYSTEM = "system"      # Global roles available to all
-    PLATFORM = "platform"  # Platform-specific roles
-    CLIENT = "client"      # Client-specific roles
+from .scopes import RoleScope
 
 class RoleModel(BaseDocument):
     """

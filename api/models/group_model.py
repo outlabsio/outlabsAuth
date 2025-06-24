@@ -2,15 +2,9 @@ from typing import List, Optional
 from pydantic import Field
 from beanie import BackLink
 from pymongo import IndexModel
-from enum import Enum
 
 from .base_model import BaseDocument
-
-class GroupScope(str, Enum):
-    """Group scope enumeration - all three levels supported"""
-    SYSTEM = "system"      # Lead company internal teams
-    PLATFORM = "platform"  # Corporate client internal teams
-    CLIENT = "client"      # Location/franchise teams
+from .scopes import GroupScope
 
 class GroupModel(BaseDocument):
     """

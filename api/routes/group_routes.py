@@ -1,348 +1,242 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import List, Optional
 from beanie import PydanticObjectId
-import json
 
-from ..dependencies import has_permission, get_current_user_with_token
+from ..dependencies import has_permission, get_current_user
 from ..schemas.group_schema import (
     GroupCreateSchema, GroupUpdateSchema, GroupResponseSchema,
-    GroupMembershipSchema, GroupMembersResponseSchema, UserGroupsResponseSchema
+    AvailableGroupsResponseSchema, GroupMembershipSchema, 
+    GroupMembersResponseSchema, UserGroupsResponseSchema
 )
 from ..schemas.user_schema import UserResponseSchema
 from ..services.group_service import group_service
 from ..models.user_model import UserModel
-from ..schemas.auth_schema import TokenDataSchema
+from ..models.scopes import GroupScope
 
 router = APIRouter(
     prefix="/v1/groups",
-    tags=["groups"],
-    dependencies=[Depends(has_permission("group:read"))]
+    tags=["Group Management"],
+    dependencies=[Depends(has_permission("system:group:read"))]
 )
 
-@router.post("/", response_model=GroupResponseSchema, status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("group:create"))])
+@router.post("/", response_model=GroupResponseSchema, status_code=status.HTTP_201_CREATED)
 async def create_group(
     group_data: GroupCreateSchema,
-    current_user_and_token = Depends(get_current_user_with_token)
+    current_user: UserModel = Depends(get_current_user),
+    scope_id: Optional[str] = Query(None, description="Platform ID or Client ID for scoped groups")
 ):
     """
-    Create a new group.
+    Create a new scoped group with direct permissions.
+    
+    Scope ID requirements:
+    - System groups: scope_id not needed (ignored)
+    - Platform groups: scope_id must be platform_id
+    - Client groups: scope_id must be client_account_id (or auto-determined from user)
+    
+    Examples:
+    - System: {"name": "customer_support", "scope": "system", "permissions": ["platform:support:all_clients"]}
+    - Platform: {"name": "marketing_team", "scope": "platform", "permissions": ["platform:marketing:manage"]} + scope_id=platform_id
+    - Client: {"name": "sales_team", "scope": "client", "permissions": ["client:listing:create"]} + scope_id=client_id
     """
-    current_user, _ = current_user_and_token
+    current_client_id = str(current_user.client_account.id) if current_user.client_account else None
     
-    # Ensure non-admin users can only create groups in their own client account
-    is_super_admin = "super_admin" in current_user.roles
-    if not current_user.is_main_client and not is_super_admin:
-        if current_user.client_account and str(current_user.client_account.ref.id) != group_data.client_account_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only create groups within your own client account"
-            )
-    
-    try:
-        new_group = await group_service.create_group(group_data)
-        
-        # Use Beanie's model_dump with by_alias=True for proper _id serialization
-        group_dict = new_group.model_dump(by_alias=True)
-        group_dict["_id"] = str(new_group.id)  # Convert ObjectId to string
-        group_dict["client_account_id"] = str(new_group.client_account.id) if new_group.client_account else None
-        
-        return GroupResponseSchema.model_validate(group_dict)
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    new_group = await group_service.create_group(
+        group_data=group_data,
+        current_user_id=str(current_user.id),
+        current_client_id=current_client_id,
+        scope_id=scope_id
+    )
+    return GroupResponseSchema.model_validate(new_group)
 
 @router.get("/", response_model=List[GroupResponseSchema])
-async def list_groups(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
-    client_account_id: Optional[str] = Query(None, description="Filter groups by client account ID"),
-    current_user_and_token = Depends(get_current_user_with_token)
+async def get_groups(
+    skip: int = Query(0, ge=0, description="Number of groups to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Number of groups to return"),
+    scope: Optional[GroupScope] = Query(None, description="Filter by group scope"),
+    scope_id: Optional[str] = Query(None, description="Filter by specific scope ID"),
+    current_user: UserModel = Depends(get_current_user)
 ):
     """
-    List all groups with pagination and optional client account filtering.
+    Retrieve groups with optional filtering by scope.
     """
-    current_user, _ = current_user_and_token
+    groups = await group_service.get_groups(
+        skip=skip, 
+        limit=limit,
+        scope=scope,
+        scope_id=scope_id
+    )
+    return [GroupResponseSchema.model_validate(group) for group in groups]
+
+@router.get("/available", response_model=AvailableGroupsResponseSchema)
+async def get_available_groups(
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Get groups that the current user can assign to others, grouped by scope.
+    """
+    current_client_id = str(current_user.client_account.id) if current_user.client_account else None
+    current_platform_id = current_user.platform_scope  # From user model
     
-    # For non-super-admin users, automatically filter by their client account
-    filter_client_id = None
-    if client_account_id:
-        filter_client_id = PydanticObjectId(client_account_id)
-    elif current_user.client_account and "super_admin" not in current_user.roles:
-        # All users except super admins should only see groups from their own client account
-        # This includes both main and non-main client users
-        filter_client_id = current_user.client_account.id
+    # Determine user permissions (simplified - in real implementation, check roles)
+    is_super_admin = "super_admin" in [role for role in current_user.roles]
+    is_platform_admin = current_user.is_platform_staff
     
-    groups = await group_service.get_groups(skip=skip, limit=limit, client_account_id=filter_client_id)
-    
-    # Convert to response format
-    response_groups = []
-    for group in groups:
-        # Use Beanie's model_dump with by_alias=True for proper _id serialization
-        group_dict = group.model_dump(by_alias=True)
-        group_dict["_id"] = str(group.id)  # Convert ObjectId to string
-        group_dict["client_account_id"] = str(group.client_account.id) if group.client_account else None
-        response_groups.append(GroupResponseSchema.model_validate(group_dict))
-    
-    return response_groups
+    return await group_service.get_available_groups_for_user(
+        current_user_client_id=current_client_id,
+        current_user_platform_id=current_platform_id,
+        is_super_admin=is_super_admin,
+        is_platform_admin=is_platform_admin
+    )
 
 @router.get("/{group_id}", response_model=GroupResponseSchema)
-async def get_group(
+async def get_group_by_id(
     group_id: str,
-    current_user_and_token = Depends(get_current_user_with_token)
+    current_user: UserModel = Depends(get_current_user)
 ):
     """
     Get a single group by ID.
     """
-    current_user, _ = current_user_and_token
-    
     try:
         group = await group_service.get_group_by_id(PydanticObjectId(group_id))
     except Exception:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid group ID format")
+    
     if not group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
-    # Check if user has access to this group
-    is_super_admin = "super_admin" in current_user.roles
-    if current_user.client_account and not is_super_admin:
-        # All users except super admins should only access groups from their own client account
-        if group.client_account.id != current_user.client_account.id:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Group not found"
-            )
-    
-    # Use Beanie's model_dump with by_alias=True for proper _id serialization
-    group_dict = group.model_dump(by_alias=True)
-    group_dict["_id"] = str(group.id)  # Convert ObjectId to string
-    group_dict["client_account_id"] = str(group.client_account.id) if group.client_account else None
-    
-    return GroupResponseSchema.model_validate(group_dict)
+    return GroupResponseSchema.model_validate(group)
 
-@router.put("/{group_id}", response_model=GroupResponseSchema, dependencies=[Depends(has_permission("group:update"))])
+@router.put("/{group_id}", response_model=GroupResponseSchema)
 async def update_group(
-    group_data: GroupUpdateSchema,
     group_id: str,
-    current_user_and_token = Depends(get_current_user_with_token)
+    group_data: GroupUpdateSchema,
+    current_user: UserModel = Depends(get_current_user)
 ):
     """
     Update a group's information.
     """
-    current_user, _ = current_user_and_token
-    
-    # Check if group exists and user has access
-    existing_group = await group_service.get_group_by_id(PydanticObjectId(group_id))
-    if not existing_group:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
-    
-    is_super_admin = "super_admin" in current_user.roles
-    if current_user.client_account and not is_super_admin:
-        # All users except super admins should only update groups from their own client account
-        if existing_group.client_account.id != current_user.client_account.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only update groups within your own client account"
-            )
-    
     try:
         updated_group = await group_service.update_group(PydanticObjectId(group_id), group_data)
-        if not updated_group:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
-        
-        # Use Beanie's model_dump with by_alias=True for proper _id serialization
-        group_dict = updated_group.model_dump(by_alias=True)
-        group_dict["_id"] = str(updated_group.id)  # Convert ObjectId to string
-        group_dict["client_account_id"] = str(updated_group.client_account.id) if updated_group.client_account else None
-        
-        return GroupResponseSchema.model_validate(group_dict)
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid group ID format")
+    
+    if not updated_group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
+    
+    return GroupResponseSchema.model_validate(updated_group)
 
-@router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(has_permission("group:delete"))])
+@router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_group(
     group_id: str,
-    current_user_and_token = Depends(get_current_user_with_token)
+    current_user: UserModel = Depends(get_current_user)
 ):
     """
     Delete a group. This will remove all users from the group first.
     """
-    current_user, _ = current_user_and_token
+    try:
+        success = await group_service.delete_group(PydanticObjectId(group_id))
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid group ID format")
     
-    # Check if group exists and user has access
-    existing_group = await group_service.get_group_by_id(PydanticObjectId(group_id))
-    if not existing_group:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
-    
-    is_super_admin = "super_admin" in current_user.roles
-    if current_user.client_account and not is_super_admin:
-        # All users except super admins should only delete groups from their own client account
-        if existing_group.client_account.id != current_user.client_account.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only delete groups within your own client account"
-            )
-    
-    success = await group_service.delete_group(PydanticObjectId(group_id))
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
 
 # Group membership management endpoints
 
-@router.post("/{group_id}/members", status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("group:manage_members"))])
+@router.post("/{group_id}/members", status_code=status.HTTP_201_CREATED)
 async def add_users_to_group(
-    membership_data: GroupMembershipSchema,
     group_id: str,
-    current_user_and_token = Depends(get_current_user_with_token)
+    membership_data: GroupMembershipSchema,
+    current_user: UserModel = Depends(get_current_user)
 ):
     """
     Add users to a group.
     """
-    current_user, _ = current_user_and_token
-    
-    # Check if group exists and user has access
-    existing_group = await group_service.get_group_by_id(PydanticObjectId(group_id))
-    if not existing_group:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
-    
-    is_super_admin = "super_admin" in current_user.roles
-    if current_user.client_account and not is_super_admin:
-        # All users except super admins should only manage members of groups from their own client account
-        if existing_group.client_account.id != current_user.client_account.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only manage members of groups within your own client account"
-            )
-    
     try:
-        await group_service.add_users_to_group(PydanticObjectId(group_id), membership_data.user_ids)
+        success = await group_service.add_users_to_group(PydanticObjectId(group_id), membership_data.user_ids)
+        if not success:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
         return {"message": f"Successfully added {len(membership_data.user_ids)} users to group"}
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid group ID format")
 
-@router.delete("/{group_id}/members", status_code=status.HTTP_200_OK, dependencies=[Depends(has_permission("group:manage_members"))])
+@router.delete("/{group_id}/members", status_code=status.HTTP_200_OK)
 async def remove_users_from_group(
-    membership_data: GroupMembershipSchema,
     group_id: str,
-    current_user_and_token = Depends(get_current_user_with_token)
+    membership_data: GroupMembershipSchema,
+    current_user: UserModel = Depends(get_current_user)
 ):
     """
     Remove users from a group.
     """
-    current_user, _ = current_user_and_token
-    
-    # Check if group exists and user has access
-    existing_group = await group_service.get_group_by_id(PydanticObjectId(group_id))
-    if not existing_group:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
-    
-    is_super_admin = "super_admin" in current_user.roles
-    if current_user.client_account and not is_super_admin:
-        # All users except super admins should only manage members of groups from their own client account
-        if existing_group.client_account.id != current_user.client_account.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only manage members of groups within your own client account"
-            )
-    
     try:
-        await group_service.remove_users_from_group(PydanticObjectId(group_id), membership_data.user_ids)
+        success = await group_service.remove_users_from_group(PydanticObjectId(group_id), membership_data.user_ids)
+        if not success:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
         return {"message": f"Successfully removed {len(membership_data.user_ids)} users from group"}
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid group ID format")
 
 @router.get("/{group_id}/members", response_model=GroupMembersResponseSchema)
 async def get_group_members(
     group_id: str,
-    current_user_and_token = Depends(get_current_user_with_token)
+    current_user: UserModel = Depends(get_current_user)
 ):
     """
     Get all members of a group.
     """
-    current_user, _ = current_user_and_token
-    
-    # Check if group exists and user has access
-    existing_group = await group_service.get_group_by_id(PydanticObjectId(group_id))
-    if not existing_group:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
-    
-    is_super_admin = "super_admin" in current_user.roles
-    if current_user.client_account and not is_super_admin:
-        # All users except super admins should only view members of groups from their own client account
-        if existing_group.client_account.id != current_user.client_account.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only view members of groups within your own client account"
-            )
-    
-    members = await group_service.get_group_members(PydanticObjectId(group_id))
-    
-    # Convert users to basic response format
-    member_data = []
-    for member in members:
-        # Use Beanie's model_dump with by_alias=True for proper _id serialization
-        member_dict = member.model_dump(by_alias=True)
-        member_dict["_id"] = str(member.id)  # Convert ObjectId to string
-        member_dict["client_account_id"] = str(member.client_account.id) if member.client_account else None
-        member_data.append(member_dict)
-    
-    return GroupMembersResponseSchema(
-        group_id=group_id,
-        group_name=existing_group.name,
-        members=member_data
-    )
-
-# User-centric group endpoints
+    try:
+        group = await group_service.get_group_by_id(PydanticObjectId(group_id))
+        if not group:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
+        
+        members = await group_service.get_group_members(PydanticObjectId(group_id))
+        
+        # Convert members to dict format
+        member_dicts = []
+        for member in members:
+            member_dict = {
+                "id": str(member.id),
+                "email": member.email,
+                "first_name": member.first_name,
+                "last_name": member.last_name,
+                "status": member.status
+            }
+            member_dicts.append(member_dict)
+        
+        return GroupMembersResponseSchema(
+            group_id=group_id,
+            group_name=group.name,
+            group_scope=group.scope,
+            members=member_dicts
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid group ID format")
 
 @router.get("/users/{user_id}/groups", response_model=UserGroupsResponseSchema)
 async def get_user_groups(
     user_id: str,
-    current_user_and_token = Depends(get_current_user_with_token)
+    current_user: UserModel = Depends(get_current_user)
 ):
     """
-    Get all groups that a user belongs to, along with their effective roles and permissions.
+    Get all groups that a user belongs to, along with their effective permissions.
     """
-    current_user, _ = current_user_and_token
-    
-    # Check if user exists and current user has access
-    target_user = await UserModel.get(PydanticObjectId(user_id))
-    if not target_user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    
-    # Users can view their own groups, or admin users can view any user's groups
-    is_super_admin = "super_admin" in current_user.roles
-    if str(current_user.id) != user_id and not current_user.is_main_client and not is_super_admin:
-        if current_user.client_account != target_user.client_account:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only view group memberships within your own client account"
-            )
-    
-    # Get user's groups
-    user_groups = await group_service.get_user_groups(PydanticObjectId(user_id))
-    
-    # Get effective roles and permissions
-    effective_roles = await group_service.get_user_effective_roles(PydanticObjectId(user_id))
-    effective_permissions = await group_service.get_user_effective_permissions(PydanticObjectId(user_id))
-    
-    # Convert groups to response format
-    groups_response = []
-    for group in user_groups:
-        # Use Beanie's model_dump with by_alias=True for proper _id serialization
-        group_dict = group.model_dump(by_alias=True)
-        group_dict["_id"] = str(group.id)  # Convert ObjectId to string
-        group_dict["client_account_id"] = str(group.client_account.id) if group.client_account else None
-        groups_response.append(GroupResponseSchema.model_validate(group_dict))
-    
-    return UserGroupsResponseSchema(
-        user_id=user_id,
-        groups=groups_response,
-        effective_roles=list(effective_roles),
-        effective_permissions=list(effective_permissions)
-    ) 
+    try:
+        user_groups = await group_service.get_user_groups(PydanticObjectId(user_id))
+        effective_permissions = await group_service.get_user_effective_permissions(PydanticObjectId(user_id))
+        
+        groups_response = [GroupResponseSchema.model_validate(group) for group in user_groups]
+        
+        return UserGroupsResponseSchema(
+            user_id=user_id,
+            groups=groups_response,
+            effective_permissions=list(effective_permissions)
+        )
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format") 

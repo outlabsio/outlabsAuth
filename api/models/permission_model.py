@@ -2,13 +2,8 @@ from typing import Optional
 from pydantic import Field
 from beanie import Document
 from pymongo import IndexModel
-from enum import Enum
 
-class PermissionScope(str, Enum):
-    """Permission scope enumeration"""
-    SYSTEM = "system"      # Core auth permissions
-    PLATFORM = "platform"  # Platform-specific permissions  
-    CLIENT = "client"      # Client-specific permissions
+from .scopes import PermissionScope
 
 class PermissionModel(Document):
     """

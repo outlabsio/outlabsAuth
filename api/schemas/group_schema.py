@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
-from ..models.group_model import GroupScope
+from ..models.scopes import GroupScope
 
 class GroupCreateSchema(BaseModel):
     """
