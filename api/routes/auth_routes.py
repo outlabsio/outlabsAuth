@@ -222,8 +222,8 @@ async def read_users_me(
     # Remove the client_account object from response
     user_dict.pop("client_account", None)
 
-    # Add effective permissions for platform permission validation
-    user_permissions = await group_service.get_user_effective_permissions(current_user.id)
+    # Add effective permissions from both roles AND groups (new aggregated method)
+    user_permissions = await user_service.get_user_effective_permissions(current_user.id)
     user_dict["permissions"] = list(user_permissions)
 
     return user_dict
