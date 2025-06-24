@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
+from beanie import PydanticObjectId
 from ..models.scopes import GroupScope
 
 class GroupCreateSchema(BaseModel):
@@ -28,7 +29,7 @@ class GroupResponseSchema(BaseModel):
     """
     Schema for returning group data in API responses.
     """
-    id: str = Field(..., alias="_id")
+    id: PydanticObjectId = Field(..., alias="_id")
     name: str
     display_name: str
     description: Optional[str] = None

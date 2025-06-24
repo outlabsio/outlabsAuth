@@ -46,7 +46,8 @@ async def create_group(
         current_client_id=current_client_id,
         scope_id=scope_id
     )
-    return GroupResponseSchema.model_validate(new_group)
+    group_dict = await group_service.group_to_response_dict(new_group)
+    return GroupResponseSchema.model_validate(group_dict)
 
 @router.get("/", response_model=List[GroupResponseSchema])
 async def get_groups(
@@ -65,7 +66,12 @@ async def get_groups(
         scope=scope,
         scope_id=scope_id
     )
-    return [GroupResponseSchema.model_validate(group) for group in groups]
+    # Convert groups to response format with resolved permission names
+    group_responses = []
+    for group in groups:
+        group_dict = await group_service.group_to_response_dict(group)
+        group_responses.append(GroupResponseSchema.model_validate(group_dict))
+    return group_responses
 
 @router.get("/available", response_model=AvailableGroupsResponseSchema)
 async def get_available_groups(
@@ -104,7 +110,8 @@ async def get_group_by_id(
     if not group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
-    return GroupResponseSchema.model_validate(group)
+    group_dict = await group_service.group_to_response_dict(group)
+    return GroupResponseSchema.model_validate(group_dict)
 
 @router.put("/{group_id}", response_model=GroupResponseSchema)
 async def update_group(
@@ -123,7 +130,8 @@ async def update_group(
     if not updated_group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
-    return GroupResponseSchema.model_validate(updated_group)
+    group_dict = await group_service.group_to_response_dict(updated_group)
+    return GroupResponseSchema.model_validate(group_dict)
 
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_group(
