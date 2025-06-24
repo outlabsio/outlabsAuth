@@ -543,10 +543,10 @@ class TestPlatformPermissionValidation:
         
         # These platform permissions should exist after Phase 3 implementation
         required_platform_permissions = [
-            "platform:manage_clients",
-            "platform:view_analytics", 
-            "platform:support_users",
-            "platform:onboard_clients"
+                            "clients:manage",
+                          "analytics:view", 
+              "support:cross_client",
+            "clients:onboard"
         ]
         
         for permission in required_platform_permissions:
@@ -577,8 +577,8 @@ class TestPlatformPermissionValidation:
         
         # Platform admin should have platform permissions
         user_permissions = profile.get("permissions", [])
-        assert "platform:manage_clients" in user_permissions, "Platform admin should have client management permission"
-        assert "platform:view_analytics" in user_permissions, "Platform admin should have analytics permission"
+        assert "clients:manage" in user_permissions, "Platform admin should have client management permission"
+        assert "analytics:view" in user_permissions, "Platform admin should have analytics permission"
     
     @pytest.mark.asyncio
     async def test_regular_client_cannot_access_platform_features(self, client: AsyncClient):
@@ -603,8 +603,8 @@ class TestPlatformPermissionValidation:
         
         # Regular client should NOT have platform permissions
         user_permissions = profile.get("permissions", [])
-        assert "platform:manage_clients" not in user_permissions, "Client admin should not have platform permissions"
-        assert "platform:view_analytics" not in user_permissions, "Client admin should not have platform analytics"
+        assert "clients:manage" not in user_permissions, "Client admin should not have platform permissions"
+        assert "analytics:view" not in user_permissions, "Client admin should not have platform analytics"
 
 
 class TestPropertyHubGroupManagement:

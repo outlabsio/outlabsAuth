@@ -10,7 +10,7 @@ class PermissionModel(Document):
     Beanie Document for the 'permissions' collection in MongoDB.
     Supports three-tier scoped permissions following the role architecture.
     """
-    id: str = Field(alias="_id")  # e.g., "platform:analytics:view"
+    # MongoDB ObjectId (auto-generated)
     name: str = Field(..., description="Permission name without scope prefix")
     display_name: str = Field(..., description="Human-readable permission name")
     description: Optional[str] = Field(None, description="What this permission allows")

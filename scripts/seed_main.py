@@ -607,8 +607,8 @@ async def seed_propertyhub_scenario():
                         "user:create", "user:read", "user:update", "user:delete",
                         "group:create", "group:read", "group:update", "group:delete",
                         "role:read", "permission:read",
-                        "platform:manage_clients", "platform:view_analytics", 
-                        "platform:support_users", "platform:onboard_clients"],
+                        "clients:manage", "analytics:view", 
+                        "support:cross_client", "clients:onboard"],
             scope=RoleScope.PLATFORM,
             is_assignable_by_main_client=True
         ),
