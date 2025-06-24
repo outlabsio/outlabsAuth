@@ -2,49 +2,84 @@
 
 ## Overview
 
-The Group Routes provide a comprehensive API for managing groups and group memberships within the authentication system. This module handles all CRUD operations for groups, group membership management, and provides endpoints for retrieving user group associations with effective roles and permissions.
+The Group Routes provide a comprehensive API for managing scoped groups and group memberships within the three-tier authentication system. This module handles all CRUD operations for groups, group membership management, and provides endpoints for retrieving user group associations with effective permissions. Groups serve as **permission containers** that complement the role system through direct permission assignment rather than role inheritance.
 
 **Base URL:** `/v1/groups`  
-**Tags:** groups
+**Tags:** Group Management
+
+## Architecture
+
+### Three-Tier Scoped Groups
+
+Groups are organized in a three-tier hierarchy with proper isolation and direct permission assignment:
+
+```
+SYSTEM GROUPS (Global)
+├─ customer_support      # Cross-platform support team
+├─ engineering          # Core development team
+└─ security_team        # Security and compliance team
+
+PLATFORM GROUPS (Per Platform)
+├─ marketing_team       # Platform marketing
+├─ analytics_team      # Platform analytics
+└─ admin_team          # Platform administration
+
+CLIENT GROUPS (Per Client Organization)
+├─ sales_team         # Client sales representatives
+├─ project_alpha_team # Project-specific team
+└─ management         # Client leadership team
+```
+
+### Groups vs Roles Philosophy
+
+| Aspect                | **Roles**                    | **Groups**                        |
+| --------------------- | ---------------------------- | --------------------------------- |
+| **Purpose**           | User identity & capabilities | Team organization & collaboration |
+| **Permission Source** | Predefined permission sets   | Direct permission assignment      |
+| **Relationship**      | User has roles               | User belongs to groups            |
+| **Use Case**          | "What can this user do?"     | "Who works on this project?"      |
 
 ## Authentication & Authorization
 
-All endpoints require authentication and specific permissions:
+All endpoints require authentication and specific scoped permissions:
 
-- **Base Permission:** `group:read` (required for all endpoints)
+- **Base Permission:** `system:group:read` (required for all endpoints)
 - **Additional Permissions:** Specific endpoints require additional permissions as noted below
 
-### Client Account Isolation
+### Scope-Based Access Control
 
-Non-admin users are restricted to groups within their own client account:
-
-- Admin users (main client) can access all groups across client accounts
-- Regular users can only access groups within their assigned client account
+- **Super Admins:** Can create/manage groups at all scopes
+- **Platform Admins:** Can create/manage groups within their platform only
+- **Client Admins:** Can create/manage groups within their client only
+- **Team Leads:** Can manage groups if granted group:manage_members permission
 
 ## Endpoints
 
-### 1. Create Group
+### 1. Create Scoped Group
 
-Creates a new group in the system.
+Creates a new group within a specific scope with direct permission assignment.
 
 **Endpoint:** `POST /v1/groups/`
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `group:create`
+**Required Permissions:** `system:group:create`
+
+**Query Parameters:**
+
+- `scope_id` (optional, string) - Platform ID or Client ID for scoped groups (auto-determined from user context if not provided)
 
 **Request Body:**
 
 ```json
 {
-  "name": "string",
-  "description": "string",
-  "client_account_id": "507f1f77bcf86cd799439011",
-  "roles": []
+  "name": "sales_team",
+  "display_name": "Sales Team",
+  "description": "Handles all sales activities and client relationships",
+  "permissions": ["client:listings:create", "client:listings:update", "client:clients:manage", "client:reports:sales"],
+  "scope": "client"
 }
 ```
-
-**Note:** The `roles` field is optional and defaults to an empty list if not provided.
 
 **Response:**
 
@@ -54,52 +89,94 @@ Creates a new group in the system.
 ```json
 {
   "id": "507f1f77bcf86cd799439012",
-  "name": "Development Team",
-  "description": "Main development team group",
-  "client_account_id": "507f1f77bcf86cd799439011",
-  "roles": [],
-  "is_active": true,
-  "created_at": "2023-01-01T00:00:00Z",
-  "updated_at": "2023-01-01T00:00:00Z"
+  "name": "sales_team",
+  "display_name": "Sales Team",
+  "description": "Handles all sales activities and client relationships",
+  "permissions": ["client:listings:create", "client:listings:update", "client:clients:manage", "client:reports:sales"],
+  "scope": "client",
+  "scope_id": "685a5f2e82e92ad29111a6a9",
+  "created_by_user_id": "507f1f77bcf86cd799439013",
+  "created_by_client_id": "685a5f2e82e92ad29111a6a9",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
 }
 ```
 
 **Error Responses:**
 
-- `400 Bad Request` - Invalid request data
-- `403 Forbidden` - Insufficient permissions or client account access denied
+- `400 Bad Request` - Invalid request data or scope validation failed
+- `403 Forbidden` - Insufficient permissions or invalid scope access
 - `401 Unauthorized` - Invalid access token
+- `409 Conflict` - Group with this name already exists in scope
 - `500 Internal Server Error` - Server error during group creation
 
-**Example Request:**
+**Example Requests:**
 
 ```bash
+# System group (super admin only)
 curl -X POST "https://api.example.com/v1/groups/" \
      -H "Authorization: Bearer <access_token>" \
      -H "Content-Type: application/json" \
      -d '{
-       "name": "Development Team",
-       "description": "Main development team group",
-       "client_account_id": "507f1f77bcf86cd799439011",
-       "roles": ["developer", "team_member"]
+       "name": "customer_support",
+       "display_name": "Customer Support Team",
+       "description": "Provides support across all platforms and clients",
+       "permissions": [
+         "support:tickets:read",
+         "support:tickets:update",
+         "platform:support:all_clients"
+       ],
+       "scope": "system"
+     }'
+
+# Platform group
+curl -X POST "https://api.example.com/v1/groups/?scope_id=real_estate_platform" \
+     -H "Authorization: Bearer <access_token>" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "name": "marketing_team",
+       "display_name": "Marketing Team",
+       "description": "Platform marketing and growth initiatives",
+       "permissions": [
+         "platform:analytics:view",
+         "platform:campaigns:manage",
+         "client:metrics:read"
+       ],
+       "scope": "platform"
+     }'
+
+# Client group (auto-scoped to user's client)
+curl -X POST "https://api.example.com/v1/groups/" \
+     -H "Authorization: Bearer <access_token>" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "name": "sales_team",
+       "display_name": "Sales Team",
+       "description": "Client sales representatives",
+       "permissions": [
+         "client:listings:create",
+         "client:clients:manage"
+       ],
+       "scope": "client"
      }'
 ```
 
-### 2. List Groups
+### 2. Get Groups with Scope Filtering
 
-Retrieves a paginated list of groups with optional client account filtering.
+Retrieves a paginated list of groups with optional scope filtering.
 
 **Endpoint:** `GET /v1/groups/`
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `group:read`
+**Required Permissions:** `system:group:read`
 
 **Query Parameters:**
 
-- `skip` (optional, integer, default: 0, min: 0) - Number of records to skip for pagination
-- `limit` (optional, integer, default: 100, min: 1, max: 1000) - Maximum number of records to return
-- `client_account_id` (optional, string) - Filter groups by client account ID
+- `skip` (optional, integer, default: 0, min: 0) - Number of groups to skip for pagination
+- `limit` (optional, integer, default: 100, min: 1, max: 1000) - Maximum number of groups to return
+- `scope` (optional, string) - Filter by group scope (`system`, `platform`, `client`)
+- `scope_id` (optional, string) - Filter by specific scope ID
 
 **Response:**
 
@@ -110,13 +187,25 @@ Retrieves a paginated list of groups with optional client account filtering.
 [
   {
     "id": "507f1f77bcf86cd799439012",
-    "name": "Development Team",
-    "description": "Main development team group",
-    "client_account_id": "507f1f77bcf86cd799439011",
-    "roles": [],
-    "is_active": true,
-    "created_at": "2023-01-01T00:00:00Z",
-    "updated_at": "2023-01-01T00:00:00Z"
+    "name": "sales_team",
+    "display_name": "Sales Team",
+    "description": "Client sales representatives",
+    "permissions": ["client:listings:create", "client:clients:manage"],
+    "scope": "client",
+    "scope_id": "685a5f2e82e92ad29111a6a9",
+    "created_by_user_id": "507f1f77bcf86cd799439013",
+    "created_at": "2024-01-15T10:30:00Z"
+  },
+  {
+    "id": "507f1f77bcf86cd799439014",
+    "name": "project_alpha_team",
+    "display_name": "Project Alpha Team",
+    "description": "Cross-functional team for Project Alpha",
+    "permissions": ["client:project:alpha:read", "client:project:alpha:update"],
+    "scope": "client",
+    "scope_id": "685a5f2e82e92ad29111a6a9",
+    "created_by_user_id": "507f1f77bcf86cd799439013",
+    "created_at": "2024-01-15T11:00:00Z"
   }
 ]
 ```
@@ -127,26 +216,109 @@ Retrieves a paginated list of groups with optional client account filtering.
 - `401 Unauthorized` - Invalid access token
 - `403 Forbidden` - Insufficient permissions
 
-**Example Request:**
+**Example Requests:**
 
 ```bash
-curl -X GET "https://api.example.com/v1/groups/?skip=0&limit=50&client_account_id=507f1f77bcf86cd799439011" \
+# Get all groups user can view
+curl -X GET "https://api.example.com/v1/groups/" \
+     -H "Authorization: Bearer <access_token>"
+
+# Get only client groups for specific client
+curl -X GET "https://api.example.com/v1/groups/?scope=client&scope_id=685a5f2e82e92ad29111a6a9" \
+     -H "Authorization: Bearer <access_token>"
+
+# Get platform groups
+curl -X GET "https://api.example.com/v1/groups/?scope=platform&scope_id=real_estate_platform" \
      -H "Authorization: Bearer <access_token>"
 ```
 
-### 3. Get Group by ID
+### 3. Get Available Groups for Assignment
 
-Retrieves a specific group by its ID.
+Retrieves groups that the current user can assign to others, grouped by scope.
+
+**Endpoint:** `GET /v1/groups/available`
+
+**Authentication Required:** Yes (Access Token)
+
+**Required Permissions:** `system:group:read`
+
+**Response:**
+
+- **Status Code:** `200 OK`
+- **Response Body:**
+
+```json
+{
+  "system_groups": [
+    {
+      "id": "507f1f77bcf86cd799439011",
+      "name": "customer_support",
+      "display_name": "Customer Support Team",
+      "description": "Cross-platform support team",
+      "scope": "system",
+      "scope_id": null,
+      "permissions": ["support:tickets:read", "support:tickets:update"]
+    }
+  ],
+  "platform_groups": [
+    {
+      "id": "507f1f77bcf86cd799439013",
+      "name": "analytics_team",
+      "display_name": "Analytics Team",
+      "description": "Platform analytics team",
+      "scope": "platform",
+      "scope_id": "real_estate_platform",
+      "permissions": ["platform:analytics:view", "platform:reports:create"]
+    }
+  ],
+  "client_groups": [
+    {
+      "id": "507f1f77bcf86cd799439015",
+      "name": "sales_team",
+      "display_name": "Sales Team",
+      "description": "Client sales team",
+      "scope": "client",
+      "scope_id": "685a5f2e82e92ad29111a6a9",
+      "permissions": ["client:listings:create", "client:clients:manage"]
+    },
+    {
+      "id": "507f1f77bcf86cd799439016",
+      "name": "project_alpha_team",
+      "display_name": "Project Alpha Team",
+      "description": "Project team",
+      "scope": "client",
+      "scope_id": "685a5f2e82e92ad29111a6a9",
+      "permissions": ["client:project:alpha:read", "client:project:alpha:update"]
+    }
+  ]
+}
+```
+
+**Error Responses:**
+
+- `403 Forbidden` - Insufficient permissions
+- `401 Unauthorized` - Invalid authentication
+
+**Example Request:**
+
+```bash
+curl -X GET "https://api.example.com/v1/groups/available" \
+     -H "Authorization: Bearer <access_token>"
+```
+
+### 4. Get Group by ID
+
+Retrieves a specific group by its MongoDB ObjectId.
 
 **Endpoint:** `GET /v1/groups/{group_id}`
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `group:read`
+**Required Permissions:** `system:group:read`
 
 **Path Parameters:**
 
-- `group_id` (required, string) - The unique identifier of the group
+- `group_id` (required, string) - The MongoDB ObjectId of the group
 
 **Response:**
 
@@ -156,20 +328,23 @@ Retrieves a specific group by its ID.
 ```json
 {
   "id": "507f1f77bcf86cd799439012",
-  "name": "Development Team",
-  "description": "Main development team group",
-  "client_account_id": "507f1f77bcf86cd799439011",
-  "roles": [],
-  "is_active": true,
-  "created_at": "2023-01-01T00:00:00Z",
-  "updated_at": "2023-01-01T00:00:00Z"
+  "name": "sales_team",
+  "display_name": "Sales Team",
+  "description": "Client sales representatives",
+  "permissions": ["client:listings:create", "client:listings:update", "client:clients:manage"],
+  "scope": "client",
+  "scope_id": "685a5f2e82e92ad29111a6a9",
+  "created_by_user_id": "507f1f77bcf86cd799439013",
+  "created_by_client_id": "685a5f2e82e92ad29111a6a9",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
 }
 ```
 
 **Error Responses:**
 
 - `400 Bad Request` - Invalid group ID format
-- `404 Not Found` - Group not found or access denied
+- `404 Not Found` - Group not found or not accessible by user
 - `401 Unauthorized` - Invalid access token
 - `403 Forbidden` - Insufficient permissions
 
@@ -180,28 +355,27 @@ curl -X GET "https://api.example.com/v1/groups/507f1f77bcf86cd799439012" \
      -H "Authorization: Bearer <access_token>"
 ```
 
-### 4. Update Group
+### 5. Update Group
 
-Updates an existing group's information.
+Updates an existing group's information and permissions.
 
 **Endpoint:** `PUT /v1/groups/{group_id}`
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `group:update`
+**Required Permissions:** `system:group:update`
 
 **Path Parameters:**
 
-- `group_id` (required, string) - The unique identifier of the group
+- `group_id` (required, string) - The MongoDB ObjectId of the group
 
 **Request Body:**
 
 ```json
 {
-  "name": "string",
-  "description": "string",
-  "roles": [],
-  "is_active": true
+  "display_name": "Senior Sales Team",
+  "description": "Updated sales team description",
+  "permissions": ["client:listings:create", "client:listings:update", "client:clients:manage", "client:reports:sales", "client:contracts:create"]
 }
 ```
 
@@ -213,21 +387,24 @@ Updates an existing group's information.
 ```json
 {
   "id": "507f1f77bcf86cd799439012",
-  "name": "Senior Development Team",
-  "description": "Updated development team group",
-  "client_account_id": "507f1f77bcf86cd799439011",
-  "roles": ["senior_developer", "team_lead"],
-  "is_active": true,
-  "created_at": "2023-01-01T00:00:00Z",
-  "updated_at": "2023-01-01T12:00:00Z"
+  "name": "sales_team",
+  "display_name": "Senior Sales Team",
+  "description": "Updated sales team description",
+  "permissions": ["client:listings:create", "client:listings:update", "client:clients:manage", "client:reports:sales", "client:contracts:create"],
+  "scope": "client",
+  "scope_id": "685a5f2e82e92ad29111a6a9",
+  "created_by_user_id": "507f1f77bcf86cd799439013",
+  "created_by_client_id": "685a5f2e82e92ad29111a6a9",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T15:30:00Z"
 }
 ```
 
 **Error Responses:**
 
-- `400 Bad Request` - Invalid request data
+- `400 Bad Request` - Invalid request data or group ID format
 - `404 Not Found` - Group not found
-- `403 Forbidden` - Insufficient permissions or client account access denied
+- `403 Forbidden` - Insufficient permissions or scope access denied
 - `401 Unauthorized` - Invalid access token
 - `500 Internal Server Error` - Server error during update
 
@@ -238,14 +415,19 @@ curl -X PUT "https://api.example.com/v1/groups/507f1f77bcf86cd799439012" \
      -H "Authorization: Bearer <access_token>" \
      -H "Content-Type: application/json" \
      -d '{
-       "name": "Senior Development Team",
-       "description": "Updated development team group",
-       "roles": ["senior_developer", "team_lead"],
-       "is_active": true
+       "display_name": "Senior Sales Team",
+       "description": "Updated sales team description",
+       "permissions": [
+         "client:listings:create",
+         "client:listings:update",
+         "client:clients:manage",
+         "client:reports:sales",
+         "client:contracts:create"
+       ]
      }'
 ```
 
-### 5. Delete Group
+### 6. Delete Group
 
 Deletes a group and removes all users from the group.
 
@@ -253,11 +435,11 @@ Deletes a group and removes all users from the group.
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `group:delete`
+**Required Permissions:** `system:group:delete`
 
 **Path Parameters:**
 
-- `group_id` (required, string) - The unique identifier of the group
+- `group_id` (required, string) - The MongoDB ObjectId of the group
 
 **Response:**
 
@@ -265,8 +447,9 @@ Deletes a group and removes all users from the group.
 
 **Error Responses:**
 
+- `400 Bad Request` - Invalid group ID format
 - `404 Not Found` - Group not found
-- `403 Forbidden` - Insufficient permissions or client account access denied
+- `403 Forbidden` - Insufficient permissions or scope access denied
 - `401 Unauthorized` - Invalid access token
 
 **Example Request:**
@@ -276,19 +459,19 @@ curl -X DELETE "https://api.example.com/v1/groups/507f1f77bcf86cd799439012" \
      -H "Authorization: Bearer <access_token>"
 ```
 
-### 6. Add Users to Group
+### 7. Add Users to Group
 
-Adds users to a specific group.
+Adds users to a specific group for team collaboration.
 
 **Endpoint:** `POST /v1/groups/{group_id}/members`
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `group:manage_members`
+**Required Permissions:** `system:group:manage_members`
 
 **Path Parameters:**
 
-- `group_id` (required, string) - The unique identifier of the group
+- `group_id` (required, string) - The MongoDB ObjectId of the group
 
 **Request Body:**
 
@@ -311,9 +494,9 @@ Adds users to a specific group.
 
 **Error Responses:**
 
-- `400 Bad Request` - Invalid request data
+- `400 Bad Request` - Invalid request data or group ID format
 - `404 Not Found` - Group not found
-- `403 Forbidden` - Insufficient permissions or client account access denied
+- `403 Forbidden` - Insufficient permissions or scope access denied
 - `401 Unauthorized` - Invalid access token
 - `500 Internal Server Error` - Server error during operation
 
@@ -331,7 +514,7 @@ curl -X POST "https://api.example.com/v1/groups/507f1f77bcf86cd799439012/members
      }'
 ```
 
-### 7. Remove Users from Group
+### 8. Remove Users from Group
 
 Removes users from a specific group.
 
@@ -339,17 +522,17 @@ Removes users from a specific group.
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `group:manage_members`
+**Required Permissions:** `system:group:manage_members`
 
 **Path Parameters:**
 
-- `group_id` (required, string) - The unique identifier of the group
+- `group_id` (required, string) - The MongoDB ObjectId of the group
 
 **Request Body:**
 
 ```json
 {
-  "user_ids": ["507f1f77bcf86cd799439013", "507f1f77bcf86cd799439014"]
+  "user_ids": ["507f1f77bcf86cd799439013"]
 }
 ```
 
@@ -360,15 +543,15 @@ Removes users from a specific group.
 
 ```json
 {
-  "message": "Successfully removed 2 users from group"
+  "message": "Successfully removed 1 users from group"
 }
 ```
 
 **Error Responses:**
 
-- `400 Bad Request` - Invalid request data
+- `400 Bad Request` - Invalid request data or group ID format
 - `404 Not Found` - Group not found
-- `403 Forbidden` - Insufficient permissions or client account access denied
+- `403 Forbidden` - Insufficient permissions or scope access denied
 - `401 Unauthorized` - Invalid access token
 - `500 Internal Server Error` - Server error during operation
 
@@ -385,19 +568,19 @@ curl -X DELETE "https://api.example.com/v1/groups/507f1f77bcf86cd799439012/membe
      }'
 ```
 
-### 8. Get Group Members
+### 9. Get Group Members
 
-Retrieves all members of a specific group.
+Retrieves all members of a specific group with their basic information.
 
 **Endpoint:** `GET /v1/groups/{group_id}/members`
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `group:read`
+**Required Permissions:** `system:group:read`
 
 **Path Parameters:**
 
-- `group_id` (required, string) - The unique identifier of the group
+- `group_id` (required, string) - The MongoDB ObjectId of the group
 
 **Response:**
 
@@ -407,22 +590,22 @@ Retrieves all members of a specific group.
 ```json
 {
   "group_id": "507f1f77bcf86cd799439012",
-  "group_name": "Development Team",
+  "group_name": "Sales Team",
+  "group_scope": "client",
   "members": [
     {
       "id": "507f1f77bcf86cd799439013",
-      "email": "john.doe@example.com",
-      "first_name": "John",
-      "last_name": "Doe",
-      "client_account_id": "507f1f77bcf86cd799439011",
-      "roles": ["developer"],
-      "groups": [],
-      "is_main_client": false,
-      "status": "active",
-      "created_at": "2023-01-01T00:00:00Z",
-      "updated_at": "2023-01-01T00:00:00Z",
-      "last_login_at": "2023-01-01T00:00:00Z",
-      "locale": "en-US"
+      "email": "sarah@acme.com",
+      "first_name": "Sarah",
+      "last_name": "Johnson",
+      "status": "active"
+    },
+    {
+      "id": "507f1f77bcf86cd799439014",
+      "email": "mike@acme.com",
+      "first_name": "Mike",
+      "last_name": "Chen",
+      "status": "active"
     }
   ]
 }
@@ -430,8 +613,9 @@ Retrieves all members of a specific group.
 
 **Error Responses:**
 
+- `400 Bad Request` - Invalid group ID format
 - `404 Not Found` - Group not found
-- `403 Forbidden` - Insufficient permissions or client account access denied
+- `403 Forbidden` - Insufficient permissions or scope access denied
 - `401 Unauthorized` - Invalid access token
 
 **Example Request:**
@@ -441,19 +625,19 @@ curl -X GET "https://api.example.com/v1/groups/507f1f77bcf86cd799439012/members"
      -H "Authorization: Bearer <access_token>"
 ```
 
-### 9. Get User Groups
+### 10. Get User Groups
 
-Retrieves all groups that a user belongs to, along with their effective roles and permissions.
+Retrieves all groups that a user belongs to, along with their effective permissions from group memberships.
 
 **Endpoint:** `GET /v1/groups/users/{user_id}/groups`
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `group:read`
+**Required Permissions:** `system:group:read`
 
 **Path Parameters:**
 
-- `user_id` (required, string) - The unique identifier of the user
+- `user_id` (required, string) - The MongoDB ObjectId of the user
 
 **Response:**
 
@@ -466,31 +650,41 @@ Retrieves all groups that a user belongs to, along with their effective roles an
   "groups": [
     {
       "id": "507f1f77bcf86cd799439012",
-      "name": "Development Team",
-      "description": "Main development team group",
-      "client_account_id": "507f1f77bcf86cd799439011",
-      "roles": ["developer"],
-      "is_active": true,
-      "created_at": "2023-01-01T00:00:00Z",
-      "updated_at": "2023-01-01T00:00:00Z"
+      "name": "sales_team",
+      "display_name": "Sales Team",
+      "description": "Client sales representatives",
+      "permissions": ["client:listings:create", "client:clients:manage"],
+      "scope": "client",
+      "scope_id": "685a5f2e82e92ad29111a6a9",
+      "created_at": "2024-01-15T10:30:00Z"
+    },
+    {
+      "id": "507f1f77bcf86cd799439016",
+      "name": "project_alpha_team",
+      "display_name": "Project Alpha Team",
+      "description": "Cross-functional project team",
+      "permissions": ["client:project:alpha:read", "client:project:alpha:update"],
+      "scope": "client",
+      "scope_id": "685a5f2e82e92ad29111a6a9",
+      "created_at": "2024-01-15T11:00:00Z"
     }
   ],
-  "effective_roles": ["developer", "team_member"],
-  "effective_permissions": ["user:read", "group:read", "project:read", "project:write"]
+  "effective_permissions": ["client:listings:create", "client:clients:manage", "client:project:alpha:read", "client:project:alpha:update"]
 }
 ```
 
 **Error Responses:**
 
+- `400 Bad Request` - Invalid user ID format
 - `404 Not Found` - User not found
-- `403 Forbidden` - Insufficient permissions or client account access denied
+- `403 Forbidden` - Insufficient permissions or scope access denied
 - `401 Unauthorized` - Invalid access token
 
 **Access Control:**
 
 - Users can view their own groups
-- Admin users can view any user's groups
-- Regular users can only view group memberships within their own client account
+- Admin users can view any user's groups within their scope
+- Proper scope isolation is enforced
 
 **Example Request:**
 
@@ -503,37 +697,133 @@ curl -X GET "https://api.example.com/v1/groups/users/507f1f77bcf86cd799439013/gr
 
 ### Required Permissions by Endpoint
 
-| Endpoint                            | Method | Required Permissions                 |
-| ----------------------------------- | ------ | ------------------------------------ |
-| `/v1/groups/`                       | GET    | `group:read`                         |
-| `/v1/groups/`                       | POST   | `group:read`, `group:create`         |
-| `/v1/groups/{group_id}`             | GET    | `group:read`                         |
-| `/v1/groups/{group_id}`             | PUT    | `group:read`, `group:update`         |
-| `/v1/groups/{group_id}`             | DELETE | `group:read`, `group:delete`         |
-| `/v1/groups/{group_id}/members`     | POST   | `group:read`, `group:manage_members` |
-| `/v1/groups/{group_id}/members`     | DELETE | `group:read`, `group:manage_members` |
-| `/v1/groups/{group_id}/members`     | GET    | `group:read`                         |
-| `/v1/groups/users/{user_id}/groups` | GET    | `group:read`                         |
+| Endpoint                            | Method | Required Permissions          |
+| ----------------------------------- | ------ | ----------------------------- |
+| `/v1/groups/`                       | GET    | `system:group:read`           |
+| `/v1/groups/`                       | POST   | `system:group:create`         |
+| `/v1/groups/available`              | GET    | `system:group:read`           |
+| `/v1/groups/{group_id}`             | GET    | `system:group:read`           |
+| `/v1/groups/{group_id}`             | PUT    | `system:group:update`         |
+| `/v1/groups/{group_id}`             | DELETE | `system:group:delete`         |
+| `/v1/groups/{group_id}/members`     | POST   | `system:group:manage_members` |
+| `/v1/groups/{group_id}/members`     | DELETE | `system:group:manage_members` |
+| `/v1/groups/{group_id}/members`     | GET    | `system:group:read`           |
+| `/v1/groups/users/{user_id}/groups` | GET    | `system:group:read`           |
 
-## Client Account Access Control
+## Scope-Based Access Control
 
-### Admin Users (Main Client)
+### Super Admins
 
-- Can access and manage groups across all client accounts
+- Can access and manage groups across all scopes
 - No restrictions on group operations
 - Can view and manage any user's group memberships
 
-### Regular Users
+### Platform Admins
 
-- Can only access groups within their assigned client account
-- Cannot create groups in other client accounts
-- Cannot view or manage groups outside their client account
-- Can only view group memberships within their client account
+- Can manage groups within their platform scope only
+- Can access system groups for assignment
+- Cannot access other platform's groups
 
-### Self-Service Operations
+### Client Admins
 
-- Users can always view their own group memberships
-- Users cannot modify their own group memberships (requires `group:manage_members` permission)
+- Can manage groups within their client scope only
+- Can access system groups for assignment
+- Cannot access other client's groups
+
+### Team Members
+
+- Can view groups they belong to
+- Cannot modify group memberships (requires manage_members permission)
+- Can view their own effective permissions through groups
+
+## Data Models
+
+### GroupCreateSchema
+
+```json
+{
+  "name": "string (required)",
+  "display_name": "string (optional)",
+  "description": "string (optional)",
+  "permissions": ["string"] (required),
+  "scope": "system | platform | client (required)"
+}
+```
+
+### GroupUpdateSchema
+
+```json
+{
+  "display_name": "string (optional)",
+  "description": "string (optional)",
+  "permissions": ["string"] (optional)
+}
+```
+
+### GroupResponseSchema
+
+```json
+{
+  "id": "string (MongoDB ObjectId)",
+  "name": "string",
+  "display_name": "string",
+  "description": "string",
+  "permissions": ["string"],
+  "scope": "system | platform | client",
+  "scope_id": "string | null",
+  "created_by_user_id": "string",
+  "created_by_client_id": "string | null",
+  "created_at": "string (ISO 8601)",
+  "updated_at": "string (ISO 8601)"
+}
+```
+
+### AvailableGroupsResponseSchema
+
+```json
+{
+  "system_groups": ["GroupResponseSchema"],
+  "platform_groups": ["GroupResponseSchema"],
+  "client_groups": ["GroupResponseSchema"]
+}
+```
+
+### GroupMembershipSchema
+
+```json
+{
+  "user_ids": ["string (MongoDB ObjectId)"]
+}
+```
+
+### GroupMembersResponseSchema
+
+```json
+{
+  "group_id": "string",
+  "group_name": "string",
+  "group_scope": "string",
+  "members": [
+    {
+      "id": "string",
+      "email": "string",
+      "first_name": "string",
+      "last_name": "string",
+      "status": "string"
+    }
+  ]
+}
+```
+
+### UserGroupsResponseSchema
+
+```json
+{
+  "user_id": "string",
+  "groups": ["GroupResponseSchema"],
+  "effective_permissions": ["string"]
+}
+```
 
 ## Error Handling
 
@@ -548,109 +838,156 @@ All endpoints follow consistent error response format:
 ### Common HTTP Status Codes
 
 - `200 OK` - Request successful
-- `201 Created` - Resource created successfully
-- `204 No Content` - Request successful, no response body
+- `201 Created` - Group created or members added successfully
+- `204 No Content` - Group deleted successfully
 - `400 Bad Request` - Invalid request data or parameters
 - `401 Unauthorized` - Authentication failed
-- `403 Forbidden` - Insufficient permissions or access denied
-- `404 Not Found` - Resource not found
+- `403 Forbidden` - Insufficient permissions or scope access denied
+- `404 Not Found` - Group or user not found
+- `409 Conflict` - Group with name already exists in scope
 - `500 Internal Server Error` - Server error
 
-### Client Account Access Errors
+### Scope-Specific Error Scenarios
 
-When a user attempts to access a group outside their client account:
-
-- Returns `404 Not Found` instead of `403 Forbidden` to prevent information disclosure
-- Generic error message: "Group not found"
-
-## Data Models
-
-### Group Object
+**403 Forbidden (Scope Access):**
 
 ```json
 {
-  "id": "string",
-  "name": "string",
-  "description": "string",
-  "client_account_id": "string",
-  "roles": ["string"],
-  "is_active": true,
-  "created_at": "string (ISO 8601)",
-  "updated_at": "string (ISO 8601)"
+  "detail": "Cannot create platform groups - insufficient platform access"
 }
 ```
 
-### Group Membership Request
+**409 Conflict (Scoped Uniqueness):**
 
 ```json
 {
-  "user_ids": ["string"]
+  "detail": "Group 'sales_team' already exists in this client scope"
 }
 ```
 
-### Group Members Response
+**400 Bad Request (Permission Validation):**
 
 ```json
 {
-  "group_id": "string",
-  "group_name": "string",
-  "members": [
-    {
-      "id": "string",
-      "email": "string",
-      "first_name": "string",
-      "last_name": "string",
-      "client_account_id": "string",
-      "roles": ["string"],
-      "groups": ["string"],
-      "is_main_client": false,
-      "status": "active",
-      "created_at": "string (ISO 8601)",
-      "updated_at": "string (ISO 8601)",
-      "last_login_at": "string (ISO 8601)",
-      "locale": "string"
-    }
-  ]
-}
-```
-
-### User Groups Response
-
-```json
-{
-  "user_id": "string",
-  "groups": ["Group Object"],
-  "effective_roles": ["string"],
-  "effective_permissions": ["string"]
+  "detail": "Permission 'invalid:permission' is not valid for client scope"
 }
 ```
 
 ## Best Practices
 
-### Group Management
+### Group Design
 
-1. Use descriptive group names and descriptions
-2. Regularly audit group memberships
-3. Implement proper metadata for organizational purposes
-4. Use client account filtering for better performance
+1. **Purpose-Driven:** Create groups for specific team functions or projects
+2. **Scope Appropriately:** Use the most restrictive scope that meets needs
+3. **Permission Focus:** Assign permissions directly rather than through roles
+4. **Lifecycle Management:** Archive groups when projects complete
 
-### Security
+### Team Organization
 
-1. Always validate user permissions before group operations
-2. Implement proper error handling to prevent information disclosure
-3. Log all group membership changes for auditing
-4. Regularly review effective permissions for users
+1. **Departmental Groups:** For ongoing organizational functions (sales_team, marketing_team)
+2. **Project Groups:** For temporary cross-functional teams (project_alpha_team)
+3. **Operational Groups:** For ongoing operational functions (support_team)
+4. **Clear Naming:** Use descriptive, functional names
 
-### Performance
+### Permission Management
 
-1. Use pagination for large group lists
-2. Filter by client account when possible
-3. Consider caching frequently accessed group data
-4. Monitor group membership query performance
+1. **Direct Assignment:** Assign permissions directly to groups
+2. **Principle of Least Privilege:** Only assign necessary permissions
+3. **Regular Audits:** Review group permissions as business needs change
+4. **Documentation:** Clearly describe group purpose and permissions
 
 ### API Usage
 
-1. Handle 404 errors gracefully for missing groups
-2. Implement retry logic for transient errors
-3. Use bulk operations for adding/removing multiple users
-4. Validate user IDs before membership operations
+1. **Use Available Endpoint:** Check `/available` to get groups user can assign
+2. **Handle Scope Contexts:** Let backend auto-determine scope_id when possible
+3. **Bulk Operations:** Use bulk member add/remove for efficiency
+4. **Error Handling:** Handle scope-related 403 errors gracefully
+
+## Real-World Examples
+
+### Lead Generation Company Group Setup
+
+```bash
+# System Level: Global operational teams
+curl -X POST "https://api.example.com/v1/groups/" \
+     -d '{
+       "name": "customer_support",
+       "display_name": "Customer Support Team",
+       "permissions": ["support:tickets:read", "platform:support:all_clients"],
+       "scope": "system"
+     }'
+
+# Platform Level: RE/MAX corporate teams
+curl -X POST "https://api.example.com/v1/groups/?scope_id=remax_platform" \
+     -d '{
+       "name": "marketing_team",
+       "display_name": "RE/MAX Marketing Team",
+       "permissions": ["platform:brand:manage", "client:analytics:all_franchises"],
+       "scope": "platform"
+     }'
+
+# Client Level: Individual franchise teams
+curl -X POST "https://api.example.com/v1/groups/" \
+     -d '{
+       "name": "sales_team",
+       "display_name": "Sales Team",
+       "permissions": ["client:listings:create", "client:leads:manage"],
+       "scope": "client"
+     }'
+```
+
+### Project Team Management
+
+```bash
+# 1. Create project-specific group
+curl -X POST "https://api.example.com/v1/groups/" \
+     -d '{
+       "name": "project_alpha_team",
+       "permissions": ["client:project:alpha:read", "client:project:alpha:update"],
+       "scope": "client"
+     }'
+
+# 2. Add cross-functional team members
+curl -X POST "https://api.example.com/v1/groups/507f1f77bcf86cd799439012/members" \
+     -d '{"user_ids": ["dev_id", "designer_id", "analyst_id"]}'
+
+# 3. When project completes, remove group
+curl -X DELETE "https://api.example.com/v1/groups/507f1f77bcf86cd799439012"
+```
+
+## Integration Notes
+
+### User Permission Aggregation
+
+Groups work alongside roles to provide comprehensive permission management:
+
+```javascript
+// User effective permissions = Role permissions + Group permissions
+const userEffectivePermissions = [
+  ...permissionsFromRoles, // e.g., "user:read" from "manager" role
+  ...permissionsFromGroups, // e.g., "client:project:alpha:edit" from project group
+];
+```
+
+### Frontend Integration
+
+```javascript
+// Check user's group-based permissions
+const userPermissions = userStore.effectivePermissions;
+const userGroups = userStore.groups;
+
+// Project-specific access
+const canEditProjectAlpha = userPermissions.includes("client:project:alpha:update");
+const isProjectAlphaMember = userGroups.some((g) => g.name === "project_alpha_team");
+
+// Team-based UI
+{
+  isProjectAlphaMember && <ProjectAlphaTools />;
+}
+```
+
+### Role vs Group Strategy
+
+- **Roles:** Define "what kind of user" someone is (manager, developer, sales_rep)
+- **Groups:** Define "who works together" on specific functions/projects
+- **Combined:** Users get comprehensive permissions for their role + team responsibilities

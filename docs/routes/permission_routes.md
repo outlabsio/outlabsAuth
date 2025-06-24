@@ -2,48 +2,94 @@
 
 ## Overview
 
-The Permission Routes provide a comprehensive API for managing permissions within the authentication system. This module handles CRUD operations for permissions, which define granular access control capabilities throughout the system. Permissions use human-readable string identifiers following a structured naming convention.
+The Permission Routes provide a comprehensive API for managing scoped permissions within the three-tier authentication system. This module handles CRUD operations for permissions, which define granular access control capabilities across system, platform, and client organizational levels. Permissions use human-readable string identifiers with scope-based isolation and validation.
 
 **Base URL:** `/v1/permissions`  
 **Tags:** Permission Management
 
+## Architecture
+
+### Three-Tier Scoped Permissions
+
+Permissions are organized in a three-tier hierarchy with proper isolation:
+
+```
+SYSTEM PERMISSIONS (Global)
+├─ user:create              # Create users across any scope
+├─ platform:create          # Create new platforms
+└─ system:infrastructure    # Manage core infrastructure
+
+PLATFORM PERMISSIONS (Per Platform)
+├─ platform:analytics       # Platform-wide analytics
+├─ client_account:create     # Create client accounts
+└─ platform:support         # Cross-client support
+
+CLIENT PERMISSIONS (Per Client Organization)
+├─ client:listings:create    # Create property listings
+├─ client:users:manage       # Manage client users
+└─ client:reports:view       # View client reports
+```
+
 ## Authentication & Authorization
 
-All endpoints require authentication and specific permissions:
+All endpoints require authentication and specific scoped permissions:
 
-- **Base Permission:** `permission:read` (required for all endpoints)
+- **Base Permission:** `system:permission:read` (required for all endpoints)
 - **Additional Permissions:** Specific endpoints require additional permissions as noted below
+
+### Scope-Based Access Control
+
+- **Super Admins:** Can create/manage permissions at all scopes
+- **Platform Admins:** Can create/manage permissions within their platform only
+- **Client Admins:** Can create/manage permissions within their client only
+- **Regular Users:** Cannot create permissions
 
 ## Permission Naming Convention
 
-Permissions follow a structured naming pattern: `service:resource:action`
+Permissions follow a structured naming pattern with scope prefixes:
 
-**Examples:**
+### System Permissions
 
-- `user:read` - Read user information
-- `user:create` - Create new users
-- `group:manage_members` - Manage group memberships
-- `billing:invoice:read` - Read billing invoices
-- `admin:system:configure` - System configuration access
+- `user:create` - Create users across any scope
+- `platform:create` - Create new platforms
+- `system:infrastructure:manage` - Manage core infrastructure
+
+### Platform Permissions
+
+- `platform:analytics:view` - View platform analytics
+- `platform:support:all_clients` - Support across all platform clients
+- `client_account:create` - Create client accounts
+
+### Client Permissions
+
+- `client:listings:create` - Create listings within client
+- `client:users:manage` - Manage users within client
+- `client:reports:view` - View client-specific reports
 
 ## Endpoints
 
-### 1. Create Permission
+### 1. Create Scoped Permission
 
-Creates a new permission in the system. This endpoint is primarily used for seeding and administrative purposes.
+Creates a new permission within a specific scope with proper validation and isolation.
 
 **Endpoint:** `POST /v1/permissions/`
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `permission:read`, `permission:create`
+**Required Permissions:** `system:permission:create`
+
+**Query Parameters:**
+
+- `scope_id` (optional, string) - Platform ID or Client ID for scoped permissions (auto-determined from user context if not provided)
 
 **Request Body:**
 
 ```json
 {
-  "id": "service:resource:action",
-  "description": "Human-readable description of the permission"
+  "name": "client:listings:create",
+  "display_name": "Create Listings",
+  "description": "Allows creating new property listings",
+  "scope": "client"
 }
 ```
 
@@ -54,44 +100,79 @@ Creates a new permission in the system. This endpoint is primarily used for seed
 
 ```json
 {
-  "id": "service:resource:action",
-  "description": "Human-readable description of the permission"
+  "id": "507f1f77bcf86cd799439011",
+  "name": "client:listings:create",
+  "display_name": "Create Listings",
+  "description": "Allows creating new property listings",
+  "scope": "client",
+  "scope_id": "685a5f2e82e92ad29111a6a9",
+  "created_by_user_id": "507f1f77bcf86cd799439012",
+  "created_by_client_id": "685a5f2e82e92ad29111a6a9",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
 }
 ```
 
 **Error Responses:**
 
-- `409 Conflict` - Permission with this ID already exists
-- `403 Forbidden` - Insufficient permissions
+- `409 Conflict` - Permission with this name already exists in scope
+- `403 Forbidden` - Insufficient permissions or invalid scope access
 - `401 Unauthorized` - Invalid authentication
-- `400 Bad Request` - Invalid request data
+- `400 Bad Request` - Invalid request data or scope validation failed
 
-**Example Request:**
+**Example Requests:**
 
 ```bash
+# System permission (super admin only)
 curl -X POST "https://api.example.com/v1/permissions/" \
      -H "Authorization: Bearer <access_token>" \
      -H "Content-Type: application/json" \
      -d '{
-       "id": "billing:invoice:read",
-       "description": "Permission to read billing invoices"
+       "name": "user:create",
+       "display_name": "Create Users",
+       "description": "Create users in any scope",
+       "scope": "system"
+     }'
+
+# Platform permission
+curl -X POST "https://api.example.com/v1/permissions/?scope_id=real_estate_platform" \
+     -H "Authorization: Bearer <access_token>" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "name": "platform:analytics:view",
+       "display_name": "View Platform Analytics",
+       "description": "Access platform-wide analytics and reports",
+       "scope": "platform"
+     }'
+
+# Client permission (auto-scoped to user's client)
+curl -X POST "https://api.example.com/v1/permissions/" \
+     -H "Authorization: Bearer <access_token>" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "name": "client:listings:create",
+       "display_name": "Create Listings",
+       "description": "Create property listings within client",
+       "scope": "client"
      }'
 ```
 
-### 2. Get All Permissions
+### 2. Get Permissions with Scope Filtering
 
-Retrieves a paginated list of all permissions in the system.
+Retrieves a paginated list of permissions with optional scope filtering.
 
 **Endpoint:** `GET /v1/permissions/`
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `permission:read`
+**Required Permissions:** `system:permission:read`
 
 **Query Parameters:**
 
 - `skip` (optional, integer, default: 0, min: 0) - Number of records to skip for pagination
-- `limit` (optional, integer, default: 100, min: 1) - Maximum number of records to return
+- `limit` (optional, integer, default: 100, min: 1, max: 1000) - Maximum number of records to return
+- `scope` (optional, string) - Filter by permission scope (`system`, `platform`, `client`)
+- `scope_id` (optional, string) - Filter by specific scope ID
 
 **Response:**
 
@@ -101,16 +182,24 @@ Retrieves a paginated list of all permissions in the system.
 ```json
 [
   {
-    "id": "user:read",
-    "description": "Permission to read user information"
+    "id": "507f1f77bcf86cd799439011",
+    "name": "user:create",
+    "display_name": "Create Users",
+    "description": "Create users in any scope",
+    "scope": "system",
+    "scope_id": null,
+    "created_by_user_id": "507f1f77bcf86cd799439012",
+    "created_at": "2024-01-15T10:30:00Z"
   },
   {
-    "id": "user:create",
-    "description": "Permission to create new users"
-  },
-  {
-    "id": "billing:invoice:read",
-    "description": "Permission to read billing invoices"
+    "id": "507f1f77bcf86cd799439013",
+    "name": "client:listings:create",
+    "display_name": "Create Listings",
+    "description": "Create property listings within client",
+    "scope": "client",
+    "scope_id": "685a5f2e82e92ad29111a6a9",
+    "created_by_user_id": "507f1f77bcf86cd799439014",
+    "created_at": "2024-01-15T10:30:00Z"
   }
 ]
 ```
@@ -121,26 +210,31 @@ Retrieves a paginated list of all permissions in the system.
 - `401 Unauthorized` - Invalid authentication
 - `400 Bad Request` - Invalid query parameters
 
-**Example Request:**
+**Example Requests:**
 
 ```bash
-curl -X GET "https://api.example.com/v1/permissions/?skip=0&limit=50" \
+# Get all permissions user can view
+curl -X GET "https://api.example.com/v1/permissions/" \
+     -H "Authorization: Bearer <access_token>"
+
+# Get only client permissions for specific client
+curl -X GET "https://api.example.com/v1/permissions/?scope=client&scope_id=685a5f2e82e92ad29111a6a9" \
+     -H "Authorization: Bearer <access_token>"
+
+# Get platform permissions
+curl -X GET "https://api.example.com/v1/permissions/?scope=platform&scope_id=real_estate_platform" \
      -H "Authorization: Bearer <access_token>"
 ```
 
-### 3. Get Permission by ID
+### 3. Get Available Permissions for Assignment
 
-Retrieves a specific permission by its string identifier.
+Retrieves permissions that the current user can assign to roles or groups, grouped by scope.
 
-**Endpoint:** `GET /v1/permissions/{permission_id}`
+**Endpoint:** `GET /v1/permissions/available`
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `permission:read`
-
-**Path Parameters:**
-
-- `permission_id` (required, string) - The unique string identifier of the permission (e.g., "user:create")
+**Required Permissions:** `system:permission:read`
 
 **Response:**
 
@@ -149,61 +243,264 @@ Retrieves a specific permission by its string identifier.
 
 ```json
 {
-  "id": "user:create",
-  "description": "Permission to create new users"
+  "system_permissions": [
+    {
+      "id": "507f1f77bcf86cd799439011",
+      "name": "user:read",
+      "display_name": "Read Users",
+      "description": "View user information",
+      "scope": "system",
+      "scope_id": null
+    }
+  ],
+  "platform_permissions": [
+    {
+      "id": "507f1f77bcf86cd799439012",
+      "name": "platform:analytics:view",
+      "display_name": "View Platform Analytics",
+      "description": "Access platform-wide analytics",
+      "scope": "platform",
+      "scope_id": "real_estate_platform"
+    }
+  ],
+  "client_permissions": [
+    {
+      "id": "507f1f77bcf86cd799439013",
+      "name": "client:listings:create",
+      "display_name": "Create Listings",
+      "description": "Create property listings",
+      "scope": "client",
+      "scope_id": "685a5f2e82e92ad29111a6a9"
+    },
+    {
+      "id": "507f1f77bcf86cd799439014",
+      "name": "client:leads:assign",
+      "display_name": "Assign Leads",
+      "description": "Assign leads to sales representatives",
+      "scope": "client",
+      "scope_id": "685a5f2e82e92ad29111a6a9"
+    }
+  ]
 }
 ```
 
 **Error Responses:**
 
-- `404 Not Found` - Permission not found
 - `403 Forbidden` - Insufficient permissions
 - `401 Unauthorized` - Invalid authentication
 
 **Example Request:**
 
 ```bash
-curl -X GET "https://api.example.com/v1/permissions/user:create" \
+curl -X GET "https://api.example.com/v1/permissions/available" \
      -H "Authorization: Bearer <access_token>"
 ```
 
-## Permission Categories
+### 4. Get Permission by ID
 
-### Core System Permissions
+Retrieves a specific permission by its MongoDB ObjectId.
+
+**Endpoint:** `GET /v1/permissions/{permission_id}`
+
+**Authentication Required:** Yes (Access Token)
+
+**Required Permissions:** `system:permission:read`
+
+**Path Parameters:**
+
+- `permission_id` (required, string) - The MongoDB ObjectId of the permission
+
+**Response:**
+
+- **Status Code:** `200 OK`
+- **Response Body:**
+
+```json
+{
+  "id": "507f1f77bcf86cd799439011",
+  "name": "client:listings:create",
+  "display_name": "Create Listings",
+  "description": "Create property listings within client",
+  "scope": "client",
+  "scope_id": "685a5f2e82e92ad29111a6a9",
+  "created_by_user_id": "507f1f77bcf86cd799439012",
+  "created_by_client_id": "685a5f2e82e92ad29111a6a9",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
+}
+```
+
+**Error Responses:**
+
+- `404 Not Found` - Permission not found or not accessible by user
+- `403 Forbidden` - Insufficient permissions
+- `401 Unauthorized` - Invalid authentication
+- `400 Bad Request` - Invalid permission ID format
+
+**Example Request:**
+
+```bash
+curl -X GET "https://api.example.com/v1/permissions/507f1f77bcf86cd799439011" \
+     -H "Authorization: Bearer <access_token>"
+```
+
+### 5. Update Permission
+
+Updates an existing permission's information.
+
+**Endpoint:** `PUT /v1/permissions/{permission_id}`
+
+**Authentication Required:** Yes (Access Token)
+
+**Required Permissions:** `system:permission:update`
+
+**Path Parameters:**
+
+- `permission_id` (required, string) - The MongoDB ObjectId of the permission
+
+**Request Body:**
+
+```json
+{
+  "display_name": "Create Property Listings",
+  "description": "Updated description for creating property listings"
+}
+```
+
+**Response:**
+
+- **Status Code:** `200 OK`
+- **Response Body:**
+
+```json
+{
+  "id": "507f1f77bcf86cd799439011",
+  "name": "client:listings:create",
+  "display_name": "Create Property Listings",
+  "description": "Updated description for creating property listings",
+  "scope": "client",
+  "scope_id": "685a5f2e82e92ad29111a6a9",
+  "created_by_user_id": "507f1f77bcf86cd799439012",
+  "created_by_client_id": "685a5f2e82e92ad29111a6a9",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T12:30:00Z"
+}
+```
+
+**Error Responses:**
+
+- `404 Not Found` - Permission not found
+- `403 Forbidden` - Insufficient permissions or scope access denied
+- `401 Unauthorized` - Invalid authentication
+- `400 Bad Request` - Invalid request data
+
+**Example Request:**
+
+```bash
+curl -X PUT "https://api.example.com/v1/permissions/507f1f77bcf86cd799439011" \
+     -H "Authorization: Bearer <access_token>" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "display_name": "Create Property Listings",
+       "description": "Updated description for creating property listings"
+     }'
+```
+
+### 6. Delete Permission
+
+Deletes a permission from the system.
+
+**Endpoint:** `DELETE /v1/permissions/{permission_id}`
+
+**Authentication Required:** Yes (Access Token)
+
+**Required Permissions:** `system:permission:delete`
+
+**Path Parameters:**
+
+- `permission_id` (required, string) - The MongoDB ObjectId of the permission
+
+**Response:**
+
+- **Status Code:** `204 No Content`
+
+**Error Responses:**
+
+- `404 Not Found` - Permission not found
+- `403 Forbidden` - Insufficient permissions or scope access denied
+- `401 Unauthorized` - Invalid authentication
+
+**Example Request:**
+
+```bash
+curl -X DELETE "https://api.example.com/v1/permissions/507f1f77bcf86cd799439011" \
+     -H "Authorization: Bearer <access_token>"
+```
+
+## Scope-Based Permission Categories
+
+### System Permissions (Global)
+
+**Core Authentication:**
+
+- `user:create` - Create users across any scope
+- `user:read` - View users across any scope
+- `user:update` - Update users across any scope
+- `user:delete` - Delete users across any scope
+
+**Platform Management:**
+
+- `platform:create` - Create new platform instances
+- `platform:read` - View platform information
+- `platform:update` - Update platform settings
+- `platform:delete` - Delete platforms
+
+**Infrastructure:**
+
+- `system:infrastructure:manage` - Full infrastructure access
+- `system:monitoring:view` - View system monitoring
+- `system:logs:read` - Access system logs
+
+### Platform Permissions (Per Platform)
+
+**Analytics & Reporting:**
+
+- `platform:analytics:view` - View platform-wide analytics
+- `platform:reports:create` - Create platform reports
+- `platform:dashboard:manage` - Manage platform dashboards
+
+**Client Management:**
+
+- `client_account:create` - Create client accounts
+- `client_account:read` - View client accounts
+- `client_account:update` - Update client accounts
+- `client_account:delete` - Delete client accounts
+
+**Support:**
+
+- `platform:support:all_clients` - Support across all platform clients
+- `platform:support:escalate` - Escalate support tickets
+
+### Client Permissions (Per Client Organization)
+
+**Business Operations:**
+
+- `client:listings:create` - Create property listings
+- `client:listings:update` - Update listings
+- `client:listings:delete` - Delete listings
+- `client:leads:assign` - Assign leads to agents
 
 **User Management:**
 
-- `user:read` - View user information
-- `user:create` - Create new users
-- `user:update` - Update user information
-- `user:delete` - Delete users
+- `client:users:manage` - Manage users within client
+- `client:roles:assign` - Assign roles within client
+- `client:groups:manage` - Manage groups within client
 
-**Group Management:**
+**Reporting:**
 
-- `group:read` - View groups
-- `group:create` - Create new groups
-- `group:update` - Update group information
-- `group:delete` - Delete groups
-- `group:manage_members` - Add/remove group members
-
-**Permission Management:**
-
-- `permission:read` - View permissions
-- `permission:create` - Create new permissions
-
-**Client Account Management:**
-
-- `client_account:read` - View client accounts
-- `client_account:create` - Create new client accounts
-- `client_account:update` - Update client account information
-- `client_account:delete` - Delete client accounts
-
-**Role Management:**
-
-- `role:read` - View roles
-- `role:create` - Create new roles
-- `role:update` - Update role information
-- `role:delete` - Delete roles
+- `client:reports:view` - View client-specific reports
+- `client:analytics:access` - Access client analytics
+- `client:metrics:export` - Export client metrics
 
 ## Data Models
 
@@ -211,22 +508,46 @@ curl -X GET "https://api.example.com/v1/permissions/user:create" \
 
 ```json
 {
-  "id": "string (required, unique)",
-  "description": "string (optional)"
+  "name": "string (required)",
+  "display_name": "string (optional)",
+  "description": "string (optional)",
+  "scope": "system | platform | client (required)"
 }
 ```
 
-**Field Constraints:**
+### PermissionUpdateSchema
 
-- `id`: Must be a unique string identifier, recommended format: `service:resource:action`
-- `description`: Optional human-readable description
+```json
+{
+  "display_name": "string (optional)",
+  "description": "string (optional)"
+}
+```
 
 ### PermissionResponseSchema
 
 ```json
 {
-  "id": "string",
-  "description": "string"
+  "id": "string (MongoDB ObjectId)",
+  "name": "string",
+  "display_name": "string",
+  "description": "string",
+  "scope": "system | platform | client",
+  "scope_id": "string | null",
+  "created_by_user_id": "string",
+  "created_by_client_id": "string | null",
+  "created_at": "string (ISO 8601)",
+  "updated_at": "string (ISO 8601)"
+}
+```
+
+### AvailablePermissionsResponseSchema
+
+```json
+{
+  "system_permissions": ["PermissionResponseSchema"],
+  "platform_permissions": ["PermissionResponseSchema"],
+  "client_permissions": ["PermissionResponseSchema"]
 }
 ```
 
@@ -244,27 +565,36 @@ All endpoints follow consistent error response format:
 
 - `200 OK` - Request successful
 - `201 Created` - Permission created successfully
+- `204 No Content` - Permission deleted successfully
 - `400 Bad Request` - Invalid request data or parameters
 - `401 Unauthorized` - Authentication failed
-- `403 Forbidden` - Insufficient permissions
+- `403 Forbidden` - Insufficient permissions or scope access denied
 - `404 Not Found` - Permission not found
-- `409 Conflict` - Permission with ID already exists
+- `409 Conflict` - Permission with name already exists in scope
 
-### Specific Error Scenarios
+### Scope-Specific Error Scenarios
 
-**409 Conflict (Permission Creation):**
+**403 Forbidden (Scope Access):**
 
 ```json
 {
-  "detail": "Permission with ID 'user:create' already exists."
+  "detail": "Cannot create platform permissions - insufficient platform access"
 }
 ```
 
-**404 Not Found (Permission Retrieval):**
+**409 Conflict (Scoped Uniqueness):**
 
 ```json
 {
-  "detail": "Permission with ID 'nonexistent:permission' not found."
+  "detail": "Permission 'client:listings:create' already exists in this client scope"
+}
+```
+
+**400 Bad Request (Scope Validation):**
+
+```json
+{
+  "detail": "scope_id required for platform and client permissions"
 }
 ```
 
@@ -272,88 +602,89 @@ All endpoints follow consistent error response format:
 
 ### Permission Design
 
-1. **Consistent Naming:** Use the `service:resource:action` pattern consistently
-2. **Granular Control:** Create specific permissions rather than broad ones
-3. **Descriptive IDs:** Use clear, self-explanatory permission identifiers
-4. **Documentation:** Always provide meaningful descriptions
+1. **Scope Appropriately:** Use the most restrictive scope that meets business needs
+2. **Consistent Naming:** Follow naming conventions within each scope
+3. **Granular Control:** Create specific permissions rather than broad ones
+4. **Business Alignment:** Match permissions to actual business processes
+
+### Scope Management
+
+1. **System Permissions:** Only for truly global capabilities
+2. **Platform Permissions:** For cross-client platform features
+3. **Client Permissions:** For organization-specific business logic
+4. **Avoid Scope Creep:** Don't make client permissions when platform would suffice
 
 ### API Usage
 
-1. **Pagination:** Use appropriate `skip` and `limit` values for large permission lists
-2. **Error Handling:** Handle 409 conflicts gracefully when creating permissions
-3. **Caching:** Consider caching permission lists as they change infrequently
-4. **Validation:** Validate permission IDs against your naming convention
+1. **Use Available Endpoint:** Check `/available` to get permissions user can assign
+2. **Handle Scope Contexts:** Let backend auto-determine scope_id when possible
+3. **Filter Appropriately:** Use scope and scope_id filters for performance
+4. **Error Handling:** Handle scope-related 403 errors gracefully
 
 ### Security Considerations
 
-1. **Access Control:** Ensure only authorized users can create/manage permissions
-2. **Audit Logging:** Log all permission creation and modification events
-3. **Regular Review:** Periodically review permissions for relevance and security
-4. **Principle of Least Privilege:** Grant only necessary permissions
+1. **Scope Isolation:** Ensure permissions are properly isolated by scope
+2. **Validation:** Validate scope_id matches user's access context
+3. **Audit Logging:** Log all permission creation and modification events
+4. **Regular Review:** Audit permissions within each scope periodically
 
-## Usage Examples
+## Real-World Examples
 
-### Creating Permissions for a New Feature
+### Lead Generation Company Permission Setup
 
 ```bash
-# Create read permission
+# System Level: Core auth permissions
 curl -X POST "https://api.example.com/v1/permissions/" \
-     -H "Authorization: Bearer <access_token>" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "id": "reports:financial:read",
-       "description": "Permission to view financial reports"
-     }'
+     -d '{"name": "user:create", "scope": "system"}'
 
-# Create write permission
+# Platform Level: RE/MAX corporate permissions
+curl -X POST "https://api.example.com/v1/permissions/?scope_id=remax_platform" \
+     -d '{"name": "platform:brand:manage", "scope": "platform"}'
+
+# Client Level: Individual franchise permissions
 curl -X POST "https://api.example.com/v1/permissions/" \
-     -H "Authorization: Bearer <access_token>" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "id": "reports:financial:create",
-       "description": "Permission to create financial reports"
-     }'
+     -d '{"name": "client:listings:create", "scope": "client"}'
 ```
 
-### Retrieving All Permissions with Pagination
+### Permission Assignment Workflow
 
 ```bash
-# Get first 25 permissions
-curl -X GET "https://api.example.com/v1/permissions/?limit=25" \
-     -H "Authorization: Bearer <access_token>"
+# 1. Check available permissions for role assignment
+curl -X GET "https://api.example.com/v1/permissions/available"
 
-# Get next 25 permissions
-curl -X GET "https://api.example.com/v1/permissions/?skip=25&limit=25" \
-     -H "Authorization: Bearer <access_token>"
+# 2. Create business-specific permission
+curl -X POST "https://api.example.com/v1/permissions/" \
+     -d '{"name": "client:commissions:calculate", "scope": "client"}'
+
+# 3. Assign to role or group (handled by role/group APIs)
 ```
 
 ## Integration Notes
 
-### Role Assignment
+### Role & Group Assignment
 
-Permissions created through this API can be assigned to roles, which are then assigned to users or groups. The permission system supports:
+Permissions created through this API are assigned to users through:
 
-- Direct role assignment to users
-- Role inheritance through group membership
-- Effective permission calculation combining direct and inherited permissions
+- **Roles:** Template-based permission packages for user types
+- **Groups:** Team-based permission packages for collaboration
+- **Aggregation:** Users receive combined permissions from both sources
 
 ### Access Control Validation
 
-The system uses these permissions for:
+The system uses scoped permissions for:
 
-- API endpoint access control (via `has_permission` dependency)
-- UI feature visibility
-- Resource-level access restrictions
-- Administrative function authorization
+- API endpoint access control with scope awareness
+- UI feature visibility based on user's scope context
+- Resource-level access restrictions with tenant isolation
+- Multi-tier organizational authorization
 
-## Rate Limiting
+### Frontend Integration
 
-Permission endpoints are subject to standard rate limiting policies. Excessive requests may result in `429 Too Many Requests` responses.
+```javascript
+// Check user's effective permissions (includes scope context)
+const userPermissions = userStore.effectivePermissions;
 
-## Dependencies
-
-This module depends on:
-
-- `permission_service`: Business logic for permission operations
-- `has_permission`: Authorization dependency for permission checking
-- Authentication middleware for token validation
+const canCreateListings = userPermissions.includes("client:listings:create");
+const canViewPlatformAnalytics = userPermissions.includes("platform:analytics:view");
+const canManageUsers = userPermissions.includes("user:create");
+```
