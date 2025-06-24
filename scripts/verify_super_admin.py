@@ -6,10 +6,14 @@ This script verifies that the super admin user (Andrew) was created correctly
 and has all the necessary permissions and roles.
 
 Usage:
-    python verify_super_admin.py
+    python verify_super_admin.py [--db DATABASE_NAME] [--test]
+    
+    --db DATABASE_NAME    Specify the database name to verify
+    --test               Use the test database (outlabsAuth_test)
 """
 
 import asyncio
+import argparse
 import os
 import sys
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -28,12 +32,12 @@ from api.models.group_model import GroupModel
 
 # Configuration
 MONGO_URL = os.getenv("DATABASE_URL", "mongodb://localhost:27017")
-DB_NAME = os.getenv("MONGO_DATABASE", "outlabsAuth")
+DEFAULT_DB_NAME = os.getenv("MONGO_DATABASE", "outlabsAuth")
 SUPER_ADMIN_EMAIL = "system@outlabs.io"
 
-async def initialize_database(client):
+async def initialize_database(client, db_name):
     """Initialize Beanie with the database."""
-    db = client[DB_NAME]
+    db = client[db_name]
 
     await init_beanie(
         database=db,
@@ -82,8 +86,8 @@ async def verify_super_admin():
     print(f"   Status: {user.status}")
 
     # Check user details
-    if user.first_name != "Andrew":
-        warnings.append(f"⚠️  First name is '{user.first_name}', expected 'Andrew'")
+    if user.first_name != "Outlabs":
+        warnings.append(f"⚠️  First name is '{user.first_name}', expected 'Outlabs'")
 
     if user.last_name not in ["System", ""]:
         warnings.append(f"⚠️  Last name is '{user.last_name}', expected 'System'")
@@ -96,17 +100,17 @@ async def verify_super_admin():
 
     # Check roles
     print(f"\n📋 User Roles: {user.roles}")
-    if "platform_admin" not in user.roles:
-        issues.append("❌ User does not have 'platform_admin' role")
+    if "super_admin" not in user.roles:
+        issues.append("❌ User does not have 'super_admin' role")
     else:
-        print("✅ Platform admin role assigned")
+        print("✅ Super admin role assigned")
 
-    # Check platform_admin role exists and has permissions
-    platform_admin_role = await RoleModel.find_one(RoleModel.id == "platform_admin")
-    if not platform_admin_role:
-        issues.append("❌ Platform admin role not found in database")
+    # Check super_admin role exists and has permissions
+    super_admin_role = await RoleModel.find_one(RoleModel.name == "super_admin")
+    if not super_admin_role:
+        issues.append("❌ Super admin role not found in database")
     else:
-        print(f"✅ Platform admin role found with {len(platform_admin_role.permissions)} permissions")
+        print(f"✅ Super admin role found with {len(super_admin_role.permissions)} permissions")
 
         # Check if role has essential permissions
         essential_perms = [
@@ -118,13 +122,13 @@ async def verify_super_admin():
 
         missing_perms = []
         for perm in essential_perms:
-            if perm not in platform_admin_role.permissions:
+            if perm not in super_admin_role.permissions:
                 missing_perms.append(perm)
 
         if missing_perms:
-            issues.append(f"❌ Platform admin role missing permissions: {missing_perms}")
+            issues.append(f"❌ Super admin role missing permissions: {missing_perms}")
         else:
-            print("✅ Platform admin role has all essential permissions")
+            print("✅ Super admin role has all essential permissions")
 
     # Check client account
     if user.client_account:
@@ -174,11 +178,11 @@ async def test_database_connection():
         print(f"❌ Database connection failed: {str(e)}")
         return None
 
-async def main():
+async def main(db_name=DEFAULT_DB_NAME):
     """Main verification function."""
     print("🔍 SUPER ADMIN VERIFICATION")
     print("=" * 50)
-    print(f"Database: {DB_NAME}")
+    print(f"Database: {db_name}")
     print(f"Email: {SUPER_ADMIN_EMAIL}")
     print("=" * 50)
 
@@ -190,7 +194,7 @@ async def main():
 
     try:
         # Initialize database
-        await initialize_database(client)
+        await initialize_database(client, db_name)
         print("✅ Database initialized")
 
         # Run verification
@@ -244,7 +248,24 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        parser = argparse.ArgumentParser(description="Verify super admin configuration")
+        parser.add_argument(
+            "--db",
+            type=str,
+            default=DEFAULT_DB_NAME,
+            help=f"Specify the database name to verify. Defaults to '{DEFAULT_DB_NAME}'."
+        )
+        parser.add_argument(
+            "--test",
+            action="store_true",
+            help="Use the test database (outlabsAuth_test). Shortcut for --db outlabsAuth_test"
+        )
+        args = parser.parse_args()
+
+        # Determine target database
+        target_db = "outlabsAuth_test" if args.test else args.db
+
+        asyncio.run(main(target_db))
     except KeyboardInterrupt:
         print("\n❌ Verification cancelled by user")
         sys.exit(1)

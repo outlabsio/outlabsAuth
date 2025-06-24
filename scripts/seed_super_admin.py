@@ -40,15 +40,34 @@ SUPER_ADMIN_EMAIL = "system@outlabs.io"
 SUPER_ADMIN_FIRST_NAME = "Outlabs"
 SUPER_ADMIN_LAST_NAME = "System"
 
-# Default Client Organization Details
-DEFAULT_ORG_NAME = "Qdarte"
-DEFAULT_ORG_DESCRIPTION = "Default client organization"
-DEFAULT_CLIENT_ADMIN_EMAIL = "system@qdarte.com"
-DEFAULT_CLIENT_ADMIN_FIRST_NAME = "System"
-DEFAULT_CLIENT_ADMIN_LAST_NAME = "Admin"
+# Qdarte Platform Details (serves as both platform and primary client)
+QDARTE_ORG_NAME = "Qdarte"
+QDARTE_ORG_DESCRIPTION = "Qdarte platform for real estate management"
+
+# Platform Admin Details (same as Qdarte since Qdarte is the platform)
+PLATFORM_ADMIN_EMAIL = "admin@qdarte.com"
+PLATFORM_ADMIN_FIRST_NAME = "Qdarte" 
+PLATFORM_ADMIN_LAST_NAME = "Admin"
+
+# Optional PropertyHub Client Details (only created with --propertyhub flag)
+PROPERTYHUB_CLIENT_EMAIL = "admin@propertyhub.com"
+PROPERTYHUB_CLIENT_FIRST_NAME = "PropertyHub"
+PROPERTYHUB_CLIENT_LAST_NAME = "Admin"
+
+# Qdarte Platform Account (this is the platform level)
+QDARTE_PLATFORM_ACCOUNT = ClientAccountCreateSchema(
+    name="Qdarte Platform",
+    description="Qdarte platform for real estate management and client onboarding"
+)
+
+# Optional PropertyHub Client Account (client of Qdarte platform)
+PROPERTYHUB_CLIENT_ACCOUNT = ClientAccountCreateSchema(
+    name="PropertyHub Real Estate",
+    description="PropertyHub real estate company - client of Qdarte platform"
+)
 
 # --- Essential Data Definitions ---
-ESSENTIAL_PERMISSIONS = [
+ESSENTIAL_SYSTEM_PERMISSIONS = [
     # System-level permissions (global)
     PermissionCreateSchema(name="user:create", display_name="Create Users", description="Allows creating a single user.", scope="system"),
     PermissionCreateSchema(name="user:read", display_name="Read Users", description="Allows reading user information.", scope="system"),
@@ -66,15 +85,18 @@ ESSENTIAL_PERMISSIONS = [
     PermissionCreateSchema(name="client_account:read", display_name="Read Client Accounts", description="Allows reading client account information.", scope="system"),
     PermissionCreateSchema(name="client_account:update", display_name="Update Client Accounts", description="Allows updating a client account.", scope="system"),
     PermissionCreateSchema(name="client_account:delete", display_name="Delete Client Accounts", description="Allows deleting a client account.", scope="system"),
-    # Platform-scoped permissions for hierarchical multi-platform tenancy
-    PermissionCreateSchema(name="client_account:create_sub", display_name="Create Sub-Clients", description="Allows creating sub-clients within platform scope.", scope="platform"),
-    PermissionCreateSchema(name="client_account:read_platform", display_name="Read Platform Clients", description="Allows reading all clients within platform scope.", scope="platform"),
-    PermissionCreateSchema(name="client_account:read_created", display_name="Read Created Clients", description="Allows reading only clients you created.", scope="platform"),
     PermissionCreateSchema(name="group:create", display_name="Create Groups", description="Allows creating a group.", scope="system"),
     PermissionCreateSchema(name="group:read", display_name="Read Groups", description="Allows reading group information.", scope="system"),
     PermissionCreateSchema(name="group:update", display_name="Update Groups", description="Allows updating a group.", scope="system"),
     PermissionCreateSchema(name="group:delete", display_name="Delete Groups", description="Allows deleting a group.", scope="system"),
     PermissionCreateSchema(name="group:manage_members", display_name="Manage Group Members", description="Allows adding/removing members from groups.", scope="system"),
+]
+
+# Platform-scoped permissions (will be created with platform ID)
+ESSENTIAL_PLATFORM_PERMISSIONS = [
+    PermissionCreateSchema(name="client_account:create_sub", display_name="Create Sub-Clients", description="Allows creating sub-clients within platform scope.", scope="platform"),
+    PermissionCreateSchema(name="client_account:read_platform", display_name="Read Platform Clients", description="Allows reading all clients within platform scope.", scope="platform"),
+    PermissionCreateSchema(name="client_account:read_created", display_name="Read Created Clients", description="Allows reading only clients you created.", scope="platform"),
 ]
 
 def get_super_admin_role():
@@ -179,12 +201,13 @@ async def initialize_beanie(db):
 
 async def ensure_permissions_exist():
     """
-    Ensure all essential permissions exist in the database.
+    Ensure all essential SYSTEM permissions exist in the database.
+    Platform permissions will be created separately with platform IDs.
     """
-    print("Ensuring essential permissions exist...")
+    print("Ensuring essential system permissions exist...")
     created_count = 0
 
-    for perm_data in ESSENTIAL_PERMISSIONS:
+    for perm_data in ESSENTIAL_SYSTEM_PERMISSIONS:
         # Check if permission exists by querying directly
         existing_perm = await PermissionModel.find_one(
             PermissionModel.name == perm_data.name,
@@ -205,7 +228,42 @@ async def ensure_permissions_exist():
         else:
             print(f"  - Permission already exists: {perm_data.name} (scope: {perm_data.scope})")
 
-    print(f"Permissions check complete. Created {created_count} new permissions.")
+    print(f"System permissions check complete. Created {created_count} new permissions.")
+    return created_count
+
+
+async def ensure_platform_permissions_exist(platform_id: str):
+    """
+    Ensure all essential PLATFORM permissions exist for a specific platform.
+    """
+    print(f"Ensuring essential platform permissions exist for platform {platform_id}...")
+    created_count = 0
+
+    for perm_data in ESSENTIAL_PLATFORM_PERMISSIONS:
+        # Check if permission exists by querying directly
+        existing_perm = await PermissionModel.find_one(
+            PermissionModel.name == perm_data.name,
+            PermissionModel.scope == perm_data.scope,
+            PermissionModel.scope_id == platform_id
+        )
+        if not existing_perm:
+            try:
+                # Create platform-scoped permission with platform ID as scope_id
+                perm_data_with_id = perm_data.model_copy()
+                await permission_service.create_permission(
+                    perm_data_with_id,
+                    current_user_id="system_seed",
+                    current_client_id=None,
+                    scope_id=platform_id  # Use scope_id instead of platform_id
+                )
+                created_count += 1
+                print(f"  ✓ Created platform permission: {perm_data.name} (platform: {platform_id})")
+            except Exception as e:
+                print(f"  ❌ Failed to create platform permission {perm_data.name}: {e}")
+        else:
+            print(f"  - Platform permission already exists: {perm_data.name} (platform: {platform_id})")
+
+    print(f"Platform permissions check complete. Created {created_count} new permissions.")
     return created_count
 
 
@@ -217,9 +275,9 @@ async def ensure_essential_roles_exist():
     created_count = 0
     updated_count = 0
 
-    # Get actual permission IDs from database
+    # Get actual permission IDs from database (SYSTEM permissions)
     actual_permission_ids = []
-    for perm_data in ESSENTIAL_PERMISSIONS:
+    for perm_data in ESSENTIAL_SYSTEM_PERMISSIONS:
         perm = await PermissionModel.find_one(
             PermissionModel.name == perm_data.name,
             PermissionModel.scope == perm_data.scope,
@@ -227,6 +285,17 @@ async def ensure_essential_roles_exist():
         )
         if perm:
             actual_permission_ids.append(str(perm.id))
+
+    # Get platform permission IDs (these are scoped to the platform)
+    platform_permission_ids = []
+    for perm_data in ESSENTIAL_PLATFORM_PERMISSIONS:
+        # Find platform permissions for any platform (we'll use the first one we find)
+        perm = await PermissionModel.find_one(
+            PermissionModel.name == perm_data.name,
+            PermissionModel.scope == perm_data.scope
+        )
+        if perm:
+            platform_permission_ids.append(str(perm.id))
 
     # Create super admin role with actual permission IDs
     super_admin_role = get_super_admin_role()
@@ -261,6 +330,28 @@ async def ensure_essential_roles_exist():
             client_admin_permission_ids.append(str(perm.id))
     
     CLIENT_ADMIN_ROLE.permissions = client_admin_permission_ids
+
+    # Get PLATFORM_ADMIN_ROLE permission IDs (includes both system and platform permissions)
+    platform_admin_permission_names = [
+        "user:create", "user:read", "user:update", "user:delete", "user:add_member", "user:bulk_create",
+        "role:create", "role:read", "role:update", "role:delete",
+        "permission:create", "permission:read",
+        "client_account:create", "client_account:read", "client_account:update", "client_account:delete",
+        "group:create", "group:read", "group:update", "group:delete", "group:manage_members"
+    ]
+    platform_admin_permission_ids = []
+    for perm_name in platform_admin_permission_names:
+        perm = await PermissionModel.find_one(
+            PermissionModel.name == perm_name,
+            PermissionModel.scope == "system",
+            PermissionModel.scope_id == None
+        )
+        if perm:
+            platform_admin_permission_ids.append(str(perm.id))
+    
+    # Add platform-specific permissions to platform admin
+    platform_admin_permission_ids.extend(platform_permission_ids)
+    PLATFORM_ADMIN_ROLE.permissions = platform_admin_permission_ids
 
     essential_roles = [super_admin_role, CLIENT_ADMIN_ROLE, PLATFORM_ADMIN_ROLE]
     
@@ -417,21 +508,50 @@ async def ensure_default_client_account_exists():
         return default_account, False
 
 
-async def create_or_update_default_client_admin(client_account_id):
+async def ensure_qdarte_platform_account_exists():
     """
-    Create or update the default client admin user.
+    Ensure the Qdarte platform account exists.
     """
-    print(f"Creating/updating default client admin user: {DEFAULT_CLIENT_ADMIN_EMAIL}")
+    print(f"Ensuring Qdarte platform account exists: {QDARTE_PLATFORM_ACCOUNT.name}")
+
+    # Check if an account with this name already exists
+    existing_accounts = await client_account_service.get_client_accounts()
+    platform_account = None
+
+    for account in existing_accounts:
+        if account.name == QDARTE_PLATFORM_ACCOUNT.name:
+            platform_account = account
+            break
+
+    if not platform_account:
+        platform_account = await client_account_service.create_client_account(QDARTE_PLATFORM_ACCOUNT)
+        print(f"  ✓ Created Qdarte platform account with ID: {platform_account.id}")
+        return platform_account, True
+    else:
+        print(f"  - Qdarte platform account already exists with ID: {platform_account.id}")
+        return platform_account, False
+
+
+async def create_or_update_qdarte_admin(client_account_id):
+    """
+    Create or update the Qdarte platform admin user (platform level only).
+    """
+    print(f"Creating/updating Qdarte platform admin user: {PLATFORM_ADMIN_EMAIL}")
 
     # Check if the user already exists
-    existing_user = await user_service.get_user_by_email(DEFAULT_CLIENT_ADMIN_EMAIL)
+    existing_user = await user_service.get_user_by_email(PLATFORM_ADMIN_EMAIL)
 
     if existing_user:
-        print(f"  - Client admin user already exists with ID: {existing_user.id}")
+        print(f"  - Qdarte platform admin user already exists with ID: {existing_user.id}")
 
         # Update user to ensure they have the correct role and client account
-        if "client_admin" not in existing_user.roles:
-            existing_user.roles.append("client_admin")
+        if "platform_admin" not in existing_user.roles:
+            existing_user.roles.append("platform_admin")
+
+        # Remove client_admin role if it exists (fixing previous confusion)
+        if "client_admin" in existing_user.roles:
+            existing_user.roles.remove("client_admin")
+            print(f"  ✓ Removed client_admin role (platform admin should only have platform_admin)")
 
         # Update client account if it's different
         current_client_id = str(existing_user.client_account.ref.id) if hasattr(existing_user.client_account, 'ref') else str(existing_user.client_account.id)
@@ -442,40 +562,112 @@ async def create_or_update_default_client_admin(client_account_id):
         existing_user.is_main_client = True
         await existing_user.save()
 
-        print(f"  ✓ Updated client admin user")
+        print(f"  ✓ Updated Qdarte platform admin user")
         return existing_user, ADMIN_PASSWORD
 
     else:
-        # Create new client admin user
-        client_admin_data = UserCreateSchema(
-            email=DEFAULT_CLIENT_ADMIN_EMAIL,
+        # Create new Qdarte platform admin user with only platform_admin role
+        qdarte_admin_data = UserCreateSchema(
+            email=PLATFORM_ADMIN_EMAIL,
             password=ADMIN_PASSWORD,
-            first_name=DEFAULT_CLIENT_ADMIN_FIRST_NAME,
-            last_name=DEFAULT_CLIENT_ADMIN_LAST_NAME,
-            is_main_client=True,  # This makes them the main admin for their org
-            roles=["client_admin"],  # Standard client admin role
+            first_name=PLATFORM_ADMIN_FIRST_NAME,
+            last_name=PLATFORM_ADMIN_LAST_NAME,
+            is_main_client=True,  # This makes them the main admin for their platform
+            roles=["platform_admin"],  # Only platform admin role
             client_account_id=str(client_account_id)
         )
 
-        client_admin_user = await user_service.create_user(client_admin_data)
-        print(f"  ✓ Created client admin user with ID: {client_admin_user.id}")
+        qdarte_admin_user = await user_service.create_user(qdarte_admin_data)
+        print(f"  ✓ Created Qdarte platform admin user with ID: {qdarte_admin_user.id}")
 
-        return client_admin_user, ADMIN_PASSWORD
+        return qdarte_admin_user, ADMIN_PASSWORD
 
 
-async def seed_complete_system(db_name: str = DEFAULT_DB_NAME):
+async def create_or_update_propertyhub_client(platform_account_id):
+    """
+    Create or update the PropertyHub client account and admin user.
+    This is optional and only created when --propertyhub flag is passed.
+    """
+    print(f"Creating PropertyHub client account as client of Qdarte platform...")
+
+    # Check if PropertyHub client account already exists
+    existing_accounts = await client_account_service.get_client_accounts()
+    propertyhub_account = None
+
+    for account in existing_accounts:
+        if account.name == PROPERTYHUB_CLIENT_ACCOUNT.name:
+            propertyhub_account = account
+            break
+
+    if not propertyhub_account:
+        propertyhub_account = await client_account_service.create_client_account(PROPERTYHUB_CLIENT_ACCOUNT)
+        print(f"  ✓ Created PropertyHub client account with ID: {propertyhub_account.id}")
+    else:
+        print(f"  - PropertyHub client account already exists with ID: {propertyhub_account.id}")
+
+    # Create PropertyHub admin user
+    print(f"Creating/updating PropertyHub admin user: {PROPERTYHUB_CLIENT_EMAIL}")
+
+    existing_user = await user_service.get_user_by_email(PROPERTYHUB_CLIENT_EMAIL)
+
+    if existing_user:
+        print(f"  - PropertyHub admin user already exists with ID: {existing_user.id}")
+
+        # Update user to ensure they have the correct role and client account
+        if "client_admin" not in existing_user.roles:
+            existing_user.roles.append("client_admin")
+
+        # Update client account if it's different
+        current_client_id = str(existing_user.client_account.ref.id) if hasattr(existing_user.client_account, 'ref') else str(existing_user.client_account.id)
+        if current_client_id != str(propertyhub_account.id):
+            print(f"  ✓ Updating client account association")
+
+        # Ensure is_main_client is True
+        existing_user.is_main_client = True
+        await existing_user.save()
+
+        print(f"  ✓ Updated PropertyHub admin user")
+        return existing_user, propertyhub_account, ADMIN_PASSWORD
+
+    else:
+        # Create new PropertyHub admin user
+        propertyhub_admin_data = UserCreateSchema(
+            email=PROPERTYHUB_CLIENT_EMAIL,
+            password=ADMIN_PASSWORD,
+            first_name=PROPERTYHUB_CLIENT_FIRST_NAME,
+            last_name=PROPERTYHUB_CLIENT_LAST_NAME,
+            is_main_client=True,  # This makes them the main admin for their client org
+            roles=["client_admin"],  # Client admin role
+            client_account_id=str(propertyhub_account.id)
+        )
+
+        propertyhub_admin_user = await user_service.create_user(propertyhub_admin_data)
+        print(f"  ✓ Created PropertyHub admin user with ID: {propertyhub_admin_user.id}")
+
+        return propertyhub_admin_user, propertyhub_account, ADMIN_PASSWORD
+
+
+# Note: Default client admin is now handled by create_or_update_qdarte_admin 
+# since Qdarte serves as both platform admin and client admin
+
+
+async def seed_complete_system(db_name: str = DEFAULT_DB_NAME, include_propertyhub: bool = False):
     """
     Main function to seed the super admin user, default client organization, and all required data.
     
     Args:
         db_name: Name of the database to seed (defaults to main database)
     """
-    print("=== Outlabs Complete System Seeding ===")
+    print("=== Outlabs Three-Tier System Seeding ===")
     print(f"Database: {db_name}")
+    print(f"Include PropertyHub: {include_propertyhub}")
     print(f"Super Admin Email: {SUPER_ADMIN_EMAIL}")
     print(f"Super Admin Name: {SUPER_ADMIN_FIRST_NAME} {SUPER_ADMIN_LAST_NAME}")
-    print(f"Default Org: {DEFAULT_ORG_NAME}")
-    print(f"Default Org Admin Email: {DEFAULT_CLIENT_ADMIN_EMAIL}")
+    print(f"Qdarte Platform Admin Email: {PLATFORM_ADMIN_EMAIL}")
+    print(f"Qdarte Platform Admin Name: {PLATFORM_ADMIN_FIRST_NAME} {PLATFORM_ADMIN_LAST_NAME}")
+    if include_propertyhub:
+        print(f"PropertyHub Client Email: {PROPERTYHUB_CLIENT_EMAIL}")
+        print(f"PropertyHub Client Name: {PROPERTYHUB_CLIENT_FIRST_NAME} {PROPERTYHUB_CLIENT_LAST_NAME}")
     print(f"Fixed Password: {ADMIN_PASSWORD}")
     print("=" * 50)
 
@@ -492,44 +684,72 @@ async def seed_complete_system(db_name: str = DEFAULT_DB_NAME):
         # Step 1: Ensure permissions exist
         await ensure_permissions_exist()
 
-        # Step 2: Ensure essential roles exist
-        await ensure_essential_roles_exist()
-
-        # Step 3: Ensure Outlabs client account exists
+        # Step 2: Ensure Outlabs client account exists
         outlabs_account, outlabs_created = await ensure_outlabs_client_account_exists()
 
-        # Step 4: Create or update super admin user
+        # Step 3: Create or update super admin user
         super_admin_user, super_admin_password = await create_or_update_super_admin(outlabs_account.id)
 
-        # Step 5: Ensure default client account exists
-        default_account, default_created = await ensure_default_client_account_exists()
+        # Step 4: Ensure Qdarte platform account exists (serves as both platform and default client)
+        qdarte_account, qdarte_created = await ensure_qdarte_platform_account_exists()
 
-        # Step 6: Create or update default client admin user
-        client_admin_user, client_admin_password = await create_or_update_default_client_admin(default_account.id)
+        # Step 5: Ensure platform permissions exist (now we have platform ID)
+        await ensure_platform_permissions_exist(str(qdarte_account.id))
+
+        # Step 6: Ensure essential roles exist
+        await ensure_essential_roles_exist()
+
+        # Step 7: Create or update Qdarte admin user (platform level only)
+        qdarte_admin_user, qdarte_admin_password = await create_or_update_qdarte_admin(qdarte_account.id)
+
+        # Step 8: Optionally create PropertyHub client (only if flag is set)
+        propertyhub_admin_user = None
+        propertyhub_account = None
+        propertyhub_admin_password = None
+        
+        if include_propertyhub:
+            print(f"\n🏗️ Creating PropertyHub client (--propertyhub flag detected)")
+            propertyhub_admin_user, propertyhub_account, propertyhub_admin_password = await create_or_update_propertyhub_client(qdarte_account.id)
 
         print("\n" + "=" * 50)
-        print("🎉 COMPLETE SYSTEM SEEDING COMPLETE 🎉")
+        print("🎉 COMPLETE THREE-TIER SYSTEM SEEDING COMPLETE 🎉")
         print("=" * 50)
         
-        print("\n📋 SUPER ADMIN DETAILS:")
+        print("\n📋 SUPER ADMIN DETAILS (Tier 1 - System Level):")
         print(f"   Email: {super_admin_user.email}")
         print(f"   Password: {super_admin_password}")
+        print(f"   Role: super_admin")
         print(f"   ID: {super_admin_user.id}")
         print(f"   Client Account: {outlabs_account.name}")
         print(f"   Client Account ID: {outlabs_account.id}")
         
-        print("\n📋 DEFAULT CLIENT ORGANIZATION:")
-        print(f"   Organization: {default_account.name}")
-        print(f"   Admin Email: {client_admin_user.email}")
-        print(f"   Admin Password: {client_admin_password}")
-        print(f"   Admin ID: {client_admin_user.id}")
-        print(f"   Client Account ID: {default_account.id}")
+        print("\n📋 QDARTE PLATFORM ADMIN DETAILS (Tier 2 - Platform Level):")
+        print(f"   Email: {qdarte_admin_user.email}")
+        print(f"   Password: {qdarte_admin_password}")
+        print(f"   Role: platform_admin")
+        print(f"   ID: {qdarte_admin_user.id}")
+        print(f"   Platform Account: {qdarte_account.name}")
+        print(f"   Account ID: {qdarte_account.id}")
+        
+        if include_propertyhub and propertyhub_admin_user:
+            print("\n📋 PROPERTYHUB CLIENT DETAILS (Tier 3 - Client Level):")
+            print(f"   Organization: {propertyhub_account.name}")
+            print(f"   Admin Email: {propertyhub_admin_user.email}")
+            print(f"   Admin Password: {propertyhub_admin_password}")
+            print(f"   Role: client_admin")
+            print(f"   Admin ID: {propertyhub_admin_user.id}")
+            print(f"   Client Account ID: {propertyhub_account.id}")
+            print(f"   Platform Provider: Qdarte Platform")
 
-        print("\n✅ Ready to use! Both accounts can login with password: Asd123$$$")
-        print("\nNext steps:")
-        print("   1. Super admin can manage the entire platform")
-        print("   2. Client admin can manage users within their organization")
-        print("   3. Both can create additional users and groups")
+        accounts_info = "all accounts" if include_propertyhub else "both accounts"
+        print(f"\n✅ Ready to use! {accounts_info.title()} can login with password: Asd123$$$")
+        print("\nThree-Tier Architecture:")
+        print("   1. Outlabs (super_admin) - System-wide control")
+        print("   2. Qdarte (platform_admin) - Platform operations")
+        if include_propertyhub:
+            print("   3. PropertyHub (client_admin) - Client of Qdarte platform")
+        else:
+            print("   3. PropertyHub - Not created (use --propertyhub to include)")
         print("=" * 50)
 
     except Exception as e:
@@ -555,6 +775,11 @@ def main():
         action="store_true",
         help="Seed the test database (outlabsAuth_test). Shortcut for --db outlabsAuth_test"
     )
+    parser.add_argument(
+        "--propertyhub",
+        action="store_true", 
+        help="Include PropertyHub as a client of Qdarte platform (optional for production)"
+    )
     args = parser.parse_args()
 
     # Determine target database
@@ -572,7 +797,7 @@ def main():
             print(f"Starting in {i}...")
             time.sleep(1)
 
-        asyncio.run(seed_complete_system(target_db))
+        asyncio.run(seed_complete_system(target_db, args.propertyhub))
 
     except KeyboardInterrupt:
         print("\n❌ Seeding cancelled by user")
