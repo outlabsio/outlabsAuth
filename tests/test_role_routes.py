@@ -27,11 +27,42 @@ async def get_admin_token(client: AsyncClient) -> str:
         "username": ADMIN_USER_DATA["email"],
         "password": ADMIN_USER_DATA["password"],
     }
-    response = await client.post("/v1/auth/login", data=login_data)
-    if response.status_code != 200:
-        print(f"Login failed with status {response.status_code}: {response.text}")
-        raise Exception(f"Login failed: {response.status_code}")
-    return response.json()["access_token"]
+    
+    # Try the login request
+    try:
+        response = await client.post("/v1/auth/login", data=login_data)
+        if response.status_code == 200:
+            return response.json()["access_token"]
+        else:
+            # Debug information for failed login
+            print(f"Login failed with status {response.status_code}: {response.text}")
+            
+            # Check environment and config
+            import os
+            from api.config import settings
+            print(f"Environment MONGO_DATABASE: {os.getenv('MONGO_DATABASE')}")
+            print(f"Settings MONGO_DATABASE: {settings.MONGO_DATABASE}")
+            
+            # Check if user exists in database
+            from api.models.user_model import UserModel
+            admin_users = await UserModel.find(UserModel.email == ADMIN_USER_DATA["email"]).to_list()
+            print(f"Found {len(admin_users)} admin users in database")
+            
+            if admin_users:
+                admin = admin_users[0]
+                print(f"Admin user exists: {admin.email}")
+                print(f"Admin roles: {admin.roles}")
+                
+                # Test password verification
+                from api.services.security_service import security_service
+                is_valid = security_service.verify_password(ADMIN_USER_DATA["password"], admin.password_hash)
+                print(f"Password verification: {is_valid}")
+            
+            raise Exception(f"Login failed: {response.status_code} - {response.text}")
+            
+    except Exception as e:
+        print(f"Exception during login: {e}")
+        raise
 
 class TestRoleRoutes:
     """Test suite for role management routes."""

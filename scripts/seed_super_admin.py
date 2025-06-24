@@ -31,10 +31,20 @@ from api.models.group_model import GroupModel
 MONGO_URL = os.getenv("DATABASE_URL", "mongodb://localhost:27017")
 MAIN_DB_NAME = os.getenv("MONGO_DATABASE", "outlabsAuth")
 
+# Fixed password for all admin users
+ADMIN_PASSWORD = "Asd123$$$"
+
 # Super Admin Details
 SUPER_ADMIN_EMAIL = "system@outlabs.io"
 SUPER_ADMIN_FIRST_NAME = "Outlabs"
 SUPER_ADMIN_LAST_NAME = "System"
+
+# Default Client Organization Details
+DEFAULT_ORG_NAME = "Qdarte"
+DEFAULT_ORG_DESCRIPTION = "Default client organization"
+DEFAULT_CLIENT_ADMIN_EMAIL = "system@qdarte.com"
+DEFAULT_CLIENT_ADMIN_FIRST_NAME = "System"
+DEFAULT_CLIENT_ADMIN_LAST_NAME = "Admin"
 
 # --- Essential Data Definitions ---
 ESSENTIAL_PERMISSIONS = [
@@ -66,29 +76,31 @@ ESSENTIAL_PERMISSIONS = [
 ]
 
 SUPER_ADMIN_ROLE = RoleCreateSchema(
-    _id="super_admin",
-    name="Super Administrator",
+    name="super_admin",
+    display_name="Super Administrator",
     description="Grants complete system-wide access.",
-    permissions=[p.id for p in ESSENTIAL_PERMISSIONS]
+    permissions=[p.id for p in ESSENTIAL_PERMISSIONS],
+    scope="system"
 )
 
 # Client Admin Role - for managing users within a client organization
 CLIENT_ADMIN_ROLE = RoleCreateSchema(
-    _id="client_admin",
-    name="Client Administrator",
+    name="client_admin",
+    display_name="Client Administrator",
     description="Administrative access for managing users, groups, and roles within a client organization",
     permissions=[
         "user:create", "user:read", "user:update", "user:delete", "user:add_member",
         "group:create", "group:read", "group:update", "group:delete", "group:manage_members",
         "role:read", "permission:read", "client_account:read"
     ],
+    scope="client",
     is_assignable_by_main_client=True
 )
 
 # Platform Admin Role - for platform-level administration
 PLATFORM_ADMIN_ROLE = RoleCreateSchema(
-    _id="platform_admin",
-    name="Platform Administrator", 
+    name="platform_admin",
+    display_name="Platform Administrator", 
     description="Administrative access for managing platform-level operations and multiple client accounts",
     permissions=[
         "user:create", "user:read", "user:update", "user:delete", "user:add_member", "user:bulk_create",
@@ -98,15 +110,17 @@ PLATFORM_ADMIN_ROLE = RoleCreateSchema(
         "client_account:create_sub", "client_account:read_platform", "client_account:read_created",
         "group:create", "group:read", "group:update", "group:delete", "group:manage_members"
     ],
+    scope="platform",
     is_assignable_by_main_client=False
 )
 
 # Basic User Role - for standard users with minimal permissions
 BASIC_USER_ROLE = RoleCreateSchema(
-    _id="basic_user",
-    name="Basic User",
+    name="basic_user",
+    display_name="Basic User",
     description="Standard user with basic read permissions",
     permissions=["user:read", "group:read", "client_account:read"],
+    scope="client",
     is_assignable_by_main_client=True
 )
 
@@ -194,23 +208,47 @@ async def ensure_essential_roles_exist():
     updated_count = 0
 
     for role_data in ESSENTIAL_ROLES:
-        existing_role = await role_service.get_role_by_id(role_data.id)
+        # Look up role by name and scope using the model directly
+        existing_role = await RoleModel.find_one(
+            RoleModel.name == role_data.name,
+            RoleModel.scope == role_data.scope
+        )
+        
         if not existing_role:
-            await role_service.create_role(role_data)
-            created_count += 1
-            print(f"  ✓ Created role: {role_data.id}")
+            # Create new role using the service with system admin context
+            try:
+                await role_service.create_role(
+                    role_data,
+                    current_user_id="system_seed",  # Dummy user ID for seeding
+                    current_client_id=None
+                )
+                created_count += 1
+                print(f"  ✓ Created role: {role_data.name}")
+            except Exception as e:
+                # If service fails, create directly
+                role = RoleModel(
+                    name=role_data.name,
+                    display_name=role_data.display_name,
+                    description=role_data.description,
+                    permissions=role_data.permissions,
+                    scope=role_data.scope,
+                    scope_id=None if role_data.scope == "system" else None,
+                    is_assignable_by_main_client=role_data.is_assignable_by_main_client,
+                    created_by_user_id="system_seed",
+                    created_by_client_id=None
+                )
+                await role.insert()
+                created_count += 1
+                print(f"  ✓ Created role: {role_data.name}")
         else:
-            # Update existing role to ensure it has current permissions
-            from api.schemas.role_schema import RoleUpdateSchema
-            update_data = RoleUpdateSchema(
-                name=role_data.name,
-                description=role_data.description,
-                permissions=role_data.permissions,
-                is_assignable_by_main_client=role_data.is_assignable_by_main_client
-            )
-            await role_service.update_role(role_data.id, update_data)
+            # Update existing role
+            existing_role.display_name = role_data.display_name
+            existing_role.description = role_data.description
+            existing_role.permissions = role_data.permissions
+            existing_role.is_assignable_by_main_client = role_data.is_assignable_by_main_client
+            await existing_role.save()
             updated_count += 1
-            print(f"  ✓ Updated role: {role_data.id}")
+            print(f"  ✓ Updated role: {role_data.name}")
 
     print(f"Roles check complete. Created {created_count} new roles, updated {updated_count} existing roles.")
     return created_count, updated_count
@@ -223,7 +261,7 @@ async def ensure_outlabs_client_account_exists():
     print("Ensuring Outlabs system client account exists...")
 
     # Check if an account with this name already exists
-    existing_accounts = await client_account_service.get_all_client_accounts()
+    existing_accounts = await client_account_service.get_client_accounts()
     outlabs_account = None
 
     for account in existing_accounts:
@@ -266,11 +304,11 @@ async def create_or_update_super_admin(client_account_id):
         await existing_user.save()
 
         print(f"  ✓ Updated super admin user")
-        return existing_user, None  # No password generated for existing user
+        return existing_user, ADMIN_PASSWORD
 
     else:
-        # Generate a secure password
-        password = generate_secure_password(20)
+        # Use fixed password
+        password = ADMIN_PASSWORD
 
         # Create new super admin user
         super_admin_data = UserCreateSchema(
@@ -289,15 +327,92 @@ async def create_or_update_super_admin(client_account_id):
         return super_admin_user, password
 
 
-async def seed_super_admin():
+async def ensure_default_client_account_exists():
     """
-    Main function to seed the super admin user and required data.
+    Ensure the default client account exists.
     """
-    print("=== Outlabs Super Admin Seeding ===")
+    print(f"Ensuring default client account exists: {DEFAULT_ORG_NAME}")
+
+    # Check if an account with this name already exists
+    existing_accounts = await client_account_service.get_client_accounts()
+    default_account = None
+
+    for account in existing_accounts:
+        if account.name == DEFAULT_ORG_NAME:
+            default_account = account
+            break
+
+    if not default_account:
+        client_data = ClientAccountCreateSchema(
+            name=DEFAULT_ORG_NAME,
+            description=DEFAULT_ORG_DESCRIPTION
+        )
+        default_account = await client_account_service.create_client_account(client_data)
+        print(f"  ✓ Created default client account with ID: {default_account.id}")
+        return default_account, True
+    else:
+        print(f"  - Default client account already exists with ID: {default_account.id}")
+        return default_account, False
+
+
+async def create_or_update_default_client_admin(client_account_id):
+    """
+    Create or update the default client admin user.
+    """
+    print(f"Creating/updating default client admin user: {DEFAULT_CLIENT_ADMIN_EMAIL}")
+
+    # Check if the user already exists
+    existing_user = await user_service.get_user_by_email(DEFAULT_CLIENT_ADMIN_EMAIL)
+
+    if existing_user:
+        print(f"  - Client admin user already exists with ID: {existing_user.id}")
+
+        # Update user to ensure they have the correct role and client account
+        if "client_admin" not in existing_user.roles:
+            existing_user.roles.append("client_admin")
+
+        # Update client account if it's different
+        current_client_id = str(existing_user.client_account.ref.id) if hasattr(existing_user.client_account, 'ref') else str(existing_user.client_account.id)
+        if current_client_id != str(client_account_id):
+            print(f"  ✓ Updating client account association")
+
+        # Ensure is_main_client is True
+        existing_user.is_main_client = True
+        await existing_user.save()
+
+        print(f"  ✓ Updated client admin user")
+        return existing_user, ADMIN_PASSWORD
+
+    else:
+        # Create new client admin user
+        client_admin_data = UserCreateSchema(
+            email=DEFAULT_CLIENT_ADMIN_EMAIL,
+            password=ADMIN_PASSWORD,
+            first_name=DEFAULT_CLIENT_ADMIN_FIRST_NAME,
+            last_name=DEFAULT_CLIENT_ADMIN_LAST_NAME,
+            is_main_client=True,  # This makes them the main admin for their org
+            roles=["client_admin"],  # Standard client admin role
+            client_account_id=str(client_account_id)
+        )
+
+        client_admin_user = await user_service.create_user(client_admin_data)
+        print(f"  ✓ Created client admin user with ID: {client_admin_user.id}")
+
+        return client_admin_user, ADMIN_PASSWORD
+
+
+async def seed_complete_system():
+    """
+    Main function to seed the super admin user, default client organization, and all required data.
+    """
+    print("=== Outlabs Complete System Seeding ===")
     print(f"Database: {MAIN_DB_NAME}")
     print(f"Super Admin Email: {SUPER_ADMIN_EMAIL}")
     print(f"Super Admin Name: {SUPER_ADMIN_FIRST_NAME} {SUPER_ADMIN_LAST_NAME}")
-    print("=" * 40)
+    print(f"Default Org: {DEFAULT_ORG_NAME}")
+    print(f"Default Org Admin Email: {DEFAULT_CLIENT_ADMIN_EMAIL}")
+    print(f"Fixed Password: {ADMIN_PASSWORD}")
+    print("=" * 50)
 
     # Connect to database
     client = AsyncIOMotorClient(MONGO_URL)
@@ -316,29 +431,41 @@ async def seed_super_admin():
         await ensure_essential_roles_exist()
 
         # Step 3: Ensure Outlabs client account exists
-        client_account, account_created = await ensure_outlabs_client_account_exists()
+        outlabs_account, outlabs_created = await ensure_outlabs_client_account_exists()
 
         # Step 4: Create or update super admin user
-        user, password = await create_or_update_super_admin(client_account.id)
+        super_admin_user, super_admin_password = await create_or_update_super_admin(outlabs_account.id)
 
-        print("\n" + "=" * 40)
-        print("🎉 SUPER ADMIN SEEDING COMPLETE 🎉")
-        print("=" * 40)
-        print(f"Super Admin Email: {user.email}")
-        print(f"Super Admin ID: {user.id}")
-        print(f"Client Account: {client_account.name}")
-        print(f"Client Account ID: {client_account.id}")
+        # Step 5: Ensure default client account exists
+        default_account, default_created = await ensure_default_client_account_exists()
 
-        if password:
-            print("\n🔐 IMPORTANT - SAVE THIS PASSWORD:")
-            print(f"Password: {password}")
-            print("\n⚠️  This password will not be shown again!")
-            print("⚠️  Make sure to save it in a secure location.")
-        else:
-            print("\n📝 User already existed - password unchanged")
+        # Step 6: Create or update default client admin user
+        client_admin_user, client_admin_password = await create_or_update_default_client_admin(default_account.id)
 
-        print("\n✅ You can now login with these credentials")
-        print("=" * 40)
+        print("\n" + "=" * 50)
+        print("🎉 COMPLETE SYSTEM SEEDING COMPLETE 🎉")
+        print("=" * 50)
+        
+        print("\n📋 SUPER ADMIN DETAILS:")
+        print(f"   Email: {super_admin_user.email}")
+        print(f"   Password: {super_admin_password}")
+        print(f"   ID: {super_admin_user.id}")
+        print(f"   Client Account: {outlabs_account.name}")
+        print(f"   Client Account ID: {outlabs_account.id}")
+        
+        print("\n📋 DEFAULT CLIENT ORGANIZATION:")
+        print(f"   Organization: {default_account.name}")
+        print(f"   Admin Email: {client_admin_user.email}")
+        print(f"   Admin Password: {client_admin_password}")
+        print(f"   Admin ID: {client_admin_user.id}")
+        print(f"   Client Account ID: {default_account.id}")
+
+        print("\n✅ Ready to use! Both accounts can login with password: Asd123$$$")
+        print("\nNext steps:")
+        print("   1. Super admin can manage the entire platform")
+        print("   2. Client admin can manage users within their organization")
+        print("   3. Both can create additional users and groups")
+        print("=" * 50)
 
     except Exception as e:
         print(f"\n❌ Error during seeding: {str(e)}")
@@ -348,7 +475,8 @@ async def seed_super_admin():
 
 
 if __name__ == "__main__":
-    print("Starting Super Admin Seeding Process...")
+    print("Starting Complete System Seeding Process...")
+    print("This will create super admin + default client organization")
     print("Press Ctrl+C to cancel within 3 seconds...")
 
     try:
@@ -358,7 +486,7 @@ if __name__ == "__main__":
             print(f"Starting in {i}...")
             time.sleep(1)
 
-        asyncio.run(seed_super_admin())
+        asyncio.run(seed_complete_system())
 
     except KeyboardInterrupt:
         print("\n❌ Seeding cancelled by user")

@@ -8,9 +8,14 @@ import os
 import subprocess
 import sys
 
-# Set environment variables for testing
+# Set environment variables for testing BEFORE any imports
+# This must happen before importing api modules that load settings
 os.environ["TESTING"] = "1"
-os.environ["MONGO_DATABASE"] = "outlabs_auth_test"
+os.environ["MONGO_DATABASE"] = "outlabsAuth_test"
+
+# Force reload of settings to pick up test environment variables
+if 'api.config' in sys.modules:
+    del sys.modules['api.config']
 
 from api.main import app
 
@@ -25,7 +30,7 @@ from api.models.group_model import GroupModel
 
 # Use a separate database for testing
 TEST_DATABASE_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
-TEST_DB_NAME = "outlabs_auth_test"
+TEST_DB_NAME = "outlabsAuth_test"
 
 # Test data constants
 ADMIN_USER_DATA = {
@@ -48,20 +53,25 @@ def run_seed_script():
     to create a complete dataset for all tests.
     """
     script_path = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'seed_main.py')
-    db_name = os.getenv("MONGO_DATABASE", "outlabs_auth_test")
+    db_name = os.getenv("MONGO_DATABASE", "outlabsAuth_test")
     
     # First, run the comprehensive scenario, which will wipe the database
     print("\n--- Running seed script for 'comprehensive' scenario (with wipe) ---")
     try:
-        subprocess.run(
+        result = subprocess.run(
             [sys.executable, script_path, "--scenario", "comprehensive", "--db", db_name],
             capture_output=True, text=True, check=True, timeout=90
         )
         print("--- 'comprehensive' scenario completed successfully ---")
+        # Print output for debugging
+        if result.stdout:
+            print("STDOUT:", result.stdout)
+        if result.stderr:
+            print("STDERR:", result.stderr)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         print("--- !!! SEED SCRIPT FAILED for 'comprehensive' scenario !!! ---")
-        print(e.stdout)
-        print(e.stderr)
+        print("STDOUT:", e.stdout)
+        print("STDERR:", e.stderr)
         pytest.fail(f"Seeding script failed, cannot proceed. Error: {e}", pytrace=False)
 
     # Second, run the hierarchical scenario without wiping the database
@@ -97,51 +107,41 @@ def run_seed_script():
 async def test_db():
     """
     Provides a clean test database for the session.
-    Connects before tests and drops the database after tests.
+    Seeds the database once and keeps it for all tests in the session.
     """
     test_db_client = AsyncIOMotorClient(TEST_DATABASE_URL)
     test_db_instance = test_db_client[TEST_DB_NAME]
     
-    # The seeding is now handled by an external script to ensure consistency.
-    # First, drop the database to ensure a clean slate.
-    await test_db_client.drop_database(TEST_DB_NAME)
+    # Check if database already exists and has data
+    collections = await test_db_instance.list_collection_names()
+    needs_seeding = "users" not in collections
     
-    # Run the seed script
-    run_seed_script()
-
-    # Initialize Beanie for the test database *after* seeding
-    await init_beanie(
-        database=test_db_instance,
-        document_models=[
-            UserModel,
-            RoleModel,
-            PermissionModel,
-            ClientAccountModel,
-            RefreshTokenModel,
-            PasswordResetTokenModel,
-            GroupModel,
-        ]
-    )
-    
-    # Rebuild models to resolve circular references with proper namespace
-    namespace = {
-        'UserModel': UserModel,
-        'ClientAccountModel': ClientAccountModel,
-        'RefreshTokenModel': RefreshTokenModel,
-        'PasswordResetTokenModel': PasswordResetTokenModel,
-        'GroupModel': GroupModel,
-    }
-    
-    UserModel.model_rebuild(_types_namespace=namespace)
-    ClientAccountModel.model_rebuild(_types_namespace=namespace)
-    RefreshTokenModel.model_rebuild(_types_namespace=namespace)
-    PasswordResetTokenModel.model_rebuild(_types_namespace=namespace)
-    GroupModel.model_rebuild(_types_namespace=namespace)
+    if needs_seeding:
+        print(f"Database {TEST_DB_NAME} needs seeding...")
+        # Drop the database to ensure a clean slate
+        await test_db_client.drop_database(TEST_DB_NAME)
+        
+        # Run the seed script
+        run_seed_script()
+        
+        # Verify seeding worked
+        collections_after = await test_db_instance.list_collection_names()
+        if "users" not in collections_after:
+            raise Exception("Seeding failed - no users collection found after seeding")
+        
+        user_count = await test_db_instance.users.count_documents({})
+        print(f"Seeding complete - {user_count} users created")
+        
+        # Small delay to ensure database operations are fully committed
+        import time
+        time.sleep(0.5)
+    else:
+        print(f"Database {TEST_DB_NAME} already exists with data, skipping seeding")
     
     yield test_db_instance
     
-    # Clean up - drop database first, then close client
-    await test_db_client.drop_database(TEST_DB_NAME)
+    # Keep the database for debugging - don't drop it
+    print(f"Test session complete - keeping {TEST_DB_NAME} database for debugging")
     test_db_client.close()
 
 @pytest_asyncio.fixture
@@ -149,7 +149,8 @@ async def client(test_db):
     """
     Async client for testing with Beanie-initialized database.
     """
-    # The test_db fixture ensures Beanie is initialized and data is seeded
+    # Use the standard app lifespan which will initialize the database properly
+    # The environment variables ensure it connects to our test database
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
