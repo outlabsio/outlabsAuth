@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List
+from beanie import PydanticObjectId
 from ..models.scopes import PermissionScope
 
 class PermissionCreateSchema(BaseModel):
@@ -23,7 +24,7 @@ class PermissionResponseSchema(BaseModel):
     """
     Schema for returning permission data in API responses.
     """
-    id: str = Field(alias="_id")
+    id: PydanticObjectId = Field(alias="_id")
     name: str
     display_name: str
     description: Optional[str] = None
