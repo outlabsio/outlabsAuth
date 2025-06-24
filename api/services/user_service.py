@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Set
 from beanie import PydanticObjectId
 from beanie.exceptions import RevisionIdWasChanged
 from pymongo.errors import DuplicateKeyError
@@ -253,6 +253,35 @@ class UserService:
                 )
         
         return successful_creates, failed_creates
+
+    async def get_user_effective_permissions(self, user_id: PydanticObjectId) -> Set[str]:
+        """
+        Get all effective permissions for a user from:
+        1. Direct role assignments
+        2. Group memberships
+        """
+        user = await self.get_user_by_id(user_id)
+        if not user:
+            return set()
+        
+        permissions = set()
+        
+        # Get permissions from direct roles
+        for role_id in user.roles:
+            try:
+                role = await role_service.get_role_by_id(PydanticObjectId(role_id))
+                if role:
+                    permissions.update(role.permissions)
+            except Exception:
+                continue  # Skip invalid role IDs
+        
+        # Get permissions from groups
+        if user.groups:
+            for group in user.groups:
+                if hasattr(group, 'permissions') and group.permissions:
+                    permissions.update(group.permissions)
+                
+        return permissions
 
 # Instantiate the service for use in other parts of the application
 user_service = UserService() 

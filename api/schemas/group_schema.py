@@ -1,35 +1,43 @@
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
+from ..models.group_model import GroupScope
 
 class GroupCreateSchema(BaseModel):
     """
-    Schema for creating a new group.
+    Schema for creating a new scoped group with direct permissions.
     """
-    name: str
-    description: Optional[str] = None
-    client_account_id: str  # String ID for client account
-    roles: Optional[List[str]] = []
+    name: str = Field(..., description="Group name (e.g., 'Sales Team', 'Customer Support')")
+    display_name: str = Field(..., description="Human-readable group name")
+    description: Optional[str] = Field(None, description="Group purpose and responsibilities")
+    permissions: List[str] = Field(default_factory=list, description="List of permission IDs")
+    scope: GroupScope = Field(..., description="Group scope: system, platform, or client")
+    # scope_id determined by service based on user context
 
 class GroupUpdateSchema(BaseModel):
     """
     Schema for updating a group. All fields are optional.
     """
-    name: Optional[str] = None
-    description: Optional[str] = None
-    roles: Optional[List[str]] = None
-    is_active: Optional[bool] = None
+    name: Optional[str] = Field(None, description="Group name")
+    display_name: Optional[str] = Field(None, description="Human-readable group name")
+    description: Optional[str] = Field(None, description="Group purpose and responsibilities")
+    permissions: Optional[List[str]] = Field(None, description="List of permission IDs")
+    is_active: Optional[bool] = Field(None, description="Whether the group is active")
 
 class GroupResponseSchema(BaseModel):
     """
     Schema for returning group data in API responses.
     """
-    id: str = Field(..., alias="_id")  # MongoDB _id field aliased as id
+    id: str = Field(..., alias="_id")
     name: str
+    display_name: str
     description: Optional[str] = None
-    client_account_id: Optional[str] = None
-    roles: List[str]
+    permissions: List[str]
+    scope: GroupScope
+    scope_id: Optional[str] = None
     is_active: bool
+    created_by_user_id: Optional[str] = None
+    created_by_client_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -38,11 +46,19 @@ class GroupResponseSchema(BaseModel):
         from_attributes=True
     )
 
+class AvailableGroupsResponseSchema(BaseModel):
+    """
+    Schema for returning groups available to a user, grouped by scope.
+    """
+    system_groups: List[GroupResponseSchema] = Field(default_factory=list)
+    platform_groups: List[GroupResponseSchema] = Field(default_factory=list)
+    client_groups: List[GroupResponseSchema] = Field(default_factory=list)
+
 class GroupMembershipSchema(BaseModel):
     """
     Schema for managing group memberships.
     """
-    user_ids: List[str]  # List of user IDs to add/remove
+    user_ids: List[str] = Field(..., description="List of user IDs to add/remove")
 
 class GroupMembersResponseSchema(BaseModel):
     """
@@ -50,6 +66,7 @@ class GroupMembersResponseSchema(BaseModel):
     """
     group_id: str
     group_name: str
+    group_scope: GroupScope
     members: List[dict]  # Will contain user details
 
 class UserGroupsResponseSchema(BaseModel):
@@ -58,5 +75,4 @@ class UserGroupsResponseSchema(BaseModel):
     """
     user_id: str
     groups: List[GroupResponseSchema]
-    effective_roles: List[str]  # All roles from groups + direct roles
-    effective_permissions: List[str]  # All permissions from effective roles 
+    effective_permissions: List[str]  # All permissions from groups + direct roles 

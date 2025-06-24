@@ -3,53 +3,108 @@ from beanie import PydanticObjectId
 from pymongo.errors import DuplicateKeyError
 from fastapi import HTTPException, status
 
-from ..models.group_model import GroupModel
+from ..models.group_model import GroupModel, GroupScope
 from ..models.client_account_model import ClientAccountModel
 from ..models.user_model import UserModel
-from ..schemas.group_schema import GroupCreateSchema, GroupUpdateSchema
+from ..schemas.group_schema import (
+    GroupCreateSchema, 
+    GroupUpdateSchema,
+    GroupResponseSchema,
+    AvailableGroupsResponseSchema
+)
 from .role_service import role_service
+from .permission_service import permission_service
 
 class GroupService:
     """
-    Service class for group-related business logic using Beanie ODM.
+    Service class for group-related business logic with scoped groups.
     """
 
-    async def create_group(self, group_data: GroupCreateSchema) -> GroupModel:
+    async def create_group(
+        self, 
+        group_data: GroupCreateSchema,
+        current_user_id: str,
+        current_client_id: Optional[str] = None,
+        scope_id: Optional[str] = None
+    ) -> GroupModel:
         """
-        Creates a new group in the database using Beanie ODM.
-        """
-        # Handle client_account Link
-        client_account = await ClientAccountModel.get(PydanticObjectId(group_data.client_account_id))
-        if not client_account:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Client account {group_data.client_account_id} not found"
-            )
+        Create a new scoped group with direct permissions.
         
-        # Validate roles exist
-        if group_data.roles:
-            for role_id in group_data.roles:
-                role = await role_service.get_role_by_id(role_id)
-                if not role:
+        Args:
+            group_data: Group creation data
+            current_user_id: ID of user creating the group
+            current_client_id: Client ID of current user
+            scope_id: Explicit scope ID (platform_id or client_account_id)
+        """
+        # Determine scope_id based on group scope
+        if group_data.scope == GroupScope.SYSTEM:
+            final_scope_id = None
+        elif group_data.scope == GroupScope.CLIENT:
+            final_scope_id = scope_id or current_client_id
+            if not final_scope_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Client ID required for client-scoped groups"
+                )
+        elif group_data.scope == GroupScope.PLATFORM:
+            if not scope_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Platform ID required for platform-scoped groups"
+                )
+            final_scope_id = scope_id
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid scope: {group_data.scope}"
+            )
+
+        # Check if group name already exists in this scope
+        existing_group = await GroupModel.find_one(
+            GroupModel.name == group_data.name,
+            GroupModel.scope == group_data.scope,
+            GroupModel.scope_id == final_scope_id
+        )
+        
+        if existing_group:
+            scope_desc = f"{group_data.scope} scope"
+            if final_scope_id:
+                scope_desc += f" ({final_scope_id})"
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Group '{group_data.name}' already exists in {scope_desc}"
+            )
+
+        # Validate permissions exist
+        if group_data.permissions:
+            for permission_id in group_data.permissions:
+                permission = await permission_service.get_permission_by_id(permission_id)
+                if not permission:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Role '{role_id}' not found"
+                        detail=f"Permission '{permission_id}' not found"
                     )
-        
-        # Create group model instance
-        group_dict = group_data.model_dump(exclude={"client_account_id"})
-        group_dict["client_account"] = client_account
-        
-        new_group = GroupModel(**group_dict)
+
+        # Create group
+        group = GroupModel(
+            name=group_data.name,
+            display_name=group_data.display_name,
+            description=group_data.description,
+            permissions=group_data.permissions,
+            scope=group_data.scope,
+            scope_id=final_scope_id,
+            created_by_user_id=current_user_id,
+            created_by_client_id=current_client_id
+        )
         
         try:
-            await new_group.insert()
+            await group.insert()
         except DuplicateKeyError as e:
             # Handle duplicate key errors gracefully
             if "name" in str(e):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail="A group with this name already exists in this client account."
+                    detail="A group with this name already exists in this scope."
                 )
             else:
                 raise HTTPException(
@@ -57,58 +112,100 @@ class GroupService:
                     detail="A group with these details already exists."
                 )
         
-        return new_group
+        return group
 
     async def get_group_by_id(self, group_id: PydanticObjectId) -> Optional[GroupModel]:
-        """
-        Retrieves a single group by its ID using Beanie ODM.
-        """
+        """Get a group by its MongoDB ObjectId."""
         return await GroupModel.get(group_id, fetch_links=True)
 
-    async def get_groups(
+    async def get_groups_by_scope(
         self, 
-        skip: int = 0, 
-        limit: int = 100, 
-        client_account_id: Optional[PydanticObjectId] = None
+        scope: GroupScope, 
+        scope_id: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 100
     ) -> List[GroupModel]:
-        """
-        Retrieves a list of groups with pagination using Beanie ODM.
-        If client_account_id is provided, filters groups by that account.
-        """
-        if client_account_id:
-            # Get the client account first
-            client_account = await ClientAccountModel.get(client_account_id)
-            if client_account:
-                query = GroupModel.find(GroupModel.client_account.id == client_account_id, fetch_links=True)
-            else:
-                query = GroupModel.find(fetch_links=True)
+        """Get all groups for a specific scope."""
+        if scope == GroupScope.SYSTEM:
+            # For system groups, just query by scope since scope_id should be None
+            groups = await GroupModel.find(
+                GroupModel.scope == scope
+            ).skip(skip).limit(limit).to_list()
         else:
-            query = GroupModel.find(fetch_links=True)
+            # For platform/client groups, filter by scope_id if provided
+            if scope_id is not None:
+                groups = await GroupModel.find(
+                    GroupModel.scope == scope,
+                    GroupModel.scope_id == scope_id
+                ).skip(skip).limit(limit).to_list()
+            else:
+                groups = await GroupModel.find(
+                    GroupModel.scope == scope
+                ).skip(skip).limit(limit).to_list()
             
-        return await query.skip(skip).limit(limit).to_list()
+        return groups
+
+    async def get_available_groups_for_user(
+        self,
+        current_user_client_id: Optional[str] = None,
+        current_user_platform_id: Optional[str] = None,
+        is_super_admin: bool = False,
+        is_platform_admin: bool = False
+    ) -> AvailableGroupsResponseSchema:
+        """
+        Get groups that a user can assign to others, grouped by scope.
+        """
+        available_groups = AvailableGroupsResponseSchema()
+
+        # System groups (only super admins can assign these)
+        if is_super_admin:
+            system_groups = await self.get_groups_by_scope(GroupScope.SYSTEM)
+            available_groups.system_groups = [
+                GroupResponseSchema.model_validate(group) for group in system_groups
+            ]
+
+        # Platform groups (platform admins can assign within their platform)
+        if is_super_admin or (is_platform_admin and current_user_platform_id):
+            platform_groups = await self.get_groups_by_scope(
+                GroupScope.PLATFORM, 
+                current_user_platform_id
+            )
+            available_groups.platform_groups = [
+                GroupResponseSchema.model_validate(group) for group in platform_groups
+            ]
+
+        # Client groups (client admins can assign within their client)
+        if current_user_client_id:
+            client_groups = await self.get_groups_by_scope(
+                GroupScope.CLIENT,
+                current_user_client_id
+            )
+            available_groups.client_groups = [
+                GroupResponseSchema.model_validate(group) for group in client_groups
+            ]
+
+        return available_groups
 
     async def update_group(
         self,
         group_id: PydanticObjectId, 
         group_data: GroupUpdateSchema
     ) -> Optional[GroupModel]:
-        """
-        Updates a group's information using Beanie ODM.
-        """
+        """Update a group by ID."""
         group = await self.get_group_by_id(group_id)
         if not group:
             return None
             
         update_data = group_data.model_dump(exclude_unset=True)
         
-        # Validate roles if being updated
-        if "roles" in update_data:
-            for role_id in update_data["roles"]:
-                role = await role_service.get_role_by_id(role_id)
-                if not role:
+        # Validate permissions if being updated
+        if "permissions" in update_data:
+            for permission_id in update_data["permissions"]:
+                permission = await permission_service.get_permission_by_id(permission_id)
+                if not permission:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Role '{role_id}' not found"
+                        detail=f"Permission '{permission_id}' not found"
                     )
 
         if not update_data:
@@ -125,9 +222,8 @@ class GroupService:
 
     async def delete_group(self, group_id: PydanticObjectId) -> bool:
         """
-        Deletes a group from the database using Beanie ODM.
+        Delete a group by ID.
         First removes all users from the group.
-        Returns True if deleted, False if group not found.
         """
         group = await self.get_group_by_id(group_id)
         if not group:
@@ -141,9 +237,7 @@ class GroupService:
         return True
 
     async def add_users_to_group(self, group_id: PydanticObjectId, user_ids: List[str]) -> bool:
-        """
-        Adds multiple users to a group.
-        """
+        """Add multiple users to a group."""
         group = await self.get_group_by_id(group_id)
         if not group:
             raise HTTPException(
@@ -180,9 +274,7 @@ class GroupService:
         return True
 
     async def remove_users_from_group(self, group_id: PydanticObjectId, user_ids: List[str]) -> bool:
-        """
-        Removes multiple users from a group.
-        """
+        """Remove multiple users from a group."""
         group = await self.get_group_by_id(group_id)
         if not group:
             raise HTTPException(
@@ -203,85 +295,84 @@ class GroupService:
         
         # Remove group from each user's groups list
         for user in valid_users:
-            # Find and remove the group from user.groups
-            # Handle both Link objects and fully loaded GroupModel objects
-            filtered_groups = []
-            for g in user.groups:
-                # Get the group ID whether it's a Link or a loaded GroupModel
-                current_group_id = g.ref.id if hasattr(g, 'ref') else g.id
-                if current_group_id != group_id:
-                    filtered_groups.append(g)
-            
-            user.groups = filtered_groups
+            user.groups = [g for g in user.groups if str(g.id) != str(group_id)]
             user.update_timestamp()
             await user.save()
         
         return True
 
     async def remove_all_users_from_group(self, group_id: PydanticObjectId) -> bool:
-        """
-        Removes all users from a group (used during group deletion).
-        """
-        # Find all users who are members of this group
-        users = await UserModel.find(UserModel.groups.id == group_id).to_list()
+        """Remove all users from a group."""
+        # Find all users that belong to this group
+        users_in_group = await UserModel.find(
+            UserModel.groups.id == group_id, 
+            fetch_links=True
+        ).to_list()
         
-        for user in users:
-            # Remove the group from user's groups list
-            user.groups = [g for g in user.groups if g.id != group_id]
+        # Remove the group from each user
+        for user in users_in_group:
+            user.groups = [g for g in user.groups if str(g.id) != str(group_id)]
             user.update_timestamp()
             await user.save()
         
         return True
 
     async def get_group_members(self, group_id: PydanticObjectId) -> List[UserModel]:
-        """
-        Gets all users who are members of a specific group.
-        """
-        return await UserModel.find(UserModel.groups.id == group_id).to_list()
+        """Get all users that belong to a specific group."""
+        return await UserModel.find(
+            UserModel.groups.id == group_id,
+            fetch_links=True
+        ).to_list()
 
     async def get_user_groups(self, user_id: PydanticObjectId) -> List[GroupModel]:
-        """
-        Gets all groups that a user belongs to.
-        """
+        """Get all groups that a user belongs to."""
         user = await UserModel.get(user_id, fetch_links=True)
-        if not user:
-            return []
-        
-        return [await group.fetch() for group in user.groups] if user.groups else []
+        return user.groups if user and user.groups else []
 
-    async def get_user_effective_roles(self, user_id: PydanticObjectId) -> Set[str]:
+    async def get_user_effective_permissions(self, user_id: PydanticObjectId) -> Set[str]:
         """
-        Gets all effective roles for a user (direct roles + group roles).
+        Get all effective permissions for a user from:
+        1. Direct role assignments
+        2. Group memberships
         """
         user = await UserModel.get(user_id, fetch_links=True)
         if not user:
             return set()
         
-        effective_roles = set(user.roles or [])  # Direct roles
+        permissions = set()
         
-        # Add roles from groups
-        if user.groups:
-            for group_link in user.groups:
-                group = await group_link.fetch()
-                if group and group.is_active:
-                    effective_roles.update(group.roles or [])
+        # Get permissions from direct roles
+        # (This will be handled by user_service, but included for completeness)
+        for role_id in user.roles:
+            try:
+                role = await role_service.get_role_by_id(PydanticObjectId(role_id))
+                if role:
+                    permissions.update(role.permissions)
+            except Exception:
+                continue  # Skip invalid role IDs
         
-        return effective_roles
+        # Get permissions from groups
+        user_groups = await self.get_user_groups(user.id)
+        for group in user_groups:
+            if hasattr(group, 'permissions'):
+                permissions.update(group.permissions)
+                
+        return permissions
 
-    async def get_user_effective_permissions(self, user_id: PydanticObjectId) -> Set[str]:
+    async def get_groups(
+        self, 
+        skip: int = 0, 
+        limit: int = 100,
+        scope: Optional[GroupScope] = None,
+        scope_id: Optional[str] = None
+    ) -> List[GroupModel]:
         """
-        Gets all effective permissions for a user (from direct roles + group roles).
+        Get groups with optional filtering by scope.
         """
-        effective_roles = await self.get_user_effective_roles(user_id)
-        effective_permissions = set()
-        
-        # Get permissions from all effective roles
-        for role_id in effective_roles:
-            role = await role_service.get_role_by_id(role_id)
-            if role and role.permissions:
-                effective_permissions.update(role.permissions)
-        
-        return effective_permissions
+        if scope:
+            return await self.get_groups_by_scope(scope, scope_id, skip, limit)
+        else:
+            return await GroupModel.find().skip(skip).limit(limit).to_list()
 
 # Instantiate the service for use in other parts of the application
 group_service = GroupService() 
