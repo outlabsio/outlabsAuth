@@ -15,7 +15,7 @@ from ..models.user_model import UserModel
 router = APIRouter(
     prefix="/v1/permissions",
     tags=["Permission Management"],
-    dependencies=[Depends(has_permission("system:permission:read"))]
+    dependencies=[Depends(has_permission("permission:read"))]
 )
 
 @router.post("/", response_model=PermissionResponseSchema, status_code=status.HTTP_201_CREATED)

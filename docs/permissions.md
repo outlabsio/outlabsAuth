@@ -4,28 +4,39 @@
 
 The OutlabsAuth system implements a **three-tier scoped permission architecture** that provides granular, secure, and scalable access control across multiple organizational levels. Permissions are the foundational building blocks that define what actions users can perform, serving as the atomic units of authorization that are assigned through both roles and groups using clean MongoDB ObjectIds and scope fields for tenant isolation.
 
+### Key Architectural Decision
+
+**Clean Names + Scope Fields**: Permissions use clean, descriptive names (e.g., `"user:create"`, `"listings:manage"`) combined with `scope` and `scope_id` fields for tenant isolation. This approach provides:
+
+- ✅ **Consistency** with roles and groups (all use the same naming pattern)
+- ✅ **Reusability** across different scopes without name conflicts
+- ✅ **Clean API** - no scope prefixes cluttering permission names
+- ✅ **Proper normalization** - scope information in dedicated fields
+
+Roles and groups reference permissions by **ObjectId**, not name, ensuring referential integrity while the permission resolution system converts IDs back to clean names for authorization checks.
+
 ## Architecture
 
 ### Three-Tier Hierarchy
 
 ```
-SYSTEM PERMISSIONS (Global)
+SYSTEM PERMISSIONS (Global - scope: "system", scope_id: null)
 ├─ user:create              # Create users across any scope
 ├─ platform:create          # Create new platforms
-├─ system:infrastructure    # Manage core infrastructure
-└─ super_admin:*           # All system capabilities
+├─ infrastructure:manage    # Manage core infrastructure
+└─ admin:*                 # All system capabilities
 
-PLATFORM PERMISSIONS (Per Platform)
-├─ platform:analytics       # Platform-wide analytics
-├─ platform:billing         # Platform billing management
-├─ client_account:create     # Create client accounts
-└─ platform:support         # Cross-client support
+PLATFORM PERMISSIONS (Per Platform - scope: "platform", scope_id: platform_id)
+├─ analytics:view           # Platform-wide analytics
+├─ billing:manage           # Platform billing management
+├─ client_account:create    # Create client accounts
+└─ support:cross_client     # Cross-client support
 
-CLIENT PERMISSIONS (Per Client Organization)
-├─ client:listings:create    # Create property listings
-├─ client:users:manage       # Manage client users
-├─ client:reports:view       # View client reports
-└─ client:settings:update    # Update client settings
+CLIENT PERMISSIONS (Per Client Organization - scope: "client", scope_id: client_account_id)
+├─ listings:create          # Create property listings
+├─ users:manage             # Manage client users
+├─ reports:view             # View client reports
+└─ settings:update          # Update client settings
 ```
 
 ## Permission vs Role vs Group Relationship
@@ -33,30 +44,36 @@ CLIENT PERMISSIONS (Per Client Organization)
 ### Foundation Layer
 
 ```javascript
-// Permissions are the atomic units
+// Permissions are the atomic units (clean names + scope isolation)
 permission_examples = [
-  "user:create", // Can create users
-  "listings:read", // Can view listings
-  "reports:generate", // Can generate reports
-  "billing:view", // Can view billing info
+  { name: "user:create", scope: "system", scope_id: null },
+  { name: "listings:read", scope: "client", scope_id: "client123" },
+  { name: "reports:generate", scope: "client", scope_id: "client123" },
+  { name: "billing:view", scope: "platform", scope_id: "platform456" },
 ];
 
-// Roles package permissions for user types
+// Roles package permissions by ID (not name) for user types
 role_example = {
   name: "sales_manager",
-  permissions: ["user:read", "listings:create", "listings:update", "reports:view"],
+  scope: "client",
+  scope_id: "client123",
+  permissions: ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439012"], // Permission ObjectIds
 };
 
-// Groups package permissions for teams
+// Groups package permissions by ID (not name) for teams
 group_example = {
   name: "sales_team",
-  permissions: ["listings:create", "listings:update", "clients:manage"],
+  scope: "client",
+  scope_id: "client123",
+  permissions: ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439013"], // Permission ObjectIds
 };
 
-// Users get permissions from both sources
+// Users get permissions from both sources (resolved to permission names for checking)
 user_effective_permissions = [
-  ...role_permissions, // From assigned roles
-  ...group_permissions, // From group memberships
+  "user:create",
+  "listings:read",
+  "listings:update",
+  "reports:view", // Resolved names
 ];
 ```
 
@@ -77,11 +94,11 @@ USERS (effective permissions = roles + groups)
 ```javascript
 {
   "id": "507f1f77bcf86cd799439011",        // MongoDB ObjectId
-  "name": "listings:create",               // Action identifier
+  "name": "listings:create",               // Clean action identifier (no scope prefix)
   "display_name": "Create Listings",       // Human-readable name
   "description": "Allows creating new property listings",
   "scope": "client",                       // "system" | "platform" | "client"
-  "scope_id": "685a5f2e82e92ad29111a6a9",  // Foreign key to owner
+  "scope_id": "685a5f2e82e92ad29111a6a9",  // Foreign key to owner (tenant isolation)
   "created_by_user_id": "507f1f77bcf86cd799439012",
   "created_by_client_id": "685a5f2e82e92ad29111a6a9",
   "created_at": "2024-01-15T10:30:00Z",
@@ -103,9 +120,10 @@ USERS (effective permissions = roles + groups)
 | ------------------------- | ------------------------ | ------------------------------ |
 | `resource:action`         | `user:create`            | Basic resource-action pattern  |
 | `service:resource:action` | `billing:invoice:read`   | Service-specific permissions   |
-| `scope:resource:action`   | `client:settings:update` | Scope-prefixed permissions     |
 | `resource:sub:action`     | `listings:photos:upload` | Nested resource permissions    |
 | `wildcard:*`              | `admin:*`                | Wildcard for broad permissions |
+
+**Note**: Scope isolation is handled via the `scope` and `scope_id` fields, not name prefixes. This keeps permission names clean and reusable across different scopes.
 
 ## Permission Examples
 
@@ -135,18 +153,18 @@ USERS (effective permissions = roles + groups)
 // Infrastructure Access
 {
   "id": "507f1f77bcf86cd799439013",
-  "name": "system:infrastructure:manage",
+  "name": "infrastructure:manage",
   "display_name": "Manage Infrastructure",
   "description": "Full infrastructure management access",
   "scope": "system",
   "scope_id": null
 }
 
-// Super Admin Wildcard
+// Admin Wildcard
 {
   "id": "507f1f77bcf86cd799439014",
-  "name": "super_admin:*",
-  "display_name": "Super Admin All Access",
+  "name": "admin:*",
+  "display_name": "Admin All Access",
   "description": "Complete system access",
   "scope": "system",
   "scope_id": null
@@ -159,7 +177,7 @@ USERS (effective permissions = roles + groups)
 // Platform Analytics
 {
   "id": "507f1f77bcf86cd799439015",
-  "name": "platform:analytics:view",
+  "name": "analytics:view",
   "display_name": "View Platform Analytics",
   "description": "Access platform-wide analytics and reports",
   "scope": "platform",
@@ -179,7 +197,7 @@ USERS (effective permissions = roles + groups)
 // Cross-Client Support
 {
   "id": "507f1f77bcf86cd799439017",
-  "name": "platform:support:all_clients",
+  "name": "support:cross_client",
   "display_name": "Support All Clients",
   "description": "Provide support across all platform clients",
   "scope": "platform",
@@ -189,7 +207,7 @@ USERS (effective permissions = roles + groups)
 // Platform Configuration
 {
   "id": "507f1f77bcf86cd799439018",
-  "name": "platform:settings:manage",
+  "name": "settings:manage",
   "display_name": "Manage Platform Settings",
   "description": "Configure platform-wide settings and features",
   "scope": "platform",
@@ -203,7 +221,7 @@ USERS (effective permissions = roles + groups)
 // Listing Management (Real Estate)
 {
   "id": "507f1f77bcf86cd799439019",
-  "name": "client:listings:create",
+  "name": "listings:create",
   "display_name": "Create Listings",
   "description": "Create new property listings",
   "scope": "client",
@@ -213,7 +231,7 @@ USERS (effective permissions = roles + groups)
 // Client User Management
 {
   "id": "507f1f77bcf86cd799439020",
-  "name": "client:users:manage",
+  "name": "users:manage",
   "display_name": "Manage Client Users",
   "description": "Manage users within the client organization",
   "scope": "client",
@@ -223,7 +241,7 @@ USERS (effective permissions = roles + groups)
 // Lead Management (Lead Gen Company)
 {
   "id": "507f1f77bcf86cd799439021",
-  "name": "client:leads:assign",
+  "name": "leads:assign",
   "display_name": "Assign Leads",
   "description": "Assign leads to sales representatives",
   "scope": "client",
@@ -233,7 +251,7 @@ USERS (effective permissions = roles + groups)
 // Custom Business Logic
 {
   "id": "507f1f77bcf86cd799439022",
-  "name": "client:contracts:esign",
+  "name": "contracts:esign",
   "display_name": "E-Sign Contracts",
   "description": "Electronically sign client contracts",
   "scope": "client",
@@ -279,7 +297,7 @@ When a client needs custom permissions for their business:
 ```python
 # Real estate client creating listing permissions
 listing_create_permission = PermissionCreateSchema(
-    name="client:listings:create",
+    name="listings:create",
     display_name="Create Property Listings",
     description="Create new property listings in the MLS system",
     scope=PermissionScope.CLIENT
@@ -292,8 +310,8 @@ permission = await permission_service.create_permission(
     # scope_id automatically set to client_admin.client_account_id
 )
 
-# Add to sales role
-sales_role.permissions.append("client:listings:create")
+# Add to sales role (uses permission ID, not name)
+sales_role.permissions.append(str(permission.id))
 await role_service.update_role(sales_role.id, sales_role)
 ```
 
@@ -304,7 +322,7 @@ Platform administrators creating permissions for new features:
 ```python
 # New analytics feature permission
 analytics_permission = PermissionCreateSchema(
-    name="platform:analytics:advanced",
+    name="analytics:advanced",
     display_name="Advanced Analytics",
     description="Access to advanced analytics dashboards and reports",
     scope=PermissionScope.PLATFORM
@@ -317,8 +335,8 @@ permission = await permission_service.create_permission(
     scope_id="real_estate_platform"
 )
 
-# Add to platform analytics group
-analytics_group.permissions.append("platform:analytics:advanced")
+# Add to platform analytics group (uses permission ID, not name)
+analytics_group.permissions.append(str(permission.id))
 await group_service.update_group(analytics_group.id, analytics_group)
 ```
 
@@ -329,7 +347,7 @@ Super admins creating permissions for system operations:
 ```python
 # Infrastructure monitoring permission
 monitoring_permission = PermissionCreateSchema(
-    name="system:monitoring:infrastructure",
+    name="monitoring:infrastructure",
     display_name="Monitor Infrastructure",
     description="Monitor system infrastructure and performance metrics",
     scope=PermissionScope.SYSTEM
@@ -342,8 +360,8 @@ permission = await permission_service.create_permission(
     # scope_id automatically null for system permissions
 )
 
-# Add to engineering group
-engineering_group.permissions.append("system:monitoring:infrastructure")
+# Add to engineering group (uses permission ID, not name)
+engineering_group.permissions.append(str(permission.id))
 await group_service.update_group(engineering_group.id, engineering_group)
 ```
 
@@ -358,22 +376,28 @@ Users receive permissions from multiple sources:
 async def get_user_effective_permissions(user_id):
     user = await UserModel.get(user_id)
 
-    # 1. Get permissions from roles
-    role_permissions = set()
+    # 1. Get permission IDs from roles
+    permission_ids = set()
     for role_id in user.roles:
         role = await RoleModel.get(role_id)
-        role_permissions.update(role.permissions)
+        permission_ids.update(role.permissions)  # Permission ObjectIds
 
-    # 2. Get permissions from groups
-    group_permissions = set()
+    # 2. Get permission IDs from groups
     user_groups = await GroupModel.find(
         In(GroupModel.id, user.groups)
     ).to_list()
     for group in user_groups:
-        group_permissions.update(group.permissions)
+        permission_ids.update(group.permissions)  # Permission ObjectIds
 
-    # 3. Combine and return unique permissions
-    return role_permissions.union(group_permissions)
+    # 3. Resolve permission IDs to permission names
+    permission_names = set()
+    for permission_id in permission_ids:
+        permission = await PermissionModel.get(permission_id)
+        if permission:
+            permission_names.add(permission.name)
+
+    # 4. Return permission names for checking
+    return permission_names
 ```
 
 ### Real-World Permission Flow
@@ -384,32 +408,29 @@ async def get_user_effective_permissions(user_id):
   "user": {
     "id": "507f1f77bcf86cd799439020",
     "email": "sarah@acme.com",
-    "roles": ["sales_manager"],                    // Role assignment
-    "groups": ["sales_team", "project_alpha_team"] // Group memberships
+    "roles": ["685ad307d90302d2b653199a"],           // Role ObjectId
+    "groups": ["685ad307d90302d2b653199b", "685ad307d90302d2b653199c"] // Group ObjectIds
   },
 
   "permission_sources": {
-    "from_sales_manager_role": [
-      "user:read",
-      "user:update",
-      "client:reports:view"
-    ],
-    "from_sales_team_group": [
-      "client:listings:create",
-      "client:listings:update",
-      "client:clients:manage"
-    ],
-    "from_project_alpha_group": [
-      "client:project:alpha:read",
-      "client:project:alpha:update",
-      "client:documents:alpha:manage"
-    ]
+    "from_sales_manager_role": {
+      "permission_ids": ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439012"],
+      "resolved_names": ["user:read", "user:update", "reports:view"]
+    },
+    "from_sales_team_group": {
+      "permission_ids": ["507f1f77bcf86cd799439019", "507f1f77bcf86cd799439020"],
+      "resolved_names": ["listings:create", "listings:update", "clients:manage"]
+    },
+    "from_project_alpha_group": {
+      "permission_ids": ["507f1f77bcf86cd799439021", "507f1f77bcf86cd799439022"],
+      "resolved_names": ["project:alpha:read", "project:alpha:update", "documents:alpha:manage"]
+    }
   },
 
   "effective_permissions": [
-    "user:read", "user:update", "client:reports:view",
-    "client:listings:create", "client:listings:update", "client:clients:manage",
-    "client:project:alpha:read", "client:project:alpha:update", "client:documents:alpha:manage"
+    "user:read", "user:update", "reports:view",
+    "listings:create", "listings:update", "clients:manage",
+    "project:alpha:read", "project:alpha:update", "documents:alpha:manage"
   ]
 }
 ```
@@ -423,13 +444,14 @@ The frontend provides intuitive permission management:
 ```javascript
 // Frontend form data for permission creation
 {
-  name: "client:campaigns:create",
+  name: "campaigns:create",
   display_name: "Create Marketing Campaigns",
   description: "Create and launch marketing campaigns for client",
   scope: "client"  // User selects scope level
 }
 
 // Backend creates permission with proper scope_id automatically
+// Clean name + scope fields provide proper isolation
 ```
 
 ### Available Permissions API
@@ -451,7 +473,7 @@ Use the `/permissions/available` endpoint to get permissions a user can assign:
   "platform_permissions": [
     {
       "id": "507f1f77bcf86cd799439015",
-      "name": "platform:analytics:view",
+      "name": "analytics:view",
       "display_name": "View Platform Analytics",
       "scope": "platform",
       "scope_id": "real_estate_platform"
@@ -460,14 +482,14 @@ Use the `/permissions/available` endpoint to get permissions a user can assign:
   "client_permissions": [
     {
       "id": "507f1f77bcf86cd799439019",
-      "name": "client:listings:create",
+      "name": "listings:create",
       "display_name": "Create Listings",
       "scope": "client",
       "scope_id": "685a5f2e82e92ad29111a6a9"
     },
     {
       "id": "507f1f77bcf86cd799439021",
-      "name": "client:leads:assign",
+      "name": "leads:assign",
       "display_name": "Assign Leads",
       "scope": "client",
       "scope_id": "685a5f2e82e92ad29111a6a9"
@@ -481,11 +503,11 @@ Use the `/permissions/available` endpoint to get permissions a user can assign:
 Frontend components can check permissions:
 
 ```javascript
-// Frontend permission checking
+// Frontend permission checking (uses resolved permission names)
 const userPermissions = userStore.effectivePermissions;
 
-const canCreateListings = userPermissions.includes("client:listings:create");
-const canViewAnalytics = userPermissions.includes("platform:analytics:view");
+const canCreateListings = userPermissions.includes("listings:create");
+const canViewAnalytics = userPermissions.includes("analytics:view");
 const canManageUsers = userPermissions.includes("user:create");
 
 // Conditional UI rendering
@@ -634,40 +656,43 @@ system_permissions = [
         "name": "user:create",
         "display_name": "Create Users",
         "description": "Create users in any scope",
-        "scope": "system"
+        "scope": "system",
+        "scope_id": null
     },
     {
         "name": "platform:create",
         "display_name": "Create Platforms",
         "description": "Create new platform instances",
-        "scope": "system"
+        "scope": "system",
+        "scope_id": null
     },
     {
-        "name": "system:infrastructure:manage",
+        "name": "infrastructure:manage",
         "display_name": "Manage Infrastructure",
         "description": "Full infrastructure access",
-        "scope": "system"
+        "scope": "system",
+        "scope_id": null
     }
 ]
 
 # Platform Level: RE/MAX corporate capabilities
 remax_platform_permissions = [
     {
-        "name": "platform:brand:manage",
+        "name": "brand:manage",
         "display_name": "Manage Brand",
         "description": "Manage RE/MAX corporate branding",
         "scope": "platform",
         "scope_id": "remax_platform"
     },
     {
-        "name": "platform:franchises:view",
+        "name": "franchises:view",
         "display_name": "View All Franchises",
         "description": "View analytics across all RE/MAX franchises",
         "scope": "platform",
         "scope_id": "remax_platform"
     },
     {
-        "name": "client_account:franchise:create",
+        "name": "franchise:create",
         "display_name": "Create Franchise",
         "description": "Create new RE/MAX franchise accounts",
         "scope": "platform",
@@ -678,28 +703,28 @@ remax_platform_permissions = [
 # Client Level: Individual franchise operations
 franchise_permissions = [
     {
-        "name": "client:listings:create",
+        "name": "listings:create",
         "display_name": "Create Listings",
         "description": "Create property listings for this franchise",
         "scope": "client",
         "scope_id": "remax_downtown_franchise"
     },
     {
-        "name": "client:agents:manage",
+        "name": "agents:manage",
         "display_name": "Manage Agents",
         "description": "Manage real estate agents in this franchise",
         "scope": "client",
         "scope_id": "remax_downtown_franchise"
     },
     {
-        "name": "client:leads:assign",
+        "name": "leads:assign",
         "display_name": "Assign Leads",
         "description": "Assign leads to franchise agents",
         "scope": "client",
         "scope_id": "remax_downtown_franchise"
     },
     {
-        "name": "client:commissions:calculate",
+        "name": "commissions:calculate",
         "display_name": "Calculate Commissions",
         "description": "Calculate and process agent commissions",
         "scope": "client",

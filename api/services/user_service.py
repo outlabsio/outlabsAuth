@@ -259,29 +259,44 @@ class UserService:
         Get all effective permissions for a user from:
         1. Direct role assignments
         2. Group memberships
+        
+        Returns clean permission names (not ObjectIds).
         """
+        from ..models.permission_model import PermissionModel
+        from beanie import PydanticObjectId as ObjectId
+        
         user = await self.get_user_by_id(user_id)
         if not user:
             return set()
         
-        permissions = set()
+        permission_ids = set()
         
-        # Get permissions from direct roles
+        # Get permission IDs from direct roles
         for role_id in user.roles:
             try:
-                role = await role_service.get_role_by_id(PydanticObjectId(role_id))
+                role = await role_service.get_role_by_id(ObjectId(role_id))
                 if role:
-                    permissions.update(role.permissions)
+                    permission_ids.update(role.permissions)
             except Exception:
                 continue  # Skip invalid role IDs
         
-        # Get permissions from groups
+        # Get permission IDs from groups
         if user.groups:
             for group in user.groups:
                 if hasattr(group, 'permissions') and group.permissions:
-                    permissions.update(group.permissions)
+                    permission_ids.update(group.permissions)
+        
+        # Resolve permission IDs to clean permission names
+        permission_names = set()
+        for permission_id in permission_ids:
+            try:
+                permission = await PermissionModel.get(ObjectId(permission_id))
+                if permission:
+                    permission_names.add(permission.name)
+            except Exception:
+                continue  # Skip invalid permission IDs
                 
-        return permissions
+        return permission_names
 
 # Instantiate the service for use in other parts of the application
 user_service = UserService() 

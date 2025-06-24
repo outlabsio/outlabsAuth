@@ -11,16 +11,13 @@ class TestGroupRoutes:
     @pytest_asyncio.fixture
     async def sample_group_data(self):
         """Sample group data for testing."""
-        # Get the seeded client account ID
-        from api.models.client_account_model import ClientAccountModel
-        client_account = await ClientAccountModel.find_one(ClientAccountModel.name == "Test Organization")
-        
         unique_suffix = str(uuid.uuid4())[:8]
         return {
-            "name": f"Test Group {unique_suffix}",
+            "name": f"test_group_{unique_suffix}",
+            "display_name": f"Test Group {unique_suffix}",
             "description": "A test group for unit testing",
-            "client_account_id": str(client_account.id) if client_account else str(ObjectId()),
-            "roles": ["super_admin"]
+            "permissions": ["user:read", "group:read"],  # Use permissions instead of roles
+            "scope": "client"  # Use the new scoped architecture
         }
 
     # ========================================
@@ -39,8 +36,10 @@ class TestGroupRoutes:
         assert response.status_code == 201
         data = response.json()
         assert data["name"] == sample_group_data["name"]
+        assert data["display_name"] == sample_group_data["display_name"]
         assert data["description"] == sample_group_data["description"]
-        assert data["roles"] == sample_group_data["roles"]
+        assert data["permissions"] == sample_group_data["permissions"]
+        assert data["scope"] == sample_group_data["scope"]
         assert "_id" in data
         assert "created_at" in data
 
@@ -64,13 +63,14 @@ class TestGroupRoutes:
         assert response.status_code in [400, 409]  # Should fail with conflict or validation error
 
     @pytest.mark.asyncio
-    async def test_create_group_invalid_client_account(self, client: AsyncClient, admin_headers):
-        """Test group creation with invalid client account ID."""
+    async def test_create_group_invalid_scope(self, client: AsyncClient, admin_headers):
+        """Test group creation with invalid scope."""
         invalid_group_data = {
-            "name": "Invalid Group",
-            "description": "A group with invalid client account",
-            "client_account_id": str(ObjectId()),  # Non-existent client account
-            "roles": ["super_admin"]
+            "name": "invalid_scope_group",
+            "display_name": "Invalid Scope Group",
+            "description": "A group with invalid scope",
+            "permissions": ["user:read"],
+            "scope": "invalid_scope"  # Invalid scope value
         }
         
         response = await client.post(
@@ -79,12 +79,12 @@ class TestGroupRoutes:
             headers=admin_headers
         )
         
-        assert response.status_code == 404
+        assert response.status_code == 422  # Validation error
 
     @pytest.mark.asyncio
-    async def test_create_group_invalid_roles(self, client: AsyncClient, admin_headers, sample_group_data):
-        """Test group creation with non-existent roles."""
-        sample_group_data["roles"] = ["non_existent_role"]
+    async def test_create_group_invalid_permissions(self, client: AsyncClient, admin_headers, sample_group_data):
+        """Test group creation with non-existent permissions."""
+        sample_group_data["permissions"] = ["non_existent:permission"]
         
         response = await client.post(
             "/v1/groups/",

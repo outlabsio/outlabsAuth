@@ -66,37 +66,40 @@ MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
 # The database name is now handled via command-line arguments.
 
 # --- Essential Data Definitions ---
+# System-level permissions (clean names, scope handled by scope field)
 ESSENTIAL_PERMISSIONS = [
-    PermissionCreateSchema(_id="user:create", description="Allows creating a single user."),
-    PermissionCreateSchema(_id="user:read", description="Allows reading user information."),
-    PermissionCreateSchema(_id="user:update", description="Allows updating a user."),
-    PermissionCreateSchema(_id="user:delete", description="Allows deleting a user."),
-    PermissionCreateSchema(_id="user:add_member", description="Allows adding a new user to one's own client account."),
-    PermissionCreateSchema(_id="user:bulk_create", description="Allows bulk creation of users."),
-    PermissionCreateSchema(_id="role:create", description="Allows creating a role."),
-    PermissionCreateSchema(_id="role:read", description="Allows reading role information."),
-    PermissionCreateSchema(_id="role:update", description="Allows updating a role."),
-    PermissionCreateSchema(_id="role:delete", description="Allows deleting a role."),
-    PermissionCreateSchema(_id="permission:create", description="Allows creating a permission."),
-    PermissionCreateSchema(_id="permission:read", description="Allows reading permission information."),
-    PermissionCreateSchema(_id="client_account:create", description="Allows creating a client account."),
-    PermissionCreateSchema(_id="client_account:read", description="Allows reading client account information."),
-    PermissionCreateSchema(_id="client_account:update", description="Allows updating a client account."),
-    PermissionCreateSchema(_id="client_account:delete", description="Allows deleting a client account."),
-    # New platform-scoped permissions for hierarchical multi-platform tenancy
-    PermissionCreateSchema(_id="client_account:create_sub", description="Allows creating sub-clients within platform scope."),
-    PermissionCreateSchema(_id="client_account:read_platform", description="Allows reading all clients within platform scope."),
-    PermissionCreateSchema(_id="client_account:read_created", description="Allows reading only clients you created."),
-    PermissionCreateSchema(_id="group:create", description="Allows creating a group."),
-    PermissionCreateSchema(_id="group:read", description="Allows reading group information."),
-    PermissionCreateSchema(_id="group:update", description="Allows updating a group."),
-    PermissionCreateSchema(_id="group:delete", description="Allows deleting a group."),
-    PermissionCreateSchema(_id="group:manage_members", description="Allows adding/removing members from groups."),
-    # Platform-specific permissions for PropertyHub three-tier model
-    PermissionCreateSchema(_id="platform:manage_clients", description="Allows managing client accounts across the platform."),
-    PermissionCreateSchema(_id="platform:view_analytics", description="Allows viewing platform-wide analytics and metrics."),
-    PermissionCreateSchema(_id="platform:support_users", description="Allows providing support to users across all clients."),
-    PermissionCreateSchema(_id="platform:onboard_clients", description="Allows onboarding new clients to the platform."),
+    PermissionCreateSchema(name="user:create", display_name="Create Users", description="Allows creating a single user.", scope="system"),
+    PermissionCreateSchema(name="user:read", display_name="Read Users", description="Allows reading user information.", scope="system"),
+    PermissionCreateSchema(name="user:update", display_name="Update Users", description="Allows updating a user.", scope="system"),
+    PermissionCreateSchema(name="user:delete", display_name="Delete Users", description="Allows deleting a user.", scope="system"),
+    PermissionCreateSchema(name="user:add_member", display_name="Add Team Members", description="Allows adding a new user to one's own client account.", scope="system"),
+    PermissionCreateSchema(name="user:bulk_create", display_name="Bulk Create Users", description="Allows bulk creation of users.", scope="system"),
+    PermissionCreateSchema(name="role:create", display_name="Create Roles", description="Allows creating a role.", scope="system"),
+    PermissionCreateSchema(name="role:read", display_name="Read Roles", description="Allows reading role information.", scope="system"),
+    PermissionCreateSchema(name="role:update", display_name="Update Roles", description="Allows updating a role.", scope="system"),
+    PermissionCreateSchema(name="role:delete", display_name="Delete Roles", description="Allows deleting a role.", scope="system"),
+    PermissionCreateSchema(name="permission:create", display_name="Create Permissions", description="Allows creating a permission.", scope="system"),
+    PermissionCreateSchema(name="permission:read", display_name="Read Permissions", description="Allows reading permission information.", scope="system"),
+    PermissionCreateSchema(name="client_account:create", display_name="Create Client Accounts", description="Allows creating a client account.", scope="system"),
+    PermissionCreateSchema(name="client_account:read", display_name="Read Client Accounts", description="Allows reading client account information.", scope="system"),
+    PermissionCreateSchema(name="client_account:update", display_name="Update Client Accounts", description="Allows updating a client account.", scope="system"),
+    PermissionCreateSchema(name="client_account:delete", display_name="Delete Client Accounts", description="Allows deleting a client account.", scope="system"),
+    PermissionCreateSchema(name="group:create", display_name="Create Groups", description="Allows creating a group.", scope="system"),
+    PermissionCreateSchema(name="group:read", display_name="Read Groups", description="Allows reading group information.", scope="system"),
+    PermissionCreateSchema(name="group:update", display_name="Update Groups", description="Allows updating a group.", scope="system"),
+    PermissionCreateSchema(name="group:delete", display_name="Delete Groups", description="Allows deleting a group.", scope="system"),
+    PermissionCreateSchema(name="group:manage_members", display_name="Manage Group Members", description="Allows adding/removing members from groups.", scope="system"),
+]
+
+# Platform permissions (clean names, scope handled by scope field)
+PLATFORM_PERMISSIONS = [
+    PermissionCreateSchema(name="client_account:create_sub", display_name="Create Sub-Clients", description="Allows creating sub-clients within platform scope.", scope="platform"),
+    PermissionCreateSchema(name="client_account:read_platform", display_name="Read Platform Clients", description="Allows reading all clients within platform scope.", scope="platform"),
+    PermissionCreateSchema(name="client_account:read_created", display_name="Read Created Clients", description="Allows reading only clients you created.", scope="platform"),
+    PermissionCreateSchema(name="clients:manage", display_name="Manage Platform Clients", description="Allows managing client accounts across the platform.", scope="platform"),
+    PermissionCreateSchema(name="analytics:view", display_name="View Platform Analytics", description="Allows viewing platform-wide analytics and metrics.", scope="platform"),
+    PermissionCreateSchema(name="support:cross_client", display_name="Support Platform Users", description="Allows providing support to users across all clients.", scope="platform"),
+    PermissionCreateSchema(name="clients:onboard", display_name="Onboard Platform Clients", description="Allows onboarding new clients to the platform.", scope="platform"),
 ]
 
 # System roles will be created in the seeding function
@@ -159,11 +162,28 @@ async def seed_permissions_and_super_admin_role():
     """
     # Create permissions
     print("Creating essential permissions...")
+    created_count = 0
     for perm_data in ESSENTIAL_PERMISSIONS:
-        # Using a simple check to avoid errors if already exists
-        if not await permission_service.get_permission_by_id(perm_data.id):
-            await permission_service.create_permission(perm_data)
-    print(f"{len(ESSENTIAL_PERMISSIONS)} permissions seeded.")
+        # Check if permission exists by querying directly
+        existing_perm = await PermissionModel.find_one(
+            PermissionModel.name == perm_data.name,
+            PermissionModel.scope == perm_data.scope,
+            PermissionModel.scope_id == None  # System permissions have null scope_id
+        )
+        if not existing_perm:
+            try:
+                await permission_service.create_permission(
+                    perm_data,
+                    current_user_id="system",
+                    current_client_id=None
+                )
+                created_count += 1
+                print(f"  ✓ Created permission: {perm_data.name} (scope: {perm_data.scope})")
+            except Exception as e:
+                print(f"  ❌ Failed to create permission {perm_data.name}: {e}")
+        else:
+            print(f"  - Permission already exists: {perm_data.name} (scope: {perm_data.scope})")
+    print(f"{created_count} new permissions created out of {len(ESSENTIAL_PERMISSIONS)} total.")
 
     # Create system roles
     print("Creating system roles...")
@@ -173,11 +193,22 @@ async def seed_permissions_and_super_admin_role():
     super_admin_exists = any(role.name == "super_admin" for role in system_roles)
     
     if not super_admin_exists:
+        # Get actual permission IDs from database
+        actual_permission_ids = []
+        for perm_data in ESSENTIAL_PERMISSIONS:
+            perm = await PermissionModel.find_one(
+                PermissionModel.name == perm_data.name,
+                PermissionModel.scope == perm_data.scope,
+                PermissionModel.scope_id == None
+            )
+            if perm:
+                actual_permission_ids.append(str(perm.id))
+        
         super_admin_role_data = RoleCreateSchema(
             name="super_admin",
             display_name="Super Administrator",
             description="Grants complete system-wide access.",
-            permissions=[p.id for p in ESSENTIAL_PERMISSIONS],
+            permissions=actual_permission_ids,  # Use actual permission IDs
             scope=RoleScope.SYSTEM,
             is_assignable_by_main_client=False
         )
@@ -193,11 +224,23 @@ async def seed_permissions_and_super_admin_role():
     basic_user_exists = any(role.name == "basic_user" for role in system_roles)
     
     if not basic_user_exists:
+        # Get actual permission IDs for basic user
+        basic_permission_names = ["user:read", "group:read"]
+        basic_permission_ids = []
+        for perm_name in basic_permission_names:
+            perm = await PermissionModel.find_one(
+                PermissionModel.name == perm_name,
+                PermissionModel.scope == "system",
+                PermissionModel.scope_id == None
+            )
+            if perm:
+                basic_permission_ids.append(str(perm.id))
+        
         basic_user_role_data = RoleCreateSchema(
             name="basic_user",
             display_name="Basic User",
             description="Basic user access with minimal permissions",
-            permissions=["user:read", "group:read"],
+            permissions=basic_permission_ids,  # Use actual permission IDs
             scope=RoleScope.SYSTEM,
             is_assignable_by_main_client=True
         )
@@ -402,11 +445,34 @@ async def seed_comprehensive_scenario():
     # Create test groups
     print("Creating test groups...")
     acme_users = await UserModel.find(UserModel.client_account.id == acme_corp.id).to_list()
-    acme_user_ids = [str(u.id) for u in acme_users]
-    await group_service.create_group(GroupCreateSchema(
-        name="ACME Team", description="ACME Corporation Team",
-        client_account_id=str(acme_corp.id), members=acme_user_ids
-    ))
+    
+    # Get permission IDs for group
+    user_read_perm = await PermissionModel.find_one(
+        PermissionModel.name == "user:read",
+        PermissionModel.scope == "system"
+    )
+    group_read_perm = await PermissionModel.find_one(
+        PermissionModel.name == "group:read", 
+        PermissionModel.scope == "system"
+    )
+    
+    permission_ids = []
+    if user_read_perm:
+        permission_ids.append(str(user_read_perm.id))
+    if group_read_perm:
+        permission_ids.append(str(group_read_perm.id))
+    
+    await group_service.create_group(
+        group_data=GroupCreateSchema(
+            name="acme_team",
+            display_name="ACME Team", 
+            description="ACME Corporation Team",
+            permissions=permission_ids,  # Use actual permission IDs
+            scope="client"
+        ),
+        current_user_id="system",
+        current_client_id=str(acme_corp.id)
+    )
     
     print("\n--- COMPREHENSIVE Scenario Seeding Complete! ---")
 

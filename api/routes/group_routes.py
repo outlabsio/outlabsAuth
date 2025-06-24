@@ -16,7 +16,7 @@ from ..models.scopes import GroupScope
 router = APIRouter(
     prefix="/v1/groups",
     tags=["Group Management"],
-    dependencies=[Depends(has_permission("system:group:read"))]
+    dependencies=[Depends(has_permission("group:read"))]
 )
 
 @router.post("/", response_model=GroupResponseSchema, status_code=status.HTTP_201_CREATED)

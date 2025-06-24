@@ -335,30 +335,44 @@ class GroupService:
         Get all effective permissions for a user from:
         1. Direct role assignments
         2. Group memberships
+        
+        Returns clean permission names (not ObjectIds).
         """
+        from ..models.permission_model import PermissionModel
+        
         user = await UserModel.get(user_id, fetch_links=True)
         if not user:
             return set()
         
-        permissions = set()
+        permission_ids = set()
         
-        # Get permissions from direct roles
+        # Get permission IDs from direct roles
         # (This will be handled by user_service, but included for completeness)
         for role_id in user.roles:
             try:
                 role = await role_service.get_role_by_id(PydanticObjectId(role_id))
                 if role:
-                    permissions.update(role.permissions)
+                    permission_ids.update(role.permissions)
             except Exception:
                 continue  # Skip invalid role IDs
         
-        # Get permissions from groups
+        # Get permission IDs from groups
         user_groups = await self.get_user_groups(user.id)
         for group in user_groups:
             if hasattr(group, 'permissions'):
-                permissions.update(group.permissions)
+                permission_ids.update(group.permissions)
+        
+        # Resolve permission IDs to clean permission names
+        permission_names = set()
+        for permission_id in permission_ids:
+            try:
+                permission = await PermissionModel.get(PydanticObjectId(permission_id))
+                if permission:
+                    permission_names.add(permission.name)
+            except Exception:
+                continue  # Skip invalid permission IDs
                 
-        return permissions
+        return permission_names
 
     async def get_groups(
         self, 

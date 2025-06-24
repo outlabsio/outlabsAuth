@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+import argparse
 from motor.motor_asyncio import AsyncIOMotorClient
 from beanie import init_beanie
 import secrets
@@ -29,7 +30,7 @@ from api.models.group_model import GroupModel
 
 # --- Configuration ---
 MONGO_URL = os.getenv("DATABASE_URL", "mongodb://localhost:27017")
-MAIN_DB_NAME = os.getenv("MONGO_DATABASE", "outlabsAuth")
+DEFAULT_DB_NAME = os.getenv("MONGO_DATABASE", "outlabsAuth")
 
 # Fixed password for all admin users
 ADMIN_PASSWORD = "Asd123$$$"
@@ -48,40 +49,43 @@ DEFAULT_CLIENT_ADMIN_LAST_NAME = "Admin"
 
 # --- Essential Data Definitions ---
 ESSENTIAL_PERMISSIONS = [
-    PermissionCreateSchema(_id="user:create", description="Allows creating a single user."),
-    PermissionCreateSchema(_id="user:read", description="Allows reading user information."),
-    PermissionCreateSchema(_id="user:update", description="Allows updating a user."),
-    PermissionCreateSchema(_id="user:delete", description="Allows deleting a user."),
-    PermissionCreateSchema(_id="user:add_member", description="Allows adding a new user to one's own client account."),
-    PermissionCreateSchema(_id="user:bulk_create", description="Allows bulk creation of users."),
-    PermissionCreateSchema(_id="role:create", description="Allows creating a role."),
-    PermissionCreateSchema(_id="role:read", description="Allows reading role information."),
-    PermissionCreateSchema(_id="role:update", description="Allows updating a role."),
-    PermissionCreateSchema(_id="role:delete", description="Allows deleting a role."),
-    PermissionCreateSchema(_id="permission:create", description="Allows creating a permission."),
-    PermissionCreateSchema(_id="permission:read", description="Allows reading permission information."),
-    PermissionCreateSchema(_id="client_account:create", description="Allows creating a client account."),
-    PermissionCreateSchema(_id="client_account:read", description="Allows reading client account information."),
-    PermissionCreateSchema(_id="client_account:update", description="Allows updating a client account."),
-    PermissionCreateSchema(_id="client_account:delete", description="Allows deleting a client account."),
-    # New platform-scoped permissions for hierarchical multi-platform tenancy
-    PermissionCreateSchema(_id="client_account:create_sub", description="Allows creating sub-clients within platform scope."),
-    PermissionCreateSchema(_id="client_account:read_platform", description="Allows reading all clients within platform scope."),
-    PermissionCreateSchema(_id="client_account:read_created", description="Allows reading only clients you created."),
-    PermissionCreateSchema(_id="group:create", description="Allows creating a group."),
-    PermissionCreateSchema(_id="group:read", description="Allows reading group information."),
-    PermissionCreateSchema(_id="group:update", description="Allows updating a group."),
-    PermissionCreateSchema(_id="group:delete", description="Allows deleting a group."),
-    PermissionCreateSchema(_id="group:manage_members", description="Allows adding/removing members from groups."),
+    # System-level permissions (global)
+    PermissionCreateSchema(name="user:create", display_name="Create Users", description="Allows creating a single user.", scope="system"),
+    PermissionCreateSchema(name="user:read", display_name="Read Users", description="Allows reading user information.", scope="system"),
+    PermissionCreateSchema(name="user:update", display_name="Update Users", description="Allows updating a user.", scope="system"),
+    PermissionCreateSchema(name="user:delete", display_name="Delete Users", description="Allows deleting a user.", scope="system"),
+    PermissionCreateSchema(name="user:add_member", display_name="Add Team Members", description="Allows adding a new user to one's own client account.", scope="system"),
+    PermissionCreateSchema(name="user:bulk_create", display_name="Bulk Create Users", description="Allows bulk creation of users.", scope="system"),
+    PermissionCreateSchema(name="role:create", display_name="Create Roles", description="Allows creating a role.", scope="system"),
+    PermissionCreateSchema(name="role:read", display_name="Read Roles", description="Allows reading role information.", scope="system"),
+    PermissionCreateSchema(name="role:update", display_name="Update Roles", description="Allows updating a role.", scope="system"),
+    PermissionCreateSchema(name="role:delete", display_name="Delete Roles", description="Allows deleting a role.", scope="system"),
+    PermissionCreateSchema(name="permission:create", display_name="Create Permissions", description="Allows creating a permission.", scope="system"),
+    PermissionCreateSchema(name="permission:read", display_name="Read Permissions", description="Allows reading permission information.", scope="system"),
+    PermissionCreateSchema(name="client_account:create", display_name="Create Client Accounts", description="Allows creating a client account.", scope="system"),
+    PermissionCreateSchema(name="client_account:read", display_name="Read Client Accounts", description="Allows reading client account information.", scope="system"),
+    PermissionCreateSchema(name="client_account:update", display_name="Update Client Accounts", description="Allows updating a client account.", scope="system"),
+    PermissionCreateSchema(name="client_account:delete", display_name="Delete Client Accounts", description="Allows deleting a client account.", scope="system"),
+    # Platform-scoped permissions for hierarchical multi-platform tenancy
+    PermissionCreateSchema(name="client_account:create_sub", display_name="Create Sub-Clients", description="Allows creating sub-clients within platform scope.", scope="platform"),
+    PermissionCreateSchema(name="client_account:read_platform", display_name="Read Platform Clients", description="Allows reading all clients within platform scope.", scope="platform"),
+    PermissionCreateSchema(name="client_account:read_created", display_name="Read Created Clients", description="Allows reading only clients you created.", scope="platform"),
+    PermissionCreateSchema(name="group:create", display_name="Create Groups", description="Allows creating a group.", scope="system"),
+    PermissionCreateSchema(name="group:read", display_name="Read Groups", description="Allows reading group information.", scope="system"),
+    PermissionCreateSchema(name="group:update", display_name="Update Groups", description="Allows updating a group.", scope="system"),
+    PermissionCreateSchema(name="group:delete", display_name="Delete Groups", description="Allows deleting a group.", scope="system"),
+    PermissionCreateSchema(name="group:manage_members", display_name="Manage Group Members", description="Allows adding/removing members from groups.", scope="system"),
 ]
 
-SUPER_ADMIN_ROLE = RoleCreateSchema(
-    name="super_admin",
-    display_name="Super Administrator",
-    description="Grants complete system-wide access.",
-    permissions=[p.id for p in ESSENTIAL_PERMISSIONS],
-    scope="system"
-)
+def get_super_admin_role():
+    """Function to get super admin role with actual permission IDs"""
+    return RoleCreateSchema(
+        name="super_admin",
+        display_name="Super Administrator",
+        description="Grants complete system-wide access.",
+        permissions=[],  # Will be populated with actual IDs
+        scope="system"
+    )
 
 # Client Admin Role - for managing users within a client organization
 CLIENT_ADMIN_ROLE = RoleCreateSchema(
@@ -120,17 +124,11 @@ BASIC_USER_ROLE = RoleCreateSchema(
     display_name="Basic User",
     description="Standard user with basic read permissions",
     permissions=["user:read", "group:read", "client_account:read"],
-    scope="client",
+    scope="system",  # Changed to system so it's available everywhere
     is_assignable_by_main_client=True
 )
 
-# All essential roles
-ESSENTIAL_ROLES = [
-    SUPER_ADMIN_ROLE,
-    CLIENT_ADMIN_ROLE,
-    PLATFORM_ADMIN_ROLE,
-    BASIC_USER_ROLE
-]
+# Essential roles are now created dynamically in the seeding function
 
 # Outlabs System Client Account
 OUTLABS_CLIENT_ACCOUNT = ClientAccountCreateSchema(
@@ -187,13 +185,25 @@ async def ensure_permissions_exist():
     created_count = 0
 
     for perm_data in ESSENTIAL_PERMISSIONS:
-        existing_perm = await permission_service.get_permission_by_id(perm_data.id)
+        # Check if permission exists by querying directly
+        existing_perm = await PermissionModel.find_one(
+            PermissionModel.name == perm_data.name,
+            PermissionModel.scope == perm_data.scope,
+            PermissionModel.scope_id == None  # System permissions have null scope_id
+        )
         if not existing_perm:
-            await permission_service.create_permission(perm_data)
-            created_count += 1
-            print(f"  ✓ Created permission: {perm_data.id}")
+            try:
+                await permission_service.create_permission(
+                    perm_data,
+                    current_user_id="system_seed",
+                    current_client_id=None
+                )
+                created_count += 1
+                print(f"  ✓ Created permission: {perm_data.name} (scope: {perm_data.scope})")
+            except Exception as e:
+                print(f"  ❌ Failed to create permission {perm_data.name}: {e}")
         else:
-            print(f"  - Permission already exists: {perm_data.id}")
+            print(f"  - Permission already exists: {perm_data.name} (scope: {perm_data.scope})")
 
     print(f"Permissions check complete. Created {created_count} new permissions.")
     return created_count
@@ -207,7 +217,59 @@ async def ensure_essential_roles_exist():
     created_count = 0
     updated_count = 0
 
-    for role_data in ESSENTIAL_ROLES:
+    # Get actual permission IDs from database
+    actual_permission_ids = []
+    for perm_data in ESSENTIAL_PERMISSIONS:
+        perm = await PermissionModel.find_one(
+            PermissionModel.name == perm_data.name,
+            PermissionModel.scope == perm_data.scope,
+            PermissionModel.scope_id == None
+        )
+        if perm:
+            actual_permission_ids.append(str(perm.id))
+
+    # Create super admin role with actual permission IDs
+    super_admin_role = get_super_admin_role()
+    super_admin_role.permissions = actual_permission_ids
+
+    # Basic permissions for other roles
+    basic_permission_names = ["user:read", "group:read", "client_account:read"]
+    basic_permission_ids = []
+    for perm_name in basic_permission_names:
+        perm = await PermissionModel.find_one(
+            PermissionModel.name == perm_name,
+            PermissionModel.scope == "system",
+            PermissionModel.scope_id == None
+        )
+        if perm:
+            basic_permission_ids.append(str(perm.id))
+
+    # Get CLIENT_ADMIN_ROLE permission IDs
+    client_admin_permission_names = [
+        "user:create", "user:read", "user:update", "user:delete", "user:add_member",
+        "group:create", "group:read", "group:update", "group:delete", "group:manage_members",
+        "role:read", "permission:read", "client_account:read"
+    ]
+    client_admin_permission_ids = []
+    for perm_name in client_admin_permission_names:
+        perm = await PermissionModel.find_one(
+            PermissionModel.name == perm_name,
+            PermissionModel.scope == "system",
+            PermissionModel.scope_id == None
+        )
+        if perm:
+            client_admin_permission_ids.append(str(perm.id))
+    
+    CLIENT_ADMIN_ROLE.permissions = client_admin_permission_ids
+
+    essential_roles = [super_admin_role, CLIENT_ADMIN_ROLE, PLATFORM_ADMIN_ROLE]
+    
+    # Update BASIC_USER_ROLE permissions
+    BASIC_USER_ROLE.permissions = basic_permission_ids
+
+    essential_roles.append(BASIC_USER_ROLE)
+
+    for role_data in essential_roles:
         # Look up role by name and scope using the model directly
         existing_role = await RoleModel.find_one(
             RoleModel.name == role_data.name,
@@ -401,12 +463,15 @@ async def create_or_update_default_client_admin(client_account_id):
         return client_admin_user, ADMIN_PASSWORD
 
 
-async def seed_complete_system():
+async def seed_complete_system(db_name: str = DEFAULT_DB_NAME):
     """
     Main function to seed the super admin user, default client organization, and all required data.
+    
+    Args:
+        db_name: Name of the database to seed (defaults to main database)
     """
     print("=== Outlabs Complete System Seeding ===")
-    print(f"Database: {MAIN_DB_NAME}")
+    print(f"Database: {db_name}")
     print(f"Super Admin Email: {SUPER_ADMIN_EMAIL}")
     print(f"Super Admin Name: {SUPER_ADMIN_FIRST_NAME} {SUPER_ADMIN_LAST_NAME}")
     print(f"Default Org: {DEFAULT_ORG_NAME}")
@@ -416,7 +481,7 @@ async def seed_complete_system():
 
     # Connect to database
     client = AsyncIOMotorClient(MONGO_URL)
-    db = client[MAIN_DB_NAME]
+    db = client[db_name]
 
     try:
         # Initialize Beanie
@@ -474,9 +539,30 @@ async def seed_complete_system():
         client.close()
 
 
-if __name__ == "__main__":
+def main():
+    """
+    Main entry point with command line argument parsing.
+    """
+    parser = argparse.ArgumentParser(description="Seed super admin and essential system data.")
+    parser.add_argument(
+        "--db",
+        type=str,
+        default=DEFAULT_DB_NAME,
+        help=f"The name of the database to seed. Defaults to '{DEFAULT_DB_NAME}'."
+    )
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Seed the test database (outlabsAuth_test). Shortcut for --db outlabsAuth_test"
+    )
+    args = parser.parse_args()
+
+    # Determine target database
+    target_db = "outlabsAuth_test" if args.test else args.db
+    
     print("Starting Complete System Seeding Process...")
     print("This will create super admin + default client organization")
+    print(f"Target database: {target_db}")
     print("Press Ctrl+C to cancel within 3 seconds...")
 
     try:
@@ -486,7 +572,7 @@ if __name__ == "__main__":
             print(f"Starting in {i}...")
             time.sleep(1)
 
-        asyncio.run(seed_complete_system())
+        asyncio.run(seed_complete_system(target_db))
 
     except KeyboardInterrupt:
         print("\n❌ Seeding cancelled by user")
@@ -494,3 +580,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n❌ Fatal error: {str(e)}")
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

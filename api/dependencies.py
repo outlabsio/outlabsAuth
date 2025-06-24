@@ -64,21 +64,25 @@ def has_permission(required_permission: str):
     """
     Dependency factory to check if the current user has the required permission.
     Now includes permissions from both direct roles and group memberships.
+    Uses clean permission names (e.g., "user:create", "listings:manage").
     """
     async def _has_permission(
         user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token)
     ):
         current_user, _ = user_and_token
         
-        # Get all effective permissions (direct roles + group roles)
+        # Get all effective permissions (direct roles + group memberships)
+        # Returns clean permission names from resolved ObjectIds
         user_permissions = await group_service.get_user_effective_permissions(current_user.id)
         
-        if required_permission not in user_permissions:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have permission to perform this action."
-            )
-        return current_user
+        # Check for exact match
+        if required_permission in user_permissions:
+            return current_user
+            
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to perform this action."
+        )
     return _has_permission
 
 def has_hierarchical_client_access(target_client_field: str = "account_id"):

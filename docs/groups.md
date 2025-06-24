@@ -43,6 +43,7 @@ CLIENT GROUPS (Per Client Organization)
 
 ```javascript
 // User effective permissions = Role permissions + Group permissions
+// (All resolved from ObjectIds to permission names for checking)
 user_permissions = [
   ...permissions_from_roles, // e.g., "user:read" from "manager" role
   ...permissions_from_groups, // e.g., "project:alpha:edit" from "project_alpha_team" group
@@ -59,11 +60,11 @@ user_permissions = [
   "name": "sales_team",                    // Simple group name
   "display_name": "Sales Team",            // Human-readable name
   "description": "Handles all sales activities and client relationships",
-  "permissions": [                         // Direct permissions (no roles)
-    "crm:clients:read",
-    "crm:clients:update",
-    "crm:deals:create",
-    "crm:reports:read"
+  "permissions": [                         // Permission ObjectIds (resolved to names for checking)
+    "507f1f77bcf86cd799439015",            // crm:clients:read
+    "507f1f77bcf86cd799439016",            // crm:clients:update
+    "507f1f77bcf86cd799439017",            // crm:deals:create
+    "507f1f77bcf86cd799439018"             // crm:reports:read
   ],
   "scope": "client",                       // "system" | "platform" | "client"
   "scope_id": "685a5f2e82e92ad29111a6a9",  // Foreign key to owner
@@ -96,11 +97,11 @@ user_permissions = [
   "scope": "system",
   "scope_id": null,
   "permissions": [
-    "support:tickets:read",
-    "support:tickets:update",
-    "user:read",
-    "client_account:read",
-    "platform:support:all_clients"
+    "507f1f77bcf86cd799439019",  // support:tickets:read
+    "507f1f77bcf86cd799439020",  // support:tickets:update
+    "507f1f77bcf86cd799439021",  // user:read
+    "507f1f77bcf86cd799439022",  // client_account:read
+    "507f1f77bcf86cd799439023"   // support:cross_client
   ]
 }
 

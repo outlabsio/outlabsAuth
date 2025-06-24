@@ -54,12 +54,6 @@ class PermissionService:
                 detail=f"Invalid scope: {permission_data.scope}"
             )
 
-        # Generate permission ID (scope:name)
-        if permission_data.scope == PermissionScope.SYSTEM:
-            permission_id = f"system:{permission_data.name}"
-        else:
-            permission_id = f"{permission_data.scope.value}:{permission_data.name}"
-
         # Check if permission name already exists in this scope
         existing_permission = await PermissionModel.find_one(
             PermissionModel.name == permission_data.name,
@@ -76,9 +70,8 @@ class PermissionService:
                 detail=f"Permission '{permission_data.name}' already exists in {scope_desc}"
             )
 
-        # Create permission
+        # Create permission (let MongoDB generate ObjectId, no custom ID)
         permission = PermissionModel(
-            id=permission_id,
             name=permission_data.name,
             display_name=permission_data.display_name,
             description=permission_data.description,
@@ -92,8 +85,12 @@ class PermissionService:
         return permission
 
     async def get_permission_by_id(self, permission_id: str) -> Optional[PermissionModel]:
-        """Get a permission by its ID."""
-        return await PermissionModel.get(permission_id)
+        """Get a permission by its ObjectId."""
+        from beanie import PydanticObjectId
+        try:
+            return await PermissionModel.get(PydanticObjectId(permission_id))
+        except Exception:
+            return None
 
     async def get_permissions_by_scope(
         self, 
@@ -183,7 +180,7 @@ class PermissionService:
         return permission
 
     async def delete_permission(self, permission_id: str) -> bool:
-        """Delete a permission by ID."""
+        """Delete a permission by ObjectId."""
         permission = await self.get_permission_by_id(permission_id)
         if not permission:
             return False
