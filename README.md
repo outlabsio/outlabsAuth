@@ -102,6 +102,109 @@ A standalone, production-ready Role-Based Access Control (RBAC) microservice wit
 - **🎯 Role-Based Access**: Granular permissions from platform level to individual agents ✅
 - **⚡ Flexible Permission Model**: Direct + role-based + group-based permission aggregation ✅
 
+## 🏗️ **Complete RBAC Architecture**
+
+### **📋 Three-Component Permission System**
+
+Our RBAC system uses **three complementary components** that work together:
+
+#### **1. Permissions (Scoped Actions)**
+
+Granular actions scoped to organizational levels:
+
+```javascript
+// System permissions (global auth functionality)
+{
+  "id": "system:user:create",
+  "scope": "system",
+  "scope_id": null
+}
+
+// Platform permissions (PropertyHub internal operations)
+{
+  "id": "platform:analytics:view",
+  "scope": "platform",
+  "scope_id": "propertyhub_platform_id"
+}
+
+// Client permissions (real estate company operations)
+{
+  "id": "client:listing:create",
+  "scope": "client",
+  "scope_id": "acme_realestate_client_id"
+}
+```
+
+#### **2. Roles (Permission Collections)**
+
+Named collections of permissions with hierarchical scoping:
+
+```javascript
+// Platform admin role (PropertyHub staff)
+{
+  "name": "platform_admin",
+  "scope": "platform",
+  "scope_id": "propertyhub_platform_id",
+  "permissions": ["platform:client:onboard", "platform:analytics:view", ...]
+}
+
+// Client admin role (ACME Real Estate)
+{
+  "name": "admin",
+  "scope": "client",
+  "scope_id": "acme_realestate_client_id",
+  "permissions": ["client:user:create", "client:listing:manage", ...]
+}
+```
+
+#### **3. Groups (Team Organization)**
+
+Organizational teams with direct permissions at all three levels:
+
+```javascript
+// System group (Lead Generation Company Internal)
+{
+  "name": "customer_support_team",
+  "scope": "system",
+  "scope_id": null,
+  "permissions": ["platform:support:all_clients", "client:user:read_all"]
+}
+
+// Platform group (PropertyHub Customer Support)
+{
+  "name": "corporate_marketing",
+  "scope": "platform",
+  "scope_id": "propertyhub_platform_id",
+  "permissions": ["platform:marketing:all_locations", "platform:analytics:view"]
+}
+
+// Client group (ACME Sales Team)
+{
+  "name": "sales_team",
+  "scope": "client",
+  "scope_id": "acme_realestate_client_id",
+  "permissions": ["client:listing:create", "client:lead:manage"]
+}
+```
+
+### **🔗 User Permission Aggregation**
+
+Users get permissions from **multiple sources**:
+
+```javascript
+// User effective permissions = Direct Roles + Group Permissions
+user_permissions = [
+  ...user.roles.flatMap((role) => role.permissions), // From assigned roles
+  ...user.groups.flatMap((group) => group.permissions), // From group memberships
+];
+```
+
+**Example**: ACME Real Estate agent:
+
+- **Direct Role**: `"sales_agent"` → `["client:listing:create", "client:user:read"]`
+- **Group Membership**: `"weekend_team"` → `["client:weekend:access"]`
+- **Effective Permissions**: All combined with deduplication
+
 ### **🎯 Real-World Permission Examples**
 
 **Platform Level Permissions** ✅:
@@ -122,6 +225,48 @@ A standalone, production-ready Role-Based Access Control (RBAC) microservice wit
 - `user:read` - View user information within their company
 - `group:read` - See their team organization
 - `client_account:read` - Access their company information
+
+### **⚡ Multi-Role Support**
+
+Users can have **multiple roles simultaneously**:
+
+```javascript
+// Platform staff with multiple responsibilities
+{
+  "email": "support@propertyhub.com",
+  "roles": [
+    "platform_support_role_id",  // Customer support capabilities
+    "platform_sales_role_id"     // Also handles sales calls
+  ]
+}
+
+// Client admin who's also a sales agent
+{
+  "email": "admin@acme.com",
+  "roles": [
+    "client_admin_role_id",      // Manage company
+    "sales_agent_role_id"        // Also sells properties
+  ]
+}
+```
+
+### **🔒 Scoping & Isolation**
+
+**Perfect tenant isolation** through scope boundaries:
+
+| Component       | System Level          | Platform Level          | Client Level              |
+| --------------- | --------------------- | ----------------------- | ------------------------- |
+| **Permissions** | Core auth actions     | Platform operations     | Client-specific business  |
+| **Roles**       | Global roles          | Platform team roles     | Client organization roles |
+| **Groups**      | System internal teams | Platform internal teams | Client department teams   |
+| **Isolation**   | Global access         | Platform-specific       | Client-specific           |
+
+**Security Features:**
+
+- ✅ **Name uniqueness**: Within scope (multiple clients can have "admin" role)
+- ✅ **Data isolation**: Platform A cannot see Platform B data
+- ✅ **Permission boundaries**: Client permissions don't work outside client scope
+- ✅ **Hierarchical access**: Platform staff can access client data when authorized
 
 ## 🎯 **API Endpoints**
 
