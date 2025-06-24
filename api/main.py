@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from .database import db, get_database
-from .routes import user_routes, permission_routes, role_routes, auth_routes, client_account_routes, group_routes
+from .routes import user_routes, permission_routes, role_routes, auth_routes, client_account_routes, group_routes, platform_routes
 from .services.permission_service import permission_service
 from .schemas.permission_schema import PermissionCreateSchema
 from .services.role_service import role_service
@@ -43,6 +43,11 @@ async def lifespan(app: FastAPI):
         PermissionCreateSchema(_id="group:update", description="Allows updating a group."),
         PermissionCreateSchema(_id="group:delete", description="Allows deleting a group."),
         PermissionCreateSchema(_id="group:manage_members", description="Allows adding/removing members from groups."),
+        # Platform-specific permissions for PropertyHub three-tier model
+        PermissionCreateSchema(_id="platform:manage_clients", description="Allows managing client accounts across the platform."),
+        PermissionCreateSchema(_id="platform:view_analytics", description="Allows viewing platform-wide analytics and metrics."),
+        PermissionCreateSchema(_id="platform:support_users", description="Allows providing support to users across all clients."),
+        PermissionCreateSchema(_id="platform:onboard_clients", description="Allows onboarding new clients to the platform."),
     ]
 
     for perm_data in essential_permissions:
@@ -51,20 +56,67 @@ async def lifespan(app: FastAPI):
         if not existing_perm:
             await permission_service.create_permission(perm_data)
 
-    # Ensure a super_admin role exists and has all permissions
-    super_admin_role_data = RoleCreateSchema(
-        _id="super_admin",
-        name="Super Administrator",
-        description="Grants complete system-wide access.",
-        permissions=all_permission_ids
-    )
+    # Ensure essential roles exist
+    essential_roles = [
+        # Super Admin Role
+        RoleCreateSchema(
+            _id="super_admin",
+            name="Super Administrator",
+            description="Grants complete system-wide access.",
+            permissions=all_permission_ids
+        ),
+        # Client Admin Role - for managing users within a client organization  
+        RoleCreateSchema(
+            _id="client_admin",
+            name="Client Administrator",
+            description="Administrative access for managing users, groups, and roles within a client organization",
+            permissions=[
+                "user:create", "user:read", "user:update", "user:delete", "user:add_member",
+                "group:create", "group:read", "group:update", "group:delete", "group:manage_members",
+                "role:create", "role:read", "role:update", "role:delete",
+                "permission:read", "client_account:read"
+            ],
+            is_assignable_by_main_client=True
+        ),
+        # Platform Admin Role - for platform-level administration
+        RoleCreateSchema(
+            _id="platform_admin",
+            name="Platform Administrator", 
+            description="Administrative access for managing platform-level operations and multiple client accounts",
+            permissions=[
+                "user:create", "user:read", "user:update", "user:delete", "user:add_member", "user:bulk_create",
+                "role:create", "role:read", "role:update", "role:delete",
+                "permission:create", "permission:read",
+                "client_account:create", "client_account:read", "client_account:update", "client_account:delete",
+                "client_account:create_sub", "client_account:read_platform", "client_account:read_created",
+                "group:create", "group:read", "group:update", "group:delete", "group:manage_members"
+            ],
+            is_assignable_by_main_client=False
+        ),
+        # Basic User Role - for standard users with minimal permissions
+        RoleCreateSchema(
+            _id="basic_user",
+            name="Basic User",
+            description="Standard user with basic read permissions",
+            permissions=["user:read", "group:read", "client_account:read"],
+            is_assignable_by_main_client=True
+        )
+    ]
 
-    existing_admin_role = await role_service.get_role_by_id("super_admin")
-    if not existing_admin_role:
-        await role_service.create_role(super_admin_role_data)
-    else:
-        # If role exists, ensure it has all permissions
-        await role_service.update_role("super_admin", super_admin_role_data)
+    for role_data in essential_roles:
+        existing_role = await role_service.get_role_by_id(role_data.id)
+        if not existing_role:
+            await role_service.create_role(role_data)
+        else:
+            # Update existing role to ensure it has current permissions and settings
+            from .schemas.role_schema import RoleUpdateSchema
+            update_data = RoleUpdateSchema(
+                name=role_data.name,
+                description=role_data.description,
+                permissions=role_data.permissions,
+                is_assignable_by_main_client=role_data.is_assignable_by_main_client
+            )
+            await role_service.update_role(role_data.id, update_data)
 
     yield
     await db.close()
@@ -82,6 +134,7 @@ app.include_router(permission_routes.router)
 app.include_router(role_routes.router)
 app.include_router(client_account_routes.router)
 app.include_router(group_routes.router)
+app.include_router(platform_routes.router)
 
 @app.get("/health", tags=["Health"])
 async def health_check():

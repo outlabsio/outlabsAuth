@@ -2,19 +2,26 @@
 
 ## Overview
 
-The Client Account Routes provide a comprehensive API for managing client accounts within the authentication system with **hierarchical multi-platform tenancy support**. This module handles all CRUD operations for client accounts with proper authentication and **platform-scoped authorization controls**.
+The Client Account Routes provide a comprehensive API for managing client accounts within the authentication system with **complete hierarchical multi-platform tenancy support**. This module handles all CRUD operations for client accounts with proper authentication, **platform-scoped authorization controls**, and **specialized platform onboarding workflows**.
 
 **Base URL:** `/v1/client_accounts`  
 **Tags:** Client Account Management
 
-## 🏢 **Hierarchical Multi-Platform Tenancy**
+## 🏢 **Complete Hierarchical Multi-Platform Tenancy**
 
-This API supports a three-tier permission hierarchy:
+This API supports a complete three-tier permission hierarchy with platform onboarding:
 
 - **Super Admins**: Complete system access across all platforms
-- **Platform Creators**: Can create sub-clients and access all clients within their platform
+- **Platform Staff**: Can create, onboard, and manage sub-clients across all clients within their platform
 - **Platform Viewers**: Can only access clients they created within their platform
 - **Client Admins**: Access only their own client account (standard behavior)
+
+## 🚀 **Platform Features Implemented**
+
+**✅ Cross-Client Management**: Platform staff can view and manage multiple client companies
+**✅ Client Onboarding**: Streamlined onboarding workflow for new client companies
+**✅ Platform Analytics**: Integration with business intelligence endpoints
+**✅ Hierarchical Access Control**: Secure multi-tenant architecture with proper isolation
 
 ## 🔄 **Scalable Hierarchical Design**
 
@@ -156,7 +163,83 @@ curl -X POST "https://api.example.com/v1/client_accounts/sub-clients" \
      }'
 ```
 
-### 3. Get All Client Accounts (Hierarchical Filtering)
+### 3. Onboard New Client (Platform Staff)
+
+**✅ NEW FEATURE** - Streamlined client onboarding workflow designed for platform staff to efficiently onboard new client companies with enhanced tracking and business intelligence integration.
+
+**Endpoint:** `POST /v1/client_accounts/onboard-client`
+
+**Required Permissions:**
+
+- `platform:onboard_clients`
+- User must be platform staff (`is_platform_staff: true`)
+
+**Request Body:**
+
+```json
+{
+  "name": "string",
+  "description": "string",
+  "main_contact_user_id": "string"
+}
+```
+
+**Features:**
+
+- **Platform Staff Validation**: Only platform staff can access this endpoint
+- **Enhanced Tracking**: Automatically sets `created_by_platform` tracking for business intelligence
+- **Streamlined Workflow**: Optimized for platform onboarding use cases
+- **Business Intelligence**: Integrates with platform analytics for client lifecycle tracking
+
+**Response:**
+
+- **Status Code:** `201 Created`
+- **Response Body:**
+
+```json
+{
+  "id": "string",
+  "name": "string",
+  "description": "string",
+  "status": "active",
+  "main_contact_user_id": "string",
+  "data_retention_policy_days": null,
+  "platform_id": "inherited_from_platform",
+  "created_by_client_id": "platform_client_id",
+  "is_platform_root": false,
+  "created_by_platform": true,
+  "created_at": "2023-01-01T00:00:00Z",
+  "updated_at": "2023-01-01T00:00:00Z"
+}
+```
+
+**Error Responses:**
+
+- `409 Conflict` - Client account with this name already exists
+- `403 Forbidden` - User is not platform staff or lacks onboarding permissions
+- `401 Unauthorized` - Invalid authentication
+- `400 Bad Request` - Invalid request body or missing required fields
+
+**Example Request:**
+
+```bash
+curl -X POST "https://api.example.com/v1/client_accounts/onboard-client" \
+     -H "Authorization: Bearer <platform_staff_token>" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "name": "Elite Properties Real Estate",
+       "description": "Luxury real estate firm joining PropertyHub platform"
+     }'
+```
+
+**Business Use Cases:**
+
+- **Platform Sales Teams**: Onboarding new real estate companies to PropertyHub
+- **Customer Success**: Streamlined setup process for new client companies
+- **Business Intelligence**: Tracking platform growth and client acquisition metrics
+- **Automated Workflows**: Integration with CRM and business development tools
+
+### 4. Get All Client Accounts (Hierarchical Filtering)
 
 Retrieves a paginated list of client accounts with automatic hierarchical filtering based on user permissions.
 
@@ -173,7 +256,7 @@ Retrieves a paginated list of client accounts with automatic hierarchical filter
 **Authorization Logic:**
 
 - **Super Admins**: See all client accounts
-- **Platform Creators** (`client_account:read_platform`): See all accounts in their platform
+- **Platform Staff** (`client_account:read_platform`): See all accounts in their platform
 - **Platform Viewers** (`client_account:read_created`): See only accounts they created
 - **Regular Users**: See only their own account
 
@@ -209,7 +292,7 @@ curl -X GET "https://api.example.com/v1/client_accounts/?skip=0&limit=50" \
      -H "Authorization: Bearer <token>"
 ```
 
-### 4. Get My Sub-Clients
+### 5. Get My Sub-Clients
 
 Retrieves all sub-clients created by the current user's client account using efficient reverse queries.
 
@@ -253,7 +336,7 @@ curl -X GET "https://api.example.com/v1/client_accounts/my-sub-clients" \
      -H "Authorization: Bearer <token>"
 ```
 
-### 5. Get Client Account by ID (Hierarchical Access Control)
+### 6. Get Client Account by ID (Hierarchical Access Control)
 
 Retrieves a specific client account by its ID with hierarchical access control.
 
@@ -304,7 +387,7 @@ curl -X GET "https://api.example.com/v1/client_accounts/507f1f77bcf86cd799439011
      -H "Authorization: Bearer <token>"
 ```
 
-### 6. Update Client Account (Hierarchical Access Control)
+### 7. Update Client Account (Hierarchical Access Control)
 
 Updates an existing client account with hierarchical access control.
 
@@ -374,7 +457,7 @@ curl -X PUT "https://api.example.com/v1/client_accounts/507f1f77bcf86cd799439011
      }'
 ```
 
-### 7. Delete Client Account (Hierarchical Access Control)
+### 8. Delete Client Account (Hierarchical Access Control)
 
 Deletes a client account from the system with hierarchical access control.
 
@@ -413,19 +496,19 @@ curl -X DELETE "https://api.example.com/v1/client_accounts/507f1f77bcf86cd799439
 
 ### Platform-Scoped Permissions
 
-| Permission                     | Description                                   | Use Case                                       |
-| ------------------------------ | --------------------------------------------- | ---------------------------------------------- |
-| `client_account:create`        | Create top-level client accounts              | Super admins creating platform roots           |
-| `client_account:create_sub`    | Create sub-clients within platform scope      | Platform admins creating sub-clients           |
-| `client_account:read_platform` | Read all clients within platform scope        | Platform creators viewing all platform clients |
-| `client_account:read_created`  | Read only clients you created                 | Platform viewers with limited scope            |
-| `client_account:read`          | Basic read access with hierarchical filtering | All authenticated users                        |
-| `client_account:update`        | Update client accounts (with access control)  | Authorized users modifying accounts            |
-| `client_account:delete`        | Delete client accounts (with access control)  | Super admins and authorized users              |
+| Permission                     | Description                                   | Use Case                                    |
+| ------------------------------ | --------------------------------------------- | ------------------------------------------- |
+| `client_account:create`        | Create top-level client accounts              | Super admins creating platform roots        |
+| `client_account:create_sub`    | Create sub-clients within platform scope      | Platform admins creating sub-clients        |
+| `client_account:read_platform` | Read all clients within platform scope        | Platform staff viewing all platform clients |
+| `client_account:read_created`  | Read only clients you created                 | Platform viewers with limited scope         |
+| `client_account:read`          | Basic read access with hierarchical filtering | All authenticated users                     |
+| `client_account:update`        | Update client accounts (with access control)  | Authorized users modifying accounts         |
+| `client_account:delete`        | Delete client accounts (with access control)  | Super admins and authorized users           |
 
 ### Role Examples
 
-**Platform Creator Role:**
+**Platform Staff Role:**
 
 - `client_account:read`, `client_account:create_sub`, `client_account:read_platform`, `client_account:update`
 - Can create sub-clients and see all clients in their platform
@@ -499,7 +582,7 @@ The API implements sophisticated hierarchical access control:
 ### Access Patterns
 
 - **Super Admin Access**: Can access any client account across all platforms
-- **Platform Creator Access**: Can access all accounts within their `platform_id`
+- **Platform Staff Access**: Can access all accounts within their `platform_id`
 - **Platform Viewer Access**: Can access only accounts where `created_by_client_id` matches their client account
 - **Regular User Access**: Can access only their own client account
 

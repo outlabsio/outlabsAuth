@@ -197,11 +197,18 @@ curl -X POST "https://api.example.com/v1/auth/logout_all" \
 
 ### 5. Get Current User Profile
 
-Retrieves the profile of the currently authenticated user.
+**✅ ENHANCED** - Retrieves the profile of the currently authenticated user with **real-time effective permissions** and **platform staff information**.
 
 **Endpoint:** `GET /v1/auth/me`
 
 **Authentication Required:** Yes (Access Token)
+
+**Features:**
+
+- **Real-Time Permissions**: Calculates effective permissions from direct roles, group roles, and user assignments
+- **Platform Staff Info**: Includes platform hierarchy fields for cross-client management
+- **Multi-Source Aggregation**: Combines permissions from roles, groups, and direct assignments
+- **Security Context**: Provides complete authorization context for frontend applications
 
 **Response:**
 
@@ -211,13 +218,34 @@ Retrieves the profile of the currently authenticated user.
 ```json
 {
   "id": "507f1f77bcf86cd799439011",
-  "email": "john.doe@example.com",
-  "first_name": "John",
-  "last_name": "Doe",
+  "email": "admin@propertyhub.com",
+  "first_name": "Platform",
+  "last_name": "Admin",
   "client_account_id": "507f1f77bcf86cd799439012",
-  "roles": ["user"],
-  "groups": [],
-  "is_main_client": false,
+  "roles": ["platform_admin"],
+  "groups": ["507f1f77bcf86cd799439013"],
+  "permissions": [
+    "client_account:create",
+    "client_account:read",
+    "client_account:update",
+    "user:create",
+    "user:read",
+    "user:update",
+    "user:delete",
+    "group:create",
+    "group:read",
+    "group:update",
+    "group:delete",
+    "role:read",
+    "permission:read",
+    "platform:manage_clients",
+    "platform:view_analytics",
+    "platform:support_users",
+    "platform:onboard_clients"
+  ],
+  "is_main_client": true,
+  "is_platform_staff": true,
+  "platform_scope": "all",
   "status": "active",
   "created_at": "2023-01-01T00:00:00Z",
   "updated_at": "2023-01-01T00:00:00Z",
@@ -225,6 +253,24 @@ Retrieves the profile of the currently authenticated user.
   "locale": "en-US"
 }
 ```
+
+**New Fields Explained:**
+
+- **`permissions`**: Array of effective permissions calculated from all sources (roles + groups + direct)
+- **`is_platform_staff`**: Boolean indicating if user has platform-level access
+- **`platform_scope`**: Platform access scope ("all", "created", or null)
+
+**Permission Calculation:**
+
+1. **Direct Role Permissions**: Permissions from user's assigned roles
+2. **Group Role Permissions**: Permissions from roles assigned to user's groups
+3. **Combined**: Real-time aggregation of all permission sources
+
+**Platform Staff Levels:**
+
+- **`platform_scope: "all"`**: Can access all clients within platform (admins, support)
+- **`platform_scope: "created"`**: Can access only clients they created (sales)
+- **`is_platform_staff: false`**: Regular client users (no cross-client access)
 
 **Error Responses:**
 
@@ -235,6 +281,54 @@ Retrieves the profile of the currently authenticated user.
 ```bash
 curl -X GET "https://api.example.com/v1/auth/me" \
      -H "Authorization: Bearer <access_token>"
+```
+
+**Example Response (Regular Client User):**
+
+```json
+{
+  "id": "507f1f77bcf86cd799439014",
+  "email": "john.agent@acmerealestate.com",
+  "first_name": "John",
+  "last_name": "Agent",
+  "client_account_id": "507f1f77bcf86cd799439015",
+  "roles": ["real_estate_agent"],
+  "groups": ["507f1f77bcf86cd799439016"],
+  "permissions": ["user:read", "group:read", "client_account:read"],
+  "is_main_client": false,
+  "is_platform_staff": false,
+  "platform_scope": null,
+  "status": "active",
+  "created_at": "2023-01-01T00:00:00Z",
+  "updated_at": "2023-01-01T00:00:00Z",
+  "last_login_at": "2023-01-01T00:00:00Z",
+  "locale": "en-US"
+}
+```
+
+**Frontend Integration:**
+
+```javascript
+// Check if user has specific permission
+function hasPermission(userProfile, permission) {
+  return userProfile.permissions.includes(permission);
+}
+
+// Check if user is platform staff
+function isPlatformStaff(userProfile) {
+  return userProfile.is_platform_staff === true;
+}
+
+// Check platform scope level
+function canAccessAllClients(userProfile) {
+  return userProfile.platform_scope === "all";
+}
+
+// Usage examples
+const user = await getCurrentUser();
+const canCreateClients = hasPermission(user, "client_account:create");
+const canViewAnalytics = hasPermission(user, "platform:view_analytics");
+const isPlatformUser = isPlatformStaff(user);
 ```
 
 ### 6. Request Password Reset

@@ -1,5 +1,5 @@
 from typing import Optional, List
-from pydantic import BaseModel, Field, ConfigDict, field_serializer
+from pydantic import BaseModel, Field, ConfigDict, field_serializer, computed_field
 from datetime import datetime
 from beanie import PydanticObjectId
 
@@ -55,6 +55,12 @@ class ClientAccountResponseSchema(BaseModel):
     
     created_at: datetime
     updated_at: datetime
+
+    @computed_field
+    @property
+    def created_by_platform(self) -> bool:
+        """Indicates if this client was created by a platform (has a parent client)."""
+        return self.created_by_client_id is not None
 
     @field_serializer('id')
     def serialize_id(self, value: PydanticObjectId) -> str:

@@ -15,6 +15,7 @@ from ..schemas.password_reset_schema import PasswordResetRequestSchema, Password
 from ..dependencies import get_current_user, get_current_user_with_token
 from ..models.user_model import UserModel
 from ..models.password_reset_token_model import PasswordResetTokenModel
+from ..services.group_service import group_service
 
 router = APIRouter(
     prefix="/v1/auth",
@@ -220,6 +221,11 @@ async def read_users_me(
     user_dict["client_account_id"] = str(current_user.client_account.id) if current_user.client_account else None
     # Remove the client_account object from response
     user_dict.pop("client_account", None)
+
+    # Add effective permissions for platform permission validation
+    user_permissions = await group_service.get_user_effective_permissions(current_user.id)
+    user_dict["permissions"] = list(user_permissions)
+
     return user_dict
 
 @router.post("/password/reset-request", status_code=status.HTTP_200_OK)

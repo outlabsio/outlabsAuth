@@ -6,6 +6,7 @@ from ..services.client_account_service import client_account_service
 from ..schemas.client_account_schema import ClientAccountCreateSchema, ClientAccountUpdateSchema, ClientAccountResponseSchema
 from ..dependencies import has_permission, valid_account_id, get_current_user, has_hierarchical_client_access
 from ..services.group_service import group_service
+from ..services.user_service import user_service
 
 router = APIRouter(
     prefix="/v1/client_accounts",
@@ -188,4 +189,51 @@ async def delete_client_account(
     """
     success = await client_account_service.delete_client_account(account_id)
     if not success:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client account not found") 
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client account not found")
+
+@router.post("/onboard-client", status_code=status.HTTP_201_CREATED, responses={
+    201: {"model": ClientAccountResponseSchema},
+    403: {"description": "Insufficient permissions"}
+})
+async def onboard_new_client(
+    client_data: ClientAccountCreateSchema,
+    current_user = Depends(get_current_user)
+):
+    """
+    Onboard a new real estate company to the PropertyHub platform.
+    Only available to platform staff with appropriate permissions.
+    """
+    # Check if user has platform management permission and is platform staff
+    user_permissions = await group_service.get_user_effective_permissions(current_user.id)
+    is_platform_staff = getattr(current_user, 'is_platform_staff', False)
+    
+    if not is_platform_staff:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Client onboarding access restricted to platform staff."
+        )
+    
+    if "client_account:create" not in user_permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to create client accounts."
+        )
+    
+    # Get current user's client account ID (PropertyHub Platform)
+    user_client_id = str(current_user.client_account.id) if current_user.client_account else None
+    if not user_client_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User not associated with any client account."
+        )
+    
+    # Create the new client account with platform relationship
+    new_account = await client_account_service.create_client_account(
+        client_data, 
+        created_by_client_id=user_client_id
+    )
+    
+    # Use Pydantic v2 model validation for automatic ObjectId handling
+    return ClientAccountResponseSchema.model_validate(new_account, from_attributes=True)
+
+ 

@@ -72,6 +72,52 @@ SUPER_ADMIN_ROLE = RoleCreateSchema(
     permissions=[p.id for p in ESSENTIAL_PERMISSIONS]
 )
 
+# Client Admin Role - for managing users within a client organization
+CLIENT_ADMIN_ROLE = RoleCreateSchema(
+    _id="client_admin",
+    name="Client Administrator",
+    description="Administrative access for managing users, groups, and roles within a client organization",
+    permissions=[
+        "user:create", "user:read", "user:update", "user:delete", "user:add_member",
+        "group:create", "group:read", "group:update", "group:delete", "group:manage_members",
+        "role:read", "permission:read", "client_account:read"
+    ],
+    is_assignable_by_main_client=True
+)
+
+# Platform Admin Role - for platform-level administration
+PLATFORM_ADMIN_ROLE = RoleCreateSchema(
+    _id="platform_admin",
+    name="Platform Administrator", 
+    description="Administrative access for managing platform-level operations and multiple client accounts",
+    permissions=[
+        "user:create", "user:read", "user:update", "user:delete", "user:add_member", "user:bulk_create",
+        "role:create", "role:read", "role:update", "role:delete",
+        "permission:create", "permission:read",
+        "client_account:create", "client_account:read", "client_account:update", "client_account:delete",
+        "client_account:create_sub", "client_account:read_platform", "client_account:read_created",
+        "group:create", "group:read", "group:update", "group:delete", "group:manage_members"
+    ],
+    is_assignable_by_main_client=False
+)
+
+# Basic User Role - for standard users with minimal permissions
+BASIC_USER_ROLE = RoleCreateSchema(
+    _id="basic_user",
+    name="Basic User",
+    description="Standard user with basic read permissions",
+    permissions=["user:read", "group:read", "client_account:read"],
+    is_assignable_by_main_client=True
+)
+
+# All essential roles
+ESSENTIAL_ROLES = [
+    SUPER_ADMIN_ROLE,
+    CLIENT_ADMIN_ROLE,
+    PLATFORM_ADMIN_ROLE,
+    BASIC_USER_ROLE
+]
+
 # Outlabs System Client Account
 OUTLABS_CLIENT_ACCOUNT = ClientAccountCreateSchema(
     name="Outlabs System",
@@ -139,24 +185,35 @@ async def ensure_permissions_exist():
     return created_count
 
 
-async def ensure_super_admin_role_exists():
+async def ensure_essential_roles_exist():
     """
-    Ensure the super_admin role exists with all permissions.
+    Ensure all essential roles exist in the database.
     """
-    print("Ensuring super_admin role exists...")
+    print("Ensuring essential roles exist...")
+    created_count = 0
+    updated_count = 0
 
-    existing_role = await role_service.get_role_by_id("super_admin")
-    if not existing_role:
-        await role_service.create_role(SUPER_ADMIN_ROLE)
-        print("  ✓ Created super_admin role")
-        return True
-    else:
-        # Update existing role to ensure it has all permissions
-        all_permission_ids = [p.id for p in ESSENTIAL_PERMISSIONS]
-        update_data = {"permissions": all_permission_ids}
-        await role_service.update_role("super_admin", update_data)
-        print("  ✓ Updated super_admin role with all permissions")
-        return False
+    for role_data in ESSENTIAL_ROLES:
+        existing_role = await role_service.get_role_by_id(role_data.id)
+        if not existing_role:
+            await role_service.create_role(role_data)
+            created_count += 1
+            print(f"  ✓ Created role: {role_data.id}")
+        else:
+            # Update existing role to ensure it has current permissions
+            from api.schemas.role_schema import RoleUpdateSchema
+            update_data = RoleUpdateSchema(
+                name=role_data.name,
+                description=role_data.description,
+                permissions=role_data.permissions,
+                is_assignable_by_main_client=role_data.is_assignable_by_main_client
+            )
+            await role_service.update_role(role_data.id, update_data)
+            updated_count += 1
+            print(f"  ✓ Updated role: {role_data.id}")
+
+    print(f"Roles check complete. Created {created_count} new roles, updated {updated_count} existing roles.")
+    return created_count, updated_count
 
 
 async def ensure_outlabs_client_account_exists():
@@ -255,8 +312,8 @@ async def seed_super_admin():
         # Step 1: Ensure permissions exist
         await ensure_permissions_exist()
 
-        # Step 2: Ensure super admin role exists
-        await ensure_super_admin_role_exists()
+        # Step 2: Ensure essential roles exist
+        await ensure_essential_roles_exist()
 
         # Step 3: Ensure Outlabs client account exists
         client_account, account_created = await ensure_outlabs_client_account_exists()

@@ -44,6 +44,7 @@ class UserResponseSchema(BaseModel):
     client_account_id: Optional[str] = None  # Will be populated from Link
     roles: List[str]
     groups: Optional[List[str]] = []  # List of group IDs
+    permissions: Optional[List[str]] = []  # Effective permissions from roles and groups
     is_main_client: bool
     is_platform_staff: Optional[bool] = False
     platform_scope: Optional[str] = None

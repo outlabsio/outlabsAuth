@@ -92,6 +92,11 @@ ESSENTIAL_PERMISSIONS = [
     PermissionCreateSchema(_id="group:update", description="Allows updating a group."),
     PermissionCreateSchema(_id="group:delete", description="Allows deleting a group."),
     PermissionCreateSchema(_id="group:manage_members", description="Allows adding/removing members from groups."),
+    # Platform-specific permissions for PropertyHub three-tier model
+    PermissionCreateSchema(_id="platform:manage_clients", description="Allows managing client accounts across the platform."),
+    PermissionCreateSchema(_id="platform:view_analytics", description="Allows viewing platform-wide analytics and metrics."),
+    PermissionCreateSchema(_id="platform:support_users", description="Allows providing support to users across all clients."),
+    PermissionCreateSchema(_id="platform:onboard_clients", description="Allows onboarding new clients to the platform."),
 ]
 
 SUPER_ADMIN_ROLE = RoleCreateSchema(
@@ -386,7 +391,9 @@ async def seed_propertyhub_scenario():
             permissions=["client_account:create", "client_account:read", "client_account:update", 
                         "user:create", "user:read", "user:update", "user:delete",
                         "group:create", "group:read", "group:update", "group:delete",
-                        "role:read", "permission:read"],
+                        "role:read", "permission:read",
+                        "platform:manage_clients", "platform:view_analytics", 
+                        "platform:support_users", "platform:onboard_clients"],
             is_assignable_by_main_client=True
         ),
         RoleCreateSchema(
@@ -405,7 +412,8 @@ async def seed_propertyhub_scenario():
             _id="real_estate_admin", name="Real Estate Company Admin",
             description="Real estate company administrator",
             permissions=["user:create", "user:read", "user:update", "user:add_member",
-                        "group:create", "group:read", "group:update", "group:manage_members"],
+                        "group:create", "group:read", "group:update", "group:manage_members",
+                        "client_account:read"],
             is_assignable_by_main_client=True
         ),
         RoleCreateSchema(
