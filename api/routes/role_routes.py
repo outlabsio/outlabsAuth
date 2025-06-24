@@ -87,7 +87,7 @@ async def create_role(
         scope_id=scope_id
     )
     
-    return RoleResponseSchema.model_validate(role)
+    return await role_service.role_to_response_schema(role)
 
 @router.get("/", response_model=List[RoleResponseSchema])
 async def get_roles(
@@ -165,7 +165,13 @@ async def get_roles(
         if await role_service.user_can_view_role(current_user.roles, client_account_id, role):
             visible_roles.append(role)
 
-    return [RoleResponseSchema.model_validate(role) for role in visible_roles]
+    # Convert roles to response schema with permission details
+    response_roles = []
+    for role in visible_roles:
+        response_role = await role_service.role_to_response_schema(role)
+        response_roles.append(response_role)
+    
+    return response_roles
 
 @router.get("/available", response_model=AvailableRolesResponseSchema)
 async def get_available_roles(
@@ -222,7 +228,7 @@ async def get_role(
             detail="You do not have permission to view this role"
         )
     
-    return RoleResponseSchema.model_validate(role)
+    return await role_service.role_to_response_schema(role)
 
 @router.put("/{role_id}", response_model=RoleResponseSchema)
 async def update_role(
@@ -254,7 +260,7 @@ async def update_role(
         )
     
     updated_role = await role_service.update_role(role_id, role_data)
-    return RoleResponseSchema.model_validate(updated_role)
+    return await role_service.role_to_response_schema(updated_role)
 
 @router.delete("/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_role(

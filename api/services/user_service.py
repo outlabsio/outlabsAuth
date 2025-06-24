@@ -298,5 +298,45 @@ class UserService:
                 
         return permission_names
 
+    async def get_user_effective_permission_details(self, user_id: PydanticObjectId) -> List:
+        """
+        Get all effective permissions for a user with full permission details.
+        Returns PermissionDetailSchema objects for API responses.
+        
+        Args:
+            user_id: User's ObjectId
+            
+        Returns:
+            List of PermissionDetailSchema objects with id, name, scope, etc.
+        """
+        from .permission_service import permission_service
+        from beanie import PydanticObjectId as ObjectId
+        
+        user = await self.get_user_by_id(user_id)
+        if not user:
+            return []
+        
+        permission_ids = set()
+        
+        # Get permission IDs from direct roles
+        for role_id in user.roles:
+            try:
+                role = await role_service.get_role_by_id(ObjectId(role_id))
+                if role:
+                    permission_ids.update(role.permissions)
+            except Exception:
+                continue  # Skip invalid role IDs
+        
+        # Get permission IDs from groups
+        if user.groups:
+            for group in user.groups:
+                if hasattr(group, 'permissions') and group.permissions:
+                    permission_ids.update(group.permissions)
+        
+        # Convert permission IDs to detailed permission information
+        permission_details = await permission_service.resolve_permissions_to_details(list(permission_ids))
+        
+        return permission_details
+
 # Instantiate the service for use in other parts of the application
 user_service = UserService() 

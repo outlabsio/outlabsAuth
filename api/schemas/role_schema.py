@@ -3,6 +3,7 @@ from typing import Optional, List
 from datetime import datetime
 from enum import Enum
 from beanie import PydanticObjectId
+from .permission_schema import PermissionDetailSchema
 
 class RoleScope(str, Enum):
     """Role scope enumeration"""
@@ -13,12 +14,12 @@ class RoleScope(str, Enum):
 class RoleCreateSchema(BaseModel):
     """
     Schema for creating a new role.
-    Frontend provides simple role details, backend handles scoping.
+    Frontend provides permission names, backend converts to ObjectIds.
     """
     name: str = Field(..., description="Role name (e.g., 'admin', 'manager')")
     display_name: str = Field(..., description="Human-readable role name")
     description: Optional[str] = Field(None, description="Role purpose and capabilities")
-    permissions: List[str] = Field(default_factory=list, description="List of permission IDs")
+    permissions: List[str] = Field(default_factory=list, description="List of permission names")
     scope: RoleScope = Field(..., description="Role scope: system, platform, or client")
     is_assignable_by_main_client: bool = Field(False, description="Can client admins assign this role?")
 
@@ -30,18 +31,19 @@ class RoleUpdateSchema(BaseModel):
     name: Optional[str] = Field(None, description="Role name")
     display_name: Optional[str] = Field(None, description="Human-readable role name")
     description: Optional[str] = Field(None, description="Role description")
-    permissions: Optional[List[str]] = Field(None, description="List of permission IDs")
+    permissions: Optional[List[str]] = Field(None, description="List of permission names")
     is_assignable_by_main_client: Optional[bool] = Field(None, description="Can client admins assign this role?")
 
 class RoleResponseSchema(BaseModel):
     """
     Schema for returning role data in API responses.
+    Returns full permission details with both ID and name.
     """
     id: PydanticObjectId = Field(..., alias="_id", description="Role ID")
     name: str = Field(..., description="Role name")
     display_name: str = Field(..., description="Human-readable role name")
     description: Optional[str] = Field(None, description="Role description")
-    permissions: List[str] = Field(..., description="List of permission IDs")
+    permissions: List[PermissionDetailSchema] = Field(..., description="Permission details with ID and name")
     scope: RoleScope = Field(..., description="Role scope")
     scope_id: Optional[str] = Field(None, description="Scope owner ID")
     is_assignable_by_main_client: bool = Field(..., description="Can client admins assign this role?")

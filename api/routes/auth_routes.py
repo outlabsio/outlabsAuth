@@ -222,9 +222,9 @@ async def read_users_me(
     # Remove the client_account object from response
     user_dict.pop("client_account", None)
 
-    # Add effective permissions from both roles AND groups (new aggregated method)
-    user_permissions = await user_service.get_user_effective_permissions(current_user.id)
-    user_dict["permissions"] = list(user_permissions)
+    # Add effective permissions with full details (new aggregated method)
+    user_permission_details = await user_service.get_user_effective_permission_details(current_user.id)
+    user_dict["permissions"] = user_permission_details
 
     return user_dict
 

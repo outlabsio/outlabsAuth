@@ -46,8 +46,7 @@ async def create_group(
         current_client_id=current_client_id,
         scope_id=scope_id
     )
-    group_dict = await group_service.group_to_response_dict(new_group)
-    return GroupResponseSchema.model_validate(group_dict)
+    return await group_service.group_to_response_schema(new_group)
 
 @router.get("/", response_model=List[GroupResponseSchema])
 async def get_groups(
@@ -66,11 +65,11 @@ async def get_groups(
         scope=scope,
         scope_id=scope_id
     )
-    # Convert groups to response format with resolved permission names
+    # Convert groups to response format with resolved permission details
     group_responses = []
     for group in groups:
-        group_dict = await group_service.group_to_response_dict(group)
-        group_responses.append(GroupResponseSchema.model_validate(group_dict))
+        group_response = await group_service.group_to_response_schema(group)
+        group_responses.append(group_response)
     return group_responses
 
 @router.get("/available", response_model=AvailableGroupsResponseSchema)
@@ -110,8 +109,7 @@ async def get_group_by_id(
     if not group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
-    group_dict = await group_service.group_to_response_dict(group)
-    return GroupResponseSchema.model_validate(group_dict)
+    return await group_service.group_to_response_schema(group)
 
 @router.put("/{group_id}", response_model=GroupResponseSchema)
 async def update_group(
@@ -130,8 +128,7 @@ async def update_group(
     if not updated_group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
-    group_dict = await group_service.group_to_response_dict(updated_group)
-    return GroupResponseSchema.model_validate(group_dict)
+    return await group_service.group_to_response_schema(updated_group)
 
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_group(
@@ -236,15 +233,21 @@ async def get_user_groups(
     Get all groups that a user belongs to, along with their effective permissions.
     """
     try:
-        user_groups = await group_service.get_user_groups(PydanticObjectId(user_id))
-        effective_permissions = await group_service.get_user_effective_permissions(PydanticObjectId(user_id))
+        from ..services.user_service import user_service
         
-        groups_response = [GroupResponseSchema.model_validate(group) for group in user_groups]
+        user_groups = await group_service.get_user_groups(PydanticObjectId(user_id))
+        effective_permission_details = await user_service.get_user_effective_permission_details(PydanticObjectId(user_id))
+        
+        # Convert groups to response schema with permission details
+        groups_response = []
+        for group in user_groups:
+            group_response = await group_service.group_to_response_schema(group)
+            groups_response.append(group_response)
         
         return UserGroupsResponseSchema(
             user_id=user_id,
             groups=groups_response,
-            effective_permissions=list(effective_permissions)
+            effective_permissions=effective_permission_details
         )
     except Exception:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID format") 

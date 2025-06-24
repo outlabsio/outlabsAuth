@@ -76,32 +76,8 @@ class GroupService:
                 detail=f"Group '{group_data.name}' already exists in {scope_desc}"
             )
 
-        # Convert permission names to ObjectIds and validate they exist
-        permission_ids = []
-        if group_data.permissions:
-            for permission_name in group_data.permissions:
-                # Check if it's already an ObjectId (for backward compatibility)
-                try:
-                    from beanie import PydanticObjectId
-                    # If it's already an ObjectId, validate it exists
-                    permission_id = PydanticObjectId(permission_name)
-                    permission = await permission_service.get_permission_by_id(str(permission_id))
-                    if not permission:
-                        raise HTTPException(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"Permission with ID '{permission_name}' not found"
-                        )
-                    permission_ids.append(str(permission_id))
-                except Exception:
-                    # It's a permission name, find the ObjectId
-                    from ..models.permission_model import PermissionModel
-                    permission = await PermissionModel.find_one(PermissionModel.name == permission_name)
-                    if not permission:
-                        raise HTTPException(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"Permission '{permission_name}' not found"
-                        )
-                    permission_ids.append(str(permission.id))
+        # Convert permission names to ObjectIds using the new permission service method
+        permission_ids = await permission_service.convert_permission_names_to_ids(group_data.permissions)
 
         # Create group
         group = GroupModel(
@@ -163,6 +139,19 @@ class GroupService:
             
         return groups
 
+    async def group_to_response_schema(self, group: GroupModel) -> GroupResponseSchema:
+        """
+        Convert a GroupModel to GroupResponseSchema with detailed permission information.
+        """
+        # Resolve permission ObjectIds to detailed permission information
+        permission_details = await permission_service.resolve_permissions_to_details(group.permissions)
+        
+        # Convert group to dict and update permissions
+        group_dict = group.model_dump(by_alias=True)
+        group_dict["permissions"] = permission_details
+        
+        return GroupResponseSchema.model_validate(group_dict)
+
     async def get_available_groups_for_user(
         self,
         current_user_client_id: Optional[str] = None,
@@ -179,7 +168,7 @@ class GroupService:
         if is_super_admin:
             system_groups = await self.get_groups_by_scope(GroupScope.SYSTEM)
             available_groups.system_groups = [
-                GroupResponseSchema.model_validate(group) for group in system_groups
+                await self.group_to_response_schema(group) for group in system_groups
             ]
 
         # Platform groups (platform admins can assign within their platform)
@@ -189,7 +178,7 @@ class GroupService:
                 current_user_platform_id
             )
             available_groups.platform_groups = [
-                GroupResponseSchema.model_validate(group) for group in platform_groups
+                await self.group_to_response_schema(group) for group in platform_groups
             ]
 
         # Client groups (client admins can assign within their client)
@@ -199,7 +188,7 @@ class GroupService:
                 current_user_client_id
             )
             available_groups.client_groups = [
-                GroupResponseSchema.model_validate(group) for group in client_groups
+                await self.group_to_response_schema(group) for group in client_groups
             ]
 
         return available_groups
@@ -209,51 +198,25 @@ class GroupService:
         group_id: PydanticObjectId, 
         group_data: GroupUpdateSchema
     ) -> Optional[GroupModel]:
-        """Update a group by ID."""
+        """
+        Update a group by ID. Permissions are resolved from names to ObjectIds.
+        """
         group = await self.get_group_by_id(group_id)
         if not group:
             return None
-            
+
         update_data = group_data.model_dump(exclude_unset=True)
         
-        # Convert permission names to ObjectIds and validate if being updated
-        if "permissions" in update_data:
-            permission_ids = []
-            for permission_name in update_data["permissions"]:
-                # Check if it's already an ObjectId (for backward compatibility)
-                try:
-                    from beanie import PydanticObjectId
-                    # If it's already an ObjectId, validate it exists
-                    permission_id = PydanticObjectId(permission_name)
-                    permission = await permission_service.get_permission_by_id(str(permission_id))
-                    if not permission:
-                        raise HTTPException(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"Permission with ID '{permission_name}' not found"
-                        )
-                    permission_ids.append(str(permission_id))
-                except Exception:
-                    # It's a permission name, find the ObjectId
-                    from ..models.permission_model import PermissionModel
-                    permission = await PermissionModel.find_one(PermissionModel.name == permission_name)
-                    if not permission:
-                        raise HTTPException(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"Permission '{permission_name}' not found"
-                        )
-                    permission_ids.append(str(permission.id))
+        # Convert permission names to ObjectIds if permissions are being updated
+        if "permissions" in update_data and update_data["permissions"] is not None:
+            permission_ids = await permission_service.convert_permission_names_to_ids(update_data["permissions"])
             update_data["permissions"] = permission_ids
-
-        if not update_data:
-            return group
-            
-        # Update group fields
-        for field, value in update_data.items():
-            setattr(group, field, value)
-            
-        group.update_timestamp()
-        await group.save()
         
+        if update_data:
+            for field, value in update_data.items():
+                setattr(group, field, value)
+            await group.save()
+            
         return group
 
     async def delete_group(self, group_id: PydanticObjectId) -> bool:
@@ -365,50 +328,6 @@ class GroupService:
         user = await UserModel.get(user_id, fetch_links=True)
         return user.groups if user and user.groups else []
 
-    async def get_user_effective_permissions(self, user_id: PydanticObjectId) -> Set[str]:
-        """
-        Get all effective permissions for a user from:
-        1. Direct role assignments
-        2. Group memberships
-        
-        Returns clean permission names (not ObjectIds).
-        """
-        from ..models.permission_model import PermissionModel
-        
-        user = await UserModel.get(user_id, fetch_links=True)
-        if not user:
-            return set()
-        
-        permission_ids = set()
-        
-        # Get permission IDs from direct roles
-        # (This will be handled by user_service, but included for completeness)
-        for role_id in user.roles:
-            try:
-                role = await role_service.get_role_by_id(PydanticObjectId(role_id))
-                if role:
-                    permission_ids.update(role.permissions)
-            except Exception:
-                continue  # Skip invalid role IDs
-        
-        # Get permission IDs from groups
-        user_groups = await self.get_user_groups(user.id)
-        for group in user_groups:
-            if hasattr(group, 'permissions'):
-                permission_ids.update(group.permissions)
-        
-        # Resolve permission IDs to clean permission names
-        permission_names = set()
-        for permission_id in permission_ids:
-            try:
-                permission = await PermissionModel.get(PydanticObjectId(permission_id))
-                if permission:
-                    permission_names.add(permission.name)
-            except Exception:
-                continue  # Skip invalid permission IDs
-                
-        return permission_names
-
     async def get_groups(
         self, 
         skip: int = 0, 
@@ -423,38 +342,6 @@ class GroupService:
             return await self.get_groups_by_scope(scope, scope_id, skip, limit)
         else:
             return await GroupModel.find().skip(skip).limit(limit).to_list()
-
-    async def resolve_permission_names(self, permission_ids: List[str]) -> List[str]:
-        """
-        Convert permission ObjectIds to clean permission names.
-        """
-        from ..models.permission_model import PermissionModel
-        from beanie import PydanticObjectId
-        
-        permission_names = []
-        for permission_id in permission_ids:
-            try:
-                permission = await PermissionModel.get(PydanticObjectId(permission_id))
-                if permission:
-                    permission_names.append(permission.name)
-            except Exception:
-                continue  # Skip invalid permission IDs
-        
-        return permission_names
-
-    async def group_to_response_dict(self, group: GroupModel) -> dict:
-        """
-        Convert a GroupModel to a dictionary with resolved permission names.
-        """
-        group_dict = group.model_dump(by_alias=True)
-        
-        # Resolve permission ObjectIds to clean names
-        if group.permissions:
-            group_dict["permissions"] = await self.resolve_permission_names(group.permissions)
-        else:
-            group_dict["permissions"] = []
-            
-        return group_dict
 
 # Instantiate the service for use in other parts of the application
 group_service = GroupService() 

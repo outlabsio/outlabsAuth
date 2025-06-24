@@ -9,6 +9,7 @@ from ..schemas.role_schema import (
     RoleResponseSchema,
     AvailableRolesResponseSchema
 )
+from .permission_service import permission_service
 
 class RoleService:
     """
@@ -70,12 +71,15 @@ class RoleService:
                 detail=f"Role '{role_data.name}' already exists in {scope_desc}"
             )
 
+        # Convert permission names to ObjectIds
+        permission_ids = await permission_service.convert_permission_names_to_ids(role_data.permissions)
+
         # Create role
         role = RoleModel(
             name=role_data.name,
             display_name=role_data.display_name,
             description=role_data.description,
-            permissions=role_data.permissions,
+            permissions=permission_ids,
             scope=role_data.scope,
             scope_id=final_scope_id,
             is_assignable_by_main_client=role_data.is_assignable_by_main_client,
@@ -117,6 +121,19 @@ class RoleService:
             
         return roles
 
+    async def role_to_response_schema(self, role: RoleModel) -> RoleResponseSchema:
+        """
+        Convert a RoleModel to RoleResponseSchema with detailed permission information.
+        """
+        # Resolve permission ObjectIds to detailed permission information
+        permission_details = await permission_service.resolve_permissions_to_details(role.permissions)
+        
+        # Convert role to dict and update permissions
+        role_dict = role.model_dump(by_alias=True)
+        role_dict["permissions"] = permission_details
+        
+        return RoleResponseSchema.model_validate(role_dict)
+
     async def get_available_roles_for_user(
         self,
         current_user_client_id: Optional[str] = None,
@@ -133,7 +150,7 @@ class RoleService:
         if is_super_admin:
             system_roles = await self.get_roles_by_scope(RoleScope.SYSTEM)
             available_roles.system_roles = [
-                RoleResponseSchema.model_validate(role) for role in system_roles
+                await self.role_to_response_schema(role) for role in system_roles
             ]
         elif current_user_client_id:
             # Client admins can assign system roles marked as assignable
@@ -142,7 +159,7 @@ class RoleService:
                 RoleModel.is_assignable_by_main_client == True
             ).to_list()
             available_roles.system_roles = [
-                RoleResponseSchema.model_validate(role) for role in assignable_system_roles
+                await self.role_to_response_schema(role) for role in assignable_system_roles
             ]
 
         # Platform roles (platform admins can assign within their platform)
@@ -152,7 +169,7 @@ class RoleService:
                 current_user_platform_id
             )
             available_roles.platform_roles = [
-                RoleResponseSchema.model_validate(role) for role in platform_roles
+                await self.role_to_response_schema(role) for role in platform_roles
             ]
 
         # Client roles (client admins can assign within their client)
@@ -162,7 +179,7 @@ class RoleService:
                 current_user_client_id
             )
             available_roles.client_roles = [
-                RoleResponseSchema.model_validate(role) for role in client_roles
+                await self.role_to_response_schema(role) for role in client_roles
             ]
 
         return available_roles
@@ -174,6 +191,11 @@ class RoleService:
             return None
 
         update_data = role_data.model_dump(exclude_unset=True)
+        
+        # Convert permission names to ObjectIds if permissions are being updated
+        if "permissions" in update_data and update_data["permissions"] is not None:
+            permission_ids = await permission_service.convert_permission_names_to_ids(update_data["permissions"])
+            update_data["permissions"] = permission_ids
         
         if update_data:
             for field, value in update_data.items():

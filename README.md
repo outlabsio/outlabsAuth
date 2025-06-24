@@ -514,6 +514,112 @@ python -m pytest tests/test_propertyhub_three_tier.py -v
 - ✅ `/v1/auth/me` - Enhanced with effective permissions
 - ✅ All existing endpoints with hierarchical access control
 
+## 🚧 **Phase 2: Permission System Optimization**
+
+### **📋 Current Permission System Architecture**
+
+**Internal Storage (Database)**:
+
+- **Roles/Groups**: Store permission **ObjectIds** for referential integrity
+- **Permission Documents**: Store clean names with scope isolation
+- **Benefits**: Proper foreign keys, data validation, MongoDB best practices
+
+**External API (Frontend Interface)**:
+
+- **API Responses**: Return **both ObjectId and permission name**
+- **API Input**: Accept permission names (auto-convert to ObjectIds)
+- **Benefits**: Frontend gets meaningful names + IDs for updates
+
+### **🎯 Planned API Response Format**
+
+```javascript
+// Current API Response (ObjectIds only - needs update)
+{
+  "permissions": ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439012"]
+}
+
+// Phase 2 Target API Response (ID + Name for updates)
+{
+  "permissions": [
+    {
+      "id": "507f1f77bcf86cd799439011",
+      "name": "user:create",
+      "scope": "client"
+    },
+    {
+      "id": "507f1f77bcf86cd799439012",
+      "name": "listings:manage",
+      "scope": "client"
+    }
+  ]
+}
+
+// Frontend Update Requests (can send names, backend converts to ObjectIds)
+PUT /v1/roles/123 {
+  "permissions": ["user:create", "listings:manage", "user:read"]
+}
+```
+
+### **🔄 Permission Resolution Process**
+
+1. **Storage**: Roles/Groups store ObjectIds in database
+2. **Resolution**: Service layer converts ObjectIds → Permission objects
+3. **API Response**: Return `{id, name, scope}` for each permission
+4. **Frontend Updates**: Accept permission names, convert to ObjectIds internally
+5. **Validation**: Ensure permission exists and user can assign it
+
+### **⚡ Phase 2 Performance Optimization (Future)**
+
+**High-Traffic Scenarios**:
+
+- 1000+ concurrent users hitting `/me` endpoint
+- Each page refresh triggers permission resolution
+- Multiple database lookups per user per request
+
+**Planned Caching Strategy**:
+
+```javascript
+// Redis Cache (1 hour TTL)
+cache_key = `user_permissions:${user_id}`
+cached_data = {
+  "user": { /* user data */ },
+  "permissions": [
+    {"id": "...", "name": "user:create", "scope": "client"},
+    {"id": "...", "name": "listings:manage", "scope": "client"}
+  ],
+  "cached_at": "2024-01-15T10:30:00Z"
+}
+
+// Cache Invalidation Triggers
+- User role changes
+- User group membership changes
+- Role permission updates
+- Group permission updates
+```
+
+**Implementation Phases**:
+
+1. **Phase 2A**: Fix API responses to include `{id, name, scope}` format
+2. **Phase 2B**: Implement MongoDB aggregation pipelines for efficiency
+3. **Phase 2C**: Add Redis caching layer for high-traffic scenarios
+4. **Phase 2D**: Add cache invalidation and warming strategies
+
+### **🎯 Benefits of This Architecture**
+
+**Development Phase (Current)**:
+
+- ✅ Proper database design with referential integrity
+- ✅ Clean API with meaningful permission names
+- ✅ Frontend gets IDs needed for updates
+- ✅ No premature optimization complexity
+
+**Production Phase (Future)**:
+
+- ✅ Sub-millisecond permission lookups via Redis
+- ✅ Automatic cache invalidation on changes
+- ✅ Scalable to 1000+ concurrent users
+- ✅ Single aggregation query on cache miss
+
 ### **🎯 Ready for Enterprise Deployment**
 
 **Security & Compliance**:

@@ -3,6 +3,17 @@ from typing import Optional, List
 from beanie import PydanticObjectId
 from ..models.scopes import PermissionScope
 
+class PermissionDetailSchema(BaseModel):
+    """
+    Schema for permission details in API responses.
+    Includes both ObjectId and human-readable information.
+    """
+    id: str = Field(..., description="Permission ObjectId")
+    name: str = Field(..., description="Permission name (e.g., 'user:create')")
+    scope: PermissionScope = Field(..., description="Permission scope")
+    display_name: str = Field(..., description="Human-readable permission name")
+    description: Optional[str] = Field(None, description="What this permission allows")
+
 class PermissionCreateSchema(BaseModel):
     """
     Schema for creating a new scoped permission.

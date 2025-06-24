@@ -3,15 +3,17 @@ from typing import Optional, List
 from datetime import datetime
 from beanie import PydanticObjectId
 from ..models.scopes import GroupScope
+from .permission_schema import PermissionDetailSchema
 
 class GroupCreateSchema(BaseModel):
     """
     Schema for creating a new scoped group with direct permissions.
+    Frontend provides permission names, backend converts to ObjectIds.
     """
     name: str = Field(..., description="Group name (e.g., 'Sales Team', 'Customer Support')")
     display_name: str = Field(..., description="Human-readable group name")
     description: Optional[str] = Field(None, description="Group purpose and responsibilities")
-    permissions: List[str] = Field(default_factory=list, description="List of permission IDs")
+    permissions: List[str] = Field(default_factory=list, description="List of permission names")
     scope: GroupScope = Field(..., description="Group scope: system, platform, or client")
     # scope_id determined by service based on user context
 
@@ -22,18 +24,19 @@ class GroupUpdateSchema(BaseModel):
     name: Optional[str] = Field(None, description="Group name")
     display_name: Optional[str] = Field(None, description="Human-readable group name")
     description: Optional[str] = Field(None, description="Group purpose and responsibilities")
-    permissions: Optional[List[str]] = Field(None, description="List of permission IDs")
+    permissions: Optional[List[str]] = Field(None, description="List of permission names")
     is_active: Optional[bool] = Field(None, description="Whether the group is active")
 
 class GroupResponseSchema(BaseModel):
     """
     Schema for returning group data in API responses.
+    Returns full permission details with both ID and name.
     """
     id: PydanticObjectId = Field(..., alias="_id")
     name: str
     display_name: str
     description: Optional[str] = None
-    permissions: List[str]
+    permissions: List[PermissionDetailSchema]
     scope: GroupScope
     scope_id: Optional[str] = None
     is_active: bool
@@ -76,4 +79,4 @@ class UserGroupsResponseSchema(BaseModel):
     """
     user_id: str
     groups: List[GroupResponseSchema]
-    effective_permissions: List[str]  # All permissions from groups + direct roles 
+    effective_permissions: List[PermissionDetailSchema]  # Full permission details 

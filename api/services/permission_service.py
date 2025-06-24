@@ -7,7 +7,8 @@ from ..schemas.permission_schema import (
     PermissionCreateSchema,
     PermissionUpdateSchema,
     PermissionResponseSchema,
-    AvailablePermissionsResponseSchema
+    AvailablePermissionsResponseSchema,
+    PermissionDetailSchema
 )
 
 class PermissionService:
@@ -91,6 +92,81 @@ class PermissionService:
             return await PermissionModel.get(PydanticObjectId(permission_id))
         except Exception:
             return None
+
+    async def get_permission_by_name(self, permission_name: str, scope: Optional[PermissionScope] = None, scope_id: Optional[str] = None) -> Optional[PermissionModel]:
+        """Get a permission by its name, optionally filtered by scope."""
+        query = {"name": permission_name}
+        if scope:
+            query["scope"] = scope
+            if scope_id is not None:
+                query["scope_id"] = scope_id
+        
+        return await PermissionModel.find_one(query)
+
+    async def convert_permission_names_to_ids(self, permission_names: List[str]) -> List[str]:
+        """
+        Convert permission names to ObjectIds for database storage.
+        
+        Args:
+            permission_names: List of permission names (e.g., ['user:create', 'listings:manage'])
+            
+        Returns:
+            List of ObjectId strings
+            
+        Raises:
+            HTTPException: If any permission name is not found
+        """
+        permission_ids = []
+        
+        for permission_name in permission_names:
+            # Check if it's already an ObjectId (for backward compatibility)
+            try:
+                from beanie import PydanticObjectId
+                permission_id = PydanticObjectId(permission_name)
+                permission = await self.get_permission_by_id(str(permission_id))
+                if not permission:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Permission with ID '{permission_name}' not found"
+                    )
+                permission_ids.append(str(permission_id))
+            except Exception:
+                # It's a permission name, find the ObjectId
+                permission = await self.get_permission_by_name(permission_name)
+                if not permission:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Permission '{permission_name}' not found"
+                    )
+                permission_ids.append(str(permission.id))
+        
+        return permission_ids
+
+    async def resolve_permissions_to_details(self, permission_ids: List[str]) -> List[PermissionDetailSchema]:
+        """
+        Convert ObjectIds to full permission details for API responses.
+        
+        Args:
+            permission_ids: List of ObjectId strings
+            
+        Returns:
+            List of PermissionDetailSchema objects with id, name, scope, etc.
+        """
+        permission_details = []
+        
+        for permission_id in permission_ids:
+            permission = await self.get_permission_by_id(permission_id)
+            if permission:
+                detail = PermissionDetailSchema(
+                    id=str(permission.id),
+                    name=permission.name,
+                    scope=permission.scope,
+                    display_name=permission.display_name,
+                    description=permission.description
+                )
+                permission_details.append(detail)
+        
+        return permission_details
 
     async def get_permissions_by_scope(
         self, 
