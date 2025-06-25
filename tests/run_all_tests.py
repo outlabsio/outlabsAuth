@@ -2,8 +2,33 @@
 """
 Run All Tests for outlabsAuth
 
+🚧 ARCHITECTURE TRANSITION NOTICE 🚧
+The core permission system has been updated to return detailed permission objects
+instead of ObjectId lists. Test suite requires updates to work with new format.
+
+Current Status: 
+- ✅ Core permission system working (verified via live API testing)
+- 🔄 Test suite needs updates for new permission detail format
+- 🎯 Target: Update all tests to expect {id, name, scope, display_name, description} objects
+
+Previous Status: 249/249 tests passing with old ObjectId format
+Current Goal: 249+ tests passing with new detailed permission object format
+
 This script runs all test modules individually and provides a comprehensive summary.
 Can be run with: python tests/run_all_tests.py
+
+New Permission Format Example:
+{
+  "permissions": [
+    {
+      "id": "685b392fc8060576736282fe",
+      "name": "client_account:read_platform", 
+      "scope": "platform",
+      "display_name": "Read Platform Clients",
+      "description": "Allows reading all clients within platform scope."
+    }
+  ]
+}
 """
 
 import subprocess

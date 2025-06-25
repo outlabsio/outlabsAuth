@@ -532,3 +532,189 @@ This outlabsAuth RBAC microservice now represents **ABSOLUTE ENTERPRISE PERFECTI
 ---
 
 _"From 94% to 100% - This is what enterprise excellence looks like!"_ 🏆
+
+## 🚧 **PHASE 2: PERMISSION SYSTEM ARCHITECTURE UPDATE REQUIRED**
+
+**Current Status**: 🔄 **ARCHITECTURE TRANSITION** - Core permission system updated, tests need updating to match new format
+
+### 📊 **NEW PERMISSION SYSTEM REQUIREMENTS**
+
+**✅ COMPLETED: Core System Architecture**
+
+- ✅ **PermissionDetailSchema** - API responses now include `{id, name, scope, display_name, description}`
+- ✅ **Service Layer** - New methods for name↔ObjectId conversion
+- ✅ **API Endpoints** - All endpoints return comprehensive permission details
+- ✅ **Seeding Scripts** - Updated to use permission names directly
+- ✅ **Live API Testing** - Verified working with 18 permission details
+
+**🔄 REQUIRED: Test Suite Updates**
+
+- 🔄 **Update test expectations** - Tests currently expect ObjectId lists, need permission detail objects
+- 🔄 **Three-tier validation** - Tests must validate permissions → roles → groups cascading
+- 🔄 **New API response format** - Update assertions for `{id, name, scope, display_name, description}` format
+- 🔄 **Permission name usage** - Tests should use permission names in requests instead of ObjectIds
+
+### 🎯 **VERIFIED: New Permission System Working**
+
+**✅ Live API Response Example** (from `/auth/me`):
+
+```json
+{
+  "permissions": [
+    {
+      "id": "685b392fc8060576736282fe",
+      "name": "client_account:read_platform",
+      "scope": "platform",
+      "display_name": "Read Platform Clients",
+      "description": "Allows reading all clients within platform scope."
+    },
+    {
+      "id": "685b392ec8060576736282e5",
+      "name": "user:create",
+      "scope": "system",
+      "display_name": "Create Users",
+      "description": "Allows creating a single user."
+    }
+    // ... 16 more permissions with full details
+  ]
+}
+```
+
+### 📋 **TEST UPDATE REQUIREMENTS BY MODULE**
+
+#### 🔄 **Critical Updates Needed** (High Priority)
+
+1. **`test_auth_routes.py`** - Update `/auth/me` tests to expect permission detail objects
+2. **`test_role_routes.py`** - Update role responses to expect permission details in role objects
+3. **`test_group_routes.py`** - Update group responses to expect permission details in group objects
+4. **`test_user_routes.py`** - Update user responses to expect permission details
+5. **`test_propertyhub_three_tier.py`** - Critical PropertyHub tests need new permission format
+
+#### 🔄 **Service Layer Updates** (Medium Priority)
+
+6. **`test_role_service.py`** - Update service tests for new permission conversion methods
+7. **`test_group_service.py`** - Update service tests for new permission conversion methods
+8. **`test_user_service.py`** - Update service tests for new permission detail methods
+9. **`test_permission_routes.py`** - Update permission endpoint tests
+
+#### 🔄 **Integration & Security Updates** (Medium Priority)
+
+10. **`test_integration.py`** - Update end-to-end tests for new permission format
+11. **`test_access_control.py`** - Update access control tests for new permission details
+12. **`test_enhanced_access_control.py`** - Update advanced permission scenarios
+13. **`test_auth_security.py`** - Update security tests for new API responses
+
+#### ✅ **Likely Compatible** (Low Priority)
+
+14. **`test_auth_comprehensive.py`** - May need minor updates
+15. **`test_client_account_routes.py`** - Should be mostly compatible
+16. **`test_duplicate_constraints.py`** - Should be compatible
+17. **`test_security_service.py`** - Should be compatible
+
+### 🎯 **NEW THREE-TIER TESTING STRATEGY**
+
+Our tests must now validate the complete permission cascade:
+
+#### **Tier 1: Permission Details Validation**
+
+```python
+# OLD FORMAT (ObjectId lists)
+assert response["permissions"] == ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439012"]
+
+# NEW FORMAT (Permission detail objects)
+permissions = response["permissions"]
+assert len(permissions) == 2
+assert permissions[0]["name"] == "user:create"
+assert permissions[0]["scope"] == "system"
+assert permissions[0]["display_name"] == "Create Users"
+assert permissions[0]["description"] == "Allows creating a single user"
+assert "id" in permissions[0]  # ObjectId still present for updates
+```
+
+#### **Tier 2: Role Response Validation**
+
+```python
+# Roles should return permission details, not just IDs
+role_response = await client.get("/v1/roles/some-role-id")
+role_permissions = role_response.json()["permissions"]
+assert isinstance(role_permissions, list)
+assert all("name" in perm and "scope" in perm for perm in role_permissions)
+```
+
+#### **Tier 3: Group Response Validation**
+
+```python
+# Groups should return permission details aggregated from roles
+group_response = await client.get("/v1/groups/some-group-id")
+group_permissions = group_response.json()["permissions"]
+assert isinstance(group_permissions, list)
+assert all("name" in perm and "scope" in perm for perm in group_permissions)
+```
+
+### 🚀 **TEST UPDATE STRATEGY**
+
+#### **Phase 1: Core API Tests** (Week 1)
+
+1. Update `/auth/me` endpoint tests
+2. Update role management endpoint tests
+3. Update group management endpoint tests
+4. Update user management endpoint tests
+
+#### **Phase 2: Service Layer Tests** (Week 1-2)
+
+5. Update permission service tests
+6. Update role service tests
+7. Update group service tests
+8. Update user service tests
+
+#### **Phase 3: Integration Tests** (Week 2)
+
+9. Update PropertyHub three-tier tests
+10. Update access control tests
+11. Update integration workflow tests
+12. Update security validation tests
+
+#### **Phase 4: Validation** (Week 2)
+
+13. Run full test suite
+14. Validate 100% success rate with new format
+15. Performance testing with new response format
+16. Documentation updates
+
+### 📊 **EXPECTED OUTCOMES**
+
+**Target Success Metrics**:
+
+- ✅ **249+ tests** updated for new permission format
+- ✅ **100% success rate** with new architecture
+- ✅ **PropertyHub tests** validating three-tier permission cascade
+- ✅ **Performance validation** with new detailed responses
+- ✅ **Documentation updates** reflecting new testing approach
+
+### 🔧 **DEVELOPMENT WORKFLOW**
+
+**Current Priority Order**:
+
+1. **Start with `/auth/me` tests** - Most critical and well-defined
+2. **Update role/group endpoint tests** - Core RBAC functionality
+3. **Update PropertyHub tests** - Real-world validation scenarios
+4. **Update service layer tests** - Internal functionality validation
+5. **Integration and security tests** - End-to-end validation
+
+### 🎯 **SUCCESS CRITERIA**
+
+**Definition of Done**:
+
+- [ ] All tests expect and validate permission detail objects
+- [ ] Tests use permission names in requests instead of ObjectIds
+- [ ] Three-tier cascade (permissions → roles → groups) fully validated
+- [ ] PropertyHub scenario tests pass with new format
+- [ ] 100% test success rate achieved
+- [ ] Performance benchmarks met with new response format
+
+---
+
+**Previous Achievement**: 249/249 tests passing with old ObjectId-based permission system
+**Current Goal**: 249+ tests passing with new detailed permission object system
+
+**This represents a significant architecture evolution requiring comprehensive test updates to maintain our enterprise-grade quality standards.**
