@@ -12,7 +12,10 @@ from ..schemas.role_schema import (
     AvailableRolesResponseSchema
 )
 from ..services.role_service import role_service
-from ..dependencies import user_has_role, require_super_admin, require_admin
+from ..dependencies import (
+    user_has_role, require_super_admin, require_admin,
+    require_role_manage_access, require_user_read_access
+)
 
 
 router = APIRouter(prefix="/v1/roles", tags=["roles"])
@@ -20,7 +23,7 @@ router = APIRouter(prefix="/v1/roles", tags=["roles"])
 @router.post("/", response_model=RoleResponseSchema, status_code=status.HTTP_201_CREATED)
 async def create_role(
     role_data: RoleCreateSchema,
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_role_manage_access)
 ):
     """
     Create a new role in the specified scope.
@@ -92,7 +95,7 @@ async def get_roles(
     scope: Optional[RoleScope] = Query(None, description="Filter by scope"),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_user_read_access)
 ):
     """
     Get roles visible to the current user.
@@ -169,10 +172,11 @@ async def get_roles(
 
 @router.get("/available", response_model=AvailableRolesResponseSchema)
 async def get_available_roles(
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_admin)
 ):
     """
     Get roles that the current user can assign to others, grouped by scope.
+    Only admins can assign roles to users.
     """
     # User roles are now Beanie Links, so we can access them directly
     user_roles = current_user.roles if current_user.roles else []
@@ -200,7 +204,7 @@ async def get_available_roles(
 @router.get("/{role_id}", response_model=RoleResponseSchema)
 async def get_role(
     role_id: PydanticObjectId,
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_user_read_access)
 ):
     """Get a specific role by ID."""
     role = await role_service.get_role_by_id(role_id)
@@ -225,7 +229,7 @@ async def get_role(
 async def update_role(
     role_id: PydanticObjectId,
     role_data: RoleUpdateSchema,
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_role_manage_access)
 ):
     """Update a role."""
     # Check if role exists
@@ -257,7 +261,7 @@ async def update_role(
 @router.delete("/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_role(
     role_id: PydanticObjectId,
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_role_manage_access)
 ):
     """Delete a role."""
     # Check if role exists

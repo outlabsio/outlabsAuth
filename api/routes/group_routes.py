@@ -11,18 +11,20 @@ from ..schemas.group_schema import (
     GroupMembersResponseSchema, UserGroupsResponseSchema
 )
 from ..services.group_service import group_service
-from ..dependencies import user_has_role, require_super_admin, require_admin
+from ..dependencies import (
+    user_has_role, require_super_admin, require_admin,
+    require_group_manage_access, require_user_read_access
+)
 
 router = APIRouter(
     prefix="/v1/groups",
-    tags=["Group Management"],
-    dependencies=[Depends(has_permission("group:read"))]
+    tags=["Group Management"]
 )
 
 @router.post("/", response_model=GroupResponseSchema, status_code=status.HTTP_201_CREATED)
 async def create_group(
     group_data: GroupCreateSchema,
-    current_user: UserModel = Depends(get_current_user),
+    current_user: UserModel = Depends(require_group_manage_access),
     scope_id: Optional[str] = Query(None, description="Platform ID or Client ID for scoped groups")
 ):
     """
@@ -54,7 +56,7 @@ async def get_groups(
     limit: int = Query(100, ge=1, le=1000, description="Number of groups to return"),
     scope: Optional[GroupScope] = Query(None, description="Filter by group scope"),
     scope_id: Optional[str] = Query(None, description="Filter by specific scope ID"),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_user_read_access)
 ):
     """
     Retrieve groups with optional filtering by scope.
@@ -74,7 +76,7 @@ async def get_groups(
 
 @router.get("/available", response_model=AvailableGroupsResponseSchema)
 async def get_available_groups(
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_admin)
 ):
     """
     Get groups that the current user can assign to others, grouped by scope.
@@ -107,7 +109,7 @@ async def get_available_groups(
 @router.get("/{group_id}", response_model=GroupResponseSchema)
 async def get_group_by_id(
     group_id: str,
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_user_read_access)
 ):
     """
     Get a single group by ID.
@@ -126,7 +128,7 @@ async def get_group_by_id(
 async def update_group(
     group_id: str,
     group_data: GroupUpdateSchema,
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_group_manage_access)
 ):
     """
     Update a group's information.
@@ -144,7 +146,7 @@ async def update_group(
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_group(
     group_id: str,
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_group_manage_access)
 ):
     """
     Delete a group. This will remove all users from the group first.
@@ -163,7 +165,7 @@ async def delete_group(
 async def add_users_to_group(
     group_id: str,
     membership_data: GroupMembershipSchema,
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_group_manage_access)
 ):
     """
     Add users to a group.
@@ -182,7 +184,7 @@ async def add_users_to_group(
 async def remove_users_from_group(
     group_id: str,
     membership_data: GroupMembershipSchema,
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_group_manage_access)
 ):
     """
     Remove users from a group.
@@ -200,7 +202,7 @@ async def remove_users_from_group(
 @router.get("/{group_id}/members", response_model=GroupMembersResponseSchema)
 async def get_group_members(
     group_id: str,
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_user_read_access)
 ):
     """
     Get all members of a group.
@@ -238,7 +240,7 @@ async def get_group_members(
 @router.get("/users/{user_id}/groups", response_model=UserGroupsResponseSchema)
 async def get_user_groups(
     user_id: str,
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_user_read_access)
 ):
     """
     Get all groups that a user belongs to, along with their effective permissions.

@@ -404,4 +404,111 @@ require_super_admin = require_role("super_admin")
 require_admin = require_any_role(["super_admin", "admin"])
 
 # Platform admin access
-require_platform_admin = require_any_role(["super_admin", "platform_admin"]) 
+require_platform_admin = require_any_role(["super_admin", "platform_admin"])
+
+
+# --- Scope-Based Admin Dependencies ---
+
+def require_scope_admin(scope: str):
+    """
+    Dependency factory for scope-specific admin access.
+    
+    Usage:
+        @router.post("/roles")
+        async def create_role(
+            role_data: RoleCreateSchema,
+            admin_user: UserModel = Depends(require_scope_admin("client"))
+        ):
+            # admin_user is guaranteed to be admin in the requested scope
+    """
+    async def _require_scope_admin(
+        current_user: UserModel = Depends(get_current_user)
+    ) -> UserModel:
+        from .models.role_model import RoleScope
+        
+        if scope == "system":
+            if not user_has_role(current_user, "super_admin"):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only super admins can perform this action"
+                )
+        elif scope == "platform":
+            platform_admin_roles = [
+                role for role in (current_user.roles or [])
+                if (role.name == "admin" and role.scope == RoleScope.PLATFORM)
+            ]
+            is_super_admin = user_has_role(current_user, "super_admin")
+            if not platform_admin_roles and not is_super_admin:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only platform admins can perform this action"
+                )
+        elif scope == "client":
+            if not current_user.client_account:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Client account required for this action"
+                )
+            
+            client_admin_roles = [
+                role for role in (current_user.roles or [])
+                if (role.name == "admin" and 
+                    role.scope == RoleScope.CLIENT and 
+                    role.scope_id == str(current_user.client_account.id))
+            ]
+            is_super_admin = user_has_role(current_user, "super_admin")
+            if not client_admin_roles and not is_super_admin:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only client admins can perform this action"
+                )
+        
+        return current_user
+    return _require_scope_admin
+
+
+def require_admin_or_permission(permission_name: str):
+    """
+    Dependency that requires EITHER admin role OR specific permission.
+    This is useful for endpoints that can be accessed by admins OR users with specific permissions.
+    
+    Usage:
+        @router.get("/users")
+        async def get_users(
+            user: UserModel = Depends(require_admin_or_permission("user:read"))
+        ):
+            # User either has admin role OR user:read permission
+    """
+    async def _require_admin_or_permission(
+        current_user: UserModel = Depends(get_current_user)
+    ) -> UserModel:
+        # Check if user is any kind of admin
+        is_admin = user_has_any_role(current_user, ["super_admin", "admin", "client_admin"])
+        
+        if is_admin:
+            return current_user
+        
+        # Check if user has the specific permission
+        user_permissions = await user_service.get_user_effective_permissions(current_user.id)
+        if permission_name in user_permissions:
+            return current_user
+        
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied. Required: admin role or '{permission_name}' permission"
+        )
+    return _require_admin_or_permission
+
+
+# --- Enhanced Commonly Used Dependencies ---
+
+# Scope-specific admin access
+require_system_admin = require_scope_admin("system")
+require_platform_admin_scope = require_scope_admin("platform")
+require_client_admin_scope = require_scope_admin("client")
+
+# Combined permission/role dependencies
+require_user_read_access = require_admin_or_permission("user:read")
+require_role_manage_access = require_admin_or_permission("role:manage")
+require_group_manage_access = require_admin_or_permission("group:manage")
+require_permission_manage_access = require_admin_or_permission("permission:manage") 

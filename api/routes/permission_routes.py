@@ -11,19 +11,21 @@ from ..schemas.permission_schema import (
 from ..models.scopes import PermissionScope
 from ..dependencies import has_permission, get_current_user
 from ..models.user_model import UserModel
-from ..dependencies import user_has_role, require_super_admin, require_admin
+from ..dependencies import (
+    user_has_role, require_super_admin, require_admin,
+    require_permission_manage_access, require_user_read_access
+)
 
 
 router = APIRouter(
     prefix="/v1/permissions",
-    tags=["Permission Management"],
-    dependencies=[Depends(has_permission("permission:read"))]
+    tags=["Permission Management"]
 )
 
 @router.post("/", response_model=PermissionResponseSchema, status_code=status.HTTP_201_CREATED)
 async def create_permission(
     permission_data: PermissionCreateSchema,
-    current_user: UserModel = Depends(get_current_user),
+    current_user: UserModel = Depends(require_permission_manage_access),
     scope_id: Optional[str] = Query(None, description="Platform ID or Client ID for scoped permissions")
 ):
     """
@@ -54,7 +56,8 @@ async def get_permissions(
     skip: int = Query(0, ge=0, description="Number of permissions to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Number of permissions to return"),
     scope: Optional[PermissionScope] = Query(None, description="Filter by permission scope"),
-    scope_id: Optional[str] = Query(None, description="Filter by specific scope ID")
+    scope_id: Optional[str] = Query(None, description="Filter by specific scope ID"),
+    current_user: UserModel = Depends(require_user_read_access)
 ):
     """
     Retrieve permissions with optional filtering by scope.
@@ -69,7 +72,7 @@ async def get_permissions(
 
 @router.get("/available", response_model=AvailablePermissionsResponseSchema)
 async def get_available_permissions(
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_admin)
 ):
     """
     Get permissions that the current user can assign to others, grouped by scope.
@@ -100,7 +103,10 @@ async def get_available_permissions(
     )
 
 @router.get("/{permission_id}", response_model=PermissionResponseSchema)
-async def get_permission_by_id(permission_id: str):
+async def get_permission_by_id(
+    permission_id: str,
+    current_user: UserModel = Depends(require_user_read_access)
+):
     """
     Retrieve a single permission by its ID.
     """
@@ -116,7 +122,7 @@ async def get_permission_by_id(permission_id: str):
 async def update_permission(
     permission_id: str,
     permission_data: PermissionUpdateSchema,
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_permission_manage_access)
 ):
     """
     Update a permission by ID.
@@ -135,7 +141,7 @@ async def update_permission(
 @router.delete("/{permission_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_permission(
     permission_id: str,
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_permission_manage_access)
 ):
     """
     Delete a permission by ID.
