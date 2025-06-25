@@ -540,8 +540,99 @@ require_system_admin = require_scope_admin("system")
 require_platform_admin_scope = require_scope_admin("platform")
 require_client_admin_scope = require_scope_admin("client")
 
-# Combined permission/role dependencies
-require_user_read_access = require_admin_or_permission("user:read")
-require_role_manage_access = require_admin_or_permission("role:manage")
-require_group_manage_access = require_admin_or_permission("group:manage")
-require_permission_manage_access = require_admin_or_permission("permission:manage") 
+# FIXED: More restrictive dependencies for system management
+require_user_read_access = require_admin  # Only admins can read user lists
+require_user_manage_access = require_admin_or_permission("user:manage")
+require_role_read_access = require_admin  # Only admins can read role lists  
+require_group_read_access = require_admin  # Only admins can read group lists
+require_permission_read_access = require_admin  # Only admins can read permission lists
+
+# Granular management permissions (for specific operations)
+require_role_manage_access = require_admin_or_permission("role:manage_client")
+require_group_manage_access = require_admin_or_permission("group:manage_client")
+require_permission_manage_access = require_admin_or_permission("permission:manage_client")
+
+# Self-access dependencies (users can access their own data)
+def require_self_access():
+    """Allows users to access only their own data."""
+    async def _require_self_access(
+        current_user: UserModel = Depends(get_current_user)
+    ) -> UserModel:
+        # This is for endpoints like /users/me where users access their own data
+        return current_user
+    return _require_self_access
+
+# Client-scoped read access (for within-client operations)  
+def require_client_scoped_read():
+    """Users can read data within their own client scope."""
+    async def _require_client_scoped_read(
+        current_user: UserModel = Depends(get_current_user)
+    ) -> UserModel:
+        # Check if user is admin (can read cross-client) or has client account
+        is_admin = user_has_any_role(current_user, ["super_admin", "admin", "client_admin"])
+        
+        if is_admin:
+            return current_user
+            
+        if not current_user.client_account:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No client account associated with user"
+            )
+            
+        return current_user
+    return _require_client_scoped_read
+
+# Scoped permission dependencies for better granularity
+def require_user_read_self():
+    """Users can read their own user data only."""
+    async def _require_user_read_self(
+        current_user: UserModel = Depends(get_current_user)
+    ) -> UserModel:
+        # Any authenticated user can read their own data
+        return current_user
+    return _require_user_read_self
+
+def require_user_read_client_scope():
+    """Users can read users within their client scope."""
+    async def _require_user_read_client(
+        current_user: UserModel = Depends(get_current_user)
+    ) -> UserModel:
+        # Admin OR user with user:read permission within client scope
+        is_admin = user_has_any_role(current_user, ["super_admin", "admin", "client_admin"])
+        
+        if is_admin:
+            return current_user
+            
+        # Check for scoped permission
+        user_permissions = await user_service.get_user_effective_permissions(current_user.id)
+        if "user:read_client" in user_permissions:
+            return current_user
+            
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Required: admin role or 'user:read_client' permission"
+        )
+    return _require_user_read_client
+
+def require_group_read_client_scope():
+    """Users can read groups within their client scope."""
+    async def _require_group_read_client(
+        current_user: UserModel = Depends(get_current_user)
+    ) -> UserModel:
+        # Admin OR user with group:read permission within client scope
+        is_admin = user_has_any_role(current_user, ["super_admin", "admin", "client_admin"])
+        
+        if is_admin:
+            return current_user
+            
+        # Check for scoped permission
+        user_permissions = await user_service.get_user_effective_permissions(current_user.id)
+        if "group:read_client" in user_permissions:
+            return current_user
+            
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Required: admin role or 'group:read_client' permission"
+        )
+    return _require_group_read_client 

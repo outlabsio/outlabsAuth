@@ -7,7 +7,7 @@ from ..schemas.user_schema import UserCreateSchema, UserUpdateSchema, UserRespon
 from ..schemas.auth_schema import TokenDataSchema
 from ..services.user_service import user_service
 from ..dependencies import get_current_user_with_token, has_permission, convert_user_to_response
-from ..dependencies import user_has_role, require_super_admin, require_admin, can_access_user
+from ..dependencies import user_has_role, require_super_admin, require_admin, can_access_user, require_user_read_access
 
 router = APIRouter(
     prefix="/v1/users",
@@ -82,39 +82,29 @@ async def create_user(
     # Convert to response format using utility
     return convert_user_to_response(new_user)
 
-@router.get("/", response_model=List[UserResponseSchema], dependencies=[Depends(has_permission("user:read"))])
+@router.get("/", response_model=List[UserResponseSchema])
 async def get_all_users(
-    user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token),
+    current_user: UserModel = Depends(require_user_read_access),
     skip: int = 0,
     limit: int = 100
 ):
     """
     Retrieve a list of users.
+    Only accessible by admin users (super_admin, admin, client_admin roles).
     - Super admins see all users.
-    - Platform staff with "all" scope see all users.
-    - Platform staff with "created" scope see their platform users only.
-    - Client users only see users within their own client_account_id.
+    - Platform/client admins see users scoped to their domain.
     """
-    current_user, token_data = user_and_token
-    
-    # Check user privileges
+    # Since require_user_read_access = require_admin, only admins can access this
+    # Check user privileges for data scoping
     is_super_admin = user_has_role(current_user, "super_admin")
-    is_platform_staff = getattr(current_user, 'is_platform_staff', False)
-    platform_scope = getattr(current_user, 'platform_scope', None)
     client_account_id = None
     
     if is_super_admin:
         # Super admin sees all users
         pass
-    elif is_platform_staff and platform_scope == "all":
-        # Platform staff with "all" scope sees all users
-        pass
-    elif token_data.client_account_id:
-        # For regular users, enforce client account scoping
-        try:
-            client_account_id = PydanticObjectId(token_data.client_account_id)
-        except Exception:
-            pass
+    elif current_user.client_account:
+        # Client admins see only users within their client account
+        client_account_id = current_user.client_account.ref.id
     
     users = await user_service.get_users(skip=skip, limit=limit, client_account_id=client_account_id)
     
@@ -133,7 +123,7 @@ async def get_user_by_id(
     # Convert to response format using utility
     return convert_user_to_response(user)
 
-@router.put("/{user_id}", response_model=UserResponseSchema, dependencies=[Depends(has_permission("user:update"))])
+@router.put("/{user_id}", response_model=UserResponseSchema, dependencies=[Depends(has_permission("user:manage_client"))])
 async def update_user(
     user_id: str,
     user_data: UserUpdateSchema,
@@ -171,7 +161,7 @@ async def update_user(
     # Convert to response format using utility
     return convert_user_to_response(updated_user)
 
-@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(has_permission("user:delete"))])
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(has_permission("user:manage_client"))])
 async def delete_user(
     user_id: str,
     user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token)

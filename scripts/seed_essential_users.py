@@ -110,28 +110,57 @@ PROPERTYHUB_CLIENT_ACCOUNT = ClientAccountCreateSchema(
 
 # --- Essential Data Definitions ---
 ESSENTIAL_SYSTEM_PERMISSIONS = [
-    # System-level permissions (global)
-    PermissionCreateSchema(name="user:create", display_name="Create Users", description="Allows creating a single user.", scope="system"),
-    PermissionCreateSchema(name="user:read", display_name="Read Users", description="Allows reading user information.", scope="system"),
-    PermissionCreateSchema(name="user:update", display_name="Update Users", description="Allows updating a user.", scope="system"),
-    PermissionCreateSchema(name="user:delete", display_name="Delete Users", description="Allows deleting a user.", scope="system"),
-    PermissionCreateSchema(name="user:add_member", display_name="Add Team Members", description="Allows adding a new user to one's own client account.", scope="system"),
-    PermissionCreateSchema(name="user:bulk_create", display_name="Bulk Create Users", description="Allows bulk creation of users.", scope="system"),
-    PermissionCreateSchema(name="role:create", display_name="Create Roles", description="Allows creating a role.", scope="system"),
-    PermissionCreateSchema(name="role:read", display_name="Read Roles", description="Allows reading role information.", scope="system"),
-    PermissionCreateSchema(name="role:update", display_name="Update Roles", description="Allows updating a role.", scope="system"),
-    PermissionCreateSchema(name="role:delete", display_name="Delete Roles", description="Allows deleting a role.", scope="system"),
-    PermissionCreateSchema(name="permission:create", display_name="Create Permissions", description="Allows creating a permission.", scope="system"),
-    PermissionCreateSchema(name="permission:read", display_name="Read Permissions", description="Allows reading permission information.", scope="system"),
-    PermissionCreateSchema(name="client_account:create", display_name="Create Client Accounts", description="Allows creating a client account.", scope="system"),
-    PermissionCreateSchema(name="client_account:read", display_name="Read Client Accounts", description="Allows reading client account information.", scope="system"),
-    PermissionCreateSchema(name="client_account:update", display_name="Update Client Accounts", description="Allows updating a client account.", scope="system"),
-    PermissionCreateSchema(name="client_account:delete", display_name="Delete Client Accounts", description="Allows deleting a client account.", scope="system"),
-    PermissionCreateSchema(name="group:create", display_name="Create Groups", description="Allows creating a group.", scope="system"),
-    PermissionCreateSchema(name="group:read", display_name="Read Groups", description="Allows reading group information.", scope="system"),
-    PermissionCreateSchema(name="group:update", display_name="Update Groups", description="Allows updating a group.", scope="system"),
-    PermissionCreateSchema(name="group:delete", display_name="Delete Groups", description="Allows deleting a group.", scope="system"),
-    PermissionCreateSchema(name="group:manage_members", display_name="Manage Group Members", description="Allows adding/removing members from groups.", scope="system"),
+    # === AUTH PLATFORM PROTECTION PERMISSIONS ===
+    
+    # Self-access permissions (default for all users)
+    PermissionCreateSchema(name="user:read_self", display_name="Read Own Profile", description="Read own user profile in auth platform", scope="system"),
+    PermissionCreateSchema(name="user:update_self", display_name="Update Own Profile", description="Update own user profile in auth platform", scope="system"),
+    PermissionCreateSchema(name="user:change_password", display_name="Change Own Password", description="Change own password", scope="system"),
+    PermissionCreateSchema(name="group:read_own", display_name="Read Own Groups", description="View own group memberships in auth platform", scope="system"),
+    PermissionCreateSchema(name="client:read_own", display_name="Read Own Client", description="View own client account info in auth platform", scope="system"),
+    
+    # Own scope creation permissions (default for all users)
+    PermissionCreateSchema(name="permission:create_own_scope", display_name="Create Own Scope Permissions", description="Create permissions in own scope", scope="system"),
+    PermissionCreateSchema(name="role:create_own_scope", display_name="Create Own Scope Roles", description="Create roles in own scope", scope="system"),
+    PermissionCreateSchema(name="group:create_own_scope", display_name="Create Own Scope Groups", description="Create groups in own scope", scope="system"),
+    
+    # Client-scoped permissions 
+    PermissionCreateSchema(name="user:read_client", display_name="Read Client Users", description="Read users in same client (auth platform)", scope="system"),
+    PermissionCreateSchema(name="user:manage_client", display_name="Manage Client Users", description="CRUD users in same client (auth platform)", scope="system"),
+    PermissionCreateSchema(name="role:read_client", display_name="Read Client Roles", description="Read roles in same client (auth platform)", scope="system"),
+    PermissionCreateSchema(name="role:manage_client", display_name="Manage Client Roles", description="CRUD roles in same client (auth platform)", scope="system"),
+    PermissionCreateSchema(name="group:read_client", display_name="Read Client Groups", description="Read groups in same client (auth platform)", scope="system"),
+    PermissionCreateSchema(name="group:manage_client", display_name="Manage Client Groups", description="CRUD groups in same client (auth platform)", scope="system"),
+    PermissionCreateSchema(name="permission:read_client", display_name="Read Client Permissions", description="Read permissions in same client (auth platform)", scope="system"),
+    PermissionCreateSchema(name="permission:manage_client", display_name="Manage Client Permissions", description="CRUD permissions in same client (auth platform)", scope="system"),
+    
+    # Admin-only permissions (replace broad permissions)
+    PermissionCreateSchema(name="user:read_all", display_name="Read All Users", description="Read all users in auth platform (admin only)", scope="system"),
+    PermissionCreateSchema(name="user:manage_all", display_name="Manage All Users", description="Global user management in auth platform (admin only)", scope="system"),
+    PermissionCreateSchema(name="role:read_all", display_name="Read All Roles", description="Read all roles in auth platform (admin only)", scope="system"),
+    PermissionCreateSchema(name="role:manage_all", display_name="Manage All Roles", description="Global role management in auth platform (admin only)", scope="system"),
+    PermissionCreateSchema(name="group:read_all", display_name="Read All Groups", description="Read all groups in auth platform (admin only)", scope="system"),
+    PermissionCreateSchema(name="group:manage_all", display_name="Manage All Groups", description="Global group management in auth platform (admin only)", scope="system"),
+    PermissionCreateSchema(name="permission:read_all", display_name="Read All Permissions", description="Read all permissions in auth platform (admin only)", scope="system"),
+    PermissionCreateSchema(name="permission:manage_all", display_name="Manage All Permissions", description="Global permission management in auth platform (admin only)", scope="system"),
+    
+    # Platform-level permissions
+    PermissionCreateSchema(name="client:create", display_name="Create Client Accounts", description="Create new client accounts in auth platform", scope="system"),
+    PermissionCreateSchema(name="client:read_platform", display_name="Read Platform Clients", description="Read all platform client accounts", scope="system"),
+    PermissionCreateSchema(name="client:manage_platform", display_name="Manage Platform Clients", description="Manage clients across platform", scope="system"),
+    PermissionCreateSchema(name="support:cross_client", display_name="Cross-Client Support", description="Support across all platform clients in auth platform", scope="system"),
+    
+    # System-level infrastructure permissions
+    PermissionCreateSchema(name="platform:create", display_name="Create Platforms", description="Create new platforms", scope="system"),
+    PermissionCreateSchema(name="platform:manage_all", display_name="Manage All Platforms", description="Full platform management in auth platform", scope="system"),
+    PermissionCreateSchema(name="system:infrastructure", display_name="System Infrastructure", description="Auth platform infrastructure management", scope="system"),
+    PermissionCreateSchema(name="admin:*", display_name="Admin All Access", description="Wildcard auth platform admin access", scope="system"),
+    
+    # === TRANSITION PERMISSIONS (for roles and tests migration) ===
+    # These maintain some existing functionality while transitioning to granular permissions
+    PermissionCreateSchema(name="user:add_member", display_name="Add Team Members", description="Add users to client account", scope="system"),
+    PermissionCreateSchema(name="user:bulk_create", display_name="Bulk Create Users", description="Bulk creation of users", scope="system"),
+    PermissionCreateSchema(name="group:manage_members", display_name="Manage Group Members", description="Add/remove group members", scope="system"),
 ]
 
 # Platform-scoped permissions (will be created with platform ID)
@@ -155,12 +184,8 @@ def get_super_admin_role():
 CLIENT_ADMIN_ROLE = RoleCreateSchema(
     name="client_admin",
     display_name="Client Administrator",
-    description="Administrative access for managing users, groups, and roles within a client organization",
-    permissions=[
-        "user:create", "user:read", "user:update", "user:delete", "user:add_member",
-        "group:create", "group:read", "group:update", "group:delete", "group:manage_members",
-        "role:read", "permission:read", "client_account:read"
-    ],
+    description="Administrative access for managing users, groups, and roles within a client organization - scoped to client level",
+    permissions=[],  # Will be populated with granular client-scoped permissions
     scope="client",
     is_assignable_by_main_client=True
 )
@@ -169,26 +194,19 @@ CLIENT_ADMIN_ROLE = RoleCreateSchema(
 PLATFORM_ADMIN_ROLE = RoleCreateSchema(
     name="platform_admin",
     display_name="Platform Administrator", 
-    description="Administrative access for managing platform-level operations and multiple client accounts",
-    permissions=[
-        "user:create", "user:read", "user:update", "user:delete", "user:add_member", "user:bulk_create",
-        "role:create", "role:read", "role:update", "role:delete",
-        "permission:create", "permission:read",
-        "client_account:create", "client_account:read", "client_account:update", "client_account:delete",
-        "client_account:create_sub", "client_account:read_platform", "client_account:read_created",
-        "group:create", "group:read", "group:update", "group:delete", "group:manage_members"
-    ],
+    description="Administrative access for managing platform-level operations and multiple client accounts - scoped to platform level",
+    permissions=[],  # Will be populated with granular platform-level permissions
     scope="platform",
     is_assignable_by_main_client=False
 )
 
-# Basic User Role - for standard users with minimal permissions
+# Basic User Role - for standard users with self-access permissions
 BASIC_USER_ROLE = RoleCreateSchema(
     name="basic_user",
     display_name="Basic User",
-    description="Standard user with basic read permissions",
-    permissions=["user:read", "group:read", "client_account:read"],
-    scope="system",  # Changed to system so it's available everywhere
+    description="Standard user with self-access permissions - can manage own profile and create business permissions in own scope",
+    permissions=[],  # Will be populated with self-access permissions
+    scope="system",  # System scope so it's available everywhere
     is_assignable_by_main_client=True
 )
 
@@ -347,10 +365,14 @@ async def ensure_essential_roles_exist():
     super_admin_role = get_super_admin_role()
     super_admin_role.permissions = actual_permission_objects
 
-    # Basic permissions for other roles
-    basic_permission_names = ["user:read", "group:read", "client_account:read"]
+    # Basic user permissions - self-access and own scope creation
+    basic_user_permission_names = [
+        "user:read_self", "user:update_self", "user:change_password",
+        "group:read_own",
+        "permission:create_own_scope", "role:create_own_scope", "group:create_own_scope"
+    ]
     basic_permission_objects = []
-    for perm_name in basic_permission_names:
+    for perm_name in basic_user_permission_names:
         perm = await PermissionModel.find_one(
             PermissionModel.name == perm_name,
             PermissionModel.scope == "system",
@@ -361,9 +383,9 @@ async def ensure_essential_roles_exist():
 
     # Get CLIENT_ADMIN_ROLE permission objects
     client_admin_permission_names = [
-        "user:create", "user:read", "user:update", "user:delete", "user:add_member",
-        "group:create", "group:read", "group:update", "group:delete", "group:manage_members",
-        "role:read", "permission:read", "client_account:read"
+        "user:manage_client", "user:add_member",
+        "group:manage_client", "group:manage_members",
+        "role:read_client", "permission:read_client", "client:read_own"
     ]
     client_admin_permission_objects = []
     for perm_name in client_admin_permission_names:
@@ -379,11 +401,11 @@ async def ensure_essential_roles_exist():
 
     # Get PLATFORM_ADMIN_ROLE permission objects (includes both system and platform permissions)
     platform_admin_permission_names = [
-        "user:create", "user:read", "user:update", "user:delete", "user:add_member", "user:bulk_create",
-        "role:create", "role:read", "role:update", "role:delete",
-        "permission:create", "permission:read",
-        "client_account:create", "client_account:read", "client_account:update", "client_account:delete",
-        "group:create", "group:read", "group:update", "group:delete", "group:manage_members"
+        "user:manage_all", "user:add_member", "user:bulk_create",
+        "role:manage_all",
+        "permission:manage_all",
+        "client:create", "client:manage_platform",
+        "group:manage_all", "group:manage_members"
     ]
     platform_admin_permission_objects = []
     for perm_name in platform_admin_permission_names:

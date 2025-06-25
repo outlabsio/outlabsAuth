@@ -14,7 +14,7 @@ router = APIRouter(
     # Removed global permission dependency - handle per endpoint instead
 )
 
-@router.post("/", status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("client_account:create"))], responses={
+@router.post("/", status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("client:create"))], responses={
     201: {"model": ClientAccountResponseSchema},
     409: {"description": "Client account with this name already exists"}
 })
@@ -26,7 +26,7 @@ async def create_client_account(
     # Use the new Pydantic v2 method that automatically handles ObjectId serialization
     return ClientAccountResponseSchema.model_validate(new_account, from_attributes=True)
 
-@router.post("/sub-clients", status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("client_account:create_sub"))], responses={
+@router.post("/sub-clients", status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("client:create_sub"))], responses={
     201: {"model": ClientAccountResponseSchema},
     409: {"description": "Client account with this name already exists"},
     403: {"description": "Insufficient permissions to create sub-clients"}
@@ -71,10 +71,15 @@ async def get_all_client_accounts(
     - Platform admins with read_created: See only accounts they created
     - Regular users: See only their own account
     """
-    # Check if user has client_account:read permission
+    # Check if user has client read permissions
     user_permissions = await user_service.get_user_effective_permissions(current_user.id)
     
-    if "client_account:read" not in user_permissions:
+    # Check for any client read permissions (all, platform, or own)
+    has_client_read = any(perm in user_permissions for perm in [
+        "client:read_all", "client:read_platform", "client:read_own"
+    ])
+    
+    if not has_client_read:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to read client accounts."
@@ -82,18 +87,13 @@ async def get_all_client_accounts(
     
     user_client_id = str(current_user.client_account.id) if current_user.client_account else None
     
-    # Check if user is super admin or platform staff
-    is_super_admin = "client_account:create" in user_permissions and "client_account:delete" in user_permissions
-    is_platform_staff = getattr(current_user, 'is_platform_staff', False)
-    platform_scope = getattr(current_user, 'platform_scope', None)
+    # Check if user is super admin
+    is_super_admin = "client:create" in user_permissions and "client:manage_all" in user_permissions
     
-    if is_super_admin:
-        # Super admin sees everything
+    if is_super_admin or "client:read_all" in user_permissions:
+        # Super admin or system-level access sees everything
         accounts = await client_account_service.get_client_accounts(skip=skip, limit=limit)
-    elif is_platform_staff and platform_scope == "all":
-        # Platform staff with "all" scope sees all client accounts
-        accounts = await client_account_service.get_client_accounts(skip=skip, limit=limit)
-    elif "client_account:read_platform" in user_permissions and user_client_id:
+    elif "client:read_platform" in user_permissions and user_client_id:
         # Platform admin with platform scope
         user_client = await client_account_service.get_client_account_by_id(PydanticObjectId(user_client_id))
         if user_client and user_client.platform_id:
@@ -102,7 +102,7 @@ async def get_all_client_accounts(
             )
         else:
             accounts = []
-    elif "client_account:read_created" in user_permissions and user_client_id:
+    elif "client:read_created" in user_permissions and user_client_id:
         # Platform admin with created scope
         accounts = await client_account_service.get_client_accounts_created_by(
             user_client_id, skip=skip, limit=limit
@@ -118,7 +118,7 @@ async def get_all_client_accounts(
     # Use Pydantic v2 model validation for automatic ObjectId handling
     return [ClientAccountResponseSchema.model_validate(account, from_attributes=True) for account in accounts]
 
-@router.get("/my-sub-clients", dependencies=[Depends(has_permission("client_account:read_created"))], responses={
+@router.get("/my-sub-clients", dependencies=[Depends(has_permission("client:read_created"))], responses={
     200: {"model": List[ClientAccountResponseSchema]}
 })
 async def get_my_sub_clients(
@@ -160,7 +160,7 @@ async def get_client_account_by_id(
     # Use Pydantic v2 model validation for automatic ObjectId handling
     return ClientAccountResponseSchema.model_validate(account, from_attributes=True)
 
-@router.put("/{account_id}", dependencies=[Depends(has_permission("client_account:update"))], responses={
+@router.put("/{account_id}", dependencies=[Depends(has_permission("client:manage_platform"))], responses={
     200: {"model": ClientAccountResponseSchema},
     404: {"description": "Client account not found"}
 })
@@ -179,7 +179,7 @@ async def update_client_account(
     # Use Pydantic v2 model validation for automatic ObjectId handling
     return ClientAccountResponseSchema.model_validate(updated_account, from_attributes=True)
 
-@router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(has_permission("client_account:delete"))])
+@router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(has_permission("client:manage_all"))])
 async def delete_client_account(
     account_id: PydanticObjectId = Depends(valid_account_id),
     current_user = Depends(has_hierarchical_client_access("account_id"))

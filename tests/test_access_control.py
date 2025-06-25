@@ -197,12 +197,13 @@ class TestAccessControl:
         """Test that users can only perform actions they have permissions for."""
         timestamp = self.get_unique_timestamp()
         
-        # Create a role with limited permissions (only user:read)
+        # Create a role with limited permissions (only user:read_self)
         limited_role_data = {
-            "_id": f"limited_role_{timestamp}",
-            "name": f"Limited Role {timestamp}",
+            "name": f"limited_role_{timestamp}",
+            "display_name": f"Limited Role {timestamp}",
             "description": "Role with limited permissions",
-            "permissions": ["user:read"]  # Only read permission
+            "permissions": ["user:read_self"],  # Only self read permission
+            "scope": "client"
         }
         
         role_response = await client.post("/v1/roles/", json=limited_role_data, headers=self.admin_headers)
@@ -226,7 +227,7 @@ class TestAccessControl:
             "first_name": "Limited",
             "last_name": "User",
             "client_account_id": account_id,
-            "roles": [limited_role_data["_id"]]
+            "roles": [limited_role_data["name"]]
         }
         
         limited_user_response = await client.post("/v1/users/", json=limited_user_data, headers=self.admin_headers)
@@ -242,7 +243,7 @@ class TestAccessControl:
         limited_token = limited_login.json()["access_token"]
         limited_headers = {"Authorization": f"Bearer {limited_token}"}
 
-        # User should be able to read their own data (has user:read permission)
+        # User should be able to read their own data (has user:read_self permission)
         read_response = await client.get(f"/v1/users/{limited_user['_id']}", headers=limited_headers)
         assert read_response.status_code == 200
 
@@ -319,15 +320,17 @@ class TestAccessControl:
 
         # Create groups in each account
         group1_data = {
-            "name": f"Group 1 {timestamp}",
+            "name": f"group_1_{timestamp}",
+            "display_name": f"Group 1 {timestamp}",
             "description": "Group in account 1",
-            "client_account_id": account1_id
+            "scope": "client"
         }
         
         group2_data = {
-            "name": f"Group 2 {timestamp}",
+            "name": f"group_2_{timestamp}",
+            "display_name": f"Group 2 {timestamp}",
             "description": "Group in account 2",
-            "client_account_id": account2_id
+            "scope": "client"
         }
 
         group1_response = await client.post("/v1/groups/", json=group1_data, headers=self.admin_headers)
@@ -411,7 +414,7 @@ class TestAccessControl:
             "_id": f"unauthorized_role_{timestamp}",
             "name": f"Unauthorized Role {timestamp}",
             "description": "Should not be created",
-            "permissions": ["user:read"]
+            "permissions": ["user:read_self"]
         }
         
         create_role_response = await client.post("/v1/roles/", json=test_role_data, headers=no_perms_headers)

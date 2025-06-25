@@ -78,40 +78,67 @@ MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
 # The database name is now handled via command-line arguments.
 
 # --- Essential Data Definitions ---
-# System-level permissions (clean names, scope handled by scope field)
+# System-level permissions (granular, scoped permissions)
 ESSENTIAL_PERMISSIONS = [
-    PermissionCreateSchema(name="user:create", display_name="Create Users", description="Allows creating a single user.", scope="system"),
-    PermissionCreateSchema(name="user:read", display_name="Read Users", description="Allows reading user information.", scope="system"),
-    PermissionCreateSchema(name="user:update", display_name="Update Users", description="Allows updating a user.", scope="system"),
-    PermissionCreateSchema(name="user:delete", display_name="Delete Users", description="Allows deleting a user.", scope="system"),
-    PermissionCreateSchema(name="user:add_member", display_name="Add Team Members", description="Allows adding a new user to one's own client account.", scope="system"),
-    PermissionCreateSchema(name="user:bulk_create", display_name="Bulk Create Users", description="Allows bulk creation of users.", scope="system"),
-    PermissionCreateSchema(name="role:create", display_name="Create Roles", description="Allows creating a role.", scope="system"),
-    PermissionCreateSchema(name="role:read", display_name="Read Roles", description="Allows reading role information.", scope="system"),
-    PermissionCreateSchema(name="role:update", display_name="Update Roles", description="Allows updating a role.", scope="system"),
-    PermissionCreateSchema(name="role:delete", display_name="Delete Roles", description="Allows deleting a role.", scope="system"),
-    PermissionCreateSchema(name="permission:create", display_name="Create Permissions", description="Allows creating a permission.", scope="system"),
-    PermissionCreateSchema(name="permission:read", display_name="Read Permissions", description="Allows reading permission information.", scope="system"),
-    PermissionCreateSchema(name="client_account:create", display_name="Create Client Accounts", description="Allows creating a client account.", scope="system"),
-    PermissionCreateSchema(name="client_account:read", display_name="Read Client Accounts", description="Allows reading client account information.", scope="system"),
-    PermissionCreateSchema(name="client_account:update", display_name="Update Client Accounts", description="Allows updating a client account.", scope="system"),
-    PermissionCreateSchema(name="client_account:delete", display_name="Delete Client Accounts", description="Allows deleting a client account.", scope="system"),
-    PermissionCreateSchema(name="group:create", display_name="Create Groups", description="Allows creating a group.", scope="system"),
-    PermissionCreateSchema(name="group:read", display_name="Read Groups", description="Allows reading group information.", scope="system"),
-    PermissionCreateSchema(name="group:update", display_name="Update Groups", description="Allows updating a group.", scope="system"),
-    PermissionCreateSchema(name="group:delete", display_name="Delete Groups", description="Allows deleting a group.", scope="system"),
-    PermissionCreateSchema(name="group:manage_members", display_name="Manage Group Members", description="Allows adding/removing members from groups.", scope="system"),
+    # === SELF-ACCESS PERMISSIONS (default for all users) ===
+    PermissionCreateSchema(name="user:read_self", display_name="Read Own Profile", description="Read own user profile in auth platform", scope="system"),
+    PermissionCreateSchema(name="user:update_self", display_name="Update Own Profile", description="Update own user profile in auth platform", scope="system"),
+    PermissionCreateSchema(name="user:change_password", display_name="Change Own Password", description="Change own password", scope="system"),
+    PermissionCreateSchema(name="group:read_own", display_name="Read Own Groups", description="View own group memberships in auth platform", scope="system"),
+    PermissionCreateSchema(name="client:read_own", display_name="Read Own Client", description="View own client account info in auth platform", scope="system"),
+    
+    # Own scope creation permissions (default for all users)
+    PermissionCreateSchema(name="permission:create_own_scope", display_name="Create Own Scope Permissions", description="Create permissions in own scope", scope="system"),
+    PermissionCreateSchema(name="role:create_own_scope", display_name="Create Own Scope Roles", description="Create roles in own scope", scope="system"),
+    PermissionCreateSchema(name="group:create_own_scope", display_name="Create Own Scope Groups", description="Create groups in own scope", scope="system"),
+    
+    # === CLIENT-SCOPED PERMISSIONS ===
+    PermissionCreateSchema(name="user:read_client", display_name="Read Client Users", description="Read users in same client (auth platform)", scope="system"),
+    PermissionCreateSchema(name="user:manage_client", display_name="Manage Client Users", description="CRUD users in same client (auth platform)", scope="system"),
+    PermissionCreateSchema(name="role:read_client", display_name="Read Client Roles", description="Read roles in same client (auth platform)", scope="system"),
+    PermissionCreateSchema(name="role:manage_client", display_name="Manage Client Roles", description="CRUD roles in same client (auth platform)", scope="system"),
+    PermissionCreateSchema(name="group:read_client", display_name="Read Client Groups", description="Read groups in same client (auth platform)", scope="system"),
+    PermissionCreateSchema(name="group:manage_client", display_name="Manage Client Groups", description="CRUD groups in same client (auth platform)", scope="system"),
+    PermissionCreateSchema(name="permission:read_client", display_name="Read Client Permissions", description="Read permissions in same client (auth platform)", scope="system"),
+    PermissionCreateSchema(name="permission:manage_client", display_name="Manage Client Permissions", description="CRUD permissions in same client (auth platform)", scope="system"),
+    
+    # === ADMIN-ONLY PERMISSIONS (system-wide) ===
+    PermissionCreateSchema(name="user:read_all", display_name="Read All Users", description="Read all users in auth platform (admin only)", scope="system"),
+    PermissionCreateSchema(name="user:manage_all", display_name="Manage All Users", description="Global user management in auth platform (admin only)", scope="system"),
+    PermissionCreateSchema(name="role:read_all", display_name="Read All Roles", description="Read all roles in auth platform (admin only)", scope="system"),
+    PermissionCreateSchema(name="role:manage_all", display_name="Manage All Roles", description="Global role management in auth platform (admin only)", scope="system"),
+    PermissionCreateSchema(name="group:read_all", display_name="Read All Groups", description="Read all groups in auth platform (admin only)", scope="system"),
+    PermissionCreateSchema(name="group:manage_all", display_name="Manage All Groups", description="Global group management in auth platform (admin only)", scope="system"),
+    PermissionCreateSchema(name="permission:read_all", display_name="Read All Permissions", description="Read all permissions in auth platform (admin only)", scope="system"),
+    PermissionCreateSchema(name="permission:manage_all", display_name="Manage All Permissions", description="Global permission management in auth platform (admin only)", scope="system"),
+    
+    # === PLATFORM-LEVEL PERMISSIONS ===
+    PermissionCreateSchema(name="client:create", display_name="Create Client Accounts", description="Create new client accounts in auth platform", scope="system"),
+    PermissionCreateSchema(name="client:read_platform", display_name="Read Platform Clients", description="Read all platform client accounts", scope="system"),
+    PermissionCreateSchema(name="client:manage_platform", display_name="Manage Platform Clients", description="Manage clients across platform", scope="system"),
+    PermissionCreateSchema(name="support:cross_client", display_name="Cross-Client Support", description="Support across all platform clients in auth platform", scope="system"),
+    
+    # === SYSTEM-LEVEL INFRASTRUCTURE PERMISSIONS ===
+    PermissionCreateSchema(name="platform:create", display_name="Create Platforms", description="Create new platforms", scope="system"),
+    PermissionCreateSchema(name="platform:manage_all", display_name="Manage All Platforms", description="Full platform management in auth platform", scope="system"),
+    PermissionCreateSchema(name="system:infrastructure", display_name="System Infrastructure", description="Auth platform infrastructure management", scope="system"),
+    PermissionCreateSchema(name="admin:*", display_name="Admin All Access", description="Wildcard auth platform admin access", scope="system"),
+    
+    # === TRANSITION PERMISSIONS (for roles and tests migration) ===
+    PermissionCreateSchema(name="user:add_member", display_name="Add Team Members", description="Add users to client account", scope="system"),
+    PermissionCreateSchema(name="user:bulk_create", display_name="Bulk Create Users", description="Bulk creation of users", scope="system"),
+    PermissionCreateSchema(name="group:manage_members", display_name="Manage Group Members", description="Add/remove group members", scope="system"),
 ]
 
-# Platform permissions (clean names, scope handled by scope field)
+# Platform permissions (platform-scoped permissions for specific platforms)
 PLATFORM_PERMISSIONS = [
-    PermissionCreateSchema(name="client_account:create_sub", display_name="Create Sub-Clients", description="Allows creating sub-clients within platform scope.", scope="platform"),
-    PermissionCreateSchema(name="client_account:read_platform", display_name="Read Platform Clients", description="Allows reading all clients within platform scope.", scope="platform"),
-    PermissionCreateSchema(name="client_account:read_created", display_name="Read Created Clients", description="Allows reading only clients you created.", scope="platform"),
-    PermissionCreateSchema(name="clients:manage", display_name="Manage Platform Clients", description="Allows managing client accounts across the platform.", scope="platform"),
-    PermissionCreateSchema(name="analytics:view", display_name="View Platform Analytics", description="Allows viewing platform-wide analytics and metrics.", scope="platform"),
-    PermissionCreateSchema(name="support:cross_client", display_name="Support Platform Users", description="Allows providing support to users across all clients.", scope="platform"),
-    PermissionCreateSchema(name="clients:onboard", display_name="Onboard Platform Clients", description="Allows onboarding new clients to the platform.", scope="platform"),
+    PermissionCreateSchema(name="client:create_sub", display_name="Create Sub-Clients", description="Create sub-clients within platform scope", scope="platform"),
+    PermissionCreateSchema(name="client:read_platform", display_name="Read Platform Clients", description="Read all clients within platform scope", scope="platform"),
+    PermissionCreateSchema(name="client:read_created", display_name="Read Created Clients", description="Read only clients you created", scope="platform"),
+    PermissionCreateSchema(name="client:manage_platform", display_name="Manage Platform Clients", description="Manage client accounts across the platform", scope="platform"),
+    PermissionCreateSchema(name="analytics:view_platform", display_name="View Platform Analytics", description="View platform-wide analytics and metrics", scope="platform"),
+    PermissionCreateSchema(name="support:cross_client", display_name="Support Platform Users", description="Provide support to users across all clients", scope="platform"),
+    PermissionCreateSchema(name="client:onboard", display_name="Onboard Platform Clients", description="Onboard new clients to the platform", scope="platform"),
 ]
 
 # System roles will be created in the seeding function
@@ -246,7 +273,7 @@ async def seed_permissions_and_super_admin_role():
         super_admin_role_data = RoleCreateSchema(
             name="super_admin",
             display_name="Super Administrator",
-            description="Grants complete system-wide access.",
+            description="Grants complete system-wide access to auth platform.",
             permissions=super_admin_permission_names,  # Use permission names directly
             scope=RoleScope.SYSTEM,
             is_assignable_by_main_client=False
@@ -263,13 +290,17 @@ async def seed_permissions_and_super_admin_role():
     basic_user_exists = any(role.name == "basic_user" for role in system_roles)
     
     if not basic_user_exists:
-        # Use permission names directly - service will convert to ObjectIds
-        basic_permission_names = ["user:read", "group:read"]
+        # Use self-access permission names directly - service will convert to ObjectIds
+        basic_permission_names = [
+            "user:read_self", "user:update_self", "user:change_password",
+            "group:read_own",
+            "permission:create_own_scope", "role:create_own_scope", "group:create_own_scope"
+        ]
         
         basic_user_role_data = RoleCreateSchema(
             name="basic_user",
             display_name="Basic User",
-            description="Basic user access with minimal permissions",
+            description="Standard user with self-access permissions - can manage own profile and create business permissions in own scope",
             permissions=basic_permission_names,  # Use permission names directly
             scope=RoleScope.SYSTEM,
             is_assignable_by_main_client=True
@@ -323,10 +354,10 @@ async def seed_comprehensive_scenario():
         role_data=RoleCreateSchema(
             name="admin",
             display_name="Client Administrator",
-            description="Administrative role for client account",
-            permissions=["user:create", "user:read", "user:update", "user:delete", "user:add_member", 
-                        "group:create", "group:read", "group:update", "group:delete", "group:manage_members",
-                        "role:create", "role:read", "role:update", "role:delete"],
+            description="Administrative role for client account - manages users, groups, and roles within client scope",
+            permissions=["user:manage_client", "user:add_member", 
+                        "group:manage_client", "group:manage_members",
+                        "role:read_client", "permission:read_client", "client:read_own"],
             scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
         ),
@@ -339,8 +370,8 @@ async def seed_comprehensive_scenario():
         role_data=RoleCreateSchema(
             name="manager",
             display_name="Manager",
-            description="Manager role with limited permissions",
-            permissions=["user:read", "group:read", "group:update", "group:manage_members"],
+            description="Manager role with limited client-scoped permissions",
+            permissions=["user:read_client", "group:read_client", "group:manage_members", "client:read_own"],
             scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
         ),
@@ -353,8 +384,8 @@ async def seed_comprehensive_scenario():
         role_data=RoleCreateSchema(
             name="employee",
             display_name="Employee",
-            description="Basic employee role",
-            permissions=["user:read", "group:read"],
+            description="Basic employee role with self-access permissions",
+            permissions=["user:read_self", "group:read_own", "client:read_own"],
             scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
         ),
@@ -381,10 +412,10 @@ async def seed_comprehensive_scenario():
         role_data=RoleCreateSchema(
             name="admin",
             display_name="Client Administrator",
-            description="Administrative role for ACME Corporation",
-            permissions=["user:create", "user:read", "user:update", "user:delete", "user:add_member", 
-                        "group:create", "group:read", "group:update", "group:delete", "group:manage_members",
-                        "role:create", "role:read", "role:update", "role:delete"],
+            description="Administrative role for ACME Corporation - manages users, groups, and roles within client scope",
+            permissions=["user:manage_client", "user:add_member", 
+                        "group:manage_client", "group:manage_members",
+                        "role:read_client", "permission:read_client", "client:read_own"],
             scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
         ),
@@ -396,8 +427,8 @@ async def seed_comprehensive_scenario():
         role_data=RoleCreateSchema(
             name="employee",
             display_name="Employee",
-            description="Basic employee role for ACME Corporation",
-            permissions=["user:read", "group:read"],
+            description="Basic employee role for ACME Corporation with self-access permissions",
+            permissions=["user:read_self", "group:read_own", "client:read_own"],
             scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
         ),
@@ -410,10 +441,10 @@ async def seed_comprehensive_scenario():
         role_data=RoleCreateSchema(
             name="admin",
             display_name="Client Administrator",
-            description="Administrative role for Tech Startup Inc",
-            permissions=["user:create", "user:read", "user:update", "user:delete", "user:add_member",
-                        "group:create", "group:read", "group:update", "group:delete", "group:manage_members",
-                        "role:create", "role:read", "role:update", "role:delete"],
+            description="Administrative role for Tech Startup Inc - manages users, groups, and roles within client scope",
+            permissions=["user:manage_client", "user:add_member",
+                        "group:manage_client", "group:manage_members",
+                        "role:read_client", "permission:read_client", "client:read_own"],
             scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
         ),
@@ -425,8 +456,8 @@ async def seed_comprehensive_scenario():
         role_data=RoleCreateSchema(
             name="employee",
             display_name="Employee",
-            description="Basic employee role for Tech Startup Inc",
-            permissions=["user:read", "group:read"],
+            description="Basic employee role for Tech Startup Inc with self-access permissions",
+            permissions=["user:read_self", "group:read_own", "client:read_own"],
             scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
         ),
@@ -481,7 +512,7 @@ async def seed_comprehensive_scenario():
             name="acme_team",
             display_name="ACME Team", 
             description="ACME Corporation Team",
-            permissions=["user:read", "group:read"],  # Use permission names directly
+            permissions=["user:read_self", "group:read_own", "client:read_own"],  # Use self-access permission names
             scope="client"
         ),
         current_user_id="system",
@@ -514,10 +545,10 @@ async def seed_hierarchical_scenario():
             display_name="Platform Creator",
             description="Can create sub-clients within their platform scope and access all platform clients.",
             permissions=[
-                "user:read", "user:create", "user:update", "user:add_member",
-                "client_account:read", "client_account:create_sub", "client_account:read_platform", "client_account:update",
-                "group:read", "group:create", "group:update", "group:manage_members",
-                "role:read", "permission:read"
+                "user:manage_all", "user:add_member",
+                "client:read_platform", "client:create_sub", "client:manage_platform",
+                "group:manage_all", "group:manage_members",
+                "role:read_all", "permission:read_all"
             ],
             scope=RoleScope.PLATFORM,
             is_assignable_by_main_client=True
@@ -533,10 +564,10 @@ async def seed_hierarchical_scenario():
             display_name="Platform Viewer",
             description="Can only view clients they created within their platform scope.",
             permissions=[
-                "user:read", "user:create", "user:update", "user:add_member",
-                "client_account:read", "client_account:read_created", "client_account:update",
-                "group:read", "group:create", "group:update", "group:manage_members",
-                "role:read", "permission:read"
+                "user:manage_client", "user:add_member",
+                "client:read_platform", "client:read_created", "client:manage_platform",
+                "group:manage_client", "group:manage_members",
+                "role:read_client", "permission:read_client"
             ],
             scope=RoleScope.PLATFORM,
             is_assignable_by_main_client=True
@@ -568,9 +599,9 @@ async def seed_hierarchical_scenario():
         role_data=RoleCreateSchema(
             name="admin",
             display_name="Client Administrator",
-            description="Administrative role for Hierarchical ACME Properties",
-            permissions=["user:read", "user:update", "user:create", "user:add_member",
-                        "group:read", "group:create", "group:update", "group:manage_members"],
+            description="Administrative role for Hierarchical ACME Properties - manages users and groups within client scope",
+            permissions=["user:manage_client", "user:add_member",
+                        "group:manage_client", "group:manage_members", "client:read_own"],
             scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
         ),
@@ -600,9 +631,9 @@ async def ensure_platform_permissions_exist(platform_id: str):
 
     # Define platform permissions inline since they're not imported
     platform_permissions = [
-        PermissionCreateSchema(name="client_account:create_sub", display_name="Create Sub-Clients", description="Allows creating sub-client accounts within platform scope.", scope="platform"),
-        PermissionCreateSchema(name="client_account:read_platform", display_name="Read Platform Clients", description="Allows reading all clients within platform scope.", scope="platform"),
-        PermissionCreateSchema(name="client_account:read_created", display_name="Read Created Clients", description="Allows reading only clients created by the user/platform.", scope="platform")
+        PermissionCreateSchema(name="client:create_sub", display_name="Create Sub-Clients", description="Create sub-client accounts within platform scope", scope="platform"),
+        PermissionCreateSchema(name="client:read_platform", display_name="Read Platform Clients", description="Read all clients within platform scope", scope="platform"),
+        PermissionCreateSchema(name="client:read_created", display_name="Read Created Clients", description="Read only clients created by the user/platform", scope="platform")
     ]
 
     for perm_data in platform_permissions:
@@ -661,11 +692,11 @@ async def seed_propertyhub_scenario():
     
     # Platform admin role with permission names
     platform_admin_permission_names = [
-        "client_account:create", "client_account:read", "client_account:update", 
-        "client_account:create_sub", "client_account:read_platform", "client_account:read_created",
-        "user:create", "user:read", "user:update", "user:delete", "user:add_member",
-        "group:create", "group:read", "group:update", "group:delete", "group:manage_members",
-        "role:read", "permission:read"
+        "client:create", "client:read_platform", "client:manage_platform", 
+        "client:create_sub", "client:read_created",
+        "user:manage_all", "user:add_member",
+        "group:manage_all", "group:manage_members",
+        "role:read_all", "permission:read_all"
     ]
     
     platform_admin_role = await role_service.create_role(
@@ -683,8 +714,8 @@ async def seed_propertyhub_scenario():
 
     # Platform support role with permission names
     platform_support_permission_names = [
-        "client_account:read", "client_account:read_platform", 
-        "user:read", "group:read"
+        "client:read_own", "client:read_platform", 
+        "user:read_client", "group:read_client"
     ]
     
     platform_support_role = await role_service.create_role(
@@ -705,8 +736,8 @@ async def seed_propertyhub_scenario():
             name="sales",
             display_name="Platform Sales",
             description="PropertyHub sales team",
-            permissions=["client_account:create", "client_account:read", "client_account:read_created",
-                        "user:read"],  # Use permission names directly
+            permissions=["client:create", "client:read_platform", "client:read_created",
+                        "user:read_client"],  # Use permission names directly
             scope=RoleScope.PLATFORM,
             is_assignable_by_main_client=True
         ),
@@ -777,9 +808,9 @@ async def seed_propertyhub_scenario():
             name="admin",
             display_name="Real Estate Company Admin",
             description="Real estate company administrator",
-            permissions=["user:create", "user:read", "user:update", "user:add_member",
-                        "group:create", "group:read", "group:update", "group:manage_members",
-                        "client_account:read"],
+            permissions=["user:manage_client", "user:add_member",
+                        "group:manage_client", "group:manage_members",
+                        "client:read_own"],
             scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
         ),
@@ -792,7 +823,7 @@ async def seed_propertyhub_scenario():
             name="agent",
             display_name="Real Estate Agent",
             description="Real estate agent or sales person",
-            permissions=["user:read", "group:read", "client_account:read"],
+            permissions=["user:read_self", "group:read_own", "client:read_own"],
             scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
         ),
@@ -806,9 +837,9 @@ async def seed_propertyhub_scenario():
             name="admin",
             display_name="Real Estate Company Admin",
             description="Real estate company administrator",
-            permissions=["user:create", "user:read", "user:update", "user:add_member",
-                        "group:create", "group:read", "group:update", "group:manage_members",
-                        "client_account:read"],
+            permissions=["user:manage_client", "user:add_member",
+                        "group:manage_client", "group:manage_members",
+                        "client:read_own"],
             scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
         ),
@@ -821,7 +852,7 @@ async def seed_propertyhub_scenario():
             name="agent",
             display_name="Real Estate Agent",
             description="Real estate agent or sales person",
-            permissions=["user:read", "group:read", "client_account:read"],
+            permissions=["user:read_self", "group:read_own", "client:read_own"],
             scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
         ),
@@ -835,9 +866,9 @@ async def seed_propertyhub_scenario():
             name="admin",
             display_name="Real Estate Company Admin",
             description="Real estate company administrator",
-            permissions=["user:create", "user:read", "user:update", "user:add_member",
-                        "group:create", "group:read", "group:update", "group:manage_members",
-                        "client_account:read"],
+            permissions=["user:manage_client", "user:add_member",
+                        "group:manage_client", "group:manage_members",
+                        "client:read_own"],
             scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
         ),
@@ -906,7 +937,7 @@ async def seed_propertyhub_scenario():
             name="PropertyHub Internal Team",
             display_name="PropertyHub Internal Team", 
             description="PropertyHub platform staff",
-            permissions=["client_account:read", "user:read", "group:read"],  # Use permission names directly
+            permissions=["client:read_platform", "user:read_client", "group:read_client"],  # Use permission names directly
             scope="platform"
         ),
         current_user_id="system",
@@ -920,7 +951,7 @@ async def seed_propertyhub_scenario():
             name="ACME Sales Team",
             display_name="ACME Sales Team",
             description="ACME Real Estate sales team",
-            permissions=["user:read", "group:read", "client_account:read"],  # Use permission names directly
+            permissions=["user:read_self", "group:read_own", "client:read_own"],  # Use permission names directly
             scope="client"
         ),
         current_user_id="system",
