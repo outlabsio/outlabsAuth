@@ -1,32 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List, Tuple
+from fastapi import APIRouter, Depends, HTTPException, status
 from beanie import PydanticObjectId
 
-from ..services.user_service import user_service
+from ..models.user_model import UserModel
 from ..schemas.user_schema import UserCreateSchema, UserUpdateSchema, UserResponseSchema, UserBulkCreateResponseSchema
 from ..schemas.auth_schema import TokenDataSchema
-from ..models.user_model import UserModel
-from ..dependencies import has_permission, get_current_user_with_token
-
-def user_has_role(user: UserModel, role_name: str) -> bool:
-    """
-    Helper function to check if a user has a specific role by name.
-    Handles both old string-based roles and new Beanie Link roles.
-    """
-    if not user.roles:
-        return False
-    
-    for role in user.roles:
-        if hasattr(role, 'name'):
-            # It's a RoleModel object (Beanie Link)
-            if role.name == role_name:
-                return True
-        elif isinstance(role, str):
-            # It's still a string (backward compatibility)
-            if role == role_name:
-                return True
-    
-    return False
+from ..services.user_service import user_service
+from ..dependencies import get_current_user_with_token, has_permission
+from ..dependencies import user_has_role, require_super_admin, require_admin, can_access_user
 
 router = APIRouter(
     prefix="/v1/users",
@@ -69,9 +50,10 @@ async def create_sub_user(
     
     return user_dict
 
-@router.post("/bulk-create", response_model=UserBulkCreateResponseSchema, status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("user:bulk_create"))])
+@router.post("/bulk-create", response_model=UserBulkCreateResponseSchema, status_code=status.HTTP_201_CREATED)
 async def bulk_create_users(
-    users_data: List[UserCreateSchema]
+    users_data: List[UserCreateSchema],
+    current_user: UserModel = Depends(require_admin)  # Using dependency for admin-only access
 ):
     """
     Creates multiple users in a single request.
@@ -99,9 +81,10 @@ async def bulk_create_users(
         failed_creates=failed_creates
     )
 
-@router.post("/", response_model=UserResponseSchema, status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("user:create"))])
+@router.post("/", response_model=UserResponseSchema, status_code=status.HTTP_201_CREATED)
 async def create_user(
-    user_data: UserCreateSchema
+    user_data: UserCreateSchema,
+    current_user: UserModel = Depends(require_admin)  # Using dependency for admin-only access
 ):
     """
     Create a new user.
@@ -184,41 +167,12 @@ async def get_all_users(
 
 @router.get("/{user_id}", response_model=UserResponseSchema)
 async def get_user_by_id(
-    user_id: str,
-    user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token)
+    user: UserModel = Depends(can_access_user())  # All access control handled by dependency!
 ):
     """
     Retrieve a single user by their ID.
+    Access control is handled by the dependency - users can view their own data, admins can view any user data.
     """
-    # Validate ObjectId format
-    try:
-        user_object_id = PydanticObjectId(user_id)
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Invalid ObjectId: {user_id}")
-    
-    current_user, token_data = user_and_token
-    user = await user_service.get_user_by_id(user_object_id)
-    
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
-        
-    # Enforce data scoping and self-access restrictions
-    is_super_admin = user_has_role(current_user, "super_admin")
-    is_client_admin = user_has_role(current_user, "client_admin")
-    
-    # Regular users can only access their own data
-    if not is_super_admin and not is_client_admin:
-        if str(current_user.id) != user_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only access your own user data.")
-    
-    # For non-super admins, enforce client account scoping
-    if not is_super_admin and token_data.client_account_id:
-        if user.client_account:
-            if str(user.client_account.id) != token_data.client_account_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
-        else:
-            # User has no client account but admin does - not allowed to access
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
 
     # Convert to response format
     user_dict = user.model_dump(by_alias=True)

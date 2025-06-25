@@ -1,7 +1,7 @@
 from beanie import PydanticObjectId
 from fastapi import HTTPException, status, Depends, Request
 from fastapi.security import OAuth2PasswordBearer
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 
 from .services.security_service import security_service
 from .services.user_service import user_service
@@ -12,6 +12,112 @@ from .models.user_model import UserModel
 from .schemas.auth_schema import TokenDataSchema
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/auth/login", auto_error=False)
+
+
+# --- User Role Utilities ---
+
+def user_has_role(user: UserModel, role_name: str) -> bool:
+    """
+    Check if a user has a specific role by name.
+    Works with Beanie Link roles.
+    
+    Args:
+        user: UserModel instance
+        role_name: Name of the role to check for (e.g., "super_admin")
+        
+    Returns:
+        bool: True if user has the role, False otherwise
+    """
+    if not user.roles:
+        return False
+    
+    for role in user.roles:
+        if role.name == role_name:
+            return True
+    
+    return False
+
+
+def user_has_any_role(user: UserModel, role_names: List[str]) -> bool:
+    """
+    Check if a user has any of the specified roles.
+    
+    Args:
+        user: UserModel instance
+        role_names: List of role names to check for
+        
+    Returns:
+        bool: True if user has any of the roles, False otherwise
+    """
+    if not user.roles:
+        return False
+    
+    user_role_names = {role.name for role in user.roles}
+    return bool(user_role_names.intersection(role_names))
+
+
+def user_get_role_names(user: UserModel) -> List[str]:
+    """
+    Get all role names for a user.
+    
+    Args:
+        user: UserModel instance
+        
+    Returns:
+        List[str]: List of role names
+    """
+    if not user.roles:
+        return []
+    
+    return [role.name for role in user.roles]
+
+
+# --- Dependency Factories for Role-Based Access ---
+
+def require_role(role_name: str):
+    """
+    Dependency factory to require a specific role.
+    
+    Usage:
+        @router.get("/admin-only")
+        async def admin_endpoint(user: UserModel = Depends(require_role("super_admin"))):
+            return {"message": "Admin access granted"}
+    """
+    async def _require_role(
+        current_user: UserModel = Depends(get_current_user)
+    ) -> UserModel:
+        if not user_has_role(current_user, role_name):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied. Required role: {role_name}"
+            )
+        return current_user
+    return _require_role
+
+
+def require_any_role(role_names: List[str]):
+    """
+    Dependency factory to require any of the specified roles.
+    
+    Usage:
+        @router.get("/admin-or-manager")
+        async def endpoint(user: UserModel = Depends(require_any_role(["admin", "manager"]))):
+            return {"message": "Access granted"}
+    """
+    async def _require_any_role(
+        current_user: UserModel = Depends(get_current_user)
+    ) -> UserModel:
+        if not user_has_any_role(current_user, role_names):
+            roles_str = ", ".join(role_names)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied. Required any of: {roles_str}"
+            )
+        return current_user
+    return _require_any_role
+
+
+# --- Core Dependencies ---
 
 def valid_account_id(account_id: str):
     try:
@@ -60,17 +166,28 @@ async def get_current_user_with_token(
         )
     return user, token_data
 
+async def get_current_user(
+    user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token)
+) -> UserModel:
+    return user_and_token[0]
+
+
+# --- Permission-Based Dependencies ---
+
 def has_permission(required_permission: str):
     """
     Dependency factory to check if the current user has the required permission.
     Now includes permissions from both direct roles and group memberships.
     Uses clean permission names (e.g., "user:create", "listings:manage").
+    
+    Usage:
+        @router.post("/users", dependencies=[Depends(has_permission("user:create"))])
+        async def create_user_endpoint():
+            return {"message": "User creation allowed"}
     """
     async def _has_permission(
-        user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token)
-    ):
-        current_user, _ = user_and_token
-        
+        current_user: UserModel = Depends(get_current_user)
+    ) -> UserModel:
         # Get all effective permissions (direct roles + group memberships)
         # Returns clean permission names from resolved ObjectIds
         user_permissions = await user_service.get_user_effective_permissions(current_user.id)
@@ -85,6 +202,7 @@ def has_permission(required_permission: str):
         )
     return _has_permission
 
+
 def has_hierarchical_client_access(target_client_field: str = "account_id"):
     """
     Dependency factory for hierarchical client account access control.
@@ -95,11 +213,18 @@ def has_hierarchical_client_access(target_client_field: str = "account_id"):
     
     Args:
         target_client_field: The path parameter or field name containing the target client ID
+        
+    Usage:
+        @router.get("/clients/{account_id}/data")
+        async def get_client_data(
+            user: UserModel = Depends(has_hierarchical_client_access("account_id"))
+        ):
+            return {"message": "Access granted"}
     """
     async def _has_hierarchical_access(
         request: Request,
         current_user: UserModel = Depends(get_current_user)
-    ):
+    ) -> UserModel:
         # Extract target client ID from path parameters
         target_client_id = request.path_params.get(target_client_field)
         if not target_client_id:
@@ -112,7 +237,7 @@ def has_hierarchical_client_access(target_client_field: str = "account_id"):
         user_permissions = await user_service.get_user_effective_permissions(current_user.id)
         
         # Check if user is super admin (has all permissions)
-        is_super_admin = "client_account:create" in user_permissions and "client_account:delete" in user_permissions
+        is_super_admin = user_has_role(current_user, "super_admin")
         
         # Use the enhanced service method to check access
         user_client_id = str(current_user.client_account.id) if current_user.client_account else None
@@ -138,7 +263,145 @@ def has_hierarchical_client_access(target_client_field: str = "account_id"):
         return current_user
     return _has_hierarchical_access
 
-async def get_current_user(
-    user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token)
-) -> UserModel:
-    return user_and_token[0] 
+
+# --- User Access Control Dependencies ---
+
+def can_access_user(user_id_param: str = "user_id"):
+    """
+    Dependency factory for user access control.
+    - Admins can access any user
+    - Regular users can only access themselves
+    
+    Usage:
+        @router.get("/users/{user_id}")
+        async def get_user(user: UserModel = Depends(can_access_user())):
+            return user
+    """
+    async def _can_access_user(
+        request: Request,
+        current_user: UserModel = Depends(get_current_user)
+    ) -> UserModel:
+        # Extract user ID from path parameters
+        target_user_id = request.path_params.get(user_id_param)
+        if not target_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Missing required parameter: {user_id_param}"
+            )
+        
+        # Validate ObjectId format
+        try:
+            target_user_object_id = PydanticObjectId(target_user_id)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, 
+                detail=f"Invalid ObjectId: {target_user_id}"
+            )
+        
+        # Get the target user
+        target_user = await user_service.get_user_by_id(target_user_object_id)
+        if target_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, 
+                detail="User not found"
+            )
+        
+        # Access control logic
+        is_admin = user_has_any_role(current_user, ["super_admin", "client_admin"])
+        is_self_access = str(current_user.id) == target_user_id
+        
+        if not is_admin and not is_self_access:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, 
+                detail="You can only access your own user data"
+            )
+        
+        # For client admins, enforce client account scoping
+        if user_has_role(current_user, "client_admin") and not user_has_role(current_user, "super_admin"):
+            if target_user.client_account and current_user.client_account:
+                if str(target_user.client_account.id) != str(current_user.client_account.id):
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND, 
+                        detail="User not found"
+                    )
+        
+        return target_user
+    return _can_access_user
+
+
+def require_self_or_admin(user_id_param: str = "user_id"):
+    """
+    Dependency factory that returns the current user if they can access the target user.
+    Similar to can_access_user but returns the current_user instead of target_user.
+    
+    Usage:
+        @router.put("/users/{user_id}")
+        async def update_user(
+            user_data: UserUpdateSchema,
+            current_user: UserModel = Depends(require_self_or_admin())
+        ):
+            # current_user is guaranteed to have access
+    """
+    async def _require_self_or_admin(
+        request: Request,
+        current_user: UserModel = Depends(get_current_user)
+    ) -> UserModel:
+        # This dependency validates access but returns current_user
+        await _can_access_user(request, current_user)
+        return current_user
+    
+    # We need to create the inner function here
+    async def _can_access_user(request: Request, current_user: UserModel) -> UserModel:
+        target_user_id = request.path_params.get(user_id_param)
+        if not target_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Missing required parameter: {user_id_param}"
+            )
+        
+        try:
+            target_user_object_id = PydanticObjectId(target_user_id)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, 
+                detail=f"Invalid ObjectId: {target_user_id}"
+            )
+        
+        target_user = await user_service.get_user_by_id(target_user_object_id)
+        if target_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, 
+                detail="User not found"
+            )
+        
+        is_admin = user_has_any_role(current_user, ["super_admin", "client_admin"])
+        is_self_access = str(current_user.id) == target_user_id
+        
+        if not is_admin and not is_self_access:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, 
+                detail="You can only access your own user data"
+            )
+        
+        if user_has_role(current_user, "client_admin") and not user_has_role(current_user, "super_admin"):
+            if target_user.client_account and current_user.client_account:
+                if str(target_user.client_account.id) != str(current_user.client_account.id):
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND, 
+                        detail="User not found"
+                    )
+        return target_user
+    
+    return _require_self_or_admin
+
+
+# --- Commonly Used Dependencies ---
+
+# Super Admin access only
+require_super_admin = require_role("super_admin")
+
+# Admin access (any admin role)
+require_admin = require_any_role(["super_admin", "admin"])
+
+# Platform admin access
+require_platform_admin = require_any_role(["super_admin", "platform_admin"]) 

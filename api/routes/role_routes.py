@@ -12,27 +12,7 @@ from ..schemas.role_schema import (
     AvailableRolesResponseSchema
 )
 from ..services.role_service import role_service
-
-
-def user_has_role(user: UserModel, role_name: str) -> bool:
-    """
-    Helper function to check if a user has a specific role by name.
-    Handles both old string-based roles and new Beanie Link roles.
-    """
-    if not user.roles:
-        return False
-    
-    for role in user.roles:
-        if hasattr(role, 'name'):
-            # It's a RoleModel object (Beanie Link)
-            if role.name == role_name:
-                return True
-        elif isinstance(role, str):
-            # It's still a string (backward compatibility)
-            if role == role_name:
-                return True
-    
-    return False
+from ..dependencies import user_has_role, require_super_admin, require_admin
 
 
 router = APIRouter(prefix="/v1/roles", tags=["roles"])

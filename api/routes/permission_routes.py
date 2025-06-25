@@ -11,27 +11,7 @@ from ..schemas.permission_schema import (
 from ..models.scopes import PermissionScope
 from ..dependencies import has_permission, get_current_user
 from ..models.user_model import UserModel
-
-
-def user_has_role(user: UserModel, role_name: str) -> bool:
-    """
-    Helper function to check if a user has a specific role by name.
-    Handles both old string-based roles and new Beanie Link roles.
-    """
-    if not user.roles:
-        return False
-    
-    for role in user.roles:
-        if hasattr(role, 'name'):
-            # It's a RoleModel object (Beanie Link)
-            if role.name == role_name:
-                return True
-        elif isinstance(role, str):
-            # It's still a string (backward compatibility)
-            if role == role_name:
-                return True
-    
-    return False
+from ..dependencies import user_has_role, require_super_admin, require_admin
 
 
 router = APIRouter(
@@ -95,15 +75,26 @@ async def get_available_permissions(
     Get permissions that the current user can assign to others, grouped by scope.
     """
     current_client_id = str(current_user.client_account.id) if current_user.client_account else None
-    current_platform_id = current_user.platform_scope  # From user model
     
-    # Determine user permissions (simplified - in real implementation, check roles)
+    # Determine user permissions and platform ID from roles
     is_super_admin = user_has_role(current_user, "super_admin")
-    is_platform_admin = user_has_role(current_user, "platform_admin")
+    
+    # Extract platform ID from platform admin roles
+    current_user_platform_id = None
+    is_platform_admin = False
+    
+    if current_user.roles:
+        for role in current_user.roles:
+            if (role.name == "admin" and 
+                hasattr(role, 'scope') and 
+                role.scope.value == "platform"):  # Check if it's a platform-scoped admin role
+                is_platform_admin = True
+                current_user_platform_id = role.scope_id
+                break
     
     return await permission_service.get_available_permissions_for_user(
         current_user_client_id=current_client_id,
-        current_user_platform_id=current_platform_id,
+        current_user_platform_id=current_user_platform_id,
         is_super_admin=is_super_admin,
         is_platform_admin=is_platform_admin
     )
