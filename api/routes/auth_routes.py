@@ -12,7 +12,7 @@ from ..config import settings
 from ..schemas.auth_schema import TokenSchema, TokenDataSchema, SessionResponseSchema
 from ..schemas.user_schema import UserResponseSchema
 from ..schemas.password_reset_schema import PasswordResetRequestSchema, PasswordResetConfirmSchema, PasswordChangeSchema
-from ..dependencies import get_current_user, get_current_user_with_token
+from ..dependencies import get_current_user, get_current_user_with_token, convert_user_to_response
 from ..models.user_model import UserModel
 from ..models.password_reset_token_model import PasswordResetTokenModel
 from ..services.group_service import group_service
@@ -213,26 +213,8 @@ async def read_users_me(
     """
     Get the profile of the currently authenticated user.
     """
-    # Convert UserModel to dict and ensure ObjectId fields are strings
-    user_dict = current_user.model_dump(by_alias=True)
-    user_dict["_id"] = str(user_dict["_id"])
-
-    # With fetch_links=True, we can access the linked object directly
-    user_dict["client_account_id"] = str(current_user.client_account.id) if current_user.client_account else None
-    # Remove the client_account object from response
-    user_dict.pop("client_account", None)
-
-    # Convert role objects to role IDs (UserResponseSchema expects List[str])
-    if current_user.roles:
-        user_dict["roles"] = [str(role.id) for role in current_user.roles]
-    else:
-        user_dict["roles"] = []
-
-    # Convert group objects to group IDs (UserResponseSchema expects List[str])
-    if current_user.groups:
-        user_dict["groups"] = [str(group.id) for group in current_user.groups]
-    else:
-        user_dict["groups"] = []
+    # Convert to response format using utility
+    user_dict = convert_user_to_response(current_user)
 
     # Add effective permissions with full details (new aggregated method)
     user_permission_details = await user_service.get_user_effective_permission_details(current_user.id)

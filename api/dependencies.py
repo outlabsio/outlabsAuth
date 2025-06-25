@@ -1,7 +1,7 @@
 from beanie import PydanticObjectId
 from fastapi import HTTPException, status, Depends, Request
 from fastapi.security import OAuth2PasswordBearer
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Dict, Any
 
 from .services.security_service import security_service
 from .services.user_service import user_service
@@ -12,6 +12,39 @@ from .models.user_model import UserModel
 from .schemas.auth_schema import TokenDataSchema
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/auth/login", auto_error=False)
+
+
+# --- Response Utilities ---
+
+def convert_user_to_response(user: UserModel) -> Dict[str, Any]:
+    """
+    Convert a UserModel to response format with proper role/group ID conversion.
+    This utility ensures consistent user response format across all endpoints.
+    
+    Args:
+        user: UserModel instance with populated roles and groups
+        
+    Returns:
+        Dict containing user data with roles and groups as ID strings
+    """
+    user_dict = user.model_dump(by_alias=True)
+    user_dict["_id"] = str(user_dict["_id"])
+    
+    # Convert role objects to role ID strings
+    user_dict["roles"] = [str(role.id) for role in user.roles] if user.roles else []
+    
+    # Convert group objects to group ID strings (if groups field exists)
+    user_dict["groups"] = [str(group.id) for group in user.groups] if hasattr(user, 'groups') and user.groups else []
+    
+    # Handle client_account conversion
+    if user.client_account:
+        user_dict["client_account_id"] = str(user.client_account.id)
+    else:
+        user_dict["client_account_id"] = None
+    # Remove the client_account object from response
+    user_dict.pop("client_account", None)
+    
+    return user_dict
 
 
 # --- User Role Utilities ---

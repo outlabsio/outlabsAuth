@@ -6,7 +6,7 @@ from ..models.user_model import UserModel
 from ..schemas.user_schema import UserCreateSchema, UserUpdateSchema, UserResponseSchema, UserBulkCreateResponseSchema
 from ..schemas.auth_schema import TokenDataSchema
 from ..services.user_service import user_service
-from ..dependencies import get_current_user_with_token, has_permission
+from ..dependencies import get_current_user_with_token, has_permission, convert_user_to_response
 from ..dependencies import user_has_role, require_super_admin, require_admin, can_access_user
 
 router = APIRouter(
@@ -37,18 +37,8 @@ async def create_sub_user(
     client_account_id = str(current_user.client_account.ref.id)
     new_user = await user_service.create_sub_user(user_data, client_account_id)
     
-    # Convert to response format
-    user_dict = new_user.model_dump(by_alias=True)
-    user_dict["_id"] = str(user_dict["_id"])
-    
-    if new_user.client_account:
-        user_dict["client_account_id"] = str(new_user.client_account.id)
-    else:
-        user_dict["client_account_id"] = None
-    # Remove the client_account object from response
-    user_dict.pop("client_account", None)
-    
-    return user_dict
+    # Convert to response format using utility
+    return convert_user_to_response(new_user)
 
 @router.post("/bulk-create", response_model=UserBulkCreateResponseSchema, status_code=status.HTTP_201_CREATED)
 async def bulk_create_users(
@@ -62,19 +52,8 @@ async def bulk_create_users(
     """
     successful_creates, failed_creates = await user_service.bulk_create_users(users_data)
     
-    # Convert successful creates to response format
-    converted_successful = []
-    for user in successful_creates:
-        user_dict = user.model_dump(by_alias=True)
-        user_dict["_id"] = str(user_dict["_id"])
-        
-        if user.client_account:
-            user_dict["client_account_id"] = str(user.client_account.id)
-        else:
-            user_dict["client_account_id"] = None
-        # Remove the client_account object from response
-        user_dict.pop("client_account", None)
-        converted_successful.append(user_dict)
+    # Convert successful creates to response format using utility
+    converted_successful = [convert_user_to_response(user) for user in successful_creates]
     
     return UserBulkCreateResponseSchema(
         successful_creates=converted_successful,
@@ -100,18 +79,8 @@ async def create_user(
     
     new_user = await user_service.create_user(user_data)
     
-    # Convert to response format
-    user_dict = new_user.model_dump(by_alias=True)
-    user_dict["_id"] = str(user_dict["_id"])
-    
-    if new_user.client_account:
-        user_dict["client_account_id"] = str(new_user.client_account.id)
-    else:
-        user_dict["client_account_id"] = None
-    # Remove the client_account object from response
-    user_dict.pop("client_account", None)
-    
-    return user_dict
+    # Convert to response format using utility
+    return convert_user_to_response(new_user)
 
 @router.get("/", response_model=List[UserResponseSchema], dependencies=[Depends(has_permission("user:read"))])
 async def get_all_users(
@@ -149,21 +118,8 @@ async def get_all_users(
     
     users = await user_service.get_users(skip=skip, limit=limit, client_account_id=client_account_id)
     
-    # Convert users to response format
-    converted_users = []
-    for user in users:
-        user_dict = user.model_dump(by_alias=True)
-        user_dict["_id"] = str(user_dict["_id"])
-        
-        if user.client_account:
-            user_dict["client_account_id"] = str(user.client_account.id)
-        else:
-            user_dict["client_account_id"] = None
-        # Remove the client_account object from response
-        user_dict.pop("client_account", None)
-        converted_users.append(user_dict)
-    
-    return converted_users
+    # Convert users to response format using utility
+    return [convert_user_to_response(user) for user in users]
 
 @router.get("/{user_id}", response_model=UserResponseSchema)
 async def get_user_by_id(
@@ -174,18 +130,8 @@ async def get_user_by_id(
     Access control is handled by the dependency - users can view their own data, admins can view any user data.
     """
 
-    # Convert to response format
-    user_dict = user.model_dump(by_alias=True)
-    user_dict["_id"] = str(user_dict["_id"])
-    
-    if user.client_account:
-        user_dict["client_account_id"] = str(user.client_account.id)
-    else:
-        user_dict["client_account_id"] = None
-    # Remove the client_account object from response
-    user_dict.pop("client_account", None)
-
-    return user_dict
+    # Convert to response format using utility
+    return convert_user_to_response(user)
 
 @router.put("/{user_id}", response_model=UserResponseSchema, dependencies=[Depends(has_permission("user:update"))])
 async def update_user(
@@ -222,18 +168,8 @@ async def update_user(
 
     updated_user = await user_service.update_user(user_object_id, user_data, current_user)
     
-    # Convert to response format
-    user_dict = updated_user.model_dump(by_alias=True)
-    user_dict["_id"] = str(user_dict["_id"])
-    
-    if updated_user.client_account:
-        user_dict["client_account_id"] = str(updated_user.client_account.id)
-    else:
-        user_dict["client_account_id"] = None
-    # Remove the client_account object from response
-    user_dict.pop("client_account", None)
-    
-    return user_dict
+    # Convert to response format using utility
+    return convert_user_to_response(updated_user)
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(has_permission("user:delete"))])
 async def delete_user(
