@@ -693,7 +693,8 @@ async def seed_propertyhub_scenario():
     # Platform admin role with permission names
     platform_admin_permission_names = [
         "client:create", "client:read_platform", "client:manage_platform", 
-        "client:create_sub", "client:read_created",
+        "client:create_sub", "client:read_created", "client:onboard",
+        "analytics:view_platform", "support:cross_client",
         "user:manage_all", "user:add_member",
         "group:manage_all", "group:manage_members",
         "role:read_all", "permission:read_all"
@@ -715,7 +716,8 @@ async def seed_propertyhub_scenario():
     # Platform support role with permission names
     platform_support_permission_names = [
         "client:read_own", "client:read_platform", 
-        "user:read_client", "group:read_client"
+        "user:read_client", "group:read_client",
+        "support:cross_client"
     ]
     
     platform_support_role = await role_service.create_role(

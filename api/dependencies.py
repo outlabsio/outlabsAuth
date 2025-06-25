@@ -340,7 +340,19 @@ def can_access_user(user_id_param: str = "user_id"):
             )
         
         # Access control logic
-        is_admin = user_has_any_role(current_user, ["super_admin", "client_admin"])
+        is_super_admin = user_has_role(current_user, "super_admin")
+        is_client_admin = False
+        
+        # Check for client admin role (role named "admin" with CLIENT scope)
+        if current_user.roles:
+            for role in current_user.roles:
+                if (role.name == "admin" and 
+                    hasattr(role, 'scope') and 
+                    role.scope.value == "client"):
+                    is_client_admin = True
+                    break
+        
+        is_admin = is_super_admin or is_client_admin
         is_self_access = str(current_user.id) == target_user_id
         
         if not is_admin and not is_self_access:
@@ -350,7 +362,7 @@ def can_access_user(user_id_param: str = "user_id"):
             )
         
         # For client admins, enforce client account scoping
-        if user_has_role(current_user, "client_admin") and not user_has_role(current_user, "super_admin"):
+        if is_client_admin and not is_super_admin:
             if target_user.client_account and current_user.client_account:
                 if str(target_user.client_account.id) != str(current_user.client_account.id):
                     raise HTTPException(
@@ -407,7 +419,19 @@ def require_self_or_admin(user_id_param: str = "user_id"):
                 detail="User not found"
             )
         
-        is_admin = user_has_any_role(current_user, ["super_admin", "client_admin"])
+        is_super_admin = user_has_role(current_user, "super_admin")
+        is_client_admin = False
+        
+        # Check for client admin role (role named "admin" with CLIENT scope)
+        if current_user.roles:
+            for role in current_user.roles:
+                if (role.name == "admin" and 
+                    hasattr(role, 'scope') and 
+                    role.scope.value == "client"):
+                    is_client_admin = True
+                    break
+        
+        is_admin = is_super_admin or is_client_admin
         is_self_access = str(current_user.id) == target_user_id
         
         if not is_admin and not is_self_access:
@@ -416,7 +440,7 @@ def require_self_or_admin(user_id_param: str = "user_id"):
                 detail="You can only access your own user data"
             )
         
-        if user_has_role(current_user, "client_admin") and not user_has_role(current_user, "super_admin"):
+        if is_client_admin and not is_super_admin:
             if target_user.client_account and current_user.client_account:
                 if str(target_user.client_account.id) != str(current_user.client_account.id):
                     raise HTTPException(
@@ -541,10 +565,10 @@ require_platform_admin_scope = require_scope_admin("platform")
 require_client_admin_scope = require_scope_admin("client")
 
 # FIXED: More restrictive dependencies for system management
-require_user_read_access = require_admin  # Only admins can read user lists
+require_user_read_access = require_admin_or_permission("user:manage_client")  # Admins or users with user:manage_client can read user lists
 require_user_manage_access = require_admin_or_permission("user:manage")
 require_role_read_access = require_admin  # Only admins can read role lists  
-require_group_read_access = require_admin  # Only admins can read group lists
+require_group_read_access = require_admin_or_permission("group:manage_client")  # Admins or users with group:manage_client can read groups
 require_permission_read_access = require_admin  # Only admins can read permission lists
 
 # Granular management permissions (for specific operations)

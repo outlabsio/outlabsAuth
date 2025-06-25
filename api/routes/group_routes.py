@@ -56,17 +56,37 @@ async def get_groups(
     limit: int = Query(100, ge=1, le=1000, description="Number of groups to return"),
     scope: Optional[GroupScope] = Query(None, description="Filter by group scope"),
     scope_id: Optional[str] = Query(None, description="Filter by specific scope ID"),
-    _: UserModel = Depends(require_group_read_access)  # Access control only
+    current_user: UserModel = Depends(require_group_read_access)  # Access control only
 ):
     """
     Retrieve groups with optional filtering by scope.
     """
+    # Apply client account scoping for non-super admins
+    is_super_admin = user_has_role(current_user, "super_admin")
+    if not is_super_admin and current_user.client_account and not scope_id:
+        # For client admins, filter to their client account if no specific scope_id is provided
+        scope = GroupScope.CLIENT
+        scope_id = str(current_user.client_account.id)
+    
     groups = await group_service.get_groups(
         skip=skip, 
         limit=limit,
         scope=scope,
         scope_id=scope_id
     )
+    
+    # Apply additional client account filtering on the results for non-super admins
+    if not is_super_admin and current_user.client_account:
+        filtered_groups = []
+        user_client_id = str(current_user.client_account.id)
+        for group in groups:
+            # Allow system/platform groups + client groups from their account
+            if (group.scope.value != "client" or 
+                not group.scope_id or 
+                group.scope_id == user_client_id):
+                filtered_groups.append(group)
+        groups = filtered_groups
+    
     # Convert groups to response format with resolved permission details
     group_responses = []
     for group in groups:
@@ -109,7 +129,7 @@ async def get_available_groups(
 @router.get("/{group_id}", response_model=GroupResponseSchema)
 async def get_group_by_id(
     group_id: str,
-    _: UserModel = Depends(require_group_read_access)  # Access control only
+    current_user: UserModel = Depends(require_group_read_access)  # Access control only
 ):
     """
     Get a single group by ID.
@@ -121,6 +141,16 @@ async def get_group_by_id(
     
     if not group:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
+    
+    # Apply client account scoping - client admins can only access groups in their client account
+    is_super_admin = user_has_role(current_user, "super_admin")
+    if not is_super_admin and current_user.client_account:
+        # Client admin should only access client-scoped groups from their client account
+        # System and platform groups are accessible to all client admins
+        if (group.scope.value == "client" and 
+            group.scope_id and 
+            group.scope_id != str(current_user.client_account.id)):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     
     return await group_service.group_to_response_schema(group)
 

@@ -96,10 +96,17 @@ async def get_all_client_accounts(
     elif "client:read_platform" in user_permissions and user_client_id:
         # Platform admin with platform scope
         user_client = await client_account_service.get_client_account_by_id(PydanticObjectId(user_client_id))
-        if user_client and user_client.platform_id:
-            accounts = await client_account_service.get_client_accounts_by_platform(
-                user_client.platform_id, skip=skip, limit=limit
-            )
+        if user_client:
+            if user_client.is_platform_root:
+                # User belongs to a platform root account - see all accounts
+                accounts = await client_account_service.get_client_accounts(skip=skip, limit=limit)
+            elif user_client.platform_id:
+                # User belongs to a client under a platform - see platform accounts
+                accounts = await client_account_service.get_client_accounts_by_platform(
+                    user_client.platform_id, skip=skip, limit=limit
+                )
+            else:
+                accounts = []
         else:
             accounts = []
     elif "client:read_created" in user_permissions and user_client_id:

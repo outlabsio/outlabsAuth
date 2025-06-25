@@ -63,7 +63,7 @@ class TestAccessControl:
             "first_name": "Client",
             "last_name": "Admin1",
             "client_account_id": account1_id,
-            "roles": ["client_admin"]
+            "roles": ["admin"]
         }
         
         admin_response = await client.post("/v1/users/", json=client_admin_data, headers=self.admin_headers)
@@ -300,7 +300,7 @@ class TestAccessControl:
             "first_name": "Admin",
             "last_name": "One",
             "client_account_id": account1_id,
-            "roles": ["client_admin"]
+            "roles": ["admin"]
         }
         
         admin2_data = {
@@ -309,7 +309,7 @@ class TestAccessControl:
             "first_name": "Admin",
             "last_name": "Two",
             "client_account_id": account2_id,
-            "roles": ["client_admin"]
+            "roles": ["admin"]
         }
 
         admin1_response = await client.post("/v1/users/", json=admin1_data, headers=self.admin_headers)
@@ -333,11 +333,11 @@ class TestAccessControl:
             "scope": "client"
         }
 
-        group1_response = await client.post("/v1/groups/", json=group1_data, headers=self.admin_headers)
+        group1_response = await client.post(f"/v1/groups/?scope_id={account1_id}", json=group1_data, headers=self.admin_headers)
         assert group1_response.status_code == 201
         group1 = group1_response.json()
         
-        group2_response = await client.post("/v1/groups/", json=group2_data, headers=self.admin_headers)
+        group2_response = await client.post(f"/v1/groups/?scope_id={account2_id}", json=group2_data, headers=self.admin_headers)
         assert group2_response.status_code == 201
         group2 = group2_response.json()
 

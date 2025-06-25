@@ -33,8 +33,8 @@ async def create_sub_user(
             detail="You do not have permission to create sub-users."
         )
     
-    # Proper Beanie way: access Link ID via ref.id
-    client_account_id = str(current_user.client_account.ref.id)
+    # Get client account ID directly
+    client_account_id = str(current_user.client_account.id)
     new_user = await user_service.create_sub_user(user_data, client_account_id)
     
     # Convert to response format using utility
@@ -91,20 +91,28 @@ async def get_all_users(
     """
     Retrieve a list of users.
     Only accessible by admin users (super_admin, admin, client_admin roles).
-    - Super admins see all users.
-    - Platform/client admins see users scoped to their domain.
+    - Super admins and platform admins see all users.
+    - Client admins see users scoped to their domain.
     """
-    # Since require_user_read_access = require_admin, only admins can access this
     # Check user privileges for data scoping
+    user_permissions = await user_service.get_user_effective_permissions(current_user.id)
     is_super_admin = user_has_role(current_user, "super_admin")
+    has_manage_all = "user:manage_all" in user_permissions
+    has_read_all = "user:read_all" in user_permissions
     client_account_id = None
     
-    if is_super_admin:
-        # Super admin sees all users
+    if is_super_admin or has_manage_all or has_read_all:
+        # Super admin or platform admin with system-wide access sees all users
         pass
     elif current_user.client_account:
-        # Client admins see only users within their client account
-        client_account_id = current_user.client_account.ref.id
+        # Check if user is from a platform root account
+        user_client = current_user.client_account
+        if user_client.is_platform_root and ("user:read_client" in user_permissions or "support:cross_client" in user_permissions):
+            # Platform staff with cross-client permissions see all users
+            pass
+        else:
+            # Regular client admins see only users within their client account
+            client_account_id = current_user.client_account.id
     
     users = await user_service.get_users(skip=skip, limit=limit, client_account_id=client_account_id)
     
