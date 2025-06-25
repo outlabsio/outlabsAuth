@@ -73,7 +73,7 @@ def has_permission(required_permission: str):
         
         # Get all effective permissions (direct roles + group memberships)
         # Returns clean permission names from resolved ObjectIds
-        user_permissions = await group_service.get_user_effective_permissions(current_user.id)
+        user_permissions = await user_service.get_user_effective_permissions(current_user.id)
         
         # Check for exact match
         if required_permission in user_permissions:
@@ -109,7 +109,7 @@ def has_hierarchical_client_access(target_client_field: str = "account_id"):
             )
         
         # Get user's effective permissions
-        user_permissions = await group_service.get_user_effective_permissions(current_user.id)
+        user_permissions = await user_service.get_user_effective_permissions(current_user.id)
         
         # Check if user is super admin (has all permissions)
         is_super_admin = "client_account:create" in user_permissions and "client_account:delete" in user_permissions

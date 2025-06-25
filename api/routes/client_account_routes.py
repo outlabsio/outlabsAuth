@@ -72,7 +72,7 @@ async def get_all_client_accounts(
     - Regular users: See only their own account
     """
     # Check if user has client_account:read permission
-    user_permissions = await group_service.get_user_effective_permissions(current_user.id)
+    user_permissions = await user_service.get_user_effective_permissions(current_user.id)
     
     if "client_account:read" not in user_permissions:
         raise HTTPException(
@@ -204,7 +204,7 @@ async def onboard_new_client(
     Only available to platform staff with appropriate permissions.
     """
     # Check if user has platform management permission and is platform staff
-    user_permissions = await group_service.get_user_effective_permissions(current_user.id)
+    user_permissions = await user_service.get_user_effective_permissions(current_user.id)
     is_platform_staff = getattr(current_user, 'is_platform_staff', False)
     
     if not is_platform_staff:
