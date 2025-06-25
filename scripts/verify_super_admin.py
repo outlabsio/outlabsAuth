@@ -55,12 +55,14 @@ async def initialize_database(client, db_name):
     # Rebuild models for circular references
     namespace = {
         'UserModel': UserModel,
+        'RoleModel': RoleModel,
+        'PermissionModel': PermissionModel,
         'ClientAccountModel': ClientAccountModel,
         'RefreshTokenModel': RefreshTokenModel,
         'PasswordResetTokenModel': PasswordResetTokenModel,
         'GroupModel': GroupModel,
     }
-    for model in [UserModel, ClientAccountModel, RefreshTokenModel, PasswordResetTokenModel, GroupModel]:
+    for model in [UserModel, RoleModel, PermissionModel, ClientAccountModel, RefreshTokenModel, PasswordResetTokenModel, GroupModel]:
         model.model_rebuild(_types_namespace=namespace)
 
     return db

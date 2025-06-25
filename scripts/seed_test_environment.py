@@ -148,12 +148,16 @@ async def initialize_and_wipe(db):
     # Rebuild models to resolve circular references
     namespace = {
         'UserModel': UserModel,
+        'RoleModel': RoleModel,
+        'PermissionModel': PermissionModel,
         'ClientAccountModel': ClientAccountModel,
         'RefreshTokenModel': RefreshTokenModel,
         'PasswordResetTokenModel': PasswordResetTokenModel,
         'GroupModel': GroupModel,
     }
     UserModel.model_rebuild(_types_namespace=namespace)
+    RoleModel.model_rebuild(_types_namespace=namespace)
+    PermissionModel.model_rebuild(_types_namespace=namespace)
     ClientAccountModel.model_rebuild(_types_namespace=namespace)
     RefreshTokenModel.model_rebuild(_types_namespace=namespace)
     PasswordResetTokenModel.model_rebuild(_types_namespace=namespace)
@@ -971,6 +975,24 @@ async def main():
                     RefreshTokenModel, PasswordResetTokenModel, GroupModel
                 ]
             )
+            
+            # Rebuild models to resolve circular references
+            namespace = {
+                'UserModel': UserModel,
+                'RoleModel': RoleModel,
+                'PermissionModel': PermissionModel,
+                'ClientAccountModel': ClientAccountModel,
+                'RefreshTokenModel': RefreshTokenModel,
+                'PasswordResetTokenModel': PasswordResetTokenModel,
+                'GroupModel': GroupModel,
+            }
+            UserModel.model_rebuild(_types_namespace=namespace)
+            RoleModel.model_rebuild(_types_namespace=namespace)
+            PermissionModel.model_rebuild(_types_namespace=namespace)
+            ClientAccountModel.model_rebuild(_types_namespace=namespace)
+            RefreshTokenModel.model_rebuild(_types_namespace=namespace)
+            PasswordResetTokenModel.model_rebuild(_types_namespace=namespace)
+            GroupModel.model_rebuild(_types_namespace=namespace)
 
         # Step 2: Seed common data (permissions, super_admin role)
         await seed_permissions_and_super_admin_role()

@@ -5,21 +5,26 @@ from bson import ObjectId
 # Mark all tests in this file as async
 pytestmark = pytest.mark.asyncio
 
-# Test data
+# Test data  
 ADMIN_USER_DATA = {
-    "email": "admin@outlabs.dev",
-    "password": "Admin123$$"
+    "email": "system@outlabs.io",
+    "password": "Asd123$$$"
 }
 
-# Test role data using new schema format
-TEST_ROLE_DATA = {
-    "name": "test_role",
-    "display_name": "Test Role",
-    "description": "A test role for unit testing",
-    "permissions": ["user:read", "user:create"],
-    "scope": "client",
-    "is_assignable_by_main_client": True
-}
+# Test role data using new schema format  
+from bson import ObjectId
+
+def get_test_role_data():
+    """Generate test role data with unique name to avoid conflicts."""
+    unique_id = str(ObjectId())[:8]
+    return {
+        "name": f"test_role_{unique_id}",
+        "display_name": "Test Role",
+        "description": "A test role for unit testing",
+        "permissions": ["user:read", "user:create"],
+        "scope": "client",
+        "is_assignable_by_main_client": True
+    }
 
 async def get_admin_token(client: AsyncClient) -> str:
     """Helper function to get admin access token."""
@@ -72,7 +77,8 @@ class TestRoleRoutes:
         token = await get_admin_token(client)
         headers = {"Authorization": f"Bearer {token}"}
         
-        response = await client.post("/v1/roles/", json=TEST_ROLE_DATA, headers=headers)
+        test_role_data = get_test_role_data()
+        response = await client.post("/v1/roles/", json=test_role_data, headers=headers)
         
         # Debug: print the response if it's not 201
         if response.status_code != 201:
@@ -81,12 +87,16 @@ class TestRoleRoutes:
         
         assert response.status_code == 201
         role_data = response.json()
-        assert role_data["name"] == TEST_ROLE_DATA["name"]
-        assert role_data["display_name"] == TEST_ROLE_DATA["display_name"]
-        assert role_data["description"] == TEST_ROLE_DATA["description"]
-        assert role_data["permissions"] == TEST_ROLE_DATA["permissions"]
-        assert role_data["scope"] == TEST_ROLE_DATA["scope"]
-        assert role_data["is_assignable_by_main_client"] == TEST_ROLE_DATA["is_assignable_by_main_client"]
+        assert role_data["name"] == test_role_data["name"]
+        assert role_data["display_name"] == test_role_data["display_name"]
+        assert role_data["description"] == test_role_data["description"]
+        
+        # Check permission names since API now returns full permission objects
+        returned_permission_names = [perm["name"] for perm in role_data["permissions"]]
+        assert sorted(returned_permission_names) == sorted(test_role_data["permissions"])
+        
+        assert role_data["scope"] == test_role_data["scope"]
+        assert role_data["is_assignable_by_main_client"] == test_role_data["is_assignable_by_main_client"]
     
     async def test_create_role_duplicate_id(self, client: AsyncClient):
         """Test role creation with duplicate name in same scope fails."""
@@ -132,14 +142,14 @@ class TestRoleRoutes:
         }
         
         response = await client.post("/v1/roles/", json=invalid_role, headers=headers)
-        # NOTE: Currently permission validation is not implemented, so this succeeds
-        # TODO: Implement permission validation in role service
-        assert response.status_code == 201  # Should be 400 when validation is implemented
+        # Permission validation is now implemented, should return 400 for invalid permissions
+        assert response.status_code == 400
     
     async def test_create_role_without_permission(self, client: AsyncClient):
         """Test role creation without proper permissions fails."""
         # Test without any token
-        response = await client.post("/v1/roles/", json=TEST_ROLE_DATA)
+        test_role_data = get_test_role_data()
+        response = await client.post("/v1/roles/", json=test_role_data)
         assert response.status_code == 401
     
     async def test_get_all_roles(self, client: AsyncClient):
@@ -210,12 +220,13 @@ class TestRoleRoutes:
         headers = {"Authorization": f"Bearer {token}"}
         
         # First create a role to update
-        create_response = await client.post("/v1/roles/", json=TEST_ROLE_DATA, headers=headers)
+        test_role_data = get_test_role_data()
+        create_response = await client.post("/v1/roles/", json=test_role_data, headers=headers)
         if create_response.status_code == 409:  # Role already exists
             # Get existing role
             all_roles_response = await client.get("/v1/roles/", headers=headers)
             all_roles = all_roles_response.json()
-            test_role = next((r for r in all_roles if r["name"] == TEST_ROLE_DATA["name"]), None)
+            test_role = next((r for r in all_roles if r["name"] == test_role_data["name"]), None)
             assert test_role is not None
             role_id = test_role["_id"]
         else:
@@ -235,7 +246,11 @@ class TestRoleRoutes:
         updated_role = response.json()
         assert updated_role["display_name"] == "Updated Test Role"
         assert updated_role["description"] == "Updated description"
-        assert updated_role["permissions"] == ["user:read"]
+        
+        # Check permission names since API now returns full permission objects
+        returned_permission_names = [perm["name"] for perm in updated_role["permissions"]]
+        assert returned_permission_names == ["user:read"]
+        
         assert updated_role["_id"] == role_id  # ID should remain unchanged
     
     async def test_update_nonexistent_role(self, client: AsyncClient):
@@ -379,7 +394,8 @@ class TestRoleRoutes:
         response = await client.get("/v1/roles/")
         assert response.status_code == 401
         
-        response = await client.post("/v1/roles/", json=TEST_ROLE_DATA)
+        test_role_data = get_test_role_data()
+        response = await client.post("/v1/roles/", json=test_role_data)
         assert response.status_code == 401
         
         response = await client.get("/v1/roles/test_role")

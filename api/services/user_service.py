@@ -47,14 +47,21 @@ class UserService:
         roles_list = []
         if user_data.roles:
             from ..models.role_model import RoleModel
-            for role_id_str in user_data.roles:
+            for role_identifier in user_data.roles:
                 try:
-                    role_id = PydanticObjectId(role_id_str)
+                    # Try to treat as ObjectId first
+                    role_id = PydanticObjectId(role_identifier)
                     role = await RoleModel.get(role_id)
                     if role:
                         roles_list.append(role)
                 except Exception:
-                    continue  # Skip invalid role IDs
+                    # If not a valid ObjectId, try to find by name
+                    try:
+                        role = await RoleModel.find_one(RoleModel.name == role_identifier)
+                        if role:
+                            roles_list.append(role)
+                    except Exception:
+                        continue  # Skip invalid role identifiers
         
         user_dict["roles"] = roles_list
         
@@ -97,17 +104,18 @@ class UserService:
         # Ensure all assigned roles are valid and assignable
         if user_data.roles:
             from ..models.role_model import RoleModel
-            for role_id in user_data.roles:
+            for role_identifier in user_data.roles:
                 try:
-                    role = await RoleModel.get(PydanticObjectId(role_id))
-                    if not role:
-                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Role '{role_id}' not found.")
-                    if not role.is_assignable_by_main_client:
-                        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Role '{role_id}' cannot be assigned by a client administrator.")
-                except Exception as e:
-                    if isinstance(e, HTTPException):
-                        raise e
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid role ID: {role_id}")
+                    # Try to get role by ObjectId first
+                    role = await RoleModel.get(PydanticObjectId(role_identifier))
+                except Exception:
+                    # If not a valid ObjectId, try to find by name
+                    role = await RoleModel.find_one(RoleModel.name == role_identifier)
+                
+                if not role:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Role '{role_identifier}' not found.")
+                if not role.is_assignable_by_main_client:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Role '{role_identifier}' cannot be assigned by a client administrator.")
         
         # Force the client account ID and set is_main_client to False
         user_data.client_account_id = client_account_id
@@ -165,30 +173,38 @@ class UserService:
         # If roles are being updated by a main_client, validate them
         if "roles" in update_data and current_user.is_main_client:
             from ..models.role_model import RoleModel
-            for role_id in update_data["roles"]:
+            for role_identifier in update_data["roles"]:
                 try:
-                    role = await RoleModel.get(PydanticObjectId(role_id))
-                    if not role:
-                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Role '{role_id}' not found.")
-                    if not role.is_assignable_by_main_client:
-                        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Role '{role_id}' cannot be assigned by a client administrator.")
-                except Exception as e:
-                    if isinstance(e, HTTPException):
-                        raise e
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid role ID: {role_id}")
+                    # Try to get role by ObjectId first
+                    role = await RoleModel.get(PydanticObjectId(role_identifier))
+                except Exception:
+                    # If not a valid ObjectId, try to find by name
+                    role = await RoleModel.find_one(RoleModel.name == role_identifier)
+                
+                if not role:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Role '{role_identifier}' not found.")
+                if not role.is_assignable_by_main_client:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Role '{role_identifier}' cannot be assigned by a client administrator.")
 
         # Handle roles updates
         if "roles" in update_data:
             from ..models.role_model import RoleModel
             roles_list = []
-            for role_id_str in update_data["roles"]:
+            for role_identifier in update_data["roles"]:
                 try:
-                    role_id = PydanticObjectId(role_id_str)
+                    # Try to treat as ObjectId first
+                    role_id = PydanticObjectId(role_identifier)
                     role = await RoleModel.get(role_id)
                     if role:
                         roles_list.append(role)
                 except Exception:
-                    continue  # Skip invalid role IDs
+                    # If not a valid ObjectId, try to find by name
+                    try:
+                        role = await RoleModel.find_one(RoleModel.name == role_identifier)
+                        if role:
+                            roles_list.append(role)
+                    except Exception:
+                        continue  # Skip invalid role identifiers
             update_data["roles"] = roles_list
 
         # Handle groups updates

@@ -229,12 +229,16 @@ async def initialize_beanie(db):
     # Rebuild models to resolve circular references
     namespace = {
         'UserModel': UserModel,
+        'RoleModel': RoleModel,
+        'PermissionModel': PermissionModel,
         'ClientAccountModel': ClientAccountModel,
         'RefreshTokenModel': RefreshTokenModel,
         'PasswordResetTokenModel': PasswordResetTokenModel,
         'GroupModel': GroupModel,
     }
     UserModel.model_rebuild(_types_namespace=namespace)
+    RoleModel.model_rebuild(_types_namespace=namespace)
+    PermissionModel.model_rebuild(_types_namespace=namespace)
     ClientAccountModel.model_rebuild(_types_namespace=namespace)
     RefreshTokenModel.model_rebuild(_types_namespace=namespace)
     PasswordResetTokenModel.model_rebuild(_types_namespace=namespace)
@@ -317,8 +321,8 @@ async def ensure_essential_roles_exist():
     created_count = 0
     updated_count = 0
 
-    # Get actual permission IDs from database (SYSTEM permissions)
-    actual_permission_ids = []
+    # Get actual permission objects from database (SYSTEM permissions)
+    actual_permission_objects = []
     for perm_data in ESSENTIAL_SYSTEM_PERMISSIONS:
         perm = await PermissionModel.find_one(
             PermissionModel.name == perm_data.name,
@@ -326,10 +330,10 @@ async def ensure_essential_roles_exist():
             PermissionModel.scope_id == None
         )
         if perm:
-            actual_permission_ids.append(str(perm.id))
+            actual_permission_objects.append(perm)
 
-    # Get platform permission IDs (these are scoped to the platform)
-    platform_permission_ids = []
+    # Get platform permission objects (these are scoped to the platform)
+    platform_permission_objects = []
     for perm_data in ESSENTIAL_PLATFORM_PERMISSIONS:
         # Find platform permissions for any platform (we'll use the first one we find)
         perm = await PermissionModel.find_one(
@@ -337,15 +341,15 @@ async def ensure_essential_roles_exist():
             PermissionModel.scope == perm_data.scope
         )
         if perm:
-            platform_permission_ids.append(str(perm.id))
+            platform_permission_objects.append(perm)
 
-    # Create super admin role with actual permission IDs
+    # Create super admin role with actual permission objects
     super_admin_role = get_super_admin_role()
-    super_admin_role.permissions = actual_permission_ids
+    super_admin_role.permissions = actual_permission_objects
 
     # Basic permissions for other roles
     basic_permission_names = ["user:read", "group:read", "client_account:read"]
-    basic_permission_ids = []
+    basic_permission_objects = []
     for perm_name in basic_permission_names:
         perm = await PermissionModel.find_one(
             PermissionModel.name == perm_name,
@@ -353,15 +357,15 @@ async def ensure_essential_roles_exist():
             PermissionModel.scope_id == None
         )
         if perm:
-            basic_permission_ids.append(str(perm.id))
+            basic_permission_objects.append(perm)
 
-    # Get CLIENT_ADMIN_ROLE permission IDs
+    # Get CLIENT_ADMIN_ROLE permission objects
     client_admin_permission_names = [
         "user:create", "user:read", "user:update", "user:delete", "user:add_member",
         "group:create", "group:read", "group:update", "group:delete", "group:manage_members",
         "role:read", "permission:read", "client_account:read"
     ]
-    client_admin_permission_ids = []
+    client_admin_permission_objects = []
     for perm_name in client_admin_permission_names:
         perm = await PermissionModel.find_one(
             PermissionModel.name == perm_name,
@@ -369,11 +373,11 @@ async def ensure_essential_roles_exist():
             PermissionModel.scope_id == None
         )
         if perm:
-            client_admin_permission_ids.append(str(perm.id))
+            client_admin_permission_objects.append(perm)
     
-    CLIENT_ADMIN_ROLE.permissions = client_admin_permission_ids
+    CLIENT_ADMIN_ROLE.permissions = client_admin_permission_objects
 
-    # Get PLATFORM_ADMIN_ROLE permission IDs (includes both system and platform permissions)
+    # Get PLATFORM_ADMIN_ROLE permission objects (includes both system and platform permissions)
     platform_admin_permission_names = [
         "user:create", "user:read", "user:update", "user:delete", "user:add_member", "user:bulk_create",
         "role:create", "role:read", "role:update", "role:delete",
@@ -381,7 +385,7 @@ async def ensure_essential_roles_exist():
         "client_account:create", "client_account:read", "client_account:update", "client_account:delete",
         "group:create", "group:read", "group:update", "group:delete", "group:manage_members"
     ]
-    platform_admin_permission_ids = []
+    platform_admin_permission_objects = []
     for perm_name in platform_admin_permission_names:
         perm = await PermissionModel.find_one(
             PermissionModel.name == perm_name,
@@ -389,16 +393,16 @@ async def ensure_essential_roles_exist():
             PermissionModel.scope_id == None
         )
         if perm:
-            platform_admin_permission_ids.append(str(perm.id))
+            platform_admin_permission_objects.append(perm)
     
     # Add platform-specific permissions to platform admin
-    platform_admin_permission_ids.extend(platform_permission_ids)
-    PLATFORM_ADMIN_ROLE.permissions = platform_admin_permission_ids
+    platform_admin_permission_objects.extend(platform_permission_objects)
+    PLATFORM_ADMIN_ROLE.permissions = platform_admin_permission_objects
 
     essential_roles = [super_admin_role, CLIENT_ADMIN_ROLE, PLATFORM_ADMIN_ROLE]
     
     # Update BASIC_USER_ROLE permissions
-    BASIC_USER_ROLE.permissions = basic_permission_ids
+    BASIC_USER_ROLE.permissions = basic_permission_objects
 
     essential_roles.append(BASIC_USER_ROLE)
 
@@ -486,8 +490,9 @@ async def create_or_update_super_admin(client_account_id):
         print(f"  - Super admin user already exists with ID: {existing_user.id}")
 
         # Update user to ensure they have the correct role and client account
-        if "super_admin" not in existing_user.roles:
-            existing_user.roles.append("super_admin")
+        super_admin_role = await RoleModel.find_one(RoleModel.name == "super_admin")
+        if super_admin_role and super_admin_role not in existing_user.roles:
+            existing_user.roles.append(super_admin_role)
 
         # Update client account if it's different
         current_client_id = str(existing_user.client_account.ref.id) if hasattr(existing_user.client_account, 'ref') else str(existing_user.client_account.id)
@@ -512,7 +517,7 @@ async def create_or_update_super_admin(client_account_id):
             first_name=SUPER_ADMIN_FIRST_NAME,
             last_name=SUPER_ADMIN_LAST_NAME,
             is_main_client=True,
-            roles=["super_admin"],
+            roles=["super_admin"],  # UserService will convert this to role objects
             client_account_id=str(client_account_id)
         )
 

@@ -47,12 +47,16 @@ class Database:
             # Rebuild models to resolve circular references with proper namespace
             namespace = {
                 'UserModel': UserModel,
+                'RoleModel': RoleModel,
+                'PermissionModel': PermissionModel,
                 'ClientAccountModel': ClientAccountModel,
                 'RefreshTokenModel': RefreshTokenModel,
                 'PasswordResetTokenModel': PasswordResetTokenModel,
                 'GroupModel': GroupModel,
             }
             UserModel.model_rebuild(_types_namespace=namespace)
+            RoleModel.model_rebuild(_types_namespace=namespace)
+            PermissionModel.model_rebuild(_types_namespace=namespace)
             ClientAccountModel.model_rebuild(_types_namespace=namespace)
             RefreshTokenModel.model_rebuild(_types_namespace=namespace)
             PasswordResetTokenModel.model_rebuild(_types_namespace=namespace)
