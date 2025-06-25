@@ -13,6 +13,26 @@ from ..services.group_service import group_service
 from ..models.user_model import UserModel
 from ..models.scopes import GroupScope
 
+def user_has_role(user: UserModel, role_name: str) -> bool:
+    """
+    Helper function to check if a user has a specific role by name.
+    Handles both old string-based roles and new Beanie Link roles.
+    """
+    if not user.roles:
+        return False
+    
+    for role in user.roles:
+        if hasattr(role, 'name'):
+            # It's a RoleModel object (Beanie Link)
+            if role.name == role_name:
+                return True
+        elif isinstance(role, str):
+            # It's still a string (backward compatibility)
+            if role == role_name:
+                return True
+    
+    return False
+
 router = APIRouter(
     prefix="/v1/groups",
     tags=["Group Management"],
@@ -83,8 +103,8 @@ async def get_available_groups(
     current_platform_id = current_user.platform_scope  # From user model
     
     # Determine user permissions (simplified - in real implementation, check roles)
-    is_super_admin = "super_admin" in [role for role in current_user.roles]
-    is_platform_admin = current_user.is_platform_staff
+    is_super_admin = user_has_role(current_user, "super_admin")
+    is_platform_admin = user_has_role(current_user, "platform_admin")
     
     return await group_service.get_available_groups_for_user(
         current_user_client_id=current_client_id,

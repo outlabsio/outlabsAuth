@@ -103,6 +103,45 @@ class PermissionService:
         
         return await PermissionModel.find_one(query)
 
+    async def convert_permission_names_to_links(self, permission_names: List[str]) -> List[PermissionModel]:
+        """
+        Convert permission names to PermissionModel Link objects for Beanie relationships.
+        
+        Args:
+            permission_names: List of permission names (e.g., ['user:create', 'listings:manage'])
+            
+        Returns:
+            List of PermissionModel objects (for Beanie Links)
+            
+        Raises:
+            HTTPException: If any permission name is not found
+        """
+        permission_links = []
+        
+        for permission_name in permission_names:
+            # Check if it's already an ObjectId (for backward compatibility)
+            try:
+                from beanie import PydanticObjectId
+                permission_id = PydanticObjectId(permission_name)
+                permission = await self.get_permission_by_id(str(permission_id))
+                if not permission:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Permission with ID '{permission_name}' not found"
+                    )
+                permission_links.append(permission)
+            except Exception:
+                # It's a permission name, find the permission object
+                permission = await self.get_permission_by_name(permission_name)
+                if not permission:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Permission '{permission_name}' not found"
+                    )
+                permission_links.append(permission)
+        
+        return permission_links
+
     async def convert_permission_names_to_ids(self, permission_names: List[str]) -> List[str]:
         """
         Convert permission names to ObjectIds for database storage.

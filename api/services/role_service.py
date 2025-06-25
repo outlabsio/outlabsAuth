@@ -71,15 +71,15 @@ class RoleService:
                 detail=f"Role '{role_data.name}' already exists in {scope_desc}"
             )
 
-        # Convert permission names to ObjectIds
-        permission_ids = await permission_service.convert_permission_names_to_ids(role_data.permissions)
+        # Convert permission names to Link objects
+        permission_links = await permission_service.convert_permission_names_to_links(role_data.permissions)
 
         # Create role
         role = RoleModel(
             name=role_data.name,
             display_name=role_data.display_name,
             description=role_data.description,
-            permissions=permission_ids,
+            permissions=permission_links,
             scope=role_data.scope,
             scope_id=final_scope_id,
             is_assignable_by_main_client=role_data.is_assignable_by_main_client,
@@ -125,8 +125,18 @@ class RoleService:
         """
         Convert a RoleModel to RoleResponseSchema with detailed permission information.
         """
+        # Extract permission ObjectIds from Link objects
+        permission_ids = []
+        if role.permissions:
+            for permission_link in role.permissions:
+                if hasattr(permission_link, 'id'):
+                    permission_ids.append(permission_link.id)
+                else:
+                    # Fallback if it's still an ObjectId
+                    permission_ids.append(permission_link)
+        
         # Resolve permission ObjectIds to detailed permission information
-        permission_details = await permission_service.resolve_permissions_to_details(role.permissions)
+        permission_details = await permission_service.resolve_permissions_to_details(permission_ids)
         
         # Convert role to dict and update permissions
         role_dict = role.model_dump(by_alias=True)
@@ -192,10 +202,10 @@ class RoleService:
 
         update_data = role_data.model_dump(exclude_unset=True)
         
-        # Convert permission names to ObjectIds if permissions are being updated
+        # Convert permission names to Link objects if permissions are being updated
         if "permissions" in update_data and update_data["permissions"] is not None:
-            permission_ids = await permission_service.convert_permission_names_to_ids(update_data["permissions"])
-            update_data["permissions"] = permission_ids
+            permission_links = await permission_service.convert_permission_names_to_links(update_data["permissions"])
+            update_data["permissions"] = permission_links
         
         if update_data:
             for field, value in update_data.items():
@@ -215,20 +225,18 @@ class RoleService:
 
     async def user_can_manage_role(
         self,
-        user_role_ids: List[str],
+        user_roles: List[RoleModel],  # Now expects RoleModel objects instead of string IDs
         user_client_id: Optional[str],
         target_role: RoleModel
     ) -> bool:
         """
         Check if a user can manage (create/update/delete) a specific role.
+        
+        Args:
+            user_roles: List of RoleModel objects (user's roles as Beanie Links)
+            user_client_id: User's client account ID
+            target_role: The role being managed
         """
-        # Get user roles by ObjectIds to check for super_admin
-        user_roles = []
-        for role_id in user_role_ids:
-            role = await self.get_role_by_id(role_id)
-            if role:
-                user_roles.append(role)
-
         # Super admins can manage everything
         if any(role.name == "super_admin" and role.scope == RoleScope.SYSTEM for role in user_roles):
             return True
@@ -263,20 +271,18 @@ class RoleService:
 
     async def user_can_view_role(
         self,
-        user_role_ids: List[str],
+        user_roles: List[RoleModel],  # Now expects RoleModel objects instead of string IDs
         user_client_id: Optional[str],
         target_role: RoleModel
     ) -> bool:
         """
         Check if a user can view a specific role.
+        
+        Args:
+            user_roles: List of RoleModel objects (user's roles as Beanie Links)
+            user_client_id: User's client account ID
+            target_role: The role being viewed
         """
-        # Get user roles by ObjectIds to check for super_admin
-        user_roles = []
-        for role_id in user_role_ids:
-            role = await self.get_role_by_id(role_id)
-            if role:
-                user_roles.append(role)
-
         # Super admins can view everything
         if any(role.name == "super_admin" and role.scope == RoleScope.SYSTEM for role in user_roles):
             return True

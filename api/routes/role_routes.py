@@ -13,6 +13,28 @@ from ..schemas.role_schema import (
 )
 from ..services.role_service import role_service
 
+
+def user_has_role(user: UserModel, role_name: str) -> bool:
+    """
+    Helper function to check if a user has a specific role by name.
+    Handles both old string-based roles and new Beanie Link roles.
+    """
+    if not user.roles:
+        return False
+    
+    for role in user.roles:
+        if hasattr(role, 'name'):
+            # It's a RoleModel object (Beanie Link)
+            if role.name == role_name:
+                return True
+        elif isinstance(role, str):
+            # It's still a string (backward compatibility)
+            if role == role_name:
+                return True
+    
+    return False
+
+
 router = APIRouter(prefix="/v1/roles", tags=["roles"])
 
 @router.post("/", response_model=RoleResponseSchema, status_code=status.HTTP_201_CREATED)
@@ -30,12 +52,8 @@ async def create_role(
     # Validate user can create roles in requested scope
     scope_id = None
     
-    # Get user roles to check permissions
-    user_roles = []
-    for role_id in current_user.roles:
-        role = await role_service.get_role_by_id(role_id)
-        if role:
-            user_roles.append(role)
+    # User roles are now Beanie Links, so we can access them directly
+    user_roles = current_user.roles if current_user.roles else []
 
     is_super_admin = any(role.name == "super_admin" and role.scope == RoleScope.SYSTEM for role in user_roles)
 
@@ -103,12 +121,8 @@ async def get_roles(
     - **Platform admins** see system + their platform roles
     - **Client admins** see system + their client roles
     """
-    # Get user roles to check permissions
-    user_roles = []
-    for role_id in current_user.roles:
-        role = await role_service.get_role_by_id(role_id)
-        if role:
-            user_roles.append(role)
+    # User roles are now Beanie Links, so we can access them directly
+    user_roles = current_user.roles if current_user.roles else []
 
     is_super_admin = any(role.name == "super_admin" and role.scope == RoleScope.SYSTEM for role in user_roles)
     
@@ -162,7 +176,7 @@ async def get_roles(
     visible_roles = []
     for role in roles:
         client_account_id = str(current_user.client_account.id) if current_user.client_account else None
-        if await role_service.user_can_view_role(current_user.roles, client_account_id, role):
+        if await role_service.user_can_view_role(user_roles, client_account_id, role):
             visible_roles.append(role)
 
     # Convert roles to response schema with permission details
@@ -180,12 +194,8 @@ async def get_available_roles(
     """
     Get roles that the current user can assign to others, grouped by scope.
     """
-    # Get user roles to check permissions
-    user_roles = []
-    for role_id in current_user.roles:
-        role = await role_service.get_role_by_id(role_id)
-        if role:
-            user_roles.append(role)
+    # User roles are now Beanie Links, so we can access them directly
+    user_roles = current_user.roles if current_user.roles else []
 
     # Determine user permissions
     is_super_admin = any(role.name == "super_admin" and role.scope == RoleScope.SYSTEM for role in user_roles)
@@ -221,8 +231,9 @@ async def get_role(
         )
     
     # Check if user can view this role
+    user_roles = current_user.roles if current_user.roles else []
     client_account_id = str(current_user.client_account.id) if current_user.client_account else None
-    if not await role_service.user_can_view_role(current_user.roles, client_account_id, role):
+    if not await role_service.user_can_view_role(user_roles, client_account_id, role):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to view this role"
@@ -246,9 +257,10 @@ async def update_role(
         )
     
     # Check permissions
+    user_roles = current_user.roles if current_user.roles else []
     client_account_id = str(current_user.client_account.id) if current_user.client_account else None
     can_manage = await role_service.user_can_manage_role(
-        user_role_ids=current_user.roles,
+        user_roles=user_roles,
         user_client_id=client_account_id,
         target_role=existing_role
     )
@@ -277,9 +289,10 @@ async def delete_role(
         )
     
     # Check permissions
+    user_roles = current_user.roles if current_user.roles else []
     client_account_id = str(current_user.client_account.id) if current_user.client_account else None
     can_manage = await role_service.user_can_manage_role(
-        user_role_ids=current_user.roles,
+        user_roles=user_roles,
         user_client_id=client_account_id,
         target_role=existing_role
     )

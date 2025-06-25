@@ -76,15 +76,15 @@ class GroupService:
                 detail=f"Group '{group_data.name}' already exists in {scope_desc}"
             )
 
-        # Convert permission names to ObjectIds using the new permission service method
-        permission_ids = await permission_service.convert_permission_names_to_ids(group_data.permissions)
+        # Convert permission names to Link objects using the new permission service method
+        permission_links = await permission_service.convert_permission_names_to_links(group_data.permissions)
 
         # Create group
         group = GroupModel(
             name=group_data.name,
             display_name=group_data.display_name,
             description=group_data.description,
-            permissions=permission_ids,
+            permissions=permission_links,
             scope=group_data.scope,
             scope_id=final_scope_id,
             created_by_user_id=current_user_id,
@@ -143,8 +143,18 @@ class GroupService:
         """
         Convert a GroupModel to GroupResponseSchema with detailed permission information.
         """
+        # Extract permission ObjectIds from Link objects
+        permission_ids = []
+        if group.permissions:
+            for permission_link in group.permissions:
+                if hasattr(permission_link, 'id'):
+                    permission_ids.append(permission_link.id)
+                else:
+                    # Fallback if it's still an ObjectId
+                    permission_ids.append(permission_link)
+        
         # Resolve permission ObjectIds to detailed permission information
-        permission_details = await permission_service.resolve_permissions_to_details(group.permissions)
+        permission_details = await permission_service.resolve_permissions_to_details(permission_ids)
         
         # Convert group to dict and update permissions
         group_dict = group.model_dump(by_alias=True)
@@ -207,10 +217,10 @@ class GroupService:
 
         update_data = group_data.model_dump(exclude_unset=True)
         
-        # Convert permission names to ObjectIds if permissions are being updated
+        # Convert permission names to Link objects if permissions are being updated
         if "permissions" in update_data and update_data["permissions"] is not None:
-            permission_ids = await permission_service.convert_permission_names_to_ids(update_data["permissions"])
-            update_data["permissions"] = permission_ids
+            permission_links = await permission_service.convert_permission_names_to_links(update_data["permissions"])
+            update_data["permissions"] = permission_links
         
         if update_data:
             for field, value in update_data.items():

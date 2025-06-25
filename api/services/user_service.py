@@ -43,6 +43,21 @@ class UserService:
             if "client_account_id" in user_dict:
                 del user_dict["client_account_id"]
         
+        # Handle roles Links
+        roles_list = []
+        if user_data.roles:
+            from ..models.role_model import RoleModel
+            for role_id_str in user_data.roles:
+                try:
+                    role_id = PydanticObjectId(role_id_str)
+                    role = await RoleModel.get(role_id)
+                    if role:
+                        roles_list.append(role)
+                except Exception:
+                    continue  # Skip invalid role IDs
+        
+        user_dict["roles"] = roles_list
+        
         # Handle groups Links
         groups_list = []
         if user_data.groups:
@@ -81,12 +96,18 @@ class UserService:
         """
         # Ensure all assigned roles are valid and assignable
         if user_data.roles:
+            from ..models.role_model import RoleModel
             for role_id in user_data.roles:
-                role = await role_service.get_role_by_id(role_id)
-                if not role:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Role '{role_id}' not found.")
-                if not role.is_assignable_by_main_client:
-                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Role '{role_id}' cannot be assigned by a client administrator.")
+                try:
+                    role = await RoleModel.get(PydanticObjectId(role_id))
+                    if not role:
+                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Role '{role_id}' not found.")
+                    if not role.is_assignable_by_main_client:
+                        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Role '{role_id}' cannot be assigned by a client administrator.")
+                except Exception as e:
+                    if isinstance(e, HTTPException):
+                        raise e
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid role ID: {role_id}")
         
         # Force the client account ID and set is_main_client to False
         user_data.client_account_id = client_account_id
@@ -143,12 +164,32 @@ class UserService:
         
         # If roles are being updated by a main_client, validate them
         if "roles" in update_data and current_user.is_main_client:
+            from ..models.role_model import RoleModel
             for role_id in update_data["roles"]:
-                role = await role_service.get_role_by_id(role_id)
-                if not role:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Role '{role_id}' not found.")
-                if not role.is_assignable_by_main_client:
-                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Role '{role_id}' cannot be assigned by a client administrator.")
+                try:
+                    role = await RoleModel.get(PydanticObjectId(role_id))
+                    if not role:
+                        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Role '{role_id}' not found.")
+                    if not role.is_assignable_by_main_client:
+                        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Role '{role_id}' cannot be assigned by a client administrator.")
+                except Exception as e:
+                    if isinstance(e, HTTPException):
+                        raise e
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid role ID: {role_id}")
+
+        # Handle roles updates
+        if "roles" in update_data:
+            from ..models.role_model import RoleModel
+            roles_list = []
+            for role_id_str in update_data["roles"]:
+                try:
+                    role_id = PydanticObjectId(role_id_str)
+                    role = await RoleModel.get(role_id)
+                    if role:
+                        roles_list.append(role)
+                except Exception:
+                    continue  # Skip invalid role IDs
+            update_data["roles"] = roles_list
 
         # Handle groups updates
         if "groups" in update_data:
@@ -263,7 +304,6 @@ class UserService:
         Returns clean permission names (not ObjectIds).
         """
         from ..models.permission_model import PermissionModel
-        from beanie import PydanticObjectId as ObjectId
         
         user = await self.get_user_by_id(user_id)
         if not user:
@@ -271,26 +311,35 @@ class UserService:
         
         permission_ids = set()
         
-        # Get permission IDs from direct roles
-        for role_id in user.roles:
-            try:
-                role = await role_service.get_role_by_id(ObjectId(role_id))
-                if role:
-                    permission_ids.update(role.permissions)
-            except Exception:
-                continue  # Skip invalid role IDs
+        # Get permission IDs from direct roles (now Links)
+        if user.roles:
+            for role in user.roles:
+                if hasattr(role, 'permissions') and role.permissions:
+                    # Extract ObjectIds from the Link objects
+                    for permission_link in role.permissions:
+                        if hasattr(permission_link, 'id'):
+                            permission_ids.add(permission_link.id)
+                        else:
+                            # Fallback if it's still an ObjectId
+                            permission_ids.add(permission_link)
         
-        # Get permission IDs from groups
+        # Get permission IDs from groups (already Links)
         if user.groups:
             for group in user.groups:
                 if hasattr(group, 'permissions') and group.permissions:
-                    permission_ids.update(group.permissions)
+                    # Extract ObjectIds from the Link objects
+                    for permission_link in group.permissions:
+                        if hasattr(permission_link, 'id'):
+                            permission_ids.add(permission_link.id)
+                        else:
+                            # Fallback if it's still an ObjectId
+                            permission_ids.add(permission_link)
         
         # Resolve permission IDs to clean permission names
         permission_names = set()
         for permission_id in permission_ids:
             try:
-                permission = await PermissionModel.get(ObjectId(permission_id))
+                permission = await PermissionModel.get(permission_id)
                 if permission:
                     permission_names.add(permission.name)
             except Exception:
@@ -310,7 +359,6 @@ class UserService:
             List of PermissionDetailSchema objects with id, name, scope, etc.
         """
         from .permission_service import permission_service
-        from beanie import PydanticObjectId as ObjectId
         
         user = await self.get_user_by_id(user_id)
         if not user:
@@ -318,20 +366,29 @@ class UserService:
         
         permission_ids = set()
         
-        # Get permission IDs from direct roles
-        for role_id in user.roles:
-            try:
-                role = await role_service.get_role_by_id(ObjectId(role_id))
-                if role:
-                    permission_ids.update(role.permissions)
-            except Exception:
-                continue  # Skip invalid role IDs
+        # Get permission IDs from direct roles (now Links)
+        if user.roles:
+            for role in user.roles:
+                if hasattr(role, 'permissions') and role.permissions:
+                    # Extract ObjectIds from the Link objects
+                    for permission_link in role.permissions:
+                        if hasattr(permission_link, 'id'):
+                            permission_ids.add(permission_link.id)
+                        else:
+                            # Fallback if it's still an ObjectId
+                            permission_ids.add(permission_link)
         
-        # Get permission IDs from groups
+        # Get permission IDs from groups (already Links)
         if user.groups:
             for group in user.groups:
                 if hasattr(group, 'permissions') and group.permissions:
-                    permission_ids.update(group.permissions)
+                    # Extract ObjectIds from the Link objects
+                    for permission_link in group.permissions:
+                        if hasattr(permission_link, 'id'):
+                            permission_ids.add(permission_link.id)
+                        else:
+                            # Fallback if it's still an ObjectId
+                            permission_ids.add(permission_link)
         
         # Convert permission IDs to detailed permission information
         permission_details = await permission_service.resolve_permissions_to_details(list(permission_ids))

@@ -8,6 +8,26 @@ from ..schemas.auth_schema import TokenDataSchema
 from ..models.user_model import UserModel
 from ..dependencies import has_permission, get_current_user_with_token
 
+def user_has_role(user: UserModel, role_name: str) -> bool:
+    """
+    Helper function to check if a user has a specific role by name.
+    Handles both old string-based roles and new Beanie Link roles.
+    """
+    if not user.roles:
+        return False
+    
+    for role in user.roles:
+        if hasattr(role, 'name'):
+            # It's a RoleModel object (Beanie Link)
+            if role.name == role_name:
+                return True
+        elif isinstance(role, str):
+            # It's still a string (backward compatibility)
+            if role == role_name:
+                return True
+    
+    return False
+
 router = APIRouter(
     prefix="/v1/users",
     tags=["User Management"],
@@ -126,7 +146,7 @@ async def get_all_users(
     current_user, token_data = user_and_token
     
     # Check user privileges
-    is_super_admin = "super_admin" in current_user.roles
+    is_super_admin = user_has_role(current_user, "super_admin")
     is_platform_staff = getattr(current_user, 'is_platform_staff', False)
     platform_scope = getattr(current_user, 'platform_scope', None)
     client_account_id = None
@@ -183,8 +203,8 @@ async def get_user_by_id(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
         
     # Enforce data scoping and self-access restrictions
-    is_super_admin = "super_admin" in current_user.roles
-    is_client_admin = "client_admin" in current_user.roles
+    is_super_admin = user_has_role(current_user, "super_admin")
+    is_client_admin = user_has_role(current_user, "client_admin")
     
     # Regular users can only access their own data
     if not is_super_admin and not is_client_admin:
@@ -236,7 +256,7 @@ async def update_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
     
     # Enforce data scoping - but allow super admins to access all users
-    is_super_admin = "super_admin" in current_user.roles
+    is_super_admin = user_has_role(current_user, "super_admin")
     if not is_super_admin and token_data.client_account_id:
         # For non-platform admins, enforce client account scoping
         if user_to_update.client_account:
@@ -283,7 +303,7 @@ async def delete_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {user_object_id} not found.")
     
     # Enforce data scoping - but allow super admins to access all users
-    is_super_admin = "super_admin" in current_user.roles
+    is_super_admin = user_has_role(current_user, "super_admin")
     if not is_super_admin and token_data.client_account_id:
         # For non-platform admins, enforce client account scoping
         if user_to_delete.client_account:
