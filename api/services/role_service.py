@@ -105,18 +105,18 @@ class RoleService:
         if scope == RoleScope.SYSTEM:
             # For system roles, just query by scope since scope_id should be None
             roles = await RoleModel.find(
-                RoleModel.scope == scope
+                RoleModel.scope == scope, fetch_links=True
             ).skip(skip).limit(limit).to_list()
         else:
             # For platform/client roles, filter by scope_id if provided
             if scope_id is not None:
                 roles = await RoleModel.find(
                     RoleModel.scope == scope,
-                    RoleModel.scope_id == scope_id
+                    RoleModel.scope_id == scope_id, fetch_links=True
                 ).skip(skip).limit(limit).to_list()
             else:
                 roles = await RoleModel.find(
-                    RoleModel.scope == scope
+                    RoleModel.scope == scope, fetch_links=True
                 ).skip(skip).limit(limit).to_list()
             
         return roles
@@ -166,7 +166,7 @@ class RoleService:
             # Client admins can assign system roles marked as assignable
             assignable_system_roles = await RoleModel.find(
                 RoleModel.scope == RoleScope.SYSTEM,
-                RoleModel.is_assignable_by_main_client == True
+                RoleModel.is_assignable_by_main_client == True, fetch_links=True
             ).to_list()
             available_roles.system_roles = [
                 await self.role_to_response_schema(role) for role in assignable_system_roles

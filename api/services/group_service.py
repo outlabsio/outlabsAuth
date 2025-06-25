@@ -123,18 +123,18 @@ class GroupService:
         if scope == GroupScope.SYSTEM:
             # For system groups, just query by scope since scope_id should be None
             groups = await GroupModel.find(
-                GroupModel.scope == scope
+                GroupModel.scope == scope, fetch_links=True
             ).skip(skip).limit(limit).to_list()
         else:
             # For platform/client groups, filter by scope_id if provided
             if scope_id is not None:
                 groups = await GroupModel.find(
                     GroupModel.scope == scope,
-                    GroupModel.scope_id == scope_id
+                    GroupModel.scope_id == scope_id, fetch_links=True
                 ).skip(skip).limit(limit).to_list()
             else:
                 groups = await GroupModel.find(
-                    GroupModel.scope == scope
+                    GroupModel.scope == scope, fetch_links=True
                 ).skip(skip).limit(limit).to_list()
             
         return groups
@@ -351,7 +351,7 @@ class GroupService:
         if scope:
             return await self.get_groups_by_scope(scope, scope_id, skip, limit)
         else:
-            return await GroupModel.find().skip(skip).limit(limit).to_list()
+            return await GroupModel.find(fetch_links=True).skip(skip).limit(limit).to_list()
 
 # Instantiate the service for use in other parts of the application
 group_service = GroupService() 
