@@ -222,6 +222,18 @@ async def read_users_me(
     # Remove the client_account object from response
     user_dict.pop("client_account", None)
 
+    # Convert role objects to role IDs (UserResponseSchema expects List[str])
+    if current_user.roles:
+        user_dict["roles"] = [str(role.id) for role in current_user.roles]
+    else:
+        user_dict["roles"] = []
+
+    # Convert group objects to group IDs (UserResponseSchema expects List[str])
+    if current_user.groups:
+        user_dict["groups"] = [str(group.id) for group in current_user.groups]
+    else:
+        user_dict["groups"] = []
+
     # Add effective permissions with full details (new aggregated method)
     user_permission_details = await user_service.get_user_effective_permission_details(current_user.id)
     user_dict["permissions"] = user_permission_details
