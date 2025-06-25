@@ -57,7 +57,7 @@ async def get_permissions(
     limit: int = Query(100, ge=1, le=1000, description="Number of permissions to return"),
     scope: Optional[PermissionScope] = Query(None, description="Filter by permission scope"),
     scope_id: Optional[str] = Query(None, description="Filter by specific scope ID"),
-    current_user: UserModel = Depends(require_user_read_access)
+    _: UserModel = Depends(require_user_read_access)  # Access control only
 ):
     """
     Retrieve permissions with optional filtering by scope.
@@ -105,7 +105,7 @@ async def get_available_permissions(
 @router.get("/{permission_id}", response_model=PermissionResponseSchema)
 async def get_permission_by_id(
     permission_id: str,
-    current_user: UserModel = Depends(require_user_read_access)
+    _: UserModel = Depends(require_user_read_access)  # Access control only
 ):
     """
     Retrieve a single permission by its ID.
@@ -122,7 +122,7 @@ async def get_permission_by_id(
 async def update_permission(
     permission_id: str,
     permission_data: PermissionUpdateSchema,
-    current_user: UserModel = Depends(require_permission_manage_access)
+    _: UserModel = Depends(require_permission_manage_access)  # Access control only
 ):
     """
     Update a permission by ID.
@@ -141,7 +141,7 @@ async def update_permission(
 @router.delete("/{permission_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_permission(
     permission_id: str,
-    current_user: UserModel = Depends(require_permission_manage_access)
+    _: UserModel = Depends(require_permission_manage_access)  # Access control only
 ):
     """
     Delete a permission by ID.
