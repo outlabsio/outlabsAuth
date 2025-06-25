@@ -7,8 +7,8 @@ pytestmark = pytest.mark.asyncio
 
 # Test data  
 ADMIN_USER_DATA = {
-    "email": "system@outlabs.io",
-    "password": "Asd123$$$"
+    "email": "admin@test.com",
+    "password": "admin123"
 }
 
 # Test role data using new schema format  
