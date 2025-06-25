@@ -1,10 +1,12 @@
 from typing import List, Optional
 from pydantic import Field
-from beanie import BackLink
+from beanie import BackLink, Link
 from pymongo import IndexModel
 
 from .base_model import BaseDocument
 from .scopes import GroupScope
+
+# Forward reference - PermissionModel will be imported by Beanie
 
 class GroupModel(BaseDocument):
     """
@@ -16,7 +18,7 @@ class GroupModel(BaseDocument):
     description: Optional[str] = Field(None, description="Group purpose and responsibilities")
     
     # Direct permissions (removed roles field)
-    permissions: List[str] = Field(default_factory=list, description="List of permission IDs")
+    permissions: List[Link["PermissionModel"]] = Field(default_factory=list, description="List of permission Links")
     
     # Scoping (all three levels)
     scope: GroupScope = Field(..., description="Group scope: system, platform, or client")

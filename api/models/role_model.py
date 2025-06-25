@@ -1,10 +1,12 @@
 from typing import List, Optional
 from pydantic import Field
 from pymongo import IndexModel
-from beanie import PydanticObjectId
+from beanie import PydanticObjectId, Link
 
 from .base_model import BaseDocument
 from .scopes import RoleScope
+
+# Forward reference - PermissionModel will be imported by Beanie
 
 class RoleModel(BaseDocument):
     """
@@ -15,7 +17,7 @@ class RoleModel(BaseDocument):
     name: str = Field(..., description="Role name (e.g., 'admin', 'manager')")
     display_name: str = Field(..., description="Human-readable role name")
     description: Optional[str] = Field(None, description="Role purpose and capabilities")
-    permissions: List[str] = Field(default_factory=list, description="List of permission IDs")
+    permissions: List[Link["PermissionModel"]] = Field(default_factory=list, description="List of permission Links")
     
     # Scope/Ownership
     scope: RoleScope = Field(..., description="Role scope: system, platform, or client")
