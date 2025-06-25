@@ -58,6 +58,7 @@ from api.services.permission_service import permission_service
 from api.services.client_account_service import client_account_service
 from api.services.group_service import group_service
 from api.schemas.user_schema import UserCreateSchema
+from api.models.user_model import UserStatus
 from api.schemas.role_schema import RoleCreateSchema, RoleScope
 from api.schemas.permission_schema import PermissionCreateSchema
 from api.schemas.client_account_schema import ClientAccountCreateSchema
@@ -271,6 +272,7 @@ async def seed_comprehensive_scenario():
         password="admin123",
         first_name="Admin",
         last_name="User",
+        status=UserStatus.ACTIVE,
         is_main_client=True,
         roles=[str(super_admin_role.id)],
         client_account_id=str(test_client.id)
@@ -401,39 +403,39 @@ async def seed_comprehensive_scenario():
     print("Creating additional users...")
     await user_service.create_user(UserCreateSchema(
         email="admin@acme.com", password="admin123", first_name="Alice", last_name="Admin",
-        is_main_client=True, roles=[str(acme_admin_role.id)], client_account_id=str(acme_corp.id)
+        status=UserStatus.ACTIVE, is_main_client=True, roles=[str(acme_admin_role.id)], client_account_id=str(acme_corp.id)
     ))
     await user_service.create_user(UserCreateSchema(
         email="manager@acme.com", password="manager123", first_name="Bob", last_name="Manager",
-        is_main_client=False, roles=[str(manager_role.id)], client_account_id=str(test_client.id)
+        status=UserStatus.ACTIVE, is_main_client=False, roles=[str(manager_role.id)], client_account_id=str(test_client.id)
     ))
     await user_service.create_user(UserCreateSchema(
         email="admin@techstartup.com", password="admin123", first_name="Charlie", last_name="Founder",
-        is_main_client=True, roles=[str(tech_admin_role.id)], client_account_id=str(tech_startup.id)
+        status=UserStatus.ACTIVE, is_main_client=True, roles=[str(tech_admin_role.id)], client_account_id=str(tech_startup.id)
     ))
     
     # Create employee users for ACME
     await user_service.create_user(UserCreateSchema(
         email="employee1@acme.com", password="secure_password_123", first_name="Employee1", last_name="Acme",
-        is_main_client=False, roles=[str(acme_employee_role.id)], client_account_id=str(acme_corp.id)
+        status=UserStatus.ACTIVE, is_main_client=False, roles=[str(acme_employee_role.id)], client_account_id=str(acme_corp.id)
     ))
     await user_service.create_user(UserCreateSchema(
         email="employee2@acme.com", password="secure_password_123", first_name="Employee2", last_name="Acme",
-        is_main_client=False, roles=[str(acme_employee_role.id)], client_account_id=str(acme_corp.id)
+        status=UserStatus.ACTIVE, is_main_client=False, roles=[str(acme_employee_role.id)], client_account_id=str(acme_corp.id)
     ))
     await user_service.create_user(UserCreateSchema(
         email="employee3@acme.com", password="secure_password_123", first_name="Employee3", last_name="Acme",
-        is_main_client=False, roles=[str(acme_employee_role.id)], client_account_id=str(acme_corp.id)
+        status=UserStatus.ACTIVE, is_main_client=False, roles=[str(acme_employee_role.id)], client_account_id=str(acme_corp.id)
     ))
     
     # Create employee users for Tech Startup
     await user_service.create_user(UserCreateSchema(
         email="dev1@techstartup.com", password="secure_password_123", first_name="Developer1", last_name="Tech",
-        is_main_client=False, roles=[str(tech_employee_role.id)], client_account_id=str(tech_startup.id)
+        status=UserStatus.ACTIVE, is_main_client=False, roles=[str(tech_employee_role.id)], client_account_id=str(tech_startup.id)
     ))
     await user_service.create_user(UserCreateSchema(
         email="dev2@techstartup.com", password="secure_password_123", first_name="Developer2", last_name="Tech",
-        is_main_client=False, roles=[str(tech_employee_role.id)], client_account_id=str(tech_startup.id)
+        status=UserStatus.ACTIVE, is_main_client=False, roles=[str(tech_employee_role.id)], client_account_id=str(tech_startup.id)
     ))
 
     # Create test groups with direct permissions
@@ -512,11 +514,11 @@ async def seed_hierarchical_scenario():
     print("Creating platform admin users...")
     await user_service.create_user(UserCreateSchema(
         email="platform1.creator@test.com", password="platform123", first_name="Platform1", last_name="Creator",
-        is_main_client=True, roles=[str(platform1_creator_role.id)], client_account_id=str(platform1_client.id)
+        status=UserStatus.ACTIVE, is_main_client=True, roles=[str(platform1_creator_role.id)], client_account_id=str(platform1_client.id)
     ))
     await user_service.create_user(UserCreateSchema(
         email="platform2.viewer@test.com", password="platform123", first_name="Platform2", last_name="Viewer",
-        is_main_client=True, roles=[str(platform2_viewer_role.id)], client_account_id=str(platform2_client.id)
+        status=UserStatus.ACTIVE, is_main_client=True, roles=[str(platform2_viewer_role.id)], client_account_id=str(platform2_client.id)
     ))
 
     # Create sub-clients for platforms
@@ -544,7 +546,7 @@ async def seed_hierarchical_scenario():
     # Create users for sub-clients
     await user_service.create_user(UserCreateSchema(
         email="admin@acme-properties.com", password="acme123", first_name="John", last_name="ACME",
-        is_main_client=True, roles=[str(acme_admin_role.id)], client_account_id=str(acme_client.id)
+        status=UserStatus.ACTIVE, is_main_client=True, roles=[str(acme_admin_role.id)], client_account_id=str(acme_client.id)
     ))
 
     print("\n--- HIERARCHICAL Scenario Seeding Complete! ---")
@@ -684,7 +686,7 @@ async def seed_propertyhub_scenario():
     await user_service.create_user(UserCreateSchema(
         email="admin@propertyhub.com", password="platform123", 
         first_name="Admin", last_name="PropertyHub",
-        is_main_client=True, roles=[str(platform_admin_role.id)], 
+        status=UserStatus.ACTIVE, is_main_client=True, roles=[str(platform_admin_role.id)], 
         client_account_id=str(propertyhub_platform.id),
         is_platform_staff=True, platform_scope="all"
     ))
@@ -692,7 +694,7 @@ async def seed_propertyhub_scenario():
     await user_service.create_user(UserCreateSchema(
         email="support@propertyhub.com", password="platform123",
         first_name="Support", last_name="Team", 
-        is_main_client=False, roles=[str(platform_support_role.id)],
+        status=UserStatus.ACTIVE, is_main_client=False, roles=[str(platform_support_role.id)],
         client_account_id=str(propertyhub_platform.id),
         is_platform_staff=True, platform_scope="all"
     ))
@@ -700,7 +702,7 @@ async def seed_propertyhub_scenario():
     await user_service.create_user(UserCreateSchema(
         email="sales@propertyhub.com", password="platform123",
         first_name="Sales", last_name="Team",
-        is_main_client=False, roles=[str(platform_sales_role.id)],
+        status=UserStatus.ACTIVE, is_main_client=False, roles=[str(platform_sales_role.id)],
         client_account_id=str(propertyhub_platform.id),
         is_platform_staff=True, platform_scope="created"
     ))
@@ -813,21 +815,21 @@ async def seed_propertyhub_scenario():
     await user_service.create_user(UserCreateSchema(
         email="admin@acmerealestate.com", password="realestate123",
         first_name="Alice", last_name="Johnson",
-        is_main_client=True, roles=[str(acme_admin_role.id)],
+        status=UserStatus.ACTIVE, is_main_client=True, roles=[str(acme_admin_role.id)],
         client_account_id=str(acme_realestate.id)
     ))
     
     await user_service.create_user(UserCreateSchema(
         email="admin@eliteproperties.com", password="realestate123",
         first_name="Bob", last_name="Smith", 
-        is_main_client=True, roles=[str(elite_admin_role.id)],
+        status=UserStatus.ACTIVE, is_main_client=True, roles=[str(elite_admin_role.id)],
         client_account_id=str(elite_properties.id)
     ))
     
     await user_service.create_user(UserCreateSchema(
         email="admin@downtownrealty.com", password="realestate123",
         first_name="Carol", last_name="Brown",
-        is_main_client=True, roles=[str(downtown_admin_role.id)],
+        status=UserStatus.ACTIVE, is_main_client=True, roles=[str(downtown_admin_role.id)],
         client_account_id=str(downtown_realty.id)
     ))
 
@@ -836,21 +838,21 @@ async def seed_propertyhub_scenario():
     await user_service.create_user(UserCreateSchema(
         email="john.agent@acmerealestate.com", password="agent123",
         first_name="John", last_name="Agent",
-        is_main_client=False, roles=[str(acme_agent_role.id)],
+        status=UserStatus.ACTIVE, is_main_client=False, roles=[str(acme_agent_role.id)],
         client_account_id=str(acme_realestate.id)
     ))
     
     await user_service.create_user(UserCreateSchema(
         email="sarah.manager@acmerealestate.com", password="agent123",
         first_name="Sarah", last_name="Manager",
-        is_main_client=False, roles=[str(acme_agent_role.id)], 
+        status=UserStatus.ACTIVE, is_main_client=False, roles=[str(acme_agent_role.id)], 
         client_account_id=str(acme_realestate.id)
     ))
     
     await user_service.create_user(UserCreateSchema(
         email="mike.assistant@acmerealestate.com", password="agent123",
         first_name="Mike", last_name="Assistant",
-        is_main_client=False, roles=[str(acme_agent_role.id)],
+        status=UserStatus.ACTIVE, is_main_client=False, roles=[str(acme_agent_role.id)],
         client_account_id=str(acme_realestate.id)
     ))
 
@@ -858,7 +860,7 @@ async def seed_propertyhub_scenario():
     await user_service.create_user(UserCreateSchema(
         email="luxury.agent@eliteproperties.com", password="agent123",
         first_name="Luxury", last_name="Agent",
-        is_main_client=False, roles=[str(elite_agent_role.id)],
+        status=UserStatus.ACTIVE, is_main_client=False, roles=[str(elite_agent_role.id)],
         client_account_id=str(elite_properties.id)
     ))
 

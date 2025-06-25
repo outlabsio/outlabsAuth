@@ -39,6 +39,7 @@ async def create_sub_user(
     # Convert to response format
     user_dict = new_user.model_dump(by_alias=True)
     user_dict["_id"] = str(user_dict["_id"])
+    
     if new_user.client_account:
         user_dict["client_account_id"] = str(new_user.client_account.id)
     else:
@@ -64,6 +65,7 @@ async def bulk_create_users(
     for user in successful_creates:
         user_dict = user.model_dump(by_alias=True)
         user_dict["_id"] = str(user_dict["_id"])
+        
         if user.client_account:
             user_dict["client_account_id"] = str(user.client_account.id)
         else:
@@ -98,6 +100,7 @@ async def create_user(
     # Convert to response format
     user_dict = new_user.model_dump(by_alias=True)
     user_dict["_id"] = str(user_dict["_id"])
+    
     if new_user.client_account:
         user_dict["client_account_id"] = str(new_user.client_account.id)
     else:
@@ -148,6 +151,7 @@ async def get_all_users(
     for user in users:
         user_dict = user.model_dump(by_alias=True)
         user_dict["_id"] = str(user_dict["_id"])
+        
         if user.client_account:
             user_dict["client_account_id"] = str(user.client_account.id)
         else:
@@ -199,6 +203,7 @@ async def get_user_by_id(
     # Convert to response format
     user_dict = user.model_dump(by_alias=True)
     user_dict["_id"] = str(user_dict["_id"])
+    
     if user.client_account:
         user_dict["client_account_id"] = str(user.client_account.id)
     else:
@@ -246,6 +251,7 @@ async def update_user(
     # Convert to response format
     user_dict = updated_user.model_dump(by_alias=True)
     user_dict["_id"] = str(user_dict["_id"])
+    
     if updated_user.client_account:
         user_dict["client_account_id"] = str(updated_user.client_account.id)
     else:

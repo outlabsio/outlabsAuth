@@ -4,7 +4,7 @@ from beanie.exceptions import RevisionIdWasChanged
 from pymongo.errors import DuplicateKeyError
 from fastapi import HTTPException, status
 
-from ..models.user_model import UserModel
+from ..models.user_model import UserModel, UserStatus
 from ..models.client_account_model import ClientAccountModel
 from ..models.group_model import GroupModel
 from ..schemas.user_schema import UserCreateSchema, UserUpdateSchema, FailedUserCreationSchema

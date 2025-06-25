@@ -14,7 +14,7 @@ class UserCreateSchema(BaseModel):
     password: str = Field(..., min_length=8, description="User's password (min 8 characters)")
     first_name: str = Field(..., description="User's first name")
     last_name: str = Field(..., description="User's last name")
-    is_active: bool = Field(True, description="Whether the user account is active")
+    status: UserStatus = Field(UserStatus.ACTIVE, description="User account status")
     
     # Optional fields for advanced user creation
     client_account_id: Optional[str] = Field(None, description="Client account ID")
@@ -31,7 +31,7 @@ class UserCreateSchema(BaseModel):
                 "password": "securepassword123",
                 "first_name": "John",
                 "last_name": "Doe",
-                "is_active": True,
+                "status": "active",
                 "client_account_id": "optional_client_id",
                 "roles": ["role_id_1", "role_id_2"],
                 "groups": ["group_id_1"]
@@ -46,7 +46,7 @@ class UserUpdateSchema(BaseModel):
     email: Optional[EmailStr] = Field(None, description="User's email address")
     first_name: Optional[str] = Field(None, description="User's first name")
     last_name: Optional[str] = Field(None, description="User's last name")
-    is_active: Optional[bool] = Field(None, description="Whether the user account is active")
+    status: Optional[UserStatus] = Field(None, description="User account status")
     roles: Optional[List[str]] = Field(None, description="List of role IDs to assign")
     groups: Optional[List[str]] = Field(None, description="List of group IDs to assign")
 
@@ -59,7 +59,7 @@ class UserResponseSchema(BaseModel):
     email: EmailStr
     first_name: str
     last_name: str
-    is_active: bool
+    status: UserStatus
     client_account_id: Optional[str] = None
     roles: List[str] = []  # Role ObjectIds for updates
     groups: List[str] = []  # Group ObjectIds for updates

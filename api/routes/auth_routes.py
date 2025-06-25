@@ -217,9 +217,6 @@ async def read_users_me(
     user_dict = current_user.model_dump(by_alias=True)
     user_dict["_id"] = str(user_dict["_id"])
 
-    # Map status to is_active for the response schema
-    user_dict["is_active"] = current_user.status.value == "active"
-
     # With fetch_links=True, we can access the linked object directly
     user_dict["client_account_id"] = str(current_user.client_account.id) if current_user.client_account else None
     # Remove the client_account object from response

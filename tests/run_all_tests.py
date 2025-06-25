@@ -1,249 +1,266 @@
 #!/usr/bin/env python3
 """
-Run All Tests for outlabsAuth
+Run All Tests for outlabsAuth - Enterprise Production Readiness Validation
 
-🚧 ARCHITECTURE TRANSITION NOTICE 🚧
-The core permission system has been updated to return detailed permission objects
-instead of ObjectId lists. Test suite requires updates to work with new format.
+🏢 ENTERPRISE-LEVEL TESTING SUITE 🏢
+Comprehensive validation for production-ready RBAC microservice
 
-Current Status: 
-- ✅ Core permission system working (verified via live API testing)
-- 🔄 Test suite needs updates for new permission detail format
-- 🎯 Target: Update all tests to expect {id, name, scope, display_name, description} objects
+Current Status: 68.7% Success Rate (189/275 tests)
+Target: 100% Bulletproof Coverage for Enterprise Production
 
-Previous Status: 249/249 tests passing with old ObjectId format
-Current Goal: 249+ tests passing with new detailed permission object format
+🎯 PHASE 1 OBJECTIVES (Target: 85% Success Rate):
+- ✅ Core authentication & authorization flows
+- ✅ Multi-tenant data isolation & security boundaries  
+- ✅ Permission system with detailed object format
+- 🔄 Complete PropertyHub three-tier scenario coverage
+- 🔄 Fix remaining permission format compatibility issues
 
-This script runs all test modules individually and provides a comprehensive summary.
-Can be run with: python tests/run_all_tests.py
+🏆 PRODUCTION READY MODULES (100% Success):
+- Authentication Routes (40/40) - Login, logout, session management
+- Permission Routes (10/10) - CRUD operations and validation
+- Client Account Routes (14/14) - Multi-tenant account management
+- Security Service (15/15) - JWT, encryption, token validation
+- User Service (13/13) - User management and effective permissions
 
-New Permission Format Example:
-{
-  "permissions": [
-    {
-      "id": "685b392fc8060576736282fe",
-      "name": "client_account:read_platform", 
-      "scope": "platform",
-      "display_name": "Read Platform Clients",
-      "description": "Allows reading all clients within platform scope."
-    }
-  ]
-}
+⚠️ ENTERPRISE HARDENING REQUIRED:
+- Access Control (0/6) - Core security boundary validation
+- Role Routes (2/14) - Role-based permission assignment
+- Performance Testing - Load testing under enterprise traffic
+- Security Testing - Penetration testing and vulnerability scanning
+- Compliance Testing - GDPR, SOC2, audit trail validation
+
+This script runs all test modules individually and provides comprehensive 
+enterprise-level reporting for production readiness assessment.
+
+Usage:
+    python tests/run_all_tests.py
+    
+Can be run from project root or tests directory.
+Generates detailed JSON report: test_report.json
 """
 
 import subprocess
-import sys
 import time
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, List, Tuple
+import sys
 import json
-import re
+from pathlib import Path
+from datetime import datetime
 
-class TestResult:
-    def __init__(self, module: str, passed: int, failed: int, skipped: int, duration: float, output: str = ""):
-        self.module = module
-        self.passed = passed
-        self.failed = failed
-        self.skipped = skipped
-        self.duration = duration
-        self.output = output
-        self.total = passed + failed + skipped
+def find_project_root():
+    """Find the project root directory."""
+    current = Path.cwd()
     
-    @property
-    def success_rate(self) -> float:
-        if self.total == 0:
-            return 0.0
-        return (self.passed / self.total) * 100
+    # Check if we're in the tests directory
+    if current.name == "tests":
+        return current.parent
+    
+    # Check if we're in the project root (has api directory)
+    if (current / "api").exists():
+        return current
+    
+    # Look for parent directories with api
+    for parent in current.parents:
+        if (parent / "api").exists():
+            return parent
+    
+    raise FileNotFoundError("Could not find project root directory")
 
-class TestOrchestrator:
-    def __init__(self):
-        self.results: List[TestResult] = []
-        self.test_modules = [
-            "tests/test_auth_routes.py",
-            "tests/test_auth_security.py",
-            "tests/test_auth_comprehensive.py",
-            "tests/test_user_routes.py", 
-            "tests/test_role_routes.py",
-            "tests/test_permission_routes.py",
-            "tests/test_group_routes.py",
-            "tests/test_group_service.py",
-            "tests/test_client_account_routes.py",
-            "tests/test_security_service.py",
-            "tests/test_user_service.py",
-            "tests/test_access_control.py",
-            "tests/test_duplicate_constraints.py",
-            "tests/test_integration.py",
-            "tests/test_enhanced_access_control.py",
-            "tests/test_propertyhub_three_tier.py"
-        ]
+def run_test_module(module_path):
+    """Run a single test module and return results."""
+    start_time = time.time()
     
-    def run_single_test_module(self, module_path: str) -> TestResult:
-        """Run a single test module and parse results."""
-        print(f"\n🧪 Running {module_path}...")
+    try:
+        result = subprocess.run([
+            sys.executable, "-m", "pytest", str(module_path), "-v", "--tb=short"
+        ], capture_output=True, text=True, timeout=120)
         
-        start_time = time.time()
-        try:
-            result = subprocess.run([
-                sys.executable, "-m", "pytest", 
-                module_path, 
-                "-v", 
-                "--tb=short",
-                "--no-header"
-            ], capture_output=True, text=True, timeout=120)
-            
-            duration = time.time() - start_time
-            output = result.stdout + result.stderr
-            
-            # Parse pytest output to extract test counts
-            passed, failed, skipped = self._parse_pytest_output(output)
-            
-            test_result = TestResult(
-                module=module_path,
-                passed=passed,
-                failed=failed, 
-                skipped=skipped,
-                duration=duration,
-                output=output
-            )
-            
-            status = "✅ PASSED" if failed == 0 else "❌ FAILED"
-            print(f"   {status} - {passed} passed, {failed} failed, {skipped} skipped ({duration:.2f}s)")
-            
-            return test_result
-            
-        except subprocess.TimeoutExpired:
-            duration = time.time() - start_time
-            print(f"   ⏰ TIMEOUT after {duration:.2f}s")
-            return TestResult(module_path, 0, 1, 0, duration, "Test timed out")
-        except Exception as e:
-            duration = time.time() - start_time
-            print(f"   💥 ERROR: {str(e)}")
-            return TestResult(module_path, 0, 1, 0, duration, f"Error: {str(e)}")
-    
-    def _parse_pytest_output(self, output: str) -> Tuple[int, int, int]:
-        """Parse pytest output to extract test counts."""
-        passed = failed = skipped = 0
+        duration = time.time() - start_time
         
-        # Look for the summary line like "===== 3 passed, 1 failed, 2 skipped in 0.75s ======"
-        lines = output.split('\n')
-        for line in lines:
-            if 'passed' in line or 'failed' in line or 'skipped' in line:
-                if line.strip().startswith('=') and line.strip().endswith('='):  # Summary line
-                    # Extract numbers before keywords
-                    
-                    # Find passed count
-                    passed_match = re.search(r'(\d+)\s+passed', line)
-                    if passed_match:
-                        passed = int(passed_match.group(1))
-                    
-                    # Find failed count
-                    failed_match = re.search(r'(\d+)\s+failed', line)
-                    if failed_match:
-                        failed = int(failed_match.group(1))
-                    
-                    # Find skipped count
-                    skipped_match = re.search(r'(\d+)\s+skipped', line)
-                    if skipped_match:
-                        skipped = int(skipped_match.group(1))
-                    
+        # Parse pytest output for counts
+        output_lines = result.stdout.split('\n')
+        summary_line = None
+        for line in reversed(output_lines):
+            if "passed" in line or "failed" in line or "error" in line:
+                if any(word in line for word in ["passed", "failed", "error", "skipped"]):
+                    summary_line = line
                     break
         
-        return passed, failed, skipped
+        # Extract counts from summary
+        passed = failed = skipped = 0
+        if summary_line:
+            import re
+            passed_match = re.search(r'(\d+) passed', summary_line)
+            failed_match = re.search(r'(\d+) failed', summary_line)
+            skipped_match = re.search(r'(\d+) skipped', summary_line)
+            
+            passed = int(passed_match.group(1)) if passed_match else 0
+            failed = int(failed_match.group(1)) if failed_match else 0
+            skipped = int(skipped_match.group(1)) if skipped_match else 0
+        
+        # Determine status
+        if result.returncode == 0 and failed == 0:
+            status = "PASSED"
+        else:
+            status = "FAILED"
+        
+        return {
+            "module": module_path.stem,
+            "status": status,
+            "passed": passed,
+            "failed": failed,
+            "skipped": skipped,
+            "duration": duration,
+            "return_code": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr
+        }
+        
+    except subprocess.TimeoutExpired:
+        return {
+            "module": module_path.stem,
+            "status": "TIMEOUT",
+            "passed": 0,
+            "failed": 1,
+            "skipped": 0,
+            "duration": 120.0,
+            "return_code": -1,
+            "stdout": "",
+            "stderr": "Test timed out after 120 seconds"
+        }
+    except Exception as e:
+        return {
+            "module": module_path.stem,
+            "status": "ERROR",
+            "passed": 0,
+            "failed": 1,
+            "skipped": 0,
+            "duration": time.time() - start_time,
+            "return_code": -1,
+            "stdout": "",
+            "stderr": str(e)
+        }
+
+def main():
+    """Run all tests and generate comprehensive report."""
+    print("🚀 Starting Enterprise Test Orchestration")
+    print("=" * 60)
     
-    def run_all_tests(self) -> None:
-        """Run all test modules and collect results."""
-        print("🚀 Starting Test Orchestration")
-        print("=" * 60)
+    try:
+        project_root = find_project_root()
+        tests_dir = project_root / "tests"
         
-        start_time = time.time()
+        if not tests_dir.exists():
+            print(f"❌ Tests directory not found: {tests_dir}")
+            return 1
         
-        for module in self.test_modules:
-            # Skip modules that don't exist yet
-            if not Path(module).exists():
-                print(f"\n⚠️  Skipping {module} (file not found)")
-                continue
-                
-            result = self.run_single_test_module(module)
-            self.results.append(result)
+        # Find all test modules
+        test_modules = list(tests_dir.glob("test_*.py"))
+        test_modules.sort()
         
-        total_duration = time.time() - start_time
-        self._print_summary(total_duration)
-        self._save_report()
-    
-    def _print_summary(self, total_duration: float) -> None:
-        """Print comprehensive test summary."""
+        if not test_modules:
+            print(f"❌ No test modules found in {tests_dir}")
+            return 1
+        
+        all_results = []
+        total_start_time = time.time()
+        
+        # Run each test module
+        for module_path in test_modules:
+            print(f"\n🧪 Running {module_path.name}...")
+            result = run_test_module(module_path)
+            all_results.append(result)
+            
+            # Display immediate result
+            status_icon = "✅" if result["status"] == "PASSED" else "❌"
+            print(f"   {status_icon} {result['status']} - {result['passed']} passed, {result['failed']} failed, {result['skipped']} skipped ({result['duration']:.2f}s)")
+        
+        total_duration = time.time() - total_start_time
+        
+        # Calculate summary statistics
+        total_modules = len(all_results)
+        passed_modules = sum(1 for r in all_results if r["status"] == "PASSED")
+        failed_modules = total_modules - passed_modules
+        
+        total_tests = sum(r["passed"] + r["failed"] + r["skipped"] for r in all_results)
+        total_passed = sum(r["passed"] for r in all_results)
+        total_failed = sum(r["failed"] for r in all_results)
+        total_skipped = sum(r["skipped"] for r in all_results)
+        
+        success_rate = (total_passed / total_tests * 100) if total_tests > 0 else 0
+        
+        # Print comprehensive summary
         print("\n" + "=" * 60)
-        print("📊 TEST ORCHESTRATION SUMMARY")
+        print("📊 ENTERPRISE TEST ORCHESTRATION SUMMARY")
         print("=" * 60)
-        
-        total_passed = sum(r.passed for r in self.results)
-        total_failed = sum(r.failed for r in self.results)
-        total_skipped = sum(r.skipped for r in self.results)
-        total_tests = total_passed + total_failed + total_skipped
-        
         print(f"🕐 Total Duration: {total_duration:.2f}s")
-        print(f"📁 Modules Run: {len(self.results)}")
+        print(f"📁 Modules Run: {total_modules}")
         print(f"🧪 Total Tests: {total_tests}")
         print(f"✅ Passed: {total_passed}")
         print(f"❌ Failed: {total_failed}")
         print(f"⏭️  Skipped: {total_skipped}")
+        print(f"📈 Success Rate: {success_rate:.1f}%")
         
-        if total_tests > 0:
-            success_rate = (total_passed / total_tests) * 100
-            print(f"📈 Success Rate: {success_rate:.1f}%")
-        
-        print("\n📋 MODULE BREAKDOWN:")
-        print("-" * 60)
-        
-        for result in self.results:
-            status_icon = "✅" if result.failed == 0 else "❌"
-            module_name = Path(result.module).stem
-            print(f"{status_icon} {module_name:<25} "
-                  f"P:{result.passed:>2} F:{result.failed:>2} S:{result.skipped:>2} "
-                  f"({result.success_rate:>5.1f}%) {result.duration:>6.2f}s")
-        
-        if total_failed > 0:
-            print(f"\n⚠️  {total_failed} test(s) failed. Check individual module outputs above.")
+        # Enterprise production readiness assessment
+        print(f"\n🏢 ENTERPRISE PRODUCTION READINESS ASSESSMENT:")
+        if success_rate >= 95:
+            print("🟢 PRODUCTION READY - Exceeds enterprise standards")
+        elif success_rate >= 85:
+            print("🟡 NEAR PRODUCTION READY - Minor hardening required")
+        elif success_rate >= 70:
+            print("🟠 DEVELOPMENT READY - Significant testing gaps remain")
         else:
-            print(f"\n🎉 All tests passed! Great job!")
+            print("🔴 NOT PRODUCTION READY - Major stability issues")
         
-        print("=" * 60)
-    
-    def _save_report(self) -> None:
-        """Save detailed report to JSON file."""
-        report_data = {
+        # Module breakdown
+        print(f"\n📋 MODULE BREAKDOWN:")
+        print("-" * 60)
+        for result in all_results:
+            success_pct = (result["passed"] / (result["passed"] + result["failed"]) * 100) if (result["passed"] + result["failed"]) > 0 else 0
+            status_icon = "✅" if result["status"] == "PASSED" else "❌"
+            print(f"{status_icon} {result['module']:<25} P:{result['passed']:>2} F:{result['failed']:>2} S:{result['skipped']:>2} ({success_pct:>5.1f}%) {result['duration']:>6.2f}s")
+        
+        # Identify critical failures
+        critical_failures = [r for r in all_results if r["failed"] > 0]
+        if critical_failures:
+            print(f"\n⚠️  {len(critical_failures)} test module(s) failed. Check individual module outputs above.")
+        
+        # Generate detailed JSON report
+        report = {
             "timestamp": datetime.now().isoformat(),
             "summary": {
-                "total_modules": len(self.results),
-                "total_passed": sum(r.passed for r in self.results),
-                "total_failed": sum(r.failed for r in self.results),
-                "total_skipped": sum(r.skipped for r in self.results),
-                "total_duration": sum(r.duration for r in self.results)
+                "total_duration": total_duration,
+                "modules_run": total_modules,
+                "modules_passed": passed_modules,
+                "modules_failed": failed_modules,
+                "total_tests": total_tests,
+                "total_passed": total_passed,
+                "total_failed": total_failed,
+                "total_skipped": total_skipped,
+                "success_rate": success_rate
             },
-            "modules": [
-                {
-                    "module": result.module,
-                    "passed": result.passed,
-                    "failed": result.failed,
-                    "skipped": result.skipped,
-                    "duration": result.duration,
-                    "success_rate": result.success_rate
-                }
-                for result in self.results
-            ]
+            "modules": all_results,
+            "enterprise_assessment": {
+                "production_ready": success_rate >= 95,
+                "near_production_ready": success_rate >= 85,
+                "development_ready": success_rate >= 70,
+                "critical_issues": len(critical_failures)
+            }
         }
         
-        report_path = Path("test_report.json")
+        report_path = project_root / "test_report.json"
         with open(report_path, 'w') as f:
-            json.dump(report_data, f, indent=2)
+            json.dump(report, f, indent=2)
         
+        print("=" * 60)
         print(f"📄 Detailed report saved to: {report_path}")
-
-def main():
-    """Main entry point for running all tests."""
-    orchestrator = TestOrchestrator()
-    orchestrator.run_all_tests()
+        
+        # Return appropriate exit code for CI/CD
+        return 0 if total_failed == 0 else 1
+        
+    except Exception as e:
+        print(f"❌ Test orchestration failed: {e}")
+        return 1
 
 if __name__ == "__main__":
-    main() 
+    exit_code = main()
+    sys.exit(exit_code) 
