@@ -176,7 +176,7 @@ async def seed_permissions_and_super_admin_role():
     """
     Seeds essential permissions and system roles.
     """
-    # Create permissions
+    # Create essential system permissions
     print("Creating essential permissions...")
     created_count = 0
     for perm_data in ESSENTIAL_PERMISSIONS:
@@ -199,7 +199,38 @@ async def seed_permissions_and_super_admin_role():
                 print(f"  ❌ Failed to create permission {perm_data.name}: {e}")
         else:
             print(f"  - Permission already exists: {perm_data.name} (scope: {perm_data.scope})")
-    print(f"{created_count} new permissions created out of {len(ESSENTIAL_PERMISSIONS)} total.")
+    
+    # Create platform permissions as system permissions
+    print("Creating platform permissions...")
+    for perm_data in PLATFORM_PERMISSIONS:
+        # Check if permission exists by querying directly
+        existing_perm = await PermissionModel.find_one(
+            PermissionModel.name == perm_data.name,
+            PermissionModel.scope == "system",  # Create as system permissions first
+            PermissionModel.scope_id == None  # System permissions have null scope_id
+        )
+        if not existing_perm:
+            try:
+                # Create as system permission first
+                system_perm_data = PermissionCreateSchema(
+                    name=perm_data.name,
+                    display_name=perm_data.display_name,
+                    description=perm_data.description,
+                    scope="system"
+                )
+                await permission_service.create_permission(
+                    system_perm_data,
+                    current_user_id="system",
+                    current_client_id=None
+                )
+                created_count += 1
+                print(f"  ✓ Created platform permission: {perm_data.name} (scope: system)")
+            except Exception as e:
+                print(f"  ❌ Failed to create platform permission {perm_data.name}: {e}")
+        else:
+            print(f"  - Platform permission already exists: {perm_data.name} (scope: system)")
+    
+    print(f"{created_count} new permissions created out of {len(ESSENTIAL_PERMISSIONS) + len(PLATFORM_PERMISSIONS)} total.")
 
     # Create system roles
     print("Creating system roles...")
@@ -469,10 +500,10 @@ async def seed_hierarchical_scenario():
     # Create platform root client accounts
     print("Creating platform root client accounts...")
     platform1_client = await client_account_service.create_client_account(
-        ClientAccountCreateSchema(name="Real Estate Platform", is_platform_root=True)
+        ClientAccountCreateSchema(name="Hierarchical Real Estate Platform", is_platform_root=True)
     )
     platform2_client = await client_account_service.create_client_account(
-        ClientAccountCreateSchema(name="CRM Platform", is_platform_root=True)
+        ClientAccountCreateSchema(name="Hierarchical CRM Platform", is_platform_root=True)
     )
     
     # Create platform-specific roles for Platform 1 (Real Estate)
@@ -528,16 +559,16 @@ async def seed_hierarchical_scenario():
     # Create sub-clients for platforms
     print("Creating sub-clients for platform testing...")
     acme_client = await client_account_service.create_client_account(
-        ClientAccountCreateSchema(name="ACME Properties", description="Sub-client of Real Estate Platform"),
+        ClientAccountCreateSchema(name="Hierarchical ACME Properties", description="Sub-client of Hierarchical Real Estate Platform"),
         created_by_client_id=str(platform1_client.id)
     )
     
-    # Create client admin role for ACME Properties
+    # Create client admin role for Hierarchical ACME Properties
     acme_admin_role = await role_service.create_role(
         role_data=RoleCreateSchema(
             name="admin",
             display_name="Client Administrator",
-            description="Administrative role for ACME Properties",
+            description="Administrative role for Hierarchical ACME Properties",
             permissions=["user:read", "user:update", "user:create", "user:add_member",
                         "group:read", "group:create", "group:update", "group:manage_members"],
             scope=RoleScope.CLIENT,
@@ -549,7 +580,7 @@ async def seed_hierarchical_scenario():
 
     # Create users for sub-clients
     await user_service.create_user(UserCreateSchema(
-        email="admin@acme-properties.com", password="acme123", first_name="John", last_name="ACME",
+        email="admin@hierarchical-acme.com", password="acme12345", first_name="John", last_name="ACME",
         status=UserStatus.ACTIVE, is_main_client=True, roles=[str(acme_admin_role.id)], client_account_id=str(acme_client.id)
     ))
 
@@ -557,7 +588,7 @@ async def seed_hierarchical_scenario():
     print("Test Users:")
     print("  - platform1.creator@test.com (Platform Creator)")
     print("  - platform2.viewer@test.com (Platform Viewer)")
-    print("  - admin@acme-properties.com (Client Admin)")
+    print("  - admin@hierarchical-acme.com (Client Admin)")
 
 
 async def ensure_platform_permissions_exist(platform_id: str):
