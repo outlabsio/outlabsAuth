@@ -107,36 +107,32 @@ def run_seed_script():
 async def test_db():
     """
     Provides a clean test database for the session.
-    Seeds the database once and keeps it for all tests in the session.
+    Always seeds the database to ensure consistent test state.
     """
     test_db_client = AsyncIOMotorClient(TEST_DATABASE_URL)
     test_db_instance = test_db_client[TEST_DB_NAME]
     
-    # Check if database already exists and has data
-    collections = await test_db_instance.list_collection_names()
-    needs_seeding = "users" not in collections
+    print(f"Preparing test database {TEST_DB_NAME}...")
     
-    if needs_seeding:
-        print(f"Database {TEST_DB_NAME} needs seeding...")
-        # Drop the database to ensure a clean slate
-        await test_db_client.drop_database(TEST_DB_NAME)
-        
-        # Run the seed script
-        run_seed_script()
-        
-        # Verify seeding worked
-        collections_after = await test_db_instance.list_collection_names()
-        if "users" not in collections_after:
-            raise Exception("Seeding failed - no users collection found after seeding")
-        
-        user_count = await test_db_instance.users.count_documents({})
-        print(f"Seeding complete - {user_count} users created")
-        
-        # Small delay to ensure database operations are fully committed
-        import time
-        time.sleep(0.5)
-    else:
-        print(f"Database {TEST_DB_NAME} already exists with data, skipping seeding")
+    # Always drop and recreate the database for consistent test state
+    await test_db_client.drop_database(TEST_DB_NAME)
+    print(f"Dropped existing database {TEST_DB_NAME}")
+    
+    # Run the seed script
+    print("Running seed script...")
+    run_seed_script()
+    
+    # Verify seeding worked
+    collections_after = await test_db_instance.list_collection_names()
+    if "users" not in collections_after:
+        raise Exception("Seeding failed - no users collection found after seeding")
+    
+    user_count = await test_db_instance.users.count_documents({})
+    print(f"Seeding complete - {user_count} users created")
+    
+    # Small delay to ensure database operations are fully committed
+    import time
+    time.sleep(0.5)
     
     yield test_db_instance
     
