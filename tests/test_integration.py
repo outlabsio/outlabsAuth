@@ -92,8 +92,10 @@ class TestIntegrationWorkflows:
         
         # 1. Create a custom permission
         permission_data = {
-            "_id": "integration:test",
-            "description": "Integration test permission"
+            "name": "integration:test",
+            "display_name": "Integration Test Permission",
+            "description": "Integration test permission",
+            "scope": "system"
         }
         
         perm_response = await client.post("/v1/permissions/", json=permission_data, headers=headers)
@@ -105,10 +107,11 @@ class TestIntegrationWorkflows:
         
         # 2. Create a custom role with the permission
         role_data = {
-            "_id": "integration_tester",
-            "name": "Integration Tester",
+            "name": "integration_tester",
+            "display_name": "Integration Tester",
             "description": "Role for integration testing",
-            "permissions": ["integration:test", "user:read"],
+            "permissions": ["integration:test", "user:read_self"],
+            "scope": "system",
             "is_assignable_by_main_client": True
         }
         

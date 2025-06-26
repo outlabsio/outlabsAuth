@@ -116,6 +116,7 @@ ESSENTIAL_PERMISSIONS = [
     PermissionCreateSchema(name="client:create", display_name="Create Client Accounts", description="Create new client accounts in auth platform", scope="system"),
     PermissionCreateSchema(name="client:read_platform", display_name="Read Platform Clients", description="Read all platform client accounts", scope="system"),
     PermissionCreateSchema(name="client:manage_platform", display_name="Manage Platform Clients", description="Manage clients across platform", scope="system"),
+    PermissionCreateSchema(name="client:manage_all", display_name="Manage All Clients", description="Global client management in auth platform (admin only)", scope="system"),
     PermissionCreateSchema(name="support:cross_client", display_name="Cross-Client Support", description="Support across all platform clients in auth platform", scope="system"),
     
     # === SYSTEM-LEVEL INFRASTRUCTURE PERMISSIONS ===
