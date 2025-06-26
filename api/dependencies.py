@@ -49,6 +49,27 @@ def convert_user_to_response(user: UserModel) -> Dict[str, Any]:
 
 # --- User Role Utilities ---
 
+def user_is_client_admin(user: UserModel) -> bool:
+    """
+    Check if a user is a client admin (has admin role with CLIENT scope).
+    
+    Args:
+        user: UserModel instance
+        
+    Returns:
+        bool: True if user is a client admin, False otherwise
+    """
+    if not user.roles:
+        return False
+    
+    for role in user.roles:
+        if (role.name == "admin" and 
+            hasattr(role, 'scope') and 
+            role.scope.value == "client"):
+            return True
+    return False
+
+
 def user_has_role(user: UserModel, role_name: str) -> bool:
     """
     Check if a user has a specific role by name.
@@ -161,6 +182,29 @@ def valid_account_id(account_id: str):
             detail=f"Invalid ObjectId: {account_id}"
         )
 
+
+def validate_object_id(object_id: str, object_type: str = "ObjectId") -> PydanticObjectId:
+    """
+    Utility function to validate and convert string to PydanticObjectId.
+    
+    Args:
+        object_id: String representation of ObjectId
+        object_type: Type name for error message (e.g., "User ID", "Role ID")
+        
+    Returns:
+        PydanticObjectId: Validated ObjectId
+        
+    Raises:
+        HTTPException: If ObjectId is invalid
+    """
+    try:
+        return PydanticObjectId(object_id)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, 
+            detail=f"Invalid {object_type}: {object_id}"
+        )
+
 async def get_token_from_request(
     request: Request,
     token: Optional[str] = Depends(oauth2_scheme)
@@ -207,33 +251,80 @@ async def get_current_user(
 
 # --- Permission-Based Dependencies ---
 
+def require_permissions(
+    any_of: Optional[List[str]] = None,
+    all_of: Optional[List[str]] = None
+):
+    """
+    A powerful dependency factory for permission-based access control with hierarchical checking.
+
+    Supports hierarchical permissions where:
+    - Manage permissions include read permissions
+    - Broader scopes include narrower scopes
+    - user:manage_all includes user:read_all, user:read_platform, user:read_client, user:read_self
+
+    It can check for:
+    - `any_of`: User must have at least one of the specified permissions.
+    - `all_of`: User must have all of the specified permissions.
+
+    Usage:
+        # Require a single permission (hierarchical)
+        Depends(require_permissions(all_of=["user:read_client"]))  # user:manage_client also works
+
+        # Require one of several permissions (hierarchical)
+        Depends(require_permissions(any_of=["user:read_all", "user:read_platform", "user:read_client"]))
+    """
+    async def _require_permissions_dependency(
+        current_user: UserModel = Depends(get_current_user)
+    ) -> UserModel:
+        # 1. Get user's effective permissions from the service layer
+        user_permissions = await user_service.get_user_effective_permissions(current_user.id)
+
+        # 2. Import hierarchical checking function
+        from .services.permission_service import check_hierarchical_permission
+
+        # 3. Check for "any_of" condition using hierarchical logic
+        if any_of:
+            has_any_permission = any(
+                check_hierarchical_permission(user_permissions, p) for p in any_of
+            )
+            if not has_any_permission:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Access denied. Requires one of the following permissions: {', '.join(any_of)}"
+                )
+
+        # 4. Check for "all_of" condition using hierarchical logic
+        if all_of:
+            missing_permissions = []
+            for p in all_of:
+                if not check_hierarchical_permission(user_permissions, p):
+                    missing_permissions.append(p)
+            
+            if missing_permissions:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Access denied. Missing required permissions: {', '.join(missing_permissions)}"
+                )
+
+        return current_user
+    return _require_permissions_dependency
+
+
 def has_permission(required_permission: str):
     """
     Dependency factory to check if the current user has the required permission.
-    Now includes permissions from both direct roles and group memberships.
-    Uses clean permission names (e.g., "user:create", "listings:manage").
+    
+    DEPRECATED: Use require_permissions(all_of=[permission]) instead.
+    This function is kept for backwards compatibility.
     
     Usage:
         @router.post("/users", dependencies=[Depends(has_permission("user:create"))])
         async def create_user_endpoint():
             return {"message": "User creation allowed"}
     """
-    async def _has_permission(
-        current_user: UserModel = Depends(get_current_user)
-    ) -> UserModel:
-        # Get all effective permissions (direct roles + group memberships)
-        # Returns clean permission names from resolved ObjectIds
-        user_permissions = await user_service.get_user_effective_permissions(current_user.id)
-        
-        # Check for exact match
-        if required_permission in user_permissions:
-            return current_user
-            
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to perform this action."
-        )
-    return _has_permission
+    # Use the new unified permission system internally
+    return require_permissions(all_of=[required_permission])
 
 
 def has_hierarchical_client_access(target_client_field: str = "account_id"):
@@ -323,13 +414,7 @@ def can_access_user(user_id_param: str = "user_id"):
             )
         
         # Validate ObjectId format
-        try:
-            target_user_object_id = PydanticObjectId(target_user_id)
-        except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, 
-                detail=f"Invalid ObjectId: {target_user_id}"
-            )
+        target_user_object_id = validate_object_id(target_user_id, "User ID")
         
         # Get the target user
         target_user = await user_service.get_user_by_id(target_user_object_id)
@@ -341,17 +426,7 @@ def can_access_user(user_id_param: str = "user_id"):
         
         # Access control logic
         is_super_admin = user_has_role(current_user, "super_admin")
-        is_client_admin = False
-        
-        # Check for client admin role (role named "admin" with CLIENT scope)
-        if current_user.roles:
-            for role in current_user.roles:
-                if (role.name == "admin" and 
-                    hasattr(role, 'scope') and 
-                    role.scope.value == "client"):
-                    is_client_admin = True
-                    break
-        
+        is_client_admin = user_is_client_admin(current_user)
         is_admin = is_super_admin or is_client_admin
         is_self_access = str(current_user.id) == target_user_id
         
@@ -404,13 +479,7 @@ def require_self_or_admin(user_id_param: str = "user_id"):
                 detail=f"Missing required parameter: {user_id_param}"
             )
         
-        try:
-            target_user_object_id = PydanticObjectId(target_user_id)
-        except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, 
-                detail=f"Invalid ObjectId: {target_user_id}"
-            )
+        target_user_object_id = validate_object_id(target_user_id, "User ID")
         
         target_user = await user_service.get_user_by_id(target_user_object_id)
         if target_user is None:
@@ -420,17 +489,7 @@ def require_self_or_admin(user_id_param: str = "user_id"):
             )
         
         is_super_admin = user_has_role(current_user, "super_admin")
-        is_client_admin = False
-        
-        # Check for client admin role (role named "admin" with CLIENT scope)
-        if current_user.roles:
-            for role in current_user.roles:
-                if (role.name == "admin" and 
-                    hasattr(role, 'scope') and 
-                    role.scope.value == "client"):
-                    is_client_admin = True
-                    break
-        
+        is_client_admin = user_is_client_admin(current_user)
         is_admin = is_super_admin or is_client_admin
         is_self_access = str(current_user.id) == target_user_id
         
@@ -454,80 +513,42 @@ def require_self_or_admin(user_id_param: str = "user_id"):
 
 # --- Commonly Used Dependencies ---
 
-# Super Admin access only
-require_super_admin = require_role("super_admin")
-
-# Admin access (any admin role)
+# Admin access (any admin role)  
 require_admin = require_any_role(["super_admin", "admin"])
 
-# Platform admin access
-require_platform_admin = require_any_role(["super_admin", "platform_admin"])
+
+# --- New Unified Permission Dependencies ---
+
+# User Management
+can_read_users = require_permissions(any_of=["user:read_all", "user:read_platform", "user:read_client"])
+can_manage_users = require_permissions(any_of=["user:manage_all", "user:manage_platform", "user:manage_client"])
+
+# Role Management
+can_read_roles = require_permissions(any_of=["role:read_all", "role:read_platform", "role:read_client"])
+can_manage_roles = require_permissions(any_of=["role:manage_all", "role:manage_platform", "role:manage_client"])
+
+# Group Management
+can_read_groups = require_permissions(any_of=["group:read_all", "group:read_platform", "group:read_client"])
+can_manage_groups = require_permissions(any_of=["group:manage_all", "group:manage_platform", "group:manage_client"])
+
+# Client Account Management  
+can_read_client_accounts = require_permissions(any_of=["client:read_all", "client:read_platform"])
+can_manage_client_accounts = require_permissions(any_of=["client:manage_all", "client:manage_platform"])
+
+# Permission Management
+can_read_permissions = require_permissions(any_of=["permission:read_all", "permission:read_platform"])
+can_manage_permissions = require_permissions(any_of=["permission:manage_all", "permission:manage_platform"])
 
 
-# --- Scope-Based Admin Dependencies ---
-
-def require_scope_admin(scope: str):
-    """
-    Dependency factory for scope-specific admin access.
-    
-    Usage:
-        @router.post("/roles")
-        async def create_role(
-            role_data: RoleCreateSchema,
-            admin_user: UserModel = Depends(require_scope_admin("client"))
-        ):
-            # admin_user is guaranteed to be admin in the requested scope
-    """
-    async def _require_scope_admin(
-        current_user: UserModel = Depends(get_current_user)
-    ) -> UserModel:
-        from .models.role_model import RoleScope
-        
-        if scope == "system":
-            if not user_has_role(current_user, "super_admin"):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Only super admins can perform this action"
-                )
-        elif scope == "platform":
-            platform_admin_roles = [
-                role for role in (current_user.roles or [])
-                if (role.name == "admin" and role.scope == RoleScope.PLATFORM)
-            ]
-            is_super_admin = user_has_role(current_user, "super_admin")
-            if not platform_admin_roles and not is_super_admin:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Only platform admins can perform this action"
-                )
-        elif scope == "client":
-            if not current_user.client_account:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Client account required for this action"
-                )
-            
-            client_admin_roles = [
-                role for role in (current_user.roles or [])
-                if (role.name == "admin" and 
-                    role.scope == RoleScope.CLIENT and 
-                    role.scope_id == str(current_user.client_account.id))
-            ]
-            is_super_admin = user_has_role(current_user, "super_admin")
-            if not client_admin_roles and not is_super_admin:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Only client admins can perform this action"
-                )
-        
-        return current_user
-    return _require_scope_admin
+# --- Enhanced Commonly Used Dependencies ---
 
 
 def require_admin_or_permission(permission_name: str):
     """
     Dependency that requires EITHER admin role OR specific permission.
-    This is useful for endpoints that can be accessed by admins OR users with specific permissions.
+    
+    DEPRECATED: Use require_permissions() or role-based dependencies instead.
+    This function is kept for backwards compatibility.
     
     Usage:
         @router.get("/users")
@@ -539,13 +560,13 @@ def require_admin_or_permission(permission_name: str):
     async def _require_admin_or_permission(
         current_user: UserModel = Depends(get_current_user)
     ) -> UserModel:
-        # Check if user is any kind of admin
+        # Check if user is any kind of admin first
         is_admin = user_has_any_role(current_user, ["super_admin", "admin", "client_admin"])
         
         if is_admin:
             return current_user
         
-        # Check if user has the specific permission
+        # Use the unified permission system for permission checking
         user_permissions = await user_service.get_user_effective_permissions(current_user.id)
         if permission_name in user_permissions:
             return current_user
@@ -556,13 +577,6 @@ def require_admin_or_permission(permission_name: str):
         )
     return _require_admin_or_permission
 
-
-# --- Enhanced Commonly Used Dependencies ---
-
-# Scope-specific admin access
-require_system_admin = require_scope_admin("system")
-require_platform_admin_scope = require_scope_admin("platform")
-require_client_admin_scope = require_scope_admin("client")
 
 # FIXED: More restrictive dependencies for system management
 require_user_read_access = require_admin_or_permission("user:read_client")  # Admins or users with user:read_client can read user lists
@@ -576,87 +590,6 @@ require_role_manage_access = require_admin_or_permission("role:manage_client")
 require_group_manage_access = require_admin_or_permission("group:manage_client")
 require_permission_manage_access = require_admin_or_permission("permission:manage_client")
 
-# Self-access dependencies (users can access their own data)
-def require_self_access():
-    """Allows users to access only their own data."""
-    async def _require_self_access(
-        current_user: UserModel = Depends(get_current_user)
-    ) -> UserModel:
-        # This is for endpoints like /users/me where users access their own data
-        return current_user
-    return _require_self_access
-
-# Client-scoped read access (for within-client operations)  
-def require_client_scoped_read():
-    """Users can read data within their own client scope."""
-    async def _require_client_scoped_read(
-        current_user: UserModel = Depends(get_current_user)
-    ) -> UserModel:
-        # Check if user is admin (can read cross-client) or has client account
-        is_admin = user_has_any_role(current_user, ["super_admin", "admin", "client_admin"])
-        
-        if is_admin:
-            return current_user
-            
-        if not current_user.client_account:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="No client account associated with user"
-            )
-            
-        return current_user
-    return _require_client_scoped_read
-
-# Scoped permission dependencies for better granularity
-def require_user_read_self():
-    """Users can read their own user data only."""
-    async def _require_user_read_self(
-        current_user: UserModel = Depends(get_current_user)
-    ) -> UserModel:
-        # Any authenticated user can read their own data
-        return current_user
-    return _require_user_read_self
-
-def require_user_read_client_scope():
-    """Users can read users within their client scope."""
-    async def _require_user_read_client(
-        current_user: UserModel = Depends(get_current_user)
-    ) -> UserModel:
-        # Admin OR user with user:read permission within client scope
-        is_admin = user_has_any_role(current_user, ["super_admin", "admin", "client_admin"])
-        
-        if is_admin:
-            return current_user
-            
-        # Check for scoped permission
-        user_permissions = await user_service.get_user_effective_permissions(current_user.id)
-        if "user:read_client" in user_permissions:
-            return current_user
-            
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Required: admin role or 'user:read_client' permission"
-        )
-    return _require_user_read_client
-
-def require_group_read_client_scope():
-    """Users can read groups within their client scope."""
-    async def _require_group_read_client(
-        current_user: UserModel = Depends(get_current_user)
-    ) -> UserModel:
-        # Admin OR user with group:read permission within client scope
-        is_admin = user_has_any_role(current_user, ["super_admin", "admin", "client_admin"])
-        
-        if is_admin:
-            return current_user
-            
-        # Check for scoped permission
-        user_permissions = await user_service.get_user_effective_permissions(current_user.id)
-        if "group:read_client" in user_permissions:
-            return current_user
-            
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Required: admin role or 'group:read_client' permission"
-        )
-    return _require_group_read_client 
+# --- DEPRECATED DEPENDENCIES (Migrated to require_permissions) ---
+# These dependencies remain for backwards compatibility during migration
+# TODO: Remove after all routes have been migrated to new pattern 

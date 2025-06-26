@@ -9,10 +9,10 @@ from ..schemas.permission_schema import (
     AvailablePermissionsResponseSchema
 )
 from ..models.scopes import PermissionScope
-from ..dependencies import has_permission, get_current_user
+from ..dependencies import has_permission
 from ..models.user_model import UserModel
 from ..dependencies import (
-    user_has_role, require_super_admin, require_admin,
+    user_has_role, require_admin,
     require_permission_manage_access, require_permission_read_access
 )
 

@@ -140,17 +140,45 @@ class UserService:
         self, 
         skip: int = 0, 
         limit: int = 100, 
-        client_account_id: Optional[PydanticObjectId] = None
+        client_account_id: Optional[PydanticObjectId] = None,
+        current_user: Optional[UserModel] = None
     ) -> List[UserModel]:
         """
         Retrieves a list of users with pagination using Beanie ODM.
-        If client_account_id is provided, filters users by that account.
+        Automatically applies scoping based on current_user permissions if provided.
         """
-        if client_account_id:
-            # Filter by client account
-            query = UserModel.find(UserModel.client_account.id == client_account_id, fetch_links=True)
+        # If current_user is provided, apply automatic scoping
+        if current_user:
+            user_permissions = await self.get_user_effective_permissions(current_user.id)
+            from ..dependencies import user_has_role
+            
+            is_super_admin = user_has_role(current_user, "super_admin")
+            has_manage_all = "user:manage_all" in user_permissions
+            has_read_all = "user:read_all" in user_permissions
+            
+            if is_super_admin or has_manage_all or has_read_all:
+                # Super admin or platform admin with system-wide access sees all users
+                query = UserModel.find(fetch_links=True)
+            elif current_user.client_account:
+                # Check if user is from a platform root account
+                user_client = current_user.client_account
+                if (hasattr(user_client, 'is_platform_root') and 
+                    user_client.is_platform_root and 
+                    ("user:read_platform" in user_permissions or "support:cross_client" in user_permissions)):
+                    # Platform staff with cross-client permissions see all users
+                    query = UserModel.find(fetch_links=True)
+                else:
+                    # Regular client admins see only users within their client account
+                    query = UserModel.find(UserModel.client_account.id == current_user.client_account.id, fetch_links=True)
+            else:
+                # User with no client account - should only see themselves in most cases
+                query = UserModel.find(UserModel.id == current_user.id, fetch_links=True)
         else:
-            query = UserModel.find(fetch_links=True)
+            # Legacy mode: use explicit client_account_id filter
+            if client_account_id:
+                query = UserModel.find(UserModel.client_account.id == client_account_id, fetch_links=True)
+            else:
+                query = UserModel.find(fetch_links=True)
             
         return await query.skip(skip).limit(limit).to_list()
 
@@ -162,11 +190,28 @@ class UserService:
     ) -> Optional[UserModel]:
         """
         Updates a user's information using Beanie ODM.
+        Automatically applies scoping - users can only update users they have access to.
         If the updater is a main_client, validates that assigned roles are assignable.
         """
         user = await self.get_user_by_id(user_id)
         if not user:
             return None
+            
+        # Apply scoping - check if current_user can access this user
+        user_permissions = await self.get_user_effective_permissions(current_user.id)
+        from ..dependencies import user_has_role
+        
+        is_super_admin = user_has_role(current_user, "super_admin")
+        
+        # If not super admin, enforce client account scoping
+        if not is_super_admin:
+            if user.client_account and current_user.client_account:
+                if str(user.client_account.id) != str(current_user.client_account.id):
+                    # User is trying to update someone from a different client account
+                    return None
+            elif user.client_account or current_user.client_account:
+                # One has client account, other doesn't - not allowed
+                return None
             
         update_data = user_data.model_dump(exclude_unset=True)
         
@@ -277,16 +322,35 @@ class UserService:
             user.update_timestamp()
             await user.save()
 
-    async def delete_user(self, user_id: PydanticObjectId) -> bool:
+    async def delete_user(self, user_id: PydanticObjectId, current_user: Optional[UserModel] = None) -> bool:
         """
         Deletes a user from the database using Beanie ODM.
-        Returns True if deleted, False if user not found.
+        Applies scoping if current_user is provided.
+        Returns True if deleted, False if user not found or access denied.
         """
         user = await self.get_user_by_id(user_id)
-        if user:
-            await user.delete()
-            return True
-        return False
+        if not user:
+            return False
+            
+        # Apply scoping if current_user is provided
+        if current_user:
+            user_permissions = await self.get_user_effective_permissions(current_user.id)
+            from ..dependencies import user_has_role
+            
+            is_super_admin = user_has_role(current_user, "super_admin")
+            
+            # If not super admin, enforce client account scoping
+            if not is_super_admin:
+                if user.client_account and current_user.client_account:
+                    if str(user.client_account.id) != str(current_user.client_account.id):
+                        # User is trying to delete someone from a different client account
+                        return False
+                elif user.client_account or current_user.client_account:
+                    # One has client account, other doesn't - not allowed
+                    return False
+        
+        await user.delete()
+        return True
 
     async def bulk_create_users(
         self, 

@@ -127,6 +127,10 @@ ESSENTIAL_SYSTEM_PERMISSIONS = [
     # Client-scoped permissions 
     PermissionCreateSchema(name="user:read_client", display_name="Read Client Users", description="Read users in same client (auth platform)", scope="system"),
     PermissionCreateSchema(name="user:manage_client", display_name="Manage Client Users", description="CRUD users in same client (auth platform)", scope="system"),
+    
+    # Platform-scoped permissions (cross-client within platform)
+    PermissionCreateSchema(name="user:read_platform", display_name="Read Platform Users", description="Read users across platform clients (auth platform)", scope="system"),
+    PermissionCreateSchema(name="user:manage_platform", display_name="Manage Platform Users", description="CRUD users across platform clients (auth platform)", scope="system"),
     PermissionCreateSchema(name="role:read_client", display_name="Read Client Roles", description="Read roles in same client (auth platform)", scope="system"),
     PermissionCreateSchema(name="role:manage_client", display_name="Manage Client Roles", description="CRUD roles in same client (auth platform)", scope="system"),
     PermissionCreateSchema(name="group:read_client", display_name="Read Client Groups", description="Read groups in same client (auth platform)", scope="system"),
@@ -381,10 +385,12 @@ async def ensure_essential_roles_exist():
         if perm:
             basic_permission_objects.append(perm)
 
-    # Get CLIENT_ADMIN_ROLE permission objects
+    # Get CLIENT_ADMIN_ROLE permission objects (using hierarchical permissions)
     client_admin_permission_names = [
-        "user:manage_client", "user:add_member",
-        "group:manage_client", "group:manage_members",
+        "user:manage_client",  # Hierarchical: includes user:read_client and user:read_self
+        "user:add_member",
+        "group:manage_client",  # Hierarchical: includes group:read_client
+        "group:manage_members",
         "role:read_client", "permission:read_client", "client:read_own"
     ]
     client_admin_permission_objects = []

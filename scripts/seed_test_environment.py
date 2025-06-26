@@ -95,6 +95,10 @@ ESSENTIAL_PERMISSIONS = [
     # === CLIENT-SCOPED PERMISSIONS ===
     PermissionCreateSchema(name="user:read_client", display_name="Read Client Users", description="Read users in same client (auth platform)", scope="system"),
     PermissionCreateSchema(name="user:manage_client", display_name="Manage Client Users", description="CRUD users in same client (auth platform)", scope="system"),
+    
+    # === PLATFORM-SCOPED PERMISSIONS (cross-client within platform) ===
+    PermissionCreateSchema(name="user:read_platform", display_name="Read Platform Users", description="Read users across platform clients (auth platform)", scope="system"),
+    PermissionCreateSchema(name="user:manage_platform", display_name="Manage Platform Users", description="CRUD users across platform clients (auth platform)", scope="system"),
     PermissionCreateSchema(name="role:read_client", display_name="Read Client Roles", description="Read roles in same client (auth platform)", scope="system"),
     PermissionCreateSchema(name="role:manage_client", display_name="Manage Client Roles", description="CRUD roles in same client (auth platform)", scope="system"),
     PermissionCreateSchema(name="group:read_client", display_name="Read Client Groups", description="Read groups in same client (auth platform)", scope="system"),
@@ -350,14 +354,16 @@ async def seed_comprehensive_scenario():
     # Create additional client-scoped roles for testing
     print("Creating client-scoped test roles...")
     
-    # Create client admin role for test client
+    # Create client admin role for test client (using hierarchical permissions)
     client_admin_role = await role_service.create_role(
         role_data=RoleCreateSchema(
             name="admin",
             display_name="Client Administrator",
             description="Administrative role for client account - manages users, groups, and roles within client scope",
-            permissions=["user:manage_client", "user:add_member", 
-                        "group:manage_client", "group:manage_members",
+            permissions=["user:manage_client",  # Includes user:read_client and user:read_self
+                        "user:add_member", 
+                        "group:manage_client",  # Includes group:read_client
+                        "group:manage_members",
                         "role:read_client", "permission:read_client", "client:read_own"],
             scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
@@ -414,7 +420,7 @@ async def seed_comprehensive_scenario():
             name="admin",
             display_name="Client Administrator",
             description="Administrative role for ACME Corporation - manages users, groups, and roles within client scope",
-            permissions=["user:manage_client", "user:add_member", 
+            permissions=["user:read_client", "user:manage_client", "user:add_member", 
                         "group:manage_client", "group:manage_members",
                         "role:read_client", "permission:read_client", "client:read_own"],
             scope=RoleScope.CLIENT,
@@ -456,7 +462,7 @@ async def seed_comprehensive_scenario():
             name="admin",
             display_name="Client Administrator",
             description="Administrative role for Tech Startup Inc - manages users, groups, and roles within client scope",
-            permissions=["user:manage_client", "user:add_member",
+            permissions=["user:read_client", "user:manage_client", "user:add_member",
                         "group:manage_client", "group:manage_members",
                         "role:read_client", "permission:read_client", "client:read_own"],
             scope=RoleScope.CLIENT,
@@ -614,7 +620,7 @@ async def seed_hierarchical_scenario():
             name="admin",
             display_name="Client Administrator",
             description="Administrative role for Hierarchical ACME Properties - manages users and groups within client scope",
-            permissions=["user:manage_client", "user:add_member",
+            permissions=["user:read_client", "user:manage_client", "user:add_member",
                         "group:manage_client", "group:manage_members", "client:read_own"],
             scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
@@ -704,13 +710,15 @@ async def seed_propertyhub_scenario():
     # Create PropertyHub platform roles for the platform
     print("Creating PropertyHub platform roles...")
     
-    # Platform admin role with permission names
+    # Platform admin role with permission names (using hierarchical top-level permissions)
     platform_admin_permission_names = [
-        "client:create", "client:read_platform", "client:manage_platform", 
-        "client:create_sub", "client:read_created", "client:onboard",
+        "client:manage_platform",  # Includes client:read_platform and client:read_own
+        "client:create", "client:create_sub", "client:onboard",
         "analytics:view_platform", "support:cross_client",
-        "user:manage_all", "user:add_member",
-        "group:manage_all", "group:read_client", "group:manage_members",
+        "user:manage_all",  # Includes all user read permissions automatically
+        "user:add_member",
+        "group:manage_all",  # Includes all group read permissions automatically 
+        "group:manage_members",
         "role:read_all", "permission:read_all"
     ]
     
@@ -727,10 +735,11 @@ async def seed_propertyhub_scenario():
         scope_id=str(propertyhub_platform.id)
     )
 
-    # Platform support role with permission names
+    # Platform support role with permission names (using hierarchical permissions)
     platform_support_permission_names = [
-        "client:read_own", "client:read_platform", 
-        "user:read_client", "group:read_client",
+        "client:read_platform",  # Includes client:read_own
+        "user:read_platform",   # Includes user:read_client and user:read_self
+        "group:read_client",
         "support:cross_client"
     ]
     
@@ -752,8 +761,8 @@ async def seed_propertyhub_scenario():
             name="sales",
             display_name="Platform Sales",
             description="PropertyHub sales team",
-            permissions=["client:create", "client:read_platform", "client:read_created",
-                        "user:read_client"],  # Use permission names directly
+            permissions=["client:create", "client:read_platform", 
+                        "user:read_platform"],  # Hierarchical: includes user:read_client and user:read_self
             scope=RoleScope.PLATFORM,
             is_assignable_by_main_client=True
         ),
@@ -824,7 +833,7 @@ async def seed_propertyhub_scenario():
             name="admin",
             display_name="Real Estate Company Admin",
             description="Real estate company administrator",
-            permissions=["user:manage_client", "user:add_member",
+            permissions=["user:read_client", "user:manage_client", "user:add_member",
                         "group:manage_client", "group:manage_members",
                         "client:read_own"],
             scope=RoleScope.CLIENT,
@@ -853,7 +862,7 @@ async def seed_propertyhub_scenario():
             name="admin",
             display_name="Real Estate Company Admin",
             description="Real estate company administrator",
-            permissions=["user:manage_client", "user:add_member",
+            permissions=["user:read_client", "user:manage_client", "user:add_member",
                         "group:manage_client", "group:manage_members",
                         "client:read_own"],
             scope=RoleScope.CLIENT,
@@ -882,7 +891,7 @@ async def seed_propertyhub_scenario():
             name="admin",
             display_name="Real Estate Company Admin",
             description="Real estate company administrator",
-            permissions=["user:manage_client", "user:add_member",
+            permissions=["user:read_client", "user:manage_client", "user:add_member",
                         "group:manage_client", "group:manage_members",
                         "client:read_own"],
             scope=RoleScope.CLIENT,

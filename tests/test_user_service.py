@@ -179,14 +179,21 @@ class TestUserService:
         mock_user.id = user_id
         mock_user.save = AsyncMock()
         mock_user.update_timestamp = MagicMock()
+        mock_user.client_account = None  # Set to None for scoping logic
         
         current_user = MagicMock()
         current_user.is_main_client = False
+        current_user.id = ObjectId()
+        current_user.client_account = None  # Set to None for scoping logic
         
         update_data = UserUpdateSchema(first_name="Updated Name")
         
-        with patch('api.services.user_service.UserModel') as mock_user_model:
+        with patch('api.services.user_service.UserModel') as mock_user_model, \
+             patch('api.services.user_service.UserService.get_user_effective_permissions', new_callable=AsyncMock) as mock_get_perms, \
+             patch('api.dependencies.user_has_role', return_value=True) as mock_has_role:
+            
             mock_user_model.get = AsyncMock(return_value=mock_user)
+            mock_get_perms.return_value = set()
             
             result = await user_service.update_user(user_id, update_data, current_user)
         

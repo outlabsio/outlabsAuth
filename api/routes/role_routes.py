@@ -2,7 +2,6 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from beanie import PydanticObjectId
 
-from ..dependencies import get_current_user
 from ..models.user_model import UserModel
 from ..models.role_model import RoleScope
 from ..schemas.role_schema import (
@@ -13,7 +12,7 @@ from ..schemas.role_schema import (
 )
 from ..services.role_service import role_service
 from ..dependencies import (
-    user_has_role, require_super_admin, require_admin,
+    user_has_role, require_admin,
     require_role_manage_access, require_user_read_access
 )
 

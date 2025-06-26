@@ -71,13 +71,18 @@ async def get_all_client_accounts(
     - Platform admins with read_created: See only accounts they created
     - Regular users: See only their own account
     """
-    # Check if user has client read permissions
+    # Check if user has client read permissions using hierarchical logic
     user_permissions = await user_service.get_user_effective_permissions(current_user.id)
     
-    # Check for any client read permissions (all, platform, or own)
-    has_client_read = any(perm in user_permissions for perm in [
-        "client:read_all", "client:read_platform", "client:read_own"
-    ])
+    # Import hierarchical checking function
+    from ..services.permission_service import check_hierarchical_permission
+    
+    # Check for any client read permissions using hierarchical logic
+    has_client_read = any(
+        check_hierarchical_permission(user_permissions, perm) for perm in [
+            "client:read_all", "client:read_platform", "client:read_own"
+        ]
+    )
     
     if not has_client_read:
         raise HTTPException(
@@ -87,13 +92,14 @@ async def get_all_client_accounts(
     
     user_client_id = str(current_user.client_account.id) if current_user.client_account else None
     
-    # Check if user is super admin
-    is_super_admin = "client:create" in user_permissions and "client:manage_all" in user_permissions
+    # Check if user is super admin using hierarchical logic
+    is_super_admin = (check_hierarchical_permission(user_permissions, "client:create") and 
+                     check_hierarchical_permission(user_permissions, "client:manage_all"))
     
-    if is_super_admin or "client:read_all" in user_permissions:
+    if is_super_admin or check_hierarchical_permission(user_permissions, "client:read_all"):
         # Super admin or system-level access sees everything
         accounts = await client_account_service.get_client_accounts(skip=skip, limit=limit)
-    elif "client:read_platform" in user_permissions and user_client_id:
+    elif check_hierarchical_permission(user_permissions, "client:read_platform") and user_client_id:
         # Platform admin with platform scope
         user_client = await client_account_service.get_client_account_by_id(PydanticObjectId(user_client_id))
         if user_client:
@@ -109,7 +115,7 @@ async def get_all_client_accounts(
                 accounts = []
         else:
             accounts = []
-    elif "client:read_created" in user_permissions and user_client_id:
+    elif check_hierarchical_permission(user_permissions, "client:read_created") and user_client_id:
         # Platform admin with created scope
         accounts = await client_account_service.get_client_accounts_created_by(
             user_client_id, skip=skip, limit=limit

@@ -318,4 +318,82 @@ class PermissionService:
         else:
             return await PermissionModel.find().skip(skip).limit(limit).to_list()
 
+def check_hierarchical_permission(user_permissions: set, required_permission: str) -> bool:
+    """
+    Check if user has the required permission using hierarchical logic.
+    
+    Hierarchy Rules:
+    1. Manage permissions include read permissions
+    2. Broader scopes include narrower scopes
+    
+    Permission Hierarchy:
+    - user:read_self < user:read_client < user:read_platform < user:read_all
+    - user:manage_client includes user:read_client + user:read_self
+    - user:manage_platform includes user:read_platform + user:read_client + user:read_self
+    - user:manage_all includes all user permissions
+    
+    Args:
+        user_permissions: Set of permission names the user has
+        required_permission: The permission being checked
+        
+    Returns:
+        bool: True if user has permission (directly or through hierarchy)
+    """
+    # Direct permission match
+    if required_permission in user_permissions:
+        return True
+    
+    # Define permission hierarchies
+    permission_hierarchy = {
+        # User permission hierarchy
+        "user:read_self": [],
+        "user:read_client": ["user:read_self"],
+        "user:read_platform": ["user:read_client", "user:read_self"],
+        "user:read_all": ["user:read_platform", "user:read_client", "user:read_self"],
+        
+        # User management hierarchy (manage includes read)
+        "user:manage_client": ["user:read_client", "user:read_self"],
+        "user:manage_platform": ["user:read_platform", "user:read_client", "user:read_self"],
+        "user:manage_all": ["user:read_all", "user:read_platform", "user:read_client", "user:read_self"],
+        
+        # Role permission hierarchy
+        "role:read_client": [],
+        "role:read_platform": ["role:read_client"],
+        "role:read_all": ["role:read_platform", "role:read_client"],
+        "role:manage_client": ["role:read_client"],
+        "role:manage_platform": ["role:read_platform", "role:read_client"],
+        "role:manage_all": ["role:read_all", "role:read_platform", "role:read_client"],
+        
+        # Group permission hierarchy
+        "group:read_client": [],
+        "group:read_platform": ["group:read_client"],
+        "group:read_all": ["group:read_platform", "group:read_client"],
+        "group:manage_client": ["group:read_client"],
+        "group:manage_platform": ["group:read_platform", "group:read_client"],
+        "group:manage_all": ["group:read_all", "group:read_platform", "group:read_client"],
+        
+        # Permission permission hierarchy
+        "permission:read_client": [],
+        "permission:read_platform": ["permission:read_client"],
+        "permission:read_all": ["permission:read_platform", "permission:read_client"],
+        "permission:manage_client": ["permission:read_client"],
+        "permission:manage_platform": ["permission:read_platform", "permission:read_client"],
+        "permission:manage_all": ["permission:read_all", "permission:read_platform", "permission:read_client"],
+        
+        # Client permission hierarchy
+        "client:read_own": [],
+        "client:read_platform": ["client:read_own"],
+        "client:read_all": ["client:read_platform", "client:read_own"],
+        "client:manage_platform": ["client:read_platform", "client:read_own"],
+        "client:manage_all": ["client:read_all", "client:read_platform", "client:read_own"],
+    }
+    
+    # Check if user has any higher-level permission that includes the required one
+    for user_perm in user_permissions:
+        included_permissions = permission_hierarchy.get(user_perm, [])
+        if required_permission in included_permissions:
+            return True
+    
+    return False
+
 permission_service = PermissionService() 
