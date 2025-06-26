@@ -385,7 +385,7 @@ def check_hierarchical_permission(user_permissions: set, required_permission: st
         "client:read_platform": ["client:read_own"],
         "client:read_all": ["client:read_platform", "client:read_own"],
         "client:manage_platform": ["client:read_platform", "client:read_own"],
-        "client:manage_all": ["client:read_all", "client:read_platform", "client:read_own"],
+        "client:manage_all": ["client:manage_platform", "client:read_all", "client:read_platform", "client:read_own"],
     }
     
     # Check if user has any higher-level permission that includes the required one
