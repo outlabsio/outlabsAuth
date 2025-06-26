@@ -423,6 +423,19 @@ async def seed_comprehensive_scenario():
         scope_id=str(acme_corp.id)
     )
     
+    acme_manager_role = await role_service.create_role(
+        role_data=RoleCreateSchema(
+            name="manager",
+            display_name="Manager",
+            description="Manager role for ACME Corporation with limited client-scoped permissions",
+            permissions=["user:read_client", "group:read_client", "group:manage_members", "client:read_own"],
+            scope=RoleScope.CLIENT,
+            is_assignable_by_main_client=True
+        ),
+        current_user_id="system",
+        scope_id=str(acme_corp.id)
+    )
+    
     acme_employee_role = await role_service.create_role(
         role_data=RoleCreateSchema(
             name="employee",
@@ -473,7 +486,7 @@ async def seed_comprehensive_scenario():
     ))
     await user_service.create_user(UserCreateSchema(
         email="manager@acme.com", password="manager123", first_name="Bob", last_name="Manager",
-        status=UserStatus.ACTIVE, is_main_client=False, roles=[str(manager_role.id)], client_account_id=str(test_client.id)
+        status=UserStatus.ACTIVE, is_main_client=False, roles=[str(acme_manager_role.id)], client_account_id=str(acme_corp.id)
     ))
     await user_service.create_user(UserCreateSchema(
         email="admin@techstartup.com", password="admin123", first_name="Charlie", last_name="Founder",

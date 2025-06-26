@@ -565,7 +565,7 @@ require_platform_admin_scope = require_scope_admin("platform")
 require_client_admin_scope = require_scope_admin("client")
 
 # FIXED: More restrictive dependencies for system management
-require_user_read_access = require_admin_or_permission("user:manage_client")  # Admins or users with user:manage_client can read user lists
+require_user_read_access = require_admin_or_permission("user:read_client")  # Admins or users with user:read_client can read user lists
 require_user_manage_access = require_admin_or_permission("user:manage")
 require_role_read_access = require_admin  # Only admins can read role lists  
 require_group_read_access = require_admin_or_permission("group:manage_client")  # Admins or users with group:manage_client can read groups
