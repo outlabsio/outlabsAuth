@@ -61,10 +61,12 @@ async def get_groups(
     """
     Retrieve groups with optional filtering by scope.
     """
-    # Apply client account scoping for non-super admins
+    # Apply client account scoping for non-super admins and non-platform admins
     is_super_admin = user_has_role(current_user, "super_admin")
-    if not is_super_admin and current_user.client_account and not scope_id:
-        # For client admins, filter to their client account if no specific scope_id is provided
+    is_platform_admin = any(role.scope.value == "platform" for role in current_user.roles if hasattr(role, 'scope'))
+    
+    if not is_super_admin and not is_platform_admin and current_user.client_account and not scope_id:
+        # For client admins (not platform admins), filter to their client account if no specific scope_id is provided
         scope = GroupScope.CLIENT
         scope_id = str(current_user.client_account.id)
     
@@ -75,8 +77,8 @@ async def get_groups(
         scope_id=scope_id
     )
     
-    # Apply additional client account filtering on the results for non-super admins
-    if not is_super_admin and current_user.client_account:
+    # Apply additional client account filtering on the results for non-super admins and non-platform admins
+    if not is_super_admin and not is_platform_admin and current_user.client_account:
         filtered_groups = []
         user_client_id = str(current_user.client_account.id)
         for group in groups:

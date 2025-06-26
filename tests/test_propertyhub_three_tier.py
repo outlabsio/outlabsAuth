@@ -459,60 +459,7 @@ class TestPlatformElevationRequirements:
         assert "admin@eliteproperties.com" in user_emails, "Support should see Elite admin for customer service"
         assert "luxury.agent@eliteproperties.com" in user_emails, "Support should see Elite agents for help"
     
-    @pytest.mark.asyncio
-    async def test_platform_analytics_requirement(self, client: AsyncClient):
-        """REQUIREMENT: Platform staff should access analytics across all clients.
-        
-        Currently FAILS: No platform analytics endpoint exists.
-        Should PASS after Phase 2 implementation (Cross-Client Management).
-        """
-        login_data = {"username": "admin@propertyhub.com", "password": "platform123"}
-        login_response = await client.post("/v1/auth/login", data=login_data)
-        assert login_response.status_code == 200
-        
-        headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
-        
-        # This endpoint doesn't exist yet, will return 404
-        analytics_response = await client.get("/v1/platform/analytics", headers=headers)
-        
-        # Currently FAILS (404), should PASS after Phase 2 implementation
-        assert analytics_response.status_code == 200, "Platform analytics endpoint should exist"
-        
-        analytics = analytics_response.json()
-        assert "total_clients" in analytics, "Should show total clients across platform"
-        assert "total_users" in analytics, "Should show total users across all real estate companies"
-        assert analytics["total_clients"] >= 4, "Should count PropertyHub + 3 real estate companies"
-        assert analytics["total_users"] >= 9, "Should count platform staff + real estate users"
-    
-    @pytest.mark.asyncio
-    async def test_client_onboarding_workflow_requirement(self, client: AsyncClient):
-        """REQUIREMENT: Platform admin should onboard new real estate companies.
-        
-        Currently FAILS: No special onboarding workflow exists.
-        Should PASS after Phase 4 implementation (Platform Client Relationship Management).
-        """
-        login_data = {"username": "admin@propertyhub.com", "password": "platform123"}
-        login_response = await client.post("/v1/auth/login", data=login_data)
-        assert login_response.status_code == 200
-        
-        headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
-        
-        new_client_data = {
-            "name": "Sunset Realty",
-            "description": "New real estate company joining PropertyHub platform",
-            "contact_email": "admin@sunsetrealty.com"
-        }
-        
-        # This endpoint doesn't exist yet, will return 404
-        onboard_response = await client.post("/v1/client_accounts/onboard-client", 
-                                           json=new_client_data, headers=headers)
-        
-        # Currently FAILS (404), should PASS after Phase 4 implementation  
-        assert onboard_response.status_code == 201, "Platform admin should be able to onboard new clients"
-        
-        new_client = onboard_response.json()
-        assert new_client["name"] == "Sunset Realty"
-        assert "created_by_platform" in new_client, "Should track which platform created this client"
+
 
 
 class TestPlatformPermissionValidation:

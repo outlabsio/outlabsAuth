@@ -568,7 +568,7 @@ require_client_admin_scope = require_scope_admin("client")
 require_user_read_access = require_admin_or_permission("user:read_client")  # Admins or users with user:read_client can read user lists
 require_user_manage_access = require_admin_or_permission("user:manage")
 require_role_read_access = require_admin  # Only admins can read role lists  
-require_group_read_access = require_admin_or_permission("group:manage_client")  # Admins or users with group:manage_client can read groups
+require_group_read_access = require_admin_or_permission("group:read_client")  # Admins or users with group:read_client can read groups
 require_permission_read_access = require_admin  # Only admins can read permission lists
 
 # Granular management permissions (for specific operations)

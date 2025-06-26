@@ -710,7 +710,7 @@ async def seed_propertyhub_scenario():
         "client:create_sub", "client:read_created", "client:onboard",
         "analytics:view_platform", "support:cross_client",
         "user:manage_all", "user:add_member",
-        "group:manage_all", "group:manage_members",
+        "group:manage_all", "group:read_client", "group:manage_members",
         "role:read_all", "permission:read_all"
     ]
     
@@ -839,7 +839,7 @@ async def seed_propertyhub_scenario():
             name="agent",
             display_name="Real Estate Agent",
             description="Real estate agent or sales person",
-            permissions=["user:read_self", "group:read_own", "client:read_own"],
+            permissions=["user:read_self", "user:read_client", "group:read_own", "group:read_client", "client:read_own"],
             scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
         ),
@@ -868,7 +868,7 @@ async def seed_propertyhub_scenario():
             name="agent",
             display_name="Real Estate Agent",
             description="Real estate agent or sales person",
-            permissions=["user:read_self", "group:read_own", "client:read_own"],
+            permissions=["user:read_self", "user:read_client", "group:read_own", "group:read_client", "client:read_own"],
             scope=RoleScope.CLIENT,
             is_assignable_by_main_client=True
         ),
