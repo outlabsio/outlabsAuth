@@ -82,12 +82,13 @@ class TestDuplicateConstraints:
         """Test that role names must be unique."""
         timestamp = self.get_unique_timestamp()
         
-        # Create first role (using _id field based on schema)
+        # Create first role (using current schema)
         role_data = {
-            "_id": f"test_role_{timestamp}",
-            "name": f"Test Role {timestamp}",
+            "name": f"test_role_{timestamp}",
+            "display_name": f"Test Role {timestamp}",
             "description": "First role",
-            "permissions": ["user:read"]  # Use a valid existing permission
+            "permissions": ["user:read_self"],  # Use a valid existing permission
+            "scope": "system"
         }
         
         response1 = await client.post("/v1/roles/", json=role_data, headers=admin_headers)
@@ -95,10 +96,11 @@ class TestDuplicateConstraints:
         
         # Try to create second role with same name - should fail
         duplicate_role_data = {
-            "_id": f"test_role_{timestamp}_2",
-            "name": f"Test Role {timestamp}",  # Same name
+            "name": f"test_role_{timestamp}",  # Same name
+            "display_name": f"Different Display Name {timestamp}",
             "description": "Second role",
-            "permissions": ["user:read"]
+            "permissions": ["user:read_self"],
+            "scope": "system"
         }
         
         response2 = await client.post("/v1/roles/", json=duplicate_role_data, headers=admin_headers)
@@ -109,23 +111,25 @@ class TestDuplicateConstraints:
         """Test that role IDs must be unique."""
         timestamp = self.get_unique_timestamp()
         
-        # Create first role (using _id field based on schema)
+        # Create first role (using current schema)
         role_data = {
-            "_id": f"test_role_{timestamp}",
-            "name": f"Test Role Name {timestamp}",
+            "name": f"test_role_{timestamp}",
+            "display_name": f"Test Role Name {timestamp}",
             "description": "First role",
-            "permissions": ["user:read"]  # Use a valid existing permission
+            "permissions": ["user:read_self"],  # Use a valid existing permission
+            "scope": "system"
         }
         
         response1 = await client.post("/v1/roles/", json=role_data, headers=admin_headers)
         assert response1.status_code == 201
         
-        # Try to create second role with same ID - should fail
+        # Try to create second role with same name - should fail
         duplicate_role_data = {
-            "_id": f"test_role_{timestamp}",  # Same ID
-            "name": f"Different Role Name {timestamp}",
+            "name": f"test_role_{timestamp}",  # Same name
+            "display_name": f"Different Role Name {timestamp}",
             "description": "Second role",
-            "permissions": ["user:read"]
+            "permissions": ["user:read_self"],
+            "scope": "system"
         }
         
         response2 = await client.post("/v1/roles/", json=duplicate_role_data, headers=admin_headers)
@@ -136,19 +140,23 @@ class TestDuplicateConstraints:
         """Test that permission IDs must be unique."""
         timestamp = self.get_unique_timestamp()
         
-        # Create first permission (using _id field based on schema)
+        # Create first permission (using current schema)
         permission_data = {
-            "_id": f"test:permission:{timestamp}",
-            "description": f"Test Permission {timestamp}"
+            "name": f"test:permission:{timestamp}",
+            "display_name": f"Test Permission {timestamp}",
+            "description": f"Test Permission {timestamp}",
+            "scope": "system"
         }
         
         response1 = await client.post("/v1/permissions/", json=permission_data, headers=admin_headers)
         assert response1.status_code == 201
         
-        # Try to create second permission with same ID - should fail
+        # Try to create second permission with same name - should fail
         duplicate_permission_data = {
-            "_id": f"test:permission:{timestamp}",  # Same ID
-            "description": f"Different Permission Description {timestamp}"
+            "name": f"test:permission:{timestamp}",  # Same name
+            "display_name": f"Different Permission Display Name {timestamp}",
+            "description": f"Different Permission Description {timestamp}",
+            "scope": "system"
         }
         
         response2 = await client.post("/v1/permissions/", json=duplicate_permission_data, headers=admin_headers)
