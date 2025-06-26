@@ -351,34 +351,34 @@ def check_hierarchical_permission(user_permissions: set, required_permission: st
         "user:read_platform": ["user:read_client", "user:read_self"],
         "user:read_all": ["user:read_platform", "user:read_client", "user:read_self"],
         
-        # User management hierarchy (manage includes read)
+        # User management hierarchy (manage includes read + lower manage levels)
         "user:manage_client": ["user:read_client", "user:read_self"],
-        "user:manage_platform": ["user:read_platform", "user:read_client", "user:read_self"],
-        "user:manage_all": ["user:read_all", "user:read_platform", "user:read_client", "user:read_self"],
+        "user:manage_platform": ["user:manage_client", "user:read_platform", "user:read_client", "user:read_self"],
+        "user:manage_all": ["user:manage_platform", "user:manage_client", "user:read_all", "user:read_platform", "user:read_client", "user:read_self"],
         
         # Role permission hierarchy
         "role:read_client": [],
         "role:read_platform": ["role:read_client"],
         "role:read_all": ["role:read_platform", "role:read_client"],
         "role:manage_client": ["role:read_client"],
-        "role:manage_platform": ["role:read_platform", "role:read_client"],
-        "role:manage_all": ["role:read_all", "role:read_platform", "role:read_client"],
+        "role:manage_platform": ["role:manage_client", "role:read_platform", "role:read_client"],
+        "role:manage_all": ["role:manage_platform", "role:manage_client", "role:read_all", "role:read_platform", "role:read_client"],
         
         # Group permission hierarchy
         "group:read_client": [],
         "group:read_platform": ["group:read_client"],
         "group:read_all": ["group:read_platform", "group:read_client"],
         "group:manage_client": ["group:read_client"],
-        "group:manage_platform": ["group:read_platform", "group:read_client"],
-        "group:manage_all": ["group:read_all", "group:read_platform", "group:read_client"],
+        "group:manage_platform": ["group:manage_client", "group:read_platform", "group:read_client"],
+        "group:manage_all": ["group:manage_platform", "group:manage_client", "group:read_all", "group:read_platform", "group:read_client"],
         
         # Permission permission hierarchy
         "permission:read_client": [],
         "permission:read_platform": ["permission:read_client"],
         "permission:read_all": ["permission:read_platform", "permission:read_client"],
         "permission:manage_client": ["permission:read_client"],
-        "permission:manage_platform": ["permission:read_platform", "permission:read_client"],
-        "permission:manage_all": ["permission:read_all", "permission:read_platform", "permission:read_client"],
+        "permission:manage_platform": ["permission:manage_client", "permission:read_platform", "permission:read_client"],
+        "permission:manage_all": ["permission:manage_platform", "permission:manage_client", "permission:read_all", "permission:read_platform", "permission:read_client"],
         
         # Client permission hierarchy
         "client:read_own": [],

@@ -540,22 +540,14 @@ can_read_permissions = require_permissions(any_of=["permission:read_all", "permi
 can_manage_permissions = require_permissions(any_of=["permission:manage_all", "permission:manage_platform"])
 
 
-# --- Enhanced Commonly Used Dependencies ---
-
+# --- DEPRECATED DEPENDENCIES SECTION ---
+# These dependencies are being replaced by the unified hierarchical permission system
+# All routes should migrate to: can_read_*, can_manage_*, etc.
 
 def require_admin_or_permission(permission_name: str):
     """
-    Dependency that requires EITHER admin role OR specific permission.
-    
-    DEPRECATED: Use require_permissions() or role-based dependencies instead.
-    This function is kept for backwards compatibility.
-    
-    Usage:
-        @router.get("/users")
-        async def get_users(
-            user: UserModel = Depends(require_admin_or_permission("user:read"))
-        ):
-            # User either has admin role OR user:read permission
+    DEPRECATED: Use require_permissions() or named dependencies instead.
+    This function is kept for backwards compatibility during migration.
     """
     async def _require_admin_or_permission(
         current_user: UserModel = Depends(get_current_user)
@@ -568,7 +560,9 @@ def require_admin_or_permission(permission_name: str):
         
         # Use the unified permission system for permission checking
         user_permissions = await user_service.get_user_effective_permissions(current_user.id)
-        if permission_name in user_permissions:
+        from .services.permission_service import check_hierarchical_permission
+        
+        if check_hierarchical_permission(user_permissions, permission_name):
             return current_user
         
         raise HTTPException(
@@ -578,18 +572,13 @@ def require_admin_or_permission(permission_name: str):
     return _require_admin_or_permission
 
 
-# FIXED: More restrictive dependencies for system management
-require_user_read_access = require_admin_or_permission("user:read_client")  # Admins or users with user:read_client can read user lists
+# DEPRECATED LEGACY DEPENDENCIES - MIGRATE TO NEW PATTERNS
+# Use the named dependencies instead: can_read_*, can_manage_*, etc.
+require_user_read_access = require_admin_or_permission("user:read_client")
 require_user_manage_access = require_admin_or_permission("user:manage")
-require_role_read_access = require_admin  # Only admins can read role lists  
-require_group_read_access = require_admin_or_permission("group:read_client")  # Admins or users with group:read_client can read groups
-require_permission_read_access = require_admin  # Only admins can read permission lists
-
-# Granular management permissions (for specific operations)
+require_role_read_access = require_admin  
+require_group_read_access = require_admin_or_permission("group:read_client")
+require_permission_read_access = require_admin
 require_role_manage_access = require_admin_or_permission("role:manage_client")
 require_group_manage_access = require_admin_or_permission("group:manage_client")
-require_permission_manage_access = require_admin_or_permission("permission:manage_client")
-
-# --- DEPRECATED DEPENDENCIES (Migrated to require_permissions) ---
-# These dependencies remain for backwards compatibility during migration
-# TODO: Remove after all routes have been migrated to new pattern 
+require_permission_manage_access = require_admin_or_permission("permission:manage_client") 

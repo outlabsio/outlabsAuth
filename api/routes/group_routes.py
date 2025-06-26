@@ -13,7 +13,7 @@ from ..schemas.group_schema import (
 from ..services.group_service import group_service
 from ..dependencies import (
     user_has_role, require_admin,
-    require_group_manage_access, require_group_read_access
+    can_read_groups, can_manage_groups
 )
 
 router = APIRouter(
@@ -24,7 +24,7 @@ router = APIRouter(
 @router.post("/", response_model=GroupResponseSchema, status_code=status.HTTP_201_CREATED)
 async def create_group(
     group_data: GroupCreateSchema,
-    current_user: UserModel = Depends(require_group_manage_access),
+    current_user: UserModel = Depends(can_manage_groups),
     scope_id: Optional[str] = Query(None, description="Platform ID or Client ID for scoped groups")
 ):
     """
@@ -56,7 +56,7 @@ async def get_groups(
     limit: int = Query(100, ge=1, le=1000, description="Number of groups to return"),
     scope: Optional[GroupScope] = Query(None, description="Filter by group scope"),
     scope_id: Optional[str] = Query(None, description="Filter by specific scope ID"),
-    current_user: UserModel = Depends(require_group_read_access)  # Access control only
+    current_user: UserModel = Depends(can_read_groups)  # Access control only
 ):
     """
     Retrieve groups with optional filtering by scope.
@@ -131,7 +131,7 @@ async def get_available_groups(
 @router.get("/{group_id}", response_model=GroupResponseSchema)
 async def get_group_by_id(
     group_id: str,
-    current_user: UserModel = Depends(require_group_read_access)  # Access control only
+    current_user: UserModel = Depends(can_read_groups)  # Access control only
 ):
     """
     Get a single group by ID.
@@ -160,7 +160,7 @@ async def get_group_by_id(
 async def update_group(
     group_id: str,
     group_data: GroupUpdateSchema,
-    _: UserModel = Depends(require_group_manage_access)  # Access control only
+    _: UserModel = Depends(can_manage_groups)  # Access control only
 ):
     """
     Update a group's information.
@@ -178,7 +178,7 @@ async def update_group(
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_group(
     group_id: str,
-    _: UserModel = Depends(require_group_manage_access)  # Access control only
+    _: UserModel = Depends(can_manage_groups)  # Access control only
 ):
     """
     Delete a group. This will remove all users from the group first.
@@ -197,7 +197,7 @@ async def delete_group(
 async def add_users_to_group(
     group_id: str,
     membership_data: GroupMembershipSchema,
-    _: UserModel = Depends(require_group_manage_access)  # Access control only
+    _: UserModel = Depends(can_manage_groups)  # Access control only
 ):
     """
     Add users to a group.
@@ -216,7 +216,7 @@ async def add_users_to_group(
 async def remove_users_from_group(
     group_id: str,
     membership_data: GroupMembershipSchema,
-    _: UserModel = Depends(require_group_manage_access)  # Access control only
+    _: UserModel = Depends(can_manage_groups)  # Access control only
 ):
     """
     Remove users from a group.
@@ -234,7 +234,7 @@ async def remove_users_from_group(
 @router.get("/{group_id}/members", response_model=GroupMembersResponseSchema)
 async def get_group_members(
     group_id: str,
-    _: UserModel = Depends(require_group_read_access)  # Access control only
+    _: UserModel = Depends(can_read_groups)  # Access control only
 ):
     """
     Get all members of a group.
@@ -272,7 +272,7 @@ async def get_group_members(
 @router.get("/users/{user_id}/groups", response_model=UserGroupsResponseSchema)
 async def get_user_groups(
     user_id: str,
-    _: UserModel = Depends(require_group_read_access)  # Access control only
+    _: UserModel = Depends(can_read_groups)  # Access control only
 ):
     """
     Get all groups that a user belongs to, along with their effective permissions.

@@ -4,7 +4,7 @@ from beanie import PydanticObjectId
 
 from ..services.client_account_service import client_account_service
 from ..schemas.client_account_schema import ClientAccountCreateSchema, ClientAccountUpdateSchema, ClientAccountResponseSchema
-from ..dependencies import has_permission, valid_account_id, get_current_user, has_hierarchical_client_access
+from ..dependencies import valid_account_id, get_current_user, has_hierarchical_client_access, can_read_client_accounts, can_manage_client_accounts
 from ..services.group_service import group_service
 from ..services.user_service import user_service
 
@@ -14,7 +14,7 @@ router = APIRouter(
     # Removed global permission dependency - handle per endpoint instead
 )
 
-@router.post("/", status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("client:create"))], responses={
+@router.post("/", status_code=status.HTTP_201_CREATED, dependencies=[Depends(can_manage_client_accounts)], responses={
     201: {"model": ClientAccountResponseSchema},
     409: {"description": "Client account with this name already exists"}
 })
@@ -26,7 +26,7 @@ async def create_client_account(
     # Use the new Pydantic v2 method that automatically handles ObjectId serialization
     return ClientAccountResponseSchema.model_validate(new_account, from_attributes=True)
 
-@router.post("/sub-clients", status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("client:create_sub"))], responses={
+@router.post("/sub-clients", status_code=status.HTTP_201_CREATED, dependencies=[Depends(can_manage_client_accounts)], responses={
     201: {"model": ClientAccountResponseSchema},
     409: {"description": "Client account with this name already exists"},
     403: {"description": "Insufficient permissions to create sub-clients"}
@@ -131,7 +131,7 @@ async def get_all_client_accounts(
     # Use Pydantic v2 model validation for automatic ObjectId handling
     return [ClientAccountResponseSchema.model_validate(account, from_attributes=True) for account in accounts]
 
-@router.get("/my-sub-clients", dependencies=[Depends(has_permission("client:read_created"))], responses={
+@router.get("/my-sub-clients", dependencies=[Depends(can_read_client_accounts)], responses={
     200: {"model": List[ClientAccountResponseSchema]}
 })
 async def get_my_sub_clients(
@@ -173,7 +173,7 @@ async def get_client_account_by_id(
     # Use Pydantic v2 model validation for automatic ObjectId handling
     return ClientAccountResponseSchema.model_validate(account, from_attributes=True)
 
-@router.put("/{account_id}", dependencies=[Depends(has_permission("client:manage_platform"))], responses={
+@router.put("/{account_id}", dependencies=[Depends(can_manage_client_accounts)], responses={
     200: {"model": ClientAccountResponseSchema},
     404: {"description": "Client account not found"}
 })
@@ -192,7 +192,7 @@ async def update_client_account(
     # Use Pydantic v2 model validation for automatic ObjectId handling
     return ClientAccountResponseSchema.model_validate(updated_account, from_attributes=True)
 
-@router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(has_permission("client:manage_all"))])
+@router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(can_manage_client_accounts)])
 async def delete_client_account(
     account_id: PydanticObjectId = Depends(valid_account_id),
     current_user = Depends(has_hierarchical_client_access("account_id"))

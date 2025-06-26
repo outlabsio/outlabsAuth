@@ -6,7 +6,7 @@ from ..models.user_model import UserModel
 from ..schemas.user_schema import UserCreateSchema, UserUpdateSchema, UserResponseSchema, UserBulkCreateResponseSchema
 from ..schemas.auth_schema import TokenDataSchema
 from ..services.user_service import user_service
-from ..dependencies import get_current_user_with_token, has_permission, convert_user_to_response
+from ..dependencies import get_current_user_with_token, convert_user_to_response
 from ..dependencies import require_admin, can_access_user
 from ..dependencies import can_read_users, can_manage_users
 
@@ -17,7 +17,7 @@ router = APIRouter(
     # dependencies=[Depends(has_permission("user:read"))]
 )
 
-@router.post("/create_sub_user", response_model=UserResponseSchema, status_code=status.HTTP_201_CREATED, dependencies=[Depends(has_permission("user:create_sub"))])
+@router.post("/create_sub_user", response_model=UserResponseSchema, status_code=status.HTTP_201_CREATED, dependencies=[Depends(can_manage_users)])
 async def create_sub_user(
     user_data: UserCreateSchema,
     user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token)
