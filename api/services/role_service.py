@@ -220,6 +220,11 @@ class RoleService:
         if not role:
             return False
 
+        # Protect critical system roles from deletion
+        critical_system_roles = ["super_admin", "platform_admin", "client_admin"]
+        if role.scope == RoleScope.SYSTEM and role.name in critical_system_roles:
+            raise ValueError(f"Cannot delete critical system role: {role.name}")
+
         await role.delete()
         return True
 
