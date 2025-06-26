@@ -21,7 +21,7 @@ def get_test_role_data():
         "name": f"test_role_{unique_id}",
         "display_name": "Test Role",
         "description": "A test role for unit testing",
-        "permissions": ["user:read", "user:create"],
+        "permissions": ["user:read_self", "user:read_client"],
         "scope": "client",
         "is_assignable_by_main_client": True
     }
@@ -108,7 +108,7 @@ class TestRoleRoutes:
             "name": "duplicate_test",
             "display_name": "First Role",
             "description": "First role",
-            "permissions": ["user:read"],
+            "permissions": ["user:read_self"],
             "scope": "client"
         }
         
@@ -120,7 +120,7 @@ class TestRoleRoutes:
             "name": "duplicate_test",
             "display_name": "Duplicate Role",
             "description": "Duplicate role",
-            "permissions": ["user:read"],
+            "permissions": ["user:read_self"],
             "scope": "client"
         }
         
@@ -192,7 +192,7 @@ class TestRoleRoutes:
         assert len(roles) > 0
         
         # Get the first role's ID
-        role_id = roles[0]["_id"]
+        role_id = roles[0].get("_id") or roles[0].get("id")
         role_name = roles[0]["name"]
         
         # Get the role by ID
@@ -200,7 +200,7 @@ class TestRoleRoutes:
         
         assert response.status_code == 200
         role_data = response.json()
-        assert role_data["_id"] == role_id
+        assert (role_data.get("_id") or role_data.get("id")) == role_id
         assert role_data["name"] == role_name
         assert isinstance(role_data["permissions"], list)
     
@@ -228,16 +228,16 @@ class TestRoleRoutes:
             all_roles = all_roles_response.json()
             test_role = next((r for r in all_roles if r["name"] == test_role_data["name"]), None)
             assert test_role is not None
-            role_id = test_role["_id"]
+            role_id = test_role.get("_id") or test_role.get("id")
         else:
             assert create_response.status_code == 201
-            role_id = create_response.json()["_id"]
+            role_id = create_response.json().get("_id") or create_response.json().get("id")
         
         # Update the role
         update_data = {
             "display_name": "Updated Test Role",
             "description": "Updated description",
-            "permissions": ["user:read"]  # Reduced permissions
+            "permissions": ["user:read_self"]  # Reduced permissions
         }
         
         response = await client.put(f"/v1/roles/{role_id}", json=update_data, headers=headers)
@@ -249,9 +249,9 @@ class TestRoleRoutes:
         
         # Check permission names since API now returns full permission objects
         returned_permission_names = [perm["name"] for perm in updated_role["permissions"]]
-        assert returned_permission_names == ["user:read"]
+        assert returned_permission_names == ["user:read_self"]
         
-        assert updated_role["_id"] == role_id  # ID should remain unchanged
+        assert (updated_role.get("_id") or updated_role.get("id")) == role_id  # ID should remain unchanged
     
     async def test_update_nonexistent_role(self, client: AsyncClient):
         """Test updating a role that doesn't exist."""
@@ -275,7 +275,7 @@ class TestRoleRoutes:
             "name": delete_role_name,
             "display_name": "Deletable Role",
             "description": "A role that can be deleted",
-            "permissions": ["user:read"],
+            "permissions": ["user:read_self"],
             "scope": "client"
         }
         
@@ -286,10 +286,10 @@ class TestRoleRoutes:
             all_roles = all_roles_response.json()
             test_role = next((r for r in all_roles if r["name"] == delete_role_name), None)
             assert test_role is not None
-            role_id = test_role["_id"]
+            role_id = test_role.get("_id") or test_role.get("id")
         else:
             assert create_response.status_code == 201
-            role_id = create_response.json()["_id"]
+            role_id = create_response.json().get("_id") or create_response.json().get("id")
         
         # Delete the role
         response = await client.delete(f"/v1/roles/{role_id}", headers=headers)
@@ -320,7 +320,7 @@ class TestRoleRoutes:
         
         if system_role:
             # Try to delete system role (should fail)
-            response = await client.delete(f"/v1/roles/{system_role['_id']}", headers=headers)
+            response = await client.delete(f"/v1/roles/{system_role.get('_id') or system_role.get('id')}", headers=headers)
             # Accept current behavior - system role protection may not be implemented yet
             assert response.status_code in [204, 400, 403]  # 204 if protection not implemented, 400/403 if implemented
     
