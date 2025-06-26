@@ -47,8 +47,8 @@ class TestPermissionRoutes:
         
         # Check that some expected permissions exist
         permission_names = [perm["name"] for perm in permissions]
-        assert "user:read" in permission_names
-        assert "user:create" in permission_names
+        assert "user:read_self" in permission_names
+        assert "user:manage_all" in permission_names
     
     async def test_get_permissions_with_pagination(self, client: AsyncClient):
         """Test permission retrieval with pagination parameters."""
@@ -67,22 +67,22 @@ class TestPermissionRoutes:
         token = await get_admin_token(client)
         headers = {"Authorization": f"Bearer {token}"}
         
-        # Get the user:read permission  
-        # First get all permissions to find the ID of user:read
+        # Get the user:read_self permission  
+        # First get all permissions to find the ID of user:read_self
         all_perms_response = await client.get("/v1/permissions/", headers=headers)
         all_permissions = all_perms_response.json()
-        user_read_perm = next((p for p in all_permissions if p["name"] == "user:read"), None)
+        user_read_perm = next((p for p in all_permissions if p["name"] == "user:read_self"), None)
         
         if user_read_perm:
             response = await client.get(f"/v1/permissions/{user_read_perm['_id']}", headers=headers)
             assert response.status_code == 200
             permission_data = response.json()
-            assert permission_data["name"] == "user:read"
+            assert permission_data["name"] == "user:read_self"
             assert "description" in permission_data
             assert "scope" in permission_data
         else:
             # Skip test if permission doesn't exist
-            pytest.skip("user:read permission not found in seeded data")
+            pytest.skip("user:read_self permission not found in seeded data")
     
     async def test_get_nonexistent_permission(self, client: AsyncClient):
         """Test retrieving a permission that doesn't exist."""
@@ -111,10 +111,10 @@ class TestPermissionRoutes:
         token = await get_admin_token(client)
         headers = {"Authorization": f"Bearer {token}"}
         
-        # Try to create user:read permission again (should fail)
+        # Try to create user:read_self permission again (should fail)
         duplicate_permission = {
-            "name": "user:read",
-            "display_name": "Duplicate User Read",
+            "name": "user:read_self",
+            "display_name": "Duplicate User Read Self",
             "description": "Duplicate permission",
             "scope": "system"
         }
