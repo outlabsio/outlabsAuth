@@ -286,9 +286,9 @@ class TestGroupRoutes:
         group_id = group_data.get("_id") or group_data.get("id")
         
         # Get a client account ID from the list (use the first one available)
-        client_accounts_response = await client.get("/v1/client-accounts/", headers=admin_headers)
+        client_accounts_response = await client.get("/v1/client_accounts/", headers=admin_headers)
         client_accounts = client_accounts_response.json()
-        admin_client_id = client_accounts[0]["id"] if client_accounts else str(ObjectId())
+        admin_client_id = client_accounts[0]["id"] if client_accounts and len(client_accounts) > 0 else str(ObjectId())
         
         # Create a test user first
         user_data = {
@@ -334,9 +334,9 @@ class TestGroupRoutes:
         group_id = group_data.get("_id") or group_data.get("id")
         
         # Get a client account ID from the list (use the first one available)
-        client_accounts_response = await client.get("/v1/client-accounts/", headers=admin_headers)
+        client_accounts_response = await client.get("/v1/client_accounts/", headers=admin_headers)
         client_accounts = client_accounts_response.json()
-        admin_client_id = client_accounts[0]["id"] if client_accounts else str(ObjectId())
+        admin_client_id = client_accounts[0]["id"] if client_accounts and len(client_accounts) > 0 else str(ObjectId())
         
         # Create a test user first
         user_data = {
