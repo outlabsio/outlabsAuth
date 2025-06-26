@@ -154,7 +154,16 @@ class TestIntegrationWorkflows:
         users = users_response.json()
         test_user = next((u for u in users if u["email"] == user_data["email"]), None)
         assert test_user is not None
-        assert "integration_tester" in test_user["roles"]
+        
+        # Get the integration_tester role ID to verify it's assigned
+        roles_response = await client.get("/v1/roles/", headers=headers)
+        roles = roles_response.json()
+        integration_role = next((r for r in roles if r["name"] == "integration_tester"), None)
+        assert integration_role is not None
+        
+        # Check if the user has the integration_tester role assigned
+        integration_role_id = integration_role.get("id", integration_role.get("_id"))
+        assert integration_role_id in test_user["roles"]
     
     async def test_authentication_and_authorization_flow(self, client: AsyncClient):
         """Test complete authentication and authorization flow."""
