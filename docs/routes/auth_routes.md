@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Authentication Routes provide a comprehensive API for user authentication, session management, and password operations within the authentication system. This module handles **JWT-based authentication**, **session management**, **password operations**, and **multi-source permission aggregation** with support for both JSON tokens and HTTP-only cookies.
+The Authentication Routes provide a comprehensive API for user authentication, session management, and password operations within the authentication system. This module handles **enriched JWT-based authentication**, **session management**, **password operations**, and **multi-source permission aggregation** with support for both JSON tokens and HTTP-only cookies.
 
 **Base URL:** `/v1/auth`  
 **Tags:** Authentication
@@ -11,17 +11,19 @@ The Authentication Routes provide a comprehensive API for user authentication, s
 
 The API supports two authentication methods:
 
-1. **Bearer Token Authentication**: Traditional JWT tokens passed in Authorization header
+1. **Bearer Token Authentication**: Enriched JWT tokens passed in Authorization header (includes user data and permissions)
 2. **HTTP-Only Cookie Authentication**: Secure cookies for web applications (use `use_cookies=true` parameter)
 
 ## 🎯 **Core Features**
 
-- **JWT Token Management** with automatic rotation
+- **Enriched JWT Token Management** with user data, roles, and permissions included by default
+- **Automatic Permission Optimization** using hierarchical compression
 - **Multi-Device Session Management** with IP/User-Agent tracking
 - **Real-Time Permission Aggregation** from roles, groups, and direct assignments
 - **Password Security** with reset and change workflows
 - **Platform Staff Detection** for cross-client access management
 - **Cookie Security** with dynamic secure flag based on environment
+- **Zero API Call Authorization** - permissions available directly in tokens
 
 ---
 
@@ -29,7 +31,7 @@ The API supports two authentication methods:
 
 ### 1. User Login
 
-**✅ ENHANCED** - Authenticates a user and returns access and refresh tokens with **client account context** and **dual authentication modes**.
+**✅ ENHANCED** - Authenticates a user and returns enriched access and refresh tokens with **user data, permissions, and client account context** by default.
 
 **Endpoint:** `POST /v1/auth/login`
 
@@ -40,6 +42,7 @@ The API supports two authentication methods:
 **Query Parameters:**
 
 - `use_cookies` (optional, boolean, default: false) - Use HTTP-only cookies instead of JSON response
+- `use_enriched_tokens` (optional, boolean, default: true) - Include user data and permissions in access token
 
 **Request Body (Form Data):**
 
@@ -52,12 +55,16 @@ The API supports two authentication methods:
 
 **Features:**
 
+- **Enriched Tokens by Default**: Access tokens include user profile, roles, permissions, and session data
+- **Zero Additional API Calls**: Frontend gets all authorization data immediately
+- **Automatic Permission Optimization**: Hierarchical permission compression for optimal token size
 - **Client Account Context**: Access tokens include client_account_id for scoped operations
 - **Session Tracking**: Stores IP address and user agent for security monitoring
 - **Dual Response Modes**: JSON tokens or HTTP-only cookies based on use_cookies parameter
 - **Dynamic Cookie Security**: Secure flag automatically set based on environment (localhost vs production)
+- **Size Management**: Automatic fallback to basic tokens if enriched token exceeds 8KB limit
 
-**Response (JSON Mode):**
+**Response (JSON Mode - Enriched Token):**
 
 - **Status Code:** `200 OK`
 - **Response Body:**
@@ -67,6 +74,46 @@ The API supports two authentication methods:
   "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
   "refresh_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
   "token_type": "bearer"
+}
+```
+
+**Enriched Access Token Payload:**
+
+```json
+{
+  "sub": "user_id",
+  "client_account_id": "client_id",
+  "jti": "refresh_token_id",
+  "exp": 1719504000,
+  "iat": 1719500400,
+
+  "user": {
+    "email": "user@example.com",
+    "first_name": "John",
+    "last_name": "Doe",
+    "status": "active",
+    "is_platform_staff": false,
+    "platform_scope": null
+  },
+
+  "roles": [
+    {
+      "id": "role_id",
+      "name": "admin",
+      "scope": "client",
+      "scope_id": "client_id"
+    }
+  ],
+
+  "permissions": ["user:manage_client", "group:read_client", "role:read_client"],
+
+  "scopes": ["client"],
+
+  "session": {
+    "is_main_client": true,
+    "mfa_enabled": false,
+    "locale": "en-US"
+  }
 }
 ```
 
@@ -83,17 +130,39 @@ The API supports two authentication methods:
 ```
 
 - **Cookies Set:**
-  - `access_token` - HTTP-only, expires in **30 minutes**
+  - `access_token` - HTTP-only, expires in **30 minutes** (enriched by default)
   - `refresh_token` - HTTP-only, expires in **7 days**
+
+**Basic Token Mode (Optional):**
+
+For clients that prefer minimal tokens, use `use_enriched_tokens=false`:
+
+```json
+{
+  "sub": "user_id",
+  "client_account_id": "client_id",
+  "jti": "refresh_token_id",
+  "exp": 1719504000,
+  "iat": 1719500400
+}
+```
 
 **Error Responses:**
 
 - `401 Unauthorized` - Incorrect email or password
 
-**Example Request (JSON Mode):**
+**Example Request (Standard - Enriched Token):**
 
 ```bash
 curl -X POST "https://api.example.com/v1/auth/login" \
+     -H "Content-Type: application/x-www-form-urlencoded" \
+     -d "username=user@example.com&password=securepassword123"
+```
+
+**Example Request (Basic Token):**
+
+```bash
+curl -X POST "https://api.example.com/v1/auth/login?use_enriched_tokens=false" \
      -H "Content-Type: application/x-www-form-urlencoded" \
      -d "username=user@example.com&password=securepassword123"
 ```
@@ -108,7 +177,7 @@ curl -X POST "https://api.example.com/v1/auth/login?use_cookies=true" \
 
 ### 2. Refresh Access Token
 
-**✅ ENHANCED** - Refreshes access token with **automatic token rotation** and **client context preservation**.
+**✅ ENHANCED** - Refreshes access token with **automatic token rotation**, **enriched token data**, and **client context preservation**.
 
 **Endpoint:** `POST /v1/auth/refresh`
 
@@ -117,6 +186,7 @@ curl -X POST "https://api.example.com/v1/auth/login?use_cookies=true" \
 **Query Parameters:**
 
 - `use_cookies` (optional, boolean, default: false) - Use HTTP-only cookies
+- `use_enriched_tokens` (optional, boolean, default: true) - Include user data and permissions in access token
 
 **Headers (JSON Mode):**
 
@@ -124,10 +194,13 @@ curl -X POST "https://api.example.com/v1/auth/login?use_cookies=true" \
 
 **Features:**
 
+- **Enriched Tokens by Default**: New access tokens include fresh user data and permissions
 - **Token Rotation**: Automatically issues new refresh token and revokes old one
+- **Permission Refresh**: Gets latest permissions from database on each refresh
 - **Client Context**: Preserves client_account_id in new tokens
 - **Session Security**: Links new tokens to same session tracking information
 - **Dual Input/Output**: Supports both header tokens and cookies
+- **Size Management**: Automatic fallback to basic tokens if enriched token exceeds 8KB limit
 
 **Response (JSON Mode):**
 
@@ -591,12 +664,96 @@ curl -X POST "https://api.example.com/v1/auth/password/change" \
      }'
 ```
 
+### 11. Get Token Information
+
+**✅ NEW** - Returns detailed information about the current access token, including capabilities and embedded data.
+
+**Endpoint:** `GET /v1/auth/token-info`
+
+**Authentication Required:** Yes (Access Token)
+
+**Features:**
+
+- **Token Type Detection**: Identifies whether token is enriched or basic
+- **Capability Analysis**: Shows what data is available in the token
+- **Frontend Optimization**: Helps frontend determine if additional API calls are needed
+- **Debug Information**: Useful for troubleshooting token issues
+
+**Response (Enriched Token):**
+
+- **Status Code:** `200 OK`
+- **Response Body:**
+
+```json
+{
+  "token_type": "enriched",
+  "user_id": "507f1f77bcf86cd799439011",
+  "client_account_id": "507f1f77bcf86cd799439012",
+  "permissions_count": 15,
+  "roles_count": 2,
+  "scopes": ["client", "platform"],
+  "expires_at": 1719504000,
+  "issued_at": 1719500400,
+  "user_email": "admin@example.com",
+  "mfa_enabled": false,
+  "locale": "en-US"
+}
+```
+
+**Response (Basic Token):**
+
+- **Status Code:** `200 OK`
+- **Response Body:**
+
+```json
+{
+  "token_type": "basic",
+  "user_id": "507f1f77bcf86cd799439011",
+  "client_account_id": "507f1f77bcf86cd799439012",
+  "message": "Token contains minimal data - use default login for enriched features"
+}
+```
+
+**Error Responses:**
+
+- `401 Unauthorized` - Invalid access token
+
+**Frontend Usage:**
+
+```javascript
+// Check token capabilities
+const tokenInfo = await fetch("/v1/auth/token-info", {
+  headers: { Authorization: `Bearer ${accessToken}` },
+}).then((r) => r.json());
+
+if (tokenInfo.token_type === "enriched") {
+  // All user data available in token - no additional API calls needed
+  const userData = jwt.decode(accessToken);
+  console.log("Permissions:", userData.permissions);
+  console.log("Roles:", userData.roles);
+} else {
+  // Need to make API calls to get user data
+  const userData = await fetch("/v1/auth/me").then((r) => r.json());
+}
+```
+
+**Example Request:**
+
+```bash
+curl -X GET "https://api.example.com/v1/auth/token-info" \
+     -H "Authorization: Bearer <access_token>"
+```
+
 ---
 
 ## 🔒 **Security Features**
 
-### **Token Management**
+### **Enriched Token Management**
 
+- **Default Enriched Format**: Access tokens include user data, roles, and permissions by default
+- **Permission Optimization**: Automatic hierarchical permission compression for optimal size
+- **Size Management**: 8KB limit with automatic fallback to basic tokens if exceeded
+- **Fresh Data**: Permissions and roles refreshed on each token refresh
 - **Access Token Expiry:** **30 minutes** (configurable via `ACCESS_TOKEN_EXPIRE_MINUTES`)
 - **Refresh Token Expiry:** **7 days** (configurable via `REFRESH_TOKEN_EXPIRE_DAYS`)
 - **Token Rotation:** New refresh tokens are issued on each refresh with old token revocation
@@ -645,7 +802,46 @@ When using `use_cookies=true`:
 }
 ```
 
-### **TokenDataSchema** (Internal JWT Payload)
+### **EnrichedTokenDataSchema** (Standard Access Token Payload)
+
+```python
+{
+  "sub": str,                              # user_id
+  "client_account_id": Optional[str],      # client account ID
+  "jti": Optional[str],                    # JWT ID for session tracking
+  "exp": int,                              # expiration timestamp
+  "iat": int,                              # issued at timestamp
+
+  "user": {                                # User profile data
+    "email": str,
+    "first_name": Optional[str],
+    "last_name": Optional[str],
+    "status": str,
+    "is_platform_staff": bool,
+    "platform_scope": Optional[str]
+  },
+
+  "roles": [                               # User roles with scope info
+    {
+      "id": str,
+      "name": str,
+      "scope": str,
+      "scope_id": Optional[str]
+    }
+  ],
+
+  "permissions": [str],                    # Permission names for quick access
+  "scopes": [str],                         # Available scopes
+
+  "session": {                             # Session metadata
+    "is_main_client": bool,
+    "mfa_enabled": bool,
+    "locale": str
+  }
+}
+```
+
+### **TokenDataSchema** (Basic Token Payload - Fallback)
 
 ```python
 {
@@ -722,17 +918,20 @@ All endpoints follow consistent error response format:
 
 ### **For Web Applications**
 
-1. **Use Cookie Mode**: Set `use_cookies=true` for browser-based applications
-2. **CSRF Protection**: Implement proper CSRF protection with SameSite cookies
-3. **HTTPS Required**: Always use HTTPS in production for cookie security
-4. **Automatic Refresh**: Implement automatic token refresh before expiration
+1. **Use Enriched Tokens**: Default behavior provides all user data without additional API calls
+2. **Use Cookie Mode**: Set `use_cookies=true` for browser-based applications
+3. **CSRF Protection**: Implement proper CSRF protection with SameSite cookies
+4. **HTTPS Required**: Always use HTTPS in production for cookie security
+5. **Automatic Refresh**: Implement automatic token refresh before expiration
+6. **Permission Caching**: Cache decoded token data to avoid repeated JWT parsing
 
 ### **For Mobile/API Applications**
 
-1. **Use JSON Tokens**: Standard bearer token authentication
+1. **Use JSON Tokens**: Standard bearer token authentication with enriched data
 2. **Secure Storage**: Store tokens in Keychain (iOS) or Keystore (Android)
 3. **Automatic Refresh**: Implement background token refresh
 4. **Network Error Handling**: Handle token refresh failures gracefully
+5. **Local Permission Checking**: Use embedded permissions for instant authorization decisions
 
 ### **Security Best Practices**
 
@@ -741,36 +940,95 @@ All endpoints follow consistent error response format:
 3. **Session Monitoring**: Monitor active sessions for suspicious activity
 4. **Regular Rotation**: Encourage users to change passwords regularly
 5. **Rate Limiting**: Implement rate limiting on authentication endpoints
+6. **Token Size Monitoring**: Monitor enriched token sizes and optimize permissions
+7. **Fallback Handling**: Gracefully handle basic tokens when enriched tokens are too large
 
-### **Frontend Integration**
+### **Frontend Integration with Enriched Tokens**
 
 ```javascript
-// Permission checking utility
+// Enriched token utility class
 class AuthService {
   constructor() {
-    this.userProfile = null;
+    this.tokenData = null;
   }
 
-  async getCurrentUser() {
-    const response = await fetch("/v1/auth/me", {
-      headers: { Authorization: `Bearer ${this.accessToken}` },
-    });
-    this.userProfile = await response.json();
-    return this.userProfile;
+  // Decode and cache token data
+  setToken(accessToken) {
+    this.accessToken = accessToken;
+    this.tokenData = jwt.decode(accessToken);
+
+    // Check if token is enriched
+    this.isEnriched = !!(this.tokenData.permissions && this.tokenData.user);
   }
 
+  // Get user profile from token (no API call needed)
+  getUserProfile() {
+    if (this.isEnriched) {
+      return this.tokenData.user;
+    }
+    // Fallback to API call for basic tokens
+    return this.fetchUserProfile();
+  }
+
+  // Check permissions locally (no API call needed)
   hasPermission(permissionName) {
-    return this.userProfile?.permissions?.some((p) => p.name === permissionName) || false;
+    if (this.isEnriched) {
+      return this.checkHierarchicalPermission(this.tokenData.permissions, permissionName);
+    }
+    // Fallback to API call for basic tokens
+    return this.checkPermissionViaAPI(permissionName);
   }
 
+  // Check roles locally (no API call needed)
+  hasRole(roleName) {
+    if (this.isEnriched) {
+      return this.tokenData.roles.some((role) => role.name === roleName);
+    }
+    // Fallback to API call for basic tokens
+    return this.checkRoleViaAPI(roleName);
+  }
+
+  // Hierarchical permission checking
+  checkHierarchicalPermission(userPermissions, required) {
+    // Direct permission match
+    if (userPermissions.includes(required)) return true;
+
+    // Hierarchical checking logic
+    const hierarchies = {
+      "user:read_self": [],
+      "user:read_client": ["user:read_self"],
+      "user:manage_client": ["user:read_client", "user:read_self"],
+      // ... more hierarchies
+    };
+
+    for (const userPerm of userPermissions) {
+      const included = hierarchies[userPerm] || [];
+      if (included.includes(required)) return true;
+    }
+
+    return false;
+  }
+
+  // Check if platform staff
   isPlatformStaff() {
-    return this.userProfile?.is_platform_staff === true;
+    return this.isEnriched ? this.tokenData.user.is_platform_staff : false;
   }
 
-  canAccessAllClients() {
-    return this.userProfile?.platform_scope === "all";
+  // Get available scopes
+  getScopes() {
+    return this.isEnriched ? this.tokenData.scopes : [];
   }
 }
+
+// Usage example
+const auth = new AuthService();
+auth.setToken(accessToken);
+
+// All these work without API calls if token is enriched
+const userProfile = auth.getUserProfile();
+const canManageUsers = auth.hasPermission("user:manage_client");
+const isAdmin = auth.hasRole("admin");
+const isPlatformUser = auth.isPlatformStaff();
 ```
 
 ---
@@ -783,6 +1041,11 @@ class AuthService {
 # Token Configuration
 ACCESS_TOKEN_EXPIRE_MINUTES=30    # Access token lifetime
 REFRESH_TOKEN_EXPIRE_DAYS=7       # Refresh token lifetime
+
+# Enriched Token Settings
+MAX_JWT_SIZE_BYTES=8192           # Maximum JWT token size (8KB limit)
+ENABLE_ENRICHED_TOKENS_BY_DEFAULT=true  # Enable enriched tokens by default
+PERMISSION_CACHE_TTL_SECONDS=300  # Permission cache TTL (5 minutes)
 
 # Security
 SECRET_KEY=your-secret-key        # JWT signing key
@@ -808,6 +1071,7 @@ Check response headers for rate limit information:
 
 ---
 
-_Documentation Updated: 2024-01-15_  
+_Documentation Updated: 2024-01-16_  
 _API Version: v1_  
+_Token Format: Enriched by default_  
 _Token Expiry: Access 30min, Refresh 7 days_

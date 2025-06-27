@@ -15,6 +15,7 @@ dependencies = [
     "redis",
     "email-validator",
     "pydantic-settings",
+    "pyjwt>=2.8.0",
 ]
 
 [project.optional-dependencies]

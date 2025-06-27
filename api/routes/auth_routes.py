@@ -29,11 +29,13 @@ async def login_for_access_token(
     request: Request,
     response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
-    use_cookies: Optional[bool] = Query(False, description="Use HTTP-only cookies instead of JSON response")
+    use_cookies: Optional[bool] = Query(False, description="Use HTTP-only cookies instead of JSON response"),
+    use_enriched_tokens: Optional[bool] = Query(None, description="Include user data and permissions in access token (default: true)")
 ) -> Union[TokenSchema, dict]:
     """
     Authenticates a user and returns an access token.
     If use_cookies=true, sets HTTP-only cookies instead of JSON response.
+    By default, returns enriched tokens with user permissions and role data.
     """
     user = await user_service.get_user_by_email(form_data.username)
     if not user or not security_service.verify_password(form_data.password, user.password_hash):
@@ -57,14 +59,27 @@ async def login_for_access_token(
         user_agent=request.headers.get("user-agent")
     )
 
-    # Create Access Token, including client_account_id
-    # With fetch_links=True, we can access the linked object directly
-    access_token_data = {
-        "sub": str(user.id),
-        "jti": jti,
-        "client_account_id": str(user.client_account.id) if user.client_account else None
-    }
-    access_token = security_service.create_access_token(access_token_data)
+    # Determine whether to use enriched tokens
+    should_use_enriched = use_enriched_tokens if use_enriched_tokens is not None else settings.ENABLE_ENRICHED_TOKENS_BY_DEFAULT
+    
+    # Create Access Token - enriched by default, basic if explicitly disabled
+    client_account_id = str(user.client_account.id) if user.client_account else None
+    
+    if should_use_enriched:
+        # Create enriched access token with user data and permissions
+        access_token = await security_service.create_enriched_access_token(
+            user_id=str(user.id),
+            client_account_id=client_account_id,
+            jti=jti
+        )
+    else:
+        # Create basic access token (for clients that prefer minimal tokens)
+        access_token_data = {
+            "sub": str(user.id),
+            "jti": jti,
+            "client_account_id": client_account_id
+        }
+        access_token = security_service.create_access_token(access_token_data)
 
     if use_cookies:
         # Set HTTP-only cookies
@@ -97,7 +112,8 @@ async def refresh_access_token(
     request: Request,
     response: Response,
     authorization: str = Header(None),
-    use_cookies: Optional[bool] = Query(False, description="Use HTTP-only cookies")
+    use_cookies: Optional[bool] = Query(False, description="Use HTTP-only cookies"),
+    use_enriched_tokens: Optional[bool] = Query(None, description="Include user data and permissions in access token (default: true)")
 ) -> Union[TokenSchema, dict]:
     # Try to get refresh token from cookies first, then from header
     refresh_token_str = None
@@ -133,21 +149,34 @@ async def refresh_access_token(
     # Revoke the old refresh token
     await refresh_token_service.revoke_token(jti)
 
-    # Create new refresh token
+    # Create new tokens (implementing token rotation)
     new_refresh_token, new_jti, new_expires_at = security_service.create_refresh_token(data={"sub": str(user.id)})
     await refresh_token_service.create_refresh_token(
         user_id=user.id, jti=new_jti, expires_at=new_expires_at,
         ip_address=request.client.host, user_agent=request.headers.get("user-agent")
     )
 
-    # Create new access token linked to the new refresh token
-    # With fetch_links=True, we can access the linked object directly
-    new_access_token_data = {
-        "sub": str(user.id),
-        "jti": new_jti,
-        "client_account_id": str(user.client_account.id) if user.client_account else None
-    }
-    new_access_token = security_service.create_access_token(new_access_token_data)
+    # Determine whether to use enriched tokens
+    should_use_enriched = use_enriched_tokens if use_enriched_tokens is not None else settings.ENABLE_ENRICHED_TOKENS_BY_DEFAULT
+    
+    # Create new access token - enriched by default, basic if explicitly disabled
+    client_account_id = str(user.client_account.id) if user.client_account else None
+    
+    if should_use_enriched:
+        # Create enriched access token with user data and permissions
+        new_access_token = await security_service.create_enriched_access_token(
+            user_id=str(user.id),
+            client_account_id=client_account_id,
+            jti=new_jti
+        )
+    else:
+        # Create basic access token (for clients that prefer minimal tokens)
+        new_access_token_data = {
+            "sub": str(user.id),
+            "jti": new_jti,
+            "client_account_id": client_account_id
+        }
+        new_access_token = security_service.create_access_token(new_access_token_data)
 
     if use_cookies:
         # Update HTTP-only cookies
@@ -206,21 +235,20 @@ async def logout_all(
     """
     await refresh_token_service.revoke_all_tokens_for_user(current_user.id)
 
-@router.get("/me", response_model=UserResponseSchema)
-async def read_users_me(
+@router.get("/me")
+async def get_current_user_info(
     current_user: UserModel = Depends(get_current_user)
-):
+) -> UserResponseSchema:
     """
-    Get the profile of the currently authenticated user.
+    Returns the current user's information based on the access token.
     """
-    # Convert to response format using utility
     user_dict = convert_user_to_response(current_user)
-
-    # Add effective permissions with full details (new aggregated method)
-    user_permission_details = await user_service.get_user_effective_permission_details(current_user.id)
-    user_dict["permissions"] = user_permission_details
-
-    return user_dict
+    
+    # Get effective permissions for response
+    permission_details = await user_service.get_user_effective_permission_details(current_user.id)
+    user_dict["permissions"] = permission_details
+    
+    return UserResponseSchema.model_validate(user_dict)
 
 @router.post("/password/reset-request", status_code=status.HTTP_200_OK)
 async def request_password_reset(
@@ -315,4 +343,51 @@ async def change_password(
     await user_service.update_password(current_user.id, request_data.new_password)
 
     # Revoke all existing sessions for security
-    await refresh_token_service.revoke_all_tokens_for_user(current_user.id) 
+    await refresh_token_service.revoke_all_tokens_for_user(current_user.id)
+
+@router.get("/token-info")
+async def get_token_info(
+    token: str = Depends(oauth2_scheme)
+) -> dict:
+    """
+    Returns information about the current access token.
+    Useful for frontend to understand token capabilities.
+    """
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Access token required"
+        )
+    
+    try:
+        # Decode the access token
+        token_data = security_service.decode_access_token(token)
+        
+        if hasattr(token_data, 'permissions') and hasattr(token_data, 'roles'):
+            # Enriched token (standard format)
+            return {
+                "token_type": "enriched",
+                "user_id": token_data.sub,
+                "client_account_id": token_data.client_account_id,
+                "permissions_count": len(token_data.permissions),
+                "roles_count": len(token_data.roles),
+                "scopes": token_data.scopes,
+                "expires_at": token_data.exp,
+                "issued_at": token_data.iat,
+                "user_email": token_data.user.email,
+                "mfa_enabled": token_data.session.mfa_enabled,
+                "locale": token_data.session.locale
+            }
+        else:
+            # Basic token (minimal format)
+            return {
+                "token_type": "basic",
+                "user_id": token_data.user_id,
+                "client_account_id": token_data.client_account_id,
+                "message": "Token contains minimal data - use default login for enriched features"
+            }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid access token"
+        ) 

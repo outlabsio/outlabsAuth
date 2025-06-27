@@ -235,7 +235,21 @@ async def get_current_user_with_token(
     Decodes JWT, then retrieves user from DB using Beanie ODM. Returns user and token payload.
     """
     token_data = security_service.decode_access_token(token)
-    user = await user_service.get_user_by_id(PydanticObjectId(token_data.user_id))
+    
+    # Handle both enriched and basic token formats
+    if hasattr(token_data, 'sub'):
+        # Enriched token format uses 'sub' field
+        user_id = token_data.sub
+    elif hasattr(token_data, 'user_id'):
+        # Basic token format uses 'user_id' field
+        user_id = token_data.user_id
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token format.",
+        )
+    
+    user = await user_service.get_user_by_id(PydanticObjectId(user_id))
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -819,3 +819,297 @@ async def test_password_change_without_authentication(client: AsyncClient):
     }
     response = await client.post("/v1/auth/password/change", json=change_data)
     assert response.status_code == 401
+
+# ==================== ENRICHED JWT TOKEN TESTS ====================
+
+async def test_login_returns_enriched_token_by_default(client: AsyncClient):
+    """
+    Test that login returns enriched JWT tokens by default (new feature).
+    """
+    login_data = {
+        "username": ADMIN_USER_DATA["email"],
+        "password": ADMIN_USER_DATA["password"],
+    }
+    response = await client.post("/v1/auth/login", data=login_data)
+    
+    assert response.status_code == 200
+    token_data = response.json()
+    assert "access_token" in token_data
+    
+    # Decode the JWT token to verify it's enriched
+    import jwt as jwt_lib
+    access_token = token_data["access_token"]
+    decoded = jwt_lib.decode(access_token, options={"verify_signature": False})
+    
+    # Enriched tokens should have these additional fields
+    assert "user" in decoded, "Token should contain user data"
+    assert "permissions" in decoded, "Token should contain permissions"
+    assert "roles" in decoded, "Token should contain roles"
+    assert "scopes" in decoded, "Token should contain scopes"
+    assert "session" in decoded, "Token should contain session data"
+    
+    # Verify user data structure
+    user_data = decoded["user"]
+    assert user_data["email"] == ADMIN_USER_DATA["email"]
+    assert "first_name" in user_data
+    assert "status" in user_data
+    assert "is_platform_staff" in user_data
+    
+    # Verify permissions are a list of strings
+    permissions = decoded["permissions"]
+    assert isinstance(permissions, list)
+    for permission in permissions:
+        assert isinstance(permission, str)
+        assert ":" in permission  # Should follow "resource:action" format
+    
+    # Verify session data structure
+    session_data = decoded["session"]
+    assert "is_main_client" in session_data
+    assert "mfa_enabled" in session_data
+    assert "locale" in session_data
+
+async def test_login_with_basic_token_parameter(client: AsyncClient):
+    """
+    Test login with use_enriched_tokens=false returns basic token (new feature).
+    """
+    login_data = {
+        "username": ADMIN_USER_DATA["email"],
+        "password": ADMIN_USER_DATA["password"],
+    }
+    response = await client.post("/v1/auth/login?use_enriched_tokens=false", data=login_data)
+    
+    assert response.status_code == 200
+    token_data = response.json()
+    assert "access_token" in token_data
+    
+    # Decode the JWT token to verify it's basic (minimal)
+    import jwt as jwt_lib
+    access_token = token_data["access_token"]
+    decoded = jwt_lib.decode(access_token, options={"verify_signature": False})
+    
+    # Basic tokens should NOT have enriched fields
+    assert "user" not in decoded, "Basic token should not contain user data"
+    assert "permissions" not in decoded, "Basic token should not contain permissions"
+    assert "roles" not in decoded, "Basic token should not contain roles"
+    assert "scopes" not in decoded, "Basic token should not contain scopes"
+    assert "session" not in decoded, "Basic token should not contain session data"
+    
+    # Basic tokens should have minimal required fields
+    assert "sub" in decoded, "Token should contain subject (user_id)"
+    assert "exp" in decoded, "Token should contain expiration"
+    assert "iat" in decoded, "Token should contain issued_at"
+
+async def test_token_info_endpoint_enriched_token(client: AsyncClient):
+    """
+    Test the new /v1/auth/token-info endpoint with enriched token.
+    """
+    # Login to get enriched token
+    login_data = {
+        "username": ADMIN_USER_DATA["email"],
+        "password": ADMIN_USER_DATA["password"],
+    }
+    login_response = await client.post("/v1/auth/login", data=login_data)
+    access_token = login_response.json()["access_token"]
+    
+    # Call token-info endpoint
+    headers = {"Authorization": f"Bearer {access_token}"}
+    response = await client.get("/v1/auth/token-info", headers=headers)
+    
+    assert response.status_code == 200
+    token_info = response.json()
+    
+    # Verify enriched token info structure
+    assert token_info["token_type"] == "enriched"
+    assert "user_id" in token_info
+    assert "client_account_id" in token_info
+    assert "permissions_count" in token_info
+    assert "roles_count" in token_info
+    assert "scopes" in token_info
+    assert "expires_at" in token_info
+    assert "issued_at" in token_info
+    assert "user_email" in token_info
+    assert "mfa_enabled" in token_info
+    assert "locale" in token_info
+    
+    # Verify data types
+    assert isinstance(token_info["permissions_count"], int)
+    assert isinstance(token_info["roles_count"], int)
+    assert isinstance(token_info["scopes"], list)
+    assert token_info["permissions_count"] >= 0
+    assert token_info["roles_count"] >= 0
+
+async def test_token_info_endpoint_basic_token(client: AsyncClient):
+    """
+    Test the /v1/auth/token-info endpoint with basic token.
+    """
+    # Login to get basic token
+    login_data = {
+        "username": ADMIN_USER_DATA["email"],
+        "password": ADMIN_USER_DATA["password"],
+    }
+    login_response = await client.post("/v1/auth/login?use_enriched_tokens=false", data=login_data)
+    access_token = login_response.json()["access_token"]
+    
+    # Call token-info endpoint
+    headers = {"Authorization": f"Bearer {access_token}"}
+    response = await client.get("/v1/auth/token-info", headers=headers)
+    
+    assert response.status_code == 200
+    token_info = response.json()
+    
+    # Verify basic token info structure
+    assert token_info["token_type"] == "basic"
+    assert "user_id" in token_info
+    assert "client_account_id" in token_info
+    assert "message" in token_info
+    assert "Token contains minimal data" in token_info["message"]
+    
+    # Basic token info should NOT have enriched fields
+    assert "permissions_count" not in token_info
+    assert "roles_count" not in token_info
+    assert "user_email" not in token_info
+
+async def test_token_info_endpoint_invalid_token(client: AsyncClient):
+    """
+    Test the /v1/auth/token-info endpoint with invalid token.
+    """
+    headers = {"Authorization": "Bearer invalid_token_here"}
+    response = await client.get("/v1/auth/token-info", headers=headers)
+    
+    assert response.status_code == 401
+    assert "Invalid access token" in response.json()["detail"]
+
+async def test_token_info_endpoint_no_authorization(client: AsyncClient):
+    """
+    Test the /v1/auth/token-info endpoint without authorization header.
+    """
+    response = await client.get("/v1/auth/token-info")
+    assert response.status_code == 401
+
+async def test_refresh_token_returns_enriched_by_default(client: AsyncClient):
+    """
+    Test that refresh token returns enriched access token by default.
+    """
+    # Login first to get refresh token
+    login_data = {
+        "username": ADMIN_USER_DATA["email"],
+        "password": ADMIN_USER_DATA["password"],
+    }
+    login_response = await client.post("/v1/auth/login", data=login_data)
+    refresh_token = login_response.json()["refresh_token"]
+    
+    # Use refresh token
+    headers = {"Authorization": f"Bearer {refresh_token}"}
+    refresh_response = await client.post("/v1/auth/refresh", headers=headers)
+    
+    assert refresh_response.status_code == 200
+    new_tokens = refresh_response.json()
+    
+    # Verify new access token is enriched
+    import jwt as jwt_lib
+    new_access_token = new_tokens["access_token"]
+    decoded = jwt_lib.decode(new_access_token, options={"verify_signature": False})
+    
+    assert "user" in decoded
+    assert "permissions" in decoded
+    assert "roles" in decoded
+    assert "scopes" in decoded
+    assert "session" in decoded
+
+async def test_refresh_token_with_basic_token_parameter(client: AsyncClient):
+    """
+    Test refresh token with use_enriched_tokens=false parameter.
+    """
+    # Login first to get refresh token
+    login_data = {
+        "username": ADMIN_USER_DATA["email"],
+        "password": ADMIN_USER_DATA["password"],
+    }
+    login_response = await client.post("/v1/auth/login", data=login_data)
+    refresh_token = login_response.json()["refresh_token"]
+    
+    # Use refresh token with basic token parameter
+    headers = {"Authorization": f"Bearer {refresh_token}"}
+    refresh_response = await client.post("/v1/auth/refresh?use_enriched_tokens=false", headers=headers)
+    
+    assert refresh_response.status_code == 200
+    new_tokens = refresh_response.json()
+    
+    # Verify new access token is basic
+    import jwt as jwt_lib
+    new_access_token = new_tokens["access_token"]
+    decoded = jwt_lib.decode(new_access_token, options={"verify_signature": False})
+    
+    assert "user" not in decoded
+    assert "permissions" not in decoded
+    assert "roles" not in decoded
+    assert "scopes" not in decoded
+    assert "session" not in decoded
+
+async def test_login_with_cookies_creates_enriched_token(client: AsyncClient):
+    """
+    Test that cookie mode creates enriched tokens by default.
+    """
+    login_data = {
+        "username": ADMIN_USER_DATA["email"],
+        "password": ADMIN_USER_DATA["password"],
+    }
+    response = await client.post("/v1/auth/login?use_cookies=true", data=login_data)
+    
+    assert response.status_code == 200
+    response_data = response.json()
+    assert response_data["message"] == "Login successful"
+    assert response_data["token_type"] == "cookie"
+    
+    # Verify cookies are set
+    assert "access_token" in response.cookies
+    assert "refresh_token" in response.cookies
+    
+    # Decode the access token cookie to verify it's enriched
+    import jwt as jwt_lib
+    access_token_cookie = response.cookies["access_token"]
+    decoded = jwt_lib.decode(access_token_cookie, options={"verify_signature": False})
+    
+    assert "user" in decoded
+    assert "permissions" in decoded
+    assert "roles" in decoded
+
+async def test_login_with_cookies_and_basic_token_flag(client: AsyncClient):
+    """
+    Test cookie mode with basic token flag.
+    """
+    login_data = {
+        "username": ADMIN_USER_DATA["email"],
+        "password": ADMIN_USER_DATA["password"],
+    }
+    response = await client.post("/v1/auth/login?use_cookies=true&use_enriched_tokens=false", data=login_data)
+    
+    assert response.status_code == 200
+    
+    # Decode the access token cookie to verify it's basic
+    import jwt as jwt_lib
+    access_token_cookie = response.cookies["access_token"]
+    decoded = jwt_lib.decode(access_token_cookie, options={"verify_signature": False})
+    
+    assert "user" not in decoded
+    assert "permissions" not in decoded
+    assert "roles" not in decoded
+
+async def test_token_size_is_reasonable(client: AsyncClient):
+    """
+    Test that enriched tokens have reasonable size.
+    """
+    login_data = {
+        "username": ADMIN_USER_DATA["email"],
+        "password": ADMIN_USER_DATA["password"],
+    }
+    response = await client.post("/v1/auth/login", data=login_data)
+    
+    access_token = response.json()["access_token"]
+    token_size = len(access_token.encode('utf-8'))
+    
+    # Token should be less than 8KB limit
+    assert token_size < 8192, f"Token size ({token_size} bytes) exceeds 8KB limit"
+    
+    # But should be substantial (more than basic token)
+    assert token_size > 200, f"Token size ({token_size} bytes) seems too small for enriched token"
