@@ -41,17 +41,29 @@ CLIENT GROUPS (Per Client Organization)
 
 ## Authentication & Authorization
 
-All endpoints require authentication and specific scoped permissions:
+All endpoints require authentication and are protected by dependency functions that implement hierarchical permission checking:
 
-- **Base Permission:** `system:group:read` (required for all endpoints)
-- **Additional Permissions:** Specific endpoints require additional permissions as noted below
+- **Read Access:** Requires one of: `group:read_all`, `group:read_platform`, or `group:read_client`
+- **Manage Access:** Requires one of: `group:manage_all`, `group:manage_platform`, or `group:manage_client`
+- **Member Management:** Uses the same manage access permissions as above
+
+### Hierarchical Permission System
+
+The permission system follows a hierarchical structure where higher-level permissions automatically include lower-level ones:
+
+- `group:manage_all` → Includes all group permissions (global admin)
+- `group:manage_platform` → Includes `group:manage_client`, `group:read_platform`, `group:read_client`
+- `group:manage_client` → Includes `group:read_client`
+- `group:read_all` → Includes `group:read_platform`, `group:read_client`
+- `group:read_platform` → Includes `group:read_client`
+- `group:read_client` → Base client-level read access
 
 ### Scope-Based Access Control
 
 - **Super Admins:** Can create/manage groups at all scopes
 - **Platform Admins:** Can create/manage groups within their platform only
 - **Client Admins:** Can create/manage groups within their client only
-- **Team Leads:** Can manage groups if granted group:manage_members permission
+- **Team Leads:** Can manage groups if granted appropriate permissions
 
 ## Endpoints
 
@@ -63,7 +75,7 @@ Creates a new group within a specific scope with direct permission assignment.
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `system:group:create`
+**Required Dependencies:** `can_manage_groups` (requires `group:manage_all`, `group:manage_platform`, or `group:manage_client`)
 
 **Query Parameters:**
 
@@ -92,9 +104,23 @@ Creates a new group within a specific scope with direct permission assignment.
   "name": "sales_team",
   "display_name": "Sales Team",
   "description": "Handles all sales activities and client relationships",
-  "permissions": ["client:listings:create", "client:listings:update", "client:clients:manage", "client:reports:sales"],
+  "permissions": [
+    {
+      "id": "507f1f77bcf86cd799439020",
+      "name": "client:listings:create",
+      "display_name": "Create Client Listings",
+      "description": "Create new listings within client scope"
+    },
+    {
+      "id": "507f1f77bcf86cd799439021",
+      "name": "client:listings:update",
+      "display_name": "Update Client Listings",
+      "description": "Update existing listings within client scope"
+    }
+  ],
   "scope": "client",
   "scope_id": "685a5f2e82e92ad29111a6a9",
+  "is_active": true,
   "created_by_user_id": "507f1f77bcf86cd799439013",
   "created_by_client_id": "685a5f2e82e92ad29111a6a9",
   "created_at": "2024-01-15T10:30:00Z",
@@ -169,7 +195,7 @@ Retrieves a paginated list of groups with optional scope filtering.
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `system:group:read`
+**Required Dependencies:** `can_read_groups` (requires `group:read_all`, `group:read_platform`, or `group:read_client`)
 
 **Query Parameters:**
 
@@ -190,11 +216,20 @@ Retrieves a paginated list of groups with optional scope filtering.
     "name": "sales_team",
     "display_name": "Sales Team",
     "description": "Client sales representatives",
-    "permissions": ["client:listings:create", "client:clients:manage"],
+    "permissions": [
+      {
+        "id": "507f1f77bcf86cd799439020",
+        "name": "client:listings:create",
+        "display_name": "Create Client Listings",
+        "description": "Create new listings within client scope"
+      }
+    ],
     "scope": "client",
     "scope_id": "685a5f2e82e92ad29111a6a9",
+    "is_active": true,
     "created_by_user_id": "507f1f77bcf86cd799439013",
-    "created_at": "2024-01-15T10:30:00Z"
+    "created_at": "2024-01-15T10:30:00Z",
+    "updated_at": "2024-01-15T10:30:00Z"
   },
   {
     "id": "507f1f77bcf86cd799439014",
@@ -240,7 +275,7 @@ Retrieves groups that the current user can assign to others, grouped by scope.
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `system:group:read`
+**Required Dependencies:** `require_admin` (any admin role)
 
 **Response:**
 
@@ -257,7 +292,17 @@ Retrieves groups that the current user can assign to others, grouped by scope.
       "description": "Cross-platform support team",
       "scope": "system",
       "scope_id": null,
-      "permissions": ["support:tickets:read", "support:tickets:update"]
+      "is_active": true,
+      "permissions": [
+        {
+          "id": "507f1f77bcf86cd799439030",
+          "name": "support:tickets:read",
+          "display_name": "Read Support Tickets",
+          "description": "Read support tickets across all platforms"
+        }
+      ],
+      "created_at": "2024-01-15T09:00:00Z",
+      "updated_at": "2024-01-15T09:00:00Z"
     }
   ],
   "platform_groups": [
@@ -268,7 +313,17 @@ Retrieves groups that the current user can assign to others, grouped by scope.
       "description": "Platform analytics team",
       "scope": "platform",
       "scope_id": "real_estate_platform",
-      "permissions": ["platform:analytics:view", "platform:reports:create"]
+      "is_active": true,
+      "permissions": [
+        {
+          "id": "507f1f77bcf86cd799439031",
+          "name": "platform:analytics:view",
+          "display_name": "View Platform Analytics",
+          "description": "View analytics across platform"
+        }
+      ],
+      "created_at": "2024-01-15T09:30:00Z",
+      "updated_at": "2024-01-15T09:30:00Z"
     }
   ],
   "client_groups": [
@@ -279,7 +334,17 @@ Retrieves groups that the current user can assign to others, grouped by scope.
       "description": "Client sales team",
       "scope": "client",
       "scope_id": "685a5f2e82e92ad29111a6a9",
-      "permissions": ["client:listings:create", "client:clients:manage"]
+      "is_active": true,
+      "permissions": [
+        {
+          "id": "507f1f77bcf86cd799439020",
+          "name": "client:listings:create",
+          "display_name": "Create Client Listings",
+          "description": "Create new listings within client scope"
+        }
+      ],
+      "created_at": "2024-01-15T10:00:00Z",
+      "updated_at": "2024-01-15T10:00:00Z"
     },
     {
       "id": "507f1f77bcf86cd799439016",
@@ -314,7 +379,7 @@ Retrieves a specific group by its MongoDB ObjectId.
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `system:group:read`
+**Required Dependencies:** `can_read_groups` (requires `group:read_all`, `group:read_platform`, or `group:read_client`)
 
 **Path Parameters:**
 
@@ -331,9 +396,17 @@ Retrieves a specific group by its MongoDB ObjectId.
   "name": "sales_team",
   "display_name": "Sales Team",
   "description": "Client sales representatives",
-  "permissions": ["client:listings:create", "client:listings:update", "client:clients:manage"],
+  "permissions": [
+    {
+      "id": "507f1f77bcf86cd799439020",
+      "name": "client:listings:create",
+      "display_name": "Create Client Listings",
+      "description": "Create new listings within client scope"
+    }
+  ],
   "scope": "client",
   "scope_id": "685a5f2e82e92ad29111a6a9",
+  "is_active": true,
   "created_by_user_id": "507f1f77bcf86cd799439013",
   "created_by_client_id": "685a5f2e82e92ad29111a6a9",
   "created_at": "2024-01-15T10:30:00Z",
@@ -363,7 +436,7 @@ Updates an existing group's information and permissions.
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `system:group:update`
+**Required Dependencies:** `can_manage_groups` (requires `group:manage_all`, `group:manage_platform`, or `group:manage_client`)
 
 **Path Parameters:**
 
@@ -390,9 +463,23 @@ Updates an existing group's information and permissions.
   "name": "sales_team",
   "display_name": "Senior Sales Team",
   "description": "Updated sales team description",
-  "permissions": ["client:listings:create", "client:listings:update", "client:clients:manage", "client:reports:sales", "client:contracts:create"],
+  "permissions": [
+    {
+      "id": "507f1f77bcf86cd799439020",
+      "name": "client:listings:create",
+      "display_name": "Create Client Listings",
+      "description": "Create new listings within client scope"
+    },
+    {
+      "id": "507f1f77bcf86cd799439025",
+      "name": "client:contracts:create",
+      "display_name": "Create Client Contracts",
+      "description": "Create contracts within client scope"
+    }
+  ],
   "scope": "client",
   "scope_id": "685a5f2e82e92ad29111a6a9",
+  "is_active": true,
   "created_by_user_id": "507f1f77bcf86cd799439013",
   "created_by_client_id": "685a5f2e82e92ad29111a6a9",
   "created_at": "2024-01-15T10:30:00Z",
@@ -435,7 +522,7 @@ Deletes a group and removes all users from the group.
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `system:group:delete`
+**Required Dependencies:** `can_manage_groups` (requires `group:manage_all`, `group:manage_platform`, or `group:manage_client`)
 
 **Path Parameters:**
 
@@ -467,7 +554,7 @@ Adds users to a specific group for team collaboration.
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `system:group:manage_members`
+**Required Dependencies:** `can_manage_groups` (requires `group:manage_all`, `group:manage_platform`, or `group:manage_client`)
 
 **Path Parameters:**
 
@@ -522,7 +609,7 @@ Removes users from a specific group.
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `system:group:manage_members`
+**Required Dependencies:** `can_manage_groups` (requires `group:manage_all`, `group:manage_platform`, or `group:manage_client`)
 
 **Path Parameters:**
 
@@ -576,7 +663,7 @@ Retrieves all members of a specific group with their basic information.
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `system:group:read`
+**Required Dependencies:** `can_read_groups` (requires `group:read_all`, `group:read_platform`, or `group:read_client`)
 
 **Path Parameters:**
 
@@ -633,7 +720,7 @@ Retrieves all groups that a user belongs to, along with their effective permissi
 
 **Authentication Required:** Yes (Access Token)
 
-**Required Permissions:** `system:group:read`
+**Required Dependencies:** `can_read_groups` (requires `group:read_all`, `group:read_platform`, or `group:read_client`)
 
 **Path Parameters:**
 
@@ -653,10 +740,19 @@ Retrieves all groups that a user belongs to, along with their effective permissi
       "name": "sales_team",
       "display_name": "Sales Team",
       "description": "Client sales representatives",
-      "permissions": ["client:listings:create", "client:clients:manage"],
+      "permissions": [
+        {
+          "id": "507f1f77bcf86cd799439020",
+          "name": "client:listings:create",
+          "display_name": "Create Client Listings",
+          "description": "Create new listings within client scope"
+        }
+      ],
       "scope": "client",
       "scope_id": "685a5f2e82e92ad29111a6a9",
-      "created_at": "2024-01-15T10:30:00Z"
+      "is_active": true,
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-15T10:30:00Z"
     },
     {
       "id": "507f1f77bcf86cd799439016",
@@ -669,7 +765,20 @@ Retrieves all groups that a user belongs to, along with their effective permissi
       "created_at": "2024-01-15T11:00:00Z"
     }
   ],
-  "effective_permissions": ["client:listings:create", "client:clients:manage", "client:project:alpha:read", "client:project:alpha:update"]
+  "effective_permissions": [
+    {
+      "id": "507f1f77bcf86cd799439020",
+      "name": "client:listings:create",
+      "display_name": "Create Client Listings",
+      "description": "Create new listings within client scope"
+    },
+    {
+      "id": "507f1f77bcf86cd799439021",
+      "name": "client:project:alpha:read",
+      "display_name": "Read Project Alpha",
+      "description": "Read access to Project Alpha resources"
+    }
+  ]
 }
 ```
 
@@ -697,43 +806,49 @@ curl -X GET "https://api.example.com/v1/groups/users/507f1f77bcf86cd799439013/gr
 
 ### Required Permissions by Endpoint
 
-| Endpoint                            | Method | Required Permissions          |
-| ----------------------------------- | ------ | ----------------------------- |
-| `/v1/groups/`                       | GET    | `system:group:read`           |
-| `/v1/groups/`                       | POST   | `system:group:create`         |
-| `/v1/groups/available`              | GET    | `system:group:read`           |
-| `/v1/groups/{group_id}`             | GET    | `system:group:read`           |
-| `/v1/groups/{group_id}`             | PUT    | `system:group:update`         |
-| `/v1/groups/{group_id}`             | DELETE | `system:group:delete`         |
-| `/v1/groups/{group_id}/members`     | POST   | `system:group:manage_members` |
-| `/v1/groups/{group_id}/members`     | DELETE | `system:group:manage_members` |
-| `/v1/groups/{group_id}/members`     | GET    | `system:group:read`           |
-| `/v1/groups/users/{user_id}/groups` | GET    | `system:group:read`           |
+| Endpoint                            | Method | Required Dependencies |
+| ----------------------------------- | ------ | --------------------- |
+| `/v1/groups/`                       | GET    | `can_read_groups`     |
+| `/v1/groups/`                       | POST   | `can_manage_groups`   |
+| `/v1/groups/available`              | GET    | `require_admin`       |
+| `/v1/groups/{group_id}`             | GET    | `can_read_groups`     |
+| `/v1/groups/{group_id}`             | PUT    | `can_manage_groups`   |
+| `/v1/groups/{group_id}`             | DELETE | `can_manage_groups`   |
+| `/v1/groups/{group_id}/members`     | POST   | `can_manage_groups`   |
+| `/v1/groups/{group_id}/members`     | DELETE | `can_manage_groups`   |
+| `/v1/groups/{group_id}/members`     | GET    | `can_read_groups`     |
+| `/v1/groups/users/{user_id}/groups` | GET    | `can_read_groups`     |
+
+### Dependency Function Mappings
+
+- `can_read_groups` requires any of: `group:read_all`, `group:read_platform`, `group:read_client`
+- `can_manage_groups` requires any of: `group:manage_all`, `group:manage_platform`, `group:manage_client`
+- `require_admin` requires any admin role: `super_admin`, `admin`, or `client_admin`
 
 ## Scope-Based Access Control
 
-### Super Admins
+### Super Admins (`group:manage_all`)
 
 - Can access and manage groups across all scopes
 - No restrictions on group operations
 - Can view and manage any user's group memberships
 
-### Platform Admins
+### Platform Admins (`group:manage_platform`)
 
 - Can manage groups within their platform scope only
 - Can access system groups for assignment
 - Cannot access other platform's groups
 
-### Client Admins
+### Client Admins (`group:manage_client`)
 
 - Can manage groups within their client scope only
 - Can access system groups for assignment
 - Cannot access other client's groups
 
-### Team Members
+### Team Members (`group:read_client`)
 
 - Can view groups they belong to
-- Cannot modify group memberships (requires manage_members permission)
+- Cannot modify group memberships (requires manage permissions)
 - Can view their own effective permissions through groups
 
 ## Data Models
@@ -743,7 +858,7 @@ curl -X GET "https://api.example.com/v1/groups/users/507f1f77bcf86cd799439013/gr
 ```json
 {
   "name": "string (required)",
-  "display_name": "string (optional)",
+  "display_name": "string (required)",
   "description": "string (optional)",
   "permissions": ["string"] (required),
   "scope": "system | platform | client (required)"
@@ -754,9 +869,11 @@ curl -X GET "https://api.example.com/v1/groups/users/507f1f77bcf86cd799439013/gr
 
 ```json
 {
+  "name": "string (optional)",
   "display_name": "string (optional)",
   "description": "string (optional)",
-  "permissions": ["string"] (optional)
+  "permissions": ["string"] (optional),
+  "is_active": "bool (optional)"
 }
 ```
 
@@ -768,10 +885,18 @@ curl -X GET "https://api.example.com/v1/groups/users/507f1f77bcf86cd799439013/gr
   "name": "string",
   "display_name": "string",
   "description": "string",
-  "permissions": ["string"],
+  "permissions": [
+    {
+      "id": "string (MongoDB ObjectId)",
+      "name": "string",
+      "display_name": "string",
+      "description": "string"
+    }
+  ],
   "scope": "system | platform | client",
   "scope_id": "string | null",
-  "created_by_user_id": "string",
+  "is_active": "bool",
+  "created_by_user_id": "string | null",
   "created_by_client_id": "string | null",
   "created_at": "string (ISO 8601)",
   "updated_at": "string (ISO 8601)"
@@ -821,7 +946,14 @@ curl -X GET "https://api.example.com/v1/groups/users/507f1f77bcf86cd799439013/gr
 {
   "user_id": "string",
   "groups": ["GroupResponseSchema"],
-  "effective_permissions": ["string"]
+  "effective_permissions": [
+    {
+      "id": "string (MongoDB ObjectId)",
+      "name": "string",
+      "display_name": "string",
+      "description": "string"
+    }
+  ]
 }
 ```
 
@@ -977,7 +1109,7 @@ const userPermissions = userStore.effectivePermissions;
 const userGroups = userStore.groups;
 
 // Project-specific access
-const canEditProjectAlpha = userPermissions.includes("client:project:alpha:update");
+const canEditProjectAlpha = userPermissions.some((p) => p.name === "client:project:alpha:update");
 const isProjectAlphaMember = userGroups.some((g) => g.name === "project_alpha_team");
 
 // Team-based UI

@@ -2,27 +2,40 @@
 
 ## Overview
 
-The Authentication Routes provide a comprehensive API for user authentication, session management, and password operations within the authentication system. This module handles login, logout, token refresh, password reset, and session management with support for both JSON tokens and HTTP-only cookies.
+The Authentication Routes provide a comprehensive API for user authentication, session management, and password operations within the authentication system. This module handles **JWT-based authentication**, **session management**, **password operations**, and **multi-source permission aggregation** with support for both JSON tokens and HTTP-only cookies.
 
 **Base URL:** `/v1/auth`  
 **Tags:** Authentication
 
-## Authentication Methods
+## 🔐 **Authentication Methods**
 
 The API supports two authentication methods:
 
-1. **Bearer Token Authentication:** Traditional JWT tokens passed in Authorization header
-2. **HTTP-Only Cookie Authentication:** Secure cookies for web applications (use `use_cookies=true` parameter)
+1. **Bearer Token Authentication**: Traditional JWT tokens passed in Authorization header
+2. **HTTP-Only Cookie Authentication**: Secure cookies for web applications (use `use_cookies=true` parameter)
 
-## Endpoints
+## 🎯 **Core Features**
+
+- **JWT Token Management** with automatic rotation
+- **Multi-Device Session Management** with IP/User-Agent tracking
+- **Real-Time Permission Aggregation** from roles, groups, and direct assignments
+- **Password Security** with reset and change workflows
+- **Platform Staff Detection** for cross-client access management
+- **Cookie Security** with dynamic secure flag based on environment
+
+---
+
+## 📋 **Endpoints**
 
 ### 1. User Login
 
-Authenticates a user and returns access and refresh tokens.
+**✅ ENHANCED** - Authenticates a user and returns access and refresh tokens with **client account context** and **dual authentication modes**.
 
 **Endpoint:** `POST /v1/auth/login`
 
 **Authentication Required:** No
+
+**Request Format:** `application/x-www-form-urlencoded` (OAuth2 standard)
 
 **Query Parameters:**
 
@@ -36,6 +49,13 @@ Authenticates a user and returns access and refresh tokens.
   "password": "securepassword123"
 }
 ```
+
+**Features:**
+
+- **Client Account Context**: Access tokens include client_account_id for scoped operations
+- **Session Tracking**: Stores IP address and user agent for security monitoring
+- **Dual Response Modes**: JSON tokens or HTTP-only cookies based on use_cookies parameter
+- **Dynamic Cookie Security**: Secure flag automatically set based on environment (localhost vs production)
 
 **Response (JSON Mode):**
 
@@ -63,8 +83,8 @@ Authenticates a user and returns access and refresh tokens.
 ```
 
 - **Cookies Set:**
-  - `access_token` - HTTP-only, expires in 15 minutes
-  - `refresh_token` - HTTP-only, expires in 7 days
+  - `access_token` - HTTP-only, expires in **30 minutes**
+  - `refresh_token` - HTTP-only, expires in **7 days**
 
 **Error Responses:**
 
@@ -88,7 +108,7 @@ curl -X POST "https://api.example.com/v1/auth/login?use_cookies=true" \
 
 ### 2. Refresh Access Token
 
-Refreshes an access token using a valid refresh token with automatic token rotation.
+**✅ ENHANCED** - Refreshes access token with **automatic token rotation** and **client context preservation**.
 
 **Endpoint:** `POST /v1/auth/refresh`
 
@@ -101,6 +121,13 @@ Refreshes an access token using a valid refresh token with automatic token rotat
 **Headers (JSON Mode):**
 
 - `Authorization: Bearer <refresh_token>`
+
+**Features:**
+
+- **Token Rotation**: Automatically issues new refresh token and revokes old one
+- **Client Context**: Preserves client_account_id in new tokens
+- **Session Security**: Links new tokens to same session tracking information
+- **Dual Input/Output**: Supports both header tokens and cookies
 
 **Response (JSON Mode):**
 
@@ -153,6 +180,8 @@ Revokes the current user's refresh token and optionally clears cookies.
 
 **Authentication Required:** Yes (Access Token)
 
+**Dependencies:** `get_current_user_with_token` (extracts JTI for token revocation)
+
 **Query Parameters:**
 
 - `use_cookies` (optional, boolean, default: false) - Clear HTTP-only cookies
@@ -180,6 +209,8 @@ Revokes all of the current user's refresh tokens across all devices.
 
 **Authentication Required:** Yes (Access Token)
 
+**Dependencies:** `get_current_user`
+
 **Response:**
 
 - **Status Code:** `204 No Content`
@@ -197,18 +228,21 @@ curl -X POST "https://api.example.com/v1/auth/logout_all" \
 
 ### 5. Get Current User Profile
 
-**✅ ENHANCED** - Retrieves the profile of the currently authenticated user with **real-time effective permissions** and **platform staff information**.
+**✅ ENHANCED** - Retrieves the profile of the currently authenticated user with **real-time effective permissions**, **platform staff context**, and **multi-source permission aggregation**.
 
 **Endpoint:** `GET /v1/auth/me`
 
 **Authentication Required:** Yes (Access Token)
 
+**Dependencies:** `get_current_user`
+
 **Features:**
 
-- **Real-Time Permissions**: Calculates effective permissions from direct roles, group roles, and user assignments
-- **Platform Staff Info**: Includes platform hierarchy fields for cross-client management
-- **Multi-Source Aggregation**: Combines permissions from roles, groups, and direct assignments
-- **Security Context**: Provides complete authorization context for frontend applications
+- **Real-Time Permissions**: Calculates effective permissions from **roles + groups + direct assignments**
+- **Platform Staff Detection**: Identifies cross-client access capabilities
+- **Permission Details**: Returns `PermissionDetailSchema` objects with full permission information
+- **Client Context**: Includes client account information and platform scope
+- **Multi-Source Aggregation**: Combines permissions from all sources for frontend authorization
 
 **Response:**
 
@@ -221,55 +255,51 @@ curl -X POST "https://api.example.com/v1/auth/logout_all" \
   "email": "admin@propertyhub.com",
   "first_name": "Platform",
   "last_name": "Admin",
+  "status": "active",
   "client_account_id": "507f1f77bcf86cd799439012",
-  "roles": ["platform_admin"],
-  "groups": ["507f1f77bcf86cd799439013"],
+  "roles": ["507f1f77bcf86cd799439015"],
+  "groups": ["507f1f77bcf86cd799439016"],
   "permissions": [
-    "client_account:create",
-    "client_account:read",
-    "client_account:update",
-    "user:create",
-    "user:read",
-    "user:update",
-    "user:delete",
-    "group:create",
-    "group:read",
-    "group:update",
-    "group:delete",
-    "role:read",
-    "permission:read",
-    "platform:manage_clients",
-    "platform:view_analytics",
-    "platform:support_users",
-    "platform:onboard_clients"
+    {
+      "id": "507f1f77bcf86cd799439020",
+      "name": "client:manage_all",
+      "display_name": "Manage All Clients",
+      "scope": "system",
+      "scope_id": null
+    },
+    {
+      "id": "507f1f77bcf86cd799439021",
+      "name": "user:manage_platform",
+      "display_name": "Manage Platform Users",
+      "scope": "platform",
+      "scope_id": "platform_id"
+    }
   ],
-  "is_main_client": true,
   "is_platform_staff": true,
   "platform_scope": "all",
-  "status": "active",
   "created_at": "2023-01-01T00:00:00Z",
-  "updated_at": "2023-01-01T00:00:00Z",
-  "last_login_at": "2023-01-01T00:00:00Z",
-  "locale": "en-US"
+  "updated_at": "2023-01-01T00:00:00Z"
 }
 ```
 
-**New Fields Explained:**
+**Key Response Fields:**
 
-- **`permissions`**: Array of effective permissions calculated from all sources (roles + groups + direct)
-- **`is_platform_staff`**: Boolean indicating if user has platform-level access
-- **`platform_scope`**: Platform access scope ("all", "created", or null)
+- **`permissions`**: Array of `PermissionDetailSchema` objects with full permission details
+- **`roles`**: Array of role ObjectId strings (not role names)
+- **`groups`**: Array of group ObjectId strings (not group names)
+- **`is_platform_staff`**: Boolean indicating cross-client access capability
+- **`platform_scope`**: Platform access level ("all", "created", or null)
 
-**Permission Calculation:**
+**Permission Calculation Process:**
 
-1. **Direct Role Permissions**: Permissions from user's assigned roles
-2. **Group Role Permissions**: Permissions from roles assigned to user's groups
-3. **Combined**: Real-time aggregation of all permission sources
+1. **Direct Role Permissions**: Permissions from user's assigned roles (via Links)
+2. **Group Role Permissions**: Permissions from user's group memberships (via Links)
+3. **Real-Time Resolution**: Resolves ObjectIds to full permission details via `permission_service.resolve_permissions_to_details()`
 
 **Platform Staff Levels:**
 
-- **`platform_scope: "all"`**: Can access all clients within platform (admins, support)
-- **`platform_scope: "created"`**: Can access only clients they created (sales)
+- **`platform_scope: "all"`**: Can access all clients (admins, support)
+- **`platform_scope: "created"`**: Can access only created clients (sales)
 - **`is_platform_staff: false`**: Regular client users (no cross-client access)
 
 **Error Responses:**
@@ -291,18 +321,23 @@ curl -X GET "https://api.example.com/v1/auth/me" \
   "email": "john.agent@acmerealestate.com",
   "first_name": "John",
   "last_name": "Agent",
+  "status": "active",
   "client_account_id": "507f1f77bcf86cd799439015",
-  "roles": ["real_estate_agent"],
-  "groups": ["507f1f77bcf86cd799439016"],
-  "permissions": ["user:read", "group:read", "client_account:read"],
-  "is_main_client": false,
+  "roles": ["507f1f77bcf86cd799439017"],
+  "groups": ["507f1f77bcf86cd799439018"],
+  "permissions": [
+    {
+      "id": "507f1f77bcf86cd799439025",
+      "name": "user:read_client",
+      "display_name": "Read Client Users",
+      "scope": "client",
+      "scope_id": "507f1f77bcf86cd799439015"
+    }
+  ],
   "is_platform_staff": false,
   "platform_scope": null,
-  "status": "active",
   "created_at": "2023-01-01T00:00:00Z",
-  "updated_at": "2023-01-01T00:00:00Z",
-  "last_login_at": "2023-01-01T00:00:00Z",
-  "locale": "en-US"
+  "updated_at": "2023-01-01T00:00:00Z"
 }
 ```
 
@@ -310,8 +345,8 @@ curl -X GET "https://api.example.com/v1/auth/me" \
 
 ```javascript
 // Check if user has specific permission
-function hasPermission(userProfile, permission) {
-  return userProfile.permissions.includes(permission);
+function hasPermission(userProfile, permissionName) {
+  return userProfile.permissions.some((p) => p.name === permissionName);
 }
 
 // Check if user is platform staff
@@ -326,7 +361,7 @@ function canAccessAllClients(userProfile) {
 
 // Usage examples
 const user = await getCurrentUser();
-const canCreateClients = hasPermission(user, "client_account:create");
+const canCreateClients = hasPermission(user, "client:manage_all");
 const canViewAnalytics = hasPermission(user, "platform:view_analytics");
 const isPlatformUser = isPlatformStaff(user);
 ```
@@ -338,6 +373,8 @@ Initiates a password reset process. In production, this would send an email with
 **Endpoint:** `POST /v1/auth/password/reset-request`
 
 **Authentication Required:** No
+
+**Request Body Schema:** `PasswordResetRequestSchema`
 
 **Request Body:**
 
@@ -359,13 +396,15 @@ Initiates a password reset process. In production, this would send an email with
 }
 ```
 
-**Note:** The `token` field is included for testing purposes. In production, this token would be sent via email and not returned in the response.
+**Important Security Notes:**
 
-**Important:** The response is the same regardless of whether the email exists or not to prevent user enumeration attacks.
+- The `token` field is included **for testing purposes only**
+- In production, this token would be sent via email and **not returned** in the response
+- The response is identical regardless of whether the email exists (prevents user enumeration)
 
 **Error Responses:**
 
-- `400 Bad Request` - Invalid email format
+- `422 Unprocessable Entity` - Invalid email format
 
 **Example Request:**
 
@@ -377,11 +416,13 @@ curl -X POST "https://api.example.com/v1/auth/password/reset-request" \
 
 ### 7. Confirm Password Reset
 
-Confirms a password reset using the token from the reset request.
+Confirms a password reset using the token from the reset request with **automatic session revocation**.
 
 **Endpoint:** `POST /v1/auth/password/reset-confirm`
 
 **Authentication Required:** No
+
+**Request Body Schema:** `PasswordResetConfirmSchema`
 
 **Request Body:**
 
@@ -392,6 +433,12 @@ Confirms a password reset using the token from the reset request.
 }
 ```
 
+**Features:**
+
+- **Automatic Session Revocation**: All user's existing sessions are revoked for security
+- **Token Usage Tracking**: Reset token is marked as used with timestamp
+- **Password Validation**: New password must meet security requirements
+
 **Response:**
 
 - **Status Code:** `204 No Content`
@@ -399,7 +446,7 @@ Confirms a password reset using the token from the reset request.
 **Error Responses:**
 
 - `400 Bad Request` - Invalid or expired password reset token
-- `400 Bad Request` - Password validation errors
+- `422 Unprocessable Entity` - Password validation errors
 
 **Example Request:**
 
@@ -414,11 +461,21 @@ curl -X POST "https://api.example.com/v1/auth/password/reset-confirm" \
 
 ### 8. Get Active Sessions
 
-Retrieves all active sessions for the current user.
+**✅ ENHANCED** - Retrieves all active sessions for the current user with **detailed session information**.
 
 **Endpoint:** `GET /v1/auth/sessions`
 
 **Authentication Required:** Yes (Access Token)
+
+**Dependencies:** `get_current_user`
+
+**Response Schema:** `List[SessionResponseSchema]`
+
+**Features:**
+
+- **Session Tracking**: Shows IP address, user agent, and timestamps for each session
+- **Security Monitoring**: Helps users identify unauthorized access
+- **Multi-Device Management**: Shows sessions across all devices
 
 **Response:**
 
@@ -450,15 +507,23 @@ curl -X GET "https://api.example.com/v1/auth/sessions" \
 
 ### 9. Revoke Specific Session
 
-Revokes a specific session by its JTI (JWT ID).
+Revokes a specific session by its JTI (JWT ID) with **user ownership validation**.
 
 **Endpoint:** `DELETE /v1/auth/sessions/{jti}`
 
 **Authentication Required:** Yes (Access Token)
 
+**Dependencies:** `get_current_user`
+
 **Path Parameters:**
 
 - `jti` (required, string) - The unique JWT identifier of the session to revoke
+
+**Features:**
+
+- **Ownership Validation**: Users can only revoke their own sessions
+- **Immediate Revocation**: Session is immediately invalidated
+- **Security Control**: Allows users to remotely log out compromised devices
 
 **Response:**
 
@@ -478,11 +543,15 @@ curl -X DELETE "https://api.example.com/v1/auth/sessions/550e8400-e29b-41d4-a716
 
 ### 10. Change Password
 
-Changes the current user's password.
+**✅ ENHANCED** - Changes the current user's password with **automatic session revocation** and **password verification**.
 
 **Endpoint:** `POST /v1/auth/password/change`
 
 **Authentication Required:** Yes (Access Token)
+
+**Dependencies:** `get_current_user`
+
+**Request Body Schema:** `PasswordChangeSchema`
 
 **Request Body:**
 
@@ -493,6 +562,13 @@ Changes the current user's password.
 }
 ```
 
+**Features:**
+
+- **Current Password Verification**: Requires current password for security
+- **Automatic Session Revocation**: All user's sessions are revoked after password change
+- **Password Validation**: New password must meet security requirements
+- **Immediate Effect**: Forces re-authentication on all devices
+
 **Response:**
 
 - **Status Code:** `204 No Content`
@@ -500,7 +576,7 @@ Changes the current user's password.
 **Error Responses:**
 
 - `400 Bad Request` - Current password is incorrect
-- `400 Bad Request` - Password validation errors
+- `422 Unprocessable Entity` - Password validation errors
 - `401 Unauthorized` - Invalid access token
 
 **Example Request:**
@@ -515,32 +591,111 @@ curl -X POST "https://api.example.com/v1/auth/password/change" \
      }'
 ```
 
-## Security Features
+---
 
-### Token Management
+## 🔒 **Security Features**
 
-- **Access Token Expiry:** 15 minutes
-- **Refresh Token Expiry:** 7 days
-- **Token Rotation:** New refresh tokens are issued on each refresh
-- **Automatic Revocation:** All tokens are revoked on password change
+### **Token Management**
 
-### Cookie Security
+- **Access Token Expiry:** **30 minutes** (configurable via `ACCESS_TOKEN_EXPIRE_MINUTES`)
+- **Refresh Token Expiry:** **7 days** (configurable via `REFRESH_TOKEN_EXPIRE_DAYS`)
+- **Token Rotation:** New refresh tokens are issued on each refresh with old token revocation
+- **Automatic Revocation:** All tokens are revoked on password change for security
+- **Client Context:** Access tokens include `client_account_id` for scoped operations
+
+### **Cookie Security**
 
 When using `use_cookies=true`:
 
-- **HTTP-Only:** Cookies cannot be accessed via JavaScript
-- **Secure Flag:** Dynamically set based on environment (false for localhost/HTTP, true for production/HTTPS)
+- **HTTP-Only:** Cookies cannot be accessed via JavaScript (XSS protection)
+- **Dynamic Secure Flag:** Automatically set based on environment:
+  - `false` for localhost/HTTP (development)
+  - `true` for production/HTTPS
 - **SameSite:** Set to "strict" for CSRF protection
-- **Proper Expiry:** Matches token expiration times
+- **Proper Expiry:** Matches token expiration times exactly
+- **Path Restriction:** Cookies scoped to appropriate paths
 
-### Session Security
+### **Session Security**
 
-- **IP Tracking:** Sessions track the originating IP address
-- **User Agent Tracking:** Sessions track the client user agent
+- **IP Tracking:** All sessions track originating IP address
+- **User Agent Tracking:** Sessions track client user agent for device identification
 - **Session Management:** Users can view and revoke individual sessions
 - **Bulk Revocation:** Support for revoking all sessions at once
+- **JTI Linking:** Access and refresh tokens share JTI for session correlation
 
-## Error Handling
+### **Password Security**
+
+- **Bcrypt Hashing:** Passwords hashed using bcrypt with proper salt rounds
+- **Current Password Verification:** Required for password changes
+- **Session Invalidation:** All sessions revoked on password change
+- **Reset Token Security:** Time-limited tokens for password reset
+- **Usage Tracking:** Reset tokens marked as used to prevent reuse
+
+---
+
+## 📊 **Authentication Schemas**
+
+### **TokenSchema**
+
+```python
+{
+  "access_token": str,
+  "refresh_token": str,
+  "token_type": str
+}
+```
+
+### **TokenDataSchema** (Internal JWT Payload)
+
+```python
+{
+  "user_id": Optional[str],
+  "jti": Optional[str],
+  "client_account_id": Optional[str]
+}
+```
+
+### **SessionResponseSchema**
+
+```python
+{
+  "jti": str,
+  "ip_address": Optional[str],
+  "user_agent": Optional[str],
+  "created_at": datetime,
+  "expires_at": datetime
+}
+```
+
+### **PasswordResetRequestSchema**
+
+```python
+{
+  "email": EmailStr
+}
+```
+
+### **PasswordResetConfirmSchema**
+
+```python
+{
+  "token": str,
+  "new_password": str
+}
+```
+
+### **PasswordChangeSchema**
+
+```python
+{
+  "current_password": str,
+  "new_password": str
+}
+```
+
+---
+
+## ⚠️ **Error Handling**
 
 All endpoints follow consistent error response format:
 
@@ -550,44 +705,109 @@ All endpoints follow consistent error response format:
 }
 ```
 
-Common HTTP status codes:
+**Common HTTP Status Codes:**
 
 - `200 OK` - Request successful
 - `204 No Content` - Request successful, no response body
-- `400 Bad Request` - Invalid request data
-- `401 Unauthorized` - Authentication failed
+- `400 Bad Request` - Invalid request data or business logic error
+- `401 Unauthorized` - Authentication failed or token invalid
 - `403 Forbidden` - Insufficient permissions
 - `404 Not Found` - Resource not found
 - `409 Conflict` - Resource conflict
+- `422 Unprocessable Entity` - Validation errors
 
-## Rate Limiting
+---
 
-Authentication endpoints may be subject to rate limiting to prevent brute force attacks. Check the response headers for rate limit information:
+## 🚀 **Best Practices**
+
+### **For Web Applications**
+
+1. **Use Cookie Mode**: Set `use_cookies=true` for browser-based applications
+2. **CSRF Protection**: Implement proper CSRF protection with SameSite cookies
+3. **HTTPS Required**: Always use HTTPS in production for cookie security
+4. **Automatic Refresh**: Implement automatic token refresh before expiration
+
+### **For Mobile/API Applications**
+
+1. **Use JSON Tokens**: Standard bearer token authentication
+2. **Secure Storage**: Store tokens in Keychain (iOS) or Keystore (Android)
+3. **Automatic Refresh**: Implement background token refresh
+4. **Network Error Handling**: Handle token refresh failures gracefully
+
+### **Security Best Practices**
+
+1. **HTTPS Only**: Never use HTTP in production
+2. **Token Storage**: Never store tokens in localStorage (web apps)
+3. **Session Monitoring**: Monitor active sessions for suspicious activity
+4. **Regular Rotation**: Encourage users to change passwords regularly
+5. **Rate Limiting**: Implement rate limiting on authentication endpoints
+
+### **Frontend Integration**
+
+```javascript
+// Permission checking utility
+class AuthService {
+  constructor() {
+    this.userProfile = null;
+  }
+
+  async getCurrentUser() {
+    const response = await fetch("/v1/auth/me", {
+      headers: { Authorization: `Bearer ${this.accessToken}` },
+    });
+    this.userProfile = await response.json();
+    return this.userProfile;
+  }
+
+  hasPermission(permissionName) {
+    return this.userProfile?.permissions?.some((p) => p.name === permissionName) || false;
+  }
+
+  isPlatformStaff() {
+    return this.userProfile?.is_platform_staff === true;
+  }
+
+  canAccessAllClients() {
+    return this.userProfile?.platform_scope === "all";
+  }
+}
+```
+
+---
+
+## 🔧 **Configuration**
+
+### **Environment Variables**
+
+```bash
+# Token Configuration
+ACCESS_TOKEN_EXPIRE_MINUTES=30    # Access token lifetime
+REFRESH_TOKEN_EXPIRE_DAYS=7       # Refresh token lifetime
+
+# Security
+SECRET_KEY=your-secret-key        # JWT signing key
+ALGORITHM=HS256                   # JWT algorithm
+
+# Database
+MONGODB_URL=mongodb://localhost:27017/outlabsauth
+```
+
+### **Rate Limiting**
+
+Authentication endpoints support rate limiting to prevent brute force attacks:
+
+- **Login Endpoint**: Limited attempts per IP/email combination
+- **Password Reset**: Limited requests per email per time window
+- **Refresh Token**: Limited refresh attempts per user
+
+Check response headers for rate limit information:
 
 - `X-RateLimit-Limit` - Maximum requests allowed
 - `X-RateLimit-Remaining` - Remaining requests in current window
-- `X-RateLimit-Reset` - Time when the rate limit resets
+- `X-RateLimit-Reset` - Time when rate limit resets
 
-## Best Practices
+---
 
-### For Web Applications
-
-1. Use `use_cookies=true` for browser-based applications
-2. Implement proper CSRF protection
-3. Use HTTPS in production
-4. Handle token refresh automatically
-
-### For Mobile/API Applications
-
-1. Use JSON token responses
-2. Store tokens securely (Keychain/Keystore)
-3. Implement automatic token refresh
-4. Handle network errors gracefully
-
-### General Security
-
-1. Always use HTTPS in production
-2. Implement proper error handling
-3. Log authentication events
-4. Monitor for suspicious activity
-5. Regularly rotate secrets and keys
+_Documentation Updated: 2024-01-15_  
+_API Version: v1_  
+_Token Expiry: Access 30min, Refresh 7 days_

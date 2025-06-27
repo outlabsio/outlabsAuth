@@ -2,335 +2,310 @@
 
 ## Overview
 
-The OutlabsAuth system implements a **sophisticated multi-layer dependency architecture** using FastAPI's dependency injection system. This approach provides declarative security, clean code separation, and flexible access control that scales from simple admin/user distinctions to enterprise-grade permission models with hundreds of specific permissions across multiple organizational scopes.
+The OutlabsAuth system implements a **unified declarative RBAC dependency architecture** using FastAPI's dependency injection system. This approach provides enterprise-grade access control through a clean, hierarchical permission model that scales from simple role-based access to granular permission-based authorization across multiple organizational scopes.
 
-## 🏗️ **Architecture: Three-Layer Permission System**
+## 🏗️ **Architecture: Unified Hierarchical Permission System**
 
-Our dependency system operates on **three complementary layers** that work together to provide comprehensive access control:
+Our dependency system operates on a **unified hierarchical permission model** with automatic scope resolution:
 
-### **Layer 1: Atomic Scoped Permissions**
+### **Hierarchical Permission Structure**
 
-The foundation layer consists of granular permissions scoped to organizational levels:
+Permissions follow a three-tier hierarchy where higher levels inherit access to lower levels:
 
 ```python
-# SYSTEM SCOPE (scope: "system", scope_id: null)
-"user:create"              # Create users anywhere in the system
-"infrastructure:manage"    # Manage core system infrastructure
-"platform:create"          # Create new platform instances
+# TIER 1: SYSTEM-WIDE ACCESS (highest privilege)
+"user:read_all"          # Read users across the entire system
+"user:manage_all"        # Manage users system-wide
+"role:manage_all"        # Manage roles across all scopes
 
-# PLATFORM SCOPE (scope: "platform", scope_id: "platform_123")
-"analytics:view"           # View platform-wide analytics
-"client_account:create"    # Create client accounts on this platform
-"support:cross_client"     # Support all clients on this platform
+# TIER 2: PLATFORM-SCOPED ACCESS (platform admin level)
+"user:read_platform"     # Read users within the platform
+"user:manage_platform"   # Manage users within the platform
+"group:read_platform"    # Read groups within the platform
 
-# CLIENT SCOPE (scope: "client", scope_id: "client_456")
-"listings:create"          # Create property listings for this client
-"users:manage"             # Manage users within this client organization
-"reports:view"             # View reports for this client
+# TIER 3: CLIENT-SCOPED ACCESS (client organization level)
+"user:read_client"       # Read users within client organization
+"user:manage_client"     # Manage users within client organization
+"role:read_client"       # Read roles within client organization
 ```
 
-### **Layer 2: Permission Categories (Dependency Families)**
+### **Automatic Scope Resolution**
 
-Broad permission categories that group related permissions for rapid development:
+The system automatically resolves user permissions based on their organizational context:
 
 ```python
-# Current permission families in the system
-require_group_manage_access = require_admin_or_permission("group:manage")
-require_role_manage_access = require_admin_or_permission("role:manage")
-require_user_read_access = require_admin_or_permission("user:read")
-require_permission_manage_access = require_admin_or_permission("permission:manage")
+# User: jane@propertyhub.com (Platform Admin)
+# Effective permissions include:
+effective_permissions = [
+    "user:read_all",         # System permissions
+    "user:manage_platform",  # Platform permissions
+    "analytics:view",        # Platform-specific permissions
+    # Inherits client permissions for all clients on their platform
+]
+
+# User: john@acmerealty.com (Client Admin for ACME Realty)
+# Effective permissions include:
+effective_permissions = [
+    "user:read_client",      # Client-scoped user read access
+    "user:manage_client",    # Client-scoped user management
+    "listings:create",       # Client-specific business permissions
+    # Automatically scoped to ACME Realty only
+]
 ```
 
-### **Layer 3: Role-Based Admin Shortcuts**
+## 🎯 **New Unified Dependency System**
 
-Administrative roles that bypass specific permission checks for operational efficiency:
+### **1. Core Permission Factory**
 
-```python
-# Role-based dependencies
-require_super_admin        # System admin (unrestricted access)
-require_admin             # Any admin role (system/platform/client)
-require_platform_admin    # Platform admin access only
-require_client_admin      # Client admin access only
-```
-
-## 🎯 **Core Dependency Patterns**
-
-### **1. Role-Based Access Control**
-
-Simple role requirements for straightforward access control:
+The foundation of the new system is the `require_permissions()` factory:
 
 ```python
-# Basic role checking
-@router.get("/admin-dashboard")
-async def admin_dashboard(
-    user: UserModel = Depends(require_super_admin)
+# Single permission required
+@router.get("/data")
+async def get_data(
+    _: UserModel = Depends(require_permissions(any_of=["data:read_client"]))
 ):
-    return {"message": "Super admin access granted"}
+    return await data_service.get_data()
 
-# Multiple role options
-@router.get("/management-panel")
-async def management_panel(
-    user: UserModel = Depends(require_admin)  # Any admin role
+# Multiple permission options (OR logic)
+@router.get("/reports")
+async def get_reports(
+    _: UserModel = Depends(require_permissions(any_of=[
+        "reports:read_all",
+        "reports:read_platform",
+        "reports:read_client"
+    ]))
 ):
-    return {"message": "Admin access granted"}
+    return await report_service.get_reports()
+
+# Multiple permissions required (AND logic)
+@router.post("/advanced-operation")
+async def advanced_operation(
+    _: UserModel = Depends(require_permissions(all_of=[
+        "operation:execute",
+        "audit:create"
+    ]))
+):
+    return await service.execute_advanced_operation()
 ```
 
-### **2. Permission-Based Access Control**
+### **2. Named Semantic Dependencies**
 
-Specific permission requirements for granular control:
+Pre-configured dependencies for common access patterns:
 
 ```python
-# Specific permission required
+# USER MANAGEMENT
+@router.get("/users")
+async def get_all_users(
+    current_user: UserModel = Depends(can_read_users),  # Auto-scoped data filtering
+    skip: int = 0, limit: int = 100
+):
+    users = await user_service.get_users(current_user=current_user, skip=skip, limit=limit)
+    return [convert_user_to_response(user) for user in users]
+
 @router.post("/users")
 async def create_user(
     user_data: UserCreateSchema,
-    _: UserModel = Depends(has_permission("user:create"))
+    _: UserModel = Depends(can_manage_users)  # Access control only
 ):
     return await user_service.create_user(user_data)
-```
 
-### **3. Hybrid Admin-or-Permission Dependencies**
-
-The most flexible pattern - admin roles OR specific permissions:
-
-```python
-# Admin roles bypass permission checks, regular users need specific permission
-@router.get("/users")
-async def get_users(
-    user: UserModel = Depends(require_user_read_access)  # Admin OR user:read
+# ROLE MANAGEMENT
+@router.get("/roles")
+async def get_roles(
+    _: UserModel = Depends(can_read_roles)
 ):
-    # Works for:
-    # - Any admin (super_admin, admin, client_admin)
-    # - Users with "user:read" permission
-    return await user_service.get_users()
+    return await role_service.get_roles()
+
+@router.post("/roles")
+async def create_role(
+    role_data: RoleCreateSchema,
+    _: UserModel = Depends(can_manage_roles)
+):
+    return await role_service.create_role(role_data)
+
+# GROUP MANAGEMENT
+@router.get("/groups")
+async def get_groups(
+    _: UserModel = Depends(can_read_groups)
+):
+    return await group_service.get_groups()
+
+@router.put("/groups/{group_id}")
+async def update_group(
+    group_id: str,
+    group_data: GroupUpdateSchema,
+    _: UserModel = Depends(can_manage_groups)
+):
+    return await group_service.update_group(group_id, group_data)
 ```
 
-### **4. User Access Control with Scoping**
+### **3. Resource Access Control**
 
-Advanced patterns for user data access with automatic scope validation:
+Advanced patterns for accessing specific resources:
 
 ```python
-# Self-or-admin access with client scoping
+# User access with automatic scoping
 @router.get("/users/{user_id}")
 async def get_user(
-    user: UserModel = Depends(can_access_user())
+    target_user: UserModel = Depends(can_access_user())  # Returns target user if accessible
 ):
-    # Handles:
-    # - Users accessing their own data
-    # - Admins accessing any user data
-    # - Client admin scoping (can't see other clients' users)
-    return convert_user_to_response(user)
+    return convert_user_to_response(target_user)
 
-# Validates access but returns current user
+# Self-or-admin pattern (returns current user)
 @router.put("/users/{user_id}")
 async def update_user(
     user_data: UserUpdateSchema,
-    current_user: UserModel = Depends(require_self_or_admin())
+    current_user: UserModel = Depends(require_self_or_admin())  # Validates access, returns current user
 ):
-    # current_user is guaranteed to have access to the target user
-    return await user_service.update_user(user_data, current_user)
+    target_user_id = request_context.path_params["user_id"]
+    return await user_service.update_user(target_user_id, user_data, current_user)
+
+# Hierarchical client access
+@router.get("/accounts/{account_id}/data")
+async def get_client_data(
+    account_id: str,
+    _: UserModel = Depends(has_hierarchical_client_access())
+):
+    return await client_service.get_data(account_id)
 ```
 
-### **5. Scope-Based Admin Dependencies**
+## 🔧 **Available Dependencies**
 
-Dependencies that validate admin access for specific scopes:
+### **Named Permission Dependencies**
+
+These are the primary dependencies you should use:
 
 ```python
-# System admin required (super admin only)
-@router.post("/system/roles")
-async def create_system_role(
-    role_data: RoleCreateSchema,
-    admin: UserModel = Depends(require_scope_admin("system"))
-):
-    return await role_service.create_role(role_data, "system")
+# USER MANAGEMENT
+can_read_users = require_permissions(any_of=["user:read_all", "user:read_platform", "user:read_client"])
+can_manage_users = require_permissions(any_of=["user:manage_all", "user:manage_platform", "user:manage_client"])
 
-# Platform admin required
-@router.post("/platform/features")
-async def create_platform_feature(
-    feature_data: FeatureCreateSchema,
-    admin: UserModel = Depends(require_scope_admin("platform"))
-):
-    return await feature_service.create_feature(feature_data)
+# ROLE MANAGEMENT
+can_read_roles = require_permissions(any_of=["role:read_all", "role:read_platform", "role:read_client"])
+can_manage_roles = require_permissions(any_of=["role:manage_all", "role:manage_platform", "role:manage_client"])
 
-# Client admin required
-@router.post("/client/departments")
-async def create_department(
-    dept_data: DepartmentCreateSchema,
-    admin: UserModel = Depends(require_scope_admin("client"))
-):
-    return await department_service.create_department(dept_data)
+# GROUP MANAGEMENT
+can_read_groups = require_permissions(any_of=["group:read_all", "group:read_platform", "group:read_client"])
+can_manage_groups = require_permissions(any_of=["group:manage_all", "group:manage_platform", "group:manage_client"])
+
+# CLIENT ACCOUNT MANAGEMENT
+can_read_client_accounts = require_permissions(any_of=["client:read_all", "client:read_platform"])
+can_manage_client_accounts = require_permissions(any_of=["client:manage_all", "client:manage_platform"])
+
+# PERMISSION MANAGEMENT
+can_read_permissions = require_permissions(any_of=["permission:read_all", "permission:read_platform"])
+can_manage_permissions = require_permissions(any_of=["permission:manage_all", "permission:manage_platform"])
 ```
 
-## 🔧 **Implementation Guide**
-
-### **Creating New Dependencies**
-
-#### **1. Simple Role Dependencies**
+### **Core Dependency Factories**
 
 ```python
-# In api/dependencies.py
+# Permission-based access
+require_permissions(any_of=["perm1", "perm2"])    # OR logic: user needs any of these permissions
+require_permissions(all_of=["perm1", "perm2"])    # AND logic: user needs all of these permissions
+require_permissions(any_of=["p1"], all_of=["p2"]) # Mixed: any of first group AND all of second group
 
-# Single role requirement
-def require_manager():
-    """Requires manager role specifically."""
-    return require_role("manager")
+# Role-based access
+require_role("role_name")                         # Specific role required
+require_any_role(["role1", "role2"])             # Any of the specified roles
+require_admin                                     # Any admin role (super_admin, admin)
 
-# Multiple role options
-def require_supervisor():
-    """Requires supervisor or manager role."""
-    return require_any_role(["supervisor", "manager"])
-
-# Usage in routes
-@router.get("/reports")
-async def get_reports(
-    user: UserModel = Depends(require_manager)
-):
-    return await report_service.get_reports()
+# Resource access control
+can_access_user(user_id_param="user_id")         # User access validation (returns target user)
+require_self_or_admin(user_id_param="user_id")   # Self-or-admin access (returns current user)
+has_hierarchical_client_access(target_client_field="account_id")  # Multi-tenant client access
 ```
 
-#### **2. Permission-Based Dependencies**
+### **Utility Functions**
 
 ```python
-# Specific permission required
-def require_export_access():
-    """Requires data export permission."""
-    return has_permission("data:export")
+# User role utilities
+user_has_role(user: UserModel, role_name: str) -> bool
+user_has_any_role(user: UserModel, role_names: List[str]) -> bool
+user_is_client_admin(user: UserModel) -> bool
+user_get_role_names(user: UserModel) -> List[str]
 
-# Admin or specific permission
-def require_analytics_access():
-    """Admin access or analytics permission."""
-    return require_admin_or_permission("analytics:view")
+# Response utilities
+convert_user_to_response(user: UserModel) -> Dict[str, Any]
 
-# Usage
-@router.get("/analytics")
-async def get_analytics(
-    user: UserModel = Depends(require_analytics_access)
-):
-    return await analytics_service.get_data()
-```
-
-#### **3. Resource-Specific Dependencies**
-
-```python
-# Resource access validation
-def can_access_project(project_id_param: str = "project_id"):
-    """Validates access to specific project."""
-    async def _can_access_project(
-        request: Request,
-        current_user: UserModel = Depends(get_current_user)
-    ) -> ProjectModel:
-        project_id = request.path_params.get(project_id_param)
-        project = await project_service.get_project(project_id)
-
-        if not project:
-            raise HTTPException(404, "Project not found")
-
-        # Check access (admin, project member, or specific permission)
-        if (user_has_role(current_user, "admin") or
-            project.is_member(current_user.id) or
-            await has_project_permission(current_user, project, "read")):
-            return project
-
-        raise HTTPException(403, "Access denied")
-    return _can_access_project
-
-# Usage
-@router.get("/projects/{project_id}")
-async def get_project(
-    project: ProjectModel = Depends(can_access_project())
-):
-    return project_to_response(project)
-```
-
-### **Granular Permission Control**
-
-#### **From Broad to Specific**
-
-```python
-# Start with broad categories during development
-require_document_access = require_admin_or_permission("document:manage")
-
-# Refine to specific operations as needed
-require_document_create = require_admin_or_permission("document:create")
-require_document_delete = require_admin_or_permission("document:delete")
-require_document_share = require_admin_or_permission("document:share")
-require_document_export = require_admin_or_permission("document:export")
-
-# Apply granular control
-@router.post("/documents")
-async def create_document(
-    doc_data: DocumentCreateSchema,
-    _: UserModel = Depends(require_document_create)  # Specific permission
-):
-    return await document_service.create(doc_data)
-
-@router.delete("/documents/{doc_id}")
-async def delete_document(
-    doc_id: str,
-    _: UserModel = Depends(require_document_delete)  # Different permission
-):
-    return await document_service.delete(doc_id)
-```
-
-#### **Conditional Granularity**
-
-```python
-# Different permission levels for the same endpoint
-@router.get("/financial-reports")
-async def get_financial_reports(
-    detail_level: str = Query("basic"),
-    user: UserModel = Depends(require_user_read_access)
-):
-    if detail_level == "detailed":
-        # Check for elevated permission inline
-        user_permissions = await user_service.get_user_effective_permissions(user.id)
-        if not ("finance:detailed" in user_permissions or user_has_role(user, "admin")):
-            raise HTTPException(403, "Detailed reports require finance:detailed permission")
-
-    return await finance_service.get_reports(detail_level)
+# Validation utilities
+validate_object_id(object_id: str, object_type: str = "ObjectId") -> PydanticObjectId
 ```
 
 ## 🎨 **Design Patterns and Best Practices**
 
-### **1. Access Control Only Pattern**
+### **1. Clean Route Architecture Pattern**
 
-When you only need access validation without using the user object:
+The new system promotes clean, declarative routes:
 
 ```python
-# Use _ to indicate access control only
-@router.get("/public-data")
-async def get_public_data(
-    _: UserModel = Depends(require_user_read_access)  # Access control only
+# ✅ GOOD: Clean, declarative, single responsibility
+@router.get("/users", response_model=List[UserResponseSchema])
+async def get_all_users(
+    current_user: UserModel = Depends(can_read_users),  # Declarative access control
+    skip: int = 0, limit: int = 100
 ):
-    # User object not needed in function logic
-    return await data_service.get_public_data()
+    # Service layer handles scoping automatically
+    users = await user_service.get_users(current_user=current_user, skip=skip, limit=limit)
+    return [convert_user_to_response(user) for user in users]
+
+# ❌ OLD: Complex, mixed concerns, hard to maintain
+@router.get("/users", dependencies=[Depends(require_user_read_access)])
+async def get_users(user_and_token: Tuple = Depends(get_current_user_with_token)):
+    current_user, _ = user_and_token
+    # 20+ lines of complex scoping logic...
+    user_permissions = await user_service.get_user_effective_permissions(current_user.id)
+    is_super_admin = user_has_role(current_user, "super_admin")
+    # ... more complex logic
 ```
 
-### **2. User Object Required Pattern**
+### **2. Service Layer Integration Pattern**
 
-When you need the user object for business logic:
+Services automatically handle data scoping:
 
 ```python
+# Service layer automatically filters data based on user permissions
+@router.get("/users")
+async def get_users(
+    current_user: UserModel = Depends(can_read_users),
+    skip: int = 0, limit: int = 100
+):
+    # user_service.get_users() automatically applies scoping based on current_user
+    users = await user_service.get_users(current_user=current_user, skip=skip, limit=limit)
+    return [convert_user_to_response(user) for user in users]
+
+# Service handles access control validation
+@router.put("/users/{user_id}")
+async def update_user(
+    user_id: str,
+    user_data: UserUpdateSchema,
+    current_user: UserModel = Depends(can_manage_users)
+):
+    # Service validates that current_user can update the target user
+    updated_user = await user_service.update_user(user_id, user_data, current_user)
+    return convert_user_to_response(updated_user)
+```
+
+### **3. Access Control Only vs User Object Pattern**
+
+```python
+# Access control only (use _ to indicate unused)
+@router.delete("/groups/{group_id}")
+async def delete_group(
+    group_id: str,
+    _: UserModel = Depends(can_manage_groups)  # Only need access validation
+):
+    await group_service.delete_group(group_id)
+    return {"message": "Group deleted successfully"}
+
+# Need user object for business logic
 @router.get("/my-profile")
 async def get_my_profile(
     current_user: UserModel = Depends(get_current_user)  # Need user object
 ):
-    # Use user object for business logic
     profile = await profile_service.get_profile(current_user.id)
     return enhance_profile_with_user_data(profile, current_user)
-```
-
-### **3. Resource Access Pattern**
-
-When returning the validated resource:
-
-```python
-@router.get("/users/{user_id}")
-async def get_user_detail(
-    target_user: UserModel = Depends(can_access_user())  # Returns target user
-):
-    # target_user is the user being accessed (with access validated)
-    return user_to_detailed_response(target_user)
 ```
 
 ### **4. Progressive Enhancement Pattern**
@@ -338,290 +313,165 @@ async def get_user_detail(
 Start simple, add granularity as needed:
 
 ```python
-# Phase 1: Simple admin check
+# Phase 1: Simple named dependency
 @router.post("/reports")
 async def create_report(
     report_data: ReportCreateSchema,
-    _: UserModel = Depends(require_admin)
+    _: UserModel = Depends(can_manage_reports)  # If this exists
 ):
-    pass
+    return await report_service.create(report_data)
 
-# Phase 2: Add specific permission
+# Phase 2: Custom permission factory
 @router.post("/reports")
 async def create_report(
     report_data: ReportCreateSchema,
-    _: UserModel = Depends(require_admin_or_permission("report:create"))
+    _: UserModel = Depends(require_permissions(any_of=[
+        "reports:create_all",
+        "reports:create_platform",
+        "reports:create_client"
+    ]))
 ):
-    pass
+    return await report_service.create(report_data)
 
-# Phase 3: Different permissions for different report types
+# Phase 3: Conditional permissions based on report type
 @router.post("/reports")
 async def create_report(
     report_data: ReportCreateSchema,
     current_user: UserModel = Depends(get_current_user)
 ):
-    # Dynamic permission checking based on report type
-    required_permission = f"report:{report_data.type}:create"
+    # Dynamic permission determination
+    if report_data.type == "financial":
+        required_permissions = ["financial:create_all", "financial:create_platform"]
+    elif report_data.type == "operational":
+        required_permissions = ["ops:create_all", "ops:create_platform", "ops:create_client"]
+    else:
+        required_permissions = ["reports:create_client"]
+
+    # Manual permission checking for dynamic scenarios
     user_permissions = await user_service.get_user_effective_permissions(current_user.id)
 
-    if not (user_has_role(current_user, "admin") or required_permission in user_permissions):
-        raise HTTPException(403, f"Required permission: {required_permission}")
+    has_permission = any(perm in user_permissions for perm in required_permissions)
+    if not has_permission:
+        raise HTTPException(403, f"Required permissions: {required_permissions}")
 
-    return await report_service.create(report_data)
+    return await report_service.create(report_data, current_user)
 ```
 
-## 🔄 **How Scoped Permissions Work**
+## 🔄 **How the New System Works**
 
-### **Automatic Scope Resolution**
-
-The system automatically resolves permissions based on user context:
+### **1. Automatic Permission Resolution**
 
 ```python
-# User: john@acmerealestate.com (ACME Real Estate client)
-# Roles: ["sales_agent"] (client-scoped to ACME)
-# Groups: ["weekend_team"] (client-scoped to ACME)
+# When can_read_users is called:
+# 1. Gets user's effective permissions from user_service.get_user_effective_permissions()
+# 2. Checks if user has ANY of: ["user:read_all", "user:read_platform", "user:read_client"]
+# 3. Service layer uses current_user context for automatic data scoping
 
-# When get_user_effective_permissions() is called:
+@router.get("/users")
+async def get_users(
+    current_user: UserModel = Depends(can_read_users)  # Permission check happens here
+):
+    # Service automatically scopes data based on current_user's permissions and context
+    users = await user_service.get_users(current_user=current_user)
+    return [convert_user_to_response(user) for user in users]
+```
+
+### **2. Service Layer Data Scoping**
+
+```python
+# In user_service.get_users():
+async def get_users(current_user: UserModel, skip: int = 0, limit: int = 100) -> List[UserModel]:
+    user_permissions = await get_user_effective_permissions(current_user.id)
+
+    if "user:read_all" in user_permissions:
+        # System admin: can see all users
+        return await UserModel.find().skip(skip).limit(limit).to_list()
+
+    elif "user:read_platform" in user_permissions:
+        # Platform admin: can see all users on their platform
+        platform_clients = await get_platform_client_ids(current_user)
+        return await UserModel.find({
+            "$or": [
+                {"client_account": {"$in": platform_clients}},
+                {"client_account": None}  # Platform users
+            ]
+        }).skip(skip).limit(limit).to_list()
+
+    elif "user:read_client" in user_permissions:
+        # Client admin: can see users in their client organization only
+        return await UserModel.find({
+            "client_account": current_user.client_account.id
+        }).skip(skip).limit(limit).to_list()
+```
+
+### **3. Permission Inheritance**
+
+Higher-level permissions automatically include lower-level access:
+
+```python
+# User with "user:read_all" permission:
 effective_permissions = [
-    # From sales_agent role (client scope: ACME)
-    "listings:create",        # Can create listings for ACME
-    "user:read",             # System permission from role
-
-    # From weekend_team group (client scope: ACME)
-    "weekend:access",        # Weekend access for ACME
-    "leads:assign"          # Assign leads within ACME
+    "user:read_all",      # Explicit permission
+    # Implicitly includes:
+    # "user:read_platform" (can read platform users)
+    # "user:read_client"   (can read client users)
 ]
 
-# Scope isolation ensures:
-# - john can't see Elite Properties' listings
-# - john can't manage Downtown Realty's users
-# - john's "listings:create" only works for ACME
-```
-
-### **Cross-Scope Access for Admins**
-
-Higher-level admins get permissions from multiple scopes:
-
-```python
-# Platform Admin: admin@propertyhub.com
+# User with "user:read_platform" permission:
 effective_permissions = [
-    # System permissions
-    "user:read", "user:create",
-
-    # Platform permissions (PropertyHub platform)
-    "analytics:view", "client_account:create", "support:cross_client",
-
-    # Client permissions (can access all clients on platform)
-    "client:*"  # Wildcard or explicit permissions from all clients
+    "user:read_platform", # Explicit permission
+    # Implicitly includes:
+    # "user:read_client"   (can read client users within platform)
 ]
-
-# Super Admin: gets permissions from ALL scopes
-# Platform Admin: gets system + their platform + all platform clients
-# Client Admin: gets system + their client only
 ```
 
-## 📊 **Dependency Reference**
+## 🧪 **Testing the New System**
 
-### **Available Dependencies**
-
-#### **Role-Based**
-
-```python
-require_super_admin           # System super admin only
-require_admin                # Any admin role (super/platform/client)
-require_platform_admin       # Platform admin roles
-require_role("role_name")     # Specific role required
-require_any_role(["r1", "r2"]) # Any of the specified roles
-```
-
-#### **Permission-Based**
-
-```python
-has_permission("permission:name")                    # Specific permission required
-require_admin_or_permission("permission:name")      # Admin role OR permission
-```
-
-#### **Scope-Based Admin**
-
-```python
-require_scope_admin("system")     # System admin (super admin only)
-require_scope_admin("platform")   # Platform admin for their platform
-require_scope_admin("client")     # Client admin for their client
-```
-
-#### **Pre-configured Categories**
-
-```python
-require_user_read_access          # Admin OR user:read permission
-require_role_manage_access        # Admin OR role:manage permission
-require_group_manage_access       # Admin OR group:manage permission
-require_permission_manage_access  # Admin OR permission:manage permission
-```
-
-#### **User Access Control**
-
-```python
-can_access_user(param="user_id")         # Returns target user if accessible
-require_self_or_admin(param="user_id")   # Returns current user if has access
-```
-
-#### **Client Access Control**
-
-```python
-has_hierarchical_client_access(param="account_id")  # Multi-tenant client access
-```
-
-### **Dependency Factory Parameters**
-
-Most dependency factories accept parameters for customization:
-
-```python
-# Parameter examples
-can_access_user(user_id_param="target_user_id")     # Custom parameter name
-has_hierarchical_client_access(target_client_field="client_id")  # Custom field
-require_role("manager")                              # Specific role name
-require_any_role(["supervisor", "manager", "lead"]) # Multiple role options
-```
-
-## 🚀 **Advanced Patterns**
-
-### **1. Conditional Dependencies**
-
-```python
-# Different dependencies based on request data
-def get_report_dependency(report_type: str):
-    if report_type == "financial":
-        return require_admin_or_permission("finance:read")
-    elif report_type == "hr":
-        return require_admin_or_permission("hr:read")
-    else:
-        return require_user_read_access
-
-@router.get("/reports/{report_type}")
-async def get_report(
-    report_type: str,
-    user: UserModel = Depends(lambda: get_report_dependency(report_type))
-):
-    return await report_service.get_report(report_type)
-```
-
-### **2. Composite Dependencies**
-
-```python
-# Multiple validation layers
-def require_project_manager_access():
-    """Requires both manager role AND project permissions."""
-    async def _composite_check(
-        manager: UserModel = Depends(require_role("manager")),
-        _: UserModel = Depends(has_permission("project:manage"))
-    ) -> UserModel:
-        return manager
-    return _composite_check
-
-@router.post("/projects/{project_id}/milestones")
-async def create_milestone(
-    project_id: str,
-    milestone_data: MilestoneCreateSchema,
-    manager: UserModel = Depends(require_project_manager_access())
-):
-    return await milestone_service.create(project_id, milestone_data, manager)
-```
-
-### **3. Dynamic Permission Dependencies**
-
-```python
-# Permission determined at runtime
-def require_dynamic_permission():
-    async def _dynamic_check(
-        request: Request,
-        current_user: UserModel = Depends(get_current_user)
-    ) -> UserModel:
-        # Extract context from request
-        action = request.path_params.get("action")
-        resource = request.path_params.get("resource")
-
-        # Build permission name dynamically
-        required_permission = f"{resource}:{action}"
-
-        # Check permission
-        user_permissions = await user_service.get_user_effective_permissions(current_user.id)
-
-        if user_has_role(current_user, "admin") or required_permission in user_permissions:
-            return current_user
-
-        raise HTTPException(403, f"Required permission: {required_permission}")
-
-    return _dynamic_check
-
-@router.post("/{resource}/{action}")
-async def dynamic_endpoint(
-    resource: str,
-    action: str,
-    user: UserModel = Depends(require_dynamic_permission())
-):
-    return await generic_service.perform_action(resource, action, user)
-```
-
-## 🧪 **Testing Dependencies**
-
-### **Mocking Dependencies in Tests**
+### **Mocking Named Dependencies**
 
 ```python
 # test_routes.py
-import pytest
-from fastapi.testclient import TestClient
-from unittest.mock import Mock
+def test_user_management_endpoint():
+    # Mock the named dependency
+    def mock_can_read_users():
+        return Mock(id="user_id", email="user@test.com")
 
-def test_admin_endpoint():
-    # Mock the dependency
-    def mock_require_admin():
-        return Mock(id="admin_id", email="admin@test.com")
-
-    # Override dependency
-    app.dependency_overrides[require_admin] = mock_require_admin
+    app.dependency_overrides[can_read_users] = mock_can_read_users
 
     client = TestClient(app)
-    response = client.get("/admin-only-endpoint")
+    response = client.get("/users")
 
     assert response.status_code == 200
-
-    # Clean up
     app.dependency_overrides.clear()
 
-def test_permission_dependency():
-    # Mock user with specific permissions
-    def mock_user_with_permission():
-        user = Mock()
-        user.id = "user_id"
-        # Mock the permission check
-        return user
+def test_permission_factory():
+    # Mock custom permission dependency
+    def mock_custom_permission():
+        return Mock(id="user_id", permissions=["custom:read"])
 
-    app.dependency_overrides[require_group_manage_access] = mock_user_with_permission
+    custom_dependency = require_permissions(any_of=["custom:read"])
+    app.dependency_overrides[custom_dependency] = mock_custom_permission
 
-    client = TestClient(app)
-    response = client.post("/groups", json={"name": "test_group"})
-
-    assert response.status_code == 201
+    response = client.get("/custom-endpoint")
+    assert response.status_code == 200
 ```
 
 ### **Integration Testing**
 
 ```python
-# test_integration.py
-async def test_real_permission_flow():
-    # Create real user with real permissions
+async def test_hierarchical_permissions():
+    # Create user with platform-level permission
     user = await user_service.create_user(UserCreateSchema(
-        email="test@example.com",
+        email="platform@test.com",
         password="password"
     ))
 
-    # Create real role with real permissions
+    # Create role with platform permission
     role = await role_service.create_role(RoleCreateSchema(
-        name="test_role",
-        permissions=["group:manage"]
+        name="platform_manager",
+        permissions=["user:read_platform"]
     ))
 
-    # Assign role to user
     user.roles.append(role)
     await user.save()
 
@@ -629,126 +479,212 @@ async def test_real_permission_flow():
     token = security_service.create_access_token(str(user.id))
     headers = {"Authorization": f"Bearer {token}"}
 
-    response = client.post("/groups",
-                          json={"name": "test_group"},
-                          headers=headers)
+    # Should pass the can_read_users dependency
+    # (user:read_platform is one of the accepted permissions)
+    response = client.get("/users", headers=headers)
+    assert response.status_code == 200
+```
 
-    assert response.status_code == 201
+## 📊 **Migration from Legacy System**
+
+### **Deprecated Dependencies**
+
+The following dependencies are **deprecated** and should be migrated:
+
+```python
+# DEPRECATED - Replace with named dependencies
+require_user_read_access    → can_read_users
+require_user_manage_access  → can_manage_users
+require_role_read_access    → can_read_roles
+require_role_manage_access  → can_manage_roles
+require_group_manage_access → can_manage_groups
+require_permission_manage_access → can_manage_permissions
+
+# DEPRECATED - Replace with require_permissions() factory
+require_admin_or_permission("permission:name") → require_permissions(any_of=["permission:name"])
+```
+
+### **Migration Examples**
+
+```python
+# OLD PATTERN
+@router.get("/users")
+async def get_users(
+    user: UserModel = Depends(require_user_read_access)
+):
+    # Complex manual scoping logic...
+    pass
+
+# NEW PATTERN
+@router.get("/users")
+async def get_users(
+    current_user: UserModel = Depends(can_read_users)
+):
+    users = await user_service.get_users(current_user=current_user)
+    return [convert_user_to_response(user) for user in users]
+
+# OLD PATTERN
+@router.post("/roles")
+async def create_role(
+    role_data: RoleCreateSchema,
+    _: UserModel = Depends(require_admin_or_permission("role:manage"))
+):
+    pass
+
+# NEW PATTERN
+@router.post("/roles")
+async def create_role(
+    role_data: RoleCreateSchema,
+    _: UserModel = Depends(can_manage_roles)
+):
+    return await role_service.create_role(role_data)
+```
+
+## 🚀 **Advanced Patterns**
+
+### **1. Custom Permission Dependencies**
+
+```python
+# Create application-specific permission dependencies
+can_export_data = require_permissions(any_of=[
+    "export:data_all",
+    "export:data_platform",
+    "export:data_client"
+])
+
+can_manage_billing = require_permissions(all_of=[
+    "billing:access",
+    "financial:manage"
+])
+
+# Usage
+@router.get("/export/users")
+async def export_users(
+    _: UserModel = Depends(can_export_data)
+):
+    return await export_service.export_users()
+
+@router.post("/billing/invoice")
+async def create_invoice(
+    invoice_data: InvoiceCreateSchema,
+    _: UserModel = Depends(can_manage_billing)
+):
+    return await billing_service.create_invoice(invoice_data)
+```
+
+### **2. Conditional Dependencies**
+
+```python
+def require_context_aware_permission():
+    """Dynamic permission based on request context."""
+    async def _context_permission(
+        request: Request,
+        current_user: UserModel = Depends(get_current_user)
+    ) -> UserModel:
+        # Extract context from request
+        resource_type = request.path_params.get("resource_type")
+
+        # Build permission dynamically
+        required_permissions = [
+            f"{resource_type}:manage_all",
+            f"{resource_type}:manage_platform",
+            f"{resource_type}:manage_client"
+        ]
+
+        # Check permissions
+        user_permissions = await user_service.get_user_effective_permissions(current_user.id)
+
+        if any(perm in user_permissions for perm in required_permissions):
+            return current_user
+
+        raise HTTPException(403, f"Required permissions: {required_permissions}")
+
+    return _context_permission
+
+# Usage
+@router.post("/{resource_type}/items")
+async def create_resource_item(
+    resource_type: str,
+    item_data: dict,
+    _: UserModel = Depends(require_context_aware_permission())
+):
+    return await dynamic_service.create_item(resource_type, item_data)
+```
+
+### **3. Composite Permission Validation**
+
+```python
+# Multiple validation layers
+async def require_senior_manager():
+    """Requires both role AND permissions."""
+    async def _composite_check(
+        manager: UserModel = Depends(require_role("manager")),
+        _: UserModel = Depends(require_permissions(any_of=["senior:access"]))
+    ) -> UserModel:
+        return manager
+    return _composite_check
+
+@router.get("/sensitive-data")
+async def get_sensitive_data(
+    manager: UserModel = Depends(require_senior_manager())
+):
+    return await sensitive_service.get_data(manager)
 ```
 
 ## 📈 **Performance Considerations**
 
-### **Dependency Caching**
+### **Permission Caching**
 
 ```python
-# Cache permission lookups within request scope
-@lru_cache(maxsize=1)
-async def get_cached_user_permissions(user_id: str) -> List[str]:
-    """Cache permissions for the duration of the request."""
-    return await user_service.get_user_effective_permissions(user_id)
+# The system automatically caches permissions within request scope
+# user_service.get_user_effective_permissions() includes intelligent caching
 
-def require_cached_permission(permission_name: str):
-    """Permission check with caching."""
-    async def _cached_permission_check(
-        current_user: UserModel = Depends(get_current_user)
-    ) -> UserModel:
-        if user_has_role(current_user, "admin"):
-            return current_user
-
-        # Use cached permissions
-        user_permissions = await get_cached_user_permissions(str(current_user.id))
-
-        if permission_name in user_permissions:
-            return current_user
-
-        raise HTTPException(403, "Access denied")
-
-    return _cached_permission_check
-```
-
-### **Optimizing Database Queries**
-
-```python
-# Fetch user with related data in single query
-async def get_current_user_with_permissions(
-    token: str = Depends(get_token_from_request)
-) -> UserModel:
-    """Get user with all related data fetched."""
-    token_data = security_service.decode_access_token(token)
-
-    # Single query with all relationships
-    user = await UserModel.get(
-        PydanticObjectId(token_data.user_id),
-        fetch_links=True  # Loads roles, groups, client_account
-    )
-
-    if not user:
-        raise HTTPException(404, "User not found")
-
-    return user
-
-# Use optimized dependency
-def require_optimized_access():
-    return require_admin_or_permission_optimized("group:manage")
-
-async def require_admin_or_permission_optimized(permission_name: str):
-    """Optimized permission check with single DB query."""
-    async def _optimized_check(
-        current_user: UserModel = Depends(get_current_user_with_permissions)
-    ) -> UserModel:
-        # All user data already loaded, no additional queries needed
-        if user_has_role(current_user, "admin"):
-            return current_user
-
-        # Check permissions from already-loaded data
-        user_permissions = extract_permissions_from_loaded_user(current_user)
-
-        if permission_name in user_permissions:
-            return current_user
-
-        raise HTTPException(403, "Access denied")
-
-    return _optimized_check
+# For high-frequency endpoints, consider service-level optimizations:
+@router.get("/high-frequency-endpoint")
+async def high_frequency_endpoint(
+    current_user: UserModel = Depends(can_read_users)
+):
+    # Service layer should use optimized queries with proper indexing
+    result = await optimized_service.get_data(current_user)
+    return result
 ```
 
 ## 📝 **Best Practices Summary**
 
-### **Do's**
+### **✅ Do's**
 
-✅ **Start with broad categories** like `require_admin` or `require_user_read_access`
-✅ **Add granular permissions** as requirements become more specific
-✅ **Use `_` parameter** when you only need access control validation
-✅ **Combine multiple dependencies** for complex validation scenarios
-✅ **Cache permission lookups** for performance-critical endpoints
-✅ **Test dependencies** both in isolation and integration scenarios
-✅ **Document custom dependencies** with clear usage examples
+- **Use named dependencies** (`can_read_*`, `can_manage_*`) for standard operations
+- **Use `require_permissions()`** for custom permission combinations
+- **Let services handle scoping** - pass `current_user` to service methods
+- **Use `_` parameter** when you only need access control validation
+- **Start with broad permissions**, add granularity as requirements evolve
+- **Test dependencies** both in isolation and integration scenarios
 
-### **Don'ts**
+### **❌ Don'ts**
 
-❌ **Don't create dependencies for every single permission** - start broad
-❌ **Don't ignore scope boundaries** - respect system/platform/client isolation
-❌ **Don't bypass dependency validation** in route logic
-❌ **Don't create overly complex dependencies** - keep them focused and testable
-❌ **Don't forget to handle edge cases** like missing roles or malformed tokens
-❌ **Don't hard-code permission names** - use constants or configuration
+- **Don't use deprecated dependencies** (`require_user_read_access`, etc.)
+- **Don't implement manual scoping** in route handlers
+- **Don't bypass the dependency system** with inline permission checks
+- **Don't create overly complex dependencies** - keep them focused and testable
+- **Don't forget automatic permission inheritance** - higher levels include lower levels
 
-### **Decision Framework**
+### **🎯 Decision Framework**
 
-1. **Simple admin check?** → Use `require_admin`
-2. **Specific permission needed?** → Use `require_admin_or_permission("permission:name")`
-3. **User access to own data?** → Use `can_access_user()` or `require_self_or_admin()`
-4. **Complex validation logic?** → Create custom dependency factory
-5. **Performance critical?** → Add caching and query optimization
-6. **Multiple permission levels?** → Use conditional dependencies or inline checks
+1. **Standard CRUD operations?** → Use named dependencies (`can_read_*`, `can_manage_*`)
+2. **Custom permission combination?** → Use `require_permissions(any_of=[], all_of=[])`
+3. **Resource access validation?** → Use `can_access_user()`, `require_self_or_admin()`
+4. **Complex conditional logic?** → Create custom dependency factory
+5. **Performance critical?** → Ensure service layer optimization and caching
 
 ## 🌟 **Conclusion**
 
-The FastAPI dependency system in OutlabsAuth provides a **powerful, flexible, and scalable** approach to access control that:
+The new unified RBAC dependency system provides:
 
-- **Scales from simple to complex** - Start with broad categories, add granularity as needed
-- **Maintains clean separation** - Security logic separate from business logic
-- **Respects organizational boundaries** - Automatic scope isolation
-- **Optimizes for developer experience** - Declarative, type-safe, and testable
-- **Supports enterprise requirements** - Handles complex multi-tenant scenarios
+- **🎯 Declarative Security**: Clear, readable permission requirements
+- **🏗️ Clean Architecture**: Separation of concerns between routes and business logic
+- **📊 Automatic Scoping**: Service layer handles data filtering transparently
+- **🔧 Flexible Permissions**: Hierarchical permissions with inheritance
+- **⚡ High Performance**: Built-in caching and optimized query patterns
+- **🧪 Testable Design**: Easy to mock and test in isolation
 
-This architecture enables rapid development while maintaining the flexibility to implement sophisticated permission models as your application grows and requirements become more complex.
+This architecture enables rapid development while maintaining enterprise-grade security and the flexibility to handle complex multi-tenant scenarios as your application scales.

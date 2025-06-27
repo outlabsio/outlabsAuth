@@ -2,83 +2,71 @@
 
 ## Overview
 
-The User Management Routes provide a comprehensive API for managing users within the authentication system with **complete hierarchical multi-platform tenancy support**. This module handles all CRUD operations for users with proper authentication, **platform-scoped authorization controls**, and **cross-client management capabilities**.
+The User Management Routes provide a comprehensive API for managing users within the authentication system with **hierarchical access control and permission-based authorization**. This module handles all CRUD operations for users with proper authentication, **scoped authorization controls**, and **bulk user management capabilities**.
 
 **Base URL:** `/v1/users`  
-**Tags:** User Management
-
-## 🏢 **Complete Hierarchical Multi-Platform Tenancy**
-
-This API supports a complete three-tier user management hierarchy:
-
-- **Super Admins**: Complete system access across all platforms and users
-- **Platform Staff**: Can view and manage users across all clients within their platform scope
-- **Client Admins**: Can manage users within their own client account
-- **Regular Users**: Can view their own profile and limited user information
-
-## 🚀 **Platform Features Implemented**
-
-**✅ Cross-Client User Management**: Platform staff can view and manage users across multiple client companies
-**✅ Platform Staff Hierarchy**: Different platform access levels (all, created, none)
-**✅ Hierarchical Access Control**: Secure user management with proper isolation
-**✅ Real-Time Permissions**: Dynamic permission calculation from multiple sources
+**Tags:** ["User Management"]
 
 ## Authentication & Authorization
 
 All endpoints require authentication and specific permissions:
 
-- **Base Permission:** `user:read` (required for most endpoints)
-- **Platform-Specific Permissions:**
-  - `user:create` - Create new users
-  - `user:update` - Update user information
-  - `user:delete` - Delete users
-  - `user:add_member` - Add users to client accounts
-  - `user:bulk_create` - Bulk user creation operations
+- **Read Operations:** `can_read_users` dependency (requires any of: `user:read_all`, `user:read_platform`, `user:read_client`)
+- **Write Operations:** `can_manage_users` dependency (requires any of: `user:manage_all`, `user:manage_platform`, `user:manage_client`)
+- **Admin Operations:** `require_admin` dependency for bulk operations
+- **Individual Access:** `can_access_user` dependency for accessing specific users
 
-## Hierarchical Access Logic
+## Hierarchical Access Control
 
-### User Visibility Rules
+### User Visibility and Management Rules
 
-**Super Admins (`is_super_admin: true`)**:
+**Super Admins**:
 
-- Can see all users across all platforms and clients
+- Can see and manage all users across all client accounts
+- Have `user:read_all` and `user:manage_all` permissions
 
-**Platform Staff (`is_platform_staff: true`)**:
+**Client Admins**:
 
-- **`platform_scope: "all"`**: Can see users across all clients in their platform
-- **`platform_scope: "created"`**: Can see users only in clients they created
-- **Platform filtering**: Automatically filtered to their platform scope
+- Can see and manage users only within their own client account
+- Automatically scoped to their client account by the service layer
+- Cannot access users from other client accounts
 
 **Regular Users**:
 
-- Can see only users within their own client account
-- Cannot access cross-client user data
+- Can access their own user data via `can_access_user` dependency
+- Limited read access based on assigned permissions
+
+### Automatic Scoping
+
+The user service automatically applies scoping based on the current user's context:
+
+- **Super admins**: No scoping applied - see all users
+- **Client-scoped users**: Automatically filtered to their client account
+- **Access control**: Prevents cross-client data access
 
 ---
 
 ## Endpoints
 
-### 1. Get All Users (Hierarchical Filtering)
+### 1. Get All Users
 
-Retrieves a paginated list of users with automatic hierarchical filtering based on user permissions and platform access.
+Retrieves a paginated list of users with automatic hierarchical filtering based on user permissions.
 
 **Endpoint:** `GET /v1/users/`
 
-**Required Permission:** `user:read`
+**Authentication Required:** Yes (Access Token)
+
+**Required Dependencies:** `can_read_users`
 
 **Query Parameters:**
 
 - `skip` (optional, integer, default: 0) - Number of records to skip for pagination
 - `limit` (optional, integer, default: 100) - Maximum number of records to return
-- `client_filter` (optional, string) - Filter by specific client account ID (platform staff only)
-- `include_permissions` (optional, boolean, default: false) - Include effective permissions in response
 
 **Authorization Logic:**
 
-- **Super Admins**: See all users across all platforms
-- **Platform Staff (`platform_scope: "all"`)**: See users across all clients in their platform
-- **Platform Staff (`platform_scope: "created"`)**: See users in clients they created
-- **Regular Users**: See only users in their client account
+- **Super Admins**: See all users across all client accounts
+- **Client Users**: See only users in their client account (automatically scoped)
 
 **Response:**
 
@@ -88,57 +76,62 @@ Retrieves a paginated list of users with automatic hierarchical filtering based 
 ```json
 [
   {
-    "id": "507f1f77bcf86cd799439011",
-    "email": "admin@propertyhub.com",
-    "first_name": "Platform",
+    "_id": "507f1f77bcf86cd799439011",
+    "email": "admin@acmerealestate.com",
+    "first_name": "John",
     "last_name": "Admin",
-    "client_account_id": "507f1f77bcf86cd799439012",
-    "roles": ["platform_admin"],
-    "groups": ["507f1f77bcf86cd799439013"],
-    "permissions": ["client_account:create", "user:create", "platform:manage_clients"],
-    "is_main_client": true,
-    "is_platform_staff": true,
-    "platform_scope": "all",
     "status": "active",
+    "client_account_id": "507f1f77bcf86cd799439012",
+    "roles": ["507f1f77bcf86cd799439020", "507f1f77bcf86cd799439021"],
+    "groups": ["507f1f77bcf86cd799439013"],
+    "permissions": [
+      {
+        "id": "507f1f77bcf86cd799439025",
+        "name": "user:create",
+        "scope": "client",
+        "display_name": "Create Users",
+        "description": "Create new users in client account"
+      }
+    ],
+    "is_platform_staff": false,
+    "platform_scope": null,
     "created_at": "2023-01-01T00:00:00Z",
-    "updated_at": "2023-01-01T00:00:00Z",
-    "last_login_at": "2023-01-01T00:00:00Z",
-    "locale": "en-US"
+    "updated_at": "2023-01-01T00:00:00Z"
   }
 ]
 ```
 
-**Example Request (Platform Staff):**
+**Error Responses:**
 
-```bash
-curl -X GET "https://api.example.com/v1/users/?client_filter=507f1f77bcf86cd799439015&include_permissions=true" \
-     -H "Authorization: Bearer <platform_staff_token>"
-```
+- `403 Forbidden` - Insufficient permissions
+- `401 Unauthorized` - Invalid authentication
 
-**Example Request (Regular Client Admin):**
+**Example Request:**
 
 ```bash
 curl -X GET "https://api.example.com/v1/users/?skip=0&limit=50" \
-     -H "Authorization: Bearer <client_admin_token>"
+     -H "Authorization: Bearer <access_token>"
 ```
 
-### 2. Get User by ID (Hierarchical Access Control)
+### 2. Get User by ID
 
 Retrieves a specific user by their ID with hierarchical access control.
 
 **Endpoint:** `GET /v1/users/{user_id}`
 
-**Required Permission:** `user:read`
+**Authentication Required:** Yes (Access Token)
+
+**Required Dependencies:** `can_access_user()`
 
 **Path Parameters:**
 
-- `user_id` (required, string) - The unique identifier of the user
+- `user_id` (required, PydanticObjectId) - The unique identifier of the user
 
-**Query Parameters:**
+**Authorization:** Uses hierarchical access control to ensure users can only access user data they have permission to view:
 
-- `include_permissions` (optional, boolean, default: false) - Include effective permissions in response
-
-**Authorization:** Uses hierarchical access control to ensure users can only access user data they have permission to view.
+- **Admins**: Can access any user data
+- **Regular users**: Can only access their own data
+- **Client scoping**: Enforced for non-super admins
 
 **Response:**
 
@@ -147,22 +140,27 @@ Retrieves a specific user by their ID with hierarchical access control.
 
 ```json
 {
-  "id": "507f1f77bcf86cd799439011",
+  "_id": "507f1f77bcf86cd799439011",
   "email": "john.agent@acmerealestate.com",
   "first_name": "John",
   "last_name": "Agent",
+  "status": "active",
   "client_account_id": "507f1f77bcf86cd799439015",
-  "roles": ["real_estate_agent"],
+  "roles": ["507f1f77bcf86cd799439022"],
   "groups": ["507f1f77bcf86cd799439016"],
-  "permissions": ["user:read", "group:read", "client_account:read"],
-  "is_main_client": false,
+  "permissions": [
+    {
+      "id": "507f1f77bcf86cd799439026",
+      "name": "user:read",
+      "scope": "client",
+      "display_name": "Read Users",
+      "description": "View user information in client account"
+    }
+  ],
   "is_platform_staff": false,
   "platform_scope": null,
-  "status": "active",
   "created_at": "2023-01-01T00:00:00Z",
-  "updated_at": "2023-01-01T00:00:00Z",
-  "last_login_at": "2023-01-01T00:00:00Z",
-  "locale": "en-US"
+  "updated_at": "2023-01-01T00:00:00Z"
 }
 ```
 
@@ -171,22 +169,24 @@ Retrieves a specific user by their ID with hierarchical access control.
 - `404 Not Found` - User not found or access denied (prevents information disclosure)
 - `403 Forbidden` - Insufficient permissions
 - `401 Unauthorized` - Invalid authentication
-- `400 Bad Request` - Invalid user ID format
+- `422 Unprocessable Entity` - Invalid user ID format
 
 **Example Request:**
 
 ```bash
-curl -X GET "https://api.example.com/v1/users/507f1f77bcf86cd799439011?include_permissions=true" \
+curl -X GET "https://api.example.com/v1/users/507f1f77bcf86cd799439011" \
      -H "Authorization: Bearer <access_token>"
 ```
 
-### 3. Create User (Platform Staff & Client Admins)
+### 3. Create User
 
-Creates a new user within the appropriate client account scope.
+Creates a new user with proper scoping and validation.
 
 **Endpoint:** `POST /v1/users/`
 
-**Required Permission:** `user:create`
+**Authentication Required:** Yes (Access Token)
+
+**Required Dependencies:** `can_manage_users`
 
 **Request Body:**
 
@@ -196,27 +196,29 @@ Creates a new user within the appropriate client account scope.
   "password": "securePassword123",
   "first_name": "New",
   "last_name": "User",
+  "status": "active",
   "client_account_id": "507f1f77bcf86cd799439015",
-  "roles": ["real_estate_agent"],
+  "roles": ["507f1f77bcf86cd799439022"],
   "groups": ["507f1f77bcf86cd799439016"],
   "is_main_client": false,
   "is_platform_staff": false,
-  "platform_scope": null,
-  "locale": "en-US"
+  "platform_scope": null
 }
 ```
 
-**Platform Staff Features:**
+**Field Requirements:**
 
-- Can create users in any client account within their platform scope
-- Can set `is_platform_staff` and `platform_scope` for platform users
-- Can assign platform-specific roles
-
-**Client Admin Features:**
-
-- Can create users only within their own client account
-- Cannot create platform staff users
-- Limited to client-specific roles
+- `email` (required, EmailStr) - Must be unique across the system
+- `password` (required, string, min 8 chars) - Will be hashed before storage
+- `first_name` (required, string) - User's first name
+- `last_name` (required, string) - User's last name
+- `status` (optional, UserStatus, default: "active") - Account status
+- `client_account_id` (optional, string) - Client account assignment
+- `roles` (optional, List[str]) - List of role ObjectIds
+- `groups` (optional, List[str]) - List of group ObjectIds
+- `is_main_client` (optional, bool, default: false) - Main client admin flag
+- `is_platform_staff` (optional, bool, default: false) - Platform staff flag
+- `platform_scope` (optional, string) - Platform scope for staff members
 
 **Response:**
 
@@ -225,56 +227,98 @@ Creates a new user within the appropriate client account scope.
 
 ```json
 {
-  "id": "507f1f77bcf86cd799439017",
+  "_id": "507f1f77bcf86cd799439017",
   "email": "newuser@acmerealestate.com",
   "first_name": "New",
   "last_name": "User",
+  "status": "active",
   "client_account_id": "507f1f77bcf86cd799439015",
-  "roles": ["real_estate_agent"],
+  "roles": ["507f1f77bcf86cd799439022"],
   "groups": ["507f1f77bcf86cd799439016"],
-  "is_main_client": false,
+  "permissions": [],
   "is_platform_staff": false,
   "platform_scope": null,
-  "status": "active",
   "created_at": "2023-01-01T00:00:00Z",
-  "updated_at": "2023-01-01T00:00:00Z",
-  "last_login_at": null,
-  "locale": "en-US"
+  "updated_at": "2023-01-01T00:00:00Z"
 }
 ```
 
 **Error Responses:**
 
 - `409 Conflict` - User with this email already exists
-- `403 Forbidden` - Insufficient permissions or invalid client account access
+- `403 Forbidden` - Insufficient permissions
 - `401 Unauthorized` - Invalid authentication
-- `400 Bad Request` - Invalid request body or validation errors
+- `422 Unprocessable Entity` - Invalid request body or validation errors
 
-**Example Request (Platform Staff):**
+**Example Request:**
 
 ```bash
 curl -X POST "https://api.example.com/v1/users/" \
-     -H "Authorization: Bearer <platform_staff_token>" \
+     -H "Authorization: Bearer <access_token>" \
      -H "Content-Type: application/json" \
      -d '{
-       "email": "support@propertyhub.com",
-       "password": "platformPassword123",
-       "first_name": "Customer",
-       "last_name": "Support",
-       "client_account_id": "507f1f77bcf86cd799439012",
-       "roles": ["platform_support"],
-       "is_platform_staff": true,
-       "platform_scope": "all"
+       "email": "newuser@example.com",
+       "password": "securePassword123",
+       "first_name": "New",
+       "last_name": "User",
+       "roles": ["507f1f77bcf86cd799439022"]
      }'
 ```
 
-### 4. Update User (Hierarchical Access Control)
+### 4. Create Sub-User
 
-Updates an existing user with hierarchical access control.
+Allows a main client user to create a new user within their own client account.
+
+**Endpoint:** `POST /v1/users/create_sub_user`
+
+**Authentication Required:** Yes (Access Token)
+
+**Required Dependencies:** `can_manage_users`
+
+**Authorization:**
+
+- User must have `is_main_client: true`
+- User must have a client account
+- Created user will be assigned to the same client account
+
+**Request Body:**
+
+Same as regular user creation, but `client_account_id` will be automatically set to the creator's client account.
+
+**Response:**
+
+- **Status Code:** `201 Created`
+- **Response Body:** Same format as regular user creation
+
+**Error Responses:**
+
+- `403 Forbidden` - User is not a main client or lacks permissions
+- Other standard user creation errors
+
+**Example Request:**
+
+```bash
+curl -X POST "https://api.example.com/v1/users/create_sub_user" \
+     -H "Authorization: Bearer <main_client_token>" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "email": "subuser@acmerealestate.com",
+       "password": "password123",
+       "first_name": "Sub",
+       "last_name": "User",
+       "roles": ["507f1f77bcf86cd799439022"]
+     }'
+```
+
+### 5. Update User
+
+Updates an existing user with hierarchical access control and validation.
 
 **Endpoint:** `PUT /v1/users/{user_id}`
 
-**Required Permission:** `user:update`
+**Authentication Required:** Yes (Access Token)
+
+**Required Dependencies:** `can_manage_users`
 
 **Path Parameters:**
 
@@ -282,29 +326,24 @@ Updates an existing user with hierarchical access control.
 
 **Request Body:**
 
+All fields are optional for updates:
+
 ```json
 {
   "email": "updated@example.com",
   "first_name": "Updated",
   "last_name": "Name",
-  "roles": ["updated_role"],
-  "groups": ["507f1f77bcf86cd799439018"],
   "status": "active",
-  "locale": "en-US"
+  "roles": ["507f1f77bcf86cd799439023"],
+  "groups": ["507f1f77bcf86cd799439018"]
 }
 ```
 
-**Platform Staff Features:**
+**Authorization:**
 
-- Can update users across all clients within their platform scope
-- Can modify platform staff fields (`is_platform_staff`, `platform_scope`)
-- Can assign platform-specific roles
-
-**Client Admin Features:**
-
-- Can update users only within their own client account
-- Cannot modify platform staff fields
-- Limited to client-specific roles
+- Super admins can update any user
+- Non-super admins can only update users within their client account
+- Main client role validation for role assignments
 
 **Response:**
 
@@ -314,9 +353,9 @@ Updates an existing user with hierarchical access control.
 **Error Responses:**
 
 - `404 Not Found` - User not found or access denied
-- `403 Forbidden` - Insufficient permissions
+- `403 Forbidden` - Insufficient permissions or invalid role assignment
 - `401 Unauthorized` - Invalid authentication
-- `400 Bad Request` - Invalid request body or validation errors
+- `422 Unprocessable Entity` - Invalid request body or user ID format
 - `409 Conflict` - Email already exists (if email is being updated)
 
 **Example Request:**
@@ -328,23 +367,29 @@ curl -X PUT "https://api.example.com/v1/users/507f1f77bcf86cd799439017" \
      -d '{
        "first_name": "Updated",
        "last_name": "User",
-       "roles": ["senior_agent"]
+       "status": "active"
      }'
 ```
 
-### 5. Delete User (Hierarchical Access Control)
+### 6. Delete User
 
 Deletes a user from the system with hierarchical access control.
 
 **Endpoint:** `DELETE /v1/users/{user_id}`
 
-**Required Permission:** `user:delete`
+**Authentication Required:** Yes (Access Token)
+
+**Required Dependencies:** `can_manage_users`
 
 **Path Parameters:**
 
 - `user_id` (required, string) - The unique identifier of the user
 
-**Authorization:** Uses hierarchical access control to ensure users can only delete users they have permission to access.
+**Authorization:**
+
+- Super admins can delete any user
+- Non-super admins can only delete users within their client account
+- Service layer enforces scoping automatically
 
 **Response:**
 
@@ -354,9 +399,9 @@ Deletes a user from the system with hierarchical access control.
 **Error Responses:**
 
 - `404 Not Found` - User not found or access denied
-- `403 Forbidden` - Insufficient permissions or cannot delete self
+- `403 Forbidden` - Insufficient permissions
 - `401 Unauthorized` - Invalid authentication
-- `400 Bad Request` - Invalid user ID format
+- `422 Unprocessable Entity` - Invalid user ID format
 
 **Example Request:**
 
@@ -365,65 +410,174 @@ curl -X DELETE "https://api.example.com/v1/users/507f1f77bcf86cd799439017" \
      -H "Authorization: Bearer <access_token>"
 ```
 
+### 7. Bulk Create Users
+
+Creates multiple users in a single request with detailed success/failure reporting.
+
+**Endpoint:** `POST /v1/users/bulk-create`
+
+**Authentication Required:** Yes (Access Token)
+
+**Required Dependencies:** `require_admin`
+
+**Note:** This is an admin-only endpoint for bulk user operations.
+
+**Request Body:**
+
+```json
+[
+  {
+    "email": "user1@example.com",
+    "password": "password123",
+    "first_name": "User",
+    "last_name": "One",
+    "roles": ["507f1f77bcf86cd799439022"]
+  },
+  {
+    "email": "user2@example.com",
+    "password": "password123",
+    "first_name": "User",
+    "last_name": "Two",
+    "roles": ["507f1f77bcf86cd799439022"]
+  }
+]
+```
+
+**Response:**
+
+- **Status Code:** `201 Created`
+- **Response Body:**
+
+```json
+{
+  "successful_creates": [
+    {
+      "_id": "507f1f77bcf86cd799439018",
+      "email": "user1@example.com",
+      "first_name": "User",
+      "last_name": "One",
+      "status": "active",
+      "roles": ["507f1f77bcf86cd799439022"],
+      "groups": [],
+      "permissions": [],
+      "is_platform_staff": false,
+      "platform_scope": null,
+      "created_at": "2023-01-01T00:00:00Z",
+      "updated_at": "2023-01-01T00:00:00Z"
+    }
+  ],
+  "failed_creates": [
+    {
+      "user_data": {
+        "email": "user2@example.com",
+        "password": "password123",
+        "first_name": "User",
+        "last_name": "Two"
+      },
+      "error": "User with this email already exists."
+    }
+  ]
+}
+```
+
+**Error Responses:**
+
+- `403 Forbidden` - Insufficient admin permissions
+- `401 Unauthorized` - Invalid authentication
+- `422 Unprocessable Entity` - Invalid request body
+
+**Example Request:**
+
+```bash
+curl -X POST "https://api.example.com/v1/users/bulk-create" \
+     -H "Authorization: Bearer <admin_token>" \
+     -H "Content-Type: application/json" \
+     -d '[
+       {
+         "email": "bulkuser1@example.com",
+         "password": "password123",
+         "first_name": "Bulk",
+         "last_name": "User1"
+       }
+     ]'
+```
+
 ---
 
-## Platform Staff Use Cases
+## Data Models
 
-### Cross-Client Customer Support
+### UserCreateSchema
 
-**Scenario**: PropertyHub support staff helping users across multiple real estate companies
-
-```bash
-# Platform support views all users across clients
-curl -X GET "https://api.example.com/v1/users/?limit=100" \
-     -H "Authorization: Bearer <platform_support_token>"
-
-# Platform support helps specific user in ACME Real Estate
-curl -X GET "https://api.example.com/v1/users/?client_filter=507f1f77bcf86cd799439015" \
-     -H "Authorization: Bearer <platform_support_token>"
+```python
+class UserCreateSchema(BaseModel):
+    email: EmailStr                                 # User's email address (required)
+    password: str                                  # User's password, min 8 characters (required)
+    first_name: str                                # User's first name (required)
+    last_name: str                                 # User's last name (required)
+    status: UserStatus = UserStatus.ACTIVE        # Account status (optional)
+    client_account_id: Optional[str] = None       # Client account ID (optional)
+    roles: Optional[List[str]] = []               # List of role ObjectIds (optional)
+    groups: Optional[List[str]] = []              # List of group ObjectIds (optional)
+    is_main_client: Optional[bool] = False        # Main client admin flag (optional)
+    is_platform_staff: Optional[bool] = False    # Platform staff flag (optional)
+    platform_scope: Optional[str] = None         # Platform scope for staff (optional)
 ```
 
-### Platform Administration
+### UserUpdateSchema
 
-**Scenario**: Platform admin managing multiple real estate companies
-
-```bash
-# Create new platform staff member
-curl -X POST "https://api.example.com/v1/users/" \
-     -H "Authorization: Bearer <platform_admin_token>" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "email": "sales@propertyhub.com",
-       "password": "platformSales123",
-       "first_name": "Platform",
-       "last_name": "Sales",
-       "client_account_id": "507f1f77bcf86cd799439012",
-       "roles": ["platform_sales"],
-       "is_platform_staff": true,
-       "platform_scope": "created"
-     }'
+```python
+class UserUpdateSchema(BaseModel):
+    email: Optional[EmailStr] = None              # User's email address
+    first_name: Optional[str] = None              # User's first name
+    last_name: Optional[str] = None               # User's last name
+    status: Optional[UserStatus] = None           # Account status
+    roles: Optional[List[str]] = None             # List of role ObjectIds to assign
+    groups: Optional[List[str]] = None            # List of group ObjectIds to assign
 ```
 
-### Client Company Management
+### UserResponseSchema
 
-**Scenario**: Real estate company admin managing their agents
+```python
+class UserResponseSchema(BaseModel):
+    id: PydanticObjectId                          # User ID (aliased from _id)
+    email: EmailStr                               # User's email address
+    first_name: str                               # User's first name
+    last_name: str                                # User's last name
+    status: UserStatus                            # Account status
+    client_account_id: Optional[str] = None      # Client account ID
+    roles: List[str] = []                         # Role ObjectIds
+    groups: List[str] = []                        # Group ObjectIds
+    permissions: Optional[List[PermissionDetailSchema]] = []  # Effective permissions
+    is_platform_staff: bool = False              # Platform staff flag
+    platform_scope: Optional[str] = None         # Platform scope
+    created_at: datetime                          # Creation timestamp
+    updated_at: datetime                          # Last update timestamp
+```
 
-```bash
-# Client admin views only their company users
-curl -X GET "https://api.example.com/v1/users/" \
-     -H "Authorization: Bearer <acme_admin_token>"
+### UserStatus Enum
 
-# Client admin creates new agent
-curl -X POST "https://api.example.com/v1/users/" \
-     -H "Authorization: Bearer <acme_admin_token>" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "email": "newagent@acmerealestate.com",
-       "password": "agentPassword123",
-       "first_name": "New",
-       "last_name": "Agent",
-       "roles": ["real_estate_agent"]
-     }'
+```python
+class UserStatus(str, Enum):
+    ACTIVE = "active"       # User is active and can log in
+    INACTIVE = "inactive"   # User is inactive
+    PENDING = "pending"     # User account is pending activation
+    SUSPENDED = "suspended" # User account is suspended
+```
+
+### UserBulkCreateResponseSchema
+
+```python
+class UserBulkCreateResponseSchema(BaseModel):
+    successful_creates: List[UserResponseSchema]  # Successfully created users
+    failed_creates: List[FailedUserCreationSchema]  # Failed user creations
+```
+
+### FailedUserCreationSchema
+
+```python
+class FailedUserCreationSchema(BaseModel):
+    user_data: UserCreateSchema                   # Original user data that failed
+    error: str                                    # Error message describing the failure
 ```
 
 ---
@@ -435,17 +589,34 @@ curl -X POST "https://api.example.com/v1/users/" \
 All user endpoints implement automatic hierarchical filtering:
 
 1. **Authentication Verification**: Valid JWT token required
-2. **Permission Check**: User must have appropriate `user:*` permissions
+2. **Permission Check**: User must have appropriate `user:*` permissions via dependencies
 3. **Scope Filtering**: Results automatically filtered based on user's access level
-4. **Platform Isolation**: Platform staff can only access users within their platform
-5. **Client Isolation**: Regular users can only access users within their client account
+4. **Client Isolation**: Non-super admins can only access users within their client account
+5. **Information Disclosure Prevention**: Users cannot see users outside their access scope
 
 ### Data Protection
 
-- **Information Disclosure Prevention**: Users cannot see users outside their access scope
+- **Password Security**: Passwords are properly hashed and never returned in responses
 - **Permission-Based Access**: Granular permissions control what user operations are allowed
 - **Audit Trail**: All user management operations are logged for security compliance
-- **Password Security**: Passwords are properly hashed and never returned in responses
+- **Role Validation**: Main client role assignment validation for enhanced security
+
+### Dependencies Used
+
+1. **Authentication Dependencies**:
+
+   - `get_current_user_with_token` - Authenticates and retrieves user with token data
+   - `get_current_user` - Authenticates and retrieves current user context
+
+2. **Authorization Dependencies**:
+
+   - `can_read_users` - Checks permissions for reading users
+   - `can_manage_users` - Checks permissions for creating/updating/deleting users
+   - `can_access_user()` - Checks permissions for accessing specific users
+   - `require_admin` - Requires admin role for admin-only operations
+
+3. **Utility Functions**:
+   - `convert_user_to_response()` - Converts UserModel to consistent response format
 
 ---
 
@@ -453,11 +624,11 @@ All user endpoints implement automatic hierarchical filtering:
 
 ### Common Error Responses
 
-**403 Forbidden - Cross-Client Access Denied**:
+**409 Conflict - Duplicate Email**:
 
 ```json
 {
-  "detail": "Access denied. User not found in your accessible scope."
+  "detail": "User with this email already exists."
 }
 ```
 
@@ -465,15 +636,31 @@ All user endpoints implement automatic hierarchical filtering:
 
 ```json
 {
-  "detail": "Insufficient permissions. Required: user:create"
+  "detail": "You do not have permission to create sub-users."
 }
 ```
 
-**409 Conflict - Duplicate Email**:
+**404 Not Found - User Not Found or Access Denied**:
 
 ```json
 {
-  "detail": "User with this email already exists"
+  "detail": "User not found or access denied."
+}
+```
+
+**422 Unprocessable Entity - Invalid Data**:
+
+```json
+{
+  "detail": "Invalid ObjectId: invalid-id"
+}
+```
+
+**403 Forbidden - Invalid Role Assignment**:
+
+```json
+{
+  "detail": "Role 'platform_admin' cannot be assigned by a client administrator."
 }
 ```
 
@@ -494,13 +681,9 @@ class UserManagementClient:
             "Content-Type": "application/json"
         }
 
-    def get_users_in_scope(self, client_filter=None, include_permissions=False):
-        """Get users accessible to current user"""
-        params = {}
-        if client_filter:
-            params["client_filter"] = client_filter
-        if include_permissions:
-            params["include_permissions"] = "true"
+    def get_users_in_scope(self, skip=0, limit=100):
+        """Get users accessible to current user with automatic scoping"""
+        params = {"skip": skip, "limit": limit}
 
         response = requests.get(
             f"{self.base_url}/v1/users/",
@@ -509,35 +692,42 @@ class UserManagementClient:
         )
         return response.json() if response.status_code == 200 else None
 
-    def create_platform_staff(self, email, password, first_name, last_name, role, platform_scope="all"):
-        """Create new platform staff member (platform admin only)"""
-        data = {
-            "email": email,
-            "password": password,
-            "first_name": first_name,
-            "last_name": last_name,
-            "roles": [role],
-            "is_platform_staff": True,
-            "platform_scope": platform_scope
-        }
-
+    def create_user(self, user_data):
+        """Create new user with validation and scoping"""
         response = requests.post(
             f"{self.base_url}/v1/users/",
             headers=self.headers,
-            json=data
+            json=user_data
+        )
+        return response.json() if response.status_code == 201 else None
+
+    def create_sub_user(self, user_data):
+        """Create sub-user within current client account"""
+        response = requests.post(
+            f"{self.base_url}/v1/users/create_sub_user",
+            headers=self.headers,
+            json=user_data
+        )
+        return response.json() if response.status_code == 201 else None
+
+    def bulk_create_users(self, users_data):
+        """Bulk create users (admin only)"""
+        response = requests.post(
+            f"{self.base_url}/v1/users/bulk-create",
+            headers=self.headers,
+            json=users_data
         )
         return response.json() if response.status_code == 201 else None
 
 # Usage
-client = UserManagementClient("http://localhost:8030", platform_admin_token)
-users = client.get_users_in_scope(include_permissions=True)
-new_staff = client.create_platform_staff(
-    "support@propertyhub.com",
-    "password123",
-    "Customer",
-    "Support",
-    "platform_support"
-)
+client = UserManagementClient("http://localhost:8030", access_token)
+users = client.get_users_in_scope(limit=50)
+new_user = client.create_user({
+    "email": "newuser@example.com",
+    "password": "securePassword123",
+    "first_name": "New",
+    "last_name": "User"
+})
 ```
 
 ### JavaScript Frontend Example
@@ -552,45 +742,119 @@ class UserManagementAPI {
     };
   }
 
-  async getUsersInScope(clientFilter = null, includePermissions = false) {
-    const params = new URLSearchParams();
-    if (clientFilter) params.append("client_filter", clientFilter);
-    if (includePermissions) params.append("include_permissions", "true");
-
-    const response = await fetch(`${this.baseUrl}/v1/users/?${params}`, { headers: this.headers });
-
+  async getUsersInScope(skip = 0, limit = 100) {
+    const params = new URLSearchParams({ skip, limit });
+    const response = await fetch(`${this.baseUrl}/v1/users/?${params}`, {
+      headers: this.headers,
+    });
     return response.ok ? await response.json() : null;
   }
 
-  async createClientUser(userData) {
+  async createUser(userData) {
     const response = await fetch(`${this.baseUrl}/v1/users/`, {
       method: "POST",
       headers: this.headers,
       body: JSON.stringify(userData),
     });
-
     return response.ok ? await response.json() : null;
   }
 
-  // Helper to check if current user can manage cross-client users
-  canManageCrossClient(userProfile) {
-    return userProfile.is_platform_staff && userProfile.platform_scope === "all";
+  async updateUser(userId, updateData) {
+    const response = await fetch(`${this.baseUrl}/v1/users/${userId}`, {
+      method: "PUT",
+      headers: this.headers,
+      body: JSON.stringify(updateData),
+    });
+    return response.ok ? await response.json() : null;
+  }
+
+  async deleteUser(userId) {
+    const response = await fetch(`${this.baseUrl}/v1/users/${userId}`, {
+      method: "DELETE",
+      headers: this.headers,
+    });
+    return response.ok;
   }
 }
 
 // Usage
 const userAPI = new UserManagementAPI("http://localhost:8030", accessToken);
-const users = await userAPI.getUsersInScope(null, true);
-const canManageAll = userAPI.canManageCrossClient(currentUserProfile);
+const users = await userAPI.getUsersInScope(0, 50);
+const newUser = await userAPI.createUser({
+  email: "newuser@example.com",
+  password: "securePassword123",
+  first_name: "New",
+  last_name: "User",
+});
 ```
+
+---
+
+## Dependencies and Services
+
+### Core Services Used
+
+The user routes utilize these key services:
+
+1. **UserService**:
+
+   - `create_user()` - Creates new users with validation
+   - `create_sub_user()` - Creates users within client account scope
+   - `get_users()` - Retrieves users with automatic scoping
+   - `get_user_by_id()` - Retrieves individual users
+   - `get_user_by_email()` - Finds users by email
+   - `update_user()` - Updates users with access control
+   - `delete_user()` - Deletes users with access control
+   - `bulk_create_users()` - Bulk user creation with error handling
+   - `get_user_effective_permissions()` - Calculates effective permissions
+
+2. **Dependencies Integration**:
+   - Hierarchical permission checking via `can_read_users`, `can_manage_users`
+   - Individual access control via `can_access_user()`
+   - Admin-only operations via `require_admin`
+   - Automatic client scoping in service layer
+
+### Database Integration
+
+- **MongoDB via Beanie ODM**: Efficient user storage with proper indexing
+- **Unique Email Constraint**: Prevents duplicate user emails
+- **Link References**: Roles and groups stored as Beanie Links for efficient querying
+- **Client Account Relationships**: Proper relationship modeling with client accounts
+
+---
+
+## Best Practices
+
+### User Management
+
+1. **Email Uniqueness**: Ensure emails are unique across the entire system
+2. **Password Security**: Use strong passwords (minimum 8 characters enforced)
+3. **Status Management**: Use appropriate user status values for account lifecycle
+4. **Role Assignment**: Validate role assignments based on user permissions
+5. **Client Scoping**: Always consider client account boundaries for data access
+
+### Security Considerations
+
+1. **Permission Validation**: Always use appropriate dependencies for access control
+2. **Data Scoping**: Let the service layer handle automatic scoping
+3. **Password Handling**: Never return passwords or password hashes in responses
+4. **Input Validation**: Validate all input data using Pydantic schemas
+5. **Error Messages**: Use consistent error messages that don't leak information
+
+### Performance Optimization
+
+1. **Pagination**: Always use pagination for user lists
+2. **Efficient Queries**: Service layer optimizes database queries
+3. **Link Fetching**: Beanie Links are fetched efficiently when needed
+4. **Index Usage**: Proper database indexes for common query patterns
 
 ---
 
 ## Related Documentation
 
-- [Platform Routes](platform_routes.md) - For platform analytics and business intelligence
-- [Client Account Routes](client_account_routes.md) - For client onboarding and management
-- [Auth Routes](auth_routes.md) - For enhanced authentication with permissions
-- [Group Routes](group_routes.md) - For team organization and group-based permissions
 - [Role Routes](role_routes.md) - For role-based access control
+- [Group Routes](group_routes.md) - For team organization and group-based permissions
 - [Permission Routes](permission_routes.md) - For granular permission management
+- [Client Account Routes](client_account_routes.md) - For client account management
+- [Auth Routes](auth_routes.md) - For authentication and login
+- [Dependencies Documentation](../dependencies.md) - For authentication and permission dependencies

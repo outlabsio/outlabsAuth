@@ -2,26 +2,26 @@
 
 ## Overview
 
-The Client Account Routes provide a comprehensive API for managing client accounts within the authentication system with **complete hierarchical multi-platform tenancy support**. This module handles all CRUD operations for client accounts with proper authentication, **platform-scoped authorization controls**, and **specialized platform onboarding workflows**.
+The Client Account Routes provide a comprehensive API for managing client accounts within the authentication system with **complete hierarchical multi-platform tenancy support**. This module handles all CRUD operations for client accounts with proper authentication, **hierarchical permission controls**, and **specialized platform management workflows**.
 
 **Base URL:** `/v1/client_accounts`  
 **Tags:** Client Account Management
 
 ## 🏢 **Complete Hierarchical Multi-Platform Tenancy**
 
-This API supports a complete three-tier permission hierarchy with platform onboarding:
+This API supports a complete three-tier permission hierarchy with platform management:
 
-- **Super Admins**: Complete system access across all platforms
-- **Platform Staff**: Can create, onboard, and manage sub-clients across all clients within their platform
-- **Platform Viewers**: Can only access clients they created within their platform
-- **Client Admins**: Access only their own client account (standard behavior)
+- **Super Admins**: Complete system access across all platforms (`client:manage_all`)
+- **Platform Managers**: Can manage clients within their platform (`client:manage_platform`)
+- **Platform Viewers**: Can read clients within their platform (`client:read_platform`)
+- **Client Users**: Access only their own client account (`client:read_own`)
 
-## 🚀 **Platform Features Implemented**
+## 🚀 **Advanced Permission System**
 
-**✅ Cross-Client Management**: Platform staff can view and manage multiple client companies
-**✅ Client Onboarding**: Streamlined onboarding workflow for new client companies
-**✅ Platform Analytics**: Integration with business intelligence endpoints
-**✅ Hierarchical Access Control**: Secure multi-tenant architecture with proper isolation
+**✅ Hierarchical Permissions**: Platform permissions automatically include client permissions
+**✅ Dynamic Access Control**: Runtime permission checking with context-aware filtering
+**✅ Multi-Tenant Isolation**: Secure data separation between platforms and clients
+**✅ Scalable Architecture**: Reverse reference design for unlimited sub-clients
 
 ## 🔄 **Scalable Hierarchical Design**
 
@@ -34,14 +34,26 @@ The system uses a **reverse reference architecture** for optimal performance:
 
 ## Authentication & Authorization
 
-All endpoints require authentication and specific permissions:
+All endpoints require authentication and are protected by dependency functions that implement hierarchical permission checking:
 
-- **Base Permission:** `client_account:read` (required for all endpoints)
-- **Platform-Scoped Permissions:**
-  - `client_account:create_sub` - Create sub-clients within platform scope
-  - `client_account:read_platform` - Read all clients within platform scope
-  - `client_account:read_created` - Read only clients you created
-- **Additional Permissions:** Specific endpoints require additional permissions as noted below
+- **Read Access:** Requires one of: `client:read_all`, `client:read_platform` (via `can_read_client_accounts`)
+- **Manage Access:** Requires one of: `client:manage_all`, `client:manage_platform` (via `can_manage_client_accounts`)
+- **Individual Access:** Uses `has_hierarchical_client_access` for per-resource authorization
+
+### Hierarchical Permission System
+
+The permission system follows a hierarchical structure where higher-level permissions automatically include lower-level ones:
+
+- `client:manage_all` → Includes all client permissions (global admin)
+- `client:manage_platform` → Includes `client:read_platform`, `client:read_own`
+- `client:read_all` → Includes `client:read_platform`, `client:read_own`
+- `client:read_platform` → Includes `client:read_own`
+- `client:read_own` → Base client-level read access
+
+### Additional System Permissions
+
+- `client:create` → Create top-level client accounts (super admin only)
+- `client:create_sub` → Create sub-clients within platform scope (platform-specific)
 
 ## Endpoints
 
@@ -51,17 +63,19 @@ Creates a new top-level client account in the system. This is typically used for
 
 **Endpoint:** `POST /v1/client_accounts/`
 
-**Required Permission:** `client_account:create`
+**Authentication Required:** Yes (Access Token)
+
+**Required Dependencies:** `can_manage_client_accounts` (requires `client:manage_all` or `client:manage_platform`)
 
 **Request Body:**
 
 ```json
 {
-  "name": "string",
-  "description": "string",
-  "main_contact_user_id": "string",
-  "platform_id": "string",
-  "is_platform_root": false
+  "name": "Real Estate Platform Root",
+  "description": "Root client for real estate platform",
+  "main_contact_user_id": "507f1f77bcf86cd799439015",
+  "platform_id": "real_estate_platform",
+  "is_platform_root": true
 }
 ```
 
@@ -72,17 +86,18 @@ Creates a new top-level client account in the system. This is typically used for
 
 ```json
 {
-  "id": "string",
-  "name": "string",
-  "description": "string",
+  "id": "507f1f77bcf86cd799439011",
+  "name": "Real Estate Platform Root",
+  "description": "Root client for real estate platform",
   "status": "active",
-  "main_contact_user_id": "string",
+  "main_contact_user_id": "507f1f77bcf86cd799439015",
   "data_retention_policy_days": null,
-  "platform_id": "string",
+  "platform_id": "real_estate_platform",
   "created_by_client_id": null,
-  "is_platform_root": false,
-  "created_at": "2023-01-01T00:00:00Z",
-  "updated_at": "2023-01-01T00:00:00Z"
+  "is_platform_root": true,
+  "created_by_platform": false,
+  "created_at": "2024-01-15T10:00:00Z",
+  "updated_at": "2024-01-15T10:00:00Z"
 }
 ```
 
@@ -92,35 +107,23 @@ Creates a new top-level client account in the system. This is typically used for
 - `403 Forbidden` - Insufficient permissions
 - `401 Unauthorized` - Invalid authentication
 
-**Example Request:**
+### 2. Create Sub-Client Account (Platform Managers)
 
-```bash
-curl -X POST "https://api.example.com/v1/client_accounts/" \
-     -H "Authorization: Bearer <token>" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "name": "Real Estate Platform Root",
-       "description": "Root client for real estate platform",
-       "platform_id": "real_estate_platform",
-       "is_platform_root": true
-     }'
-```
-
-### 2. Create Sub-Client Account (Platform Admins)
-
-Creates a sub-client account under the current user's client account. Available to platform admins with appropriate permissions.
+Creates a sub-client account under the current user's client account. Available to platform managers with appropriate permissions.
 
 **Endpoint:** `POST /v1/client_accounts/sub-clients`
 
-**Required Permission:** `client_account:create_sub`
+**Authentication Required:** Yes (Access Token)
+
+**Required Dependencies:** `can_manage_client_accounts` (requires `client:manage_all` or `client:manage_platform`)
 
 **Request Body:**
 
 ```json
 {
-  "name": "string",
-  "description": "string",
-  "main_contact_user_id": "string"
+  "name": "ACME Properties",
+  "description": "Real estate company under platform",
+  "main_contact_user_id": "507f1f77bcf86cd799439016"
 }
 ```
 
@@ -131,17 +134,18 @@ Creates a sub-client account under the current user's client account. Available 
 
 ```json
 {
-  "id": "string",
-  "name": "string",
-  "description": "string",
+  "id": "507f1f77bcf86cd799439012",
+  "name": "ACME Properties",
+  "description": "Real estate company under platform",
   "status": "active",
-  "main_contact_user_id": "string",
+  "main_contact_user_id": "507f1f77bcf86cd799439016",
   "data_retention_policy_days": null,
-  "platform_id": "inherited_from_parent",
-  "created_by_client_id": "parent_client_id",
+  "platform_id": "real_estate_platform",
+  "created_by_client_id": "507f1f77bcf86cd799439011",
   "is_platform_root": false,
-  "created_at": "2023-01-01T00:00:00Z",
-  "updated_at": "2023-01-01T00:00:00Z"
+  "created_by_platform": true,
+  "created_at": "2024-01-15T11:00:00Z",
+  "updated_at": "2024-01-15T11:00:00Z"
 }
 ```
 
@@ -151,101 +155,15 @@ Creates a sub-client account under the current user's client account. Available 
 - `403 Forbidden` - Insufficient permissions or user not associated with client account
 - `401 Unauthorized` - Invalid authentication
 
-**Example Request:**
+### 3. Get All Client Accounts (Hierarchical Filtering)
 
-```bash
-curl -X POST "https://api.example.com/v1/client_accounts/sub-clients" \
-     -H "Authorization: Bearer <token>" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "name": "ACME Properties",
-       "description": "Real estate company under platform"
-     }'
-```
-
-### 3. Onboard New Client (Platform Staff)
-
-**✅ NEW FEATURE** - Streamlined client onboarding workflow designed for platform staff to efficiently onboard new client companies with enhanced tracking and business intelligence integration.
-
-**Endpoint:** `POST /v1/client_accounts/onboard-client`
-
-**Required Permissions:**
-
-- `platform:onboard_clients`
-- User must be platform staff (`is_platform_staff: true`)
-
-**Request Body:**
-
-```json
-{
-  "name": "string",
-  "description": "string",
-  "main_contact_user_id": "string"
-}
-```
-
-**Features:**
-
-- **Platform Staff Validation**: Only platform staff can access this endpoint
-- **Enhanced Tracking**: Automatically sets `created_by_platform` tracking for business intelligence
-- **Streamlined Workflow**: Optimized for platform onboarding use cases
-- **Business Intelligence**: Integrates with platform analytics for client lifecycle tracking
-
-**Response:**
-
-- **Status Code:** `201 Created`
-- **Response Body:**
-
-```json
-{
-  "id": "string",
-  "name": "string",
-  "description": "string",
-  "status": "active",
-  "main_contact_user_id": "string",
-  "data_retention_policy_days": null,
-  "platform_id": "inherited_from_platform",
-  "created_by_client_id": "platform_client_id",
-  "is_platform_root": false,
-  "created_by_platform": true,
-  "created_at": "2023-01-01T00:00:00Z",
-  "updated_at": "2023-01-01T00:00:00Z"
-}
-```
-
-**Error Responses:**
-
-- `409 Conflict` - Client account with this name already exists
-- `403 Forbidden` - User is not platform staff or lacks onboarding permissions
-- `401 Unauthorized` - Invalid authentication
-- `400 Bad Request` - Invalid request body or missing required fields
-
-**Example Request:**
-
-```bash
-curl -X POST "https://api.example.com/v1/client_accounts/onboard-client" \
-     -H "Authorization: Bearer <platform_staff_token>" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "name": "Elite Properties Real Estate",
-       "description": "Luxury real estate firm joining PropertyHub platform"
-     }'
-```
-
-**Business Use Cases:**
-
-- **Platform Sales Teams**: Onboarding new real estate companies to PropertyHub
-- **Customer Success**: Streamlined setup process for new client companies
-- **Business Intelligence**: Tracking platform growth and client acquisition metrics
-- **Automated Workflows**: Integration with CRM and business development tools
-
-### 4. Get All Client Accounts (Hierarchical Filtering)
-
-Retrieves a paginated list of client accounts with automatic hierarchical filtering based on user permissions.
+Retrieves a paginated list of client accounts with **automatic hierarchical filtering** based on user permissions.
 
 **Endpoint:** `GET /v1/client_accounts/`
 
-**Required Permission:** `client_account:read`
+**Authentication Required:** Yes (Access Token)
+
+**Required Permissions:** Runtime permission checking (no dependency - permissions checked in route)
 
 **Query Parameters:**
 
@@ -253,12 +171,12 @@ Retrieves a paginated list of client accounts with automatic hierarchical filter
 - `limit` (optional, integer, default: 100) - Maximum number of records to return
 - `platform_scope` (optional, string) - Filter hint (not currently used, filtering is automatic)
 
-**Authorization Logic:**
+**Dynamic Authorization Logic:**
 
-- **Super Admins**: See all client accounts
-- **Platform Staff** (`client_account:read_platform`): See all accounts in their platform
-- **Platform Viewers** (`client_account:read_created`): See only accounts they created
-- **Regular Users**: See only their own account
+- **Super Admins** (`client:read_all` or `client:create` + `client:manage_all`): See all client accounts
+- **Platform Staff** (`client:read_platform` + platform root): See all accounts in their platform
+- **Platform Members** (`client:read_platform` + regular client): See accounts within same platform
+- **Regular Users** (`client:read_own`): See only their own account
 
 **Response:**
 
@@ -268,37 +186,47 @@ Retrieves a paginated list of client accounts with automatic hierarchical filter
 ```json
 [
   {
-    "id": "string",
-    "name": "string",
-    "description": "string",
+    "id": "507f1f77bcf86cd799439011",
+    "name": "Real Estate Platform Root",
+    "description": "Root client for real estate platform",
     "status": "active",
-    "main_contact_user_id": "string",
+    "main_contact_user_id": "507f1f77bcf86cd799439015",
     "data_retention_policy_days": null,
-    "platform_id": "string",
-    "created_by_client_id": "string",
+    "platform_id": "real_estate_platform",
+    "created_by_client_id": null,
+    "is_platform_root": true,
+    "created_by_platform": false,
+    "created_at": "2024-01-15T10:00:00Z",
+    "updated_at": "2024-01-15T10:00:00Z"
+  },
+  {
+    "id": "507f1f77bcf86cd799439012",
+    "name": "ACME Properties",
+    "description": "Real estate company under platform",
+    "status": "active",
+    "main_contact_user_id": "507f1f77bcf86cd799439016",
+    "data_retention_policy_days": null,
+    "platform_id": "real_estate_platform",
+    "created_by_client_id": "507f1f77bcf86cd799439011",
     "is_platform_root": false,
-    "created_at": "2023-01-01T00:00:00Z",
-    "updated_at": "2023-01-01T00:00:00Z"
+    "created_by_platform": true,
+    "created_at": "2024-01-15T11:00:00Z",
+    "updated_at": "2024-01-15T11:00:00Z"
   }
 ]
 ```
 
 **Note:** Child client relationships are not included in list responses for performance. Use the `/my-sub-clients` endpoint to get children.
 
-**Example Request:**
-
-```bash
-curl -X GET "https://api.example.com/v1/client_accounts/?skip=0&limit=50" \
-     -H "Authorization: Bearer <token>"
-```
-
-### 5. Get My Sub-Clients
+### 4. Get My Sub-Clients
 
 Retrieves all sub-clients created by the current user's client account using efficient reverse queries.
 
 **Endpoint:** `GET /v1/client_accounts/my-sub-clients`
 
-**Required Permission:** `client_account:read_created`
+**Authentication Required:** Yes (Access Token)
+
+**Required Dependencies:** `can_read_client_accounts` (requires `client:read_all` or `client:read_platform`)
 
 **Query Parameters:**
 
@@ -315,38 +243,35 @@ Retrieves all sub-clients created by the current user's client account using eff
 ```json
 [
   {
-    "id": "string",
-    "name": "string",
-    "description": "string",
+    "id": "507f1f77bcf86cd799439012",
+    "name": "ACME Properties",
+    "description": "Real estate company under platform",
     "status": "active",
-    "main_contact_user_id": "string",
-    "platform_id": "string",
-    "created_by_client_id": "current_user_client_id",
+    "main_contact_user_id": "507f1f77bcf86cd799439016",
+    "data_retention_policy_days": null,
+    "platform_id": "real_estate_platform",
+    "created_by_client_id": "507f1f77bcf86cd799439011",
     "is_platform_root": false,
-    "created_at": "2023-01-01T00:00:00Z",
-    "updated_at": "2023-01-01T00:00:00Z"
+    "created_by_platform": true,
+    "created_at": "2024-01-15T11:00:00Z",
+    "updated_at": "2024-01-15T11:00:00Z"
   }
 ]
 ```
 
-**Example Request:**
-
-```bash
-curl -X GET "https://api.example.com/v1/client_accounts/my-sub-clients" \
-     -H "Authorization: Bearer <token>"
-```
-
-### 6. Get Client Account by ID (Hierarchical Access Control)
+### 5. Get Client Account by ID (Hierarchical Access Control)
 
 Retrieves a specific client account by its ID with hierarchical access control.
 
 **Endpoint:** `GET /v1/client_accounts/{account_id}`
 
-**Required Permission:** `client_account:read`
+**Authentication Required:** Yes (Access Token)
+
+**Required Dependencies:** `has_hierarchical_client_access("account_id")` (context-aware access control)
 
 **Path Parameters:**
 
-- `account_id` (required, string) - The unique identifier of the client account
+- `account_id` (required, string) - The MongoDB ObjectId of the client account (validated by `valid_account_id`)
 
 **Authorization:** Uses hierarchical access control to ensure users can only access accounts they have permission to view.
 
@@ -357,21 +282,20 @@ Retrieves a specific client account by its ID with hierarchical access control.
 
 ```json
 {
-  "id": "string",
-  "name": "string",
-  "description": "string",
+  "id": "507f1f77bcf86cd799439011",
+  "name": "Real Estate Platform Root",
+  "description": "Root client for real estate platform",
   "status": "active",
-  "main_contact_user_id": "string",
+  "main_contact_user_id": "507f1f77bcf86cd799439015",
   "data_retention_policy_days": null,
-  "platform_id": "string",
-  "created_by_client_id": "string",
-  "is_platform_root": false,
-  "created_at": "2023-01-01T00:00:00Z",
-  "updated_at": "2023-01-01T00:00:00Z"
+  "platform_id": "real_estate_platform",
+  "created_by_client_id": null,
+  "is_platform_root": true,
+  "created_by_platform": false,
+  "created_at": "2024-01-15T10:00:00Z",
+  "updated_at": "2024-01-15T10:00:00Z"
 }
 ```
-
-**Note:** To get sub-clients of this account, use the `/my-sub-clients` endpoint or filter the main listing by `created_by_client_id`.
 
 **Error Responses:**
 
@@ -380,35 +304,33 @@ Retrieves a specific client account by its ID with hierarchical access control.
 - `401 Unauthorized` - Invalid authentication
 - `400 Bad Request` - Invalid account ID format
 
-**Example Request:**
-
-```bash
-curl -X GET "https://api.example.com/v1/client_accounts/507f1f77bcf86cd799439011" \
-     -H "Authorization: Bearer <token>"
-```
-
-### 7. Update Client Account (Hierarchical Access Control)
+### 6. Update Client Account (Hierarchical Access Control)
 
 Updates an existing client account with hierarchical access control.
 
 **Endpoint:** `PUT /v1/client_accounts/{account_id}`
 
-**Required Permission:** `client_account:update`
+**Authentication Required:** Yes (Access Token)
+
+**Required Dependencies:**
+
+- `can_manage_client_accounts` (requires `client:manage_all` or `client:manage_platform`)
+- `has_hierarchical_client_access("account_id")` (context-aware access control)
 
 **Path Parameters:**
 
-- `account_id` (required, string) - The unique identifier of the client account
+- `account_id` (required, string) - The MongoDB ObjectId of the client account (validated by `valid_account_id`)
 
 **Request Body:**
 
 ```json
 {
-  "name": "string",
-  "description": "string",
+  "name": "Updated Platform Client",
+  "description": "Updated description",
   "status": "active",
-  "main_contact_user_id": "string",
-  "data_retention_policy_days": 30,
-  "platform_id": "string",
+  "main_contact_user_id": "507f1f77bcf86cd799439017",
+  "data_retention_policy_days": 90,
+  "platform_id": "real_estate_platform",
   "is_platform_root": false
 }
 ```
@@ -422,52 +344,37 @@ Updates an existing client account with hierarchical access control.
 
 ```json
 {
-  "id": "string",
-  "name": "string",
-  "description": "string",
+  "id": "507f1f77bcf86cd799439011",
+  "name": "Updated Platform Client",
+  "description": "Updated description",
   "status": "active",
-  "main_contact_user_id": "string",
-  "data_retention_policy_days": 30,
-  "platform_id": "string",
-  "created_by_client_id": "string",
+  "main_contact_user_id": "507f1f77bcf86cd799439017",
+  "data_retention_policy_days": 90,
+  "platform_id": "real_estate_platform",
+  "created_by_client_id": null,
   "is_platform_root": false,
-  "created_at": "2023-01-01T00:00:00Z",
-  "updated_at": "2023-01-01T00:00:00Z"
+  "created_by_platform": false,
+  "created_at": "2024-01-15T10:00:00Z",
+  "updated_at": "2024-01-15T12:30:00Z"
 }
 ```
 
-**Error Responses:**
-
-- `404 Not Found` - Client account not found or access denied
-- `403 Forbidden` - Insufficient permissions
-- `401 Unauthorized` - Invalid authentication
-- `400 Bad Request` - Invalid account ID format or request body
-
-**Example Request:**
-
-```bash
-curl -X PUT "https://api.example.com/v1/client_accounts/507f1f77bcf86cd799439011" \
-     -H "Authorization: Bearer <token>" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "name": "Updated Platform Client",
-       "description": "Updated description",
-       "status": "active",
-       "data_retention_policy_days": 90
-     }'
-```
-
-### 8. Delete Client Account (Hierarchical Access Control)
+### 7. Delete Client Account (Hierarchical Access Control)
 
 Deletes a client account from the system with hierarchical access control.
 
 **Endpoint:** `DELETE /v1/client_accounts/{account_id}`
 
-**Required Permission:** `client_account:delete`
+**Authentication Required:** Yes (Access Token)
+
+**Required Dependencies:**
+
+- `can_manage_client_accounts` (requires `client:manage_all` or `client:manage_platform`)
+- `has_hierarchical_client_access("account_id")` (context-aware access control)
 
 **Path Parameters:**
 
-- `account_id` (required, string) - The unique identifier of the client account
+- `account_id` (required, string) - The MongoDB ObjectId of the client account (validated by `valid_account_id`)
 
 **Authorization:** Uses hierarchical access control to ensure users can only delete accounts they have permission to access.
 
@@ -478,45 +385,112 @@ Deletes a client account from the system with hierarchical access control.
 - **Status Code:** `204 No Content`
 - **Response Body:** Empty
 
-**Error Responses:**
+### 8. Onboard New Client (Platform Staff)
 
-- `404 Not Found` - Client account not found or access denied
-- `403 Forbidden` - Insufficient permissions
-- `401 Unauthorized` - Invalid authentication
-- `400 Bad Request` - Invalid account ID format
+**✅ SPECIALIZED ENDPOINT** - Platform staff onboarding workflow with enhanced validation and tracking.
 
-**Example Request:**
+**Endpoint:** `POST /v1/client_accounts/onboard-client`
 
-```bash
-curl -X DELETE "https://api.example.com/v1/client_accounts/507f1f77bcf86cd799439011" \
-     -H "Authorization: Bearer <token>"
+**Authentication Required:** Yes (Access Token)
+
+**Required Validation:**
+
+- User must have `is_platform_staff: true`
+- User must have `client_account:create` permission (note: legacy permission check)
+
+**Request Body:**
+
+```json
+{
+  "name": "Elite Properties Real Estate",
+  "description": "Luxury real estate firm joining PropertyHub platform",
+  "main_contact_user_id": "507f1f77bcf86cd799439018"
+}
 ```
 
-## 🔐 **Hierarchical Permissions**
+**Features:**
 
-### Platform-Scoped Permissions
+- **Platform Staff Validation**: Only platform staff can access this endpoint
+- **Enhanced Tracking**: Automatically sets hierarchical relationship tracking
+- **Permission Validation**: Checks for appropriate creation permissions
+- **Business Intelligence**: Integrates with platform analytics for client lifecycle tracking
 
-| Permission                     | Description                                   | Use Case                                    |
-| ------------------------------ | --------------------------------------------- | ------------------------------------------- |
-| `client_account:create`        | Create top-level client accounts              | Super admins creating platform roots        |
-| `client_account:create_sub`    | Create sub-clients within platform scope      | Platform admins creating sub-clients        |
-| `client_account:read_platform` | Read all clients within platform scope        | Platform staff viewing all platform clients |
-| `client_account:read_created`  | Read only clients you created                 | Platform viewers with limited scope         |
-| `client_account:read`          | Basic read access with hierarchical filtering | All authenticated users                     |
-| `client_account:update`        | Update client accounts (with access control)  | Authorized users modifying accounts         |
-| `client_account:delete`        | Delete client accounts (with access control)  | Super admins and authorized users           |
+**Response:**
 
-### Role Examples
+- **Status Code:** `201 Created`
+- **Response Body:**
 
-**Platform Staff Role:**
+```json
+{
+  "id": "507f1f77bcf86cd799439013",
+  "name": "Elite Properties Real Estate",
+  "description": "Luxury real estate firm joining PropertyHub platform",
+  "status": "active",
+  "main_contact_user_id": "507f1f77bcf86cd799439018",
+  "data_retention_policy_days": null,
+  "platform_id": "real_estate_platform",
+  "created_by_client_id": "507f1f77bcf86cd799439011",
+  "is_platform_root": false,
+  "created_by_platform": true,
+  "created_at": "2024-01-15T13:00:00Z",
+  "updated_at": "2024-01-15T13:00:00Z"
+}
+```
 
-- `client_account:read`, `client_account:create_sub`, `client_account:read_platform`, `client_account:update`
-- Can create sub-clients and see all clients in their platform
+**Error Responses:**
 
-**Platform Viewer Role:**
+- `403 Forbidden` - User is not platform staff or lacks creation permissions
+- `409 Conflict` - Client account with this name already exists
+- `401 Unauthorized` - Invalid authentication
+- `400 Bad Request` - Invalid request body or missing required fields
 
-- `client_account:read`, `client_account:read_created`
-- Can only see clients they created
+## Permission Requirements
+
+### Required Dependencies by Endpoint
+
+| Endpoint                             | Method | Required Dependencies                                           |
+| ------------------------------------ | ------ | --------------------------------------------------------------- |
+| `/v1/client_accounts/`               | GET    | Runtime permission checking                                     |
+| `/v1/client_accounts/`               | POST   | `can_manage_client_accounts`                                    |
+| `/v1/client_accounts/sub-clients`    | POST   | `can_manage_client_accounts`                                    |
+| `/v1/client_accounts/my-sub-clients` | GET    | `can_read_client_accounts`                                      |
+| `/v1/client_accounts/{account_id}`   | GET    | `has_hierarchical_client_access`                                |
+| `/v1/client_accounts/{account_id}`   | PUT    | `can_manage_client_accounts` + `has_hierarchical_client_access` |
+| `/v1/client_accounts/{account_id}`   | DELETE | `can_manage_client_accounts` + `has_hierarchical_client_access` |
+| `/v1/client_accounts/onboard-client` | POST   | Platform staff validation + custom permission check             |
+
+### Dependency Function Mappings
+
+- `can_read_client_accounts` requires any of: `client:read_all`, `client:read_platform`
+- `can_manage_client_accounts` requires any of: `client:manage_all`, `client:manage_platform`
+- `has_hierarchical_client_access` provides context-aware resource-level access control
+- `valid_account_id` validates MongoDB ObjectId format
+
+## Scope-Based Access Control
+
+### Super Admins (`client:manage_all`)
+
+- Can access and manage client accounts across all platforms
+- No restrictions on client operations
+- Can create top-level platform root accounts
+
+### Platform Managers (`client:manage_platform`)
+
+- Can manage client accounts within their platform scope only
+- Can create sub-clients under their platform
+- Cannot access other platform's clients
+
+### Platform Viewers (`client:read_platform`)
+
+- Can read client accounts within their platform scope only
+- Cannot modify client accounts
+- Automatic filtering based on platform context
+
+### Client Users (`client:read_own`)
+
+- Can read only their own client account
+- Cannot modify client accounts (requires manage permissions)
+- Most restrictive access level
 
 ## Data Models
 
@@ -524,10 +498,11 @@ curl -X DELETE "https://api.example.com/v1/client_accounts/507f1f77bcf86cd799439
 
 ```json
 {
-  "name": "string (required)",
+  "name": "string (required, 1-100 chars)",
   "description": "string (optional)",
-  "main_contact_user_id": "string (optional)",
+  "main_contact_user_id": "string (optional, MongoDB ObjectId)",
   "platform_id": "string (optional)",
+  "created_by_client_id": "string (optional, auto-set)",
   "is_platform_root": "boolean (optional, default: false)"
 }
 ```
@@ -536,10 +511,10 @@ curl -X DELETE "https://api.example.com/v1/client_accounts/507f1f77bcf86cd799439
 
 ```json
 {
-  "name": "string (optional)",
+  "name": "string (optional, 1-100 chars)",
   "description": "string (optional)",
-  "status": "string (optional, enum: 'active'|'suspended')",
-  "main_contact_user_id": "string (optional)",
+  "status": "active | suspended (optional)",
+  "main_contact_user_id": "string (optional, MongoDB ObjectId)",
   "data_retention_policy_days": "integer (optional)",
   "platform_id": "string (optional)",
   "is_platform_root": "boolean (optional)"
@@ -552,17 +527,18 @@ curl -X DELETE "https://api.example.com/v1/client_accounts/507f1f77bcf86cd799439
 
 ```json
 {
-  "id": "string",
+  "id": "string (MongoDB ObjectId)",
   "name": "string",
   "description": "string",
-  "status": "string (enum: 'active'|'suspended')",
-  "main_contact_user_id": "string",
+  "status": "active | suspended",
+  "main_contact_user_id": "string (MongoDB ObjectId)",
   "data_retention_policy_days": "integer",
   "platform_id": "string",
-  "created_by_client_id": "string",
+  "created_by_client_id": "string (MongoDB ObjectId)",
   "is_platform_root": "boolean",
-  "created_at": "datetime",
-  "updated_at": "datetime"
+  "created_by_platform": "boolean (computed field)",
+  "created_at": "datetime (ISO 8601)",
+  "updated_at": "datetime (ISO 8601)"
 }
 ```
 
@@ -575,15 +551,15 @@ curl -X DELETE "https://api.example.com/v1/client_accounts/507f1f77bcf86cd799439
 The API implements sophisticated hierarchical access control:
 
 1. **Information Disclosure Prevention**: Returns `404 Not Found` instead of `403 Forbidden` when users attempt to access accounts outside their scope
-2. **Automatic Filtering**: The `GET /v1/client_accounts/` endpoint automatically filters results based on user permissions
+2. **Dynamic Permission Checking**: The `GET /` endpoint performs runtime permission evaluation for flexible access control
 3. **Platform Isolation**: Users cannot access accounts from other platforms unless they're super admins
-4. **Parent-Child Validation**: Sub-client operations validate proper hierarchical relationships
+4. **Context-Aware Dependencies**: `has_hierarchical_client_access` validates per-resource access rights
 
 ### Access Patterns
 
 - **Super Admin Access**: Can access any client account across all platforms
-- **Platform Staff Access**: Can access all accounts within their `platform_id`
-- **Platform Viewer Access**: Can access only accounts where `created_by_client_id` matches their client account
+- **Platform Manager Access**: Can access and manage all accounts within their `platform_id`
+- **Platform Viewer Access**: Can read all accounts within their `platform_id`
 - **Regular User Access**: Can access only their own client account
 
 ## 🚀 **Performance & Scalability**
@@ -647,11 +623,13 @@ All endpoints are subject to rate limiting middleware. Exceeding rate limits wil
 This module depends on:
 
 - `client_account_service`: Enhanced business logic for hierarchical client account operations with reverse reference queries
-- `has_permission`: Authorization dependency for permission checking
-- `has_hierarchical_client_access`: Hierarchical access control dependency
+- `can_read_client_accounts`: Read permission dependency (requires `client:read_all` or `client:read_platform`)
+- `can_manage_client_accounts`: Manage permission dependency (requires `client:manage_all` or `client:manage_platform`)
+- `has_hierarchical_client_access`: Context-aware resource-level access control dependency
 - `get_current_user`: User context for authorization decisions
-- `valid_account_id`: Validation dependency for account ID format
-- `group_service`: For retrieving user effective permissions
+- `valid_account_id`: Validation dependency for MongoDB ObjectId format
+- `user_service`: For retrieving user effective permissions
+- `permission_service`: For hierarchical permission checking
 
 ## Usage Notes
 
@@ -674,15 +652,15 @@ This module depends on:
 **Real Estate Platform Scenario:**
 
 1. Create platform root: `POST /v1/client_accounts/` with `platform_id: "real_estate"`
-2. Platform admin creates property companies: `POST /v1/client_accounts/sub-clients`
-3. Platform admin views all real estate clients: `GET /v1/client_accounts/`
-4. Platform admin views their sub-clients: `GET /v1/client_accounts/my-sub-clients`
+2. Platform manager creates property companies: `POST /v1/client_accounts/sub-clients`
+3. Platform manager views all real estate clients: `GET /v1/client_accounts/`
+4. Platform manager views their sub-clients: `GET /v1/client_accounts/my-sub-clients`
 
 **CRM Platform Scenario:**
 
 1. Create platform root: `POST /v1/client_accounts/` with `platform_id: "crm_platform"`
-2. Platform admin creates business clients: `POST /v1/client_accounts/sub-clients`
-3. Platform admin views only their created clients: `GET /v1/client_accounts/my-sub-clients`
+2. Platform manager creates business clients: `POST /v1/client_accounts/sub-clients`
+3. Platform manager views only their platform clients: `GET /v1/client_accounts/`
 
 **Large Scale Example:**
 

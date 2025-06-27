@@ -2,29 +2,26 @@
 
 ## Overview
 
-The OutlabsAuth system implements a **three-tier scoped group architecture** that provides flexible team organization and direct permission management across multiple organizational levels. Groups serve as **permission containers** that complement the role system by allowing fine-grained access control through team-based organization using clean MongoDB ObjectIds and scope fields for tenant isolation.
+The OutlabsAuth system implements a **scoped group architecture** with **hierarchical permissions** that provides flexible team organization and direct permission management across multiple organizational levels. Groups serve as **permission containers** that complement the role system by allowing fine-grained access control through team-based organization with intelligent permission inheritance using clean MongoDB ObjectIds and scope fields for tenant isolation.
 
-## Architecture
+## 🏗️ **Architecture: Scoped Groups + Hierarchical Permissions**
 
-### Three-Tier Hierarchy
+### **Two-Layer System Design**
 
 ```
-SYSTEM GROUPS (Global)
-├─ customer_support      # Cross-platform support team
-├─ engineering          # Core development team
-└─ security_team        # Security and compliance team
+GROUPS (Scoped Containers)
+├─ System Groups    → Global operational teams (scope: system, scope_id: null)
+├─ Platform Groups  → Platform-specific teams (scope: platform, scope_id: platform_id)
+└─ Client Groups    → Client organization teams (scope: client, scope_id: client_account_id)
 
-PLATFORM GROUPS (Per Platform)
-├─ marketing_team       # Platform marketing
-├─ sales_team          # Platform sales
-├─ analytics_team      # Platform analytics
-└─ admin_team          # Platform administration
-
-CLIENT GROUPS (Per Client Organization)
-├─ management          # Client leadership team
-├─ sales_team         # Client sales representatives
-├─ support_staff      # Client customer support
-└─ project_managers   # Client project management
+PERMISSIONS (Hierarchical Direct Assignment)
+├─ manage_all     → Includes manage_platform + manage_client + all read levels
+├─ manage_platform → Includes manage_client + platform/client/self read levels
+├─ manage_client   → Includes client/self read levels
+├─ read_all       → System-wide read access
+├─ read_platform  → Platform-wide read access (includes client/self)
+├─ read_client    → Client organization read access (includes self)
+└─ read_self      → Individual user access (default for all users)
 ```
 
 ## Group vs Role Philosophy
@@ -34,7 +31,7 @@ CLIENT GROUPS (Per Client Organization)
 | Aspect                | **Roles**                    | **Groups**                        |
 | --------------------- | ---------------------------- | --------------------------------- |
 | **Purpose**           | User identity & capabilities | Team organization & collaboration |
-| **Permission Source** | Predefined permission sets   | Direct permission assignment      |
+| **Permission Source** | Hierarchical permission sets | Direct hierarchical permissions   |
 | **Relationship**      | User has roles               | User belongs to groups            |
 | **Flexibility**       | Structured, template-based   | Dynamic, team-based               |
 | **Use Case**          | "What can this user do?"     | "Who works on this project?"      |
@@ -43,11 +40,13 @@ CLIENT GROUPS (Per Client Organization)
 
 ```javascript
 // User effective permissions = Role permissions + Group permissions
-// (All resolved from ObjectIds to permission names for checking)
+// (All resolved using hierarchical permission inheritance)
 user_permissions = [
-  ...permissions_from_roles, // e.g., "user:read" from "manager" role
-  ...permissions_from_groups, // e.g., "project:alpha:edit" from "project_alpha_team" group
+  ...permissions_from_roles, // e.g., "user:read_client" from "manager" role
+  ...permissions_from_groups, // e.g., "group:manage_client" from "project_team" group
 ];
+
+// Hierarchical checking: "user:manage_client" automatically includes "user:read_client" and "user:read_self"
 ```
 
 ## Group Structure
@@ -60,14 +59,15 @@ user_permissions = [
   "name": "sales_team",                    // Simple group name
   "display_name": "Sales Team",            // Human-readable name
   "description": "Handles all sales activities and client relationships",
-  "permissions": [                         // Permission ObjectIds (resolved to names for checking)
-    "507f1f77bcf86cd799439015",            // crm:clients:read
-    "507f1f77bcf86cd799439016",            // crm:clients:update
-    "507f1f77bcf86cd799439017",            // crm:deals:create
-    "507f1f77bcf86cd799439018"             // crm:reports:read
+  "permissions": [                         // Hierarchical permission names
+    "user:read_client",                    // Read client users (includes self)
+    "group:manage_client",                 // Manage client groups (includes read)
+    "user:add_member",                     // Add team members
+    "group:manage_members"                 // Manage group membership
   ],
   "scope": "client",                       // "system" | "platform" | "client"
-  "scope_id": "685a5f2e82e92ad29111a6a9",  // Foreign key to owner
+  "scope_id": "685a5f2e82e92ad29111a6a9",  // Foreign key to scope owner
+  "is_active": true,
   "created_by_user_id": "507f1f77bcf86cd799439012",
   "created_by_client_id": "685a5f2e82e92ad29111a6a9",
   "created_at": "2024-01-15T10:30:00Z",
@@ -83,12 +83,50 @@ user_permissions = [
 | **platform** | `platform_id`        | `"real_estate_platform"`     | Platform that owns this group            |
 | **client**   | `client_account_id`  | `"685a5f2e82e92ad29111a6a9"` | Client organization that owns this group |
 
+## Hierarchical Permission System in Groups
+
+### **Permission Hierarchy Levels**
+
+Groups use the same hierarchical permission system as roles, with automatic inheritance:
+
+```python
+# Group Management Hierarchy (for managing groups themselves)
+"group:manage_all"     # Global group management across all scopes
+├─ "group:manage_platform" # Manage groups across platform clients
+├─ "group:manage_client"   # Manage groups within client organization
+├─ "group:read_all"        # Read groups system-wide
+├─ "group:read_platform"   # Read groups across platform clients
+└─ "group:read_client"     # Read groups within client organization
+
+# User Management Hierarchy (groups can grant user permissions)
+"user:manage_all"      # Global user management across all scopes
+├─ "user:manage_platform"  # Manage users across platform clients
+├─ "user:manage_client"    # Manage users within client organization
+├─ "user:read_all"         # Read users system-wide
+├─ "user:read_platform"    # Read users across platform clients
+├─ "user:read_client"      # Read users within client organization
+└─ "user:read_self"        # Read own profile (granted to all users)
+
+# Other Resource Hierarchies (roles, permissions, client accounts)
+"role:manage_client"   # Manage roles within client (includes role:read_client)
+"permission:read_platform" # Read permissions across platform
+"client:read_own"      # View own client account (default)
+```
+
+### **Automatic Permission Inheritance in Groups**
+
+Groups benefit from the same intelligent permission inheritance:
+
+1. **Manage includes Read**: `user:manage_client` in a group automatically includes `user:read_client`
+2. **Broader scopes include narrower**: `user:read_platform` automatically includes `user:read_client` and `user:read_self`
+3. **Higher levels include lower**: `user:manage_all` includes all user permissions at every level
+
 ## Group Examples
 
 ### System Groups
 
 ```javascript
-// Customer Support (cross-platform)
+// Customer Support (cross-platform operations)
 {
   "id": "507f1f77bcf86cd799439011",
   "name": "customer_support",
@@ -97,15 +135,14 @@ user_permissions = [
   "scope": "system",
   "scope_id": null,
   "permissions": [
-    "507f1f77bcf86cd799439019",  // support:tickets:read
-    "507f1f77bcf86cd799439020",  // support:tickets:update
-    "507f1f77bcf86cd799439021",  // user:read
-    "507f1f77bcf86cd799439022",  // client_account:read
-    "507f1f77bcf86cd799439023"   // support:cross_client
+    "user:read_platform",      // Read users across platform (includes client/self)
+    "support:cross_client",    // Cross-client support access
+    "client:read_platform",    // Read client accounts (includes own)
+    "group:read_platform"      // Read groups across platform (includes client)
   ]
 }
 
-// Engineering Team (system-wide access)
+// Engineering Team (system-wide infrastructure)
 {
   "id": "507f1f77bcf86cd799439012",
   "name": "engineering",
@@ -114,11 +151,10 @@ user_permissions = [
   "scope": "system",
   "scope_id": null,
   "permissions": [
-    "system:infrastructure:manage",
-    "system:deploy:production",
-    "system:logs:read",
-    "platform:*",
-    "client:*"
+    "system:infrastructure",   // System infrastructure management
+    "platform:manage_all",     // Full platform management
+    "user:read_all",          // Read all users (includes all lower levels)
+    "client:read_all"         // Read all client accounts (includes all lower)
   ]
 }
 ```
@@ -126,7 +162,7 @@ user_permissions = [
 ### Platform Groups
 
 ```javascript
-// Platform Marketing Team
+// Platform Marketing Team (cross-client marketing)
 {
   "id": "507f1f77bcf86cd799439013",
   "name": "marketing_team",
@@ -135,14 +171,14 @@ user_permissions = [
   "scope": "platform",
   "scope_id": "real_estate_platform",
   "permissions": [
-    "platform:analytics:view",
-    "platform:campaigns:manage",
-    "platform:reports:create",
-    "client:metrics:read"
+    "client:read_platform",    // Read platform clients (includes own)
+    "user:read_platform",      // Read platform users (includes client/self)
+    "group:read_platform",     // Read platform groups (includes client)
+    "support:cross_client"     // Cross-client support for marketing
   ]
 }
 
-// Platform Sales Team
+// Platform Sales Team (client acquisition)
 {
   "id": "507f1f77bcf86cd799439014",
   "name": "sales_team",
@@ -151,10 +187,10 @@ user_permissions = [
   "scope": "platform",
   "scope_id": "real_estate_platform",
   "permissions": [
-    "platform:leads:manage",
-    "client_account:create",
-    "client_account:read",
-    "platform:pricing:view"
+    "client:create",           // Create new client accounts
+    "client:manage_platform",  // Manage platform clients (includes read)
+    "user:read_platform",      // Read platform users (includes client/self)
+    "user:add_member"          // Add users to client accounts
   ]
 }
 ```
@@ -162,36 +198,37 @@ user_permissions = [
 ### Client Groups
 
 ```javascript
-// Client Sales Team (for Acme Real Estate)
+// Client Sales Team (organization sales)
 {
   "id": "507f1f77bcf86cd799439015",
   "name": "sales_team",
   "display_name": "Sales Team",
-  "description": "Acme Real Estate sales representatives",
+  "description": "Client organization sales representatives",
   "scope": "client",
-  "scope_id": "685a5f2e82e92ad29111a6a9",  // Acme's client_account_id
+  "scope_id": "685a5f2e82e92ad29111a6a9",  // Client account ID
   "permissions": [
-    "client:listings:create",
-    "client:listings:update",
-    "client:clients:manage",
-    "client:contracts:create",
-    "client:reports:sales"
+    "user:read_client",        // Read client users (includes self)
+    "group:read_client",       // Read client groups
+    "user:add_member",         // Add new team members
+    "group:manage_members",    // Manage group membership
+    "client:read_own"          // View own client account (default)
   ]
 }
 
-// Project Team (for specific project)
+// Project Team (specific project collaboration)
 {
   "id": "507f1f77bcf86cd799439016",
   "name": "project_alpha_team",
   "display_name": "Project Alpha Team",
-  "description": "Team working on the Alpha project initiative",
+  "description": "Cross-functional team for Project Alpha initiative",
   "scope": "client",
   "scope_id": "685a5f2e82e92ad29111a6a9",
   "permissions": [
-    "client:project:alpha:read",
-    "client:project:alpha:update",
-    "client:documents:alpha:manage",
-    "client:meetings:alpha:schedule"
+    "user:read_client",        // Read client users (includes self)
+    "group:manage_client",     // Manage client groups (includes read)
+    "user:add_member",         // Add project team members
+    "group:manage_members",    // Manage project team membership
+    "permission:read_client"   // Read client permissions for project setup
   ]
 }
 ```
@@ -200,30 +237,30 @@ user_permissions = [
 
 ### Who Can Create Groups
 
-| User Type          | Can Create         | Scope                            | Restrictions                 |
-| ------------------ | ------------------ | -------------------------------- | ---------------------------- |
-| **Super Admin**    | ✅ Any group       | `system`, `platform`, `client`   | No restrictions              |
-| **Platform Admin** | ✅ Platform groups | `platform` (their platform only) | Only within their platform   |
-| **Client Admin**   | ✅ Client groups   | `client` (their client only)     | Only within their client org |
-| **Team Lead**      | ✅ Client groups   | `client` (their client only)     | If granted group:create      |
+| User Type          | Can Create         | Scope                            | Permissions Required    | Restrictions                 |
+| ------------------ | ------------------ | -------------------------------- | ----------------------- | ---------------------------- |
+| **Super Admin**    | ✅ Any group       | `system`, `platform`, `client`   | `group:manage_all`      | No restrictions              |
+| **Platform Admin** | ✅ Platform groups | `platform` (their platform only) | `group:manage_platform` | Only within their platform   |
+| **Client Admin**   | ✅ Client groups   | `client` (their client only)     | `group:manage_client`   | Only within their client org |
+| **Team Lead**      | ✅ Client groups   | `client` (their client only)     | `group:manage_client`   | If granted group management  |
 
 ### Who Can Assign Group Membership
 
-| User Type          | Can Add Members To                   | Examples                                   |
-| ------------------ | ------------------------------------ | ------------------------------------------ |
-| **Super Admin**    | Any group                            | All system, platform, and client groups    |
-| **Platform Admin** | Platform groups + some system groups | Platform groups + customer_support         |
-| **Client Admin**   | Client groups                        | All groups within their client             |
-| **Group Manager**  | Groups they manage                   | If granted group:manage_members permission |
+| User Type          | Can Add Members To            | Permissions Required    | Examples                                |
+| ------------------ | ----------------------------- | ----------------------- | --------------------------------------- |
+| **Super Admin**    | Any group                     | `group:manage_all`      | All system, platform, and client groups |
+| **Platform Admin** | Platform + some system groups | `group:manage_platform` | Platform groups + customer_support      |
+| **Client Admin**   | Client groups                 | `group:manage_client`   | All groups within their client          |
+| **Group Manager**  | Groups they manage            | `group:manage_members`  | If granted group membership management  |
 
-### Group Visibility
+### Group Visibility (Using Hierarchical Permissions)
 
-| User Type          | Can View                                     |
-| ------------------ | -------------------------------------------- |
-| **Super Admin**    | All groups across all scopes                 |
-| **Platform Admin** | System groups + their platform groups        |
-| **Client Admin**   | System groups + their client groups          |
-| **Regular User**   | Groups they belong to + public client groups |
+| User Type          | Can View                              | Permission Required                    |
+| ------------------ | ------------------------------------- | -------------------------------------- |
+| **Super Admin**    | All groups across all scopes          | `group:read_all`                       |
+| **Platform Admin** | System + platform groups              | `group:read_platform`                  |
+| **Client Admin**   | System + client groups                | `group:read_client`                    |
+| **Regular User**   | Groups they belong to + client groups | `group:read_own` + `group:read_client` |
 
 ## Usage Patterns
 
@@ -232,16 +269,17 @@ user_permissions = [
 When organizing teams within a client organization:
 
 ```python
-# Create sales team group
+# Create sales team group with hierarchical permissions
 sales_group_data = GroupCreateSchema(
     name="sales_team",
     display_name="Sales Team",
     description="Handles all sales activities and client relationships",
     permissions=[
-        "client:listings:create",
-        "client:listings:update",
-        "client:clients:manage",
-        "client:reports:sales"
+        "user:read_client",        // Hierarchical: includes user:read_self
+        "group:read_client",       // Read client groups
+        "user:add_member",         // Add new team members
+        "group:manage_members",    // Manage group membership
+        "client:read_own"          // View own client account (default)
     ],
     scope=GroupScope.CLIENT
 )
@@ -265,16 +303,17 @@ await group_service.add_users_to_group(
 Creating temporary groups for specific projects:
 
 ```python
-# Create project-specific group
+# Create project-specific group with hierarchical permissions
 project_group_data = GroupCreateSchema(
     name="project_alpha_team",
     display_name="Project Alpha Team",
     description="Cross-functional team for Project Alpha",
     permissions=[
-        "client:project:alpha:read",
-        "client:project:alpha:update",
-        "client:documents:alpha:manage",
-        "client:meetings:alpha:schedule"
+        "user:read_client",        // Hierarchical: includes user:read_self
+        "group:manage_client",     // Manage client groups (includes read)
+        "user:add_member",         // Add project team members
+        "group:manage_members",    // Manage project team membership
+        "permission:read_client"   // Read client permissions for project setup
     ],
     scope=GroupScope.CLIENT
 )
@@ -297,16 +336,16 @@ await group_service.add_users_to_group(
 Platform administrators creating cross-client operational teams:
 
 ```python
-# Create platform analytics group
+# Create platform analytics group with hierarchical permissions
 analytics_group_data = GroupCreateSchema(
     name="analytics_team",
     display_name="Analytics Team",
     description="Platform-wide analytics and reporting team",
     permissions=[
-        "platform:analytics:view",
-        "platform:reports:create",
-        "client:metrics:read",
-        "platform:dashboard:manage"
+        "user:read_platform",      // Hierarchical: includes user:read_client + user:read_self
+        "client:read_platform",    // Hierarchical: includes client:read_own
+        "group:read_platform",     // Hierarchical: includes group:read_client
+        "support:cross_client"     // Cross-client support access
     ],
     scope=GroupScope.PLATFORM
 )
@@ -321,18 +360,19 @@ analytics_group = await group_service.create_group(
 
 ## Multi-Role + Group Permissions
 
-### Permission Aggregation
+### Permission Aggregation with Hierarchical Inheritance
 
-Users can have both roles and group memberships, with permissions combined:
+Users can have both roles and group memberships, with permissions combined using hierarchical logic:
 
 ```python
 # User has "manager" role + belongs to "sales_team" group
 user_effective_permissions = await user_service.get_user_effective_permissions(user_id)
 
-# Returns combined permissions:
-# From "manager" role: ["user:read", "user:update", "reports:view"]
-# From "sales_team" group: ["client:listings:create", "client:clients:manage"]
-# Final: ["user:read", "user:update", "reports:view", "client:listings:create", "client:clients:manage"]
+# Returns combined permissions with hierarchical inheritance:
+# From "manager" role: ["user:manage_client"] -> includes ["user:read_client", "user:read_self"]
+# From "sales_team" group: ["group:manage_client"] -> includes ["group:read_client"]
+# Final effective: ["user:manage_client", "user:read_client", "user:read_self",
+#                  "group:manage_client", "group:read_client", "user:add_member"]
 ```
 
 ### Real-World Example
@@ -348,23 +388,84 @@ user_effective_permissions = await user_service.get_user_effective_permissions(u
   },
 
   "effective_permissions": [
-    // From "manager" role:
-    "user:read", "user:update", "reports:view",
+    // From "manager" role (hierarchical):
+    "user:manage_client",      // Includes user:read_client, user:read_self
+    "group:read_client",       // Read client groups
+    "client:read_own",         // View own client account
 
     // From "sales_team" group:
-    "client:listings:create", "client:clients:manage",
+    "user:add_member",         // Add new team members
+    "group:manage_members",    // Manage group membership
 
     // From "project_alpha_team" group:
-    "client:project:alpha:update", "client:documents:alpha:manage"
+    "permission:read_client"   // Read client permissions for project setup
   ]
 }
+```
+
+## Integration with Dependencies
+
+### Named Dependencies Using Hierarchical Permissions
+
+The dependency system uses hierarchical permissions for clean group access control:
+
+```python
+# Group Management Dependencies
+can_read_groups = require_permissions(any_of=["group:read_all", "group:read_platform", "group:read_client"])
+can_manage_groups = require_permissions(any_of=["group:manage_all", "group:manage_platform", "group:manage_client"])
+
+# Route Usage Example
+@router.get("/", response_model=List[GroupResponseSchema])
+async def get_all_groups(
+    current_user: UserModel = Depends(can_read_groups),  // Hierarchical permission check
+    skip: int = 0, limit: int = 100
+):
+    groups = await group_service.get_groups(current_user=current_user, skip=skip, limit=limit)
+    return [await group_service.group_to_response_schema(group) for group in groups]
+```
+
+### Automatic Data Scoping
+
+The service layer automatically handles data scoping based on user permissions:
+
+```python
+async def get_groups(self, current_user: UserModel, skip: int = 0, limit: int = 100) -> List[GroupModel]:
+    """
+    Get groups with automatic scoping based on user's hierarchical permissions.
+    """
+    user_permissions = await get_user_effective_permissions(current_user.id)
+
+    if "group:read_all" in user_permissions:
+        # Super admin - see all groups
+        return await GroupModel.find().skip(skip).limit(limit).to_list()
+    elif "group:read_platform" in user_permissions:
+        # Platform admin - see system + platform groups
+        return await GroupModel.find({
+            "$or": [
+                {"scope": "system"},
+                {"scope": "platform", "scope_id": current_user.platform_id}
+            ]
+        }).skip(skip).limit(limit).to_list()
+    elif "group:read_client" in user_permissions:
+        # Client admin - see system + client groups
+        return await GroupModel.find({
+            "$or": [
+                {"scope": "system"},
+                {"scope": "client", "scope_id": current_user.client_account_id}
+            ]
+        }).skip(skip).limit(limit).to_list()
+    else:
+        # No group read permissions - only own groups
+        return await GroupModel.find({
+            "members": current_user.id
+        }).skip(skip).limit(limit).to_list()
 ```
 
 ## Frontend Integration
 
 ### Group Creation UI
 
-The frontend provides intuitive group management:
+The frontend provides intuitive group management with hierarchical permission selection:
 
 ```javascript
 // Frontend form data
@@ -373,10 +474,11 @@ The frontend provides intuitive group management:
   display_name: "Marketing Team",
   description: "Handles marketing campaigns and brand management",
   permissions: [
-    "client:campaigns:create",
-    "client:campaigns:manage",
-    "client:social_media:post",
-    "client:analytics:marketing"
+    "user:read_client",         // Hierarchical: includes user:read_self
+    "group:read_client",        // Read client groups
+    "user:add_member",          // Add team members
+    "group:manage_members",     // Manage group membership
+    "client:read_own"           // View own client account (default)
   ],
   scope: "client"  // User selects scope level
 }
@@ -397,7 +499,11 @@ Use the `/groups/available` endpoint to get groups a user can assign:
       "name": "customer_support",
       "display_name": "Customer Support Team",
       "scope": "system",
-      "scope_id": null
+      "scope_id": null,
+      "permissions": [
+        {"name": "user:read_platform", "display_name": "Read Platform Users"},
+        {"name": "support:cross_client", "display_name": "Cross-Client Support"}
+      ]
     }
   ],
   "platform_groups": [
@@ -406,7 +512,11 @@ Use the `/groups/available` endpoint to get groups a user can assign:
       "name": "analytics_team",
       "display_name": "Analytics Team",
       "scope": "platform",
-      "scope_id": "real_estate_platform"
+      "scope_id": "real_estate_platform",
+      "permissions": [
+        {"name": "user:read_platform", "display_name": "Read Platform Users"},
+        {"name": "client:read_platform", "display_name": "Read Platform Clients"}
+      ]
     }
   ],
   "client_groups": [
@@ -415,14 +525,11 @@ Use the `/groups/available` endpoint to get groups a user can assign:
       "name": "sales_team",
       "display_name": "Sales Team",
       "scope": "client",
-      "scope_id": "685a5f2e82e92ad29111a6a9"
-    },
-    {
-      "id": "507f1f77bcf86cd799439016",
-      "name": "project_alpha_team",
-      "display_name": "Project Alpha Team",
-      "scope": "client",
-      "scope_id": "685a5f2e82e92ad29111a6a9"
+      "scope_id": "685a5f2e82e92ad29111a6a9",
+      "permissions": [
+        {"name": "user:read_client", "display_name": "Read Client Users"},
+        {"name": "group:read_client", "display_name": "Read Client Groups"}
+      ]
     }
   ]
 }
@@ -457,22 +564,24 @@ Use the `/groups/available` endpoint to get groups a user can assign:
 
 ## Security Features
 
-### Namespace Isolation
+### Namespace Isolation + Hierarchical Security
 
 - **No group collisions**: Groups are isolated by scope + scope_id
 - **Tenant isolation**: Client A's "sales_team" is completely separate from Client B's "sales_team"
-- **Clear boundaries**: Platform groups cannot access client data without explicit permissions
+- **Permission inheritance**: Higher-level permissions automatically include lower levels
+- **Automatic scoping**: Service layer filters data based on user's permission hierarchy
 
 ### Permission Validation
 
-- **Permission checks**: Only valid permissions can be assigned to groups
+- **Hierarchical validation**: Only valid hierarchical permissions can be assigned to groups
 - **Scope validation**: Group permissions must be appropriate for the group's scope
-- **Context awareness**: Backend validates permissions against user's capabilities
+- **Context awareness**: Backend validates permissions against user's hierarchical capabilities
 
 ### Unique Constraints
 
 - **Name uniqueness**: Group names must be unique within their scope (name + scope + scope_id)
 - **Proper isolation**: Same group name can exist in different scopes without conflict
+- **Permission inheritance**: Automatic validation of permission hierarchy
 
 ## Database Queries
 
@@ -482,10 +591,11 @@ Use the `/groups/available` endpoint to get groups a user can assign:
 # Get all client groups for a specific client
 client_groups = await GroupModel.find(
     GroupModel.scope == GroupScope.CLIENT,
-    GroupModel.scope_id == client_id
+    GroupModel.scope_id == client_id,
+    fetch_links=True  # Fetch permission details
 ).to_list()
 
-# Get user's group memberships with permissions
+# Get user's group memberships with hierarchical permissions
 user_groups = await group_service.get_user_groups(user_id)
 user_group_permissions = await group_service.get_user_effective_permissions(user_id)
 
@@ -499,111 +609,112 @@ existing_group = await GroupModel.find_one(
 
 ## Best Practices
 
-### 1. Group Naming
+### 1. Group Design with Hierarchical Permissions
 
-- **Functional names**: `"sales_team"`, `"project_alpha_team"`, `"marketing_team"`
-- **Clear display names**: `"Sales Team"`, `"Project Alpha Team"`, `"Marketing Department"`
-- **Consistent patterns**: Use similar naming conventions across scopes
+- **Use hierarchical permissions**: Prefer `user:manage_client` over multiple individual permissions
+- **Leverage inheritance**: `user:manage_client` automatically includes `user:read_client` and `user:read_self`
+- **Scope appropriately**: Use the narrowest scope that meets team requirements
 
-### 2. Permission Assignment
+### 2. Permission Assignment Strategy
 
-- **Principle of least privilege**: Only assign necessary permissions to groups
-- **Purpose-driven**: Align permissions with the group's specific function
-- **Regular audits**: Review group permissions as projects evolve
+- **Start with higher-level permissions**: `group:manage_client` is better than listing all individual permissions
+- **Use named dependencies**: `can_manage_groups` is cleaner than manual permission checks
+- **Follow hierarchy**: Respect the `all > platform > client > self` hierarchy
 
 ### 3. Group Lifecycle
 
-- **Create as needed**: Groups should serve a clear organizational purpose
+- **Create as needed**: Groups should serve a clear organizational or project purpose
 - **Archive completed projects**: Remove project groups when projects complete
 - **Update membership**: Keep group membership current with team changes
 
 ### 4. Scope Design
 
-- **System groups**: Only for global operational teams (support, engineering)
-- **Platform groups**: For cross-client platform functionality
-- **Client groups**: For organization-specific teams and projects
+- **System groups**: Only for global operational teams (`customer_support`, `engineering`)
+- **Platform groups**: For cross-client platform functionality (`platform_marketing`, `platform_support`)
+- **Client groups**: For organization-specific teams and projects (`sales_team`, `project_alpha_team`)
 
 ### 5. Role + Group Strategy
 
 - **Roles for identity**: Use roles to define "what kind of user" someone is
 - **Groups for collaboration**: Use groups to define "who works together"
-- **Combined permissions**: Leverage both systems for comprehensive access control
+- **Combined permissions**: Leverage both systems with hierarchical inheritance for comprehensive access control
 
 ## API Endpoints
 
-| Endpoint                        | Purpose               | Example                                          |
-| ------------------------------- | --------------------- | ------------------------------------------------ |
-| `POST /groups/`                 | Create group          | Creates group in specified scope                 |
-| `GET /groups/`                  | List groups           | Returns groups visible to user                   |
-| `GET /groups/available`         | Get assignable groups | Returns groups user can assign, grouped by scope |
-| `GET /groups/{group_id}`        | Get specific group    | Returns group details if user can view           |
-| `PUT /groups/{group_id}`        | Update group          | Updates group if user can manage                 |
-| `DELETE /groups/{group_id}`     | Delete group          | Deletes group if user can manage                 |
-| `POST /groups/{id}/members`     | Add group members     | Adds users to group                              |
-| `DELETE /groups/{id}/members`   | Remove group members  | Removes users from group                         |
-| `GET /groups/{id}/members`      | Get group members     | Returns list of group members                    |
-| `GET /groups/users/{id}/groups` | Get user's groups     | Returns groups user belongs to + effective perms |
+| Endpoint                        | Purpose               | Permissions Required   | Example                                          |
+| ------------------------------- | --------------------- | ---------------------- | ------------------------------------------------ |
+| `POST /groups/`                 | Create group          | `group:manage_*`       | Creates group in specified scope                 |
+| `GET /groups/`                  | List groups           | `group:read_*`         | Returns groups visible to user with auto-scoping |
+| `GET /groups/available`         | Get assignable groups | `group:read_*`         | Returns groups user can assign, grouped by scope |
+| `GET /groups/{group_id}`        | Get specific group    | `group:read_*`         | Returns group details if user can view           |
+| `PUT /groups/{group_id}`        | Update group          | `group:manage_*`       | Updates group if user can manage                 |
+| `DELETE /groups/{group_id}`     | Delete group          | `group:manage_*`       | Deletes group if user can manage                 |
+| `POST /groups/{id}/members`     | Add group members     | `group:manage_members` | Adds users to group                              |
+| `DELETE /groups/{id}/members`   | Remove group members  | `group:manage_members` | Removes users from group                         |
+| `GET /groups/{id}/members`      | Get group members     | `group:read_*`         | Returns list of group members                    |
+| `GET /groups/users/{id}/groups` | Get user's groups     | `group:read_own`       | Returns groups user belongs to + effective perms |
 
 ## Complete Example
 
-### Lead Generation Company Scenario
+### Client Setup with Hierarchical Group Permissions
 
 ```python
-# System Level: Lead company internal teams
-customer_support_group = await group_service.create_group(
-    group_data=GroupCreateSchema(
-        name="customer_support",
-        display_name="Customer Support Team",
-        description="Provides support across all platforms and clients",
-        permissions=[
-            "support:tickets:read",
-            "support:tickets:update",
-            "platform:support:all_clients"
-        ],
-        scope=GroupScope.SYSTEM
-    ),
-    current_user_id=super_admin_id
+# 1. Client admin creates departmental sales group
+sales_group_data = GroupCreateSchema(
+    name="sales_team",
+    display_name="Sales Team",
+    description="Client organization sales representatives",
+    permissions=[
+        "user:read_client",        // Hierarchical: includes user:read_self
+        "group:read_client",       // Read client groups
+        "user:add_member",         // Add new team members
+        "group:manage_members",    // Manage group membership
+        "client:read_own"          // View own client account (default)
+    ],
+    scope=GroupScope.CLIENT
 )
 
-# Platform Level: Corporate client teams (RE/MAX HQ)
-remax_marketing_group = await group_service.create_group(
-    group_data=GroupCreateSchema(
-        name="marketing_team",
-        display_name="RE/MAX Marketing Team",
-        description="Corporate marketing team for RE/MAX brand",
-        permissions=[
-            "platform:brand:manage",
-            "platform:campaigns:corporate",
-            "client:analytics:all_franchises"
-        ],
-        scope=GroupScope.PLATFORM
-    ),
-    current_user_id=platform_admin_id,
-    scope_id="remax_platform"
+sales_group = await group_service.create_group(
+    group_data=sales_group_data,
+    current_user_id=client_admin_id,
+    current_client_id=client_admin.client_account_id
 )
 
-# Client Level: Individual franchise teams (RE/MAX Downtown)
-franchise_sales_group = await group_service.create_group(
-    group_data=GroupCreateSchema(
-        name="sales_team",
-        display_name="Sales Team",
-        description="RE/MAX Downtown sales representatives",
-        permissions=[
-            "client:listings:create",
-            "client:listings:update",
-            "client:leads:manage",
-            "client:reports:sales"
-        ],
-        scope=GroupScope.CLIENT
-    ),
-    current_user_id=franchise_admin_id,
-    current_client_id=franchise_client_id
+# 2. Create project-specific group with hierarchical permissions
+project_group_data = GroupCreateSchema(
+    name="project_alpha_team",
+    display_name="Project Alpha Team",
+    description="Cross-functional team for Project Alpha initiative",
+    permissions=[
+        "user:read_client",        // Hierarchical: includes user:read_self
+        "group:manage_client",     // Manage client groups (includes read)
+        "user:add_member",         // Add project team members
+        "group:manage_members",    // Manage project team membership
+        "permission:read_client"   // Read client permissions for project setup
+    ],
+    scope=GroupScope.CLIENT
 )
 
-# Perfect isolation: Each level operates independently
-# Customer support can help all clients
-# RE/MAX HQ marketing can manage corporate campaigns
-# Downtown franchise can only manage their own listings
+project_group = await group_service.create_group(
+    group_data=project_group_data,
+    current_user_id=client_admin_id,
+    current_client_id=client_admin.client_account_id
+)
+
+# 3. Add users to groups (users get permissions from both roles and groups)
+await group_service.add_users_to_group(
+    group_id=sales_group.id,
+    user_ids=[sales_rep_1_id, sales_rep_2_id, sales_manager_id]
+)
+
+await group_service.add_users_to_group(
+    group_id=project_group.id,
+    user_ids=[sales_manager_id, developer_id, designer_id, analyst_id]
+)
+
+# 4. Users now have combined permissions:
+# - sales_manager_id: Role permissions + Sales Team permissions + Project Alpha permissions
+# - All with hierarchical inheritance automatically applied
 ```
 
-This creates a complete, isolated multi-tier group environment with proper permission boundaries and collaborative team organization using clean MongoDB ObjectIds and scope-based isolation.
+This creates a complete, isolated multi-tier group environment with proper permission boundaries, hierarchical inheritance, and collaborative team organization using clean MongoDB ObjectIds and scope-based isolation.
