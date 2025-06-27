@@ -305,16 +305,19 @@ class TestPlatformAccessControl:
                 
                 user_data = me_response.json()
                 # Platform staff should have appropriate permissions
-                effective_permissions = user_data.get("effective_permissions", [])
-                
+                permissions = user_data.get("permissions", [])
+
+                # Extract permission names from permission details
+                permission_names = [perm.get("name", "") for perm in permissions]
+
                 # Should have some level of client account access
                 has_client_access = any(
-                    perm.startswith("client:") for perm in effective_permissions
+                    perm.startswith("client:") for perm in permission_names
                 )
-                
+
                 if "propertyhub.com" in email or email == "admin@test.com":
                     # Platform users should have client access
-                    assert has_client_access or len(effective_permissions) > 0
+                    assert has_client_access or len(permission_names) > 0
 
     @pytest.mark.asyncio
     async def test_cross_client_access_validation(self, client: AsyncClient):
