@@ -15,12 +15,13 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Users, Shield, Building2, Activity } from "lucide-react";
+import { useAuthStore } from "@/stores/auth-store";
 
 export const Route = createFileRoute("/dashboard")({
   beforeLoad: async () => {
-    // Check if user is authenticated
-    const token = localStorage.getItem("access_token");
-    if (!token) {
+    // Check if user is authenticated using the store
+    const { isAuthenticated } = useAuthStore.getState();
+    if (!isAuthenticated) {
       throw redirect({
         to: "/login",
       });

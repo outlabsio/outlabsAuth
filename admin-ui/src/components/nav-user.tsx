@@ -9,6 +9,7 @@ import {
   Sparkles,
 } from "lucide-react"
 import { useRouter } from "@tanstack/react-router"
+import { useAuthStore } from "@/stores/auth-store"
 
 import {
   Avatar,
@@ -43,10 +44,10 @@ export function NavUser({
   const { isMobile } = useSidebar()
   const router = useRouter()
 
+  const logout = useAuthStore((state) => state.logout)
+  
   const handleLogout = () => {
-    localStorage.removeItem("access_token")
-    localStorage.removeItem("refresh_token")
-    window.location.href = "/login"
+    logout()
   }
 
   return (

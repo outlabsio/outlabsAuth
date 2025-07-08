@@ -16,12 +16,13 @@ import {
 } from "@/components/ui/sidebar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmailSettings } from "@/components/settings/email-settings";
+import { useAuthStore } from "@/stores/auth-store";
 
 export const Route = createFileRoute("/settings/")({
   beforeLoad: async () => {
-    // Check if user is authenticated
-    const token = localStorage.getItem("access_token");
-    if (!token) {
+    // Check if user is authenticated using the store
+    const { isAuthenticated } = useAuthStore.getState();
+    if (!isAuthenticated) {
       throw redirect({
         to: "/login",
       });

@@ -7,6 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Loader2 } from "lucide-react";
+import { useAuthStore } from "@/stores/auth-store";
+import { toast } from "sonner";
 
 async function handleLogin(values: { username: string; password: string }) {
   const response = await fetch("/v1/auth/login", {
@@ -21,25 +24,26 @@ async function handleLogin(values: { username: string; password: string }) {
   }
 
   const data = await response.json();
-  
-  // Store tokens
-  localStorage.setItem("access_token", data.access_token);
-  if (data.refresh_token) {
-    localStorage.setItem("refresh_token", data.refresh_token);
-  }
-  
   return data;
 }
 
 export function LoginForm({ className, ...props }: React.ComponentProps<"div">) {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const login = useAuthStore((state) => state.login);
 
   const mutation = useMutation({
     mutationFn: handleLogin,
-    onSuccess: () => {
+    onSuccess: async (data) => {
+      // Store tokens in Zustand store
+      await login(data);
+      
       queryClient.invalidateQueries({ queryKey: ["user"] });
+      toast.success("Login successful!");
       router.navigate({ to: "/dashboard" });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Login failed");
     },
   });
 
@@ -147,7 +151,14 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"div">) 
                     className='w-full' 
                     disabled={!canSubmit || isSubmitting || mutation.isPending}
                   >
-                    {mutation.isPending ? "Signing in..." : "Sign in"}
+                    {mutation.isPending ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Signing in...
+                      </>
+                    ) : (
+                      "Sign in"
+                    )}
                   </Button>
                 )}
               </form.Subscribe>

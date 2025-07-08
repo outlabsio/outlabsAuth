@@ -1,13 +1,13 @@
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Loader2, Mail, CheckCircle, XCircle } from "lucide-react";
+import { Loader2, Mail } from "lucide-react";
+import { toast } from "sonner";
+import { authenticatedFetch } from "@/lib/auth";
 
 interface EmailSettings {
   smtp_host: string;
@@ -27,11 +27,7 @@ interface CurrentUser {
 
 // API functions
 async function fetchEmailSettings(): Promise<EmailSettings> {
-  const response = await fetch("/v1/settings/email", {
-    headers: {
-      Authorization: `Bearer ${localStorage.getItem("access_token")}`,
-    },
-  });
+  const response = await authenticatedFetch("/v1/settings/email");
   if (!response.ok) {
     const errorData = await response.json();
     throw new Error(errorData.detail || "Failed to fetch email settings");
@@ -40,11 +36,10 @@ async function fetchEmailSettings(): Promise<EmailSettings> {
 }
 
 async function updateEmailSettings(settings: EmailSettings): Promise<void> {
-  const response = await fetch("/v1/settings/email", {
+  const response = await authenticatedFetch("/v1/settings/email", {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${localStorage.getItem("access_token")}`,
     },
     body: JSON.stringify(settings),
   });
@@ -55,11 +50,8 @@ async function updateEmailSettings(settings: EmailSettings): Promise<void> {
 }
 
 async function sendTestEmail(): Promise<{ message: string }> {
-  const response = await fetch("/v1/settings/email/test", {
+  const response = await authenticatedFetch("/v1/settings/email/test", {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${localStorage.getItem("access_token")}`,
-    },
   });
   if (!response.ok) {
     const errorData = await response.json();
@@ -69,19 +61,13 @@ async function sendTestEmail(): Promise<{ message: string }> {
 }
 
 async function fetchCurrentUser(): Promise<CurrentUser> {
-  const response = await fetch("/v1/auth/me", {
-    headers: {
-      Authorization: `Bearer ${localStorage.getItem("access_token")}`,
-    },
-  });
+  const response = await authenticatedFetch("/v1/auth/me");
   if (!response.ok) throw new Error("Failed to fetch user info");
   return response.json();
 }
 
 export function EmailSettings() {
   const queryClient = useQueryClient();
-  const [testEmailStatus, setTestEmailStatus] = useState<"idle" | "sending" | "success" | "error">("idle");
-  const [testEmailMessage, setTestEmailMessage] = useState("");
 
   // Fetch current settings
   const { data: settings, isLoading } = useQuery({
@@ -100,23 +86,21 @@ export function EmailSettings() {
     mutationFn: updateEmailSettings,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["emailSettings"] });
+      toast.success("Email settings updated successfully!");
+    },
+    onError: (error: Error) => {
+      toast.error(`Failed to update settings: ${error.message}`);
     },
   });
 
   // Test email mutation
   const testMutation = useMutation({
     mutationFn: sendTestEmail,
-    onMutate: () => {
-      setTestEmailStatus("sending");
-      setTestEmailMessage("");
-    },
     onSuccess: (data) => {
-      setTestEmailStatus("success");
-      setTestEmailMessage(data.message || "Test email sent successfully!");
+      toast.success(data.message || "Test email sent successfully!");
     },
-    onError: (error) => {
-      setTestEmailStatus("error");
-      setTestEmailMessage(error.message || "Failed to send test email");
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to send test email");
     },
   });
 
@@ -340,22 +324,6 @@ export function EmailSettings() {
                 )}
               </form.Subscribe>
             </div>
-
-            {updateMutation.isSuccess && (
-              <Alert>
-                <CheckCircle className="h-4 w-4" />
-                <AlertDescription>Email settings updated successfully!</AlertDescription>
-              </Alert>
-            )}
-
-            {updateMutation.isError && (
-              <Alert variant="destructive">
-                <XCircle className="h-4 w-4" />
-                <AlertDescription>
-                  Failed to update settings: {updateMutation.error?.message}
-                </AlertDescription>
-              </Alert>
-            )}
           </form>
         </CardContent>
       </Card>
@@ -394,20 +362,6 @@ export function EmailSettings() {
                 )}
               </Button>
             </div>
-
-            {testEmailStatus === "success" && (
-              <Alert>
-                <CheckCircle className="h-4 w-4" />
-                <AlertDescription>{testEmailMessage}</AlertDescription>
-              </Alert>
-            )}
-
-            {testEmailStatus === "error" && (
-              <Alert variant="destructive">
-                <XCircle className="h-4 w-4" />
-                <AlertDescription>{testEmailMessage}</AlertDescription>
-              </Alert>
-            )}
           </div>
         </CardContent>
       </Card>
