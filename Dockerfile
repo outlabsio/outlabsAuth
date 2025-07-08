@@ -1,22 +1,68 @@
-# Use an official Python runtime as a parent image
-FROM python:3.11-slim
+# Multi-stage build for production-optimized FastAPI application
+# Stage 1: Build stage
+FROM python:3.12-slim as builder
 
-# Set the working directory in the container
-WORKDIR /app
+# Set environment variables for Python
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install uv, a very fast Python package installer
+# Install system dependencies needed for building
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv for fast dependency management
 RUN pip install uv
 
-# Copy the project definition file
+# Set work directory
+WORKDIR /app
+
+# Copy dependency files
 COPY pyproject.toml ./
 
-# Install project dependencies using uv
-# Using --system to install into the global site-packages of the container's Python
-RUN uv pip install --system --no-cache --requirement pyproject.toml
+# Install dependencies into a virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN uv pip install --no-cache --requirement pyproject.toml
 
-# Copy the rest of the application's code into the container at /app
-# This is done after installing dependencies to leverage Docker's layer caching.
-COPY . /app
+# Stage 2: Production stage
+FROM python:3.12-slim as production
 
-# Command to run the application
-# The command is specified in docker-compose.yml to allow for hot-reloading 
+# Set environment variables for production
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/opt/venv/bin:$PATH"
+
+# Install only curl for health checks
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create non-root user for security
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+# Copy virtual environment from builder stage
+COPY --from=builder /opt/venv /opt/venv
+
+# Set work directory
+WORKDIR /app
+
+# Copy application code
+COPY --chown=appuser:appuser . /app
+
+# Switch to non-root user
+USER appuser
+
+# Expose port 8010 for Coolify
+EXPOSE 8010
+
+# Add health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8010/health || exit 1
+
+# Production command optimized for Coolify
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8010", "--workers", "1"] 
