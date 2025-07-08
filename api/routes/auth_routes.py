@@ -4,6 +4,7 @@ from jose import JWTError
 from datetime import timedelta, datetime
 from typing import Tuple, List, Optional, Union
 from beanie import PydanticObjectId
+import logging
 
 from ..services.user_service import user_service
 from ..services.security_service import security_service
@@ -16,6 +17,8 @@ from ..dependencies import get_current_user, get_current_user_with_token, conver
 from ..models.user_model import UserModel
 from ..models.password_reset_token_model import PasswordResetTokenModel
 from ..services.group_service import group_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/v1/auth",
@@ -255,19 +258,35 @@ async def request_password_reset(
     request_data: PasswordResetRequestSchema
 ):
     """
-    Initiates a password reset process. In a real app, this would send an email.
-    For this implementation, it returns the token directly for testing purposes.
+    Initiates a password reset process for system administrators.
+    Sends a password reset email if the user exists.
     """
+    from ..services.email_service import system_email_service
+    
     user = await user_service.get_user_by_email(request_data.email)
     if user:
-        # In a real application, you would NOT return the token.
-        # You would send it in an email.
-        token = await security_service.create_password_reset_token(user.id)
-
-        # This is where you would call an email service:
-        # email_service.send_password_reset_email(user.email, token)
-
-        return {"message": "If a user with this email exists, a password reset link has been sent.", "token": token}
+        # Check if this is a system user (super admin or has system roles)
+        is_system_user = any(
+            hasattr(role, 'scope') and role.scope == "system" 
+            for role in (user.roles or [])
+        )
+        
+        if is_system_user:
+            # Generate password reset token
+            token = await security_service.create_password_reset_token(user.id)
+            
+            # Send email asynchronously
+            user_name = f"{user.first_name} {user.last_name}".strip() or user.email
+            await system_email_service.send_password_reset_email(
+                email=user.email,
+                name=user_name,
+                reset_token=token
+            )
+            
+            logger.info(f"Password reset email sent to system user: {user.email}")
+        else:
+            # For non-system users, just log (platform/client emails not implemented yet)
+            logger.info(f"Password reset requested for non-system user: {user.email}")
 
     # Return a generic response to prevent user enumeration
     return {"message": "If a user with this email exists, a password reset link has been sent."}

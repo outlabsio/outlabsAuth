@@ -16,6 +16,7 @@ dependencies = [
     "email-validator",
     "pydantic-settings",
     "pyjwt>=2.8.0",
+    "aiosmtplib",
 ]
 
 [project.optional-dependencies]

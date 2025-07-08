@@ -165,6 +165,8 @@ class UserService:
         super_user = UserModel(
             email=email,
             password_hash=hashed_password,
+            first_name="System",  # Set default first name
+            last_name="Administrator",  # Set default last name
             roles=[super_admin_role],
             is_platform_staff=True, # Super admins are always platform staff
             status=UserStatus.ACTIVE

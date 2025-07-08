@@ -12,6 +12,15 @@ const getPlatformStatus = async (): Promise<{ initialized: boolean }> => {
 export const Route = createFileRoute("/")({
   beforeLoad: async () => {
     try {
+      // First check if user is authenticated
+      const token = localStorage.getItem("access_token");
+      if (token) {
+        throw redirect({
+          to: "/dashboard",
+        });
+      }
+
+      // If not authenticated, check platform status
       const status = await getPlatformStatus();
       if (status.initialized) {
         throw redirect({
@@ -24,9 +33,12 @@ export const Route = createFileRoute("/")({
       }
     } catch (error) {
       if (error instanceof Error && error.message.includes("Failed to fetch")) {
-        // Handle API offline case, maybe redirect to an error page
+        // Handle API offline case
         console.error("API is not reachable. Can't determine platform status.");
-        // For now, we'll let it render the component which will show an error.
+        // Redirect to login as a fallback
+        throw redirect({
+          to: "/login",
+        });
       }
       // Re-throw redirects
       throw error;

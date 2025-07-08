@@ -5,7 +5,7 @@ from beanie import PydanticObjectId
 from ..services.client_account_service import client_account_service
 from ..services.user_service import user_service
 from ..services.group_service import group_service
-from ..dependencies import get_current_user
+from ..dependencies import get_current_user, convert_user_to_response
 from ..schemas.client_account_schema import ClientAccountCreateSchema, ClientAccountResponseSchema
 from ..schemas.user_schema import SuperUserCreateSchema, UserResponseSchema
 from ..models.user_model import UserModel
@@ -48,7 +48,7 @@ async def initialize_platform(user_data: SuperUserCreateSchema):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create super user."
         )
-    return super_user
+    return convert_user_to_response(super_user)
 
 @router.get("/analytics", responses={
     200: {"description": "Platform analytics data"}

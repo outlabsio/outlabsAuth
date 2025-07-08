@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}Security Alert - {{ alert_type }}{% endblock %}
+
+{% block content %}
+<h2 style="color: #d73502;">Security Alert</h2>
+
+<p>Hello {{ user_name }},</p>
+
+<p>We detected a security event on your system administrator account that requires your attention:</p>
+
+<div class="warning" style="background-color: #f8d7da; border-color: #f5c6cb; color: #721c24;">
+    <strong>Alert Type:</strong> {{ alert_type }}<br>
+    <strong>Timestamp:</strong> {{ timestamp }}
+</div>
+
+<h3>Event Details:</h3>
+<div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+    {% for key, value in details.items() %}
+    <p style="margin: 5px 0;"><strong>{{ key|replace('_', ' ')|title }}:</strong> {{ value }}</p>
+    {% endfor %}
+</div>
+
+<h3>Recommended Actions:</h3>
+<ul>
+    <li>Review the event details above</li>
+    <li>If this activity was not initiated by you, change your password immediately</li>
+    <li>Check your recent account activity</li>
+    <li>Enable additional security measures if available</li>
+</ul>
+
+<div style="text-align: center; margin: 30px 0;">
+    <a href="{{ system_url | default('http://localhost:5173') }}/security" class="button" style="background-color: #dc3545;">Review Security Settings</a>
+</div>
+
+<p>If you have any concerns about this alert or need assistance, please contact your security team immediately.</p>
+
+<hr style="border: none; border-top: 1px solid #e0e0e0; margin: 30px 0;">
+
+<p style="font-size: 12px; color: #666;">
+    This is an automated security alert from {{ system_name }}. Please do not reply to this email.
+</p>
+{% endblock %}

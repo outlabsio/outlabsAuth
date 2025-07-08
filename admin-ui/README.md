@@ -22,12 +22,20 @@ bun run preview
 
 ## 🎯 Features
 
+### ✅ Implemented
 - **First-Run Setup**: Automatic detection and guided superuser creation
+- **Authentication**: JWT-based login/logout with token management
+- **Dashboard**: Professional admin dashboard with statistics
+- **Navigation**: Collapsible sidebar with ShadCN patterns
+- **Context Switching**: Multi-tenant support with client account switching
+- **Modern UI**: Clean, responsive interface built with shadcn/ui components
+
+### 📋 Coming Soon
 - **User Management**: Complete user lifecycle management with role assignments
 - **Role & Permission Management**: Hierarchical RBAC administration
 - **Client Account Management**: Multi-tenant organization control
 - **Group Management**: Team organization and permission aggregation
-- **Modern UI**: Clean, responsive interface built with shadcn/ui components
+- **Audit Logs**: Comprehensive activity tracking
 
 ## 🏗️ Tech Stack
 
@@ -64,23 +72,30 @@ admin-ui/
 ├── src/
 │   ├── components/          # Reusable UI components
 │   │   ├── ui/             # shadcn/ui base components
+│   │   ├── app-sidebar.tsx # Main navigation sidebar
+│   │   ├── nav-main.tsx    # Navigation menu component
+│   │   ├── nav-user.tsx    # User profile dropdown
+│   │   ├── team-switcher.tsx # Context/client switcher
 │   │   ├── login-form.tsx  # Authentication form
 │   │   └── setup-form.tsx  # Initial setup form
-│   ├── routes/             # Application routes (auto-generated)
+│   ├── routes/             # Application routes
 │   │   ├── __root.tsx      # Root layout
-│   │   ├── index.tsx       # Dashboard/home page
+│   │   ├── index.tsx       # Entry point with auth check
+│   │   ├── dashboard.tsx   # Main dashboard
 │   │   ├── login.tsx       # Login page
 │   │   ├── setup.tsx       # First-run setup
 │   │   └── 404.tsx         # Not found page
 │   ├── lib/                # Utility functions
 │   │   └── utils.ts        # Common utilities
+│   ├── hooks/              # Custom React hooks
+│   │   └── use-mobile.ts   # Mobile detection hook
 │   ├── App.tsx             # Main app component
 │   ├── main.tsx            # Application entry point
 │   └── index.css           # Global styles with Tailwind
 ├── public/                 # Static assets
 ├── components.json         # shadcn/ui configuration
 ├── tailwind.config.ts      # Tailwind CSS configuration
-├── vite.config.ts          # Vite configuration
+├── vite.config.ts          # Vite configuration with API proxy
 └── package.json            # Dependencies and scripts
 ```
 
@@ -89,10 +104,10 @@ admin-ui/
 ### Adding New Components
 
 ```bash
-# Add shadcn/ui components
-npx shadcn@latest add button
-npx shadcn@latest add form
-npx shadcn@latest add input
+# Add shadcn/ui components using Bun
+bunx shadcn@latest add button
+bunx shadcn@latest add form
+bunx shadcn@latest add input
 
 # Components are automatically added to src/components/ui/
 ```
@@ -105,9 +120,9 @@ npx shadcn@latest add input
 
 ### API Integration
 
-The frontend communicates with the FastAPI backend at:
+The frontend communicates with the FastAPI backend through Vite's proxy configuration:
 
-- **Development**: `http://localhost:8030`
+- **Development**: Proxied from `/v1/*` to `http://localhost:8030`
 - **Production**: Configured via Docker Compose
 
 Key endpoints:
@@ -115,6 +130,8 @@ Key endpoints:
 - `GET /v1/platform/status` - Check initialization status
 - `POST /v1/platform/initialize` - Create first superuser
 - `POST /v1/auth/login` - User authentication
+- `POST /v1/auth/logout` - User logout
+- `POST /v1/auth/refresh` - Refresh access token
 - `GET /v1/auth/me` - Current user profile
 
 ## 🐳 Docker Deployment
