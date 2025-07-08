@@ -84,6 +84,7 @@ admin-ui/
 │   │   ├── dashboard.tsx   # Main dashboard
 │   │   ├── login.tsx       # Login page
 │   │   ├── setup.tsx       # First-run setup
+│   │   ├── settings.tsx    # System settings page
 │   │   └── 404.tsx         # Not found page
 │   ├── lib/                # Utility functions
 │   │   └── utils.ts        # Common utilities

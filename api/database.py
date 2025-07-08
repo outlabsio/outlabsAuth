@@ -10,6 +10,7 @@ from .models.client_account_model import ClientAccountModel
 from .models.refresh_token_model import RefreshTokenModel
 from .models.password_reset_token_model import PasswordResetTokenModel
 from .models.group_model import GroupModel
+from .models.system_settings import SystemSettingsModel
 
 class Database:
     """
@@ -40,6 +41,7 @@ class Database:
                     RefreshTokenModel,
                     PasswordResetTokenModel,
                     GroupModel,
+                    SystemSettingsModel,
                 ]
             )
             print("Beanie ODM initialized successfully.")
@@ -53,6 +55,7 @@ class Database:
                 'RefreshTokenModel': RefreshTokenModel,
                 'PasswordResetTokenModel': PasswordResetTokenModel,
                 'GroupModel': GroupModel,
+                'SystemSettingsModel': SystemSettingsModel,
             }
             UserModel.model_rebuild(_types_namespace=namespace)
             RoleModel.model_rebuild(_types_namespace=namespace)
@@ -61,6 +64,7 @@ class Database:
             RefreshTokenModel.model_rebuild(_types_namespace=namespace)
             PasswordResetTokenModel.model_rebuild(_types_namespace=namespace)
             GroupModel.model_rebuild(_types_namespace=namespace)
+            SystemSettingsModel.model_rebuild(_types_namespace=namespace)
             print("Model circular references resolved.")
             
             # Beanie handles all indexes automatically through model definitions

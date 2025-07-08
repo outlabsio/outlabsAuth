@@ -10,7 +10,7 @@ import aiosmtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..config import settings
 
@@ -49,7 +49,7 @@ class SystemEmailService:
         template_name: str,
         template_data: Dict[str, Any],
         to_name: Optional[str] = None
-    ) -> bool:
+    ) -> None:
         """
         Send an email using a template.
         
@@ -60,8 +60,8 @@ class SystemEmailService:
             template_data: Data to pass to the template
             to_name: Optional recipient name
             
-        Returns:
-            bool: True if email was sent successfully
+        Raises:
+            Exception: If email fails to send
         """
         try:
             # Load and render templates
@@ -81,7 +81,7 @@ class SystemEmailService:
             msg['Subject'] = subject
             msg['From'] = f"{self.from_name} <{self.from_email}>"
             msg['To'] = f"{to_name} <{to_email}>" if to_name else to_email
-            msg['Date'] = datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S +0000")
+            msg['Date'] = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
             
             # Add text part if available
             if text_content:
@@ -101,18 +101,19 @@ class SystemEmailService:
             )
             
             logger.info(f"System email sent successfully to {to_email}")
-            return True
             
         except Exception as e:
-            logger.error(f"Failed to send system email to {to_email}: {str(e)}")
-            return False
+            error_msg = str(e)
+            logger.error(f"Failed to send system email to {to_email}: {error_msg}")
+            # Pass through the original error message without wrapping
+            raise Exception(error_msg)
     
     async def send_password_reset_email(
         self, 
         email: str, 
         name: str, 
         reset_token: str
-    ) -> bool:
+    ) -> None:
         """
         Send password reset email to system administrator.
         """
@@ -127,7 +128,7 @@ class SystemEmailService:
             "current_year": datetime.now().year
         }
         
-        return await self.send_email(
+        await self.send_email(
             to_email=email,
             to_name=name,
             subject="Reset Your Password - Outlabs Auth System",
@@ -141,7 +142,7 @@ class SystemEmailService:
         inviter_name: str,
         invitation_token: str,
         role_name: str = "System Administrator"
-    ) -> bool:
+    ) -> None:
         """
         Send invitation email for new system administrator.
         """
@@ -156,7 +157,7 @@ class SystemEmailService:
             "current_year": datetime.now().year
         }
         
-        return await self.send_email(
+        await self.send_email(
             to_email=email,
             subject=f"Invitation to join Outlabs Auth as {role_name}",
             template_name="system_invitation",
@@ -169,7 +170,7 @@ class SystemEmailService:
         name: str,
         alert_type: str,
         details: Dict[str, Any]
-    ) -> bool:
+    ) -> None:
         """
         Send security alert to system administrator.
         """
@@ -177,18 +178,39 @@ class SystemEmailService:
             "user_name": name,
             "alert_type": alert_type,
             "details": details,
-            "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
             "system_name": "Outlabs Auth",
             "current_year": datetime.now().year
         }
         
-        return await self.send_email(
+        await self.send_email(
             to_email=email,
             to_name=name,
             subject=f"Security Alert: {alert_type}",
             template_name="security_alert",
             template_data=template_data
         )
+
+
+    def update_config(
+        self,
+        smtp_host: str,
+        smtp_port: int,
+        smtp_user: str,
+        smtp_password: str,
+        use_tls: bool,
+        from_email: str,
+        from_name: str
+    ):
+        """Update email configuration dynamically"""
+        self.smtp_host = smtp_host
+        self.smtp_port = smtp_port
+        self.smtp_user = smtp_user
+        self.smtp_password = smtp_password
+        self.use_tls = use_tls
+        self.from_email = from_email
+        self.from_name = from_name
+        logger.info("Email configuration updated")
 
 
 # Create singleton instance

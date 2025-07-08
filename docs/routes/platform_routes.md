@@ -395,4 +395,5 @@ Potential future additions to platform analytics:
 - [Auth Routes](auth_routes.md) - For platform staff authentication
 - [Permission Routes](permission_routes.md) - For platform permission management
 - [User Routes](user_routes.md) - For cross-client user management
+- [Settings Routes](settings_routes.md) - For system-level configuration management
 - [Dependencies Documentation](../dependencies.md) - For authentication and permission dependencies

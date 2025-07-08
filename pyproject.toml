@@ -17,6 +17,7 @@ dependencies = [
     "pydantic-settings",
     "pyjwt>=2.8.0",
     "aiosmtplib",
+    "jinja2",
 ]
 
 [project.optional-dependencies]

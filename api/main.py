@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from .database import db, get_database
-from .routes import user_routes, permission_routes, role_routes, auth_routes, client_account_routes, group_routes, platform_routes
+from .routes import user_routes, permission_routes, role_routes, auth_routes, client_account_routes, group_routes, platform_routes, settings_routes
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -28,6 +28,7 @@ app.include_router(role_routes.router)
 app.include_router(client_account_routes.router)
 app.include_router(group_routes.router)
 app.include_router(platform_routes.router)
+app.include_router(settings_routes.router, prefix="/v1/settings", tags=["Settings"])
 
 @app.get("/health", tags=["Health"])
 async def health_check():
