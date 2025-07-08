@@ -22,7 +22,7 @@ import { Plus, Globe } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { authenticatedFetch } from "@/lib/auth";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CreatePlatformDrawer } from "@/components/platforms/create-platform-drawer";
+import { PlatformDrawer } from "@/components/platforms/platform-drawer";
 import { requireAuth } from "@/lib/route-guards";
 
 export const Route = createFileRoute("/platforms/")({
@@ -34,11 +34,12 @@ interface Platform {
   _id: string;
   name: string;
   description: string;
-  is_active: boolean;
+  status: "active" | "suspended";
   is_platform_root: boolean;
   created_by_client?: string;
   created_at: string;
   updated_at: string;
+  platform_url?: string;
 }
 
 async function fetchPlatforms(): Promise<Platform[]> {
@@ -52,17 +53,17 @@ async function fetchPlatforms(): Promise<Platform[]> {
   return allAccounts.filter((account: Platform) => account.is_platform_root);
 }
 
-function PlatformCard({ platform }: { platform: Platform }) {
+function PlatformCard({ platform, onClick }: { platform: Platform; onClick: () => void }) {
   return (
-    <Card className="cursor-pointer hover:shadow-md transition-shadow">
+    <Card className="cursor-pointer hover:shadow-md transition-shadow" onClick={onClick}>
       <CardHeader>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Globe className="h-5 w-5 text-muted-foreground" />
             <CardTitle className="text-lg">{platform.name}</CardTitle>
           </div>
-          <Badge variant={platform.is_active ? "default" : "secondary"}>
-            {platform.is_active ? "Active" : "Inactive"}
+          <Badge variant={platform.status === "active" ? "default" : "secondary"}>
+            {platform.status === "active" ? "Active" : "Suspended"}
           </Badge>
         </div>
         <CardDescription className="mt-2">
@@ -70,15 +71,22 @@ function PlatformCard({ platform }: { platform: Platform }) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="text-sm text-muted-foreground">
-          Created on {new Date(platform.created_at).toLocaleDateString()}
+        <div className="space-y-1">
+          {platform.platform_url && (
+            <div className="text-sm text-muted-foreground">
+              <span className="font-medium">URL:</span> {platform.platform_url}
+            </div>
+          )}
+          <div className="text-sm text-muted-foreground">
+            Created on {new Date(platform.created_at).toLocaleDateString()}
+          </div>
         </div>
       </CardContent>
     </Card>
   );
 }
 
-function PlatformsContent() {
+function PlatformsContent({ onEditPlatform }: { onEditPlatform: (platformId: string) => void }) {
   const { data: platforms, isLoading, error } = useQuery({
     queryKey: ["platforms"],
     queryFn: fetchPlatforms,
@@ -131,14 +139,32 @@ function PlatformsContent() {
   return (
     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
       {platforms.map((platform) => (
-        <PlatformCard key={platform._id} platform={platform} />
+        <PlatformCard 
+          key={platform._id} 
+          platform={platform} 
+          onClick={() => onEditPlatform(platform._id)}
+        />
       ))}
     </div>
   );
 }
 
 function Platforms() {
-  const [createDrawerOpen, setCreateDrawerOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerMode, setDrawerMode] = useState<"create" | "edit">("create");
+  const [selectedPlatformId, setSelectedPlatformId] = useState<string | null>(null);
+  
+  const handleCreatePlatform = () => {
+    setDrawerMode("create");
+    setSelectedPlatformId(null);
+    setDrawerOpen(true);
+  };
+  
+  const handleEditPlatform = (platformId: string) => {
+    setDrawerMode("edit");
+    setSelectedPlatformId(platformId);
+    setDrawerOpen(true);
+  };
   
   return (
     <SidebarProvider>
@@ -170,20 +196,22 @@ function Platforms() {
                   Manage multi-tenant platforms and their client organizations
                 </p>
               </div>
-              <Button onClick={() => setCreateDrawerOpen(true)}>
+              <Button onClick={handleCreatePlatform}>
                 <Plus className="mr-2 h-4 w-4" />
                 Create Platform
               </Button>
             </div>
             
-            <PlatformsContent />
+            <PlatformsContent onEditPlatform={handleEditPlatform} />
           </div>
         </div>
       </SidebarInset>
       
-      <CreatePlatformDrawer 
-        open={createDrawerOpen} 
-        onOpenChange={setCreateDrawerOpen} 
+      <PlatformDrawer 
+        open={drawerOpen} 
+        onOpenChange={setDrawerOpen}
+        mode={drawerMode}
+        platformId={selectedPlatformId}
       />
     </SidebarProvider>
   );

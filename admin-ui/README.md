@@ -20,6 +20,18 @@ bun run preview
 
 **Development Server**: http://localhost:5173/
 
+## 🔐 Initial Setup Procedure
+
+When starting with a fresh database, the platform needs to be initialized with a Super Admin account:
+
+1. **Automatic Detection**: When you first visit the application, it checks if the platform is initialized
+2. **Login Redirect**: If no users exist, you'll be redirected to the login page by default
+3. **Manual Setup Access**: Navigate to `/setup` manually to access the initialization form
+4. **Create Super Admin**: Fill in the email and password to create the first Super Admin account
+5. **Start Using**: After successful setup, you'll be redirected to login with your new credentials
+
+> **Note**: The `/setup` route is only accessible when the database is empty (no users exist). Once the first user is created, this route becomes inaccessible for security reasons.
+
 ## 🎯 Features
 
 ### ✅ Implemented

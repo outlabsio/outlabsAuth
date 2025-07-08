@@ -29,6 +29,7 @@ class ClientAccountModel(BaseDocument):
     platform_id: Optional[str] = None          # Which platform owns this client
     created_by_client_id: Optional[str] = None # Parent client relationship  
     is_platform_root: bool = False             # Can create sub-clients
+    platform_url: Optional[str] = None         # URL for platform root accounts
     
     # Removed child_clients array for scalability - use reverse queries instead
     # To get children: ClientAccountModel.find(ClientAccountModel.created_by_client_id == parent_id)

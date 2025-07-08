@@ -22,7 +22,8 @@ export function useAuthInitialization() {
       if (!isTokenValid()) {
         console.log('Stored token is expired, clearing auth...');
         clearAuth();
-        window.location.href = '/login';
+        // Don't redirect here - let the routing logic handle it
+        // This allows the platform status check to run properly
       } else {
         console.log('Token is valid, initializing refresh mechanism...');
         initializeTokenRefresh();

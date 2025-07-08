@@ -14,6 +14,7 @@ class ClientAccountCreateSchema(BaseModel):
     platform_id: Optional[str] = None          # Platform this client belongs to
     created_by_client_id: Optional[str] = None # Parent client creating this account
     is_platform_root: bool = False             # Whether this client can create sub-clients
+    platform_url: Optional[str] = Field(None, pattern="^https?://.*", description="Platform URL (only for platform root accounts)")
 
     model_config = ConfigDict(
         str_strip_whitespace=True,
@@ -30,6 +31,7 @@ class ClientAccountUpdateSchema(BaseModel):
     # Hierarchical Multi-Platform Tenancy fields
     platform_id: Optional[str] = None
     is_platform_root: Optional[bool] = None
+    platform_url: Optional[str] = Field(None, pattern="^https?://.*", description="Platform URL (only for platform root accounts)")
     
     # Note: created_by_client_id is not updatable for security reasons
     # Note: child clients found via reverse queries, not stored as array
@@ -51,6 +53,7 @@ class ClientAccountResponseSchema(BaseModel):
     platform_id: Optional[str] = None
     created_by_client_id: Optional[str] = None
     is_platform_root: bool = False
+    platform_url: Optional[str] = None
     # Note: child_clients removed for scalability - use /my-sub-clients endpoint instead
     
     created_at: datetime
