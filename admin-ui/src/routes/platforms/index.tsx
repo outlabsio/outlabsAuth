@@ -86,7 +86,7 @@ function PlatformCard({ platform, onClick }: { platform: Platform; onClick: () =
   );
 }
 
-function PlatformsContent({ onEditPlatform }: { onEditPlatform: (platformId: string) => void }) {
+function PlatformsContent({ onEditPlatform }: { onEditPlatform: (platform: Platform) => void }) {
   const { data: platforms, isLoading, error } = useQuery({
     queryKey: ["platforms"],
     queryFn: fetchPlatforms,
@@ -142,7 +142,7 @@ function PlatformsContent({ onEditPlatform }: { onEditPlatform: (platformId: str
         <PlatformCard 
           key={platform._id} 
           platform={platform} 
-          onClick={() => onEditPlatform(platform._id)}
+          onClick={() => onEditPlatform(platform)}
         />
       ))}
     </div>
@@ -153,6 +153,7 @@ function Platforms() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<"create" | "edit">("create");
   const [selectedPlatformId, setSelectedPlatformId] = useState<string | null>(null);
+  const [selectedPlatform, setSelectedPlatform] = useState<Platform | null>(null);
   
   const handleCreatePlatform = () => {
     setDrawerMode("create");
@@ -160,9 +161,10 @@ function Platforms() {
     setDrawerOpen(true);
   };
   
-  const handleEditPlatform = (platformId: string) => {
+  const handleEditPlatform = (platform: Platform) => {
     setDrawerMode("edit");
-    setSelectedPlatformId(platformId);
+    setSelectedPlatformId(platform._id);
+    setSelectedPlatform(platform);
     setDrawerOpen(true);
   };
   
@@ -212,6 +214,7 @@ function Platforms() {
         onOpenChange={setDrawerOpen}
         mode={drawerMode}
         platformId={selectedPlatformId}
+        platformData={selectedPlatform}
       />
     </SidebarProvider>
   );

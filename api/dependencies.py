@@ -379,18 +379,22 @@ def has_hierarchical_client_access(target_client_field: str = "account_id"):
         
         # Use the enhanced service method to check access
         user_client_id = str(current_user.client_account.id) if current_user.client_account else None
-        if not user_client_id:
+        if not user_client_id and not is_super_admin:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="User not associated with any client account."
             )
         
-        can_access = await client_account_service.can_user_access_client_account(
-            user_client_id=user_client_id,
-            target_client_id=target_client_id,
-            user_permissions=user_permissions,
-            is_super_admin=is_super_admin
-        )
+        # Super admins have access to everything
+        if is_super_admin:
+            can_access = True
+        else:
+            can_access = await client_account_service.can_user_access_client_account(
+                user_client_id=user_client_id,
+                target_client_id=target_client_id,
+                user_permissions=user_permissions,
+                is_super_admin=is_super_admin
+            )
         
         if not can_access:
             raise HTTPException(

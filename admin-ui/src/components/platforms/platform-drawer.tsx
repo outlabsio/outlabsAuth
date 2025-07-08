@@ -1,5 +1,5 @@
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Drawer,
   DrawerContent,
@@ -23,6 +23,7 @@ interface PlatformDrawerProps {
   onOpenChange: (open: boolean) => void;
   mode: "create" | "edit";
   platformId?: string | null;
+  platformData?: Platform | null;
 }
 
 interface Platform {
@@ -34,15 +35,7 @@ interface Platform {
   platform_url?: string;
 }
 
-async function fetchPlatform(id: string): Promise<Platform> {
-  const response = await authenticatedFetch(`/v1/client_accounts/${id}`);
-  
-  if (!response.ok) {
-    throw new Error("Failed to fetch platform");
-  }
-  
-  return response.json();
-}
+// Removed fetchPlatform as we're using passed data instead
 
 async function createPlatform(data: {
   name: string;
@@ -76,7 +69,7 @@ async function updatePlatform(id: string, data: {
   platform_url: string;
 }) {
   const response = await authenticatedFetch(`/v1/client_accounts/${id}`, {
-    method: "PATCH",
+    method: "PUT",
     headers: {
       "Content-Type": "application/json",
     },
@@ -91,15 +84,13 @@ async function updatePlatform(id: string, data: {
   return response.json();
 }
 
-export function PlatformDrawer({ open, onOpenChange, mode, platformId }: PlatformDrawerProps) {
+export function PlatformDrawer({ open, onOpenChange, mode, platformId, platformData }: PlatformDrawerProps) {
   const queryClient = useQueryClient();
   const isEditMode = mode === "edit";
   
-  const { data: platform, isLoading } = useQuery({
-    queryKey: ["platform", platformId],
-    queryFn: () => platformId ? fetchPlatform(platformId) : null,
-    enabled: isEditMode && !!platformId && open,
-  });
+  // Use provided platform data instead of fetching
+  const platform = isEditMode ? platformData : null;
+  const isLoading = false;
   
   const mutation = useMutation({
     mutationFn: (data: { name: string; description: string; status: "active" | "suspended"; platform_url: string }) => 
@@ -136,7 +127,7 @@ export function PlatformDrawer({ open, onOpenChange, mode, platformId }: Platfor
   
   // Update form when platform data is loaded (edit mode)
   useEffect(() => {
-    if (isEditMode && platform) {
+    if (isEditMode && platform && open) {
       form.reset({
         name: platform.name || "",
         description: platform.description || "",
@@ -144,7 +135,7 @@ export function PlatformDrawer({ open, onOpenChange, mode, platformId }: Platfor
         platform_url: platform.platform_url || "",
       });
     }
-  }, [platform, isEditMode]);
+  }, [platform, isEditMode, open, form]);
   
   // Reset form when switching to create mode
   useEffect(() => {
