@@ -6,9 +6,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 outlabsAuth is an enterprise-grade Role-Based Access Control (RBAC) authentication platform built with FastAPI, MongoDB, and Beanie ODM. It features a unique three-tier hierarchical permission system with automatic inheritance and multi-tenant support.
 
+### Frontend Tech Stack
+- **React 19** with TypeScript
+- **Vite** for build tooling
+- **TanStack Router** for type-safe routing
+- **TanStack Query** for server state management
+- **TanStack Form** for form handling
+- **Zustand** for client state management (auth, UI state)
+- **ShadCN UI** components with Radix UI primitives
+- **Tailwind CSS v4** for styling
+- **Sonner** for toast notifications
+- **Bun** as package manager
+
 ## Essential Commands
 
-### Development
+### Backend Development
 ```bash
 # Setup and dependencies
 uv sync                              # Install all dependencies
@@ -31,6 +43,27 @@ uv run mypy .                        # Type checking
 
 # Database seeding
 uv run python scripts/seed_test_environment.py # Seed test data
+```
+
+### Frontend Development
+```bash
+# Navigate to frontend directory
+cd admin-ui
+
+# Install dependencies (use bun, NOT npm)
+bun install
+
+# Development server
+bun dev                              # Start Vite dev server on port 5173
+
+# Build for production
+bun run build
+
+# Add ShadCN components
+bunx --bun shadcn@latest add <component-name>
+
+# Type checking
+bun run type-check
 ```
 
 ### Docker
@@ -120,6 +153,55 @@ tests/
 └── test_*_service.py # Service layer tests
 ```
 
+## Frontend Architecture & Patterns
+
+### State Management with Zustand
+The frontend uses Zustand for client-side state management:
+
+```typescript
+// Auth store example (stores/auth-store.ts)
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set, get) => ({
+      user: null,
+      tokens: null,
+      isAuthenticated: false,
+      
+      login: async (tokens, user) => { /* ... */ },
+      logout: () => { /* ... */ },
+      refreshTokens: async () => { /* ... */ }
+    }),
+    { name: 'auth-storage' }
+  )
+);
+```
+
+### Authentication Flow
+1. **Login**: Tokens stored in Zustand with localStorage persistence
+2. **API Calls**: Use `authenticatedFetch` wrapper that handles:
+   - Automatic token injection
+   - 401 error handling with token refresh
+   - Automatic logout on refresh failure
+3. **Protected Routes**: Check auth state in route `beforeLoad`
+
+### UI Patterns
+- **Forms**: TanStack Form with validation
+- **Notifications**: Sonner toasts for user feedback
+- **Components**: ShadCN UI components, add with `bunx --bun shadcn@latest add`
+- **Styling**: Tailwind CSS v4 with CSS variables for theming
+
+### API Integration
+```typescript
+// Use authenticatedFetch for all API calls
+import { authenticatedFetch } from '@/lib/auth';
+
+const response = await authenticatedFetch('/v1/endpoint', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(data)
+});
+```
+
 ## Common Development Tasks
 
 ### Adding a New Endpoint
@@ -149,3 +231,12 @@ Key variables for local development:
 - `SECRET_KEY`: JWT signing key
 - `ACCESS_TOKEN_EXPIRE_MINUTES`: Default 15
 - `REFRESH_TOKEN_EXPIRE_DAYS`: Default 30
+
+## Important Frontend Notes
+
+- **Package Manager**: ALWAYS use `bun`, never `npm` or `yarn`
+- **State Management**: Use Zustand for client state, TanStack Query for server state
+- **Auth**: All API calls should use `authenticatedFetch` for automatic token handling
+- **Components**: Prefer ShadCN UI components, install with `bunx --bun shadcn@latest add`
+- **Notifications**: Use Sonner toasts instead of static alerts
+- **Forms**: Use TanStack Form for form handling with built-in validation

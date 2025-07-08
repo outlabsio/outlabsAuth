@@ -1,13 +1,13 @@
-import { NotFoundRoute } from "@tanstack/react-router";
-import { Route as rootRoute } from "./__root";
+import { createFileRoute } from "@tanstack/react-router";
 
-export const notFoundRoute = new NotFoundRoute({
-  getParentRoute: () => rootRoute,
+export const Route = createFileRoute("/404")({
   component: () => {
     return (
-      <div>
-        <h1>404 - Not Found</h1>
-        <p>The page you are looking for does not exist.</p>
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <h1 className="text-4xl font-bold mb-4">404 - Not Found</h1>
+          <p className="text-muted-foreground">The page you are looking for does not exist.</p>
+        </div>
       </div>
     );
   },
