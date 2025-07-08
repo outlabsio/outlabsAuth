@@ -523,7 +523,7 @@ export function CreateRoleDrawer({ open, onOpenChange }: CreateRoleDrawerProps) 
             {([canSubmit]) => (
               <Button
                 type="submit"
-                disabled={!canSubmit || createMutation.isPending || selectedPermissions.length === 0}
+                disabled={!canSubmit || createMutation.isPending}
                 onClick={form.handleSubmit}
               >
                 {createMutation.isPending ? (
