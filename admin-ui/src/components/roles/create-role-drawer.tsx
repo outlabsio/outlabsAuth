@@ -233,8 +233,8 @@ export function CreateRoleDrawer({ open, onOpenChange }: CreateRoleDrawerProps) 
   };
   
   return (
-    <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent className="max-h-[90vh]">
+    <Drawer open={open} onOpenChange={onOpenChange} direction="right">
+      <DrawerContent className="w-full max-w-2xl h-full flex flex-col">
         <DrawerHeader className="px-6">
           <DrawerTitle>Create New Role</DrawerTitle>
           <DrawerDescription>
@@ -242,7 +242,7 @@ export function CreateRoleDrawer({ open, onOpenChange }: CreateRoleDrawerProps) 
           </DrawerDescription>
         </DrawerHeader>
         
-        <div className="overflow-y-auto px-6 py-4 max-h-[calc(90vh-8rem)]">
+        <div className="overflow-y-auto px-6 py-4 flex-1">
           <form
             onSubmit={(e) => {
               e.preventDefault();
