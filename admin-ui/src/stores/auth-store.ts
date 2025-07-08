@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { isTokenExpired, willTokenExpireSoon } from '@/lib/jwt';
 
 interface User {
   id: string;
@@ -22,6 +23,7 @@ interface AuthState {
   tokens: AuthTokens | null;
   isAuthenticated: boolean;
   isRefreshing: boolean;
+  refreshInterval: NodeJS.Timeout | null;
   
   // Actions
   login: (tokens: AuthTokens, user?: User) => Promise<void>;
@@ -29,10 +31,14 @@ interface AuthState {
   refreshTokens: () => Promise<void>;
   setUser: (user: User) => void;
   clearAuth: () => void;
+  initializeTokenRefresh: () => void;
+  clearRefreshInterval: () => void;
   
   // Computed
   getAccessToken: () => string | null;
   getRefreshToken: () => string | null;
+  isTokenValid: () => boolean;
+  shouldRefreshToken: () => boolean;
 }
 
 // Create the store with persistence
@@ -44,9 +50,13 @@ export const useAuthStore = create<AuthState>()(
       tokens: null,
       isAuthenticated: false,
       isRefreshing: false,
+      refreshInterval: null,
 
       // Login action
       login: async (tokens: AuthTokens, user?: User) => {
+        // Clear any existing refresh interval
+        get().clearRefreshInterval();
+        
         set({ 
           tokens, 
           isAuthenticated: true 
@@ -71,10 +81,16 @@ export const useAuthStore = create<AuthState>()(
             console.error('Failed to fetch user data:', error);
           }
         }
+        
+        // Initialize automatic token refresh
+        get().initializeTokenRefresh();
       },
 
       // Logout action
       logout: () => {
+        // Clear refresh interval
+        get().clearRefreshInterval();
+        
         set({ 
           user: null, 
           tokens: null, 
@@ -148,6 +164,52 @@ export const useAuthStore = create<AuthState>()(
       // Get refresh token
       getRefreshToken: () => {
         return get().tokens?.refresh_token || null;
+      },
+
+      // Check if token is valid (not expired)
+      isTokenValid: () => {
+        const token = get().tokens?.access_token;
+        if (!token) return false;
+        return !isTokenExpired(token);
+      },
+
+      // Check if token should be refreshed (expires in less than 2 minutes)
+      shouldRefreshToken: () => {
+        const token = get().tokens?.access_token;
+        if (!token) return false;
+        return willTokenExpireSoon(token, 120); // 2 minutes
+      },
+
+      // Initialize automatic token refresh
+      initializeTokenRefresh: () => {
+        const { refreshInterval } = get();
+        
+        // Clear existing interval if any
+        if (refreshInterval) {
+          clearInterval(refreshInterval);
+        }
+
+        // Set up interval to check token every 30 seconds
+        const interval = setInterval(async () => {
+          const state = get();
+          
+          // Only refresh if we have tokens and should refresh
+          if (state.tokens && state.shouldRefreshToken() && !state.isRefreshing) {
+            console.log('Token expiring soon, refreshing...');
+            await state.refreshTokens();
+          }
+        }, 30000); // Check every 30 seconds
+
+        set({ refreshInterval: interval });
+      },
+
+      // Clear refresh interval
+      clearRefreshInterval: () => {
+        const { refreshInterval } = get();
+        if (refreshInterval) {
+          clearInterval(refreshInterval);
+          set({ refreshInterval: null });
+        }
       },
     }),
     {

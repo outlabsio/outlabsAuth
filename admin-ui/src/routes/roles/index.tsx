@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { AppSidebar } from "@/components/app-sidebar";
 import {
   Breadcrumb,
@@ -20,22 +20,14 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Plus, Shield, Globe, Building2 } from "lucide-react";
-import { useAuthStore } from "@/stores/auth-store";
 import { useQuery } from "@tanstack/react-query";
 import { authenticatedFetch } from "@/lib/auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CreateRoleDrawer } from "@/components/roles/create-role-drawer";
+import { requireAuth } from "@/lib/route-guards";
 
 export const Route = createFileRoute("/roles/")({
-  beforeLoad: async () => {
-    // Check if user is authenticated using the store
-    const { isAuthenticated } = useAuthStore.getState();
-    if (!isAuthenticated) {
-      throw redirect({
-        to: "/login",
-      });
-    }
-  },
+  beforeLoad: requireAuth,
   component: Roles,
 });
 

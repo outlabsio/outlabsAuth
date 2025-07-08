@@ -1,4 +1,4 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { AppSidebar } from "@/components/app-sidebar";
 import {
   Breadcrumb,
@@ -16,18 +16,10 @@ import {
 } from "@/components/ui/sidebar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmailSettings } from "@/components/settings/email-settings";
-import { useAuthStore } from "@/stores/auth-store";
+import { requireAuth } from "@/lib/route-guards";
 
 export const Route = createFileRoute("/settings/")({
-  beforeLoad: async () => {
-    // Check if user is authenticated using the store
-    const { isAuthenticated } = useAuthStore.getState();
-    if (!isAuthenticated) {
-      throw redirect({
-        to: "/login",
-      });
-    }
-  },
+  beforeLoad: requireAuth,
   component: Settings,
 });
 

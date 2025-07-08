@@ -1,4 +1,4 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { AppSidebar } from "@/components/app-sidebar";
 import {
   Breadcrumb,
@@ -15,18 +15,10 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Users, Shield, Building2, Activity } from "lucide-react";
-import { useAuthStore } from "@/stores/auth-store";
+import { requireAuth } from "@/lib/route-guards";
 
 export const Route = createFileRoute("/dashboard")({
-  beforeLoad: async () => {
-    // Check if user is authenticated using the store
-    const { isAuthenticated } = useAuthStore.getState();
-    if (!isAuthenticated) {
-      throw redirect({
-        to: "/login",
-      });
-    }
-  },
+  beforeLoad: requireAuth,
   component: Dashboard,
 });
 
