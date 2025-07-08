@@ -55,13 +55,6 @@ function Settings() {
         </header>
         <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
           <div className="mx-auto w-full max-w-6xl">
-            <div className="mb-8">
-              <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
-              <p className="text-muted-foreground">
-                Manage your system configuration and preferences
-              </p>
-            </div>
-
             <Tabs defaultValue="email" className="space-y-6">
               <TabsList>
                 <TabsTrigger value="general">General</TabsTrigger>
