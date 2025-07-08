@@ -1,0 +1,244 @@
+# outlabsAuth Project Structure
+
+## Overview
+outlabsAuth is an enterprise-grade Role-Based Access Control (RBAC) authentication platform built with FastAPI (backend) and React/TypeScript (frontend). The project uses MongoDB with Beanie ODM for data persistence and features a unique three-tier hierarchical permission system with multi-tenant support.
+
+## Root Directory Structure
+
+```
+outlabsAuth/
+├── .env                           # Environment variables (not in git)
+├── .gitignore                     # Git ignore rules
+├── CLAUDE.md                      # Claude AI assistant guidance
+├── Dockerfile                     # Backend API Docker configuration
+├── FINAL_PLATFORM_DOCUMENTATION.md # Complete platform documentation
+├── README.md                      # Project overview and setup guide
+├── UV_COMMANDS.md                 # UV package manager commands reference
+├── docker-compose.yml             # Multi-container Docker setup
+├── pyproject.toml                 # Python project configuration (dependencies, tools)
+├── uv.lock                        # UV package lock file
+├── test_report.json               # Test execution results
+├── debug_platform_admin.py        # Debugging script for platform admin
+├── debug_roles.py                 # Debugging script for role system
+├── api/                           # Backend FastAPI application
+├── admin-ui/                      # Frontend React/TypeScript application
+├── docs/                          # Additional documentation
+├── scripts/                       # Utility and seeding scripts
+├── tests/                         # Test suite
+└── stress_test_results/           # Performance test results
+```
+
+## Backend Structure (api/)
+
+### Main Entry Points
+- `main.py` - FastAPI application entry point, route registration, middleware setup
+- `config.py` - Application configuration from environment variables
+- `database.py` - MongoDB/Beanie database connection and initialization
+- `dependencies.py` - Shared dependencies (auth helpers, permission checkers)
+
+### Core Directories
+
+#### models/ - Beanie ODM Models
+Database models with automatic validation and type safety:
+- `base_model.py` - Base document class with common fields (id, timestamps)
+- `client_account_model.py` - Multi-tenant client organizations
+- `user_model.py` - User accounts with profile and permissions
+- `role_model.py` - RBAC roles with hierarchical permissions
+- `group_model.py` - User groups for bulk permission assignment
+- `permission_model.py` - Permission definitions and hierarchy
+- `refresh_token_model.py` - JWT refresh token storage
+- `password_reset_token_model.py` - Password reset functionality
+- `scopes.py` - Permission scope constants and utilities
+
+#### routes/ - API Endpoints
+FastAPI route handlers with dependency injection:
+- `auth_routes.py` - Authentication (login, logout, refresh, password reset)
+- `user_routes.py` - User CRUD operations
+- `role_routes.py` - Role management
+- `group_routes.py` - Group management
+- `permission_routes.py` - Permission listing and management
+- `client_account_routes.py` - Client organization management
+- `platform_routes.py` - Platform-level administration
+
+#### services/ - Business Logic
+Service layer handling complex operations:
+- `user_service.py` - User management logic
+- `role_service.py` - Role operations and permission handling
+- `group_service.py` - Group membership management
+- `permission_service.py` - Permission validation and hierarchy
+- `security_service.py` - Password hashing, JWT tokens
+- `refresh_token_service.py` - Token lifecycle management
+- `client_account_service.py` - Multi-tenant operations
+
+#### schemas/ - Pydantic Models
+Request/response validation schemas:
+- `auth_schema.py` - Login, token, password reset DTOs
+- `user_schema.py` - User creation, update, response models
+- `role_schema.py` - Role DTOs with permission lists
+- `group_schema.py` - Group management schemas
+- `permission_schema.py` - Permission structure schemas
+- `client_account_schema.py` - Client organization schemas
+- `refresh_token_schema.py` - Token response models
+- `password_reset_schema.py` - Password reset flow schemas
+
+#### middleware/
+Custom middleware components:
+- `rate_limiting.py` - Request rate limiting for security
+
+## Frontend Structure (admin-ui/)
+
+### Configuration Files
+- `package.json` - NPM dependencies and scripts
+- `bun.lock` - Bun package manager lock file
+- `tsconfig.json` - TypeScript compiler configuration
+- `tsconfig.node.json` - TypeScript config for Node.js
+- `vite.config.ts` - Vite bundler configuration
+- `tailwind.config.ts` - Tailwind CSS configuration
+- `components.json` - shadcn/ui component registry
+- `index.html` - HTML entry point
+- `nginx.conf` - Production nginx configuration
+- `Dockerfile` - Frontend container configuration
+- `PROJECT_PLAN.md` - Frontend development roadmap
+- `README.md` - Frontend setup guide
+
+### Source Code (src/)
+
+#### Main Files
+- `main.tsx` - React application entry point
+- `index.css` - Global styles and Tailwind directives
+- `routeTree.gen.ts` - Generated route tree (TanStack Router)
+
+#### components/
+Reusable React components:
+- `login-form.tsx` - Authentication form component
+- `ui/` - shadcn/ui base components:
+  - `button.tsx` - Button component
+  - `card.tsx` - Card layout component
+  - `form.tsx` - Form wrapper with react-hook-form
+  - `input.tsx` - Input field component
+  - `label.tsx` - Form label component
+
+#### routes/
+Page components (TanStack Router):
+- `__root.tsx` - Root layout component
+- `index.tsx` - Dashboard/home page
+- `login.tsx` - Login page
+- `setup.tsx` - Initial setup wizard
+- `404.tsx` - Not found page
+
+#### lib/
+Utility functions:
+- `utils.ts` - Helper functions (e.g., cn for className merging)
+
+## Testing Structure (tests/)
+
+### Test Configuration
+- `conftest.py` - Pytest fixtures, test database setup, mock data
+- `run_all_tests.py` - Test runner script with coverage reporting
+
+### Test Categories
+
+#### Unit Tests
+- `test_user_service.py` - User service logic tests
+- `test_group_service.py` - Group service tests
+- `test_security_service.py` - Security utilities tests
+- `test_refresh_token_service.py` - Token management tests
+
+#### Route/Integration Tests
+- `test_auth_routes.py` - Authentication endpoint tests
+- `test_user_routes.py` - User CRUD endpoint tests
+- `test_role_routes.py` - Role management tests
+- `test_group_routes.py` - Group endpoint tests
+- `test_permission_routes.py` - Permission endpoint tests
+- `test_client_account_routes.py` - Client management tests
+- `test_platform_routes.py` - Platform admin tests
+
+#### Feature Tests
+- `test_hierarchical_permissions.py` - Permission inheritance tests
+- `test_access_control.py` - RBAC access control tests
+- `test_enhanced_access_control.py` - Advanced permission scenarios
+- `test_auth_comprehensive.py` - Complete auth flow tests
+- `test_auth_security.py` - Security feature tests
+- `test_rate_limiting.py` - Rate limiter tests
+- `test_duplicate_constraints.py` - Unique constraint tests
+- `test_enriched_jwt_tokens.py` - JWT token content tests
+- `test_integration.py` - End-to-end integration tests
+- `test_propertyhub_three_tier.py` - Three-tier permission tests
+
+### Stress Testing (stress_test/)
+Performance and load testing:
+- `README.md` - Stress testing guide
+- `locust_ddos.py` - Locust load test scenarios
+- `ddos_stress_test.py` - DDoS simulation tests
+- `monitor_container.py` - Container resource monitoring
+- `setup_containers.sh` - Test environment setup
+- `run_stress_tests.sh` - Test execution script
+- `requirements.txt` - Stress test dependencies
+
+## Scripts Directory
+
+Database seeding and utilities:
+- `seed_test_environment.py` - Complete test data seeding
+- `seed_essential_users.py` - Minimal user seeding
+- `seed_via_api.py` - Seed data through API calls
+- `test_data_helper.py` - Test data generation utilities
+- `verify_super_admin.py` - Admin verification script
+- `README_seeding.md` - Seeding documentation
+
+## Documentation (docs/)
+
+Additional technical documentation:
+- `dependencies.md` - Dependency injection patterns
+- `permissions.md` - Permission system design
+- `roles.md` - Role-based access control
+- `groups.md` - Group management guide
+- `jwt_optimization.md` - JWT token optimization
+- `routes/` - API endpoint documentation:
+  - `auth_routes.md`
+  - `user_routes.md`
+  - `role_routes.md`
+  - `group_routes.md`
+  - `permission_routes.md`
+  - `client_account_routes.md`
+  - `platform_routes.md`
+
+## Docker Configuration
+
+### docker-compose.yml Services
+1. **mongodb** - MongoDB database (port 27017)
+2. **api** - FastAPI backend (port 8030)
+3. **admin-ui** - React frontend (port 80)
+
+### Dockerfiles
+- `/Dockerfile` - Multi-stage Python backend build
+- `/admin-ui/Dockerfile` - Multi-stage Node.js frontend build
+
+## Key Design Patterns
+
+### Backend Patterns
+1. **Service Layer Pattern**: Routes → Services → Models
+2. **Dependency Injection**: FastAPI dependencies for auth/permissions
+3. **Repository Pattern**: Beanie ODM for data access
+4. **Multi-tenant Isolation**: Client-based data filtering
+
+### Frontend Patterns
+1. **Component-based Architecture**: Reusable UI components
+2. **File-based Routing**: TanStack Router with route files
+3. **Utility-first CSS**: Tailwind CSS for styling
+4. **Type Safety**: TypeScript throughout
+
+### Testing Patterns
+1. **Fixture-based Testing**: Shared test data in conftest.py
+2. **Integration Testing**: Full API flow tests
+3. **Performance Testing**: Locust-based stress tests
+4. **Coverage Tracking**: 98%+ test coverage target
+
+## Environment Variables
+
+Key configuration (see .env.example or config.py):
+- `DATABASE_URL` - MongoDB connection string
+- `MONGO_DATABASE` - Database name
+- `SECRET_KEY` - JWT signing key
+- `ACCESS_TOKEN_EXPIRE_MINUTES` - Access token TTL
+- `REFRESH_TOKEN_EXPIRE_DAYS` - Refresh token TTL
+- `RATE_LIMIT_*` - Rate limiting configuration

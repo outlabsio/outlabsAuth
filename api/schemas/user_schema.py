@@ -43,12 +43,17 @@ class UserUpdateSchema(BaseModel):
     """
     Schema for user updates.
     """
-    email: Optional[EmailStr] = Field(None, description="User's email address")
+    full_name: Optional[str] = None
+    email: Optional[EmailStr] = None
     first_name: Optional[str] = Field(None, description="User's first name")
     last_name: Optional[str] = Field(None, description="User's last name")
     status: Optional[UserStatus] = Field(None, description="User account status")
     roles: Optional[List[str]] = Field(None, description="List of role IDs to assign")
     groups: Optional[List[str]] = Field(None, description="List of group IDs to assign")
+
+class SuperUserCreateSchema(BaseModel):
+    email: EmailStr
+    password: str
 
 class UserResponseSchema(BaseModel):
     """

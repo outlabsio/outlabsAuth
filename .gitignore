@@ -1,5 +1,9 @@
 # Environment
 .env
+.env.local
+.env.production.local
+.env.development.local
+.env.test.local
 .venv
 env/
 venv/
@@ -28,18 +32,126 @@ share/python-wheels/
 *.egg
 *.manifest
 *.spec
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+
+# Frontend - Node/React/Vite
+admin-ui/node_modules/
+admin-ui/dist/
+admin-ui/.vite/
+admin-ui/build/
+admin-ui/coverage/
+admin-ui/*.log
+admin-ui/npm-debug.log*
+admin-ui/yarn-debug.log*
+admin-ui/yarn-error.log*
+admin-ui/.pnpm-debug.log*
+admin-ui/.env
+admin-ui/.env.local
+admin-ui/.env.production.local
+admin-ui/.env.development.local
+admin-ui/.env.test.local
+
+# Bun
+admin-ui/.bun/
+admin-ui/bun.lockb
+
+# Generated files
+admin-ui/src/routeTree.gen.ts
+*.tsbuildinfo
 
 # Docker
 .dockerignore
 docker-compose.override.yml
 
-# IDE
+# IDE and Editors
 .idea/
 .vscode/
 *.swp
 *.swo
-*~ 
+*~
+.DS_Store
+Thumbs.db
+.cursor/
 
+# Test Results
 stress_test_results/
 test_report.json
-test_report.json
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Backup files
+*.bak
+*.backup
+*.tmp
+*.temp
+*.old
+*.orig
+
+# Database
+*.sqlite
+*.sqlite3
+*.db
+
+# UV (Python package manager)
+.venv/
+uv.lock
+
+# Temporary files
+tmp/
+temp/
+.cache/
+.parcel-cache/
+
+# Production build files
+build/
+dist/
+out/
+.next/
+.nuxt/
+.output/
+
+# SSL Certificates
+*.pem
+*.key
+*.crt
+*.cert
+
+# Private keys
+*.pem
+*.p12
+*.pfx
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# Other
+.history/
+.gitattributes

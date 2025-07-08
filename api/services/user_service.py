@@ -9,7 +9,6 @@ from ..models.client_account_model import ClientAccountModel
 from ..models.group_model import GroupModel
 from ..schemas.user_schema import UserCreateSchema, UserUpdateSchema, FailedUserCreationSchema
 from .security_service import security_service
-from .role_service import role_service
 
 class UserService:
     """
@@ -95,6 +94,97 @@ class UserService:
                     status_code=status.HTTP_409_CONFLICT,
                     detail="User with this information already exists."
                 )
+
+    async def create_super_user(self, email: str, password: str) -> Optional[UserModel]:
+        """
+        Creates the first super user with the 'Super Admin' role.
+        This should only be called when the system is being initialized.
+        """
+        # Find the 'Super Admin' role
+        from ..models.role_model import RoleModel, RoleScope
+        from ..models.permission_model import PermissionModel, PermissionScope
+        
+        super_admin_role = await RoleModel.find_one(
+            RoleModel.name == "super_admin",
+            RoleModel.scope == RoleScope.SYSTEM
+        )
+        
+        if not super_admin_role:
+            # Create essential permissions if they don't exist
+            essential_permissions = [
+                {"name": "user:manage_all", "display_name": "Manage All Users", "description": "Create, read, update, delete all users across the system"},
+                {"name": "role:manage_all", "display_name": "Manage All Roles", "description": "Create, read, update, delete all roles across the system"},
+                {"name": "permission:manage_all", "display_name": "Manage All Permissions", "description": "Create, read, update, delete all permissions across the system"},
+                {"name": "client:manage_all", "display_name": "Manage All Clients", "description": "Create, read, update, delete all client accounts"},
+                {"name": "platform:manage_all", "display_name": "Manage All Platforms", "description": "Create, read, update, delete all platforms"},
+                {"name": "group:manage_all", "display_name": "Manage All Groups", "description": "Create, read, update, delete all groups across the system"},
+                {"name": "analytics:view_all", "display_name": "View All Analytics", "description": "View analytics across all clients and platforms"},
+                {"name": "audit:view_all", "display_name": "View All Audit Logs", "description": "View audit logs across all clients and platforms"},
+                {"name": "system:manage_settings", "display_name": "Manage System Settings", "description": "Manage system-wide settings and configurations"}
+            ]
+            
+            permission_links = []
+            for perm_data in essential_permissions:
+                # Check if permission exists
+                permission = await PermissionModel.find_one(
+                    PermissionModel.name == perm_data["name"],
+                    PermissionModel.scope == PermissionScope.SYSTEM
+                )
+                
+                if not permission:
+                    # Create the permission
+                    permission = PermissionModel(
+                        name=perm_data["name"],
+                        display_name=perm_data["display_name"],
+                        description=perm_data["description"],
+                        scope=PermissionScope.SYSTEM,
+                        created_by_user_id="system",
+                        created_by_client_id=None
+                    )
+                    await permission.insert()
+                
+                permission_links.append(permission)
+            
+            # Create the super admin role with all permissions
+            super_admin_role = RoleModel(
+                name="super_admin",
+                display_name="Super Administrator",
+                description="Grants complete system-wide access to auth platform.",
+                permissions=permission_links,
+                scope=RoleScope.SYSTEM,
+                is_assignable_by_main_client=False,
+                created_by_user_id="system",
+                created_by_client_id=None
+            )
+            await super_admin_role.insert()
+
+        # Hash the password
+        hashed_password = security_service.get_password_hash(password)
+
+        # Create the user instance
+        super_user = UserModel(
+            email=email,
+            password_hash=hashed_password,
+            roles=[super_admin_role],
+            is_platform_staff=True, # Super admins are always platform staff
+            status=UserStatus.ACTIVE
+        )
+
+        try:
+            await super_user.insert()
+            return super_user
+        except DuplicateKeyError:
+            # This should technically be caught by the route handler, but as a safeguard:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"User with email '{email}' already exists."
+            )
+        except Exception as e:
+            # Catch other potential database errors
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"An unexpected error occurred while creating the super user: {e}"
+            )
 
     async def create_sub_user(self, user_data: UserCreateSchema, client_account_id: str) -> UserModel:
         """

@@ -2,27 +2,102 @@
 
 🏆 **PRODUCTION READY** - 98.4% Test Success Rate (360/366 tests passing, **+90 new infrastructure tests**)
 
-A standalone, enterprise-grade Role-Based Access Control (RBAC) microservice providing centralized authentication, authorization, and multi-tenant user management.
+A standalone, enterprise-grade Role-Based Access Control (RBAC) microservice providing centralized authentication, authorization, and multi-tenant user management with a modern React admin interface.
 
 ## 🚀 **Quick Start**
+
+### Prerequisites
+
+- Docker & Docker Compose
+- MongoDB (local instance or remote)
+- [Bun](https://bun.sh) (for frontend development)
+
+### Full Stack Deployment
 
 ```bash
 # Clone and deploy
 git clone <repository-url>
 cd outlabsAuth
-docker compose up -d --build
+
+# Start the API (connects to your local MongoDB)
+docker compose up -d api
+
+# Start the frontend admin UI for development
+cd admin-ui
+bun install
+bun run dev
 ```
 
+**Access Points:**
+
 - **API**: http://localhost:8030
-- **Docs**: http://localhost:8030/docs
-- **Health**: http://localhost:8030/health
+- **Admin UI**: http://localhost:5173 (development)
+- **API Docs**: http://localhost:8030/docs
+- **Health Check**: http://localhost:8030/health
+
+## 🎛️ **Platform Initialization**
+
+The platform includes a **smart initialization flow** that automatically detects if setup is required:
+
+### First-Time Setup
+
+1. **Platform Status Check**: The frontend calls `/v1/platform/status` to determine initialization state
+2. **Setup Flow**: If no users exist (`"initialized": false`), the admin UI shows the setup page
+3. **Super Admin Creation**: Create the first Super Admin account through the web interface
+4. **Automatic Redirect**: After setup, users are redirected to the login page
+
+### Platform Status API
+
+```bash
+# Check if platform is initialized
+curl http://localhost:8030/v1/platform/status
+
+# Response examples:
+{"initialized": false}  # Setup required
+{"initialized": true}   # Ready for login
+```
+
+### Manual Platform Initialization (API)
+
+```bash
+# Initialize platform with first Super Admin
+curl -X POST http://localhost:8030/v1/platform/initialize \
+  -H "Content-Type: application/json" \
+  -d '{"email": "admin@company.com", "password": "secure-password"}'
+```
+
+## 🏗️ **Architecture Overview**
+
+### **Backend (FastAPI + MongoDB)**
+
+- **Production API**: Dockerized FastAPI service on port 8030
+- **Database**: MongoDB with Beanie ODM for document modeling
+- **Authentication**: JWT with refresh tokens and session management
+
+### **Frontend (React + TypeScript)**
+
+- **Admin Interface**: Modern React SPA built with Vite and Bun
+- **UI Framework**: Shadcn/ui components with Tailwind CSS
+- **Routing**: TanStack Router with automatic platform detection
+- **State Management**: TanStack Query for server state
+- **Development**: Hot reload with Bun dev server
+
+### **Smart Routing Flow**
+
+```
+Frontend Access → Platform Status Check → Route Decision
+├── Not Initialized → Setup Page (Create Super Admin)
+├── Initialized → Login Page
+└── Authenticated → Dashboard
+```
 
 ## 🎯 **Key Features**
 
 ✅ **Hierarchical RBAC**: Three-tier permission hierarchy with automatic inheritance  
 ✅ **Multi-Tenant**: Complete client isolation with cross-platform support  
 ✅ **Production Hardened**: 42 hierarchical permissions, **98.4% test success rate**  
-✅ **Modern Stack**: FastAPI + MongoDB + Beanie ODM  
+✅ **Modern Stack**: FastAPI + MongoDB + React + TypeScript  
+✅ **Smart Initialization**: Web-based setup flow with platform detection  
 ✅ **Battle-Tested**: 360 test scenarios with comprehensive infrastructure coverage
 
 ## 🏗️ **Architecture Highlights**
@@ -105,6 +180,13 @@ While we have achieved **98.4% test success rate** with comprehensive infrastruc
 - **Audit Logging**: Comprehensive activity tracking
 
 ## 🚀 **API Endpoints**
+
+### Platform Management
+
+```
+GET  /v1/platform/status     # Check initialization status
+POST /v1/platform/initialize # Initialize with first Super Admin
+```
 
 ### Authentication
 
@@ -195,3 +277,46 @@ RefreshTokenModel:  # Session management
 ---
 
 _For complete technical details, architecture diagrams, and implementation guides, see [FINAL_PLATFORM_DOCUMENTATION.md](FINAL_PLATFORM_DOCUMENTATION.md)_
+
+## 🛠️ **Development Workflow**
+
+### Backend Development
+
+```bash
+# API development with hot reload
+docker compose up api
+
+# Run tests
+python -m pytest tests/ -v
+
+# Check API health
+curl http://localhost:8030/health
+```
+
+### Frontend Development
+
+```bash
+cd admin-ui
+
+# Install dependencies
+bun install
+
+# Start development server
+bun run dev
+
+# Build for production
+bun run build
+
+# Type checking
+bun run type-check
+```
+
+### Database Setup
+
+Ensure MongoDB is running locally on port 27017, or update the connection string in docker-compose.yml:
+
+```yaml
+environment:
+  - DATABASE_URL=mongodb://host.docker.internal:27017
+  - MONGO_DATABASE=outlabsAuth_test
+```

@@ -7,11 +7,48 @@ from ..services.user_service import user_service
 from ..services.group_service import group_service
 from ..dependencies import get_current_user
 from ..schemas.client_account_schema import ClientAccountCreateSchema, ClientAccountResponseSchema
+from ..schemas.user_schema import SuperUserCreateSchema, UserResponseSchema
+from ..models.user_model import UserModel
 
 router = APIRouter(
     prefix="/v1/platform",
     tags=["Platform Management"]
 )
+
+@router.get("/status", summary="Get Platform Initialization Status")
+async def get_platform_status():
+    """
+    Checks if the platform has been initialized (i.e., if any user exists).
+    This is a public endpoint used by the frontend to determine if it should show
+    the setup page or the login page.
+    """
+    user_count = await UserModel.count()
+    return {"initialized": user_count > 0}
+
+@router.post("/initialize", response_model=UserResponseSchema, status_code=status.HTTP_201_CREATED,
+             summary="Initialize Platform and Create Super User",
+             description="Creates the first super user account. This endpoint can only be used once.")
+async def initialize_platform(user_data: SuperUserCreateSchema):
+    """
+    Initializes the platform by creating the first super user.
+    This can only be done when there are no other users in the system.
+    """
+    users = await user_service.get_users(limit=1)
+    if users:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Platform has already been initialized."
+        )
+
+    # Use the user_service to create the super user
+    super_user = await user_service.create_super_user(email=user_data.email, password=user_data.password)
+
+    if not super_user:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create super user."
+        )
+    return super_user
 
 @router.get("/analytics", responses={
     200: {"description": "Platform analytics data"}

@@ -7,68 +7,23 @@ services:
     volumes:
       - .:/app
     environment:
-      - DATABASE_URL=mongodb://mongo:27017
-      - MONGO_DATABASE=outlabsAuth
+      - DATABASE_URL=mongodb://host.docker.internal:27017
+      - MONGO_DATABASE=outlabsAuth_test
       - SECRET_KEY=a_very_secret_key_that_should_be_changed_in_production
       - ACCESS_TOKEN_EXPIRE_MINUTES=30
       - REFRESH_TOKEN_EXPIRE_DAYS=7
       - ALGORITHM=HS256
-    depends_on:
-      - mongo
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8030 --workers 4
-    # 🔥 PRODUCTION-LEVEL RESOURCE CONSTRAINTS FOR STRESS TESTING 🔥
-    deploy:
-      resources:
-        limits:
-          # 8GB RAM for realistic production API server
-          memory: 8G
-          # 4 CPU cores for proper multi-threading
-          cpus: "4.0"
-          # Process limits
-          pids: 500
-        reservations:
-          # Reserve minimum resources
-          memory: 2G
-          cpus: "1.0"
-    # File descriptor limits (production-ready)
-    ulimits:
-      nofile:
-        soft: 8192
-        hard: 16384
-      nproc:
-        soft: 512
-        hard: 1024
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8030 --reload
 
-  mongo:
-    image: mongo:8.0
-    container_name: outlabs_auth_mongo
+  admin-ui:
+    build:
+      context: ./admin-ui
+      dockerfile: Dockerfile
+    container_name: outlabs_auth_admin_ui
     ports:
-      - "27017:27017"
-    volumes:
-      - mongo-data:/data/db
-    environment:
-      - MONGO_INITDB_DATABASE=outlabsAuth
-    # 🔥 PRODUCTION MONGODB CONSTRAINTS 🔥
-    deploy:
-      resources:
-        limits:
-          # 4GB RAM for MongoDB (realistic for production DB)
-          memory: 4G
-          # 2 CPU cores for database operations
-          cpus: "2.0"
-          # Process limits
-          pids: 1000
-        reservations:
-          memory: 1G
-          cpus: "0.5"
-    # MongoDB-specific limits
-    ulimits:
-      nofile:
-        soft: 16384
-        hard: 32768
-      nproc:
-        soft: 512
-        hard: 1024
+      - "8088:80"
+    depends_on:
+      - api
 
 volumes:
   mongo-data:
