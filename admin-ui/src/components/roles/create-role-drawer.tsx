@@ -234,7 +234,7 @@ export function CreateRoleDrawer({ open, onOpenChange }: CreateRoleDrawerProps) 
   
   return (
     <Drawer open={open} onOpenChange={onOpenChange} direction="right">
-      <DrawerContent className="w-full max-w-2xl h-full flex flex-col">
+      <DrawerContent className="w-full max-w-4xl h-full flex flex-col">
         <DrawerHeader className="px-6">
           <DrawerTitle>Create New Role</DrawerTitle>
           <DrawerDescription>
@@ -332,66 +332,60 @@ export function CreateRoleDrawer({ open, onOpenChange }: CreateRoleDrawerProps) 
                     setSelectedPermissions([]); // Reset permissions when scope changes
                   }}
                 >
-                  <div className="space-y-3">
-                    <Card className={cn(
-                      "cursor-pointer transition-colors",
-                      field.state.value === "system" && "border-primary"
-                    )}>
-                      <CardHeader className="pb-3">
-                        <div className="flex items-center gap-2">
-                          <RadioGroupItem value="system" id="scope-system" />
-                          <Label htmlFor="scope-system" className="flex items-center gap-2 cursor-pointer">
-                            <Shield className="h-4 w-4" />
-                            System Role
-                          </Label>
-                        </div>
-                      </CardHeader>
-                      <CardContent>
-                        <CardDescription>
-                          Global roles available across all platforms and clients
-                        </CardDescription>
-                      </CardContent>
-                    </Card>
+                  <div className="grid grid-cols-3 gap-3">
+                    <label
+                      htmlFor="scope-system"
+                      className={cn(
+                        "relative flex flex-col items-center space-y-2 rounded-lg border-2 p-4 cursor-pointer hover:bg-accent transition-colors",
+                        field.state.value === "system" ? "border-primary bg-primary/5" : "border-muted"
+                      )}
+                    >
+                      <RadioGroupItem value="system" id="scope-system" className="sr-only" />
+                      <Shield className={cn(
+                        "h-6 w-6",
+                        field.state.value === "system" ? "text-primary" : "text-muted-foreground"
+                      )} />
+                      <span className="text-sm font-medium">System</span>
+                      <span className="text-xs text-center text-muted-foreground">
+                        Global across all platforms
+                      </span>
+                    </label>
                     
-                    <Card className={cn(
-                      "cursor-pointer transition-colors",
-                      field.state.value === "platform" && "border-primary"
-                    )}>
-                      <CardHeader className="pb-3">
-                        <div className="flex items-center gap-2">
-                          <RadioGroupItem value="platform" id="scope-platform" />
-                          <Label htmlFor="scope-platform" className="flex items-center gap-2 cursor-pointer">
-                            <Globe className="h-4 w-4" />
-                            Platform Role
-                          </Label>
-                        </div>
-                      </CardHeader>
-                      <CardContent>
-                        <CardDescription>
-                          Platform-specific roles for cross-client operations
-                        </CardDescription>
-                      </CardContent>
-                    </Card>
+                    <label
+                      htmlFor="scope-platform"
+                      className={cn(
+                        "relative flex flex-col items-center space-y-2 rounded-lg border-2 p-4 cursor-pointer hover:bg-accent transition-colors",
+                        field.state.value === "platform" ? "border-primary bg-primary/5" : "border-muted"
+                      )}
+                    >
+                      <RadioGroupItem value="platform" id="scope-platform" className="sr-only" />
+                      <Globe className={cn(
+                        "h-6 w-6",
+                        field.state.value === "platform" ? "text-primary" : "text-muted-foreground"
+                      )} />
+                      <span className="text-sm font-medium">Platform</span>
+                      <span className="text-xs text-center text-muted-foreground">
+                        Cross-client operations
+                      </span>
+                    </label>
                     
-                    <Card className={cn(
-                      "cursor-pointer transition-colors",
-                      field.state.value === "client" && "border-primary"
-                    )}>
-                      <CardHeader className="pb-3">
-                        <div className="flex items-center gap-2">
-                          <RadioGroupItem value="client" id="scope-client" />
-                          <Label htmlFor="scope-client" className="flex items-center gap-2 cursor-pointer">
-                            <Building2 className="h-4 w-4" />
-                            Client Role
-                          </Label>
-                        </div>
-                      </CardHeader>
-                      <CardContent>
-                        <CardDescription>
-                          Organization-specific roles for your client account
-                        </CardDescription>
-                      </CardContent>
-                    </Card>
+                    <label
+                      htmlFor="scope-client"
+                      className={cn(
+                        "relative flex flex-col items-center space-y-2 rounded-lg border-2 p-4 cursor-pointer hover:bg-accent transition-colors",
+                        field.state.value === "client" ? "border-primary bg-primary/5" : "border-muted"
+                      )}
+                    >
+                      <RadioGroupItem value="client" id="scope-client" className="sr-only" />
+                      <Building2 className={cn(
+                        "h-6 w-6",
+                        field.state.value === "client" ? "text-primary" : "text-muted-foreground"
+                      )} />
+                      <span className="text-sm font-medium">Client</span>
+                      <span className="text-xs text-center text-muted-foreground">
+                        Organization-specific
+                      </span>
+                    </label>
                   </div>
                 </RadioGroup>
               )}
