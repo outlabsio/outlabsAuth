@@ -173,7 +173,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
       description: "",
       entity_class: EntityClass.STRUCTURAL,
       entity_type: EntityType.ORGANIZATION,
-      parent_entity: "",
+      parent_entity: "none",
       status: "active" as "active" | "inactive" | "archived",
       max_members: "",
     },
@@ -187,7 +187,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
         status: value.status,
       };
 
-      if (value.parent_entity) {
+      if (value.parent_entity && value.parent_entity !== "none") {
         data.parent_entity_id = value.parent_entity;
       } else if (value.entity_type === EntityType.PLATFORM) {
         // For root platform entities, use the entity's own ID as platform_id
@@ -212,7 +212,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
         entity_type: entity.entity_type,
         parent_entity: typeof entity.parent_entity === 'string' 
           ? entity.parent_entity 
-          : entity.parent_entity?.id || "",
+          : entity.parent_entity?.id || "none",
         status: entity.status || "active",
         max_members: entity.max_members?.toString() || "",
       });
@@ -380,7 +380,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
                         <SelectValue placeholder="Select parent entity (optional)" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">No parent (root entity)</SelectItem>
+                        <SelectItem value="none">No parent (root entity)</SelectItem>
                         {potentialParents.map(parent => (
                           <SelectItem key={parent.id} value={parent.id}>
                             <div className="flex items-center gap-2">
