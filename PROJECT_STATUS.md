@@ -414,28 +414,70 @@ curl -H "Authorization: Bearer $ACCESS_TOKEN" \
 - ⬜ Advanced Security (MFA, OAuth2): Pending
 - ⬜ Monitoring & Observability: Pending
 
-### Custom Permissions System (NEW)
-We discovered that the system was missing the ability for organizations to create custom permissions. This has now been implemented:
+### 🚀 Hybrid Authorization Model (RBAC + ReBAC + ABAC) - NEW!
+We've evolved the permission system into a powerful hybrid model that combines Role-Based, Relationship-Based, and Attribute-Based Access Control.
 
-#### Features
-- **PermissionModel**: New model for storing custom permissions
-- **Permission CRUD API**: Create, read, update, delete custom permissions
-- **Dynamic Validation**: Roles can now use both system and custom permissions
-- **Permission Format**: `resource:action` (e.g., `lead:create`, `invoice:approve`)
-- **Metadata Support**: Tags and custom metadata for permissions
-- **Entity Scoping**: Permissions can be global or entity-specific
+#### ✅ Documentation Phase (COMPLETED)
+- **HYBRID_AUTHORIZATION_GUIDE.md**: Comprehensive guide for the new model
+- **ARCHITECTURE.md**: Updated with policy evaluation engine
+- **CUSTOM_PERMISSIONS.md**: Enhanced with conditional permissions
+- **API_SPECIFICATION.md**: New endpoints for resource-aware checks
+- **PERFORMANCE_OPTIMIZATION.md**: Policy caching strategies
+- **PERMISSION_BUILDER_UI.md**: Intuitive UI/UX design
+- **HYBRID_MODEL_MIGRATION_GUIDE.md**: Phased migration approach
+- **PERFORMANCE_BEST_PRACTICES.md**: Two-tier caching pattern
 
-#### API Endpoints
-- `GET /v1/permissions/available` - List all available permissions (system + custom)
-- `POST /v1/permissions/` - Create custom permission
-- `GET /v1/permissions/{id}` - Get permission details
-- `PUT /v1/permissions/{id}` - Update permission
-- `DELETE /v1/permissions/{id}` - Delete permission
-- `POST /v1/permissions/validate` - Validate permission strings
+#### 🔄 Implementation Phase (IN PROGRESS)
+- ✅ **PermissionModel Enhanced**: Added `Condition` class for ABAC rules
+- ✅ **Backward Compatible**: Existing permissions work without changes
+- ✅ **Policy Evaluation Engine**: Implemented in permission_service.py
+- ✅ **API Endpoint Updates**: Added POST /v1/permissions/check endpoint
+- ✅ **Caching Layer**: Implemented policy result caching (1-minute TTL)
+- ⬜ **Testing Suite**: Create comprehensive tests for conditions
 
-#### Example Custom Permissions
-- `lead:create` - Create new leads in CRM
-- `invoice:approve` - Approve invoices for payment
-- `report:view_quarterly` - View quarterly reports
-- `contract:sign` - Sign contracts
-- `commission:calculate` - Calculate commissions
+#### Key Features
+- **Conditional Permissions**: Permissions can include conditions (e.g., "approve invoices under $50k")
+- **Three-Layer Evaluation**: RBAC (roles) + ReBAC (relationships) + ABAC (attributes)
+- **Dynamic Attributes**: Support for user, resource, entity, and environment attributes
+- **Backward Compatible**: All existing permissions continue to work
+- **Performance Optimized**: Smart caching for policy evaluations
+
+#### Example Conditional Permission
+```json
+{
+  "name": "invoice:approve",
+  "display_name": "Approve Invoices",
+  "conditions": [
+    {
+      "attribute": "resource.value",
+      "operator": "LESS_THAN_OR_EQUAL",
+      "value": 50000
+    },
+    {
+      "attribute": "resource.status",
+      "operator": "EQUALS",
+      "value": "pending_approval"
+    }
+  ]
+}
+```
+
+#### ✅ API Changes (IMPLEMENTED)
+- `POST /v1/permissions/check` - Now accepts `resource_attributes` for ABAC evaluation
+- Returns detailed evaluation results showing which checks passed/failed
+- Full hybrid RBAC + ReBAC + ABAC permission checking
+- Backward compatible - works with existing permissions without conditions
+
+#### Implementation Checklist
+- [x] Update PermissionModel with Condition support
+- [x] Create comprehensive documentation
+- [x] Implement PolicyEvaluationEngine in permission_service.py
+- [x] Update permission check endpoint (POST /v1/permissions/check)
+- [x] Add attribute extraction utilities (_extract_attribute_value)
+- [x] Implement policy result caching (Redis with 1-minute TTL)
+- [x] Create condition evaluation logic (_evaluate_condition, _evaluate_operator)
+- [x] Update permission routes to support conditions in create/update
+- [ ] Add integration tests for conditional permissions
+- [ ] Update permission management UI components
+- [ ] Create example conditional permissions for testing
+- [ ] Add condition validation tests

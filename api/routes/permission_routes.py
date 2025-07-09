@@ -2,12 +2,14 @@
 Permission Routes
 API endpoints for managing custom permissions
 """
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, Field
 
 from api.models import UserModel, PermissionModel
+from api.models.permission_model import Condition
 from api.services.permission_management_service import permission_management_service
+from api.services.permission_service import permission_service
 from api.routes.auth_routes import get_current_user
 from api.dependencies import require_permission
 
@@ -22,6 +24,7 @@ class PermissionCreateRequest(BaseModel):
     description: Optional[str] = Field(None, max_length=500, description="Permission description")
     entity_id: Optional[str] = Field(None, description="Entity that owns this permission")
     tags: List[str] = Field(default_factory=list, description="Tags for categorization")
+    conditions: List[Condition] = Field(default_factory=list, description="ABAC conditions for this permission")
     metadata: dict = Field(default_factory=dict, description="Additional metadata")
 
 
@@ -31,6 +34,7 @@ class PermissionUpdateRequest(BaseModel):
     description: Optional[str] = Field(None, max_length=500)
     is_active: Optional[bool] = None
     tags: Optional[List[str]] = None
+    conditions: Optional[List[Condition]] = None
     metadata: Optional[dict] = None
 
 
@@ -47,6 +51,7 @@ class PermissionResponse(BaseModel):
     is_system: bool
     is_active: bool
     tags: List[str]
+    conditions: List[Condition] = Field(default_factory=list, description="ABAC conditions")
     metadata: dict
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -67,6 +72,7 @@ class PermissionResponse(BaseModel):
             is_system=permission.is_system,
             is_active=permission.is_active,
             tags=permission.tags,
+            conditions=permission.conditions,
             metadata=permission.metadata,
             created_at=permission.created_at.isoformat() if permission.created_at else None,
             updated_at=permission.updated_at.isoformat() if permission.updated_at else None,
@@ -99,6 +105,7 @@ async def create_permission(
         entity_id=request.entity_id,
         created_by=current_user,
         tags=request.tags,
+        conditions=request.conditions,
         metadata=request.metadata
     )
     
@@ -179,6 +186,7 @@ async def update_permission(
         description=request.description,
         is_active=request.is_active,
         tags=request.tags,
+        conditions=request.conditions,
         metadata=request.metadata,
         current_user=current_user
     )
@@ -228,3 +236,89 @@ async def validate_permissions(
         "permissions": validated,
         "count": len(validated)
     }
+
+
+# Permission Check schemas
+class PermissionCheckRequest(BaseModel):
+    """Request to check a permission with optional resource context"""
+    permission: str = Field(..., description="Permission to check (e.g., 'invoice:approve')")
+    entity_id: Optional[str] = Field(None, description="Entity context for the check")
+    resource_attributes: Optional[Dict[str, Any]] = Field(
+        None, 
+        description="Attributes of the resource being accessed for ABAC evaluation"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "permission": "invoice:approve",
+                "entity_id": "507f1f77bcf86cd799439011",
+                "resource_attributes": {
+                    "value": 25000,
+                    "currency": "USD",
+                    "status": "pending_approval",
+                    "department": "finance"
+                }
+            }
+        }
+
+
+class PermissionCheckResponse(BaseModel):
+    """Response from permission check"""
+    allowed: bool = Field(..., description="Whether permission is granted")
+    reason: str = Field(..., description="Human-readable reason for the decision")
+    details: Dict[str, Any] = Field(default_factory=dict, description="Additional evaluation details")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "allowed": True,
+                "reason": "All conditions passed",
+                "details": {
+                    "rbac_check": True,
+                    "rbac_source": "role",
+                    "evaluations": [
+                        {
+                            "attribute": "resource.value",
+                            "operator": "LESS_THAN_OR_EQUAL",
+                            "expected": 50000,
+                            "actual": 25000,
+                            "passed": True,
+                            "reason": "Condition evaluation successful"
+                        }
+                    ]
+                }
+            }
+        }
+
+
+@router.post("/check", response_model=PermissionCheckResponse)
+async def check_permission(
+    request: PermissionCheckRequest,
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Check if the current user has a specific permission with optional ABAC conditions
+    
+    This endpoint performs a comprehensive permission check that includes:
+    1. Traditional RBAC (role-based) checks
+    2. ReBAC (relationship-based) checks through entity hierarchy
+    3. ABAC (attribute-based) condition evaluation if resource_attributes are provided
+    
+    The permission is granted only if:
+    - User has the basic permission through their roles (RBAC)
+    - All conditions defined on the permission pass (ABAC)
+    """
+    result = await permission_service.check_permission_with_context(
+        user_id=str(current_user.id),
+        permission=request.permission,
+        entity_id=request.entity_id,
+        resource_attributes=request.resource_attributes,
+        use_cache=True
+    )
+    
+    return PermissionCheckResponse(
+        allowed=result.allowed,
+        reason=result.reason,
+        details=result.details
+    )

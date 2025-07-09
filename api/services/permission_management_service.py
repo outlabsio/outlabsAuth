@@ -10,6 +10,7 @@ from fastapi import HTTPException, status
 import logging
 
 from api.models import PermissionModel, EntityModel, UserModel
+from api.models.permission_model import Condition
 from api.services.entity_service import EntityService
 from api.services.permission_service import permission_service
 
@@ -57,6 +58,7 @@ class PermissionManagementService:
         entity_id: Optional[str],
         created_by: UserModel,
         tags: List[str] = None,
+        conditions: List[Condition] = None,
         metadata: Dict = None
     ) -> PermissionModel:
         """
@@ -130,6 +132,7 @@ class PermissionManagementService:
             entity_id=entity_id,
             created_by=created_by.id,
             tags=tags or [],
+            conditions=conditions or [],
             metadata=metadata or {},
             is_system=False
         )
@@ -207,6 +210,7 @@ class PermissionManagementService:
                     'is_system': True,
                     'is_active': True,
                     'tags': [],
+                    'conditions': [],
                     'metadata': {},
                     'created_at': None,
                     'updated_at': None,
@@ -265,6 +269,7 @@ class PermissionManagementService:
         description: Optional[str] = None,
         is_active: Optional[bool] = None,
         tags: Optional[List[str]] = None,
+        conditions: Optional[List[Condition]] = None,
         metadata: Optional[Dict] = None,
         current_user: UserModel = None
     ) -> PermissionModel:
@@ -321,6 +326,8 @@ class PermissionManagementService:
             permission.is_active = is_active
         if tags is not None:
             permission.tags = tags
+        if conditions is not None:
+            permission.conditions = conditions
         if metadata is not None:
             permission.metadata = metadata
         

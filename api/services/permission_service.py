@@ -1,17 +1,378 @@
 """
 Permission Service
-Handles permission resolution, caching, and hierarchical checking
+Handles permission resolution, caching, hierarchical checking, and ABAC policy evaluation
 """
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Set, Tuple, Any
+from typing import Dict, List, Optional, Set, Tuple, Any, Union
 from beanie import PydanticObjectId
 from beanie.operators import In, And
 import redis
 import json
 import hashlib
+import re
+from enum import Enum
 
 from api.models import UserModel, EntityModel, EntityMembershipModel, RoleModel
+from api.models.permission_model import PermissionModel, Condition
 from api.config import settings
+
+
+class PolicyResult:
+    """Result of policy evaluation"""
+    def __init__(self, allowed: bool, reason: str = "", details: Optional[Dict[str, Any]] = None):
+        self.allowed = allowed
+        self.reason = reason
+        self.details = details or {}
+
+
+class PolicyEvaluationEngine:
+    """
+    Engine for evaluating ABAC policies and conditions
+    Supports attribute-based access control with dynamic evaluation
+    """
+    
+    def __init__(self):
+        self.redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        self.policy_cache_ttl = 60  # 1 minute for policy results
+    
+    async def evaluate_permission(
+        self,
+        user: UserModel,
+        permission_name: str,
+        entity: Optional[EntityModel] = None,
+        resource_attributes: Optional[Dict[str, Any]] = None,
+        use_cache: bool = True
+    ) -> PolicyResult:
+        """
+        Evaluate a permission request with ABAC conditions
+        
+        Args:
+            user: User requesting access
+            permission_name: Permission name (e.g., "invoice:approve")
+            entity: Entity context
+            resource_attributes: Attributes of the resource being accessed
+            use_cache: Whether to use cache for policy results
+        
+        Returns:
+            PolicyResult with allowed status and reason
+        """
+        # Generate cache key for this specific evaluation
+        cache_key = self._generate_policy_cache_key(
+            user.id, permission_name, entity.id if entity else None, resource_attributes
+        )
+        
+        # Check cache first
+        if use_cache:
+            cached_result = await self._get_cached_policy_result(cache_key)
+            if cached_result:
+                return cached_result
+        
+        # Get the permission definition
+        permission = await self._get_permission_definition(permission_name, entity.id if entity else None)
+        if not permission:
+            return PolicyResult(False, f"Permission '{permission_name}' not found")
+        
+        # If permission has no conditions, it's a simple RBAC check (handled elsewhere)
+        if not permission.conditions:
+            return PolicyResult(True, "No conditions to evaluate")
+        
+        # Build evaluation context
+        context = await self._build_evaluation_context(user, entity, resource_attributes)
+        
+        # Evaluate all conditions (AND logic)
+        evaluation_details = []
+        for condition in permission.conditions:
+            result = await self._evaluate_condition(condition, context)
+            evaluation_details.append({
+                "attribute": condition.attribute,
+                "operator": condition.operator,
+                "expected": condition.value,
+                "actual": result.get("actual_value"),
+                "passed": result["passed"],
+                "reason": result.get("reason", "")
+            })
+            
+            # If any condition fails, deny access
+            if not result["passed"]:
+                return PolicyResult(
+                    False,
+                    f"Condition failed: {condition.attribute} {condition.operator} {condition.value}",
+                    {"evaluations": evaluation_details}
+                )
+        
+        # All conditions passed
+        result = PolicyResult(
+            True,
+            "All conditions passed",
+            {"evaluations": evaluation_details}
+        )
+        
+        # Cache the result
+        if use_cache:
+            await self._cache_policy_result(cache_key, result)
+        
+        return result
+    
+    async def _build_evaluation_context(
+        self,
+        user: UserModel,
+        entity: Optional[EntityModel],
+        resource_attributes: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Build the evaluation context with all available attributes"""
+        context = {
+            "user": {
+                "id": str(user.id),
+                "email": user.email,
+                "is_active": user.is_active,
+                "is_verified": user.is_verified,
+                "is_system_user": user.is_system_user,
+                "created_at": user.created_at.isoformat() if user.created_at else None,
+            },
+            "resource": resource_attributes or {},
+            "entity": {},
+            "environment": {
+                "time": datetime.now(timezone.utc).isoformat(),
+                "day_of_week": datetime.now(timezone.utc).strftime("%A").lower(),
+                "hour": datetime.now(timezone.utc).hour,
+            }
+        }
+        
+        # Add user profile attributes if available
+        if user.profile:
+            context["user"].update({
+                "department": user.profile.department,
+                "team": user.profile.team,
+                "location": user.profile.location,
+                "manager_id": user.profile.manager_id,
+            })
+            # Add any custom attributes from profile metadata
+            if user.profile.metadata:
+                for key, value in user.profile.metadata.items():
+                    if key not in context["user"]:
+                        context["user"][key] = value
+        
+        # Add entity attributes if available
+        if entity:
+            context["entity"] = {
+                "id": str(entity.id),
+                "name": entity.name,
+                "type": entity.entity_type,
+                "is_active": entity.is_active,
+                "member_count": entity.member_count,
+            }
+            # Add entity settings/metadata
+            if entity.settings:
+                context["entity"]["settings"] = entity.settings
+        
+        return context
+    
+    async def _evaluate_condition(
+        self,
+        condition: Condition,
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Evaluate a single condition against the context"""
+        # Extract the attribute value from context
+        attribute_value = self._extract_attribute_value(condition.attribute, context)
+        
+        # Handle EXISTS/NOT_EXISTS operators
+        if condition.operator == "EXISTS":
+            return {
+                "passed": attribute_value is not None,
+                "actual_value": attribute_value,
+                "reason": f"Attribute {'exists' if attribute_value is not None else 'does not exist'}"
+            }
+        
+        if condition.operator == "NOT_EXISTS":
+            return {
+                "passed": attribute_value is None,
+                "actual_value": attribute_value,
+                "reason": f"Attribute {'does not exist' if attribute_value is None else 'exists'}"
+            }
+        
+        # If attribute doesn't exist and it's not an existence check, fail
+        if attribute_value is None:
+            return {
+                "passed": False,
+                "actual_value": None,
+                "reason": f"Attribute '{condition.attribute}' not found in context"
+            }
+        
+        # Evaluate based on operator
+        try:
+            passed = self._evaluate_operator(
+                attribute_value,
+                condition.operator,
+                condition.value
+            )
+            return {
+                "passed": passed,
+                "actual_value": attribute_value,
+                "reason": "Condition evaluation successful"
+            }
+        except Exception as e:
+            return {
+                "passed": False,
+                "actual_value": attribute_value,
+                "reason": f"Evaluation error: {str(e)}"
+            }
+    
+    def _extract_attribute_value(self, attribute_path: str, context: Dict[str, Any]) -> Any:
+        """Extract attribute value from context using dot notation"""
+        parts = attribute_path.split('.')
+        value = context
+        
+        for part in parts:
+            if isinstance(value, dict) and part in value:
+                value = value[part]
+            else:
+                return None
+        
+        return value
+    
+    def _evaluate_operator(self, actual_value: Any, operator: str, expected_value: Any) -> bool:
+        """Evaluate the operator comparison"""
+        # Type conversion for numeric comparisons
+        if operator in ["LESS_THAN", "LESS_THAN_OR_EQUAL", "GREATER_THAN", "GREATER_THAN_OR_EQUAL"]:
+            try:
+                actual_value = float(actual_value)
+                expected_value = float(expected_value)
+            except (TypeError, ValueError):
+                return False
+        
+        # Operator evaluation
+        if operator == "EQUALS":
+            return str(actual_value).lower() == str(expected_value).lower()
+        
+        elif operator == "NOT_EQUALS":
+            return str(actual_value).lower() != str(expected_value).lower()
+        
+        elif operator == "LESS_THAN":
+            return actual_value < expected_value
+        
+        elif operator == "LESS_THAN_OR_EQUAL":
+            return actual_value <= expected_value
+        
+        elif operator == "GREATER_THAN":
+            return actual_value > expected_value
+        
+        elif operator == "GREATER_THAN_OR_EQUAL":
+            return actual_value >= expected_value
+        
+        elif operator == "IN":
+            if isinstance(expected_value, list):
+                return actual_value in expected_value
+            return False
+        
+        elif operator == "NOT_IN":
+            if isinstance(expected_value, list):
+                return actual_value not in expected_value
+            return True
+        
+        elif operator == "CONTAINS":
+            if isinstance(actual_value, (list, str)):
+                return expected_value in actual_value
+            return False
+        
+        elif operator == "NOT_CONTAINS":
+            if isinstance(actual_value, (list, str)):
+                return expected_value not in actual_value
+            return True
+        
+        elif operator == "STARTS_WITH":
+            return str(actual_value).startswith(str(expected_value))
+        
+        elif operator == "ENDS_WITH":
+            return str(actual_value).endswith(str(expected_value))
+        
+        elif operator == "REGEX_MATCH":
+            try:
+                return bool(re.match(str(expected_value), str(actual_value)))
+            except re.error:
+                return False
+        
+        return False
+    
+    async def _get_permission_definition(
+        self,
+        permission_name: str,
+        entity_id: Optional[str] = None
+    ) -> Optional[PermissionModel]:
+        """Get permission definition from database"""
+        # First try entity-specific permission
+        if entity_id:
+            permission = await PermissionModel.find_one(
+                PermissionModel.name == permission_name,
+                PermissionModel.entity_id == PydanticObjectId(entity_id),
+                PermissionModel.is_active == True
+            )
+            if permission:
+                return permission
+        
+        # Fall back to system-level permission
+        permission = await PermissionModel.find_one(
+            PermissionModel.name == permission_name,
+            PermissionModel.entity_id == None,
+            PermissionModel.is_system == True,
+            PermissionModel.is_active == True
+        )
+        
+        return permission
+    
+    def _generate_policy_cache_key(
+        self,
+        user_id: str,
+        permission: str,
+        entity_id: Optional[str],
+        resource_attributes: Optional[Dict[str, Any]]
+    ) -> str:
+        """Generate cache key for policy evaluation result"""
+        # Create a deterministic hash of resource attributes
+        attr_hash = ""
+        if resource_attributes:
+            # Sort keys for consistency
+            sorted_attrs = json.dumps(resource_attributes, sort_keys=True)
+            attr_hash = hashlib.md5(sorted_attrs.encode()).hexdigest()[:8]
+        
+        parts = ["policy", user_id, permission]
+        if entity_id:
+            parts.append(entity_id)
+        if attr_hash:
+            parts.append(attr_hash)
+        
+        return ":".join(parts)
+    
+    async def _get_cached_policy_result(self, cache_key: str) -> Optional[PolicyResult]:
+        """Get cached policy result"""
+        try:
+            data = await self.redis_client.get(cache_key)
+            if data:
+                result_data = json.loads(data)
+                return PolicyResult(
+                    allowed=result_data["allowed"],
+                    reason=result_data.get("reason", ""),
+                    details=result_data.get("details", {})
+                )
+        except Exception:
+            pass
+        return None
+    
+    async def _cache_policy_result(self, cache_key: str, result: PolicyResult) -> None:
+        """Cache policy result"""
+        try:
+            data = {
+                "allowed": result.allowed,
+                "reason": result.reason,
+                "details": result.details
+            }
+            await self.redis_client.setex(
+                cache_key,
+                self.policy_cache_ttl,
+                json.dumps(data)
+            )
+        except Exception:
+            pass
 
 
 class PermissionService:
@@ -23,6 +384,9 @@ class PermissionService:
         
         # Cache TTL in seconds
         self.cache_ttl = 300  # 5 minutes
+        
+        # Policy evaluation engine for ABAC
+        self.policy_engine = PolicyEvaluationEngine()
         
         # Permission hierarchy definitions
         self.permission_hierarchy = {
@@ -200,6 +564,75 @@ class PermissionService:
                 return True, source
         
         return False, "none"
+    
+    async def check_permission_with_context(
+        self,
+        user_id: str,
+        permission: str,
+        entity_id: Optional[str] = None,
+        resource_attributes: Optional[Dict[str, Any]] = None,
+        use_cache: bool = True
+    ) -> PolicyResult:
+        """
+        Check permission with full hybrid RBAC + ABAC evaluation
+        
+        This is the main entry point for permission checking that combines:
+        1. Traditional RBAC (role-based) checks
+        2. ReBAC (relationship-based) checks through entity hierarchy
+        3. ABAC (attribute-based) condition evaluation
+        
+        Args:
+            user_id: User ID
+            permission: Permission to check (e.g., "invoice:approve")
+            entity_id: Entity context
+            resource_attributes: Attributes of the resource being accessed
+            use_cache: Whether to use cache
+        
+        Returns:
+            PolicyResult with allowed status, reason, and evaluation details
+        """
+        # Step 1: Traditional RBAC check
+        has_permission, source = await self.check_permission(
+            user_id, permission, entity_id, use_cache
+        )
+        
+        # If no basic permission, deny immediately
+        if not has_permission:
+            return PolicyResult(
+                False, 
+                f"User lacks basic permission '{permission}'",
+                {"rbac_check": False, "source": source}
+            )
+        
+        # Step 2: Get user and entity for ABAC evaluation
+        user = await UserModel.get(user_id)
+        if not user:
+            return PolicyResult(False, "User not found")
+        
+        entity = None
+        if entity_id:
+            entity = await EntityModel.get(entity_id)
+            if not entity:
+                return PolicyResult(False, "Entity not found")
+        
+        # Step 3: ABAC evaluation if permission has conditions
+        policy_result = await self.policy_engine.evaluate_permission(
+            user, permission, entity, resource_attributes, use_cache
+        )
+        
+        # If no conditions, permission is granted based on RBAC alone
+        if policy_result.reason == "No conditions to evaluate":
+            return PolicyResult(
+                True,
+                "Permission granted (RBAC only)",
+                {"rbac_check": True, "source": source, "abac_check": "not_required"}
+            )
+        
+        # Add RBAC info to the policy result
+        policy_result.details["rbac_check"] = True
+        policy_result.details["rbac_source"] = source
+        
+        return policy_result
     
     async def check_multiple_permissions(
         self,
