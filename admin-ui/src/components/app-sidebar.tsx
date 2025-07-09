@@ -3,7 +3,6 @@
 import * as React from "react"
 import {
   Building2,
-  Globe,
   Home,
   Settings2,
   Shield,
@@ -75,21 +74,21 @@ const data = {
       ],
     },
     {
-      title: "Platforms",
+      title: "Entities",
       url: "#",
-      icon: Globe,
+      icon: Building2,
       items: [
         {
-          title: "All Platforms",
-          url: "/platforms",
+          title: "All Entities",
+          url: "/entities",
         },
         {
-          title: "Client Accounts",
-          url: "/clients",
+          title: "Entity Tree",
+          url: "/entities/tree",
         },
         {
-          title: "Billing",
-          url: "/billing",
+          title: "Access Groups",
+          url: "/entities/groups",
         },
       ],
     },

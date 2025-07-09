@@ -50,15 +50,15 @@ async def create_entity(
     return EntityResponse(
         id=str(entity.id),
         name=entity.name,
-        display_name=entity.display_name,
+        display_name=entity.name,  # Use name as display_name
         description=entity.description,
-        entity_class=entity.entity_class,
+        entity_class=entity.entity_class.value.upper(),  # Convert to uppercase
         entity_type=entity.entity_type,
         parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
         platform_id=str(entity.platform_id) if entity.platform_id else None,
         status=entity.status,
         direct_permissions=entity.direct_permissions,
-        config=entity.config,
+        config=entity.metadata,  # Use metadata as config
         valid_from=entity.valid_from,
         valid_until=entity.valid_until,
         created_at=entity.created_at,
@@ -81,15 +81,15 @@ async def get_entity(
     return EntityResponse(
         id=str(entity.id),
         name=entity.name,
-        display_name=entity.display_name,
+        display_name=entity.name,  # Use name as display_name
         description=entity.description,
-        entity_class=entity.entity_class,
+        entity_class=entity.entity_class.value.upper(),  # Convert to uppercase
         entity_type=entity.entity_type,
         parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
         platform_id=str(entity.platform_id) if entity.platform_id else None,
         status=entity.status,
         direct_permissions=entity.direct_permissions,
-        config=entity.config,
+        config=entity.metadata,  # Use metadata as config
         valid_from=entity.valid_from,
         valid_until=entity.valid_until,
         created_at=entity.created_at,
@@ -114,15 +114,15 @@ async def update_entity(
     return EntityResponse(
         id=str(entity.id),
         name=entity.name,
-        display_name=entity.display_name,
+        display_name=entity.name,  # Use name as display_name
         description=entity.description,
-        entity_class=entity.entity_class,
+        entity_class=entity.entity_class.value.upper(),  # Convert to uppercase
         entity_type=entity.entity_type,
         parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
         platform_id=str(entity.platform_id) if entity.platform_id else None,
         status=entity.status,
         direct_permissions=entity.direct_permissions,
-        config=entity.config,
+        config=entity.metadata,  # Use metadata as config
         valid_from=entity.valid_from,
         valid_until=entity.valid_until,
         created_at=entity.created_at,
@@ -186,15 +186,15 @@ async def search_entities(
         items.append(EntityResponse(
             id=str(entity.id),
             name=entity.name,
-            display_name=entity.display_name,
+            display_name=entity.name,  # Use name as display_name
             description=entity.description,
-            entity_class=entity.entity_class,
+            entity_class=entity.entity_class.value.upper(),  # Convert to uppercase
             entity_type=entity.entity_type,
             parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
             platform_id=str(entity.platform_id) if entity.platform_id else None,
             status=entity.status,
             direct_permissions=entity.direct_permissions,
-            config=entity.config,
+            config=entity.metadata,  # Use metadata as config
             valid_from=entity.valid_from,
             valid_until=entity.valid_until,
             created_at=entity.created_at,
@@ -249,15 +249,15 @@ async def get_entity_path(
         response_path.append(EntityResponse(
             id=str(entity.id),
             name=entity.name,
-            display_name=entity.display_name,
+            display_name=entity.name,  # Use name as display_name
             description=entity.description,
-            entity_class=entity.entity_class,
+            entity_class=entity.entity_class.value.upper(),  # Convert to uppercase
             entity_type=entity.entity_type,
             parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
             platform_id=str(entity.platform_id) if entity.platform_id else None,
             status=entity.status,
             direct_permissions=entity.direct_permissions,
-            config=entity.config,
+            config=entity.metadata,  # Use metadata as config
             valid_from=entity.valid_from,
             valid_until=entity.valid_until,
             created_at=entity.created_at,
@@ -294,9 +294,9 @@ async def add_entity_member(
         user_email=user.email,
         user_name=f"{user.profile.first_name} {user.profile.last_name}" if user.profile else user.email,
         entity_id=str(entity.id),
-        entity_name=entity.display_name,
+        entity_name=entity.name,
         role_id=str(role.id),
-        role_name=role.display_name,
+        role_name=role.name,
         permissions=role.permissions,
         status=membership.status,
         valid_from=membership.valid_from,
@@ -369,9 +369,9 @@ async def update_entity_member(
         user_email=user.email,
         user_name=f"{user.profile.first_name} {user.profile.last_name}" if user.profile else user.email,
         entity_id=str(entity.id),
-        entity_name=entity.display_name,
+        entity_name=entity.name,
         role_id=str(role.id),
-        role_name=role.display_name,
+        role_name=role.name,
         permissions=role.permissions,
         status=membership.status,
         valid_from=membership.valid_from,
