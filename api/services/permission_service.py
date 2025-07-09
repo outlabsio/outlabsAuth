@@ -302,15 +302,20 @@ class PermissionService:
         Args:
             entity_id: Entity ID
         """
-        # Pattern to match all entity permission cache keys
-        pattern = f"perm:*:{entity_id}"
-        
-        # Get all matching keys
-        keys = await self.redis_client.keys(pattern)
-        
-        # Delete all keys
-        if keys:
-            await self.redis_client.delete(*keys)
+        try:
+            # Pattern to match all entity permission cache keys
+            pattern = f"perm:*:{entity_id}"
+            
+            # Get all matching keys
+            keys = await self.redis_client.keys(pattern)
+            
+            # Delete all keys
+            if keys:
+                await self.redis_client.delete(*keys)
+        except Exception as e:
+            # If Redis is unavailable, log but don't fail
+            print(f"Warning: Redis cache invalidation failed: {e}")
+            pass
     
     async def _get_user_memberships(
         self,

@@ -23,6 +23,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from api.database import init_db
 from api.models import UserModel, EntityModel, RoleModel, EntityMembershipModel
 from api.models.user_model import UserProfile
+
+# Resolve forward references
+RoleModel.model_rebuild()
+EntityMembershipModel.model_rebuild()
 from api.services.auth_service import AuthService
 from api.services.entity_service import EntityService
 from api.services.role_service import RoleService
@@ -139,7 +143,7 @@ class DatabaseSeeder:
                     first_name=user_data["first_name"],
                     last_name=user_data["last_name"]
                 ),
-                status="active",
+                is_active=True,
                 email_verified=True,
                 created_at=datetime.now(timezone.utc)
             )
@@ -154,66 +158,70 @@ class DatabaseSeeder:
         
         # Create platform
         platform = EntityModel(
-            name="outlabs-platform",
-            display_name="OutLabs Platform",
+            name="OutLabs Platform",
+            slug="outlabs-platform",
             description="Main OutLabs platform",
-            entity_class="STRUCTURAL",
+            entity_class="structural",
             entity_type="platform",
+            platform_id="self",  # Platform references itself
             status="active",
             direct_permissions=[],
-            config={},
+            metadata={},
             created_at=datetime.now(timezone.utc)
         )
         await platform.save()
+        # Update platform_id to reference itself
+        platform.platform_id = str(platform.id)
+        await platform.save()
         self.created_entities["platform"] = platform
-        print(f"  ✅ Created platform: {platform.display_name}")
+        print(f"  ✅ Created platform: {platform.name}")
         
         # Create organization
         organization = EntityModel(
-            name="acme-corp",
-            display_name="ACME Corporation",
+            name="ACME Corporation",
+            slug="acme-corp",
             description="ACME Corporation - Demo Organization",
-            entity_class="STRUCTURAL", 
+            entity_class="structural", 
             entity_type="organization",
             parent_entity=platform,
-            platform_id=platform.id,
+            platform_id=str(platform.id),
             status="active",
             direct_permissions=[],
-            config={"max_members": 1000},
+            metadata={"max_members": 1000},
             created_at=datetime.now(timezone.utc)
         )
         await organization.save()
         self.created_entities["organization"] = organization
-        print(f"  ✅ Created organization: {organization.display_name}")
+        print(f"  ✅ Created organization: {organization.name}")
         
         # Create branch
         branch = EntityModel(
-            name="acme-engineering",
-            display_name="ACME Engineering Branch",
+            name="ACME Engineering Branch",
+            slug="acme-engineering",
             description="Engineering division of ACME Corp",
-            entity_class="STRUCTURAL",
+            entity_class="structural",
             entity_type="branch", 
             parent_entity=organization,
-            platform_id=platform.id,
+            platform_id=str(platform.id),
             status="active",
             direct_permissions=[],
-            config={"department": "engineering"},
+            metadata={"department": "engineering"},
             created_at=datetime.now(timezone.utc)
         )
         await branch.save()
         self.created_entities["branch"] = branch
-        print(f"  ✅ Created branch: {branch.display_name}")
+        print(f"  ✅ Created branch: {branch.name}")
         
         # Create teams
         teams = [
             {
-                "name": "backend-team",
-                "display_name": "Backend Development Team",
+                "name": "Backend Development Team",
+                "slug": "backend-team",
                 "description": "Backend API development team"
             },
             {
-                "name": "frontend-team", 
-                "display_name": "Frontend Development Team",
+                "name": "Frontend Development Team", 
+                "slug": "frontend-team",
                 "description": "Frontend UI development team"
             }
         ]
@@ -222,38 +230,38 @@ class DatabaseSeeder:
         for team_data in teams:
             team = EntityModel(
                 name=team_data["name"],
-                display_name=team_data["display_name"],
+                slug=team_data["slug"],
                 description=team_data["description"],
-                entity_class="STRUCTURAL",
+                entity_class="structural",
                 entity_type="team",
                 parent_entity=branch,
-                platform_id=platform.id,
+                platform_id=str(platform.id),
                 status="active",
                 direct_permissions=[],
-                config={"team_type": "development"},
+                metadata={"team_type": "development"},
                 created_at=datetime.now(timezone.utc)
             )
             await team.save()
             self.created_entities["teams"].append(team)
-            print(f"  ✅ Created team: {team.display_name}")
+            print(f"  ✅ Created team: {team.name}")
             
         # Create access group
         access_group = EntityModel(
-            name="senior-devs",
-            display_name="Senior Developers",
+            name="Senior Developers",
+            slug="senior-devs",
             description="Access group for senior developers with elevated permissions",
-            entity_class="ACCESS_GROUP",
+            entity_class="access_group",
             entity_type="access_group",
             parent_entity=branch,
-            platform_id=platform.id,
+            platform_id=str(platform.id),
             status="active",
             direct_permissions=["code:review", "deploy:staging"],
-            config={"access_level": "senior"},
+            metadata={"access_level": "senior"},
             created_at=datetime.now(timezone.utc)
         )
         await access_group.save()
         self.created_entities["access_group"] = access_group
-        print(f"  ✅ Created access group: {access_group.display_name}")
+        print(f"  ✅ Created access group: {access_group.name}")
         
     async def create_system_roles(self):
         """Create system and entity-specific roles"""
@@ -321,7 +329,7 @@ class DatabaseSeeder:
             membership = EntityMembershipModel(
                 user=system_admin,
                 entity=platform,
-                role=system_role,
+                roles=[system_role],
                 status="active",
                 created_at=datetime.now(timezone.utc)
             )
@@ -337,7 +345,7 @@ class DatabaseSeeder:
             membership = EntityMembershipModel(
                 user=platform_admin,
                 entity=organization,
-                role=platform_role,
+                roles=[platform_role],
                 status="active",
                 created_at=datetime.now(timezone.utc)
             )
@@ -351,7 +359,7 @@ class DatabaseSeeder:
             membership = EntityMembershipModel(
                 user=org_admin,
                 entity=organization,
-                role=org_admin_role,
+                roles=[org_admin_role],
                 status="active", 
                 created_at=datetime.now(timezone.utc)
             )
@@ -371,12 +379,12 @@ class DatabaseSeeder:
                 membership = EntityMembershipModel(
                     user=team_lead,
                     entity=team,
-                    role=admin_role,
+                    roles=[admin_role],
                     status="active",
                     created_at=datetime.now(timezone.utc)
                 )
                 await membership.save()
-                print(f"  ✅ Added {team_lead.email} as admin to {team.display_name}")
+                print(f"  ✅ Added {team_lead.email} as admin to {team.name}")
         
         # Regular users to teams
         regular_user = self.created_users["user"]
@@ -384,7 +392,7 @@ class DatabaseSeeder:
         
         for i, team in enumerate(teams):
             # Get or create member roles
-            team_roles = await RoleModel.find(RoleModel.entity_id == team.id).to_list()
+            team_roles = await RoleModel.find(RoleModel.entity.id == team.id).to_list()
             member_role = next((r for r in team_roles if "member" in r.name), None)
             viewer_role = next((r for r in team_roles if "viewer" in r.name), None)
             
@@ -393,24 +401,24 @@ class DatabaseSeeder:
                 membership = EntityMembershipModel(
                     user=regular_user,
                     entity=team,
-                    role=member_role,
+                    roles=[member_role],
                     status="active",
                     created_at=datetime.now(timezone.utc)
                 )
                 await membership.save()
-                print(f"  ✅ Added {regular_user.email} as member to {team.display_name}")
+                print(f"  ✅ Added {regular_user.email} as member to {team.name}")
             
             # Add viewer to second team
             if i == 1 and viewer_role:
                 membership = EntityMembershipModel(
                     user=viewer_user,
                     entity=team,
-                    role=viewer_role,
+                    roles=[viewer_role],
                     status="active",
                     created_at=datetime.now(timezone.utc)
                 )
                 await membership.save()
-                print(f"  ✅ Added {viewer_user.email} as viewer to {team.display_name}")
+                print(f"  ✅ Added {viewer_user.email} as viewer to {team.name}")
                 
     def print_summary(self):
         """Print summary of created data"""

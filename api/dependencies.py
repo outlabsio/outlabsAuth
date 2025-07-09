@@ -333,3 +333,16 @@ class PermissionChecker:
 
 # Global permission checker instance
 permission_checker = PermissionChecker()
+
+
+# User permission dependencies
+async def require_user_read(current_user: UserModel = Depends(get_current_user)) -> UserModel:
+    """Require user:read permission"""
+    await PermissionChecker.require_user_permission(current_user, "user:read")
+    return current_user
+
+
+async def require_user_manage(current_user: UserModel = Depends(get_current_user)) -> UserModel:
+    """Require user:manage permission"""
+    await PermissionChecker.require_user_permission(current_user, "user:manage")
+    return current_user

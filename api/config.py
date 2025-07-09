@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     
-    # Redis
-    REDIS_URL: str = "redis://localhost:6379"
+    # Redis  
+    REDIS_URL: str = "redis://:guest@localhost:6379"
     
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]

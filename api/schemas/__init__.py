@@ -39,6 +39,25 @@ from .role_schema import (
     RoleUsageStats,
     RoleUsageStatsResponse
 )
+from .user_schema import (
+    UserProfileUpdate,
+    UserProfileResponse,
+    UserResponse,
+    UserListResponse,
+    UserSearchParams,
+    UserStatusUpdate,
+    UserInviteRequest,
+    UserInviteResponse,
+    UserPasswordResetRequest,
+    UserPasswordResetResponse,
+    UserMembershipRole,
+    UserMembershipEntity,
+    UserMembershipResponse,
+    UserMembershipListResponse,
+    UserStatsResponse,
+    UserBulkActionRequest,
+    UserBulkActionResponse
+)
 
 __all__ = [
     # Auth schemas
@@ -75,5 +94,23 @@ __all__ = [
     "RolePermissionTemplate",
     "RoleTemplateResponse",
     "RoleUsageStats",
-    "RoleUsageStatsResponse"
+    "RoleUsageStatsResponse",
+    # User schemas
+    "UserProfileUpdate",
+    "UserProfileResponse",
+    "UserResponse",
+    "UserListResponse",
+    "UserSearchParams",
+    "UserStatusUpdate",
+    "UserInviteRequest",
+    "UserInviteResponse",
+    "UserPasswordResetRequest",
+    "UserPasswordResetResponse",
+    "UserMembershipRole",
+    "UserMembershipEntity",
+    "UserMembershipResponse",
+    "UserMembershipListResponse",
+    "UserStatsResponse",
+    "UserBulkActionRequest",
+    "UserBulkActionResponse"
 ]

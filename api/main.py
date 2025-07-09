@@ -82,7 +82,7 @@ async def root():
 
 
 # Import and include routers
-from api.routes import test_routes, auth_routes, entity_routes, role_routes
+from api.routes import test_routes, auth_routes, entity_routes, role_routes, user_routes
 
 # Test routes (remove in production)
 app.include_router(test_routes.router, prefix="/v1/test", tags=["Testing"])
@@ -96,6 +96,5 @@ app.include_router(entity_routes.router, prefix="/v1/entities", tags=["Entities"
 # Role routes
 app.include_router(role_routes.router, prefix="/v1/roles", tags=["Roles"])
 
-# TODO: Add more routers as we implement them
-# from api.routes import user_routes
-# app.include_router(user_routes.router, prefix="/v1/users", tags=["Users"])
+# User routes
+app.include_router(user_routes.router, prefix="/v1/users", tags=["Users"])

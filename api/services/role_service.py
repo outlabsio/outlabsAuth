@@ -86,9 +86,9 @@ class RoleService:
         # Check for duplicate role name within entity
         existing_query = RoleModel.find(RoleModel.name == name)
         if entity:
-            existing_query = existing_query.find(RoleModel.entity_id == entity.id)
+            existing_query = existing_query.find(RoleModel.entity.id == entity.id)
         else:
-            existing_query = existing_query.find(RoleModel.entity_id == None)
+            existing_query = existing_query.find(RoleModel.entity == None)
         
         existing_role = await existing_query.first_or_none()
         if existing_role:
@@ -106,7 +106,7 @@ class RoleService:
             display_name=display_name,
             description=description,
             permissions=validated_permissions,
-            entity_id=entity.id if entity else None,
+            entity=entity,
             assignable_at_types=assignable_at_types or [],
             is_system_role=is_system_role,
             is_global=is_global
@@ -443,19 +443,28 @@ class RoleService:
             "system:manage_all", "system:read_all",
             
             # Platform level
-            "platform:manage_platform", "platform:read_platform",
+            "platform:manage", "platform:manage_platform", "platform:read_platform",
             
             # Entity level
-            "entity:manage", "entity:read", "entity:create", "entity:update", "entity:delete",
+            "entity:manage", "entity:manage_all", "entity:read", "entity:read_all", 
+            "entity:create", "entity:update", "entity:delete",
             
             # User level
-            "user:manage", "user:read", "user:create", "user:update", "user:delete",
+            "user:manage", "user:manage_all", "user:manage_client", "user:read", "user:read_all",
+            "user:create", "user:update", "user:delete",
             
             # Role level
-            "role:manage", "role:read", "role:create", "role:update", "role:delete", "role:assign",
+            "role:manage", "role:manage_all", "role:read", "role:read_all", 
+            "role:create", "role:update", "role:delete", "role:assign",
             
             # Member level
             "member:manage", "member:read", "member:add", "member:update", "member:remove",
+            
+            # Organization level
+            "organization:manage_all", "organization:manage_platform",
+            
+            # Custom permissions for demos
+            "code:review", "deploy:staging",
             
             # Wildcard permissions
             "*:manage_all", "*:read_all"
@@ -464,6 +473,9 @@ class RoleService:
         validated = []
         for perm in permissions:
             if perm in valid_permissions:
+                validated.append(perm)
+            elif perm == "*":
+                # Allow standalone wildcard for system admin
                 validated.append(perm)
             else:
                 # Check if it's a valid wildcard pattern
