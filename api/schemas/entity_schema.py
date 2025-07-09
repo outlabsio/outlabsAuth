@@ -20,17 +20,17 @@ class EntityCreate(BaseModel):
     config: Optional[Dict[str, Any]] = None
     
     @field_validator('entity_type')
-    def validate_entity_type(cls, v, values):
+    def validate_entity_type(cls, v, info):
         """Validate entity type based on entity class"""
-        if 'entity_class' in values:
-            if values['entity_class'] == 'STRUCTURAL':
-                allowed_types = ['platform', 'organization', 'branch', 'team']
+        if info.data and 'entity_class' in info.data:
+            if info.data['entity_class'] == 'STRUCTURAL':
+                allowed_types = ['platform', 'organization', 'division', 'branch', 'team']
                 if v not in allowed_types:
                     raise ValueError(f'For STRUCTURAL entities, type must be one of: {allowed_types}')
-            elif values['entity_class'] == 'ACCESS_GROUP':
-                # Access groups can have custom types
-                if not v.islower():
-                    raise ValueError('Access group types must be lowercase')
+            elif info.data['entity_class'] == 'ACCESS_GROUP':
+                allowed_types = ['functional_group', 'permission_group', 'project_group', 'role_group', 'access_group']
+                if v not in allowed_types:
+                    raise ValueError(f'For ACCESS_GROUP entities, type must be one of: {allowed_types}')
         return v
     
     @field_validator('parent_entity_id')
@@ -54,10 +54,10 @@ class EntityUpdate(BaseModel):
     valid_until: Optional[datetime] = None
     
     @field_validator('valid_until')
-    def validate_validity_period(cls, v, values):
+    def validate_validity_period(cls, v, info):
         """Ensure valid_until is after valid_from"""
-        if v and 'valid_from' in values and values['valid_from']:
-            if v <= values['valid_from']:
+        if v and info.data and 'valid_from' in info.data and info.data['valid_from']:
+            if v <= info.data['valid_from']:
                 raise ValueError('valid_until must be after valid_from')
         return v
 
@@ -110,10 +110,10 @@ class EntityMemberAdd(BaseModel):
         return v
     
     @field_validator('valid_until')
-    def validate_validity_period(cls, v, values):
+    def validate_validity_period(cls, v, info):
         """Ensure valid_until is after valid_from"""
-        if v and 'valid_from' in values and values['valid_from']:
-            if v <= values['valid_from']:
+        if v and info.data and 'valid_from' in info.data and info.data['valid_from']:
+            if v <= info.data['valid_from']:
                 raise ValueError('valid_until must be after valid_from')
         return v
 
