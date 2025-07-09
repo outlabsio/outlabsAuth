@@ -3,8 +3,8 @@
  */
 
 export enum EntityClass {
-  STRUCTURAL = "structural",
-  ACCESS_GROUP = "access_group"
+  STRUCTURAL = "STRUCTURAL",
+  ACCESS_GROUP = "ACCESS_GROUP"
 }
 
 export enum EntityType {

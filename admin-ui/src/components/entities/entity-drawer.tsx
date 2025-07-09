@@ -130,7 +130,9 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
 
   // Filter potential parent entities (only structural entities can be parents)
   const potentialParents = allEntities?.filter(
-    e => e.entity_class === EntityClass.STRUCTURAL && (!isEditMode || e.id !== entity?.id)
+    e => e.entity_class === EntityClass.STRUCTURAL && 
+         e.status === "active" && // Only show active entities
+         (!isEditMode || e.id !== entity?.id)
   ) || [];
 
   const mutation = useMutation({
@@ -213,7 +215,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
         name: value.name,
         display_name: value.name, // API expects display_name
         description: value.description,
-        entity_class: value.entity_class.toUpperCase(), // API expects uppercase
+        entity_class: value.entity_class, // Already uppercase from enum
         entity_type: value.entity_type,
         status: value.status,
       };
