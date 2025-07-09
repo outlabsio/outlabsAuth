@@ -173,12 +173,16 @@ open http://localhost:8030/docs
 - [x] UserStatsResponse for analytics
 - [x] UserBulkActionRequest/Response for admin operations
 
-### 📋 Phase 5: Advanced Features (NEXT)
+### 🔄 Phase 5: Advanced Features (IN PROGRESS)
 
-**Status**: 🔄 Ready to implement
+**Status**: 🏗️ Email service completed, ready for next feature selection
 
 #### Background Tasks
-- [ ] Email sending service with templates
+- [x] Email sending service with templates (COMPLETED)
+  - Non-blocking background processing using asyncio.Queue
+  - Jinja2 templates for all system emails
+  - Integrated with user registration, invitations, and password reset
+  - Templates: welcome, invitation, password_reset, password_changed, email_verification, account_locked, admin_password_reset
 - [ ] Audit logging for all operations
 - [ ] Scheduled tasks (cleanup, notifications)
 - [ ] Event notifications and webhooks
@@ -264,38 +268,77 @@ redis-cli
 ## Known Issues
 
 1. **Admin UI**: TypeScript compilation errors prevent building
-2. **Email Service**: Not implemented yet (returns success without sending)
-3. **bcrypt Compatibility**: Warning about bcrypt version compatibility (non-blocking)
-4. **Permission System**: Entity routes have placeholder permission checks (TODO)
+2. **bcrypt Compatibility**: Warning about bcrypt version compatibility (non-blocking)
+3. **Permission Dependencies**: Authentication integration issue with permission-protected endpoints (non-blocking)
+4. **SMTP Configuration**: Email service needs SMTP settings in environment variables to actually send emails
 
-## Next Steps
+## Next Steps - Phase 5 Feature Selection
 
-1. **Fix bcrypt Compatibility Issue**
-   - Update bcrypt dependency version
-   - Test authentication flow
-   - Ensure password hashing works correctly
+Based on the current implementation status, here are the recommended next features in priority order:
 
-2. **Implement Permission System**
-   - Create permission resolution service
-   - Implement hierarchical permission checking
-   - Add caching with Redis
-   - Replace placeholder permission checks in routes
+### 1. **Audit Logging** (Recommended Next)
+   - Track all sensitive operations (login, permission changes, data modifications)
+   - Store audit logs in MongoDB with structured format
+   - Include user, timestamp, action, entity affected, old/new values
+   - Essential for compliance and security monitoring
+   - Can leverage existing service layer pattern
 
-3. **Create Role Management**
-   - Implement role CRUD operations
-   - Add role assignment rules
-   - Create role-based permission inheritance
+### 2. **Performance Optimization**
+   - Implement Redis caching for permissions and user data
+   - Add database indexes for common queries
+   - Optimize entity tree queries with aggregation pipelines
+   - Connection pooling for MongoDB
+   - Would significantly improve API response times
+
+### 3. **Advanced Security - MFA**
+   - Multi-factor authentication using TOTP
+   - QR code generation for authenticator apps
+   - Backup codes for account recovery
+   - High user value for enterprise customers
+   - Builds on existing auth infrastructure
+
+### 4. **Monitoring & Observability**
+   - Structured logging with correlation IDs
+   - Prometheus metrics for API performance
+   - Health check endpoints with dependency status
+   - Error tracking and alerting
+   - Critical for production operations
+
+### 5. **API Key Management**
+   - Long-lived API keys for service accounts
+   - Key rotation and revocation
+   - Rate limiting per API key
+   - Scoped permissions for API keys
+   - Enables machine-to-machine auth
+
+### 6. **Scheduled Tasks**
+   - Cleanup expired tokens and sessions
+   - Send digest emails for notifications
+   - Generate periodic reports
+   - Database maintenance tasks
+   - Lower priority but useful for automation
 
 ## Environment Variables
 
 ```env
+# Database
 DATABASE_URL=mongodb://host.docker.internal:27017
 MONGO_DATABASE=outlabsAuth_test
 REDIS_URL=redis://:guest@host.docker.internal:6379
+
+# JWT Configuration
 SECRET_KEY=a_very_secret_key_that_should_be_changed_in_production
 ACCESS_TOKEN_EXPIRE_MINUTES=15
 REFRESH_TOKEN_EXPIRE_DAYS=30
 ALGORITHM=HS256
+
+# Email Configuration (Optional - emails will be logged if not configured)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=your-email@gmail.com
+SMTP_PASSWORD=your-app-password
+SMTP_FROM_EMAIL=noreply@outlabs.com
+APP_URL=https://auth.outlabs.com
 ```
 
 ## API Testing Examples
@@ -345,16 +388,54 @@ curl -H "Authorization: Bearer $ACCESS_TOKEN" \
 - Entity ← → Role (1:many)
 - EntityMembership → Role (many:1)
 
-## Updated: 2025-07-09 13:30 UTC
+## Updated: 2025-07-09 14:30 UTC
 
 ### Recent Changes
-- ✅ **Phase 4 Complete**: User management system fully implemented
-- ✅ **User Service**: Profile management, search, invitations, status management, bulk operations
-- ✅ **User Routes**: 10 comprehensive user management endpoints
-- ✅ **User Schemas**: Complete request/response validation schemas
-- ✅ **User Invitations**: Temporary password generation and email notifications (stubbed)
-- ✅ **User Analytics**: Statistics and overview endpoints
-- ✅ **Bulk Operations**: Admin bulk actions for user management
-- ✅ **Integration**: All user routes integrated with permission system
-- ⚠️ **Authentication Issue**: Permission dependencies authentication integration (non-blocking)
-- 🔄 **Next Phase**: Advanced features (email service, audit logging, etc.)
+- ✅ **Email Service Complete**: Non-blocking email service with background processing
+  - asyncio.Queue for background email processing
+  - Jinja2 templates for all system emails
+  - Background worker processes emails without blocking API
+  - Graceful degradation when SMTP not configured (logs emails)
+  - Full integration with auth flows and user management
+- ✅ **All Email Templates Created**: 
+  - base.html (responsive base template)
+  - welcome, invitation, password_reset, password_changed
+  - email_verification, account_locked, admin_password_reset
+- ✅ **Testing Confirmed**: Email queueing and processing working correctly
+- ⚠️ **SMTP Configuration**: Needs environment variables for actual email delivery
+
+### Phase 5 Progress Summary
+- ✅ Email Service: COMPLETED
+- ✅ Custom Permissions: COMPLETED (see details below)
+- ⬜ Audit Logging: Ready to implement
+- ⬜ Scheduled Tasks: Pending
+- ⬜ Webhooks: Pending
+- ⬜ Performance Optimization: Pending
+- ⬜ Advanced Security (MFA, OAuth2): Pending
+- ⬜ Monitoring & Observability: Pending
+
+### Custom Permissions System (NEW)
+We discovered that the system was missing the ability for organizations to create custom permissions. This has now been implemented:
+
+#### Features
+- **PermissionModel**: New model for storing custom permissions
+- **Permission CRUD API**: Create, read, update, delete custom permissions
+- **Dynamic Validation**: Roles can now use both system and custom permissions
+- **Permission Format**: `resource:action` (e.g., `lead:create`, `invoice:approve`)
+- **Metadata Support**: Tags and custom metadata for permissions
+- **Entity Scoping**: Permissions can be global or entity-specific
+
+#### API Endpoints
+- `GET /v1/permissions/available` - List all available permissions (system + custom)
+- `POST /v1/permissions/` - Create custom permission
+- `GET /v1/permissions/{id}` - Get permission details
+- `PUT /v1/permissions/{id}` - Update permission
+- `DELETE /v1/permissions/{id}` - Delete permission
+- `POST /v1/permissions/validate` - Validate permission strings
+
+#### Example Custom Permissions
+- `lead:create` - Create new leads in CRM
+- `invoice:approve` - Approve invoices for payment
+- `report:view_quarterly` - View quarterly reports
+- `contract:sign` - Sign contracts
+- `commission:calculate` - Calculate commissions

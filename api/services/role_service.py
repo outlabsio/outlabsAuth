@@ -98,7 +98,7 @@ class RoleService:
             )
         
         # Validate permissions
-        validated_permissions = await RoleService._validate_permissions(permissions)
+        validated_permissions = await RoleService._validate_permissions(permissions, entity_id)
         
         # Create role
         role = RoleModel(
@@ -185,7 +185,7 @@ class RoleService:
             role.description = description
         
         if permissions is not None:
-            validated_permissions = await RoleService._validate_permissions(permissions)
+            validated_permissions = await RoleService._validate_permissions(permissions, role.entity)
             role.permissions = validated_permissions
         
         if assignable_at_types is not None:
@@ -424,12 +424,13 @@ class RoleService:
         return created_roles
     
     @staticmethod
-    async def _validate_permissions(permissions: List[str]) -> List[str]:
+    async def _validate_permissions(permissions: List[str], entity_id: Optional[str] = None) -> List[str]:
         """
         Validate and normalize permissions
         
         Args:
             permissions: List of permission strings
+            entity_id: Entity context for validation
         
         Returns:
             Validated permissions
@@ -437,61 +438,20 @@ class RoleService:
         Raises:
             HTTPException: If permissions are invalid
         """
-        # Define valid permissions
-        valid_permissions = {
-            # System level
-            "system:manage_all", "system:read_all",
-            
-            # Platform level
-            "platform:manage", "platform:manage_platform", "platform:read_platform",
-            
-            # Entity level
-            "entity:manage", "entity:manage_all", "entity:read", "entity:read_all", 
-            "entity:create", "entity:update", "entity:delete",
-            
-            # User level
-            "user:manage", "user:manage_all", "user:manage_client", "user:read", "user:read_all",
-            "user:create", "user:update", "user:delete",
-            
-            # Role level
-            "role:manage", "role:manage_all", "role:read", "role:read_all", 
-            "role:create", "role:update", "role:delete", "role:assign",
-            
-            # Member level
-            "member:manage", "member:read", "member:add", "member:update", "member:remove",
-            
-            # Organization level
-            "organization:manage_all", "organization:manage_platform",
-            
-            # Custom permissions for demos
-            "code:review", "deploy:staging",
-            
-            # Wildcard permissions
-            "*:manage_all", "*:read_all"
-        }
+        # Use the new permission management service for validation
+        from api.services.permission_management_service import permission_management_service
         
-        validated = []
-        for perm in permissions:
-            if perm in valid_permissions:
-                validated.append(perm)
-            elif perm == "*":
-                # Allow standalone wildcard for system admin
-                validated.append(perm)
-            else:
-                # Check if it's a valid wildcard pattern
-                if ":" in perm:
-                    resource, action = perm.split(":", 1)
-                    if resource == "*" or action == "*":
-                        validated.append(perm)
-                    else:
-                        raise HTTPException(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"Invalid permission: {perm}"
-                        )
-                else:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Invalid permission format: {perm}"
-                    )
-        
-        return validated
+        try:
+            validated = await permission_management_service.validate_permissions(
+                permissions=permissions,
+                entity_id=entity_id
+            )
+            return validated
+        except HTTPException:
+            # Re-raise with original error
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Permission validation failed: {str(e)}"
+            )

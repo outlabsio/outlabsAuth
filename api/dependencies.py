@@ -25,7 +25,7 @@ def require_permissions(
     Returns:
         Dependency function
     """
-    def permission_dependency(
+    async def permission_dependency(
         current_user: UserModel = Depends(get_current_user),
         entity_id: Optional[str] = None
     ) -> UserModel:
@@ -47,32 +47,12 @@ def require_permissions(
             return current_user
         
         # Check permissions
-        import asyncio
-        
-        # Create async wrapper for permission check
-        async def check_perms():
-            return await permission_service.check_multiple_permissions(
-                str(current_user.id),
-                permissions,
-                entity_id,
-                require_all
-            )
-        
-        # Run permission check
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # If we're already in an async context, create a task
-            import asyncio
-            task = asyncio.create_task(check_perms())
-            try:
-                results = loop.run_until_complete(task)
-            except RuntimeError:
-                # Fallback for nested event loops
-                import nest_asyncio
-                nest_asyncio.apply()
-                results = loop.run_until_complete(task)
-        else:
-            results = loop.run_until_complete(check_perms())
+        results = await permission_service.check_multiple_permissions(
+            str(current_user.id),
+            permissions,
+            entity_id,
+            require_all
+        )
         
         # Check results
         if require_all:
@@ -97,11 +77,11 @@ def require_permissions(
     
     # If entity_id_param is specified, inject it
     if entity_id_param:
-        def wrapper(
+        async def wrapper(
             current_user: UserModel = Depends(get_current_user),
             entity_id: str = Path(..., alias=entity_id_param)
         ) -> UserModel:
-            return permission_dependency(current_user, entity_id)
+            return await permission_dependency(current_user, entity_id)
         return wrapper
     
     return permission_dependency
@@ -158,7 +138,7 @@ def require_self_or_permission(permission: str) -> Callable:
     Returns:
         Dependency function
     """
-    def self_or_permission_dependency(
+    async def self_or_permission_dependency(
         current_user: UserModel = Depends(get_current_user),
         user_id: str = Path(...)
     ) -> UserModel:
@@ -181,7 +161,7 @@ def require_self_or_permission(permission: str) -> Callable:
         
         # Check permission for other users
         permission_check = require_permission(permission)
-        return permission_check(current_user)
+        return await permission_check(current_user)
     
     return self_or_permission_dependency
 

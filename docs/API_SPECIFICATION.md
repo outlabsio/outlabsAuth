@@ -622,34 +622,168 @@ Get all roles assigned to a user across all entities.
 
 ### Permission Management Endpoints
 
-#### GET /v1/permissions/
-List all permissions defined in the system.
+#### GET /v1/permissions/available
+List all available permissions (system + custom) for the current context.
 
 **Query Parameters:**
-- `platform_id`: Filter by platform
-- `resource`: Filter by resource (e.g., "lead", "user")
-- `action`: Filter by action (e.g., "create", "read")
+- `entity_id`: Entity context for permission filtering
+- `include_system`: Include system permissions (default: true)
+- `include_inherited`: Include inherited permissions from parent entities (default: true)
+- `active_only`: Only return active permissions (default: true)
 
 **Response:**
 ```json
 {
   "permissions": [
     {
-      "id": "perm_lead_read",
-      "name": "lead:read",
-      "display_name": "View Leads",
-      "description": "Ability to view lead information",
-      "resource": "lead",
+      "id": null,
+      "name": "user:read",
+      "display_name": "User - Read",
+      "description": "System permission for user:read",
+      "resource": "user",
       "action": "read",
-      "platform_id": "plat_diverse_leads"
+      "is_system": true,
+      "is_active": true,
+      "tags": [],
+      "metadata": {}
+    },
+    {
+      "id": "507f1f77bcf86cd799439011",
+      "name": "lead:create",
+      "display_name": "Create Leads",
+      "description": "Allows creating new lead records",
+      "resource": "lead",
+      "action": "create",
+      "is_system": false,
+      "is_active": true,
+      "tags": ["crm", "sales"],
+      "metadata": {"category": "sales"}
     }
   ],
-  "total": 1
+  "total": 45,
+  "system_count": 41,
+  "custom_count": 4
 }
 ```
 
+#### POST /v1/permissions/
+Create a new custom permission with optional ABAC conditions.
+
+**Request Body:**
+```json
+{
+  "name": "invoice:approve",
+  "display_name": "Approve Invoices",
+  "description": "Allows approving invoices for payment",
+  "entity_id": "507f1f77bcf86cd799439011",  // Optional
+  "tags": ["finance", "accounting"],
+  "conditions": [  // Optional - for ABAC
+    {
+      "attribute": "resource.value",
+      "operator": "LESS_THAN_OR_EQUAL",
+      "value": 50000
+    },
+    {
+      "attribute": "resource.status",
+      "operator": "EQUALS",
+      "value": "pending_approval"
+    }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "id": "507f1f77bcf86cd799439012",
+  "name": "invoice:approve",
+  "display_name": "Approve Invoices",
+  "description": "Allows approving invoices for payment",
+  "resource": "invoice",
+  "action": "approve",
+  "scope": null,
+  "entity_id": "507f1f77bcf86cd799439011",
+  "is_system": false,
+  "is_active": true,
+  "tags": ["finance", "accounting"],
+  "conditions": [
+    {
+      "attribute": "resource.value",
+      "operator": "LESS_THAN_OR_EQUAL",
+      "value": 50000
+    },
+    {
+      "attribute": "resource.status",
+      "operator": "EQUALS",
+      "value": "pending_approval"
+    }
+  ],
+  "created_at": "2024-01-10T10:00:00Z",
+  "created_by": "507f1f77bcf86cd799439013"
+}
+```
+
+#### GET /v1/permissions/{permission_id}
+Get a specific permission by ID.
+
+**Response:** Same as POST response above.
+
+#### PUT /v1/permissions/{permission_id}
+Update a custom permission.
+
+**Request Body:**
+```json
+{
+  "display_name": "Approve Financial Invoices",
+  "description": "Allows approving invoices for financial processing",
+  "is_active": true,
+  "tags": ["finance", "accounting", "approval"],
+  "metadata": {
+    "requires_2fa": true,
+    "max_amount": 50000,
+    "requires_manager_approval": true
+  }
+}
+```
+
+**Note:** Cannot update system permissions or the permission name.
+
+#### DELETE /v1/permissions/{permission_id}
+Delete a custom permission.
+
+**Response:**
+```json
+{
+  "message": "Permission deleted successfully"
+}
+```
+
+**Note:** Cannot delete system permissions or permissions currently assigned to roles.
+
+#### POST /v1/permissions/validate
+Validate a list of permission strings.
+
+**Request Body:**
+```json
+{
+  "permissions": ["user:read", "lead:create", "invalid:permission"],
+  "entity_id": "507f1f77bcf86cd799439011"  // Optional context
+}
+```
+
+**Response:**
+```json
+{
+  "valid": true,
+  "permissions": ["user:read", "lead:create"],
+  "count": 2
+}
+```
+
+**Note:** Returns 400 error if any permission is invalid.
+
 #### POST /v1/permissions/check
-Check if the authenticated user has a specific permission. User is identified from the provided token.
+Check if the authenticated user has specific permissions with optional resource context for ABAC evaluation.
 
 **Headers:**
 ```
@@ -660,27 +794,66 @@ Authorization: Bearer <access_token>
 **Request:**
 ```json
 {
-  "permission": "lead:delete",
+  "permission": "invoice:approve",
   "context": {
-    "entity_id": "ent_miami_office",
-    "resource_id": "lead_456"  // Optional: specific resource
+    "entity_id": "ent_miami_office"
+  },
+  "resource_attributes": {  // Optional - for ABAC evaluation
+    "type": "invoice",
+    "value": 45000,
+    "status": "pending_approval",
+    "department": "sales",
+    "created_by": "user_456"
   }
 }
 ```
 
-**Response:**
+**Response (Success):**
 ```json
 {
   "allowed": true,
-  "user": {  // User info included for single-call pattern
+  "user": {
     "id": "user_123",
     "email": "user@example.com"
   },
-  "reason": "Permission granted through role 'team_lead' in entity 'ent_miami_office'",
-  "source": {
-    "type": "role",
-    "role_id": "role_team_lead",
-    "entity_id": "ent_miami_office"
+  "reason": "All authorization checks passed",
+  "evaluation_details": {
+    "rbac_check": "passed",
+    "rebac_check": "passed",
+    "conditions_evaluated": [
+      {
+        "condition": "resource.value <= 50000",
+        "result": "passed"
+      },
+      {
+        "condition": "resource.status == pending_approval",
+        "result": "passed"
+      }
+    ]
+  }
+}
+```
+
+**Response (Failure - Condition):**
+```json
+{
+  "allowed": false,
+  "user": {
+    "id": "user_123",
+    "email": "user@example.com"
+  },
+  "reason": "Condition failed: resource.value LESS_THAN_OR_EQUAL 50000",
+  "evaluation_details": {
+    "rbac_check": "passed",
+    "rebac_check": "passed",
+    "conditions_evaluated": [
+      {
+        "condition": "resource.value <= 50000",
+        "result": "failed",
+        "actual_value": 75000,
+        "expected_value": 50000
+      }
+    ]
   }
 }
 ```

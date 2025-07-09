@@ -249,7 +249,83 @@ async def create_lead(
     return {"lead": {...}}
 ```
 
-### Step 3: Implement Permission Checking
+### Step 3: Define Custom Permissions
+
+Before implementing permission checking, you need to define your platform's custom permissions.
+
+#### Creating Custom Permissions
+
+```javascript
+// Define your platform's permissions
+const platformPermissions = [
+  {
+    name: "lead:create",
+    display_name: "Create Leads",
+    description: "Allows creating new lead records",
+    tags: ["sales", "crm"]
+  },
+  {
+    name: "lead:assign",
+    display_name: "Assign Leads",
+    description: "Allows assigning leads to agents",
+    tags: ["sales", "management"]
+  },
+  {
+    name: "report:view_sales",
+    display_name: "View Sales Reports",
+    description: "Allows viewing sales performance reports",
+    tags: ["reporting", "analytics"]
+  }
+]
+
+// Create permissions during platform setup
+async function setupPlatformPermissions() {
+  for (const permission of platformPermissions) {
+    await authService.makeAuthenticatedRequest(
+      `${authService.baseURL}/v1/permissions`,
+      {
+        method: 'POST',
+        body: JSON.stringify(permission)
+      }
+    )
+  }
+}
+```
+
+#### Backend Permission Creation (Python)
+
+```python
+# Define custom permissions for your platform
+async def create_platform_permissions():
+    permissions = [
+        {
+            "name": "invoice:approve",
+            "display_name": "Approve Invoices",
+            "description": "Allows approving invoices for payment",
+            "tags": ["finance", "approval"],
+            "metadata": {
+                "requires_2fa": True,
+                "max_amount": 10000
+            }
+        },
+        {
+            "name": "commission:calculate",
+            "display_name": "Calculate Commissions",
+            "description": "Allows calculating agent commissions",
+            "tags": ["finance", "sales"]
+        }
+    ]
+    
+    for perm_data in permissions:
+        response = await auth_client.post(
+            f"{base_url}/v1/permissions",
+            json=perm_data
+        )
+        if response.status_code != 201:
+            logger.error(f"Failed to create permission: {perm_data['name']}")
+```
+
+### Step 4: Implement Permission Checking
 
 #### Frontend Permission Checking
 

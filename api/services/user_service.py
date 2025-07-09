@@ -15,6 +15,7 @@ from api.models.user_model import UserProfile
 from api.services.auth_service import AuthService
 from api.services.entity_service import EntityService
 from api.services.permission_service import permission_service
+from api.services.email_service import email_service
 from api.config import settings
 
 
@@ -567,12 +568,12 @@ class UserService:
         invited_by: UserModel
     ):
         """Send invitation email to new user"""
-        # TODO: Implement email sending
-        # For now, just log the invitation
-        print(f"📧 Invitation email would be sent to {user.email}")
-        print(f"   Temporary password: {temp_password}")
-        print(f"   Invited to: {entity.name}")
-        print(f"   Invited by: {invited_by.email}")
+        await email_service.send_invitation_email(
+            user=user,
+            temp_password=temp_password,
+            entity=entity,
+            invited_by=invited_by
+        )
     
     @staticmethod
     async def _send_password_reset_email(
@@ -581,8 +582,8 @@ class UserService:
         reset_by: UserModel
     ):
         """Send password reset email"""
-        # TODO: Implement email sending
-        # For now, just log the reset
-        print(f"📧 Password reset email would be sent to {user.email}")
-        print(f"   New temporary password: {temp_password}")
-        print(f"   Reset by: {reset_by.email}")
+        await email_service.send_admin_password_reset_email(
+            user=user,
+            temp_password=temp_password,
+            reset_by=reset_by
+        )

@@ -92,6 +92,21 @@ EntityMembershipModel:
   - entity: Link[EntityModel]
   - role_in_entity: str
   - joined_at: datetime
+
+# Permission - Custom business permissions
+PermissionModel:
+  - id: str
+  - name: str  # e.g., "lead:create", "invoice:approve"
+  - display_name: str
+  - description: str
+  - resource: str  # e.g., "lead", "invoice"
+  - action: str  # e.g., "create", "approve"
+  - scope: Optional[str]  # e.g., "team", "department"
+  - entity_id: Optional[str]  # Scoped to specific entity
+  - is_system: bool  # Built-in vs custom
+  - is_active: bool
+  - tags: List[str]
+  - metadata: dict  # Business rules, conditions
 ```
 
 ## Authentication Flow
@@ -182,7 +197,8 @@ class RoleModel(BaseDocument):
     
     # Permissions this role grants
     permissions: List[str] = Field(default_factory=list)
-    # e.g., ["lead:read", "lead:create", "report:view_team"]
+    # e.g., ["user:read", "lead:create", "report:view_quarterly"]
+    # These are validated against system and custom permissions
     
     # Scoping
     entity: Link[EntityModel]  # Which entity owns this role
@@ -530,6 +546,321 @@ class PermissionService:
 ```
 
 This approach provides a powerful, flexible role system that adapts to any organizational structure while maintaining clean separation of concerns and preventing common pitfalls.
+
+## Hybrid Authorization System (RBAC + ReBAC + ABAC)
+
+outlabsAuth implements a powerful hybrid authorization model that combines three proven access control paradigms:
+
+- **RBAC (Role-Based Access Control)**: Roles define base permissions
+- **ReBAC (Relationship-Based Access Control)**: Entity relationships provide context
+- **ABAC (Attribute-Based Access Control)**: Conditions enable granular, context-aware control
+
+### Permission Architecture
+
+#### 1. Enhanced Permission Model
+```python
+# Represents a single condition for ABAC
+class Condition(BaseModel):
+    # The attribute to check (dot-notation for nested attributes)
+    # e.g., "user.department", "resource.value", "environment.time"
+    attribute: str
+    
+    # The operator for comparison
+    # e.g., "EQUALS", "LESS_THAN", "GREATER_THAN", "IN", "CONTAINS"
+    operator: str
+    
+    # The value to compare against (can be static or dynamic reference)
+    value: Any  # Can be number, string, list, or {"ref": "user.spending_limit"}
+
+class PermissionModel(BaseDocument):
+    # Identity
+    name: str  # e.g., "lead:create", "invoice:approve"
+    display_name: str  # Human-readable name
+    description: str
+    
+    # Structure (auto-derived from name)
+    resource: str  # e.g., "lead", "invoice"
+    action: str  # e.g., "create", "approve"
+    scope: Optional[str]  # e.g., "team", "department"
+    
+    # Ownership
+    entity_id: Optional[str]  # Scoped to specific entity
+    is_system: bool  # Built-in vs custom
+    is_active: bool
+    
+    # ABAC Support - NEW
+    conditions: List[Condition] = Field(default_factory=list)
+    
+    # Metadata
+    tags: List[str]  # For categorization
+    metadata: dict  # Legacy - being phased out in favor of conditions
+```
+
+#### 2. System vs Custom Permissions
+
+**System Permissions** (Built-in, immutable):
+```python
+SYSTEM_PERMISSIONS = {
+    # User management
+    "user:read", "user:create", "user:manage", "user:manage_client",
+    
+    # Entity management
+    "entity:read", "entity:create", "entity:manage", "entity:manage_all",
+    
+    # Role management
+    "role:read", "role:create", "role:manage", "role:assign",
+    
+    # Permission management
+    "permission:read", "permission:create", "permission:manage",
+    
+    # Wildcards
+    "*:manage_all", "*:read_all"
+}
+```
+
+**Custom Permissions** (Platform-specific):
+```python
+# CRM Platform
+"lead:create", "lead:assign", "lead:convert",
+"opportunity:close", "commission:calculate"
+
+# E-commerce Platform
+"product:publish", "order:refund", "discount:create",
+"inventory:manage", "report:view_revenue"
+
+# Healthcare Platform
+"patient:view", "prescription:create", "prescription:approve",
+"appointment:schedule", "billing:submit"
+```
+
+### Permission Creation and Management
+
+#### 1. Creating Conditional Permissions
+```python
+# Platform creates a permission with ABAC conditions
+permission = await PermissionModel.create({
+    "name": "invoice:approve",
+    "display_name": "Approve Invoices",
+    "description": "Allows approving invoices for payment",
+    "tags": ["finance", "accounting"],
+    "conditions": [
+        {
+            "attribute": "resource.value",
+            "operator": "LESS_THAN_OR_EQUAL",
+            "value": 50000
+        },
+        {
+            "attribute": "resource.status",
+            "operator": "EQUALS",
+            "value": "pending_approval"
+        }
+    ]
+})
+
+# Backward compatible - permissions without conditions work as before
+simple_permission = await PermissionModel.create({
+    "name": "lead:read",
+    "display_name": "Read Leads",
+    "description": "View lead information"
+    # No conditions - always granted if user has permission
+})
+```
+
+#### 2. Permission Validation in Roles
+```python
+# When creating/updating roles, permissions are validated
+role = await RoleModel.create({
+    "name": "sales_manager",
+    "permissions": [
+        "user:read",          # System permission
+        "lead:create",        # Custom permission
+        "lead:assign",        # Custom permission
+        "report:view_sales"   # Custom permission
+    ]
+})
+
+# Validation ensures all permissions exist and are active
+```
+
+### Policy Evaluation Engine
+
+The permission system now includes a full policy evaluation engine that handles RBAC, ReBAC, and ABAC checks:
+
+```python
+async def check_permission(
+    user: UserModel,
+    permission: str,
+    entity: EntityModel,
+    resource_attributes: Dict[str, Any] = None
+) -> PermissionCheckResult:
+    """
+    Evaluate permission with full hybrid model support
+    """
+    # 1. RBAC Check - Does user have the permission through roles?
+    user_permissions = await resolve_user_permissions(user, entity)
+    if permission not in user_permissions:
+        return PermissionCheckResult(
+            allowed=False,
+            reason="User lacks required permission",
+            evaluation_details={
+                "rbac_check": "failed",
+                "missing_permission": permission
+            }
+        )
+    
+    # 2. ReBAC Check - Is the entity relationship valid?
+    if not await check_entity_access(user, entity):
+        return PermissionCheckResult(
+            allowed=False,
+            reason="Invalid entity relationship",
+            evaluation_details={
+                "rbac_check": "passed",
+                "rebac_check": "failed"
+            }
+        )
+    
+    # 3. ABAC Check - Evaluate conditions if present
+    permission_model = await PermissionModel.find_one({"name": permission})
+    if permission_model and permission_model.conditions:
+        # Gather all attributes for evaluation
+        context = {
+            "user": await gather_user_attributes(user),
+            "resource": resource_attributes or {},
+            "entity": await gather_entity_attributes(entity),
+            "environment": await gather_environment_attributes()
+        }
+        
+        # Evaluate each condition
+        conditions_results = []
+        for condition in permission_model.conditions:
+            result = await evaluate_condition(condition, context)
+            conditions_results.append({
+                "condition": f"{condition.attribute} {condition.operator} {condition.value}",
+                "result": "passed" if result else "failed"
+            })
+            
+            if not result:
+                return PermissionCheckResult(
+                    allowed=False,
+                    reason=f"Condition failed: {condition.attribute} {condition.operator} {condition.value}",
+                    evaluation_details={
+                        "rbac_check": "passed",
+                        "rebac_check": "passed",
+                        "conditions_evaluated": conditions_results
+                    }
+                )
+    
+    # All checks passed
+    return PermissionCheckResult(
+        allowed=True,
+        reason="All authorization checks passed",
+        evaluation_details={
+            "rbac_check": "passed",
+            "rebac_check": "passed",
+            "conditions_evaluated": conditions_results if permission_model.conditions else []
+        }
+    )
+
+async def evaluate_condition(condition: Condition, context: Dict[str, Any]) -> bool:
+    """
+    Evaluate a single ABAC condition
+    """
+    # Extract the attribute value using dot notation
+    attribute_value = extract_attribute(condition.attribute, context)
+    
+    # Handle dynamic value references
+    compare_value = condition.value
+    if isinstance(compare_value, dict) and "ref" in compare_value:
+        compare_value = extract_attribute(compare_value["ref"], context)
+    
+    # Perform the comparison based on operator
+    return perform_comparison(attribute_value, condition.operator, compare_value)
+```
+
+### Permission Expansion Rules
+
+System permissions support automatic expansion:
+```python
+PERMISSION_HIERARCHY = {
+    "user": {
+        "manage": ["read", "create", "update", "delete", "invite"],
+        "manage_client": ["manage", "assign_roles", "bulk_operations"],
+        "manage_platform": ["manage_client", "cross_client_operations"]
+    },
+    "entity": {
+        "manage": ["read", "create", "update", "delete"],
+        "manage_all": ["manage", "manage_children", "manage_members"]
+    }
+}
+```
+
+**Note**: Custom permissions do NOT automatically expand. If you want `lead:manage` to include other permissions, you must explicitly assign them all.
+
+### Real-World Permission Examples
+
+#### CRM Platform (Diverse Leads)
+```yaml
+Custom Permissions:
+  Sales:
+    - lead:create: "Create new leads"
+    - lead:assign: "Assign leads to agents"
+    - lead:convert: "Convert leads to opportunities"
+    - commission:calculate: "Calculate agent commissions"
+    
+  Reporting:
+    - report:view_sales: "View sales reports"
+    - report:view_commission: "View commission reports"
+    - report:export: "Export reports to CSV/PDF"
+    
+  Management:
+    - branch:override_rules: "Override branch business rules"
+    - agent:manage_quota: "Set agent quotas"
+```
+
+#### Healthcare Platform
+```yaml
+Custom Permissions:
+  Clinical:
+    - patient:view_history: "View full patient history"
+    - prescription:write: "Write new prescriptions"
+    - prescription:approve: "Approve controlled substances"
+    - lab:order: "Order lab tests"
+    
+  Administrative:
+    - appointment:schedule: "Schedule appointments"
+    - billing:submit_claim: "Submit insurance claims"
+    - billing:adjust: "Adjust billing amounts"
+```
+
+### Permission Checking Flow
+
+```python
+# 1. Route Protection
+@router.post("/leads", dependencies=[Depends(require_permission("lead:create"))])
+async def create_lead(data: LeadCreate):
+    # Handler only executes if user has permission
+    
+# 2. Service Layer Check
+async def assign_lead(lead_id: str, agent_id: str, current_user: UserModel):
+    # Check permission in context
+    if not await has_permission(current_user, "lead:assign", entity_id):
+        raise HTTPException(403, "Cannot assign leads")
+    
+# 3. Conditional Logic
+if await has_permission(user, "commission:approve"):
+    # Show approval button
+    commission.status = "pending_approval"
+else:
+    # Auto-approve if no approval required
+    commission.status = "approved"
+```
+
+### Performance Considerations
+
+1. **Permission Caching**: Resolved permissions are cached in Redis with entity-specific keys
+2. **Bulk Validation**: Validate all permissions in a single query when creating/updating roles
+3. **Lazy Loading**: Only load and validate custom permissions when actually checking them
+4. **Index Strategy**: Indexes on `name`, `entity_id`, and `is_active` for fast lookups
 
 ## Security Architecture
 

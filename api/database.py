@@ -11,6 +11,7 @@ from api.models.user_model import UserModel
 from api.models.entity_model import EntityModel, EntityMembershipModel
 from api.models.role_model import RoleModel
 from api.models.refresh_token_model import RefreshTokenModel
+from api.models.permission_model import PermissionModel
 
 # Global database client
 client: AsyncIOMotorClient = None
@@ -37,6 +38,7 @@ async def init_db():
             EntityMembershipModel,
             RoleModel,
             RefreshTokenModel,
+            PermissionModel,
         ]
     )
 

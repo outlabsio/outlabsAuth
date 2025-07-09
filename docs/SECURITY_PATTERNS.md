@@ -99,11 +99,12 @@ Used for actions taken on behalf of a specific user.
 # User creating an entity within their permissions
 @router.post("/v1/entities/")
 @requires_auth  # Validates Bearer token
+@requires_permission("entity:create")  # Validates against custom permissions
 async def create_entity(
     data: EntityCreateSchema,
     current_user: User = Depends(get_current_user)
 ):
-    # Action performed in user's context
+    # Action performed in user's context with verified permissions
     return await entity_service.create_entity(data, current_user)
 ```
 
@@ -157,6 +158,11 @@ def require_permission(permission: str):
         request: Request,
         token: str = Depends(get_token_from_cookie)
     ):
+        # Validate permission exists in the system (custom or system permission)
+        valid_permissions = await permission_service.get_available_permissions()
+        if permission not in [p.name for p in valid_permissions]:
+            raise HTTPException(500, f"Invalid permission configured: {permission}")
+        
         # Single API call that validates token AND checks permission
         response = await auth_client.check_permission_with_token(
             token=token,
@@ -165,7 +171,7 @@ def require_permission(permission: str):
         )
         
         if not response.allowed:
-            raise HTTPException(403, "Permission denied")
+            raise HTTPException(403, f"Permission '{permission}' required")
         
         return response.user  # User data from the same call
     

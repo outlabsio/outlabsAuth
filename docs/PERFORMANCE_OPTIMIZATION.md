@@ -15,57 +15,115 @@ User → Memberships → Entities → Roles → Permissions
 
 For users with many memberships, this can result in N+1 query problems.
 
-### Solution 1: Denormalized Permission Cache
+### Solution 1: Policy Evaluation Cache
 
-#### Redis-Based Permission Cache
+With the hybrid authorization model, we can no longer cache just permission lists. We need to cache policy evaluation results:
+
+#### Policy Result Cache
 
 ```python
 import json
-from typing import Set, Optional
+import hashlib
+from typing import Optional, Dict, Any
 from datetime import timedelta
 
-class PermissionCacheService:
+class PolicyCacheService:
     def __init__(self, redis_client):
         self.redis = redis_client
-        self.cache_ttl = timedelta(minutes=15)  # 15-minute cache
+        self.cache_ttl = timedelta(minutes=5)  # Shorter TTL due to dynamic nature
     
-    async def get_user_permissions(
-        self, 
-        user_id: str, 
-        context: Optional[str] = None
-    ) -> Optional[Set[str]]:
-        """Get cached permissions for user"""
-        cache_key = f"perms:{user_id}"
-        if context:
-            cache_key += f":{context}"
+    def _generate_cache_key(
+        self,
+        user_id: str,
+        permission: str,
+        entity_id: str,
+        resource_attributes: Dict[str, Any]
+    ) -> str:
+        """Generate unique cache key for policy evaluation"""
+        # Create deterministic hash of resource attributes
+        attrs_hash = hashlib.md5(
+            json.dumps(resource_attributes, sort_keys=True).encode()
+        ).hexdigest()
         
-        cached = await self.redis.get(cache_key)
-        if cached:
-            return set(json.loads(cached))
+        return f"policy:{user_id}:{permission}:{entity_id}:{attrs_hash}"
+    
+    async def get_policy_result(
+        self,
+        user_id: str,
+        permission: str,
+        entity_id: str,
+        resource_attributes: Dict[str, Any]
+    ) -> Optional[bool]:
+        """Get cached policy evaluation result"""
+        cache_key = self._generate_cache_key(
+            user_id, permission, entity_id, resource_attributes
+        )
+        
+        result = await self.redis.get(cache_key)
+        if result is not None:
+            return result == "1"
         return None
     
-    async def set_user_permissions(
-        self, 
-        user_id: str, 
-        permissions: Set[str],
-        context: Optional[str] = None
+    async def set_policy_result(
+        self,
+        user_id: str,
+        permission: str,
+        entity_id: str,
+        resource_attributes: Dict[str, Any],
+        allowed: bool
     ):
-        """Cache user permissions"""
-        cache_key = f"perms:{user_id}"
-        if context:
-            cache_key += f":{context}"
+        """Cache policy evaluation result"""
+        cache_key = self._generate_cache_key(
+            user_id, permission, entity_id, resource_attributes
+        )
         
         await self.redis.setex(
             cache_key,
             self.cache_ttl,
-            json.dumps(list(permissions))
+            "1" if allowed else "0"
         )
     
-    async def invalidate_user_permissions(self, user_id: str):
-        """Clear all cached permissions for a user"""
-        pattern = f"perms:{user_id}*"
+    async def invalidate_user_policies(self, user_id: str):
+        """Clear all cached policy results for a user"""
+        pattern = f"policy:{user_id}:*"
         async for key in self.redis.scan_iter(match=pattern):
             await self.redis.delete(key)
+    
+    async def invalidate_permission_policies(self, permission: str):
+        """Clear all cached results for a specific permission"""
+        pattern = f"policy:*:{permission}:*"
+        async for key in self.redis.scan_iter(match=pattern):
+            await self.redis.delete(key)
+```
+
+#### Permission Definition Cache
+
+```python
+class PermissionDefinitionCache:
+    """Cache permission definitions including conditions"""
+    
+    def __init__(self, redis_client):
+        self.redis = redis_client
+        self.cache_ttl = timedelta(hours=1)  # Longer TTL for definitions
+    
+    async def get_permission(self, name: str) -> Optional[Dict[str, Any]]:
+        """Get cached permission definition"""
+        cached = await self.redis.get(f"perm_def:{name}")
+        if cached:
+            return json.loads(cached)
+        return None
+    
+    async def set_permission(self, permission: PermissionModel):
+        """Cache permission definition"""
+        await self.redis.setex(
+            f"perm_def:{permission.name}",
+            self.cache_ttl,
+            json.dumps(permission.dict())
+        )
+    
+    async def invalidate_permission(self, name: str):
+        """Invalidate cached permission definition"""
+        await self.redis.delete(f"perm_def:{name}")
 ```
 
 #### Background Permission Calculator
@@ -142,9 +200,15 @@ async def recalculate_user_permissions(membership_id: str):
         permissions = set()
         for membership in memberships:
             for role in membership['role_data']:
-                permissions.update(role['permissions'])
+                # Validate each permission against custom permissions
+                for perm in role['permissions']:
+                    # Check if it's a system permission or valid custom permission
+                    if await permission_service.is_valid_permission(perm):
+                        permissions.add(perm)
+                    else:
+                        logger.warning(f"Invalid permission '{perm}' in role {role['name']}")
         
-        # Cache results
+        # Cache validated results
         cache_service = PermissionCacheService(redis)
         await cache_service.set_user_permissions(
             str(membership.user.id), 
@@ -412,34 +476,70 @@ class EntityMembershipModel(BaseDocument):
         ]
 ```
 
-### Solution 3: Permission Resolution Service
+### Solution 3: Optimized Policy Evaluation Service
 
 ```python
-class OptimizedPermissionService:
-    def __init__(self, cache_service: PermissionCacheService):
-        self.cache = cache_service
+class OptimizedPolicyService:
+    def __init__(
+        self,
+        policy_cache: PolicyCacheService,
+        permission_cache: PermissionDefinitionCache
+    ):
+        self.policy_cache = policy_cache
+        self.permission_cache = permission_cache
     
     async def check_permission(
         self,
         user_id: str,
         permission: str,
-        context: Optional[EntityModel] = None
-    ) -> bool:
-        """Check if user has specific permission with caching"""
+        entity_id: str,
+        resource_attributes: Dict[str, Any] = None
+    ) -> PermissionCheckResult:
+        """Check permission with policy caching"""
         
+        # Normalize resource attributes
+        resource_attrs = resource_attributes or {}
+        
+        # Check policy result cache first
+        cached_result = await self.policy_cache.get_policy_result(
+            user_id, permission, entity_id, resource_attrs
+        )
+        
+        if cached_result is not None:
+            return PermissionCheckResult(
+                allowed=cached_result,
+                cache_hit=True
+            )
+        
+        # Get permission definition (with caching)
+        perm_def = await self._get_permission_definition(permission)
+        
+        # Perform full policy evaluation
+        result = await self._evaluate_policy(
+            user_id, permission, entity_id, resource_attrs, perm_def
+        )
+        
+        # Cache the result
+        await self.policy_cache.set_policy_result(
+            user_id, permission, entity_id, resource_attrs, result.allowed
+        )
+        
+        return result
+    
+    async def _get_permission_definition(self, permission: str) -> Dict[str, Any]:
+        """Get permission definition with caching"""
         # Try cache first
-        cache_key = f"{user_id}:{context.id if context else 'global'}"
-        permissions = await self.cache.get_user_permissions(user_id, cache_key)
+        cached = await self.permission_cache.get_permission(permission)
+        if cached:
+            return cached
         
-        if permissions is None:
-            # Cache miss - calculate permissions
-            permissions = await self._calculate_permissions(user_id, context)
-            
-            # Cache for next time
-            await self.cache.set_user_permissions(user_id, permissions, cache_key)
+        # Fetch from database
+        perm_model = await PermissionModel.find_one({"name": permission})
+        if perm_model:
+            await self.permission_cache.set_permission(perm_model)
+            return perm_model.dict()
         
-        # Check hierarchical permissions
-        return self._check_hierarchical_permission(permissions, permission)
+        return None
     
     def _check_hierarchical_permission(
         self, 
@@ -452,17 +552,23 @@ class OptimizedPermissionService:
         if required in user_permissions:
             return True
         
-        # Hierarchical matches
-        parts = required.split(':')
-        if len(parts) == 2:
-            resource, action = parts
-            
-            # Check for higher-level permissions
-            if f"{resource}:manage_all" in user_permissions:
-                return True
-            
-            if action == "read" and f"{resource}:manage" in user_permissions:
-                return True
+        # Note: With custom permissions, hierarchical expansion is only
+        # applied to SYSTEM permissions. Custom permissions must be
+        # explicitly granted and don't auto-expand.
+        
+        # Check if this is a system permission
+        if self._is_system_permission(required):
+            # Hierarchical matches for system permissions only
+            parts = required.split(':')
+            if len(parts) == 2:
+                resource, action = parts
+                
+                # System permission hierarchy
+                if f"{resource}:manage_all" in user_permissions:
+                    return True
+                
+                if action == "read" and f"{resource}:manage" in user_permissions:
+                    return True
         
         return False
 ```
@@ -579,6 +685,73 @@ class DatabaseConfig:
         )
 ```
 
+## Cache Invalidation Strategies
+
+### When to Invalidate Policy Cache
+
+With conditional permissions, cache invalidation becomes more complex:
+
+```python
+class CacheInvalidationService:
+    def __init__(self, policy_cache: PolicyCacheService):
+        self.policy_cache = policy_cache
+    
+    async def on_user_role_change(self, user_id: str):
+        """Invalidate all cached policies for a user"""
+        await self.policy_cache.invalidate_user_policies(user_id)
+    
+    async def on_permission_update(self, permission: str):
+        """Invalidate all cached results for updated permission"""
+        await self.policy_cache.invalidate_permission_policies(permission)
+    
+    async def on_user_attribute_change(self, user_id: str, attribute: str):
+        """Invalidate policies that depend on changed attribute"""
+        # Find permissions that use this attribute in conditions
+        permissions = await PermissionModel.find({
+            "conditions.attribute": {"$regex": f"^user.{attribute}"}
+        }).to_list()
+        
+        for perm in permissions:
+            pattern = f"policy:{user_id}:{perm.name}:*"
+            async for key in redis.scan_iter(match=pattern):
+                await redis.delete(key)
+    
+    async def on_entity_change(self, entity_id: str):
+        """Invalidate policies for entity changes"""
+        # Clear all cached policies for this entity
+        pattern = f"policy:*:*:{entity_id}:*"
+        async for key in redis.scan_iter(match=pattern):
+            await redis.delete(key)
+```
+
+### Smart Cache Warming
+
+Pre-compute common policy evaluations:
+
+```python
+async def warm_policy_cache():
+    """Pre-compute common permission checks"""
+    
+    # Get frequently checked permissions
+    frequent_permissions = await get_frequent_permissions()
+    
+    # Get active users
+    active_users = await get_recently_active_users()
+    
+    for user in active_users:
+        for permission in frequent_permissions:
+            # Pre-evaluate with common resource attributes
+            common_scenarios = await get_common_scenarios(permission)
+            
+            for scenario in common_scenarios:
+                result = await policy_service.check_permission(
+                    user.id,
+                    permission,
+                    user.primary_entity_id,
+                    scenario.resource_attributes
+                )
+```
+
 ## Caching Strategy
 
 ### Multi-Layer Cache
@@ -637,6 +810,24 @@ async def warm_cache():
             [e.dict() for e in entities],
             ttl=1800
         )
+    
+    # Cache custom permissions for fast validation
+    custom_permissions = await PermissionModel.find(
+        {"is_active": True, "is_system": False}
+    ).to_list()
+    
+    await cache.set(
+        "permissions:custom:active",
+        [p.name for p in custom_permissions],
+        ttl=3600  # 1 hour cache
+    )
+    
+    # Cache system permissions
+    await cache.set(
+        "permissions:system",
+        list(SYSTEM_PERMISSIONS),
+        ttl=86400  # 24 hour cache
+    )
 ```
 
 ## Monitoring & Metrics
@@ -695,16 +886,62 @@ async def metrics():
 
 ## Best Practices Summary
 
-1. **Cache Aggressively**: Use multi-layer caching for permissions
-2. **Batch Operations**: Aggregate multiple permission checks
-3. **Use Projections**: Only fetch fields you need
-4. **Index Properly**: Create compound indexes for common queries
-5. **Monitor Performance**: Track cache hit rates and query times
-6. **Invalidate Smartly**: Clear caches only when necessary
-7. **Pre-calculate**: Use background jobs for expensive calculations
-8. **Paginate**: Always paginate large result sets
-9. **Connection Pool**: Tune database connection pool settings
-10. **Profile Queries**: Use MongoDB profiler to identify slow queries
+### General Optimization
+1. **Cache Aggressively**: Cache policy evaluation results, not just permissions
+2. **Batch Operations**: Aggregate multiple permission checks when possible
+3. **Use Projections**: Only fetch fields you need from database
+4. **Index Properly**: Create indexes on condition attributes
+5. **Monitor Performance**: Track cache hit rates and policy evaluation times
+
+### Hybrid Model Specific
+6. **Optimize Conditions**: Keep conditions simple and fast to evaluate
+7. **Limit Condition Depth**: Avoid deeply nested attribute paths
+8. **Cache Permission Definitions**: Permission structures change infrequently
+9. **Short TTLs for Policies**: Resource attributes change frequently
+10. **Pre-evaluate Common Cases**: Warm cache with typical scenarios
+
+### Condition Design Tips
+```python
+# GOOD: Simple, direct comparisons
+{
+    "attribute": "resource.value",
+    "operator": "LESS_THAN",
+    "value": 50000
+}
+
+# AVOID: Complex nested paths
+{
+    "attribute": "resource.metadata.custom_fields.approval_chain[0].limit",
+    "operator": "GREATER_THAN",
+    "value": 1000
+}
+
+# GOOD: Use indexed attributes
+{
+    "attribute": "user.department",  # Indexed field
+    "operator": "EQUALS",
+    "value": "finance"
+}
+```
+
+### Performance Monitoring
+```python
+# Track policy evaluation metrics
+policy_evaluation_histogram = Histogram(
+    'policy_evaluation_duration_seconds',
+    'Time spent evaluating policies',
+    ['permission', 'cached', 'conditions_count']
+)
+
+@policy_evaluation_histogram.time()
+async def evaluate_policy_with_metrics(
+    permission: str,
+    conditions_count: int,
+    cached: bool
+):
+    # Policy evaluation logic
+    pass
+```
 
 ## Choosing Background Processing
 

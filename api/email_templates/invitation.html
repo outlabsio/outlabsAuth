@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block title %}You've been invited to {{ entity_name }}{% endblock %}
+
+{% block content %}
+<h2>Hello {{ first_name }}!</h2>
+
+<p>{{ inviter_name }} has invited you to join <strong>{{ entity_name }}</strong> on {{ app_name }}.</p>
+
+<p>A temporary account has been created for you. Please use the following credentials to log in:</p>
+
+<div class="alert">
+    <p><strong>Email:</strong> {{ user.email }}</p>
+    <p><strong>Temporary Password:</strong> <span class="code">{{ temp_password }}</span></p>
+</div>
+
+<p><strong>Important:</strong> You will be required to change this password upon your first login.</p>
+
+<a href="{{ app_url }}/login" class="button">Accept Invitation & Log In</a>
+
+<p>This invitation and temporary password will expire in 7 days. If you need a new invitation, please contact {{ inviter_name }}.</p>
+{% endblock %}

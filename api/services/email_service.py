@@ -38,11 +38,10 @@ class EmailService:
         
         # Email queue for background processing
         self.email_queue: asyncio.Queue = asyncio.Queue()
+        self._worker_task = None
         
-        # Start background worker if SMTP is configured
         if self._is_smtp_configured():
-            asyncio.create_task(self._email_worker())
-            logger.info("Email service initialized with background worker")
+            logger.info("Email service initialized with SMTP configuration")
         else:
             logger.warning("SMTP not configured, emails will be logged only")
     
@@ -55,14 +54,22 @@ class EmailService:
             settings.SMTP_PASSWORD
         )
     
+    async def start_worker(self):
+        """Start the background email worker"""
+        if self._worker_task is None:
+            self._worker_task = asyncio.create_task(self._email_worker())
+            logger.info("Email background worker started")
+    
     async def _email_worker(self):
         """Background worker to process email queue"""
         logger.info("Email worker started")
+        print("📧 Email worker started and ready to process emails")
         
         while True:
             try:
                 # Get email from queue (blocks until available)
                 email_data = await self.email_queue.get()
+                print(f"📧 Processing email to: {email_data['to_email']}")
                 
                 # Send email
                 await self._send_email_async(
@@ -77,6 +84,7 @@ class EmailService:
                 
             except Exception as e:
                 logger.error(f"Error in email worker: {e}")
+                print(f"❌ Error in email worker: {e}")
                 # Continue processing other emails
     
     async def _send_email_async(
@@ -118,6 +126,11 @@ class EmailService:
             logger.info(f"   To: {to_email}")
             logger.info(f"   Subject: {subject}")
             logger.info(f"   Body preview: {text_body[:100] if text_body else html_body[:100]}...")
+            # Also print to stdout for Docker logs
+            print(f"📧 Email (not sent - SMTP not configured):")
+            print(f"   To: {to_email}")
+            print(f"   Subject: {subject}")
+            print(f"   Body preview: {text_body[:100] if text_body else html_body[:100]}...")
             return
         
         # Create message
@@ -201,6 +214,7 @@ class EmailService:
             # Queue for background processing
             await self.email_queue.put(email_data)
             logger.info(f"Email queued for {to_email} with subject: {subject}")
+            print(f"📧 Email queued for {to_email} with subject: {subject}")
     
     # System email methods
     
@@ -249,11 +263,12 @@ class EmailService:
         reset_token: str
     ):
         """Send password reset email"""
+        app_url = settings.APP_URL if hasattr(settings, 'APP_URL') else 'http://localhost:8030'
         context = {
             'user': user,
             'reset_token': reset_token,
             'first_name': user.profile.first_name if user.profile else 'User',
-            'reset_url': f"{context['app_url']}/reset-password?token={reset_token}"
+            'reset_url': f"{app_url}/reset-password?token={reset_token}"
         }
         
         await self.send_email(
@@ -284,11 +299,12 @@ class EmailService:
         verification_token: str
     ):
         """Send email verification"""
+        app_url = settings.APP_URL if hasattr(settings, 'APP_URL') else 'http://localhost:8030'
         context = {
             'user': user,
             'verification_token': verification_token,
             'first_name': user.profile.first_name if user.profile else 'User',
-            'verify_url': f"{context['app_url']}/verify-email?token={verification_token}"
+            'verify_url': f"{app_url}/verify-email?token={verification_token}"
         }
         
         await self.send_email(

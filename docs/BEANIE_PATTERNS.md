@@ -295,8 +295,8 @@ class EntityModel(BaseDocument):
     # Role assignments
     roles: List[Link["RoleModel"]] = Field(default_factory=list)
     
-    # Direct permissions (if not using permission links)
-    direct_permissions: List[str] = Field(default_factory=list)
+    # Note: With custom permissions, we now validate permission strings
+    # against the PermissionModel collection rather than storing arbitrary strings
 ```
 
 ### 2. EntityMembership with Links
@@ -335,14 +335,19 @@ async def get_user_permissions(user_id: str) -> Set[str]:
     # Aggregate permissions
     permissions = set()
     for entity in entities:
-        if entity.direct_permissions:
-            permissions.update(entity.direct_permissions)
         if entity.roles:
             for role in entity.roles:
-                # Assume role.permissions is already populated
+                # Role permissions are now validated against PermissionModel
+                # Only valid system and custom permissions are included
                 permissions.update(role.permissions)
     
-    return permissions
+    # Validate permissions are still active (custom permissions can be deactivated)
+    active_permissions = await PermissionModel.find({
+        "name": {"$in": list(permissions)},
+        "is_active": True
+    }).to_list()
+    
+    return {p.name for p in active_permissions}
 ```
 
 ## Best Practices Summary

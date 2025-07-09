@@ -105,6 +105,13 @@ routes/ → services/ → models/
 - **Services**: Business logic, permission checks, database operations
 - **Models**: Beanie ODM documents with type safety
 
+### Email Service
+- **Non-blocking**: Uses asyncio.Queue for background processing
+- **Templates**: Jinja2 templates in `api/email_templates/`
+- **Graceful degradation**: Logs emails when SMTP not configured
+- **System emails**: Welcome, invitations, password reset, etc.
+- **Background worker**: Processes emails without blocking main thread
+
 ### Authentication Flow
 1. Login creates JWT access token (15 min) and refresh token (30 days)
 2. Refresh tokens support multi-device sessions

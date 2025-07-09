@@ -19,6 +19,7 @@ from api.schemas.auth_schema import (
     RegisterRequest
 )
 from api.services.auth_service import AuthService
+from api.services.email_service import email_service
 from api.models import UserModel
 from api.utils.jwt_utils import decode_token
 from api.config import settings
@@ -101,6 +102,9 @@ async def register(request: RegisterRequest):
         }
     )
     await user.save()
+    
+    # Send welcome email
+    await email_service.send_welcome_email(user)
     
     return UserInfoResponse(
         id=str(user.id),

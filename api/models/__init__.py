@@ -11,6 +11,7 @@ from api.models.entity_model import (
 )
 from api.models.role_model import RoleModel
 from api.models.refresh_token_model import RefreshTokenModel
+from api.models.permission_model import PermissionModel
 
 __all__ = [
     "BaseDocument",
@@ -22,4 +23,5 @@ __all__ = [
     "EntityType",
     "RoleModel",
     "RefreshTokenModel",
+    "PermissionModel",
 ]

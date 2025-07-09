@@ -20,6 +20,7 @@ from api.utils.jwt_utils import (
     create_email_verification_token
 )
 from api.config import settings
+from api.services.email_service import email_service
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -287,7 +288,15 @@ class AuthService:
         if not user:
             return None
         
-        return create_password_reset_token(str(user.id))
+        reset_token = create_password_reset_token(str(user.id))
+        
+        # Send password reset email
+        await email_service.send_password_reset_email(
+            user=user,
+            reset_token=reset_token
+        )
+        
+        return reset_token
     
     @staticmethod
     async def reset_password(token: str, new_password: str) -> bool:

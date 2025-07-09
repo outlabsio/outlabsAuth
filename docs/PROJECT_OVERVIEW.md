@@ -92,8 +92,11 @@ async function checkUserAccess(resource) {
 
 ### 3. Granular Permissions
 - Resource-based permissions (user:create, lead:delete)
-- Hierarchical permission inheritance
+- **Custom permissions**: Platforms can define their own permissions
+- System permissions for core operations
+- Hierarchical permission inheritance (for system permissions)
 - Context-aware permission checking
+- Permission validation and management APIs
 
 ### 4. Enterprise Features
 - SSO/SAML support (future)

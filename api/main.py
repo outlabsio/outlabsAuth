@@ -8,6 +8,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from api.config import settings
 from api.database import init_db, close_db
+from api.services.email_service import email_service
 
 
 @asynccontextmanager
@@ -17,6 +18,10 @@ async def lifespan(app: FastAPI):
     try:
         await init_db()
         print("Database connected")
+        
+        # Start email worker
+        await email_service.start_worker()
+        print("Email service started")
     except Exception as e:
         print(f"Warning: Database connection failed: {e}")
         print("Running in limited mode without database")
@@ -82,7 +87,7 @@ async def root():
 
 
 # Import and include routers
-from api.routes import test_routes, auth_routes, entity_routes, role_routes, user_routes
+from api.routes import test_routes, auth_routes, entity_routes, role_routes, user_routes, permission_routes
 
 # Test routes (remove in production)
 app.include_router(test_routes.router, prefix="/v1/test", tags=["Testing"])
@@ -98,3 +103,6 @@ app.include_router(role_routes.router, prefix="/v1/roles", tags=["Roles"])
 
 # User routes
 app.include_router(user_routes.router, prefix="/v1/users", tags=["Users"])
+
+# Permission routes
+app.include_router(permission_routes.router, prefix="/v1/permissions", tags=["Permissions"])
