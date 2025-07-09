@@ -8,9 +8,23 @@ Development: http://localhost:8030
 
 ## Authentication
 
-All authenticated endpoints require a Bearer token:
+### Web Clients
+Authentication is handled via HttpOnly cookies set by the server. Include CSRF token for state-changing requests:
+```
+X-CSRF-Token: <csrf_token>
+```
+
+### Mobile/Native Clients
+Include Bearer token in Authorization header:
 ```
 Authorization: Bearer <access_token>
+X-Client-Type: mobile
+```
+
+### API Key Authentication
+For server-to-server calls, use API key:
+```
+X-API-Key: plat_diverse_leads_sk_live_xyz123
 ```
 
 ## API Endpoints
@@ -29,13 +43,9 @@ Authenticate a user and receive tokens.
 }
 ```
 
-**Response:**
+**Response (Web Clients):**
 ```json
 {
-  "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
-  "refresh_token": "f47c4d3b-1a2e-4e3d-9f6a...",
-  "token_type": "bearer",
-  "expires_in": 900,
   "user": {
     "id": "user_123",
     "email": "user@example.com",
@@ -51,24 +61,72 @@ Authenticate a user and receive tokens.
         "role_in_entity": "member"
       }
     ]
+  },
+  "csrf_token": "f47c4d3b-1a2e-4e3d-9f6a...",
+  "expires_in": 900
+}
+
+// Note: Access and refresh tokens are set as HttpOnly cookies
+```
+
+**Response (Mobile Clients):**
+```json
+{
+  "user": {
+    "id": "user_123",
+    "email": "user@example.com",
+    "profile": {
+      "first_name": "Maria",
+      "last_name": "Garcia"
+    },
+    "entities": [
+      {
+        "id": "ent_miami_office",
+        "name": "Miami Office",
+        "entity_type": "branch",
+        "role_in_entity": "member"
+      }
+    ]
+  },
+  "tokens": {
+    "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+    "refresh_token": "f47c4d3b-1a2e-4e3d-9f6a...",
+    "token_type": "bearer",
+    "expires_in": 900
   }
 }
 ```
 
 #### POST /v1/auth/refresh
-Refresh an access token using a refresh token.
+Refresh an access token using a refresh token. Implements token rotation.
 
-**Request:**
+**Request (Mobile):**
 ```json
 {
   "refresh_token": "f47c4d3b-1a2e-4e3d-9f6a..."
 }
 ```
 
-**Response:**
+**Request (Web):**
+```
+// Refresh token sent automatically via cookie
+```
+
+**Response (Web):**
+```json
+{
+  "csrf_token": "new_csrf_token_if_needed",
+  "expires_in": 900
+}
+
+// Note: New tokens are set as HttpOnly cookies
+```
+
+**Response (Mobile):**
 ```json
 {
   "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+  "refresh_token": "new_f47c4d3b-1a2e...",  // New refresh token (rotation)
   "token_type": "bearer",
   "expires_in": 900
 }
@@ -251,7 +309,7 @@ Accept an invitation and create user account.
 }
 ```
 
-**Response:**
+**Response (Web):**
 ```json
 {
   "user": {
@@ -266,8 +324,33 @@ Accept an invitation and create user account.
     "entity_id": "ent_miami_office",
     "roles": ["agent"]
   },
-  "access_token": "eyJ...",  // If not using cookies
-  "refresh_token": "f47c..."
+  "csrf_token": "abc123..."
+}
+
+// Tokens set as HttpOnly cookies
+```
+
+**Response (Mobile):**
+```json
+{
+  "user": {
+    "id": "user_890",
+    "email": "newuser@example.com",
+    "profile": {
+      "first_name": "Jane",
+      "last_name": "Smith"
+    }
+  },
+  "membership": {
+    "entity_id": "ent_miami_office",
+    "roles": ["agent"]
+  },
+  "tokens": {
+    "access_token": "eyJ...",
+    "refresh_token": "f47c...",
+    "token_type": "bearer",
+    "expires_in": 900
+  }
 }
 ```
 
@@ -658,12 +741,30 @@ All errors follow a consistent format:
 - `VALIDATION_ERROR`: Request validation failed
 - `RATE_LIMIT_EXCEEDED`: Too many requests
 
+## Security Headers
+
+### Required Headers for State-Changing Requests (Web)
+```
+X-CSRF-Token: <csrf_token_from_login>
+```
+
+### Security Response Headers
+All responses include:
+```
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+X-XSS-Protection: 1; mode=block
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+Content-Security-Policy: default-src 'self'
+```
+
 ## Rate Limiting
 
-API requests are rate limited based on the platform:
+API requests are rate limited based on the authentication method:
 - Authentication endpoints: 5 requests per minute per IP
-- Read endpoints: 1000 requests per minute per platform
-- Write endpoints: 100 requests per minute per platform
+- Bearer token (user context): 1000 requests per minute
+- API key (platform context): 10000 requests per minute
+- Unauthenticated: 100 requests per minute per IP
 
 Rate limit headers:
 ```

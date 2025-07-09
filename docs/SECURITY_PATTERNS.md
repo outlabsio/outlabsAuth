@@ -226,7 +226,102 @@ class CSRFProtectedClient {
 }
 ```
 
-### 5. Session Management
+### 5. Refresh Token Rotation
+
+**Implementation for Enhanced Security:**
+
+```python
+import secrets
+from datetime import datetime, timedelta
+
+@router.post("/v1/auth/refresh")
+async def refresh_token(
+    request: Request,
+    response: Response,
+    refresh_token: Optional[str] = Cookie(None),
+    mobile_request: Optional[RefreshTokenRequest] = None,
+    client_type: str = Header(None, alias="X-Client-Type")
+):
+    # Determine token source
+    if client_type == "mobile" and mobile_request:
+        token_to_validate = mobile_request.refresh_token
+    elif refresh_token:
+        token_to_validate = refresh_token
+    else:
+        raise HTTPException(401, "No refresh token provided")
+    
+    # Validate and get token data
+    token_data = await validate_refresh_token(token_to_validate)
+    if not token_data:
+        raise HTTPException(401, "Invalid refresh token")
+    
+    # CRITICAL: Invalidate old refresh token (one-time use)
+    await redis.delete(f"refresh_token:{token_to_validate}")
+    
+    # Check if token was already used (replay attack)
+    if await redis.get(f"used_token:{token_to_validate}"):
+        # Token reuse detected - invalidate all user tokens
+        await invalidate_all_user_tokens(token_data.user_id)
+        raise HTTPException(401, "Token reuse detected - all sessions terminated")
+    
+    # Mark token as used
+    await redis.setex(f"used_token:{token_to_validate}", 86400, "1")  # 24h
+    
+    # Generate new token pair
+    new_access = create_access_token(token_data.user_id)
+    new_refresh = create_refresh_token(token_data.user_id)
+    
+    # Store new refresh token
+    await redis.setex(
+        f"refresh_token:{new_refresh}",
+        timedelta(days=30).total_seconds(),
+        json.dumps({
+            "user_id": token_data.user_id,
+            "created_at": datetime.utcnow().isoformat(),
+            "device_id": token_data.device_id  # Track device
+        })
+    )
+    
+    # Return based on client type
+    if client_type == "mobile":
+        return {
+            "access_token": new_access,
+            "refresh_token": new_refresh,
+            "token_type": "bearer",
+            "expires_in": 900
+        }
+    else:
+        # Web client - set cookies
+        response.set_cookie(
+            key="access_token",
+            value=new_access,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=900
+        )
+        response.set_cookie(
+            key="refresh_token",
+            value=new_refresh,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=2592000
+        )
+        
+        # Return new CSRF token if needed
+        csrf_token = request.session.get("csrf_token")
+        if not csrf_token:
+            csrf_token = secrets.token_urlsafe(32)
+            await redis.setex(f"csrf:{token_data.user_id}", 3600, csrf_token)
+        
+        return {
+            "csrf_token": csrf_token,
+            "expires_in": 900
+        }
+```
+
+### 6. Session Management
 
 **Secure Session Configuration:**
 ```python
@@ -358,6 +453,7 @@ async def list_entities(api_key: str = Depends(validate_api_key)):
 - [ ] Use short expiration for access tokens (15 min)
 - [ ] Store sensitive data server-side, not in tokens
 - [ ] Implement token revocation lists for logout
+- [ ] Implement per-device session tracking and revocation (Future Phase)
 
 ### Infrastructure
 - [ ] Use Redis for session/cache with TLS
@@ -366,25 +462,144 @@ async def list_entities(api_key: str = Depends(validate_api_key)):
 - [ ] Use environment variables for secrets
 - [ ] Regular security dependency updates
 
+## Client-Specific Authentication Patterns
+
+### Detecting Client Type
+
+```python
+from enum import Enum
+from fastapi import Header, Request
+from typing import Optional
+
+class ClientType(str, Enum):
+    WEB = "web"
+    MOBILE = "mobile"
+    API = "api"
+
+@app.middleware("http")
+async def detect_client_middleware(request: Request, call_next):
+    # Check explicit header first
+    client_type = request.headers.get("X-Client-Type")
+    
+    if not client_type:
+        # Check for API key
+        if "X-API-Key" in request.headers:
+            client_type = ClientType.API
+        # Check User-Agent
+        elif user_agent := request.headers.get("User-Agent", ""):
+            mobile_keywords = ["iOS", "Android", "Mobile", "Flutter"]
+            if any(keyword in user_agent for keyword in mobile_keywords):
+                client_type = ClientType.MOBILE
+            else:
+                client_type = ClientType.WEB
+        else:
+            client_type = ClientType.WEB
+    
+    request.state.client_type = client_type
+    return await call_next(request)
+```
+
+### Unified Authentication Handler
+
+```python
+class AuthService:
+    async def authenticate_request(
+        self,
+        request: Request,
+        authorization: Optional[str] = Header(None),
+        access_token: Optional[str] = Cookie(None),
+        api_key: Optional[str] = Header(None, alias="X-API-Key")
+    ) -> AuthContext:
+        client_type = request.state.client_type
+        
+        if client_type == ClientType.API and api_key:
+            # Platform authentication
+            platform = await validate_api_key(api_key)
+            return AuthContext(type="platform", platform=platform)
+        
+        elif client_type == ClientType.MOBILE and authorization:
+            # Mobile bearer token
+            token = authorization.replace("Bearer ", "")
+            user = await validate_access_token(token)
+            return AuthContext(type="user", user=user)
+        
+        elif client_type == ClientType.WEB and access_token:
+            # Web cookie authentication
+            user = await validate_access_token(access_token)
+            # Also validate CSRF for state-changing requests
+            if request.method in ["POST", "PUT", "DELETE", "PATCH"]:
+                csrf_token = request.headers.get("X-CSRF-Token")
+                if not await validate_csrf_token(user.id, csrf_token):
+                    raise HTTPException(403, "Invalid CSRF token")
+            return AuthContext(type="user", user=user)
+        
+        raise HTTPException(401, "Authentication required")
+```
+
 ## Migration Guide: localStorage to HttpOnly Cookies
 
 For existing implementations using localStorage:
 
 1. **Backend Changes:**
-   - Modify login endpoint to set HttpOnly cookies
-   - Update middleware to read from cookies instead of Authorization header
-   - Add CSRF token generation and validation
+   - Modify login endpoint to detect client type
+   - Support both cookie and token-in-body responses
+   - Add CSRF token generation for web clients
+   - Update middleware to handle multiple auth methods
 
-2. **Frontend Changes:**
+2. **Frontend Changes (Web):**
    - Remove all localStorage token handling
    - Add `credentials: 'include'` to all fetch requests
-   - Implement CSRF token management
+   - Store CSRF token in memory (not localStorage)
    - Update error handling for cookie-based auth
 
-3. **Transition Period:**
-   - Support both patterns temporarily
-   - Log which method each request uses
-   - Gradually migrate all clients
-   - Remove localStorage support after migration
+3. **Mobile App Updates:**
+   - Add `X-Client-Type: mobile` header
+   - Implement secure token storage using platform APIs
+   - Handle refresh token rotation
+   - Implement biometric authentication
 
-This approach provides defense-in-depth security while maintaining a smooth developer experience.
+4. **Transition Period:**
+   ```python
+   # Support both patterns temporarily
+   @router.post("/v1/auth/login")
+   async def login(
+       credentials: LoginSchema,
+       response: Response,
+       request: Request,
+       legacy_mode: bool = Query(False)  # Temporary flag
+   ):
+       # Authenticate user
+       user = await authenticate_user(credentials)
+       
+       if legacy_mode or request.state.client_type == ClientType.MOBILE:
+           # Old pattern - tokens in response
+           return {
+               "access_token": create_access_token(user.id),
+               "refresh_token": create_refresh_token(user.id),
+               "user": user.dict()
+           }
+       else:
+           # New pattern - HttpOnly cookies
+           # Set cookies and return user + CSRF
+           ...
+   ```
+
+5. **Monitoring Migration:**
+   ```python
+   # Track authentication methods
+   auth_method_counter = Counter(
+       'auth_method_used',
+       'Authentication method used by clients',
+       ['method']
+   )
+   
+   # In authentication middleware
+   if legacy_mode:
+       auth_method_counter.labels(method='legacy').inc()
+   elif client_type == ClientType.WEB:
+       auth_method_counter.labels(method='cookie').inc()
+   elif client_type == ClientType.MOBILE:
+       auth_method_counter.labels(method='bearer').inc()
+   ```
+
+This approach provides defense-in-depth security while maintaining compatibility across all client types.

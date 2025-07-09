@@ -643,6 +643,20 @@ MongoDB Instance
 Redis Instance
 ```
 
+#### Future: SessionManagementModel (for Multi-Device Control)
+
+To support future requirements like per-device logout, a session model will be introduced. This will not require changes to the core authentication flow but will augment it.
+
+```python
+class SessionManagementModel(BaseDocument):
+    user: Link[UserModel]
+    refresh_token_family: str  # A unique ID linking all rotated refresh tokens for one session
+    device_info: str          # User-Agent, etc.
+    ip_address: str
+    last_active: datetime
+    created_at: datetime
+```
+
 ## Monitoring & Observability
 
 ### 1. Metrics
