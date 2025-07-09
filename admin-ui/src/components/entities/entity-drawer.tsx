@@ -33,6 +33,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Entity,
   EntityClass,
@@ -116,6 +117,8 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
   const queryClient = useQueryClient();
   const isEditMode = mode === "edit";
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [hasChildren, setHasChildren] = useState(false);
+  const [enableCascade, setEnableCascade] = useState(false);
   const [selectedClass, setSelectedClass] = useState<EntityClass>(EntityClass.STRUCTURAL);
 
   // Fetch all entities for parent selection
@@ -173,7 +176,8 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
     mutationFn: async () => {
       if (!entity) throw new Error("No entity to delete");
 
-      const response = await authenticatedFetch(`/v1/entities/${entity.id}`, {
+      const url = `/v1/entities/${entity.id}${enableCascade ? '?cascade=true' : ''}`;
+      const response = await authenticatedFetch(url, {
         method: "DELETE",
       });
 
@@ -492,7 +496,17 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
 
                   <Button
                     variant="destructive"
-                    onClick={() => setShowDeleteDialog(true)}
+                    onClick={async () => {
+                      // Check if entity has children
+                      if (entity) {
+                        const response = await authenticatedFetch(`/v1/entities/?parent_entity_id=${entity.id}`);
+                        if (response.ok) {
+                          const data = await response.json();
+                          setHasChildren(data.total > 0);
+                        }
+                      }
+                      setShowDeleteDialog(true);
+                    }}
                     className="w-full"
                   >
                     <Trash2 className="mr-2 h-4 w-4" />
@@ -530,11 +544,16 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
       </DrawerContent>
 
       {/* Delete Confirmation Dialog */}
-      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+      <AlertDialog open={showDeleteDialog} onOpenChange={(open) => {
+        setShowDeleteDialog(open);
+        if (!open) {
+          setEnableCascade(false); // Reset cascade state when dialog closes
+        }
+      }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-            <AlertDialogDescription className="space-y-2">
+            <AlertDialogDescription className="space-y-3">
               <p>
                 This action cannot be undone. This will permanently delete the entity
                 <span className="font-semibold"> {entity?.name}</span> and remove all
@@ -543,11 +562,45 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
               <ul className="list-disc list-inside space-y-1 text-sm">
                 <li>All user memberships in this entity</li>
                 <li>All permissions assigned to this entity</li>
-                <li>All child entities (if any)</li>
+                {hasChildren && <li className="text-destructive font-semibold">All child entities and their data</li>}
               </ul>
-              <p className="font-semibold text-destructive">
-                This is a destructive action that cannot be reversed.
-              </p>
+              
+              {hasChildren && (
+                <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 space-y-3">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="h-5 w-5 text-destructive mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="font-semibold text-destructive">
+                        Warning: This entity has child entities!
+                      </p>
+                      <p className="text-sm">
+                        Deleting this entity will require cascading deletion of all its children.
+                        This operation cannot be undone.
+                      </p>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center space-x-2">
+                    <Checkbox 
+                      id="cascade-delete" 
+                      checked={enableCascade}
+                      onCheckedChange={(checked) => setEnableCascade(checked as boolean)}
+                    />
+                    <label
+                      htmlFor="cascade-delete"
+                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                    >
+                      I understand and want to delete all child entities
+                    </label>
+                  </div>
+                </div>
+              )}
+              
+              {!hasChildren && (
+                <p className="font-semibold text-destructive">
+                  This is a destructive action that cannot be reversed.
+                </p>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -555,7 +608,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
             <AlertDialogAction
               onClick={() => deleteMutation.mutate()}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              disabled={deleteMutation.isPending}
+              disabled={deleteMutation.isPending || (hasChildren && !enableCascade)}
             >
               {deleteMutation.isPending ? (
                 <>
