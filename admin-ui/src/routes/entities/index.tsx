@@ -59,12 +59,10 @@ async function fetchEntities(parentId?: string, includeArchived: boolean = false
   if (params.toString()) {
     url += `?${params.toString()}`;
   }
+  
   const response = await authenticatedFetch(url);
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to fetch entities");
-  }
   const data = await response.json();
+  
   // API returns paginated response, extract items array
   if (data && Array.isArray(data.items)) {
     return data.items;
@@ -75,10 +73,6 @@ async function fetchEntities(parentId?: string, includeArchived: boolean = false
 
 async function fetchEntityPath(entityId: string): Promise<Entity[]> {
   const response = await authenticatedFetch(`/v1/entities/${entityId}/path`);
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to fetch entity path");
-  }
   return response.json();
 }
 
@@ -202,7 +196,6 @@ function EntitiesContent({
     queryFn: async () => {
       if (!currentEntityId) return null;
       const response = await authenticatedFetch(`/v1/entities/${currentEntityId}`);
-      if (!response.ok) throw new Error("Failed to fetch entity");
       return response.json();
     },
     enabled: !!currentEntityId,

@@ -83,10 +83,6 @@ const PERMISSION_HIERARCHY: Record<string, string[]> = {
 
 async function fetchAvailablePermissions(): Promise<AvailablePermissionsResponse> {
   const response = await authenticatedFetch("/v1/permissions/available");
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to fetch permissions");
-  }
   return response.json();
 }
 
@@ -105,11 +101,6 @@ async function createRole(data: {
     },
     body: JSON.stringify(data),
   });
-  
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to create role");
-  }
   
   return response.json();
 }

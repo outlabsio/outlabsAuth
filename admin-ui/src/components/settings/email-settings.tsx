@@ -28,41 +28,28 @@ interface CurrentUser {
 // API functions
 async function fetchEmailSettings(): Promise<EmailSettings> {
   const response = await authenticatedFetch("/v1/settings/email");
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to fetch email settings");
-  }
   return response.json();
 }
 
 async function updateEmailSettings(settings: EmailSettings): Promise<void> {
-  const response = await authenticatedFetch("/v1/settings/email", {
+  await authenticatedFetch("/v1/settings/email", {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(settings),
   });
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to update email settings");
-  }
 }
 
 async function sendTestEmail(): Promise<{ message: string }> {
   const response = await authenticatedFetch("/v1/settings/email/test", {
     method: "POST",
   });
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to send test email");
-  }
   return response.json();
 }
 
 async function fetchCurrentUser(): Promise<CurrentUser> {
   const response = await authenticatedFetch("/v1/auth/me");
-  if (!response.ok) throw new Error("Failed to fetch user info");
   return response.json();
 }
 
@@ -88,8 +75,9 @@ export function EmailSettings() {
       queryClient.invalidateQueries({ queryKey: ["emailSettings"] });
       toast.success("Email settings updated successfully!");
     },
-    onError: (error: Error) => {
-      toast.error(`Failed to update settings: ${error.message}`);
+    onError: (error: any) => {
+      const message = error.detail || error.message || "Failed to update settings";
+      toast.error(message);
     },
   });
 
@@ -99,8 +87,9 @@ export function EmailSettings() {
     onSuccess: (data) => {
       toast.success(data.message || "Test email sent successfully!");
     },
-    onError: (error: Error) => {
-      toast.error(error.message || "Failed to send test email");
+    onError: (error: any) => {
+      const message = error.detail || error.message || "Failed to send test email";
+      toast.error(message);
     },
   });
 

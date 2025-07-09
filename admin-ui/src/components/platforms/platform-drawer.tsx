@@ -62,11 +62,6 @@ async function createPlatform(data: {
     body: JSON.stringify(data),
   });
   
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to create platform");
-  }
-  
   return response.json();
 }
 
@@ -83,11 +78,6 @@ async function updatePlatform(id: string, data: {
     },
     body: JSON.stringify(data),
   });
-  
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to update platform");
-  }
   
   return response.json();
 }
@@ -130,11 +120,6 @@ export function PlatformDrawer({ open, onOpenChange, mode, platformId, platformD
       const response = await authenticatedFetch(`/v1/platforms/${platformId}`, {
         method: "DELETE",
       });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || "Failed to delete platform");
-      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["platforms"] });

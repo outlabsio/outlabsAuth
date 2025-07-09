@@ -79,19 +79,11 @@ interface PermissionsResponse {
 
 async function fetchPermissions(): Promise<PermissionsResponse> {
   const response = await authenticatedFetch("/v1/permissions/available");
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to fetch permissions");
-  }
   return response.json();
 }
 
 async function fetchPlatforms(): Promise<Platform[]> {
   const response = await authenticatedFetch("/v1/platforms/");
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to fetch platforms");
-  }
   return response.json();
 }
 

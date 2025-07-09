@@ -59,10 +59,6 @@ interface RolesResponse {
 
 async function fetchRoles(): Promise<RolesResponse> {
   const response = await authenticatedFetch("/v1/roles/available");
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to fetch roles");
-  }
   return response.json();
 }
 

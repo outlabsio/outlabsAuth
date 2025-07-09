@@ -111,19 +111,11 @@ const PERMISSION_HIERARCHY: Record<string, string[]> = {
 
 async function fetchAvailablePermissions(): Promise<AvailablePermissionsResponse> {
   const response = await authenticatedFetch("/v1/permissions/available");
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to fetch permissions");
-  }
   return response.json();
 }
 
 async function fetchPlatforms(): Promise<Platform[]> {
   const response = await authenticatedFetch("/v1/platforms/");
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to fetch platforms");
-  }
   return response.json();
 }
 
@@ -144,11 +136,6 @@ async function createRole(data: {
     body: JSON.stringify(data),
   });
   
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to create role");
-  }
-  
   return response.json();
 }
 
@@ -167,11 +154,6 @@ async function updateRole(id: string, data: {
     body: JSON.stringify(data),
   });
   
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to update role");
-  }
-  
   return response.json();
 }
 
@@ -179,11 +161,6 @@ async function deleteRole(id: string) {
   const response = await authenticatedFetch(`/v1/roles/${id}`, {
     method: "DELETE",
   });
-  
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to delete role");
-  }
 }
 
 function groupPermissionsByResource(permissions: Permission[]): PermissionGroup[] {

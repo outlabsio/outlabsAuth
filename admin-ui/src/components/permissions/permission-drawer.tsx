@@ -71,11 +71,6 @@ async function createPermission(data: {
     body: JSON.stringify(data),
   });
   
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to create permission");
-  }
-  
   return response.json();
 }
 
@@ -91,11 +86,6 @@ async function updatePermission(id: string, data: {
     body: JSON.stringify(data),
   });
   
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to update permission");
-  }
-  
   return response.json();
 }
 
@@ -103,11 +93,6 @@ async function deletePermission(id: string) {
   const response = await authenticatedFetch(`/v1/permissions/${id}`, {
     method: "DELETE",
   });
-  
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to delete permission");
-  }
 }
 
 // Common permission actions
@@ -139,10 +124,6 @@ const RESOURCES = [
 
 async function fetchPlatforms(): Promise<Platform[]> {
   const response = await authenticatedFetch("/v1/platforms/");
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to fetch platforms");
-  }
   return response.json();
 }
 

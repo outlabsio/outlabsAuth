@@ -190,6 +190,13 @@ class EntityService:
         """
         entity = await EntityService.get_entity(entity_id)
         
+        # Prevent deletion of root platform
+        if entity.metadata.get("is_root") or entity.slug == "root_platform":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot delete the root platform entity"
+            )
+        
         # Check for children
         children_count = await EntityModel.find(
             EntityModel.parent_entity.id == entity.id

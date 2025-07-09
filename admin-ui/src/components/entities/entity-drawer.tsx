@@ -84,9 +84,6 @@ const accessGroupTypes = [
 
 async function fetchEntities(): Promise<Entity[]> {
   const response = await authenticatedFetch("/v1/entities/");
-  if (!response.ok) {
-    throw new Error("Failed to fetch entities");
-  }
   const data = await response.json();
   // API returns paginated response, extract items array
   return data.items || [];
@@ -100,13 +97,6 @@ async function createEntity(data: Partial<Entity>) {
     },
     body: JSON.stringify(data),
   });
-
-  if (!response.ok) {
-    const errorData = await response.json();
-    // Pass the full error data as JSON string for better error handling
-    throw new Error(JSON.stringify(errorData));
-  }
-
   return response.json();
 }
 
@@ -118,13 +108,6 @@ async function updateEntity(id: string, data: Partial<Entity>) {
     },
     body: JSON.stringify(data),
   });
-
-  if (!response.ok) {
-    const errorData = await response.json();
-    // Pass the full error data as JSON string for better error handling
-    throw new Error(JSON.stringify(errorData));
-  }
-
   return response.json();
 }
 
@@ -225,14 +208,9 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
       if (!entity) throw new Error("No entity to delete");
 
       const url = `/v1/entities/${entity.id}${enableCascade ? '?cascade=true' : ''}`;
-      const response = await authenticatedFetch(url, {
+      await authenticatedFetch(url, {
         method: "DELETE",
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || "Failed to delete entity");
-      }
     },
     onSuccess: () => {
       // Invalidate all entity-related queries
@@ -653,8 +631,9 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
               )}
             </form.Field>
 
-            {/* Danger Zone - Only show in edit mode */}
-            {isEditMode && (
+            {/* Danger Zone - Only show in edit mode and not for root platform */}
+            {isEditMode && entity && 
+             !(entity.metadata?.is_root || entity.slug === "root_platform") && (
               <div className="mt-8 space-y-4 rounded-lg border border-destructive/20 bg-destructive/5 p-4">
                 <div className="flex items-center gap-2">
                   <AlertTriangle className="h-5 w-5 text-destructive" />
@@ -675,10 +654,13 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                     onClick={async () => {
                       // Check if entity has children
                       if (entity) {
-                        const response = await authenticatedFetch(`/v1/entities/?parent_entity_id=${entity.id}&status=active`);
-                        if (response.ok) {
+                        try {
+                          const response = await authenticatedFetch(`/v1/entities/?parent_entity_id=${entity.id}&status=active`);
                           const data = await response.json();
                           setHasChildren(data.total > 0);
+                        } catch (error) {
+                          // If error checking children, assume no children
+                          setHasChildren(false);
                         }
                       }
                       setShowDeleteDialog(true);

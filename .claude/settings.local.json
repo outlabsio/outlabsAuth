@@ -11,7 +11,11 @@
       "Bash(bunx:*)",
       "Bash(bun add:*)",
       "Bash(docker logs:*)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "Bash(rm:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(test:*)"
     ],
     "deny": []
   }

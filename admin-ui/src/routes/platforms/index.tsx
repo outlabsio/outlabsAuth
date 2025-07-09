@@ -43,10 +43,6 @@ interface Platform {
 
 async function fetchPlatforms(): Promise<Platform[]> {
   const response = await authenticatedFetch("/v1/platforms/");
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to fetch platforms");
-  }
   return response.json();
 }
 
