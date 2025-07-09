@@ -13,10 +13,21 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
-import { Loader2 } from "lucide-react";
+import { Loader2, Trash2, AlertTriangle } from "lucide-react";
 import { authenticatedFetch } from "@/lib/auth";
 import { toast } from "sonner";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { useRouter } from "@tanstack/react-router";
 
 interface PlatformDrawerProps {
   open: boolean;
@@ -43,15 +54,12 @@ async function createPlatform(data: {
   status: "active" | "suspended";
   platform_url: string;
 }) {
-  const response = await authenticatedFetch("/v1/client_accounts/", {
+  const response = await authenticatedFetch("/v1/platforms/", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      ...data,
-      is_platform_root: true,
-    }),
+    body: JSON.stringify(data),
   });
   
   if (!response.ok) {
@@ -68,7 +76,7 @@ async function updatePlatform(id: string, data: {
   status: "active" | "suspended";
   platform_url: string;
 }) {
-  const response = await authenticatedFetch(`/v1/client_accounts/${id}`, {
+  const response = await authenticatedFetch(`/v1/platforms/${id}`, {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
@@ -86,7 +94,9 @@ async function updatePlatform(id: string, data: {
 
 export function PlatformDrawer({ open, onOpenChange, mode, platformId, platformData }: PlatformDrawerProps) {
   const queryClient = useQueryClient();
+  const router = useRouter();
   const isEditMode = mode === "edit";
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   
   // Use provided platform data instead of fetching
   const platform = isEditMode ? platformData : null;
@@ -110,6 +120,33 @@ export function PlatformDrawer({ open, onOpenChange, mode, platformId, platformD
     },
     onError: (error: Error) => {
       toast.error(error.message);
+    },
+  });
+  
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      if (!platformId) throw new Error("No platform ID");
+      
+      const response = await authenticatedFetch(`/v1/platforms/${platformId}`, {
+        method: "DELETE",
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || "Failed to delete platform");
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["platforms"] });
+      toast.success("Platform deleted successfully!");
+      onOpenChange(false);
+      setShowDeleteDialog(false);
+      // Navigate back to platforms list
+      router.navigate({ to: "/platforms" });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+      setShowDeleteDialog(false);
     },
   });
   
@@ -268,6 +305,35 @@ export function PlatformDrawer({ open, onOpenChange, mode, platformId, platformD
                   </div>
                 )}
               </form.Field>
+              
+              {/* Danger Zone - Only show in edit mode */}
+              {isEditMode && (
+                <div className="mt-8 space-y-4 rounded-lg border border-destructive/20 bg-destructive/5 p-4">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="h-5 w-5 text-destructive" />
+                    <h3 className="font-semibold text-destructive">Danger Zone</h3>
+                  </div>
+                  
+                  <div className="space-y-4">
+                    <div>
+                      <h4 className="font-medium">Delete this platform</h4>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Once you delete a platform, there is no going back. This will permanently delete the platform
+                        and all associated users, roles, permissions, and groups.
+                      </p>
+                    </div>
+                    
+                    <Button
+                      variant="destructive"
+                      onClick={() => setShowDeleteDialog(true)}
+                      className="w-full"
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Delete Platform
+                    </Button>
+                  </div>
+                </div>
+              )}
             </form>
           )}
         </div>
@@ -296,6 +362,47 @@ export function PlatformDrawer({ open, onOpenChange, mode, platformId, platformD
           </form.Subscribe>
         </DrawerFooter>
       </DrawerContent>
+      
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <p>
+                This action cannot be undone. This will permanently delete the platform
+                <span className="font-semibold"> {platform?.name}</span> and remove all associated data:
+              </p>
+              <ul className="list-disc list-inside space-y-1 text-sm">
+                <li>All users associated with this platform</li>
+                <li>All roles and permissions</li>
+                <li>All groups and their assignments</li>
+                <li>All configuration and settings</li>
+              </ul>
+              <p className="font-semibold text-destructive">
+                This is a destructive action that cannot be reversed.
+              </p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteMutation.mutate()}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                "Delete Platform"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Drawer>
   );
 }

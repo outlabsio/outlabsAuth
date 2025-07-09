@@ -34,23 +34,20 @@ interface Platform {
   _id: string;
   name: string;
   description: string;
-  status: "active" | "suspended";
-  is_platform_root: boolean;
-  created_by_client?: string;
+  status: "active" | "suspended" | "maintenance";
   created_at: string;
   updated_at: string;
   platform_url?: string;
+  user_count?: number;
 }
 
 async function fetchPlatforms(): Promise<Platform[]> {
-  const response = await authenticatedFetch("/v1/client_accounts/");
+  const response = await authenticatedFetch("/v1/platforms/");
   if (!response.ok) {
     const errorData = await response.json();
     throw new Error(errorData.detail || "Failed to fetch platforms");
   }
-  const allAccounts = await response.json();
-  // Filter to only show platform root accounts
-  return allAccounts.filter((account: Platform) => account.is_platform_root);
+  return response.json();
 }
 
 function PlatformCard({ platform, onClick }: { platform: Platform; onClick: () => void }) {
@@ -195,7 +192,7 @@ function Platforms() {
               <div>
                 <h1 className="text-2xl font-bold tracking-tight">Platform Management</h1>
                 <p className="text-muted-foreground">
-                  Manage multi-tenant platforms and their client organizations
+                  Manage platforms and their configurations
                 </p>
               </div>
               <Button onClick={handleCreatePlatform}>
