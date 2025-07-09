@@ -53,7 +53,9 @@ async function fetchEntities(): Promise<Entity[]> {
     const errorData = await response.json();
     throw new Error(errorData.detail || "Failed to fetch entities");
   }
-  return response.json();
+  const data = await response.json();
+  // API returns paginated response, extract items array
+  return data.items || [];
 }
 
 function EntityTypeBadge({ type }: { type: EntityType }) {
