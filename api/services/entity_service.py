@@ -69,20 +69,49 @@ class EntityService:
                 detail=f"Entity with name '{entity_data.name}' already exists under this parent"
             )
         
+        # Generate slug from name
+        import re
+        slug = re.sub(r'[^a-z0-9-]', '-', entity_data.name.lower())
+        slug = re.sub(r'-+', '-', slug).strip('-')
+        
+        # Determine platform_id
+        if parent_entity:
+            # Inherit platform_id from parent
+            platform_id = parent_entity.platform_id
+        elif entity_data.entity_type.lower() == 'platform':
+            # This is a root platform, use its own id (will be set after creation)
+            platform_id = "temp_platform_id"  # Will update after save
+        else:
+            # For other root entities, get the first platform
+            root_platform = await EntityModel.find_one({"entity_type": "platform"})
+            if root_platform:
+                platform_id = str(root_platform.id)
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No platform found. Please create a platform first."
+                )
+        
         # Create entity
         entity = EntityModel(
             name=entity_data.name,
-            display_name=entity_data.display_name,
+            slug=slug,
             description=entity_data.description,
-            entity_class=entity_data.entity_class,
-            entity_type=entity_data.entity_type,
+            entity_class=entity_data.entity_class.lower(),  # Convert to lowercase
+            entity_type=entity_data.entity_type.lower(),  # Convert to lowercase
             parent_entity=parent_entity,
-            platform_id=PydanticObjectId(entity_data.platform_id) if entity_data.platform_id else None,
+            platform_id=platform_id,
             status=entity_data.status,
-            config=entity_data.config or {}
+            metadata=entity_data.config or {}  # Use metadata instead of config
         )
         
         await entity.save()
+        
+        # Update platform_id for new platform entities
+        if entity.entity_type == "platform" and platform_id == "temp_platform_id":
+            entity.platform_id = str(entity.id)
+            await entity.save()
+        
         return entity
     
     @staticmethod

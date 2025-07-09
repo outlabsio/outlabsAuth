@@ -85,7 +85,8 @@ async function createEntity(data: Partial<Entity>) {
 
   if (!response.ok) {
     const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to create entity");
+    // Pass the full error data as JSON string for better error handling
+    throw new Error(JSON.stringify(errorData));
   }
 
   return response.json();
@@ -102,7 +103,8 @@ async function updateEntity(id: string, data: Partial<Entity>) {
 
   if (!response.ok) {
     const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to update entity");
+    // Pass the full error data as JSON string for better error handling
+    throw new Error(JSON.stringify(errorData));
   }
 
   return response.json();
@@ -137,8 +139,28 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
         form.reset();
       }
     },
-    onError: (error: Error) => {
-      toast.error(error.message);
+    onError: (error: any) => {
+      // Handle validation errors from API
+      if (error.message) {
+        try {
+          const errorData = JSON.parse(error.message);
+          if (errorData.detail && Array.isArray(errorData.detail)) {
+            // Format validation errors
+            const messages = errorData.detail.map((err: any) => 
+              `${err.loc.join('.')}: ${err.msg}`
+            ).join(', ');
+            toast.error(messages);
+          } else if (errorData.detail) {
+            toast.error(errorData.detail);
+          } else {
+            toast.error(error.message);
+          }
+        } catch {
+          toast.error(error.message);
+        }
+      } else {
+        toast.error("An error occurred");
+      }
     },
   });
 
@@ -182,16 +204,13 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
         name: value.name,
         display_name: value.name, // API expects display_name
         description: value.description,
-        entity_class: value.entity_class,
+        entity_class: value.entity_class.toUpperCase(), // API expects uppercase
         entity_type: value.entity_type,
         status: value.status,
       };
 
       if (value.parent_entity && value.parent_entity !== "none") {
         data.parent_entity_id = value.parent_entity;
-      } else if (value.entity_type === EntityType.PLATFORM) {
-        // For root platform entities, use the entity's own ID as platform_id
-        data.platform_id = "root"; // This will be set by the backend
       }
 
       if (value.max_members) {
