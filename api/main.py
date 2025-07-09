@@ -87,7 +87,7 @@ async def root():
 
 
 # Import and include routers
-from api.routes import test_routes, auth_routes, entity_routes, role_routes, user_routes, permission_routes
+from api.routes import test_routes, auth_routes, entity_routes, role_routes, user_routes, permission_routes, system_routes
 
 # Test routes (remove in production)
 app.include_router(test_routes.router, prefix="/v1/test", tags=["Testing"])
@@ -106,3 +106,9 @@ app.include_router(user_routes.router, prefix="/v1/users", tags=["Users"])
 
 # Permission routes
 app.include_router(permission_routes.router, prefix="/v1/permissions", tags=["Permissions"])
+
+# System routes
+app.include_router(system_routes.router, prefix="/v1/system", tags=["System"])
+
+# Backward compatibility routes for frontend
+app.include_router(system_routes.router, prefix="/v1", tags=["System (Legacy)"])
