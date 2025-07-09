@@ -55,7 +55,11 @@ async function fetchEntities(): Promise<Entity[]> {
   }
   const data = await response.json();
   // API returns paginated response, extract items array
-  return data.items || [];
+  if (data && Array.isArray(data.items)) {
+    return data.items;
+  }
+  // Fallback for unexpected response format
+  return Array.isArray(data) ? data : [];
 }
 
 function EntityTypeBadge({ type }: { type: EntityType }) {
@@ -177,8 +181,8 @@ function EntitiesContent({
     );
   }
 
-  // Filter entities
-  let filteredEntities = entities || [];
+  // Filter entities - ensure we have an array
+  let filteredEntities = Array.isArray(entities) ? entities : [];
   
   if (searchQuery) {
     filteredEntities = filteredEntities.filter(entity => 

@@ -71,7 +71,9 @@ async function fetchEntities(): Promise<Entity[]> {
   if (!response.ok) {
     throw new Error("Failed to fetch entities");
   }
-  return response.json();
+  const data = await response.json();
+  // API returns paginated response, extract items array
+  return data.items || [];
 }
 
 async function createEntity(data: Partial<Entity>) {
@@ -134,10 +136,13 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["entities"] });
       toast.success(isEditMode ? "Entity updated successfully!" : "Entity created successfully!");
-      onOpenChange(false);
       if (!isEditMode) {
         form.reset();
       }
+      // Close drawer after a short delay to show success message
+      setTimeout(() => {
+        onOpenChange(false);
+      }, 500);
     },
     onError: (error: any) => {
       // Handle validation errors from API
