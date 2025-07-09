@@ -279,7 +279,7 @@ class SystemService:
             "root_entity": {
                 "id": str(root_entity.id),
                 "name": root_entity.name,
-                "display_name": root_entity.display_name
+                "slug": root_entity.slug
             },
             "message": "System initialized successfully"
         }

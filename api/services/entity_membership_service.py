@@ -79,16 +79,16 @@ class EntityMembershipService:
             )
         
         # Check entity member limit if configured
-        if entity.config.get("max_members"):
+        if entity.max_members:
             current_count = await EntityMembershipModel.find(
                 EntityMembershipModel.entity.id == entity.id,
                 EntityMembershipModel.status == "active"
             ).count()
             
-            if current_count >= entity.config["max_members"]:
+            if current_count >= entity.max_members:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Entity has reached maximum member limit ({entity.config['max_members']})"
+                    detail=f"Entity has reached maximum member limit ({entity.max_members})"
                 )
         
         # Create membership

@@ -13,6 +13,9 @@ from api.models.role_model import RoleModel
 from api.models.refresh_token_model import RefreshTokenModel
 from api.models.permission_model import PermissionModel
 
+# Rebuild models to resolve forward references
+EntityMembershipModel.model_rebuild()
+
 # Global database client
 client: AsyncIOMotorClient = None
 
