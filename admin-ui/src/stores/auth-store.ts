@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { isTokenExpired, willTokenExpireSoon } from '@/lib/jwt';
+import { apiUrl } from '@/config';
 
 interface User {
   id: string;
@@ -67,7 +68,7 @@ export const useAuthStore = create<AuthState>()(
           set({ user });
         } else {
           try {
-            const response = await fetch('/v1/auth/me', {
+            const response = await fetch(apiUrl('/auth/me'), {
               headers: {
                 Authorization: `Bearer ${tokens.access_token}`,
               },
@@ -114,7 +115,7 @@ export const useAuthStore = create<AuthState>()(
         set({ isRefreshing: true });
 
         try {
-          const response = await fetch('/v1/auth/refresh', {
+          const response = await fetch(apiUrl('/auth/refresh'), {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',

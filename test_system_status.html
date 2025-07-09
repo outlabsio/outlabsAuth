@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test System Status</title>
+</head>
+<body>
+    <h1>Testing System Status Endpoint</h1>
+    <button onclick="testStatus()">Test /v1/system/status</button>
+    <pre id="output"></pre>
+    
+    <script>
+        async function testStatus() {
+            const output = document.getElementById('output');
+            output.textContent = 'Testing...\n';
+            
+            try {
+                const response = await fetch('http://localhost:8030/v1/system/status');
+                output.textContent += `Response Status: ${response.status} ${response.statusText}\n`;
+                output.textContent += `Response Headers:\n`;
+                for (let [key, value] of response.headers) {
+                    output.textContent += `  ${key}: ${value}\n`;
+                }
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    output.textContent += `\nResponse Data:\n${JSON.stringify(data, null, 2)}`;
+                } else {
+                    const text = await response.text();
+                    output.textContent += `\nError Response:\n${text}`;
+                }
+            } catch (error) {
+                output.textContent += `\nError: ${error.message}`;
+            }
+        }
+        
+        // Test on load
+        window.addEventListener('load', testStatus);
+    </script>
+</body>
+</html>

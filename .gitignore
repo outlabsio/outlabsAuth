@@ -155,3 +155,6 @@ out/
 # Other
 .history/
 .gitattributes
+
+# Admin token for testing
+.admin_token

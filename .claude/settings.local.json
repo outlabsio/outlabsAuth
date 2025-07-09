@@ -7,7 +7,10 @@
       "Bash(chmod:*)",
       "Bash(uv run:*)",
       "Bash(/tmp/test_custom_permissions.sh:*)",
-      "Bash(bun run:*)"
+      "Bash(bun run:*)",
+      "Bash(bunx:*)",
+      "Bash(bun add:*)",
+      "Bash(docker logs:*)"
     ],
     "deny": []
   }

@@ -1,23 +1,35 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
+import { apiUrl } from "@/config";
 
 // Helper function to query the system status
 const getSystemStatus = async (): Promise<{ initialized: boolean }> => {
-  const response = await fetch("/v1/system/status");
+  console.log("Checking system status...");
+  const response = await fetch(apiUrl("/system/status"));
+  console.log("System status response:", response.status, response.ok);
   if (!response.ok) {
     throw new Error("Failed to fetch system status");
   }
-  return response.json();
+  const data = await response.json();
+  console.log("System status data:", data);
+  return data;
 };
 
 export const Route = createFileRoute("/")({
   beforeLoad: async () => {
     try {
       // First check if user is authenticated
-      const token = localStorage.getItem("access_token");
-      if (token) {
-        throw redirect({
-          to: "/dashboard",
-        });
+      const authStorage = localStorage.getItem("auth-storage");
+      if (authStorage) {
+        try {
+          const authData = JSON.parse(authStorage);
+          if (authData.state?.isAuthenticated && authData.state?.tokens?.access_token) {
+            throw redirect({
+              to: "/dashboard",
+            });
+          }
+        } catch (e) {
+          // Invalid auth storage, continue to check system status
+        }
       }
 
       // If not authenticated, check system status

@@ -1,6 +1,7 @@
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
+import { apiUrl } from "@/config";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -12,7 +13,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { toast } from "sonner";
 
 async function handleLogin(values: { username: string; password: string }) {
-  const response = await fetch("/v1/auth/login", {
+  const response = await fetch(apiUrl("/auth/login"), {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(values),

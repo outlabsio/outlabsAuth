@@ -2,6 +2,7 @@ import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation } from "@tanstack/react-query";
 import { GalleryVerticalEnd } from "lucide-react";
+import { apiUrl } from "@/config";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,10 +10,14 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 async function initializeSystem(values: { email: string; password: string }) {
-  const response = await fetch("/v1/system/initialize", {
+  const response = await fetch(apiUrl("/system/initialize"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(values),
+    body: JSON.stringify({
+      ...values,
+      first_name: "System",
+      last_name: "Administrator"
+    }),
   });
 
   if (!response.ok) {
