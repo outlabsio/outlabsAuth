@@ -20,8 +20,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, Trash2, AlertTriangle } from "lucide-react";
+import { Loader2, Trash2, AlertTriangle, Check, ChevronsUpDown, Search } from "lucide-react";
 import { authenticatedFetch } from "@/lib/auth";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -34,6 +35,19 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Entity,
   EntityClass,
@@ -120,6 +134,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
   const [hasChildren, setHasChildren] = useState(false);
   const [enableCascade, setEnableCascade] = useState(false);
   const [selectedClass, setSelectedClass] = useState<EntityClass>(EntityClass.STRUCTURAL);
+  const [parentEntityOpen, setParentEntityOpen] = useState(false);
 
   // Fetch all entities for parent selection
   const { data: allEntities } = useQuery({
@@ -399,33 +414,94 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
 
             {selectedClass === EntityClass.STRUCTURAL && (
               <form.Field name="parent_entity">
-                {(field) => (
-                  <div className="space-y-2">
-                    <Label htmlFor="parent_entity">Parent Entity</Label>
-                    <Select
-                      value={field.state.value}
-                      onValueChange={(value) => field.handleChange(value)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select parent entity (optional)" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">No parent (root entity)</SelectItem>
-                        {potentialParents.map(parent => (
-                          <SelectItem key={parent.id} value={parent.id}>
-                            <div className="flex items-center gap-2">
-                              <span>{getEntityTypeIcon(parent.entity_type)}</span>
-                              <span>{parent.name}</span>
-                            </div>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">
-                      Create a hierarchy by selecting a parent entity
-                    </p>
-                  </div>
-                )}
+                {(field) => {
+                  const selectedParent = field.state.value && field.state.value !== "none" 
+                    ? potentialParents.find(p => p.id === field.state.value)
+                    : null;
+                  
+                  return (
+                    <div className="space-y-2">
+                      <Label htmlFor="parent_entity">Parent Entity</Label>
+                      <Popover open={parentEntityOpen} onOpenChange={setParentEntityOpen}>
+                        <PopoverTrigger asChild>
+                          <Button
+                            variant="outline"
+                            role="combobox"
+                            aria-expanded={parentEntityOpen}
+                            className="w-full justify-between font-normal"
+                          >
+                            {selectedParent ? (
+                              <div className="flex items-center gap-2">
+                                <span>{getEntityTypeIcon(selectedParent.entity_type)}</span>
+                                <span>{selectedParent.name}</span>
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground">Select parent entity (optional)</span>
+                            )}
+                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-full p-0" align="start">
+                          <Command>
+                            <CommandInput 
+                              placeholder="Search entities..." 
+                              className="h-9"
+                            />
+                            <CommandList>
+                              <CommandEmpty>No entities found.</CommandEmpty>
+                              <CommandGroup>
+                                <CommandItem
+                                  value="none"
+                                  onSelect={() => {
+                                    field.handleChange("none");
+                                    setParentEntityOpen(false);
+                                  }}
+                                >
+                                  <Check
+                                    className={cn(
+                                      "mr-2 h-4 w-4",
+                                      field.state.value === "none" ? "opacity-100" : "opacity-0"
+                                    )}
+                                  />
+                                  No parent (root entity)
+                                </CommandItem>
+                                {potentialParents.map(parent => (
+                                  <CommandItem
+                                    key={parent.id}
+                                    value={`${parent.name.toLowerCase()} ${parent.slug}`}
+                                    onSelect={() => {
+                                      field.handleChange(parent.id);
+                                      setParentEntityOpen(false);
+                                    }}
+                                  >
+                                    <Check
+                                      className={cn(
+                                        "mr-2 h-4 w-4",
+                                        field.state.value === parent.id ? "opacity-100" : "opacity-0"
+                                      )}
+                                    />
+                                    <div className="flex items-center gap-2">
+                                      <span>{getEntityTypeIcon(parent.entity_type)}</span>
+                                      <div className="flex flex-col">
+                                        <span>{parent.name}</span>
+                                        {parent.description && (
+                                          <span className="text-xs text-muted-foreground">{parent.description}</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </CommandItem>
+                                ))}
+                              </CommandGroup>
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                      <p className="text-xs text-muted-foreground">
+                        Create a hierarchy by selecting a parent entity
+                      </p>
+                    </div>
+                  );
+                }}
               </form.Field>
             )}
 

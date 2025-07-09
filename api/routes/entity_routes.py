@@ -54,7 +54,7 @@ async def create_entity(
         description=entity.description,
         entity_class=entity.entity_class.value.upper(),  # Convert to uppercase
         entity_type=entity.entity_type,
-        parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
+        parent_entity_id=str(entity.parent_entity.ref.id) if entity.parent_entity else None,
         platform_id=str(entity.platform_id) if entity.platform_id else None,
         status=entity.status,
         direct_permissions=entity.direct_permissions,
@@ -85,7 +85,7 @@ async def get_entity(
         description=entity.description,
         entity_class=entity.entity_class.value.upper(),  # Convert to uppercase
         entity_type=entity.entity_type,
-        parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
+        parent_entity_id=str(entity.parent_entity.ref.id) if entity.parent_entity else None,
         platform_id=str(entity.platform_id) if entity.platform_id else None,
         status=entity.status,
         direct_permissions=entity.direct_permissions,
@@ -118,7 +118,7 @@ async def update_entity(
         description=entity.description,
         entity_class=entity.entity_class.value.upper(),  # Convert to uppercase
         entity_type=entity.entity_type,
-        parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
+        parent_entity_id=str(entity.parent_entity.ref.id) if entity.parent_entity else None,
         platform_id=str(entity.platform_id) if entity.platform_id else None,
         status=entity.status,
         direct_permissions=entity.direct_permissions,
@@ -190,7 +190,7 @@ async def search_entities(
             description=entity.description,
             entity_class=entity.entity_class.value.upper(),  # Convert to uppercase
             entity_type=entity.entity_type,
-            parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
+            parent_entity_id=str(entity.parent_entity.ref.id) if entity.parent_entity else None,
             platform_id=str(entity.platform_id) if entity.platform_id else None,
             status=entity.status,
             direct_permissions=entity.direct_permissions,
@@ -253,7 +253,7 @@ async def get_entity_path(
             description=entity.description,
             entity_class=entity.entity_class.value.upper(),  # Convert to uppercase
             entity_type=entity.entity_type,
-            parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
+            parent_entity_id=str(entity.parent_entity.ref.id) if entity.parent_entity else None,
             platform_id=str(entity.platform_id) if entity.platform_id else None,
             status=entity.status,
             direct_permissions=entity.direct_permissions,
