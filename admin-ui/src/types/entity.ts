@@ -41,6 +41,7 @@ export interface Entity {
   // Hierarchy
   platform_id: string;
   parent_entity?: Entity | string; // Can be populated or just ID
+  parent_entity_id?: string; // The ID when parent_entity is not populated
   
   // Access control
   status: "active" | "inactive" | "archived";

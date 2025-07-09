@@ -6,6 +6,27 @@ from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
+class UserEntityRole(BaseModel):
+    """User's role within an entity"""
+    id: str
+    name: str
+    display_name: str
+    permissions: List[str]
+
+
+class UserEntity(BaseModel):
+    """Entity information for user response"""
+    id: str
+    name: str
+    slug: str
+    entity_type: str
+    entity_class: str
+    parent_id: Optional[str] = None
+    roles: List[UserEntityRole]
+    status: str
+    joined_at: datetime
+
+
 class UserProfileUpdate(BaseModel):
     """Update user profile request schema"""
     first_name: Optional[str] = Field(None, min_length=1, max_length=50)
@@ -42,6 +63,7 @@ class UserResponse(BaseModel):
     last_password_change: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    entities: List[UserEntity] = Field(default_factory=list)
     
     class Config:
         from_attributes = True
@@ -76,6 +98,37 @@ class UserStatusUpdate(BaseModel):
         if v not in valid_statuses:
             raise ValueError(f"Status must be one of: {', '.join(valid_statuses)}")
         return v
+
+
+class UserEntityAssignment(BaseModel):
+    """Entity and role assignment for user"""
+    entity_id: str
+    role_ids: List[str] = Field(default_factory=list)
+    status: str = Field(default="active")
+    valid_from: Optional[datetime] = None
+    valid_until: Optional[datetime] = None
+
+
+class UserCreateRequest(BaseModel):
+    """User creation request schema"""
+    email: EmailStr
+    password: Optional[str] = Field(None, min_length=8)
+    first_name: Optional[str] = Field(None, min_length=1, max_length=50)
+    last_name: Optional[str] = Field(None, min_length=1, max_length=50)
+    phone: Optional[str] = Field(None, max_length=20)
+    entity_assignments: List[UserEntityAssignment] = Field(default_factory=list)
+    is_active: bool = Field(default=True)
+    send_welcome_email: bool = Field(default=True)
+
+
+class UserUpdateRequest(BaseModel):
+    """User update request schema"""
+    email: Optional[EmailStr] = None
+    first_name: Optional[str] = Field(None, min_length=1, max_length=50)
+    last_name: Optional[str] = Field(None, min_length=1, max_length=50)
+    phone: Optional[str] = Field(None, max_length=20)
+    is_active: Optional[bool] = None
+    entity_assignments: Optional[List[UserEntityAssignment]] = None
 
 
 class UserInviteRequest(BaseModel):

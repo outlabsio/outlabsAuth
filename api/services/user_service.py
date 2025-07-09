@@ -555,6 +555,212 @@ class UserService:
         return result
     
     @staticmethod
+    async def enrich_user_with_entities(user: UserModel) -> Dict[str, Any]:
+        """
+        Enrich user data with entity memberships
+        
+        Args:
+            user: User model
+            
+        Returns:
+            User data with entities
+        """
+        # Get active memberships
+        memberships = await EntityMembershipModel.find(
+            And(
+                EntityMembershipModel.user.id == user.id,
+                EntityMembershipModel.status == "active"
+            )
+        ).to_list()
+        
+        # Format entities
+        entities = []
+        for membership in memberships:
+            entity = await membership.entity.fetch()
+            roles = []
+            for role_link in membership.roles:
+                role = await role_link.fetch()
+                roles.append({
+                    "id": str(role.id),
+                    "name": role.name,
+                    "display_name": role.display_name,
+                    "permissions": role.permissions
+                })
+            
+            entities.append({
+                "id": str(entity.id),
+                "name": entity.name,
+                "slug": entity.slug,
+                "entity_type": entity.entity_type,
+                "entity_class": entity.entity_class,
+                "parent_id": str(entity.parent_entity.id) if entity.parent_entity else None,
+                "roles": roles,
+                "status": membership.status,
+                "joined_at": membership.joined_at
+            })
+        
+        return {
+            "id": str(user.id),
+            "email": user.email,
+            "profile": {
+                "first_name": user.profile.first_name,
+                "last_name": user.profile.last_name,
+                "phone": user.profile.phone,
+                "avatar_url": user.profile.avatar_url,
+                "preferences": user.profile.preferences,
+                "full_name": user.profile.full_name
+            },
+            "is_active": user.is_active,
+            "is_system_user": user.is_system_user,
+            "email_verified": user.email_verified,
+            "last_login": user.last_login,
+            "last_password_change": user.last_password_change,
+            "created_at": user.created_at,
+            "updated_at": user.updated_at,
+            "entities": entities
+        }
+    
+    @staticmethod
+    async def create_user_with_entities(
+        email: str,
+        password: Optional[str],
+        profile_data: Dict[str, Any],
+        entity_assignments: List[Dict[str, Any]],
+        is_active: bool = True,
+        send_welcome_email: bool = True,
+        current_user: UserModel = None
+    ) -> Tuple[UserModel, Optional[str]]:
+        """
+        Create a new user with entity assignments
+        
+        Args:
+            email: User email
+            password: User password (optional, will generate if not provided)
+            profile_data: Profile information
+            entity_assignments: List of entity/role assignments
+            is_active: Whether user is active
+            send_welcome_email: Whether to send welcome email
+            current_user: User creating the new user
+            
+        Returns:
+            Tuple of (created user, temporary password if generated)
+        """
+        # Check if user already exists
+        existing_user = await UserModel.find_one(UserModel.email == email)
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User with this email already exists"
+            )
+        
+        # Generate password if not provided
+        temp_password = None
+        if not password:
+            temp_password = UserService._generate_temporary_password()
+            password = temp_password
+        
+        # Create user
+        hashed_password = AuthService.hash_password(password)
+        user = UserModel(
+            email=email,
+            hashed_password=hashed_password,
+            profile=UserProfile(**profile_data),
+            is_active=is_active,
+            created_at=datetime.now(timezone.utc)
+        )
+        await user.save()
+        
+        # Assign to entities
+        for assignment in entity_assignments:
+            entity = await EntityModel.get(assignment["entity_id"])
+            if not entity:
+                continue
+                
+            # Create membership
+            membership = EntityMembershipModel(
+                user=user,
+                entity=entity,
+                status=assignment.get("status", "active"),
+                valid_from=assignment.get("valid_from"),
+                valid_until=assignment.get("valid_until"),
+                joined_by=current_user if current_user else None
+            )
+            
+            # Assign roles
+            for role_id in assignment.get("role_ids", []):
+                role = await RoleModel.get(role_id)
+                if role and role.entity_id == str(entity.id):
+                    membership.roles.append(role)
+            
+            await membership.save()
+        
+        # Send welcome email if requested
+        if send_welcome_email and temp_password:
+            await UserService._send_invitation_email(user, entity.name, temp_password)
+        
+        return user, temp_password
+    
+    @staticmethod
+    async def update_user_entities(
+        user_id: str,
+        entity_assignments: List[Dict[str, Any]],
+        current_user: UserModel
+    ) -> UserModel:
+        """
+        Update user's entity assignments
+        
+        Args:
+            user_id: User ID to update
+            entity_assignments: New entity/role assignments
+            current_user: User performing the update
+            
+        Returns:
+            Updated user
+        """
+        user = await UserService.get_user(user_id)
+        
+        # Check permission
+        has_permission, _ = await permission_service.check_permission(
+            str(current_user.id),
+            "user:manage"
+        )
+        if not has_permission:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to update user entities"
+            )
+        
+        # Remove existing memberships
+        await EntityMembershipModel.find(
+            EntityMembershipModel.user.id == user.id
+        ).delete()
+        
+        # Add new assignments
+        for assignment in entity_assignments:
+            entity = await EntityModel.get(assignment["entity_id"])
+            if not entity:
+                continue
+                
+            membership = EntityMembershipModel(
+                user=user,
+                entity=entity,
+                status=assignment.get("status", "active"),
+                valid_from=assignment.get("valid_from"),
+                valid_until=assignment.get("valid_until"),
+                joined_by=current_user
+            )
+            
+            # Assign roles
+            for role_id in assignment.get("role_ids", []):
+                role = await RoleModel.get(role_id)
+                if role and role.entity_id == str(entity.id):
+                    membership.roles.append(role)
+            
+            await membership.save()
+        
+        return user
+    
+    @staticmethod
     def _generate_temporary_password(length: int = 12) -> str:
         """Generate a secure temporary password"""
         characters = string.ascii_letters + string.digits + "!@#$%^&*"

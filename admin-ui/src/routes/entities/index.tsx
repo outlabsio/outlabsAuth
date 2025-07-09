@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { AppSidebar } from "@/components/app-sidebar";
+import { useContextStore } from "@/stores/context-store";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -26,7 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Search, Building2, ChevronRight, FolderOpen, Folder } from "lucide-react";
+import { Plus, Search, Building2, ChevronRight, FolderOpen } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { authenticatedFetch } from "@/lib/auth";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -107,7 +108,7 @@ function EntityCard({
   entity: Entity; 
   onNavigate: () => void; 
   onEdit: () => void;
-  hasChildren?: boolean;
+  hasChildren: boolean;
 }) {
   return (
     <Card className="group hover:shadow-md transition-shadow">
@@ -264,7 +265,7 @@ function EntitiesContent({
 
   // Filter to only show root entities when no current entity
   if (!currentEntityId) {
-    filteredEntities = filteredEntities.filter(entity => !entity.parent_entity_id);
+    filteredEntities = filteredEntities.filter(entity => !entity.parent_entity && !entity.parent_entity_id);
   }
 
   return (
@@ -382,6 +383,7 @@ function EntitiesContent({
 }
 
 function Entities() {
+  const { selectedOrganization, isSystemContext } = useContextStore();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<"create" | "edit">("create");
   const [selectedEntity, setSelectedEntity] = useState<Entity | null>(null);
@@ -390,6 +392,9 @@ function Entities() {
   const [typeFilter, setTypeFilter] = useState("all");
   const [currentEntityId, setCurrentEntityId] = useState<string | null>(null);
   const [childCounts] = useState(new Map<string, number>());
+  
+  // In system context, start at root. In org context, start at that org
+  // const rootEntityId = isSystemContext() ? null : selectedOrganization?.id || null;
   
   // Fetch all entities to calculate child counts
   const { data: allEntities } = useQuery({
@@ -402,9 +407,13 @@ function Entities() {
     if (!allEntities) return;
     childCounts.clear();
     allEntities.forEach(entity => {
-      if (entity.parent_entity_id) {
-        const count = childCounts.get(entity.parent_entity_id) || 0;
-        childCounts.set(entity.parent_entity_id, count + 1);
+      const parentId = entity.parent_entity_id || 
+        (entity.parent_entity && typeof entity.parent_entity === 'string' ? entity.parent_entity : 
+         entity.parent_entity && typeof entity.parent_entity === 'object' ? entity.parent_entity.id : null);
+      
+      if (parentId) {
+        const count = childCounts.get(parentId) || 0;
+        childCounts.set(parentId, count + 1);
       }
     });
   }, [allEntities, childCounts]);
@@ -458,9 +467,15 @@ function Entities() {
                   {currentEntityId ? "Entity Details" : "Entity Management"}
                 </h1>
                 <p className="text-muted-foreground">
-                  {currentEntityId 
-                    ? "Navigate through your organizational hierarchy"
-                    : "Manage your organizational structure and access groups"}
+                  {!isSystemContext() && selectedOrganization ? (
+                    <>
+                      Managing entities for <span className="font-medium">{selectedOrganization.name}</span>
+                    </>
+                  ) : currentEntityId ? (
+                    "Navigate through your organizational hierarchy"
+                  ) : (
+                    "Manage your organizational structure and access groups"
+                  )}
                 </p>
               </div>
               <Button onClick={handleCreateEntity}>

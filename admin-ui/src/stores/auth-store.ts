@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { apiUrl } from '@/config';
+import { useContextStore } from './context-store';
 
 interface User {
   id: string;
@@ -83,6 +84,8 @@ export const useAuthStore = create<AuthState>()(
         });
         // Clear all persisted data
         localStorage.removeItem('auth-storage');
+        // Clear organization context
+        useContextStore.getState().clearContext();
         // Redirect to login
         window.location.href = '/login';
       },

@@ -147,6 +147,66 @@ async def delete_entity(
     return {"message": "Entity deleted successfully", "cascade": cascade}
 
 
+@router.get("/top-level-organizations", response_model=EntityListResponse)
+async def get_top_level_organizations(
+    status: Optional[str] = Query("active", description="Filter by status"),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Get all top-level organizations (root entities with type ORGANIZATION)
+    
+    This is specifically for the context selector dropdown.
+    Returns organizations where the current user has membership.
+    
+    Requires: Authenticated user
+    """
+    # Build search params for top-level organizations
+    search_params = EntitySearchParams(
+        entity_type="ORGANIZATION",
+        parent_entity_id="null",  # Explicitly search for null parent
+        status=status,
+        include_children=False,
+        page=1,
+        page_size=100  # Assuming max 100 top-level orgs
+    )
+    
+    entities, total = await EntityService.search_entities(search_params, current_user)
+    
+    # Convert to response models
+    items = []
+    for entity in entities:
+        # Only include if user has membership
+        membership = await EntityMembershipService.get_user_membership_in_entity(
+            str(current_user.id),
+            str(entity.id)
+        )
+        if membership:
+            items.append(EntityResponse(
+                id=str(entity.id),
+                name=entity.name,
+                slug=entity.slug,
+                description=entity.description,
+                entity_class=entity.entity_class,
+                entity_type=entity.entity_type,
+                platform_id=entity.platform_id,
+                parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
+                status=entity.status,
+                valid_from=entity.valid_from,
+                valid_until=entity.valid_until,
+                metadata=entity.metadata,
+                created_at=entity.created_at,
+                updated_at=entity.updated_at
+            ))
+    
+    return EntityListResponse(
+        items=items,
+        total=len(items),
+        page=1,
+        page_size=100,
+        total_pages=1
+    )
+
+
 @router.get("/", response_model=EntityListResponse)
 async def search_entities(
     query: Optional[str] = Query(None, description="Search in name, display_name, description"),

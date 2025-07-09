@@ -17,7 +17,10 @@ from api.schemas.user_schema import (
     UserMembershipListResponse,
     UserStatsResponse,
     UserBulkActionRequest,
-    UserBulkActionResponse
+    UserBulkActionResponse,
+    UserCreateRequest,
+    UserUpdateRequest,
+    UserEntityAssignment
 )
 from api.services.user_service import UserService
 from api.dependencies import (
@@ -28,6 +31,12 @@ from api.dependencies import (
 )
 
 router = APIRouter()
+
+
+async def _user_to_response(user: UserModel) -> UserResponse:
+    """Convert user model to response with entities"""
+    user_data = await UserService.enrich_user_with_entities(user)
+    return UserResponse(**user_data)
 
 
 @router.get("/", response_model=UserListResponse, dependencies=[Depends(require_user_read)])
@@ -56,18 +65,8 @@ async def search_users(
     # Convert to response models
     items = []
     for user in users:
-        items.append(UserResponse(
-            id=str(user.id),
-            email=user.email,
-            profile=user.profile,
-            is_active=user.is_active,
-            is_system_user=user.is_system_user,
-            email_verified=user.email_verified,
-            last_login=user.last_login,
-            last_password_change=user.last_password_change,
-            created_at=user.created_at,
-            updated_at=user.updated_at
-        ))
+        user_response = await _user_to_response(user)
+        items.append(user_response)
     
     total_pages = (total + page_size - 1) // page_size
     
@@ -78,6 +77,46 @@ async def search_users(
         page_size=page_size,
         total_pages=total_pages
     )
+
+
+@router.post("/", response_model=UserResponse, dependencies=[Depends(require_user_manage)])
+async def create_user(
+    user_data: UserCreateRequest,
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Create a new user with entity assignments
+    
+    Requires: user:manage permission
+    """
+    profile_data = {
+        "first_name": user_data.first_name,
+        "last_name": user_data.last_name,
+        "phone": user_data.phone
+    }
+    
+    entity_assignments = [
+        {
+            "entity_id": assignment.entity_id,
+            "role_ids": assignment.role_ids,
+            "status": assignment.status,
+            "valid_from": assignment.valid_from,
+            "valid_until": assignment.valid_until
+        }
+        for assignment in user_data.entity_assignments
+    ]
+    
+    user, temp_password = await UserService.create_user_with_entities(
+        email=user_data.email,
+        password=user_data.password,
+        profile_data=profile_data,
+        entity_assignments=entity_assignments,
+        is_active=user_data.is_active,
+        send_welcome_email=user_data.send_welcome_email,
+        current_user=current_user
+    )
+    
+    return await _user_to_response(user)
 
 
 @router.get("/{user_id}", response_model=UserResponse)
@@ -91,53 +130,68 @@ async def get_user(
     Requires: user:read permission or self
     """
     user = await UserService.get_user(user_id)
-    
-    return UserResponse(
-        id=str(user.id),
-        email=user.email,
-        profile=user.profile,
-        is_active=user.is_active,
-        is_system_user=user.is_system_user,
-        email_verified=user.email_verified,
-        last_login=user.last_login,
-        last_password_change=user.last_password_change,
-        created_at=user.created_at,
-        updated_at=user.updated_at
-    )
+    return await _user_to_response(user)
 
 
 @router.put("/{user_id}", response_model=UserResponse)
-async def update_user_profile(
+async def update_user(
     user_id: str,
-    profile_data: UserProfileUpdate,
+    user_data: UserUpdateRequest,
     current_user: UserModel = Depends(require_self_or_permission("user:manage"))
 ):
     """
-    Update user profile
+    Update user profile and entity assignments
     
     Requires: user:manage permission or self
     """
-    # Convert to dict, excluding None values
-    profile_dict = profile_data.model_dump(exclude_none=True)
+    # Update profile if provided
+    if any([user_data.email, user_data.first_name, user_data.last_name, user_data.phone, user_data.is_active is not None]):
+        profile_dict = {}
+        if user_data.first_name is not None:
+            profile_dict["first_name"] = user_data.first_name
+        if user_data.last_name is not None:
+            profile_dict["last_name"] = user_data.last_name
+        if user_data.phone is not None:
+            profile_dict["phone"] = user_data.phone
+            
+        user = await UserService.update_user_profile(
+            user_id=user_id,
+            profile_data=profile_dict,
+            current_user=current_user
+        )
+        
+        # Update email if provided
+        if user_data.email:
+            user.email = user_data.email
+            await user.save()
+            
+        # Update is_active if provided
+        if user_data.is_active is not None:
+            user.is_active = user_data.is_active
+            await user.save()
+    else:
+        user = await UserService.get_user(user_id)
     
-    user = await UserService.update_user_profile(
-        user_id=user_id,
-        profile_data=profile_dict,
-        current_user=current_user
-    )
+    # Update entity assignments if provided
+    if user_data.entity_assignments is not None:
+        entity_assignments = [
+            {
+                "entity_id": assignment.entity_id,
+                "role_ids": assignment.role_ids,
+                "status": assignment.status,
+                "valid_from": assignment.valid_from,
+                "valid_until": assignment.valid_until
+            }
+            for assignment in user_data.entity_assignments
+        ]
+        
+        user = await UserService.update_user_entities(
+            user_id=user_id,
+            entity_assignments=entity_assignments,
+            current_user=current_user
+        )
     
-    return UserResponse(
-        id=str(user.id),
-        email=user.email,
-        profile=user.profile,
-        is_active=user.is_active,
-        is_system_user=user.is_system_user,
-        email_verified=user.email_verified,
-        last_login=user.last_login,
-        last_password_change=user.last_password_change,
-        created_at=user.created_at,
-        updated_at=user.updated_at
-    )
+    return await _user_to_response(user)
 
 
 @router.delete("/{user_id}", dependencies=[Depends(require_user_manage)])
@@ -178,18 +232,7 @@ async def update_user_status(
         current_user=current_user
     )
     
-    return UserResponse(
-        id=str(user.id),
-        email=user.email,
-        profile=user.profile,
-        is_active=user.is_active,
-        is_system_user=user.is_system_user,
-        email_verified=user.email_verified,
-        last_login=user.last_login,
-        last_password_change=user.last_password_change,
-        created_at=user.created_at,
-        updated_at=user.updated_at
-    )
+    return await _user_to_response(user)
 
 
 @router.post("/invite", response_model=UserInviteResponse, dependencies=[Depends(require_user_manage)])
@@ -212,18 +255,7 @@ async def invite_user(
         send_email=invite_request.send_email
     )
     
-    user_response = UserResponse(
-        id=str(user.id),
-        email=user.email,
-        profile=user.profile,
-        is_active=user.is_active,
-        is_system_user=user.is_system_user,
-        email_verified=user.email_verified,
-        last_login=user.last_login,
-        last_password_change=user.last_password_change,
-        created_at=user.created_at,
-        updated_at=user.updated_at
-    )
+    user_response = await _user_to_response(user)
     
     # Return temporary password if user was created
     temp_password = None
