@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { useState, useMemo } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { AppSidebar } from "@/components/app-sidebar";
 import {
   Breadcrumb,
@@ -26,7 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Search, Building2, ChevronRight } from "lucide-react";
+import { Plus, Search, Building2, ChevronRight, FolderOpen, Folder } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { authenticatedFetch } from "@/lib/auth";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -47,8 +47,12 @@ export const Route = createFileRoute("/entities/")({
   component: Entities,
 });
 
-async function fetchEntities(): Promise<Entity[]> {
-  const response = await authenticatedFetch("/v1/entities/");
+async function fetchEntities(parentId?: string): Promise<Entity[]> {
+  let url = "/v1/entities/";
+  if (parentId) {
+    url += `?parent_entity_id=${parentId}`;
+  }
+  const response = await authenticatedFetch(url);
   if (!response.ok) {
     const errorData = await response.json();
     throw new Error(errorData.detail || "Failed to fetch entities");
@@ -60,6 +64,15 @@ async function fetchEntities(): Promise<Entity[]> {
   }
   // Fallback for unexpected response format
   return Array.isArray(data) ? data : [];
+}
+
+async function fetchEntityPath(entityId: string): Promise<Entity[]> {
+  const response = await authenticatedFetch(`/v1/entities/${entityId}/path`);
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.detail || "Failed to fetch entity path");
+  }
+  return response.json();
 }
 
 function EntityTypeBadge({ type }: { type: EntityType }) {
@@ -84,15 +97,39 @@ function EntityTypeBadge({ type }: { type: EntityType }) {
   );
 }
 
-function EntityCard({ entity, onClick }: { entity: Entity; onClick: () => void }) {
+function EntityCard({ 
+  entity, 
+  onNavigate, 
+  onEdit,
+  hasChildren 
+}: { 
+  entity: Entity; 
+  onNavigate: () => void; 
+  onEdit: () => void;
+  hasChildren?: boolean;
+}) {
   return (
-    <Card className="cursor-pointer hover:shadow-md transition-shadow" onClick={onClick}>
-      <CardHeader>
+    <Card className="group hover:shadow-md transition-shadow">
+      <CardHeader 
+        className="cursor-pointer" 
+        onClick={hasChildren ? onNavigate : undefined}
+      >
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-xl">{getEntityClassIcon(entity.entity_class)}</span>
+          <div className="flex items-center gap-3">
+            <div className="text-2xl">
+              {hasChildren ? (
+                <FolderOpen className="h-6 w-6 text-muted-foreground group-hover:text-foreground transition-colors" />
+              ) : (
+                getEntityTypeIcon(entity.entity_type)
+              )}
+            </div>
             <div>
-              <CardTitle className="text-lg">{entity.name}</CardTitle>
+              <CardTitle className="text-lg flex items-center gap-2">
+                {entity.name}
+                {hasChildren && (
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                )}
+              </CardTitle>
               {entity.slug && (
                 <p className="text-xs text-muted-foreground mt-0.5">{entity.slug}</p>
               )}
@@ -105,32 +142,25 @@ function EntityCard({ entity, onClick }: { entity: Entity; onClick: () => void }
             </Badge>
           </div>
         </div>
-        <CardDescription className="mt-2">
-          {entity.description || "No description available"}
-        </CardDescription>
+        {entity.description && (
+          <CardDescription className="mt-2">
+            {entity.description}
+          </CardDescription>
+        )}
       </CardHeader>
       <CardContent>
-        <div className="space-y-2">
-          {entity.parent_entity && typeof entity.parent_entity === 'object' && (
-            <div className="flex items-center text-sm text-muted-foreground">
-              <ChevronRight className="h-3 w-3 mr-1" />
-              <span className="font-medium">Parent:</span>
-              <span className="ml-1">{entity.parent_entity.name}</span>
-            </div>
-          )}
-          {entity.max_members && (
-            <div className="text-sm text-muted-foreground">
-              <span className="font-medium">Max Members:</span> {entity.max_members}
-            </div>
-          )}
-          <div className="flex items-center justify-between text-sm text-muted-foreground">
-            <span>Created {new Date(entity.created_at).toLocaleDateString()}</span>
-            {entity.direct_permissions.length > 0 && (
-              <Badge variant="outline" className="text-xs">
-                {entity.direct_permissions.length} permissions
-              </Badge>
-            )}
-          </div>
+        <div className="flex items-center justify-between text-sm text-muted-foreground">
+          <span>Created {new Date(entity.created_at).toLocaleDateString()}</span>
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit();
+            }}
+          >
+            Edit
+          </Button>
         </div>
       </CardContent>
     </Card>
@@ -139,34 +169,62 @@ function EntityCard({ entity, onClick }: { entity: Entity; onClick: () => void }
 
 function EntitiesContent({ 
   onEditEntity,
+  onNavigateToEntity,
   searchQuery,
   classFilter,
-  typeFilter 
+  typeFilter,
+  currentEntityId,
+  childCounts
 }: { 
   onEditEntity: (entity: Entity) => void;
+  onNavigateToEntity: (entityId: string | null) => void;
   searchQuery: string;
   classFilter: string;
   typeFilter: string;
+  currentEntityId: string | null;
+  childCounts: Map<string, number>;
 }) {
   const { data: entities, isLoading, error } = useQuery({
-    queryKey: ["entities"],
-    queryFn: fetchEntities,
+    queryKey: ["entities", currentEntityId],
+    queryFn: () => fetchEntities(currentEntityId || undefined),
+  });
+
+  // Fetch current entity details if we're not at root
+  const { data: currentEntity } = useQuery({
+    queryKey: ["entity", currentEntityId],
+    queryFn: async () => {
+      if (!currentEntityId) return null;
+      const response = await authenticatedFetch(`/v1/entities/${currentEntityId}`);
+      if (!response.ok) throw new Error("Failed to fetch entity");
+      return response.json();
+    },
+    enabled: !!currentEntityId,
+  });
+
+  // Fetch breadcrumb path
+  const { data: breadcrumbPath } = useQuery({
+    queryKey: ["entity-path", currentEntityId],
+    queryFn: () => currentEntityId ? fetchEntityPath(currentEntityId) : Promise.resolve([]),
+    enabled: !!currentEntityId,
   });
 
   if (isLoading) {
     return (
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {[1, 2, 3].map((i) => (
-          <Card key={i}>
-            <CardHeader>
-              <Skeleton className="h-4 w-24" />
-              <Skeleton className="h-3 w-full mt-2" />
-            </CardHeader>
-            <CardContent>
-              <Skeleton className="h-20 w-full" />
-            </CardContent>
-          </Card>
-        ))}
+      <div className="space-y-4">
+        <Skeleton className="h-10 w-full" />
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {[1, 2, 3].map((i) => (
+            <Card key={i}>
+              <CardHeader>
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-3 w-full mt-2" />
+              </CardHeader>
+              <CardContent>
+                <Skeleton className="h-20 w-full" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       </div>
     );
   }
@@ -181,7 +239,7 @@ function EntitiesContent({
     );
   }
 
-  // Filter entities - ensure we have an array
+  // Filter entities
   let filteredEntities = Array.isArray(entities) ? entities : [];
   
   if (searchQuery) {
@@ -204,63 +262,119 @@ function EntitiesContent({
     );
   }
 
-  if (filteredEntities.length === 0) {
-    return (
-      <Card>
-        <CardContent className="pt-6">
-          <div className="text-center py-8">
-            <Building2 className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <h3 className="text-lg font-semibold mb-2">No Entities Found</h3>
-            <p className="text-muted-foreground mb-4">
-              {searchQuery || classFilter !== "all" || typeFilter !== "all" 
-                ? "Try adjusting your filters or search query"
-                : "Create your first entity to start building your organizational structure"}
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-    );
+  // Filter to only show root entities when no current entity
+  if (!currentEntityId) {
+    filteredEntities = filteredEntities.filter(entity => !entity.parent_entity_id);
   }
 
-  // Group entities by class for better organization
-  const structuralEntities = filteredEntities.filter(isStructuralEntity);
-  const accessGroups = filteredEntities.filter(e => !isStructuralEntity(e));
-
   return (
-    <div className="space-y-6">
-      {structuralEntities.length > 0 && (
-        <div>
-          <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-            <span>{getEntityClassIcon(EntityClass.STRUCTURAL)}</span>
-            Structural Entities
-          </h3>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {structuralEntities.map((entity) => (
-              <EntityCard 
-                key={entity.id} 
-                entity={entity} 
-                onClick={() => onEditEntity(entity)}
-              />
-            ))}
-          </div>
+    <div className="space-y-4">
+      {/* Breadcrumb Navigation */}
+      {breadcrumbPath && breadcrumbPath.length > 0 && (
+        <div className="flex items-center gap-2 text-sm">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onNavigateToEntity(null)}
+            className="h-8 px-2"
+          >
+            <Building2 className="h-4 w-4 mr-1" />
+            All Entities
+          </Button>
+          {breadcrumbPath.map((entity, index) => (
+            <div key={entity.id} className="flex items-center gap-2">
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onNavigateToEntity(entity.id)}
+                className="h-8 px-2"
+                disabled={index === breadcrumbPath.length - 1}
+              >
+                {getEntityTypeIcon(entity.entity_type)} {entity.name}
+              </Button>
+            </div>
+          ))}
         </div>
       )}
-      
-      {accessGroups.length > 0 && (
-        <div>
-          <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-            <span>{getEntityClassIcon(EntityClass.ACCESS_GROUP)}</span>
-            Access Groups
-          </h3>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {accessGroups.map((entity) => (
-              <EntityCard 
-                key={entity.id} 
-                entity={entity} 
-                onClick={() => onEditEntity(entity)}
-              />
-            ))}
-          </div>
+
+      {/* Current Entity Info */}
+      {currentEntity && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">{getEntityTypeIcon(currentEntity.entity_type)}</span>
+                <div>
+                  <CardTitle>{currentEntity.name}</CardTitle>
+                  <CardDescription>{currentEntity.description || "No description"}</CardDescription>
+                </div>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => onEditEntity(currentEntity)}>
+                Edit
+              </Button>
+            </div>
+          </CardHeader>
+        </Card>
+      )}
+
+      {/* Entity List */}
+      {filteredEntities.length === 0 ? (
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-center py-8">
+              <Building2 className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+              <h3 className="text-lg font-semibold mb-2">No Child Entities</h3>
+              <p className="text-muted-foreground mb-4">
+                {currentEntity 
+                  ? `No entities found under ${currentEntity.name}`
+                  : "Create your first entity to start building your organizational structure"}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-6">
+          {/* Group by class */}
+          {filteredEntities.filter(isStructuralEntity).length > 0 && (
+            <div>
+              <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                <span>{getEntityClassIcon(EntityClass.STRUCTURAL)}</span>
+                Structural Entities
+              </h3>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {filteredEntities.filter(isStructuralEntity).map((entity) => (
+                  <EntityCard 
+                    key={entity.id} 
+                    entity={entity} 
+                    onNavigate={() => onNavigateToEntity(entity.id)}
+                    onEdit={() => onEditEntity(entity)}
+                    hasChildren={childCounts.get(entity.id) > 0}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {filteredEntities.filter(e => !isStructuralEntity(e)).length > 0 && (
+            <div>
+              <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                <span>{getEntityClassIcon(EntityClass.ACCESS_GROUP)}</span>
+                Access Groups
+              </h3>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {filteredEntities.filter(e => !isStructuralEntity(e)).map((entity) => (
+                  <EntityCard 
+                    key={entity.id} 
+                    entity={entity} 
+                    onNavigate={() => onNavigateToEntity(entity.id)}
+                    onEdit={() => onEditEntity(entity)}
+                    hasChildren={childCounts.get(entity.id) > 0}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -274,6 +388,26 @@ function Entities() {
   const [searchQuery, setSearchQuery] = useState("");
   const [classFilter, setClassFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [currentEntityId, setCurrentEntityId] = useState<string | null>(null);
+  const [childCounts] = useState(new Map<string, number>());
+  
+  // Fetch all entities to calculate child counts
+  const { data: allEntities } = useQuery({
+    queryKey: ["all-entities"],
+    queryFn: () => fetchEntities(),
+  });
+  
+  // Calculate child counts
+  useMemo(() => {
+    if (!allEntities) return;
+    childCounts.clear();
+    allEntities.forEach(entity => {
+      if (entity.parent_entity_id) {
+        const count = childCounts.get(entity.parent_entity_id) || 0;
+        childCounts.set(entity.parent_entity_id, count + 1);
+      }
+    });
+  }, [allEntities, childCounts]);
   
   const handleCreateEntity = () => {
     setDrawerMode("create");
@@ -285,6 +419,14 @@ function Entities() {
     setDrawerMode("edit");
     setSelectedEntity(entity);
     setDrawerOpen(true);
+  };
+  
+  const handleNavigateToEntity = (entityId: string | null) => {
+    setCurrentEntityId(entityId);
+    // Reset filters when navigating
+    setSearchQuery("");
+    setClassFilter("all");
+    setTypeFilter("all");
   };
   
   return (
@@ -312,9 +454,13 @@ function Entities() {
           <div className="mx-auto w-full max-w-7xl">
             <div className="flex items-center justify-between mb-6">
               <div>
-                <h1 className="text-2xl font-bold tracking-tight">Entity Management</h1>
+                <h1 className="text-2xl font-bold tracking-tight">
+                  {currentEntityId ? "Entity Details" : "Entity Management"}
+                </h1>
                 <p className="text-muted-foreground">
-                  Manage your organizational structure and access groups
+                  {currentEntityId 
+                    ? "Navigate through your organizational hierarchy"
+                    : "Manage your organizational structure and access groups"}
                 </p>
               </div>
               <Button onClick={handleCreateEntity}>
@@ -391,9 +537,12 @@ function Entities() {
             
             <EntitiesContent 
               onEditEntity={handleEditEntity}
+              onNavigateToEntity={handleNavigateToEntity}
               searchQuery={searchQuery}
               classFilter={classFilter}
               typeFilter={typeFilter}
+              currentEntityId={currentEntityId}
+              childCounts={childCounts}
             />
           </div>
         </div>
@@ -404,6 +553,7 @@ function Entities() {
         onOpenChange={setDrawerOpen}
         mode={drawerMode}
         entity={selectedEntity}
+        defaultParentId={currentEntityId}
       />
     </SidebarProvider>
   );

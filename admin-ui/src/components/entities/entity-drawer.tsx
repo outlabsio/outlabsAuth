@@ -62,6 +62,7 @@ interface EntityDrawerProps {
   onOpenChange: (open: boolean) => void;
   mode: "create" | "edit";
   entity?: Entity | null;
+  defaultParentId?: string | null;
 }
 
 // Entity type options based on class
@@ -127,7 +128,7 @@ async function updateEntity(id: string, data: Partial<Entity>) {
   return response.json();
 }
 
-export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerProps) {
+export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId }: EntityDrawerProps) {
   const queryClient = useQueryClient();
   const isEditMode = mode === "edit";
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -268,10 +269,18 @@ export function EntityDrawer({ open, onOpenChange, mode, entity }: EntityDrawerP
   // Reset form when switching to create mode
   useEffect(() => {
     if (!isEditMode && open) {
-      form.reset();
+      form.reset({
+        name: "",
+        description: "",
+        entity_class: EntityClass.STRUCTURAL,
+        entity_type: EntityType.ORGANIZATION,
+        parent_entity: defaultParentId || "none",
+        status: "active",
+        max_members: "",
+      });
       setSelectedClass(EntityClass.STRUCTURAL);
     }
-  }, [isEditMode, open]);
+  }, [isEditMode, open, defaultParentId]);
 
   // Get available entity types based on selected class
   const availableTypes = selectedClass === EntityClass.STRUCTURAL 
