@@ -6,7 +6,8 @@
       "Bash(docker compose:*)",
       "Bash(chmod:*)",
       "Bash(uv run:*)",
-      "Bash(/tmp/test_custom_permissions.sh:*)"
+      "Bash(/tmp/test_custom_permissions.sh:*)",
+      "Bash(bun run:*)"
     ],
     "deny": []
   }
