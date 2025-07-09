@@ -8,8 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-async function initializePlatform(values: { email: string; password: string }) {
-  const response = await fetch("/v1/platform/initialize", {
+async function initializeSystem(values: { email: string; password: string }) {
+  const response = await fetch("/v1/system/initialize", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(values),
@@ -17,7 +17,7 @@ async function initializePlatform(values: { email: string; password: string }) {
 
   if (!response.ok) {
     const errorData = await response.json();
-    throw new Error(errorData.detail || "Failed to initialize platform");
+    throw new Error(errorData.detail || "Failed to initialize system");
   }
 
   return response.json();
@@ -31,7 +31,7 @@ function SetupComponent() {
   const router = useRouter();
 
   const mutation = useMutation({
-    mutationFn: initializePlatform,
+    mutationFn: initializeSystem,
     onSuccess: () => {
       // On successful creation, redirect to the login page
       router.navigate({ to: "/login" });
@@ -59,8 +59,8 @@ function SetupComponent() {
         </a>
         <Card>
           <CardHeader className='text-center'>
-            <CardTitle className='text-xl'>Platform Setup</CardTitle>
-            <CardDescription>Create the first Super Admin account to initialize the platform</CardDescription>
+            <CardTitle className='text-xl'>System Setup</CardTitle>
+            <CardDescription>Create the first Super Admin account to initialize the system</CardDescription>
           </CardHeader>
           <CardContent>
             <form
@@ -126,7 +126,7 @@ function SetupComponent() {
                   selector={(state) => [state.canSubmit, state.isSubmitting]}
                   children={([canSubmit, isSubmitting]) => (
                     <Button type='submit' className='w-full' disabled={!canSubmit || isSubmitting}>
-                      {isSubmitting || mutation.isPending ? "Initializing..." : "Initialize Platform"}
+                      {isSubmitting || mutation.isPending ? "Initializing..." : "Initialize System"}
                     </Button>
                   )}
                 />
@@ -134,7 +134,7 @@ function SetupComponent() {
             </form>
           </CardContent>
         </Card>
-        <div className='text-muted-foreground text-center text-xs text-balance'>This will create your first Super Admin account and complete the platform setup.</div>
+        <div className='text-muted-foreground text-center text-xs text-balance'>This will create your first Super Admin account and complete the system setup.</div>
       </div>
     </div>
   );

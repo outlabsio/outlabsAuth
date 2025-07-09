@@ -176,8 +176,13 @@ class SystemService:
         logger.info("Created system roles")
         
         # Step 3: Create the superuser
+        # Hash the password first
+        auth_service = AuthService()
+        hashed_password = auth_service.hash_password(password)
+        
         user = UserModel(
             email=email.lower(),
+            hashed_password=hashed_password,  # Include hashed password in creation
             is_active=True,
             is_verified=True,  # Auto-verify the first user
             is_system_user=True,  # Mark as system user
@@ -191,10 +196,6 @@ class SystemService:
             created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc)
         )
-        
-        # Hash the password
-        auth_service = AuthService()
-        user.hashed_password = auth_service.hash_password(password)
         
         # Save the user
         await user.save()

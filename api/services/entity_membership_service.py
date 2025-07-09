@@ -410,8 +410,8 @@ class EntityMembershipService:
             HTTPException: If role cannot be assigned
         """
         # Check if role belongs to the same entity or a parent
-        if role.entity_id:
-            role_entity = await RoleModel.get(role.entity_id)
+        if role.entity:
+            role_entity = await role.entity.fetch()
             if role_entity:
                 # Get entity path
                 entity_path = await EntityMembershipService._get_entity_ancestors(entity)

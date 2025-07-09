@@ -109,6 +109,3 @@ app.include_router(permission_routes.router, prefix="/v1/permissions", tags=["Pe
 
 # System routes
 app.include_router(system_routes.router, prefix="/v1/system", tags=["System"])
-
-# Backward compatibility routes for frontend
-app.include_router(system_routes.router, prefix="/v1", tags=["System (Legacy)"])

@@ -1,10 +1,10 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 
-// Helper function to query the platform status
-const getPlatformStatus = async (): Promise<{ initialized: boolean }> => {
-  const response = await fetch("/v1/platform/status");
+// Helper function to query the system status
+const getSystemStatus = async (): Promise<{ initialized: boolean }> => {
+  const response = await fetch("/v1/system/status");
   if (!response.ok) {
-    throw new Error("Failed to fetch platform status");
+    throw new Error("Failed to fetch system status");
   }
   return response.json();
 };
@@ -20,8 +20,8 @@ export const Route = createFileRoute("/")({
         });
       }
 
-      // If not authenticated, check platform status
-      const status = await getPlatformStatus();
+      // If not authenticated, check system status
+      const status = await getSystemStatus();
       if (status.initialized) {
         throw redirect({
           to: "/login",
@@ -51,7 +51,7 @@ function Index() {
   return (
     <div className='p-2'>
       <h3>Loading...</h3>
-      <p>Determining platform status. You should be redirected shortly.</p>
+      <p>Determining system status. You should be redirected shortly.</p>
     </div>
   );
 }

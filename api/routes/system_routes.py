@@ -97,32 +97,3 @@ async def reset_system(
     
     result = await system_service.reset_system(request.confirmation)
     return result
-
-
-# Additional routes for backward compatibility with frontend
-@router.get("/platform/status", response_model=SystemStatusResponse, deprecated=True)
-async def get_platform_status():
-    """
-    Get platform initialization status (DEPRECATED)
-    
-    Use /v1/system/status instead. This endpoint is kept for backward compatibility.
-    """
-    status = await system_service.get_system_status()
-    return SystemStatusResponse(**status)
-
-
-@router.post("/platform/initialize", response_model=SystemInitializeResponse, deprecated=True)
-async def initialize_platform(request: SystemInitializeRequest):
-    """
-    Initialize the platform (DEPRECATED)
-    
-    Use /v1/system/initialize instead. This endpoint is kept for backward compatibility.
-    """
-    result = await system_service.initialize_system(
-        email=request.email,
-        password=request.password,
-        first_name=request.first_name,
-        last_name=request.last_name
-    )
-    
-    return SystemInitializeResponse(**result)
