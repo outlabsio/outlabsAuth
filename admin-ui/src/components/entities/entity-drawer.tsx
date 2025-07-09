@@ -1,6 +1,6 @@
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import {
   Drawer,
   DrawerContent,
@@ -144,12 +144,42 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
     enabled: open,
   });
 
-  // Filter potential parent entities (only structural entities can be parents)
-  const potentialParents = allEntities?.filter(
-    e => e.entity_class === EntityClass.STRUCTURAL && 
-         e.status === "active" && // Only show active entities
-         (!isEditMode || e.id !== entity?.id)
-  ) || [];
+  // Filter potential parent entities based on context
+  const potentialParents = useMemo(() => {
+    if (!allEntities) return [];
+    
+    let filtered = allEntities.filter(
+      e => e.entity_class === EntityClass.STRUCTURAL && 
+           e.status === "active" && 
+           (!isEditMode || e.id !== entity?.id)
+    );
+    
+    // If we have a default parent (creating within a context), 
+    // only show that parent and its ancestors
+    if (defaultParentId && !isEditMode) {
+      const contextEntity = allEntities.find(e => e.id === defaultParentId);
+      if (contextEntity) {
+        // Get the context entity and all its ancestors
+        const allowedIds = new Set<string>([defaultParentId]);
+        
+        // Find all ancestors of the context entity
+        let current = contextEntity;
+        while (current.parent_entity_id) {
+          const parent = allEntities.find(e => e.id === current.parent_entity_id);
+          if (parent) {
+            allowedIds.add(parent.id);
+            current = parent;
+          } else {
+            break;
+          }
+        }
+        
+        filtered = filtered.filter(e => allowedIds.has(e.id));
+      }
+    }
+    
+    return filtered;
+  }, [allEntities, defaultParentId, isEditMode, entity?.id]);
 
   const mutation = useMutation({
     mutationFn: (data: Partial<Entity>) =>
@@ -453,27 +483,29 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                         <PopoverContent className="w-full p-0" align="start">
                           <Command>
                             <CommandInput 
-                              placeholder="Search entities..." 
+                              placeholder={potentialParents.length > 0 ? "Search parent entities..." : "No other options available"} 
                               className="h-9"
                             />
                             <CommandList>
                               <CommandEmpty>No entities found.</CommandEmpty>
                               <CommandGroup>
-                                <CommandItem
-                                  value="none"
-                                  onSelect={() => {
-                                    field.handleChange("none");
-                                    setParentEntityOpen(false);
-                                  }}
-                                >
-                                  <Check
-                                    className={cn(
-                                      "mr-2 h-4 w-4",
-                                      field.state.value === "none" ? "opacity-100" : "opacity-0"
-                                    )}
-                                  />
-                                  No parent (root entity)
-                                </CommandItem>
+                                {(!defaultParentId || isEditMode) && (
+                                  <CommandItem
+                                    value="none"
+                                    onSelect={() => {
+                                      field.handleChange("none");
+                                      setParentEntityOpen(false);
+                                    }}
+                                  >
+                                    <Check
+                                      className={cn(
+                                        "mr-2 h-4 w-4",
+                                        field.state.value === "none" ? "opacity-100" : "opacity-0"
+                                      )}
+                                    />
+                                    No parent (root entity)
+                                  </CommandItem>
+                                )}
                                 {potentialParents.map(parent => (
                                   <CommandItem
                                     key={parent.id}
@@ -506,7 +538,9 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                         </PopoverContent>
                       </Popover>
                       <p className="text-xs text-muted-foreground">
-                        Create a hierarchy by selecting a parent entity
+                        {defaultParentId && !isEditMode 
+                          ? "Parent selection is limited to the current context and its ancestors"
+                          : "Create a hierarchy by selecting a parent entity"}
                       </p>
                     </div>
                   );
