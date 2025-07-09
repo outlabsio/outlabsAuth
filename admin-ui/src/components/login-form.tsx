@@ -41,7 +41,11 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"div">) 
       
       queryClient.invalidateQueries({ queryKey: ["user"] });
       toast.success("Login successful!");
-      router.navigate({ to: "/dashboard" });
+      
+      // Small delay to ensure state is persisted
+      setTimeout(() => {
+        router.navigate({ to: "/dashboard" });
+      }, 100);
     },
     onError: (error: Error) => {
       toast.error(error.message || "Login failed");
