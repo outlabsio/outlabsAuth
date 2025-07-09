@@ -235,8 +235,12 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
       }
     },
     onSuccess: () => {
+      // Invalidate all entity-related queries
       queryClient.invalidateQueries({ queryKey: ["entities"] });
-      toast.success("Entity deleted successfully!");
+      queryClient.invalidateQueries({ queryKey: ["all-entities"] });
+      queryClient.invalidateQueries({ queryKey: ["entity"] });
+      queryClient.invalidateQueries({ queryKey: ["entity-path"] });
+      toast.success("Entity archived successfully!");
       onOpenChange(false);
       setShowDeleteDialog(false);
     },
@@ -312,10 +316,35 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
     }
   }, [isEditMode, open, defaultParentId]);
 
-  // Get available entity types based on selected class
-  const availableTypes = selectedClass === EntityClass.STRUCTURAL 
-    ? structuralTypes 
-    : accessGroupTypes;
+  // Get available entity types based on selected class and parent
+  const availableTypes = useMemo(() => {
+    if (selectedClass === EntityClass.ACCESS_GROUP) {
+      return accessGroupTypes;
+    }
+    
+    // For structural entities, filter based on parent's allowed children
+    if (!isEditMode && form.state.values.parent_entity && form.state.values.parent_entity !== "none") {
+      const parentEntity = potentialParents.find(p => p.id === form.state.values.parent_entity);
+      if (parentEntity) {
+        // Define hierarchy rules matching backend
+        const hierarchyRules: Record<string, EntityType[]> = {
+          [EntityType.PLATFORM]: [EntityType.ORGANIZATION],
+          [EntityType.ORGANIZATION]: [EntityType.BRANCH, EntityType.TEAM],
+          [EntityType.BRANCH]: [EntityType.TEAM],
+          [EntityType.TEAM]: [], // Teams can't have structural children
+        };
+        
+        return hierarchyRules[parentEntity.entity_type] || [];
+      }
+    }
+    
+    // If no parent selected, only platforms can be created at root
+    if (!form.state.values.parent_entity || form.state.values.parent_entity === "none") {
+      return [EntityType.PLATFORM];
+    }
+    
+    return structuralTypes;
+  }, [selectedClass, isEditMode, form.state.values.parent_entity, potentialParents]);
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange} direction="right">
@@ -429,24 +458,33 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
               {(field) => (
                 <div className="space-y-2">
                   <Label htmlFor="entity_type">Entity Type</Label>
-                  <Select
-                    value={field.state.value}
-                    onValueChange={(value: EntityType) => field.handleChange(value)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableTypes.map(type => (
-                        <SelectItem key={type} value={type}>
-                          <div className="flex items-center gap-2">
-                            <span>{getEntityTypeIcon(type)}</span>
-                            <span>{getEntityTypeLabel(type)}</span>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  {availableTypes.length === 0 && selectedClass === EntityClass.STRUCTURAL ? (
+                    <div className="rounded-lg border border-muted bg-muted/50 p-3">
+                      <p className="text-sm text-muted-foreground">
+                        The selected parent entity cannot have structural children.
+                        Consider creating an access group instead.
+                      </p>
+                    </div>
+                  ) : (
+                    <Select
+                      value={field.state.value}
+                      onValueChange={(value: EntityType) => field.handleChange(value)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableTypes.map(type => (
+                          <SelectItem key={type} value={type}>
+                            <div className="flex items-center gap-2">
+                              <span>{getEntityTypeIcon(type)}</span>
+                              <span>{getEntityTypeLabel(type)}</span>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                 </div>
               )}
             </form.Field>
@@ -495,6 +533,10 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                                     onSelect={() => {
                                       field.handleChange("none");
                                       setParentEntityOpen(false);
+                                      // Reset entity type to platform when no parent
+                                      if (form.state.values.entity_class === EntityClass.STRUCTURAL) {
+                                        form.setFieldValue("entity_type", EntityType.PLATFORM);
+                                      }
                                     }}
                                   >
                                     <Check
@@ -513,6 +555,19 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                                     onSelect={() => {
                                       field.handleChange(parent.id);
                                       setParentEntityOpen(false);
+                                      // Reset entity type based on parent's allowed children
+                                      if (form.state.values.entity_class === EntityClass.STRUCTURAL) {
+                                        const hierarchyRules: Record<string, EntityType[]> = {
+                                          [EntityType.PLATFORM]: [EntityType.ORGANIZATION],
+                                          [EntityType.ORGANIZATION]: [EntityType.BRANCH, EntityType.TEAM],
+                                          [EntityType.BRANCH]: [EntityType.TEAM],
+                                          [EntityType.TEAM]: [],
+                                        };
+                                        const allowedTypes = hierarchyRules[parent.entity_type] || [];
+                                        if (allowedTypes.length > 0 && !allowedTypes.includes(form.state.values.entity_type)) {
+                                          form.setFieldValue("entity_type", allowedTypes[0]);
+                                        }
+                                      }
                                     }}
                                   >
                                     <Check
@@ -603,15 +658,15 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
               <div className="mt-8 space-y-4 rounded-lg border border-destructive/20 bg-destructive/5 p-4">
                 <div className="flex items-center gap-2">
                   <AlertTriangle className="h-5 w-5 text-destructive" />
-                  <h3 className="font-semibold text-destructive">Danger Zone</h3>
+                  <h3 className="font-semibold text-destructive">Archive Zone</h3>
                 </div>
 
                 <div className="space-y-4">
                   <div>
-                    <h4 className="font-medium">Delete this entity</h4>
+                    <h4 className="font-medium">Archive this entity</h4>
                     <p className="text-sm text-muted-foreground mt-1">
-                      Once you delete an entity, there is no going back. This will permanently delete
-                      the entity and all associated memberships and permissions.
+                      Archiving an entity will soft-delete it, removing it from active lists
+                      and revoking all memberships. Archived entities are not permanently deleted.
                     </p>
                   </div>
 
@@ -620,7 +675,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                     onClick={async () => {
                       // Check if entity has children
                       if (entity) {
-                        const response = await authenticatedFetch(`/v1/entities/?parent_entity_id=${entity.id}`);
+                        const response = await authenticatedFetch(`/v1/entities/?parent_entity_id=${entity.id}&status=active`);
                         if (response.ok) {
                           const data = await response.json();
                           setHasChildren(data.total > 0);
@@ -631,7 +686,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                     className="w-full"
                   >
                     <Trash2 className="mr-2 h-4 w-4" />
-                    Delete Entity
+                    Archive Entity
                   </Button>
                 </div>
               </div>
@@ -674,54 +729,56 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-            <AlertDialogDescription className="space-y-3">
-              <p>
-                This action cannot be undone. This will permanently delete the entity
-                <span className="font-semibold"> {entity?.name}</span> and remove all
-                associated data:
-              </p>
-              <ul className="list-disc list-inside space-y-1 text-sm">
-                <li>All user memberships in this entity</li>
-                <li>All permissions assigned to this entity</li>
-                {hasChildren && <li className="text-destructive font-semibold">All child entities and their data</li>}
-              </ul>
-              
-              {hasChildren && (
-                <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 space-y-3">
-                  <div className="flex items-start gap-2">
-                    <AlertTriangle className="h-5 w-5 text-destructive mt-0.5" />
-                    <div className="space-y-1">
-                      <p className="font-semibold text-destructive">
-                        Warning: This entity has child entities!
-                      </p>
-                      <p className="text-sm">
-                        Deleting this entity will require cascading deletion of all its children.
-                        This operation cannot be undone.
-                      </p>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3">
+                <p>
+                  This will archive the entity
+                  <span className="font-semibold"> {entity?.name}</span> and:
+                </p>
+                <ul className="list-disc list-inside space-y-1 text-sm">
+                  <li>Remove it from all active lists</li>
+                  <li>Revoke all user memberships in this entity</li>
+                  <li>Disable all permissions assigned to this entity</li>
+                  {hasChildren && <li className="text-destructive font-semibold">Archive all child entities and their data</li>}
+                </ul>
+                
+                {hasChildren && (
+                  <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 space-y-3">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="h-5 w-5 text-destructive mt-0.5" />
+                      <div className="space-y-1">
+                        <p className="font-semibold text-destructive">
+                          Warning: This entity has child entities!
+                        </p>
+                        <p className="text-sm">
+                          Deleting this entity will require cascading deletion of all its children.
+                          This operation cannot be undone.
+                        </p>
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-center space-x-2">
+                      <Checkbox 
+                        id="cascade-delete" 
+                        checked={enableCascade}
+                        onCheckedChange={(checked) => setEnableCascade(checked as boolean)}
+                      />
+                      <label
+                        htmlFor="cascade-delete"
+                        className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                      >
+                        I understand and want to archive all child entities
+                      </label>
                     </div>
                   </div>
-                  
-                  <div className="flex items-center space-x-2">
-                    <Checkbox 
-                      id="cascade-delete" 
-                      checked={enableCascade}
-                      onCheckedChange={(checked) => setEnableCascade(checked as boolean)}
-                    />
-                    <label
-                      htmlFor="cascade-delete"
-                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
-                    >
-                      I understand and want to delete all child entities
-                    </label>
-                  </div>
-                </div>
-              )}
-              
-              {!hasChildren && (
-                <p className="font-semibold text-destructive">
-                  This is a destructive action that cannot be reversed.
-                </p>
-              )}
+                )}
+                
+                {!hasChildren && (
+                  <p className="text-sm text-muted-foreground">
+                    The entity will be archived and removed from active views.
+                  </p>
+                )}
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -737,7 +794,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                   Deleting...
                 </>
               ) : (
-                "Delete Entity"
+                "Archive Entity"
               )}
             </AlertDialogAction>
           </AlertDialogFooter>

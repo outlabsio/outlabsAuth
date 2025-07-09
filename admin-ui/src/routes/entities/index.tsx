@@ -47,10 +47,17 @@ export const Route = createFileRoute("/entities/")({
   component: Entities,
 });
 
-async function fetchEntities(parentId?: string): Promise<Entity[]> {
+async function fetchEntities(parentId?: string, includeArchived: boolean = false): Promise<Entity[]> {
   let url = "/v1/entities/";
+  const params = new URLSearchParams();
   if (parentId) {
-    url += `?parent_entity_id=${parentId}`;
+    params.append("parent_entity_id", parentId);
+  }
+  if (!includeArchived) {
+    params.append("status", "active");
+  }
+  if (params.toString()) {
+    url += `?${params.toString()}`;
   }
   const response = await authenticatedFetch(url);
   if (!response.ok) {

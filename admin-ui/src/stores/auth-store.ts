@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import { isTokenExpired, willTokenExpireSoon } from '@/lib/jwt';
+import { isTokenExpired, willTokenExpireSoon, getTokenRemainingTime } from '@/lib/jwt';
 import { apiUrl } from '@/config';
 
 interface User {
@@ -84,7 +84,10 @@ export const useAuthStore = create<AuthState>()(
         }
         
         // Initialize automatic token refresh
-        get().initializeTokenRefresh();
+        // Use setTimeout to avoid blocking the login flow
+        setTimeout(() => {
+          get().initializeTokenRefresh();
+        }, 0);
       },
 
       // Logout action
@@ -109,9 +112,11 @@ export const useAuthStore = create<AuthState>()(
         
         // Prevent multiple simultaneous refresh attempts
         if (isRefreshing || !tokens?.refresh_token) {
+          console.log('[Auth] Skipping refresh - already refreshing or no refresh token');
           return;
         }
 
+        console.log('[Auth] Starting token refresh...');
         set({ isRefreshing: true });
 
         try {
@@ -127,16 +132,20 @@ export const useAuthStore = create<AuthState>()(
 
           if (response.ok) {
             const newTokens: AuthTokens = await response.json();
+            console.log('[Auth] Token refresh successful');
             set({ 
               tokens: newTokens, 
               isAuthenticated: true 
             });
           } else {
+            console.error('[Auth] Token refresh failed with status:', response.status);
+            const errorText = await response.text();
+            console.error('[Auth] Error response:', errorText);
             // Refresh failed, logout
             get().logout();
           }
         } catch (error) {
-          console.error('Token refresh failed:', error);
+          console.error('[Auth] Token refresh failed with error:', error);
           get().logout();
         } finally {
           set({ isRefreshing: false });
@@ -174,11 +183,11 @@ export const useAuthStore = create<AuthState>()(
         return !isTokenExpired(token);
       },
 
-      // Check if token should be refreshed (expires in less than 2 minutes)
+      // Check if token should be refreshed (expires in less than 5 minutes)
       shouldRefreshToken: () => {
         const token = get().tokens?.access_token;
         if (!token) return false;
-        return willTokenExpireSoon(token, 120); // 2 minutes
+        return willTokenExpireSoon(token, 300); // 5 minutes
       },
 
       // Initialize automatic token refresh
@@ -190,14 +199,32 @@ export const useAuthStore = create<AuthState>()(
           clearInterval(refreshInterval);
         }
 
+        // Do an immediate check (async to not block)
+        setTimeout(() => {
+          const state = get();
+          if (state.tokens && state.shouldRefreshToken() && !state.isRefreshing) {
+            console.log('[Auth] Token expiring soon, refreshing immediately...');
+            state.refreshTokens();
+          }
+        }, 100);
+
         // Set up interval to check token every 30 seconds
         const interval = setInterval(async () => {
-          const state = get();
+          const currentState = get();
+          
+          if (!currentState.tokens) {
+            console.log('[Auth] No tokens, skipping refresh check');
+            return;
+          }
+
+          const token = currentState.tokens.access_token;
+          const remainingTime = getTokenRemainingTime(token);
+          console.log(`[Auth] Token check - ${remainingTime}s remaining`);
           
           // Only refresh if we have tokens and should refresh
-          if (state.tokens && state.shouldRefreshToken() && !state.isRefreshing) {
-            console.log('Token expiring soon, refreshing...');
-            await state.refreshTokens();
+          if (currentState.shouldRefreshToken() && !currentState.isRefreshing) {
+            console.log('[Auth] Token expiring soon, refreshing...');
+            await currentState.refreshTokens();
           }
         }, 30000); // Check every 30 seconds
 
