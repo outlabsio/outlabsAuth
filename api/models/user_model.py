@@ -1,60 +1,65 @@
-from datetime import datetime
-from typing import List, Optional
-from pydantic import Field, EmailStr
-from enum import Enum
-from beanie import Link
-from pymongo import IndexModel
+"""
+User Model
+"""
+from typing import Optional, Dict, Any
+from datetime import datetime, timezone
+from beanie import Indexed
+from pydantic import EmailStr, Field
+from api.models.base_model import BaseDocument
 
-from ..models.base_model import BaseDocument
-from .client_account_model import ClientAccountModel
 
-class UserStatus(str, Enum):
-    """
-    Enum for user status values.
-    """
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-    PENDING = "pending"
-    SUSPENDED = "suspended"
+class UserProfile(BaseDocument):
+    """User profile information"""
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone: Optional[str] = None
+    avatar_url: Optional[str] = None
+    preferences: Dict[str, Any] = Field(default_factory=dict)
+    
+    @property
+    def full_name(self) -> str:
+        parts = [self.first_name, self.last_name]
+        return " ".join(p for p in parts if p) or "Unknown"
+
 
 class UserModel(BaseDocument):
     """
-    Beanie Document for the 'users' collection in MongoDB.
+    User account model
     """
-    email: EmailStr
-    password_hash: str
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    client_account: Optional[Link["ClientAccountModel"]] = None
-    roles: List[Link["RoleModel"]] = Field(default_factory=list)  # Direct role assignments
-    groups: List[Link["GroupModel"]] = Field(default_factory=list)  # Group memberships
-    is_main_client: bool = False
-    status: UserStatus = Field(UserStatus.PENDING)
-    last_login_at: Optional[datetime] = None
-    locale: Optional[str] = "en-US"
-    metadata: Optional[dict] = None
-    mfa_enabled: bool = False
-    mfa_secret: Optional[str] = None
-    recovery_codes: Optional[List[str]] = None
-    failed_login_attempts: int = 0
-    lockout_until: Optional[datetime] = None
+    # Authentication
+    email: EmailStr = Indexed(unique=True)
+    hashed_password: str
     
-    # Platform hierarchy fields
-    is_platform_staff: bool = False
-    platform_scope: Optional[str] = None
+    # Profile
+    profile: UserProfile = Field(default_factory=UserProfile)
+    
+    # Status
+    is_active: bool = Field(default=True)
+    is_system_user: bool = Field(default=False)
+    email_verified: bool = Field(default=False)
+    
+    # Security
+    last_login: Optional[datetime] = None
+    last_password_change: Optional[datetime] = None
+    failed_login_attempts: int = Field(default=0)
+    locked_until: Optional[datetime] = None
+    
+    # Metadata
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    
+    def is_locked(self) -> bool:
+        """Check if account is locked"""
+        if self.locked_until:
+            return datetime.now(timezone.utc) < self.locked_until
+        return False
+    
+    def can_authenticate(self) -> bool:
+        """Check if user can authenticate"""
+        return self.is_active and not self.is_locked()
     
     class Settings:
-        name = "users"  # MongoDB collection name
+        name = "users"
         indexes = [
-            IndexModel([("email", 1)], unique=True, name="email_unique"),  # Unique email index
-            IndexModel([("client_account.id", 1)], name="client_account_index"),
-            IndexModel([("is_platform_staff", 1)], name="platform_staff_index"),
-            IndexModel([("roles", 1)], name="roles_index"),
-        ] 
-
-    # Pydantic v2 model configuration
-    class Config:
-        # Allow population by field name or alias
-        populate_by_name = True
-        # Validate default values
-        validate_default = True 
+            [("email", 1)],
+            [("is_active", 1)],
+        ]

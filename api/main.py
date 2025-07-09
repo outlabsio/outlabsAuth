@@ -1,38 +1,101 @@
-from fastapi import FastAPI
+"""
+outlabsAuth API - Main Application
+"""
 from contextlib import asynccontextmanager
-from .database import db, get_database
-from .routes import user_routes, permission_routes, role_routes, auth_routes, client_account_routes, group_routes, platform_routes, settings_routes
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+
+from api.config import settings
+from api.database import init_db, close_db
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Manages the application's lifespan.
-    Connects to the database on startup and disconnects on shutdown.
-    Note: Permissions and roles are now created via seeding scripts rather than here.
-    """
-    await db.connect()
+    """Manage application lifecycle"""
+    # Startup
+    try:
+        await init_db()
+        print("Database connected")
+    except Exception as e:
+        print(f"Warning: Database connection failed: {e}")
+        print("Running in limited mode without database")
+    
     yield
-    await db.close()
+    
+    # Shutdown
+    try:
+        await close_db()
+        print("Database disconnected")
+    except:
+        pass
 
+
+# Create FastAPI app
 app = FastAPI(
-    title="Outlabs RBAC Microservice",
-    description="A standalone, generic Role-Based Access Control (RBAC) microservice.",
-    version="0.1.0",
+    title="outlabsAuth API",
+    description="Unified Entity Model Authentication Platform",
+    version="2.0.0",
     lifespan=lifespan
 )
 
-app.include_router(auth_routes.router)
-app.include_router(user_routes.router)
-app.include_router(permission_routes.router)
-app.include_router(role_routes.router)
-app.include_router(client_account_routes.router)
-app.include_router(group_routes.router)
-app.include_router(platform_routes.router)
-app.include_router(settings_routes.router, prefix="/v1/settings", tags=["Settings"])
+# Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-@app.get("/health", tags=["Health"])
+if settings.ENVIRONMENT == "production":
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["api.auth.outlabs.com", "*.auth.outlabs.com"]
+    )
+
+# Security headers middleware
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
+# Health check
+@app.get("/health")
 async def health_check():
-    """
-    Basic health check to confirm the service is running.
-    """
-    return {"status": "ok"}
+    return {"status": "healthy", "version": "2.0.0"}
+
+
+# Root endpoint
+@app.get("/")
+async def root():
+    return {
+        "message": "outlabsAuth API - Unified Entity Model",
+        "version": "2.0.0",
+        "docs": "/docs"
+    }
+
+
+# Import and include routers
+from api.routes import test_routes, auth_routes, entity_routes, role_routes
+
+# Test routes (remove in production)
+app.include_router(test_routes.router, prefix="/v1/test", tags=["Testing"])
+
+# Authentication routes
+app.include_router(auth_routes.router, prefix="/v1/auth", tags=["Authentication"])
+
+# Entity routes
+app.include_router(entity_routes.router, prefix="/v1/entities", tags=["Entities"])
+
+# Role routes
+app.include_router(role_routes.router, prefix="/v1/roles", tags=["Roles"])
+
+# TODO: Add more routers as we implement them
+# from api.routes import user_routes
+# app.include_router(user_routes.router, prefix="/v1/users", tags=["Users"])

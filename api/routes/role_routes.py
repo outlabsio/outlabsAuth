@@ -1,300 +1,382 @@
+"""
+Role routes
+"""
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from beanie import PydanticObjectId
-
-from ..models.user_model import UserModel
-from ..models.role_model import RoleScope
-from ..schemas.role_schema import (
-    RoleCreateSchema, 
-    RoleUpdateSchema, 
-    RoleResponseSchema,
-    AvailableRolesResponseSchema
+from api.models import UserModel
+from api.schemas.role_schema import (
+    RoleCreate,
+    RoleUpdate,
+    RoleResponse,
+    RoleListResponse,
+    RoleSearchParams,
+    RoleTemplateResponse,
+    RolePermissionTemplate,
+    RoleUsageStatsResponse,
+    RoleUsageStats
 )
-from ..services.role_service import role_service
-from ..dependencies import (
-    user_has_role, require_admin,
-    can_read_roles, can_manage_roles
+from api.services.role_service import RoleService
+from api.dependencies import (
+    require_role_read,
+    require_role_manage,
+    get_current_user
 )
 
+router = APIRouter()
 
-router = APIRouter(prefix="/v1/roles", tags=["roles"])
 
-@router.post("/", response_model=RoleResponseSchema, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=RoleResponse, dependencies=[Depends(require_role_manage)])
 async def create_role(
-    role_data: RoleCreateSchema,
-    current_user: UserModel = Depends(can_manage_roles)
+    role_data: RoleCreate,
+    current_user: UserModel = Depends(get_current_user)
 ):
     """
-    Create a new role in the specified scope.
+    Create a new role
     
-    - **Client admins** create client-scoped roles within their organization
-    - **Platform admins** create platform-scoped roles within their platform
-    - **Super admins** can create roles in any scope
+    Requires: role:manage permission
     """
-    # Validate user can create roles in requested scope
-    scope_id = None
-    
-    # User roles are now Beanie Links, so we can access them directly
-    user_roles = current_user.roles if current_user.roles else []
-
-    is_super_admin = any(role.name == "super_admin" and role.scope == RoleScope.SYSTEM for role in user_roles)
-
-    if role_data.scope == RoleScope.SYSTEM:
-        if not is_super_admin:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only super admins can create system roles"
-            )
-    elif role_data.scope == RoleScope.PLATFORM:
-        # Check if user is platform admin and extract platform ID
-        platform_admin_roles = [
-            role for role in user_roles 
-            if (role.name == "admin" and role.scope == RoleScope.PLATFORM)
-        ]
-        if not platform_admin_roles and not is_super_admin:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only platform admins can create platform roles"
-            )
-        if platform_admin_roles:
-            scope_id = platform_admin_roles[0].scope_id
-    elif role_data.scope == RoleScope.CLIENT:
-        if not current_user.client_account:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Client account ID required for client roles"
-            )
-        scope_id = str(current_user.client_account.id)
-        
-        # Check if user is client admin
-        client_admin_roles = [
-            role for role in user_roles 
-            if (role.name == "admin" and 
-                role.scope == RoleScope.CLIENT and 
-                role.scope_id == str(current_user.client_account.id))
-        ]
-        if not client_admin_roles and not is_super_admin:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only client admins can create client roles"
-            )
-
-    # Create the role
-    role = await role_service.create_role(
-        role_data=role_data,
-        current_user_id=str(current_user.id),
-        current_client_id=str(current_user.client_account.id) if current_user.client_account else None,
-        scope_id=scope_id
+    role = await RoleService.create_role(
+        name=role_data.name,
+        display_name=role_data.display_name,
+        description=role_data.description,
+        permissions=role_data.permissions,
+        entity_id=role_data.entity_id,
+        assignable_at_types=role_data.assignable_at_types,
+        is_global=role_data.is_global,
+        created_by=current_user
     )
     
-    return await role_service.role_to_response_schema(role)
+    # Get entity name if applicable
+    entity_name = None
+    if role.entity_id:
+        from api.models import EntityModel
+        entity = await EntityModel.get(role.entity_id)
+        if entity:
+            entity_name = entity.display_name
+    
+    return RoleResponse(
+        id=str(role.id),
+        name=role.name,
+        display_name=role.display_name,
+        description=role.description,
+        permissions=role.permissions,
+        entity_id=str(role.entity_id) if role.entity_id else None,
+        entity_name=entity_name,
+        assignable_at_types=role.assignable_at_types,
+        is_system_role=role.is_system_role,
+        is_global=role.is_global,
+        created_at=role.created_at,
+        updated_at=role.updated_at
+    )
 
-@router.get("/", response_model=List[RoleResponseSchema])
-async def get_roles(
-    scope: Optional[RoleScope] = Query(None, description="Filter by scope"),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
-    current_user: UserModel = Depends(can_read_roles)
+
+@router.get("/{role_id}", response_model=RoleResponse, dependencies=[Depends(require_role_read)])
+async def get_role(role_id: str):
+    """
+    Get role by ID
+    
+    Requires: role:read permission
+    """
+    role = await RoleService.get_role(role_id)
+    
+    # Get entity name if applicable
+    entity_name = None
+    if role.entity_id:
+        from api.models import EntityModel
+        entity = await EntityModel.get(role.entity_id)
+        if entity:
+            entity_name = entity.display_name
+    
+    return RoleResponse(
+        id=str(role.id),
+        name=role.name,
+        display_name=role.display_name,
+        description=role.description,
+        permissions=role.permissions,
+        entity_id=str(role.entity_id) if role.entity_id else None,
+        entity_name=entity_name,
+        assignable_at_types=role.assignable_at_types,
+        is_system_role=role.is_system_role,
+        is_global=role.is_global,
+        created_at=role.created_at,
+        updated_at=role.updated_at
+    )
+
+
+@router.put("/{role_id}", response_model=RoleResponse, dependencies=[Depends(require_role_manage)])
+async def update_role(
+    role_id: str,
+    update_data: RoleUpdate,
+    current_user: UserModel = Depends(get_current_user)
 ):
     """
-    Get roles visible to the current user.
+    Update a role
     
-    - **Super admins** see all roles
-    - **Platform admins** see system + their platform roles
-    - **Client admins** see system + their client roles
+    Requires: role:manage permission
     """
-    # User roles are now Beanie Links, so we can access them directly
-    user_roles = current_user.roles if current_user.roles else []
-
-    is_super_admin = any(role.name == "super_admin" and role.scope == RoleScope.SYSTEM for role in user_roles)
+    role = await RoleService.update_role(
+        role_id=role_id,
+        display_name=update_data.display_name,
+        description=update_data.description,
+        permissions=update_data.permissions,
+        assignable_at_types=update_data.assignable_at_types,
+        updated_by=current_user
+    )
     
-    roles = []
+    # Get entity name if applicable
+    entity_name = None
+    if role.entity_id:
+        from api.models import EntityModel
+        entity = await EntityModel.get(role.entity_id)
+        if entity:
+            entity_name = entity.display_name
     
-    if scope:
-        # Filter by specific scope
-        if scope == RoleScope.SYSTEM:
-            roles = await role_service.get_roles_by_scope(scope, skip=skip, limit=limit)
-        elif scope == RoleScope.PLATFORM:
-            # Get platform ID from user's roles
-            platform_admin_roles = [
-                role for role in user_roles 
-                if (role.name == "admin" and role.scope == RoleScope.PLATFORM)
-            ]
-            if platform_admin_roles or is_super_admin:
-                platform_id = platform_admin_roles[0].scope_id if platform_admin_roles else None
-                roles = await role_service.get_roles_by_scope(scope, platform_id, skip, limit)
-        elif scope == RoleScope.CLIENT:
-            if current_user.client_account:
-                roles = await role_service.get_roles_by_scope(scope, str(current_user.client_account.id), skip, limit)
-    else:
-        # Get all visible roles
-        if is_super_admin:
-            # Super admin sees everything - get from all scopes
-            system_roles = await role_service.get_roles_by_scope(RoleScope.SYSTEM, skip=skip, limit=limit//3)
-            platform_roles = await role_service.get_roles_by_scope(RoleScope.PLATFORM, skip=skip, limit=limit//3) 
-            client_roles = await role_service.get_roles_by_scope(RoleScope.CLIENT, skip=skip, limit=limit//3)
-            roles = system_roles + platform_roles + client_roles
-        else:
-            # Regular users see system + their scope
-            system_roles = await role_service.get_roles_by_scope(RoleScope.SYSTEM, skip=skip, limit=limit//3)
-            roles.extend(system_roles)
-            
-            # Add platform roles if user is platform admin
-            platform_admin_roles = [
-                role for role in user_roles 
-                if (role.name == "admin" and role.scope == RoleScope.PLATFORM)
-            ]
-            if platform_admin_roles:
-                platform_id = platform_admin_roles[0].scope_id
-                platform_roles = await role_service.get_roles_by_scope(RoleScope.PLATFORM, platform_id, skip=skip, limit=limit//3)
-                roles.extend(platform_roles)
-            
-            # Add client roles if user has client account
-            if current_user.client_account:
-                client_roles = await role_service.get_roles_by_scope(RoleScope.CLIENT, str(current_user.client_account.id), skip=skip, limit=limit//3)
-                roles.extend(client_roles)
+    return RoleResponse(
+        id=str(role.id),
+        name=role.name,
+        display_name=role.display_name,
+        description=role.description,
+        permissions=role.permissions,
+        entity_id=str(role.entity_id) if role.entity_id else None,
+        entity_name=entity_name,
+        assignable_at_types=role.assignable_at_types,
+        is_system_role=role.is_system_role,
+        is_global=role.is_global,
+        created_at=role.created_at,
+        updated_at=role.updated_at
+    )
 
-    # Filter roles user can actually view
-    visible_roles = []
+
+@router.delete("/{role_id}", dependencies=[Depends(require_role_manage)])
+async def delete_role(
+    role_id: str,
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Delete a role
+    
+    Requires: role:manage permission
+    """
+    await RoleService.delete_role(role_id, current_user)
+    return {"message": "Role deleted successfully"}
+
+
+@router.get("/", response_model=RoleListResponse, dependencies=[Depends(require_role_read)])
+async def search_roles(
+    entity_id: Optional[str] = Query(None, description="Filter by entity"),
+    query: Optional[str] = Query(None, description="Search in name and description"),
+    is_global: Optional[bool] = Query(None, description="Filter by global status"),
+    assignable_at_type: Optional[str] = Query(None, description="Filter by assignable type"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100)
+):
+    """
+    Search roles with filtering and pagination
+    
+    Requires: role:read permission
+    """
+    roles, total = await RoleService.search_roles(
+        entity_id=entity_id,
+        query=query,
+        is_global=is_global,
+        assignable_at_type=assignable_at_type,
+        page=page,
+        page_size=page_size
+    )
+    
+    # Convert to response models
+    items = []
     for role in roles:
-        client_account_id = str(current_user.client_account.id) if current_user.client_account else None
-        if await role_service.user_can_view_role(user_roles, client_account_id, role):
-            visible_roles.append(role)
+        # Get entity name if applicable
+        entity_name = None
+        if role.entity_id:
+            from api.models import EntityModel
+            entity = await EntityModel.get(role.entity_id)
+            if entity:
+                entity_name = entity.display_name
+        
+        items.append(RoleResponse(
+            id=str(role.id),
+            name=role.name,
+            display_name=role.display_name,
+            description=role.description,
+            permissions=role.permissions,
+            entity_id=str(role.entity_id) if role.entity_id else None,
+            entity_name=entity_name,
+            assignable_at_types=role.assignable_at_types,
+            is_system_role=role.is_system_role,
+            is_global=role.is_global,
+            created_at=role.created_at,
+            updated_at=role.updated_at
+        ))
+    
+    total_pages = (total + page_size - 1) // page_size
+    
+    return RoleListResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages
+    )
 
-    # Convert roles to response schema with permission details
+
+@router.get("/entity/{entity_id}/assignable", response_model=List[RoleResponse])
+async def get_assignable_roles(
+    entity_id: str,
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Get roles that can be assigned at a specific entity
+    
+    Requires: Authentication
+    """
+    # Get entity to determine type
+    from api.models import EntityModel
+    entity = await EntityModel.get(entity_id)
+    if not entity:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Entity not found"
+        )
+    
+    # Get assignable roles
+    roles = await RoleService.get_assignable_roles(entity_id, entity.entity_type)
+    
+    # Convert to response models
     response_roles = []
-    for role in visible_roles:
-        response_role = await role_service.role_to_response_schema(role)
-        response_roles.append(response_role)
+    for role in roles:
+        # Get entity name if applicable
+        entity_name = None
+        if role.entity_id:
+            role_entity = await EntityModel.get(role.entity_id)
+            if role_entity:
+                entity_name = role_entity.display_name
+        
+        response_roles.append(RoleResponse(
+            id=str(role.id),
+            name=role.name,
+            display_name=role.display_name,
+            description=role.description,
+            permissions=role.permissions,
+            entity_id=str(role.entity_id) if role.entity_id else None,
+            entity_name=entity_name,
+            assignable_at_types=role.assignable_at_types,
+            is_system_role=role.is_system_role,
+            is_global=role.is_global,
+            created_at=role.created_at,
+            updated_at=role.updated_at
+        ))
     
     return response_roles
 
-@router.get("/available", response_model=AvailableRolesResponseSchema)
-async def get_available_roles(
-    current_user: UserModel = Depends(require_admin)
+
+@router.post("/entity/{entity_id}/defaults", response_model=List[RoleResponse])
+async def create_default_roles(
+    entity_id: str,
+    current_user: UserModel = Depends(require_role_manage)
 ):
     """
-    Get roles that the current user can assign to others, grouped by scope.
-    Only admins can assign roles to users.
+    Create default roles for an entity
+    
+    Requires: role:manage permission
     """
-    # User roles are now Beanie Links, so we can access them directly
-    user_roles = current_user.roles if current_user.roles else []
-
-    # Determine user permissions
-    is_super_admin = any(role.name == "super_admin" and role.scope == RoleScope.SYSTEM for role in user_roles)
-    platform_admin_roles = [
-        role for role in user_roles 
-        if (role.name == "admin" and role.scope == RoleScope.PLATFORM)
-    ]
-    is_platform_admin = len(platform_admin_roles) > 0
+    roles = await RoleService.create_default_roles(entity_id)
     
-    # Extract platform ID if platform admin
-    current_user_platform_id = None
-    if is_platform_admin:
-        current_user_platform_id = platform_admin_roles[0].scope_id
+    # Convert to response models
+    response_roles = []
+    for role in roles:
+        # Get entity name
+        from api.models import EntityModel
+        entity = await EntityModel.get(role.entity_id)
+        entity_name = entity.display_name if entity else None
+        
+        response_roles.append(RoleResponse(
+            id=str(role.id),
+            name=role.name,
+            display_name=role.display_name,
+            description=role.description,
+            permissions=role.permissions,
+            entity_id=str(role.entity_id) if role.entity_id else None,
+            entity_name=entity_name,
+            assignable_at_types=role.assignable_at_types,
+            is_system_role=role.is_system_role,
+            is_global=role.is_global,
+            created_at=role.created_at,
+            updated_at=role.updated_at
+        ))
     
-    return await role_service.get_available_roles_for_user(
-        current_user_client_id=str(current_user.client_account.id) if current_user.client_account else None,
-        current_user_platform_id=current_user_platform_id,
-        is_super_admin=is_super_admin,
-        is_platform_admin=is_platform_admin
-    )
+    return response_roles
 
-@router.get("/{role_id}", response_model=RoleResponseSchema)
-async def get_role(
-    role_id: PydanticObjectId,
-    current_user: UserModel = Depends(can_read_roles)
+
+@router.get("/templates", response_model=RoleTemplateResponse)
+async def get_role_templates():
+    """
+    Get role permission templates
+    
+    Requires: Authentication
+    """
+    templates = {}
+    
+    for template_name, permissions in RoleService.PERMISSION_TEMPLATES.items():
+        templates[template_name] = RolePermissionTemplate(
+            name=template_name,
+            display_name=template_name.title(),
+            description=f"Standard {template_name} role with appropriate permissions",
+            permissions=permissions,
+            suitable_for=["platform", "organization", "team"]  # Most templates work for these
+        )
+    
+    return RoleTemplateResponse(templates=templates)
+
+
+@router.get("/{role_id}/usage", response_model=RoleUsageStatsResponse)
+async def get_role_usage_stats(
+    role_id: str,
+    current_user: UserModel = Depends(require_role_read)
 ):
-    """Get a specific role by ID."""
-    role = await role_service.get_role_by_id(role_id)
-    if not role:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Role not found"
-        )
+    """
+    Get usage statistics for a role
     
-    # Check if user can view this role
-    user_roles = current_user.roles if current_user.roles else []
-    client_account_id = str(current_user.client_account.id) if current_user.client_account else None
-    if not await role_service.user_can_view_role(user_roles, client_account_id, role):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to view this role"
-        )
+    Requires: role:read permission
+    """
+    # Get role
+    role = await RoleService.get_role(role_id)
     
-    return await role_service.role_to_response_schema(role)
-
-@router.put("/{role_id}", response_model=RoleResponseSchema)
-async def update_role(
-    role_id: PydanticObjectId,
-    role_data: RoleUpdateSchema,
-    current_user: UserModel = Depends(can_manage_roles)
-):
-    """Update a role."""
-    # Check if role exists
-    existing_role = await role_service.get_role_by_id(role_id)
-    if not existing_role:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Role not found"
-        )
+    # Get usage statistics
+    from api.models import EntityMembershipModel
     
-    # Check permissions
-    user_roles = current_user.roles if current_user.roles else []
-    client_account_id = str(current_user.client_account.id) if current_user.client_account else None
-    can_manage = await role_service.user_can_manage_role(
-        user_roles=user_roles,
-        user_client_id=client_account_id,
-        target_role=existing_role
-    )
+    # Count active assignments
+    active_assignments = await EntityMembershipModel.find(
+        EntityMembershipModel.role.id == role.id,
+        EntityMembershipModel.status == "active"
+    ).count()
     
-    if not can_manage:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to update this role"
-        )
+    # Count total assignments
+    total_assignments = await EntityMembershipModel.find(
+        EntityMembershipModel.role.id == role.id
+    ).count()
     
-    updated_role = await role_service.update_role(role_id, role_data)
-    return await role_service.role_to_response_schema(updated_role)
-
-@router.delete("/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_role(
-    role_id: PydanticObjectId,
-    current_user: UserModel = Depends(can_manage_roles)
-):
-    """Delete a role."""
-    # Check if role exists
-    existing_role = await role_service.get_role_by_id(role_id)
-    if not existing_role:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Role not found"
-        )
+    # Count entities used in
+    memberships = await EntityMembershipModel.find(
+        EntityMembershipModel.role.id == role.id
+    ).to_list()
     
-    # Check permissions
-    user_roles = current_user.roles if current_user.roles else []
-    client_account_id = str(current_user.client_account.id) if current_user.client_account else None
-    can_manage = await role_service.user_can_manage_role(
-        user_roles=user_roles,
-        user_client_id=client_account_id,
-        target_role=existing_role
+    unique_entities = set()
+    last_assigned = None
+    
+    for membership in memberships:
+        unique_entities.add(str(membership.entity.id))
+        if not last_assigned or membership.created_at > last_assigned:
+            last_assigned = membership.created_at
+    
+    stats = RoleUsageStats(
+        role_id=str(role.id),
+        role_name=role.display_name,
+        active_assignments=active_assignments,
+        total_assignments=total_assignments,
+        entities_used_in=len(unique_entities),
+        last_assigned=last_assigned
     )
     
-    if not can_manage:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to delete this role"
-        )
-    
-    try:
-        deleted = await role_service.delete_role(role_id)
-        if not deleted:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Role not found"
-            )
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        ) 
+    return RoleUsageStatsResponse(stats=[stats])

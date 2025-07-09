@@ -1,602 +1,335 @@
-from beanie import PydanticObjectId
-from fastapi import HTTPException, status, Depends, Request
-from fastapi.security import OAuth2PasswordBearer
-from typing import Tuple, Optional, List, Dict, Any
+"""
+Authentication and permission dependencies
+"""
+from typing import Optional, List, Callable, Any
+from functools import wraps
+from fastapi import Depends, HTTPException, status, Path
+from api.models import UserModel
+from api.routes.auth_routes import get_current_user
+from api.services.permission_service import permission_service
 
-from .services.security_service import security_service
-from .services.user_service import user_service
-from .services.role_service import role_service
-from .services.group_service import group_service
-from .services.client_account_service import client_account_service
-from .models.user_model import UserModel
-from .schemas.auth_schema import TokenDataSchema
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/auth/login", auto_error=False)
-
-
-# --- Response Utilities ---
-
-def convert_user_to_response(user: UserModel) -> Dict[str, Any]:
-    """
-    Convert a UserModel to response format with proper role/group ID conversion.
-    This utility ensures consistent user response format across all endpoints.
-    
-    Args:
-        user: UserModel instance with populated roles and groups
-        
-    Returns:
-        Dict containing user data with roles and groups as ID strings
-    """
-    user_dict = user.model_dump(by_alias=True)
-    user_dict["_id"] = str(user_dict["_id"])
-    
-    # Convert role objects to role ID strings
-    user_dict["roles"] = [str(role.id) for role in user.roles] if user.roles else []
-    
-    # Convert group objects to group ID strings (if groups field exists)
-    user_dict["groups"] = [str(group.id) for group in user.groups] if hasattr(user, 'groups') and user.groups else []
-    
-    # Handle client_account conversion
-    if user.client_account:
-        user_dict["client_account_id"] = str(user.client_account.id)
-    else:
-        user_dict["client_account_id"] = None
-    # Remove the client_account object from response
-    user_dict.pop("client_account", None)
-    
-    return user_dict
-
-
-# --- User Role Utilities ---
-
-def user_is_client_admin(user: UserModel) -> bool:
-    """
-    Check if a user is a client admin (has admin role with CLIENT scope).
-    
-    Args:
-        user: UserModel instance
-        
-    Returns:
-        bool: True if user is a client admin, False otherwise
-    """
-    if not user.roles:
-        return False
-    
-    for role in user.roles:
-        if (role.name == "admin" and 
-            hasattr(role, 'scope') and 
-            role.scope.value == "client"):
-            return True
-    return False
-
-
-def user_has_role(user: UserModel, role_name: str) -> bool:
-    """
-    Check if a user has a specific role by name.
-    Works with Beanie Link roles.
-    
-    Args:
-        user: UserModel instance
-        role_name: Name of the role to check for (e.g., "super_admin")
-        
-    Returns:
-        bool: True if user has the role, False otherwise
-    """
-    if not user.roles:
-        return False
-    
-    for role in user.roles:
-        if role.name == role_name:
-            return True
-    
-    return False
-
-
-def user_has_any_role(user: UserModel, role_names: List[str]) -> bool:
-    """
-    Check if a user has any of the specified roles.
-    
-    Args:
-        user: UserModel instance
-        role_names: List of role names to check for
-        
-    Returns:
-        bool: True if user has any of the roles, False otherwise
-    """
-    if not user.roles:
-        return False
-    
-    user_role_names = {role.name for role in user.roles}
-    return bool(user_role_names.intersection(role_names))
-
-
-def user_get_role_names(user: UserModel) -> List[str]:
-    """
-    Get all role names for a user.
-    
-    Args:
-        user: UserModel instance
-        
-    Returns:
-        List[str]: List of role names
-    """
-    if not user.roles:
-        return []
-    
-    return [role.name for role in user.roles]
-
-
-# --- Dependency Factories for Role-Based Access ---
-
-def require_role(role_name: str):
-    """
-    Dependency factory to require a specific role.
-    
-    Usage:
-        @router.get("/admin-only")
-        async def admin_endpoint(user: UserModel = Depends(require_role("super_admin"))):
-            return {"message": "Admin access granted"}
-    """
-    async def _require_role(
-        current_user: UserModel = Depends(get_current_user)
-    ) -> UserModel:
-        if not user_has_role(current_user, role_name):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied. Required role: {role_name}"
-            )
-        return current_user
-    return _require_role
-
-
-def require_any_role(role_names: List[str]):
-    """
-    Dependency factory to require any of the specified roles.
-    
-    Usage:
-        @router.get("/admin-or-manager")
-        async def endpoint(user: UserModel = Depends(require_any_role(["admin", "manager"]))):
-            return {"message": "Access granted"}
-    """
-    async def _require_any_role(
-        current_user: UserModel = Depends(get_current_user)
-    ) -> UserModel:
-        if not user_has_any_role(current_user, role_names):
-            roles_str = ", ".join(role_names)
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied. Required any of: {roles_str}"
-            )
-        return current_user
-    return _require_any_role
-
-
-# --- Core Dependencies ---
-
-def valid_account_id(account_id: str):
-    try:
-        return PydanticObjectId(account_id)
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail=f"Invalid ObjectId: {account_id}"
-        )
-
-
-def validate_object_id(object_id: str, object_type: str = "ObjectId") -> PydanticObjectId:
-    """
-    Utility function to validate and convert string to PydanticObjectId.
-    
-    Args:
-        object_id: String representation of ObjectId
-        object_type: Type name for error message (e.g., "User ID", "Role ID")
-        
-    Returns:
-        PydanticObjectId: Validated ObjectId
-        
-    Raises:
-        HTTPException: If ObjectId is invalid
-    """
-    try:
-        return PydanticObjectId(object_id)
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, 
-            detail=f"Invalid {object_type}: {object_id}"
-        )
-
-async def get_token_from_request(
-    request: Request,
-    token: Optional[str] = Depends(oauth2_scheme)
-) -> str:
-    """
-    Extract token from either Authorization header or HTTP-only cookie.
-    """
-    # Try Authorization header first
-    if token:
-        return token
-    
-    # Try HTTP-only cookie
-    cookie_token = request.cookies.get("access_token")
-    if cookie_token:
-        return cookie_token
-    
-    # No token found
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-async def get_current_user_with_token(
-    token: str = Depends(get_token_from_request)
-) -> Tuple[UserModel, TokenDataSchema]:
-    """
-    Decodes JWT, then retrieves user from DB using Beanie ODM. Returns user and token payload.
-    """
-    token_data = security_service.decode_access_token(token)
-    
-    # Handle both enriched and basic token formats
-    if hasattr(token_data, 'sub'):
-        # Enriched token format uses 'sub' field
-        user_id = token_data.sub
-    elif hasattr(token_data, 'user_id'):
-        # Basic token format uses 'user_id' field
-        user_id = token_data.user_id
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token format.",
-        )
-    
-    user = await user_service.get_user_by_id(PydanticObjectId(user_id))
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found.",
-        )
-    return user, token_data
-
-async def get_current_user(
-    user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token)
-) -> UserModel:
-    return user_and_token[0]
-
-
-# --- Permission-Based Dependencies ---
 
 def require_permissions(
-    any_of: Optional[List[str]] = None,
-    all_of: Optional[List[str]] = None
-):
+    permissions: List[str],
+    entity_id_param: Optional[str] = None,
+    require_all: bool = True
+) -> Callable:
     """
-    A powerful dependency factory for permission-based access control with hierarchical checking.
-
-    Supports hierarchical permissions where:
-    - Manage permissions include read permissions
-    - Broader scopes include narrower scopes
-    - user:manage_all includes user:read_all, user:read_platform, user:read_client, user:read_self
-
-    It can check for:
-    - `any_of`: User must have at least one of the specified permissions.
-    - `all_of`: User must have all of the specified permissions.
-
-    Usage:
-        # Require a single permission (hierarchical)
-        Depends(require_permissions(all_of=["user:read_client"]))  # user:manage_client also works
-
-        # Require one of several permissions (hierarchical)
-        Depends(require_permissions(any_of=["user:read_all", "user:read_platform", "user:read_client"]))
-    """
-    async def _require_permissions_dependency(
-        current_user: UserModel = Depends(get_current_user)
-    ) -> UserModel:
-        # 1. Get user's effective permissions from the service layer
-        user_permissions = await user_service.get_user_effective_permissions(current_user.id)
-
-        # 2. Import hierarchical checking function
-        from .services.permission_service import check_hierarchical_permission
-
-        # 3. Check for "any_of" condition using hierarchical logic
-        if any_of:
-            has_any_permission = any(
-                check_hierarchical_permission(user_permissions, p) for p in any_of
-            )
-            if not has_any_permission:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Access denied. Requires one of the following permissions: {', '.join(any_of)}"
-                )
-
-        # 4. Check for "all_of" condition using hierarchical logic
-        if all_of:
-            missing_permissions = []
-            for p in all_of:
-                if not check_hierarchical_permission(user_permissions, p):
-                    missing_permissions.append(p)
-            
-            if missing_permissions:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Access denied. Missing required permissions: {', '.join(missing_permissions)}"
-                )
-
-        return current_user
-    return _require_permissions_dependency
-
-
-def has_permission(required_permission: str):
-    """
-    Dependency factory to check if the current user has the required permission.
-    
-    DEPRECATED: Use require_permissions(all_of=[permission]) instead.
-    This function is kept for backwards compatibility.
-    
-    Usage:
-        @router.post("/users", dependencies=[Depends(has_permission("user:create"))])
-        async def create_user_endpoint():
-            return {"message": "User creation allowed"}
-    """
-    # Use the new unified permission system internally
-    return require_permissions(all_of=[required_permission])
-
-
-def has_hierarchical_client_access(target_client_field: str = "account_id"):
-    """
-    Dependency factory for hierarchical client account access control.
-    Validates that the user can access the target client account based on:
-    - Super admins: Access everything
-    - Platform admins: Access clients in their platform scope
-    - Regular users: Access only their own client account
+    Dependency factory for permission checking
     
     Args:
-        target_client_field: The path parameter or field name containing the target client ID
-        
-    Usage:
-        @router.get("/clients/{account_id}/data")
-        async def get_client_data(
-            user: UserModel = Depends(has_hierarchical_client_access("account_id"))
-        ):
-            return {"message": "Access granted"}
+        permissions: List of required permissions
+        entity_id_param: Name of path parameter containing entity ID
+        require_all: Whether all permissions are required
+    
+    Returns:
+        Dependency function
     """
-    async def _has_hierarchical_access(
-        request: Request,
-        current_user: UserModel = Depends(get_current_user)
+    def permission_dependency(
+        current_user: UserModel = Depends(get_current_user),
+        entity_id: Optional[str] = None
     ) -> UserModel:
-        # Extract target client ID from path parameters
-        target_client_id = request.path_params.get(target_client_field)
-        if not target_client_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Missing required parameter: {target_client_field}"
+        """
+        Check if user has required permissions
+        
+        Args:
+            current_user: Current authenticated user
+            entity_id: Entity ID from path parameter
+        
+        Returns:
+            User if authorized
+        
+        Raises:
+            HTTPException: If permission check fails
+        """
+        # For system users, allow all operations
+        if current_user.is_system_user:
+            return current_user
+        
+        # Check permissions
+        import asyncio
+        
+        # Create async wrapper for permission check
+        async def check_perms():
+            return await permission_service.check_multiple_permissions(
+                str(current_user.id),
+                permissions,
+                entity_id,
+                require_all
             )
         
-        # Get user's effective permissions
-        user_permissions = await user_service.get_user_effective_permissions(current_user.id)
+        # Run permission check
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # If we're already in an async context, create a task
+            import asyncio
+            task = asyncio.create_task(check_perms())
+            try:
+                results = loop.run_until_complete(task)
+            except RuntimeError:
+                # Fallback for nested event loops
+                import nest_asyncio
+                nest_asyncio.apply()
+                results = loop.run_until_complete(task)
+        else:
+            results = loop.run_until_complete(check_perms())
         
-        # Check if user is super admin (has all permissions)
-        is_super_admin = user_has_role(current_user, "super_admin")
+        # Check results
+        if require_all:
+            failed_permissions = [
+                perm for perm, (has_perm, _) in results.items() 
+                if not has_perm
+            ]
+            if failed_permissions:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Missing required permissions: {', '.join(failed_permissions)}"
+                )
+        else:
+            # At least one permission required
+            if not any(has_perm for has_perm, _ in results.values()):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Missing any of required permissions: {', '.join(permissions)}"
+                )
         
-        # Use the enhanced service method to check access
-        user_client_id = str(current_user.client_account.id) if current_user.client_account else None
-        if not user_client_id and not is_super_admin:
+        return current_user
+    
+    # If entity_id_param is specified, inject it
+    if entity_id_param:
+        def wrapper(
+            current_user: UserModel = Depends(get_current_user),
+            entity_id: str = Path(..., alias=entity_id_param)
+        ) -> UserModel:
+            return permission_dependency(current_user, entity_id)
+        return wrapper
+    
+    return permission_dependency
+
+
+def require_permission(permission: str, entity_id_param: Optional[str] = None) -> Callable:
+    """
+    Dependency factory for single permission checking
+    
+    Args:
+        permission: Required permission
+        entity_id_param: Name of path parameter containing entity ID
+    
+    Returns:
+        Dependency function
+    """
+    return require_permissions([permission], entity_id_param, require_all=True)
+
+
+def require_any_permission(permissions: List[str], entity_id_param: Optional[str] = None) -> Callable:
+    """
+    Dependency factory for any permission checking
+    
+    Args:
+        permissions: List of permissions (any one required)
+        entity_id_param: Name of path parameter containing entity ID
+    
+    Returns:
+        Dependency function
+    """
+    return require_permissions(permissions, entity_id_param, require_all=False)
+
+
+def require_entity_access(permission: str) -> Callable:
+    """
+    Dependency factory for entity-specific permission checking
+    
+    Args:
+        permission: Required permission
+    
+    Returns:
+        Dependency function that expects entity_id in path
+    """
+    return require_permission(permission, entity_id_param="entity_id")
+
+
+def require_self_or_permission(permission: str) -> Callable:
+    """
+    Dependency factory for self-access or permission checking
+    
+    Args:
+        permission: Required permission for non-self access
+    
+    Returns:
+        Dependency function
+    """
+    def self_or_permission_dependency(
+        current_user: UserModel = Depends(get_current_user),
+        user_id: str = Path(...)
+    ) -> UserModel:
+        """
+        Check if user is accessing their own data or has permission
+        
+        Args:
+            current_user: Current authenticated user
+            user_id: User ID from path parameter
+        
+        Returns:
+            User if authorized
+        
+        Raises:
+            HTTPException: If not authorized
+        """
+        # Allow self-access
+        if str(current_user.id) == user_id:
+            return current_user
+        
+        # Check permission for other users
+        permission_check = require_permission(permission)
+        return permission_check(current_user)
+    
+    return self_or_permission_dependency
+
+
+# Common permission dependencies
+require_user_read = require_permission("user:read")
+require_user_manage = require_permission("user:manage")
+require_entity_read = require_entity_access("entity:read")
+require_entity_manage = require_entity_access("entity:manage")
+require_entity_create = require_permission("entity:create")
+require_member_read = require_entity_access("member:read")
+require_member_manage = require_entity_access("member:manage")
+require_role_read = require_permission("role:read")
+require_role_manage = require_permission("role:manage")
+
+
+class PermissionChecker:
+    """
+    Utility class for permission checking in service layer
+    """
+    
+    @staticmethod
+    async def check_entity_permission(
+        user: UserModel,
+        entity_id: str,
+        permission: str
+    ) -> bool:
+        """
+        Check if user has permission on entity
+        
+        Args:
+            user: User to check
+            entity_id: Entity ID
+            permission: Permission to check
+        
+        Returns:
+            True if user has permission
+        """
+        if user.is_system_user:
+            return True
+        
+        has_perm, _ = await permission_service.check_permission(
+            str(user.id),
+            permission,
+            entity_id
+        )
+        return has_perm
+    
+    @staticmethod
+    async def check_user_permission(
+        user: UserModel,
+        permission: str
+    ) -> bool:
+        """
+        Check if user has global permission
+        
+        Args:
+            user: User to check
+            permission: Permission to check
+        
+        Returns:
+            True if user has permission
+        """
+        if user.is_system_user:
+            return True
+        
+        has_perm, _ = await permission_service.check_permission(
+            str(user.id),
+            permission
+        )
+        return has_perm
+    
+    @staticmethod
+    async def filter_entities_by_permission(
+        user: UserModel,
+        entity_ids: List[str],
+        permission: str
+    ) -> List[str]:
+        """
+        Filter entity IDs by user permission
+        
+        Args:
+            user: User to check
+            entity_ids: List of entity IDs
+            permission: Permission to check
+        
+        Returns:
+            Filtered list of entity IDs
+        """
+        if user.is_system_user:
+            return entity_ids
+        
+        filtered_ids = []
+        for entity_id in entity_ids:
+            has_perm, _ = await permission_service.check_permission(
+                str(user.id),
+                permission,
+                entity_id
+            )
+            if has_perm:
+                filtered_ids.append(entity_id)
+        
+        return filtered_ids
+    
+    @staticmethod
+    async def require_entity_permission(
+        user: UserModel,
+        entity_id: str,
+        permission: str
+    ) -> None:
+        """
+        Require entity permission or raise exception
+        
+        Args:
+            user: User to check
+            entity_id: Entity ID
+            permission: Permission to check
+        
+        Raises:
+            HTTPException: If permission check fails
+        """
+        if not await PermissionChecker.check_entity_permission(user, entity_id, permission):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="User not associated with any client account."
+                detail=f"Missing required permission: {permission}"
             )
-        
-        # Super admins have access to everything
-        if is_super_admin:
-            can_access = True
-        else:
-            can_access = await client_account_service.can_user_access_client_account(
-                user_client_id=user_client_id,
-                target_client_id=target_client_id,
-                user_permissions=user_permissions,
-                is_super_admin=is_super_admin
-            )
-        
-        if not can_access:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,  # Return 404 to prevent information disclosure
-                detail="Client account not found"
-            )
-        
-        return current_user
-    return _has_hierarchical_access
-
-
-# --- User Access Control Dependencies ---
-
-def can_access_user(user_id_param: str = "user_id"):
-    """
-    Dependency factory for user access control.
-    - Admins can access any user
-    - Regular users can only access themselves
     
-    Usage:
-        @router.get("/users/{user_id}")
-        async def get_user(user: UserModel = Depends(can_access_user())):
-            return user
-    """
-    async def _can_access_user(
-        request: Request,
-        current_user: UserModel = Depends(get_current_user)
-    ) -> UserModel:
-        # Extract user ID from path parameters
-        target_user_id = request.path_params.get(user_id_param)
-        if not target_user_id:
+    @staticmethod
+    async def require_user_permission(
+        user: UserModel,
+        permission: str
+    ) -> None:
+        """
+        Require user permission or raise exception
+        
+        Args:
+            user: User to check
+            permission: Permission to check
+        
+        Raises:
+            HTTPException: If permission check fails
+        """
+        if not await PermissionChecker.check_user_permission(user, permission):
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Missing required parameter: {user_id_param}"
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing required permission: {permission}"
             )
-        
-        # Validate ObjectId format
-        target_user_object_id = validate_object_id(target_user_id, "User ID")
-        
-        # Get the target user
-        target_user = await user_service.get_user_by_id(target_user_object_id)
-        if target_user is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, 
-                detail="User not found"
-            )
-        
-        # Access control logic
-        is_super_admin = user_has_role(current_user, "super_admin")
-        is_client_admin = user_is_client_admin(current_user)
-        is_admin = is_super_admin or is_client_admin
-        is_self_access = str(current_user.id) == target_user_id
-        
-        if not is_admin and not is_self_access:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, 
-                detail="You can only access your own user data"
-            )
-        
-        # For client admins, enforce client account scoping
-        if is_client_admin and not is_super_admin:
-            if target_user.client_account and current_user.client_account:
-                if str(target_user.client_account.id) != str(current_user.client_account.id):
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND, 
-                        detail="User not found"
-                    )
-        
-        return target_user
-    return _can_access_user
 
 
-def require_self_or_admin(user_id_param: str = "user_id"):
-    """
-    Dependency factory that returns the current user if they can access the target user.
-    Similar to can_access_user but returns the current_user instead of target_user.
-    
-    Usage:
-        @router.put("/users/{user_id}")
-        async def update_user(
-            user_data: UserUpdateSchema,
-            current_user: UserModel = Depends(require_self_or_admin())
-        ):
-            # current_user is guaranteed to have access
-    """
-    async def _require_self_or_admin(
-        request: Request,
-        current_user: UserModel = Depends(get_current_user)
-    ) -> UserModel:
-        # This dependency validates access but returns current_user
-        await _can_access_user(request, current_user)
-        return current_user
-    
-    # We need to create the inner function here
-    async def _can_access_user(request: Request, current_user: UserModel) -> UserModel:
-        target_user_id = request.path_params.get(user_id_param)
-        if not target_user_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Missing required parameter: {user_id_param}"
-            )
-        
-        target_user_object_id = validate_object_id(target_user_id, "User ID")
-        
-        target_user = await user_service.get_user_by_id(target_user_object_id)
-        if target_user is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, 
-                detail="User not found"
-            )
-        
-        is_super_admin = user_has_role(current_user, "super_admin")
-        is_client_admin = user_is_client_admin(current_user)
-        is_admin = is_super_admin or is_client_admin
-        is_self_access = str(current_user.id) == target_user_id
-        
-        if not is_admin and not is_self_access:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, 
-                detail="You can only access your own user data"
-            )
-        
-        if is_client_admin and not is_super_admin:
-            if target_user.client_account and current_user.client_account:
-                if str(target_user.client_account.id) != str(current_user.client_account.id):
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND, 
-                        detail="User not found"
-                    )
-        return target_user
-    
-    return _require_self_or_admin
-
-
-# --- Commonly Used Dependencies ---
-
-# Admin access (any admin role)  
-require_admin = require_any_role(["super_admin", "admin"])
-
-
-# --- New Unified Permission Dependencies ---
-
-# User Management
-can_read_users = require_permissions(any_of=["user:read_all", "user:read_platform", "user:read_client"])
-can_manage_users = require_permissions(any_of=["user:manage_all", "user:manage_platform", "user:manage_client"])
-
-# Role Management
-can_read_roles = require_permissions(any_of=["role:read_all", "role:read_platform", "role:read_client"])
-can_manage_roles = require_permissions(any_of=["role:manage_all", "role:manage_platform", "role:manage_client"])
-
-# Group Management
-can_read_groups = require_permissions(any_of=["group:read_all", "group:read_platform", "group:read_client"])
-can_manage_groups = require_permissions(any_of=["group:manage_all", "group:manage_platform", "group:manage_client"])
-
-# Client Account Management  
-can_read_client_accounts = require_permissions(any_of=["client:read_all", "client:read_platform"])
-can_manage_client_accounts = require_permissions(any_of=["client:manage_all", "client:manage_platform"])
-
-# Permission Management
-can_read_permissions = require_permissions(any_of=["permission:read_all", "permission:read_platform"])
-can_manage_permissions = require_permissions(any_of=["permission:manage_all", "permission:manage_platform"])
-
-
-# --- DEPRECATED DEPENDENCIES SECTION ---
-# These dependencies are being replaced by the unified hierarchical permission system
-# All routes should migrate to: can_read_*, can_manage_*, etc.
-
-def require_admin_or_permission(permission_name: str):
-    """
-    DEPRECATED: Use require_permissions() or named dependencies instead.
-    This function is kept for backwards compatibility during migration.
-    """
-    async def _require_admin_or_permission(
-        current_user: UserModel = Depends(get_current_user)
-    ) -> UserModel:
-        # Check if user is any kind of admin first
-        is_admin = user_has_any_role(current_user, ["super_admin", "admin", "client_admin"])
-        
-        if is_admin:
-            return current_user
-        
-        # Use the unified permission system for permission checking
-        user_permissions = await user_service.get_user_effective_permissions(current_user.id)
-        from .services.permission_service import check_hierarchical_permission
-        
-        if check_hierarchical_permission(user_permissions, permission_name):
-            return current_user
-        
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Access denied. Required: admin role or '{permission_name}' permission"
-        )
-    return _require_admin_or_permission
-
-
-# DEPRECATED LEGACY DEPENDENCIES - MIGRATE TO NEW PATTERNS
-# Use the named dependencies instead: can_read_*, can_manage_*, etc.
-require_user_read_access = require_admin_or_permission("user:read_client")
-require_user_manage_access = require_admin_or_permission("user:manage")
-require_role_read_access = require_admin  
-require_group_read_access = require_admin_or_permission("group:read_client")
-require_permission_read_access = require_admin
-require_role_manage_access = require_admin_or_permission("role:manage_client")
-require_group_manage_access = require_admin_or_permission("group:manage_client")
-require_permission_manage_access = require_admin_or_permission("permission:manage_client") 
+# Global permission checker instance
+permission_checker = PermissionChecker()

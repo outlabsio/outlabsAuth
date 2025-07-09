@@ -1,412 +1,390 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Header, Response, Query
-from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
-from jose import JWTError
-from datetime import timedelta, datetime
-from typing import Tuple, List, Optional, Union
-from beanie import PydanticObjectId
-import logging
+"""
+Authentication routes
+"""
+from datetime import datetime, timezone
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from typing import Optional
 
-from ..services.user_service import user_service
-from ..services.security_service import security_service
-from ..services.refresh_token_service import refresh_token_service
-from ..config import settings
-from ..schemas.auth_schema import TokenSchema, TokenDataSchema, SessionResponseSchema
-from ..schemas.user_schema import UserResponseSchema
-from ..schemas.password_reset_schema import PasswordResetRequestSchema, PasswordResetConfirmSchema, PasswordChangeSchema
-from ..dependencies import get_current_user, get_current_user_with_token, convert_user_to_response
-from ..models.user_model import UserModel
-from ..models.password_reset_token_model import PasswordResetTokenModel
-from ..services.group_service import group_service
-
-logger = logging.getLogger(__name__)
-
-router = APIRouter(
-    prefix="/v1/auth",
-    tags=["Authentication"]
+from api.schemas.auth_schema import (
+    LoginRequest,
+    TokenResponse,
+    RefreshTokenRequest,
+    LogoutRequest,
+    PasswordResetRequest,
+    PasswordResetConfirm,
+    EmailVerificationRequest,
+    UserInfoResponse,
+    ChangePasswordRequest,
+    RegisterRequest
 )
+from api.services.auth_service import AuthService
+from api.models import UserModel
+from api.utils.jwt_utils import decode_token
+from api.config import settings
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/auth/login", auto_error=False)
+router = APIRouter()
 
-@router.post("/login")
-async def login_for_access_token(
-    request: Request,
-    response: Response,
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    use_cookies: Optional[bool] = Query(False, description="Use HTTP-only cookies instead of JSON response"),
-    use_enriched_tokens: Optional[bool] = Query(None, description="Include user data and permissions in access token (default: true)")
-) -> Union[TokenSchema, dict]:
+# OAuth2 scheme for token authentication
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/auth/login")
+
+
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserModel:
     """
-    Authenticates a user and returns an access token.
-    If use_cookies=true, sets HTTP-only cookies instead of JSON response.
-    By default, returns enriched tokens with user permissions and role data.
-    """
-    user = await user_service.get_user_by_email(form_data.username)
-    if not user or not security_service.verify_password(form_data.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    # Create Refresh Token
-    refresh_token, jti, expires_at = security_service.create_refresh_token(
-        data={"sub": str(user.id)}
-    )
-
-    # Store refresh token in DB
-    await refresh_token_service.create_refresh_token(
-        user_id=user.id,
-        jti=jti,
-        expires_at=expires_at,
-        ip_address=request.client.host,
-        user_agent=request.headers.get("user-agent")
-    )
-
-    # Determine whether to use enriched tokens
-    should_use_enriched = use_enriched_tokens if use_enriched_tokens is not None else settings.ENABLE_ENRICHED_TOKENS_BY_DEFAULT
+    Get current authenticated user from token
     
-    # Create Access Token - enriched by default, basic if explicitly disabled
-    client_account_id = str(user.client_account.id) if user.client_account else None
+    Args:
+        token: JWT access token
     
-    if should_use_enriched:
-        # Create enriched access token with user data and permissions
-        access_token = await security_service.create_enriched_access_token(
-            user_id=str(user.id),
-            client_account_id=client_account_id,
-            jti=jti
-        )
-    else:
-        # Create basic access token (for clients that prefer minimal tokens)
-        access_token_data = {
-            "sub": str(user.id),
-            "jti": jti,
-            "client_account_id": client_account_id
-        }
-        access_token = security_service.create_access_token(access_token_data)
-
-    if use_cookies:
-        # Set HTTP-only cookies
-        # Use secure=False for local development (HTTP), secure=True for production (HTTPS)
-        is_secure = not (request.url.hostname in ["localhost", "127.0.0.1"] or request.url.scheme == "http")
-        
-        response.set_cookie(
-            key="access_token",
-            value=access_token,
-            max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # Convert to seconds
-            httponly=True,
-            secure=is_secure,  # Dynamic based on environment
-            samesite="strict"
-        )
-        response.set_cookie(
-            key="refresh_token",
-            value=refresh_token,
-            max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,  # Convert to seconds
-            httponly=True,
-            secure=is_secure,  # Dynamic based on environment
-            samesite="strict"
-        )
-        return {"message": "Login successful", "token_type": "cookie"}
-    else:
-        # Return JSON tokens (current behavior)
-        return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
-
-@router.post("/refresh")
-async def refresh_access_token(
-    request: Request,
-    response: Response,
-    authorization: str = Header(None),
-    use_cookies: Optional[bool] = Query(False, description="Use HTTP-only cookies"),
-    use_enriched_tokens: Optional[bool] = Query(None, description="Include user data and permissions in access token (default: true)")
-) -> Union[TokenSchema, dict]:
-    # Try to get refresh token from cookies first, then from header
-    refresh_token_str = None
+    Returns:
+        Current user
     
-    if use_cookies:
-        refresh_token_str = request.cookies.get("refresh_token")
-        if not refresh_token_str:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token not found in cookies")
-    else:
-        # Extract token from Authorization header manually to provide specific error messages
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token not found")
-        
-        refresh_token_str = authorization.split(" ")[1]
-        if not refresh_token_str:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token not found")
-
-    payload = security_service.decode_refresh_token(refresh_token_str)
-    jti = payload.jti
-
-    db_token = await refresh_token_service.get_refresh_token_by_jti(jti)
-    if not db_token or db_token.is_revoked:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token revoked or invalid")
-
-    # With Beanie Links, we need to fetch the user reference or access it properly
-    # db_token.user is a Link object, we need to get the referenced user ID
-    user_id = db_token.user.ref.id if hasattr(db_token.user, 'ref') else db_token.user.id
-    user = await user_service.get_user_by_id(user_id)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-
-    # Issue new tokens (implementing token rotation)
-    # Revoke the old refresh token
-    await refresh_token_service.revoke_token(jti)
-
-    # Create new tokens (implementing token rotation)
-    new_refresh_token, new_jti, new_expires_at = security_service.create_refresh_token(data={"sub": str(user.id)})
-    await refresh_token_service.create_refresh_token(
-        user_id=user.id, jti=new_jti, expires_at=new_expires_at,
-        ip_address=request.client.host, user_agent=request.headers.get("user-agent")
-    )
-
-    # Determine whether to use enriched tokens
-    should_use_enriched = use_enriched_tokens if use_enriched_tokens is not None else settings.ENABLE_ENRICHED_TOKENS_BY_DEFAULT
-    
-    # Create new access token - enriched by default, basic if explicitly disabled
-    client_account_id = str(user.client_account.id) if user.client_account else None
-    
-    if should_use_enriched:
-        # Create enriched access token with user data and permissions
-        new_access_token = await security_service.create_enriched_access_token(
-            user_id=str(user.id),
-            client_account_id=client_account_id,
-            jti=new_jti
-        )
-    else:
-        # Create basic access token (for clients that prefer minimal tokens)
-        new_access_token_data = {
-            "sub": str(user.id),
-            "jti": new_jti,
-            "client_account_id": client_account_id
-        }
-        new_access_token = security_service.create_access_token(new_access_token_data)
-
-    if use_cookies:
-        # Update HTTP-only cookies
-        # Use secure=False for local development (HTTP), secure=True for production (HTTPS)
-        is_secure = not (request.url.hostname in ["localhost", "127.0.0.1"] or request.url.scheme == "http")
-        
-        response.set_cookie(
-            key="access_token",
-            value=new_access_token,
-            max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            httponly=True,
-            secure=is_secure,  # Dynamic based on environment
-            samesite="strict"
-        )
-        response.set_cookie(
-            key="refresh_token",
-            value=new_refresh_token,
-            max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
-            httponly=True,
-            secure=is_secure,  # Dynamic based on environment
-            samesite="strict"
-        )
-        return {"message": "Tokens refreshed", "token_type": "cookie"}
-    else:
-        return {"access_token": new_access_token, "refresh_token": new_refresh_token, "token_type": "bearer"}
-
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(
-    response: Response,
-    user_and_token: Tuple[UserModel, TokenDataSchema] = Depends(get_current_user_with_token),
-    use_cookies: Optional[bool] = Query(False, description="Clear HTTP-only cookies")
-):
+    Raises:
+        HTTPException: If token is invalid
     """
-    Revokes the current user's refresh token.
-    If use_cookies=true, also clears the HTTP-only cookies.
-    """
-    _, token_data = user_and_token
-    jti = token_data.jti
-    if jti:
-        await refresh_token_service.revoke_token(jti)
-
-    if use_cookies:
-        # Clear HTTP-only cookies
-        response.delete_cookie(key="access_token", httponly=True, secure=True, samesite="strict")
-        response.delete_cookie(key="refresh_token", httponly=True, secure=True, samesite="strict")
-
-    # Optional: Add the access token to a blacklist cache (e.g., Redis)
-    # for immediate invalidation before it expires.
-
-@router.post("/logout_all", status_code=status.HTTP_204_NO_CONTENT)
-async def logout_all(
-    current_user: UserModel = Depends(get_current_user)
-):
-    """
-    Revokes all of the current user's refresh tokens.
-    """
-    await refresh_token_service.revoke_all_tokens_for_user(current_user.id)
-
-@router.get("/me")
-async def get_current_user_info(
-    current_user: UserModel = Depends(get_current_user)
-) -> UserResponseSchema:
-    """
-    Returns the current user's information based on the access token.
-    """
-    user_dict = convert_user_to_response(current_user)
-    
-    # Get effective permissions for response
-    permission_details = await user_service.get_user_effective_permission_details(current_user.id)
-    user_dict["permissions"] = permission_details
-    
-    return UserResponseSchema.model_validate(user_dict)
-
-@router.post("/password/reset-request", status_code=status.HTTP_200_OK)
-async def request_password_reset(
-    request_data: PasswordResetRequestSchema
-):
-    """
-    Initiates a password reset process for system administrators.
-    Sends a password reset email if the user exists.
-    """
-    from ..services.email_service import system_email_service
-    
-    user = await user_service.get_user_by_email(request_data.email)
-    if user:
-        # Check if this is a system user (super admin or has system roles)
-        is_system_user = any(
-            hasattr(role, 'scope') and role.scope == "system" 
-            for role in (user.roles or [])
-        )
-        
-        if is_system_user:
-            # Generate password reset token
-            token = await security_service.create_password_reset_token(user.id)
-            
-            # Send email asynchronously
-            user_name = f"{user.first_name} {user.last_name}".strip() or user.email
-            await system_email_service.send_password_reset_email(
-                email=user.email,
-                name=user_name,
-                reset_token=token
-            )
-            
-            logger.info(f"Password reset email sent to system user: {user.email}")
-        else:
-            # For non-system users, just log (platform/client emails not implemented yet)
-            logger.info(f"Password reset requested for non-system user: {user.email}")
-
-    # Return a generic response to prevent user enumeration
-    return {"message": "If a user with this email exists, a password reset link has been sent."}
-
-@router.post("/password/reset-confirm", status_code=status.HTTP_204_NO_CONTENT)
-async def confirm_password_reset(
-    request_data: PasswordResetConfirmSchema
-):
-    """
-    Confirms a password reset using the token from the email.
-    """
-    token_doc = await security_service.verify_password_reset_token(request_data.token)
-
-    if not token_doc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired password reset token."
-        )
-
-    # Update the user's password
-    # With Beanie Links, we need to get the user ID properly
-    user_id = token_doc.user.ref.id if hasattr(token_doc.user, 'ref') else token_doc.user.id
-    await user_service.update_password(user_id, request_data.new_password)
-
-    # Revoke all of the user's existing sessions for security
-    await refresh_token_service.revoke_all_tokens_for_user(user_id)
-
-    # Mark the token as used
-    token_doc.used_at = datetime.utcnow()
-    await token_doc.save()
-
-@router.get("/sessions", response_model=List[SessionResponseSchema])
-async def get_active_sessions(
-    current_user: UserModel = Depends(get_current_user)
-):
-    """
-    Get all active sessions for the current user.
-    """
-    sessions = await refresh_token_service.get_sessions_for_user(current_user.id)
-    return sessions
-
-@router.delete("/sessions/{jti}", status_code=status.HTTP_204_NO_CONTENT)
-async def revoke_session(
-    jti: str,
-    current_user: UserModel = Depends(get_current_user)
-):
-    """
-    Revoke a specific session by JTI.
-    """
-    success = await refresh_token_service.revoke_session_by_jti(current_user.id, jti)
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Session not found or already revoked."
-        )
-
-@router.post("/password/change", status_code=status.HTTP_204_NO_CONTENT)
-async def change_password(
-    request_data: PasswordChangeSchema,
-    current_user: UserModel = Depends(get_current_user)
-):
-    """
-    Change the current user's password.
-    """
-    # Verify current password
-    if not security_service.verify_password(request_data.current_password, current_user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Current password is incorrect."
-        )
-
-    # Update password
-    await user_service.update_password(current_user.id, request_data.new_password)
-
-    # Revoke all existing sessions for security
-    await refresh_token_service.revoke_all_tokens_for_user(current_user.id)
-
-@router.get("/token-info")
-async def get_token_info(
-    token: str = Depends(oauth2_scheme)
-) -> dict:
-    """
-    Returns information about the current access token.
-    Useful for frontend to understand token capabilities.
-    """
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Access token required"
-        )
-    
     try:
-        # Decode the access token
-        token_data = security_service.decode_access_token(token)
+        payload = decode_token(token)
+        if payload.get("type") != "access":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token type"
+            )
         
-        if hasattr(token_data, 'permissions') and hasattr(token_data, 'roles'):
-            # Enriched token (standard format)
-            return {
-                "token_type": "enriched",
-                "user_id": token_data.sub,
-                "client_account_id": token_data.client_account_id,
-                "permissions_count": len(token_data.permissions),
-                "roles_count": len(token_data.roles),
-                "scopes": token_data.scopes,
-                "expires_at": token_data.exp,
-                "issued_at": token_data.iat,
-                "user_email": token_data.user.email,
-                "mfa_enabled": token_data.session.mfa_enabled,
-                "locale": token_data.session.locale
-            }
-        else:
-            # Basic token (minimal format)
-            return {
-                "token_type": "basic",
-                "user_id": token_data.user_id,
-                "client_account_id": token_data.client_account_id,
-                "message": "Token contains minimal data - use default login for enriched features"
-            }
+        user = await UserModel.get(payload["sub"])
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found"
+            )
+        
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Inactive user"
+            )
+        
+        return user
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid access token"
-        ) 
+            detail="Could not validate credentials"
+        )
+
+
+@router.post("/register", response_model=UserInfoResponse)
+async def register(request: RegisterRequest):
+    """
+    Register a new user
+    
+    Args:
+        request: Registration data
+    
+    Returns:
+        Created user information
+    """
+    # Check if user already exists
+    existing_user = await UserModel.find_one(UserModel.email == request.email)
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
+        )
+    
+    # Create new user
+    user = UserModel(
+        email=request.email,
+        hashed_password=AuthService.hash_password(request.password),
+        profile={
+            "first_name": request.first_name,
+            "last_name": request.last_name,
+            "phone": request.phone
+        }
+    )
+    await user.save()
+    
+    return UserInfoResponse(
+        id=str(user.id),
+        email=user.email,
+        profile=user.profile.model_dump() if user.profile else {},
+        is_active=user.is_active,
+        email_verified=user.email_verified,
+        created_at=user.created_at,
+        last_login=user.last_login
+    )
+
+
+@router.post("/login", response_model=TokenResponse)
+async def login(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends()
+):
+    """
+    Login with email and password
+    
+    Args:
+        request: FastAPI request object
+        form_data: OAuth2 form data (username=email, password)
+    
+    Returns:
+        Access and refresh tokens
+    """
+    # Get client IP
+    ip_address = request.client.host if request.client else None
+    
+    # Authenticate user (username field contains email)
+    user = await AuthService.authenticate_user(form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password"
+        )
+    
+    # Create tokens
+    access_token, refresh_token, _ = await AuthService.create_tokens(
+        user,
+        device_info={"user_agent": request.headers.get("user-agent")},
+        ip_address=ip_address
+    )
+    
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer",
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    )
+
+
+@router.post("/login/json", response_model=TokenResponse)
+async def login_json(
+    request: Request,
+    login_data: LoginRequest
+):
+    """
+    Login with JSON payload (alternative to form data)
+    
+    Args:
+        request: FastAPI request object
+        login_data: Login credentials
+    
+    Returns:
+        Access and refresh tokens
+    """
+    # Get client IP
+    ip_address = request.client.host if request.client else None
+    
+    # Authenticate user
+    user = await AuthService.authenticate_user(login_data.email, login_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password"
+        )
+    
+    # Create tokens
+    access_token, refresh_token, _ = await AuthService.create_tokens(
+        user,
+        device_info=login_data.device_info or {"user_agent": request.headers.get("user-agent")},
+        ip_address=ip_address
+    )
+    
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer",
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    )
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_token(
+    request: Request,
+    refresh_data: RefreshTokenRequest
+):
+    """
+    Refresh access token using refresh token
+    
+    Args:
+        request: FastAPI request object
+        refresh_data: Refresh token
+    
+    Returns:
+        New access and refresh tokens
+    """
+    ip_address = request.client.host if request.client else None
+    
+    try:
+        access_token, refresh_token = await AuthService.refresh_access_token(
+            refresh_data.refresh_token,
+            ip_address=ip_address
+        )
+        
+        return TokenResponse(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            token_type="bearer",
+            expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token"
+        )
+
+
+@router.post("/logout")
+async def logout(logout_data: LogoutRequest):
+    """
+    Logout by revoking refresh token
+    
+    Args:
+        logout_data: Refresh token to revoke
+    
+    Returns:
+        Success message
+    """
+    success = await AuthService.logout(logout_data.refresh_token)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid refresh token"
+        )
+    
+    return {"message": "Successfully logged out"}
+
+
+@router.post("/logout/all")
+async def logout_all_devices(current_user: UserModel = Depends(get_current_user)):
+    """
+    Logout from all devices
+    
+    Args:
+        current_user: Authenticated user
+    
+    Returns:
+        Number of sessions terminated
+    """
+    count = await AuthService.logout_all_devices(str(current_user.id))
+    return {"message": f"Logged out from {count} device(s)"}
+
+
+@router.get("/me", response_model=UserInfoResponse)
+async def get_current_user_info(current_user: UserModel = Depends(get_current_user)):
+    """
+    Get current user information
+    
+    Args:
+        current_user: Authenticated user
+    
+    Returns:
+        User information
+    """
+    return UserInfoResponse(
+        id=str(current_user.id),
+        email=current_user.email,
+        profile=current_user.profile.model_dump() if current_user.profile else {},
+        is_active=current_user.is_active,
+        email_verified=current_user.email_verified,
+        created_at=current_user.created_at,
+        last_login=current_user.last_login
+    )
+
+
+@router.post("/password/reset")
+async def request_password_reset(reset_data: PasswordResetRequest):
+    """
+    Request password reset token
+    
+    Args:
+        reset_data: Email address
+    
+    Returns:
+        Success message (always returns success for security)
+    """
+    token = await AuthService.create_password_reset_request(reset_data.email)
+    
+    # TODO: Send email with reset token
+    # For now, we'll just return success
+    # In production, never return the token in the response
+    
+    return {"message": "If the email exists, a password reset link has been sent"}
+
+
+@router.post("/password/reset/confirm")
+async def confirm_password_reset(reset_data: PasswordResetConfirm):
+    """
+    Reset password with token
+    
+    Args:
+        reset_data: Reset token and new password
+    
+    Returns:
+        Success message
+    """
+    try:
+        await AuthService.reset_password(reset_data.token, reset_data.new_password)
+        return {"message": "Password successfully reset"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token"
+        )
+
+
+@router.post("/password/change")
+async def change_password(
+    password_data: ChangePasswordRequest,
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Change password for authenticated user
+    
+    Args:
+        password_data: Current and new passwords
+        current_user: Authenticated user
+    
+    Returns:
+        Success message
+    """
+    # Verify current password
+    if not AuthService.verify_password(password_data.current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Incorrect current password"
+        )
+    
+    # Update password
+    current_user.hashed_password = AuthService.hash_password(password_data.new_password)
+    current_user.last_password_change = datetime.now(timezone.utc)
+    await current_user.save()
+    
+    # Revoke all refresh tokens for security
+    await AuthService.logout_all_devices(str(current_user.id))
+    
+    return {"message": "Password successfully changed. Please login again."}
+
+
+@router.post("/email/verify")
+async def verify_email(verification_data: EmailVerificationRequest):
+    """
+    Verify email address with token
+    
+    Args:
+        verification_data: Verification token
+    
+    Returns:
+        Success message
+    """
+    try:
+        await AuthService.verify_email(verification_data.token)
+        return {"message": "Email successfully verified"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification token"
+        )

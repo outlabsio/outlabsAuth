@@ -1,315 +1,485 @@
-from typing import List, Optional, Dict, Any
+"""
+Role Service
+Handles role CRUD operations and permission management
+"""
+from datetime import datetime, timezone
+from typing import List, Optional, Dict, Any, Tuple
 from beanie import PydanticObjectId
+from beanie.operators import In, And, Or
 from fastapi import HTTPException, status
 
-from ..models.role_model import RoleModel, RoleScope
-from ..schemas.role_schema import (
-    RoleCreateSchema, 
-    RoleUpdateSchema, 
-    RoleResponseSchema,
-    AvailableRolesResponseSchema
-)
-from .permission_service import permission_service
+from api.models import RoleModel, EntityModel, UserModel, EntityMembershipModel
+from api.services.permission_service import permission_service
+
 
 class RoleService:
-    """
-    Service class for role-related operations with scoped role support.
-    """
-
+    """Service for role operations"""
+    
+    # Predefined permission templates
+    PERMISSION_TEMPLATES = {
+        "admin": [
+            "entity:manage",
+            "user:manage",
+            "role:manage",
+            "member:manage"
+        ],
+        "manager": [
+            "entity:read",
+            "entity:update",
+            "user:read",
+            "user:update",
+            "member:manage"
+        ],
+        "member": [
+            "entity:read",
+            "user:read",
+            "member:read"
+        ],
+        "viewer": [
+            "entity:read",
+            "user:read"
+        ]
+    }
+    
+    @staticmethod
     async def create_role(
-        self, 
-        role_data: RoleCreateSchema, 
-        current_user_id: str,
-        current_client_id: Optional[str] = None,
-        scope_id: Optional[str] = None
+        name: str,
+        display_name: str,
+        description: Optional[str],
+        permissions: List[str],
+        entity_id: Optional[str] = None,
+        assignable_at_types: Optional[List[str]] = None,
+        is_system_role: bool = False,
+        is_global: bool = False,
+        created_by: Optional[UserModel] = None
     ) -> RoleModel:
         """
-        Create a new role with proper scoping.
+        Create a new role
         
         Args:
-            role_data: Role creation data
-            current_user_id: ID of user creating the role
-            current_client_id: Client ID of current user
-            scope_id: Explicit scope ID (platform_id or client_account_id)
-        """
-        # Determine scope_id based on role scope
-        if role_data.scope == RoleScope.SYSTEM:
-            final_scope_id = None
-        elif role_data.scope == RoleScope.CLIENT:
-            final_scope_id = scope_id or current_client_id
-            if not final_scope_id:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Client ID required for client-scoped roles"
-                )
-        elif role_data.scope == RoleScope.PLATFORM:
-            if not scope_id:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Platform ID required for platform-scoped roles"
-                )
-            final_scope_id = scope_id
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid scope: {role_data.scope}"
-            )
-
-        # Check if role name already exists in this scope
-        existing_role = await RoleModel.find_one(
-            RoleModel.name == role_data.name,
-            RoleModel.scope == role_data.scope,
-            RoleModel.scope_id == final_scope_id
-        )
+            name: Role name (unique within entity)
+            display_name: Human-readable name
+            description: Role description
+            permissions: List of permissions
+            entity_id: Entity that owns this role
+            assignable_at_types: Entity types where role can be assigned
+            is_system_role: Whether this is a system role
+            is_global: Whether this is a global role
+            created_by: User creating the role
         
+        Returns:
+            Created role
+        
+        Raises:
+            HTTPException: If validation fails
+        """
+        # Validate entity if provided
+        entity = None
+        if entity_id:
+            entity = await EntityModel.get(entity_id)
+            if not entity:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Entity not found"
+                )
+        
+        # Check for duplicate role name within entity
+        existing_query = RoleModel.find(RoleModel.name == name)
+        if entity:
+            existing_query = existing_query.find(RoleModel.entity_id == entity.id)
+        else:
+            existing_query = existing_query.find(RoleModel.entity_id == None)
+        
+        existing_role = await existing_query.first_or_none()
         if existing_role:
-            scope_desc = f"{role_data.scope} scope"
-            if final_scope_id:
-                scope_desc += f" ({final_scope_id})"
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Role '{role_data.name}' already exists in {scope_desc}"
+                detail=f"Role '{name}' already exists in this scope"
             )
-
-        # Convert permission names to Link objects
-        permission_links = await permission_service.convert_permission_names_to_links(role_data.permissions)
-
+        
+        # Validate permissions
+        validated_permissions = await RoleService._validate_permissions(permissions)
+        
         # Create role
         role = RoleModel(
-            name=role_data.name,
-            display_name=role_data.display_name,
-            description=role_data.description,
-            permissions=permission_links,
-            scope=role_data.scope,
-            scope_id=final_scope_id,
-            is_assignable_by_main_client=role_data.is_assignable_by_main_client,
-            created_by_user_id=current_user_id,
-            created_by_client_id=current_client_id
+            name=name,
+            display_name=display_name,
+            description=description,
+            permissions=validated_permissions,
+            entity_id=entity.id if entity else None,
+            assignable_at_types=assignable_at_types or [],
+            is_system_role=is_system_role,
+            is_global=is_global
         )
         
-        await role.insert()
+        await role.save()
+        
+        # Invalidate permission cache for affected users
+        if entity:
+            await permission_service.invalidate_entity_cache(str(entity.id))
+        
         return role
-
-    async def get_role_by_id(self, role_id: PydanticObjectId) -> Optional[RoleModel]:
-        """Get a role by its MongoDB ObjectId."""
-        return await RoleModel.get(role_id)
-
-    async def get_roles_by_scope(
-        self, 
-        scope: RoleScope, 
-        scope_id: Optional[str] = None,
-        skip: int = 0,
-        limit: int = 100
-    ) -> List[RoleModel]:
-        """Get all roles for a specific scope."""
-        if scope == RoleScope.SYSTEM:
-            # For system roles, just query by scope since scope_id should be None
-            roles = await RoleModel.find(
-                RoleModel.scope == scope, fetch_links=True
-            ).skip(skip).limit(limit).to_list()
-        else:
-            # For platform/client roles, filter by scope_id if provided
-            if scope_id is not None:
-                roles = await RoleModel.find(
-                    RoleModel.scope == scope,
-                    RoleModel.scope_id == scope_id, fetch_links=True
-                ).skip(skip).limit(limit).to_list()
-            else:
-                roles = await RoleModel.find(
-                    RoleModel.scope == scope, fetch_links=True
-                ).skip(skip).limit(limit).to_list()
-            
-        return roles
-
-    async def role_to_response_schema(self, role: RoleModel) -> RoleResponseSchema:
+    
+    @staticmethod
+    async def get_role(role_id: str) -> RoleModel:
         """
-        Convert a RoleModel to RoleResponseSchema with detailed permission information.
-        """
-        # Extract permission ObjectIds from Link objects
-        permission_ids = []
-        if role.permissions:
-            for permission_link in role.permissions:
-                if hasattr(permission_link, 'id'):
-                    permission_ids.append(permission_link.id)
-                else:
-                    # Fallback if it's still an ObjectId
-                    permission_ids.append(permission_link)
+        Get role by ID
         
-        # Resolve permission ObjectIds to detailed permission information
-        permission_details = await permission_service.resolve_permissions_to_details(permission_ids)
+        Args:
+            role_id: Role ID
         
-        # Convert role to dict and update permissions
-        role_dict = role.model_dump(by_alias=True)
-        role_dict["permissions"] = permission_details
+        Returns:
+            Role model
         
-        return RoleResponseSchema.model_validate(role_dict)
-
-    async def get_available_roles_for_user(
-        self,
-        current_user_client_id: Optional[str] = None,
-        current_user_platform_id: Optional[str] = None,
-        is_super_admin: bool = False,
-        is_platform_admin: bool = False
-    ) -> AvailableRolesResponseSchema:
+        Raises:
+            HTTPException: If role not found
         """
-        Get roles that a user can assign to others, grouped by scope.
-        """
-        available_roles = AvailableRolesResponseSchema()
-
-        # System roles (only super admins can assign these, or assignable ones for client admins)
-        if is_super_admin:
-            system_roles = await self.get_roles_by_scope(RoleScope.SYSTEM)
-            available_roles.system_roles = [
-                await self.role_to_response_schema(role) for role in system_roles
-            ]
-        elif current_user_client_id:
-            # Client admins can assign system roles marked as assignable
-            assignable_system_roles = await RoleModel.find(
-                RoleModel.scope == RoleScope.SYSTEM,
-                RoleModel.is_assignable_by_main_client == True, fetch_links=True
-            ).to_list()
-            available_roles.system_roles = [
-                await self.role_to_response_schema(role) for role in assignable_system_roles
-            ]
-
-        # Platform roles (platform admins can assign within their platform)
-        if is_super_admin or (is_platform_admin and current_user_platform_id):
-            platform_roles = await self.get_roles_by_scope(
-                RoleScope.PLATFORM, 
-                current_user_platform_id
-            )
-            available_roles.platform_roles = [
-                await self.role_to_response_schema(role) for role in platform_roles
-            ]
-
-        # Client roles (client admins can assign within their client)
-        if current_user_client_id:
-            client_roles = await self.get_roles_by_scope(
-                RoleScope.CLIENT,
-                current_user_client_id
-            )
-            available_roles.client_roles = [
-                await self.role_to_response_schema(role) for role in client_roles
-            ]
-
-        return available_roles
-
-    async def update_role(self, role_id: PydanticObjectId, role_data: RoleUpdateSchema) -> Optional[RoleModel]:
-        """Update a role by ID."""
-        role = await self.get_role_by_id(role_id)
+        role = await RoleModel.get(role_id)
         if not role:
-            return None
-
-        update_data = role_data.model_dump(exclude_unset=True)
-        
-        # Convert permission names to Link objects if permissions are being updated
-        if "permissions" in update_data and update_data["permissions"] is not None:
-            permission_links = await permission_service.convert_permission_names_to_links(update_data["permissions"])
-            update_data["permissions"] = permission_links
-        
-        if update_data:
-            for field, value in update_data.items():
-                setattr(role, field, value)
-            await role.save()
-            
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Role not found"
+            )
         return role
-
-    async def delete_role(self, role_id: PydanticObjectId) -> bool:
-        """Delete a role by ID."""
-        role = await self.get_role_by_id(role_id)
-        if not role:
-            return False
-
-        # Protect critical system roles from deletion
-        critical_system_roles = ["super_admin", "platform_admin", "client_admin"]
-        if role.scope == RoleScope.SYSTEM and role.name in critical_system_roles:
-            raise ValueError(f"Cannot delete critical system role: {role.name}")
-
+    
+    @staticmethod
+    async def update_role(
+        role_id: str,
+        display_name: Optional[str] = None,
+        description: Optional[str] = None,
+        permissions: Optional[List[str]] = None,
+        assignable_at_types: Optional[List[str]] = None,
+        updated_by: Optional[UserModel] = None
+    ) -> RoleModel:
+        """
+        Update a role
+        
+        Args:
+            role_id: Role ID
+            display_name: New display name
+            description: New description
+            permissions: New permissions
+            assignable_at_types: New assignable types
+            updated_by: User updating the role
+        
+        Returns:
+            Updated role
+        
+        Raises:
+            HTTPException: If role not found or validation fails
+        """
+        role = await RoleService.get_role(role_id)
+        
+        # Prevent modification of system roles
+        if role.is_system_role:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot modify system roles"
+            )
+        
+        # Update fields
+        if display_name is not None:
+            role.display_name = display_name
+        
+        if description is not None:
+            role.description = description
+        
+        if permissions is not None:
+            validated_permissions = await RoleService._validate_permissions(permissions)
+            role.permissions = validated_permissions
+        
+        if assignable_at_types is not None:
+            role.assignable_at_types = assignable_at_types
+        
+        role.updated_at = datetime.now(timezone.utc)
+        await role.save()
+        
+        # Invalidate permission cache for affected users
+        if role.entity_id:
+            await permission_service.invalidate_entity_cache(str(role.entity_id))
+        
+        return role
+    
+    @staticmethod
+    async def delete_role(role_id: str, deleted_by: Optional[UserModel] = None) -> bool:
+        """
+        Delete a role
+        
+        Args:
+            role_id: Role ID
+            deleted_by: User deleting the role
+        
+        Returns:
+            Success status
+        
+        Raises:
+            HTTPException: If role not found or cannot be deleted
+        """
+        role = await RoleService.get_role(role_id)
+        
+        # Prevent deletion of system roles
+        if role.is_system_role:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete system roles"
+            )
+        
+        # Check if role is in use
+        memberships_count = await EntityMembershipModel.find(
+            EntityMembershipModel.role.id == role.id,
+            EntityMembershipModel.status == "active"
+        ).count()
+        
+        if memberships_count > 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot delete role: {memberships_count} active memberships exist"
+            )
+        
+        # Delete role
         await role.delete()
+        
+        # Invalidate permission cache
+        if role.entity_id:
+            await permission_service.invalidate_entity_cache(str(role.entity_id))
+        
         return True
-
-    async def user_can_manage_role(
-        self,
-        user_roles: List[RoleModel],  # Now expects RoleModel objects instead of string IDs
-        user_client_id: Optional[str],
-        target_role: RoleModel
-    ) -> bool:
+    
+    @staticmethod
+    async def search_roles(
+        entity_id: Optional[str] = None,
+        query: Optional[str] = None,
+        is_global: Optional[bool] = None,
+        assignable_at_type: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 20
+    ) -> Tuple[List[RoleModel], int]:
         """
-        Check if a user can manage (create/update/delete) a specific role.
+        Search roles with filtering
         
         Args:
-            user_roles: List of RoleModel objects (user's roles as Beanie Links)
-            user_client_id: User's client account ID
-            target_role: The role being managed
-        """
-        # Super admins can manage everything
-        if any(role.name == "super_admin" and role.scope == RoleScope.SYSTEM for role in user_roles):
-            return True
-
-        # System roles - only super admins can manage
-        if target_role.scope == RoleScope.SYSTEM:
-            return False
+            entity_id: Filter by entity
+            query: Search in name and description
+            is_global: Filter by global status
+            assignable_at_type: Filter by assignable type
+            page: Page number
+            page_size: Items per page
         
-        # Platform roles - platform admins for that platform can manage
-        if target_role.scope == RoleScope.PLATFORM:
-            platform_admin_roles = [
-                role for role in user_roles 
-                if (role.name == "admin" and 
-                    role.scope == RoleScope.PLATFORM and 
-                    role.scope_id == target_role.scope_id)
-            ]
-            return len(platform_admin_roles) > 0
-            
-        # Client roles - client admins for that client can manage
-        if target_role.scope == RoleScope.CLIENT:
-            if user_client_id != target_role.scope_id:
-                return False
-            client_admin_roles = [
-                role for role in user_roles 
-                if (role.name == "admin" and 
-                    role.scope == RoleScope.CLIENT and 
-                    role.scope_id == target_role.scope_id)
-            ]
-            return len(client_admin_roles) > 0
-        
-        return False
-
-    async def user_can_view_role(
-        self,
-        user_roles: List[RoleModel],  # Now expects RoleModel objects instead of string IDs
-        user_client_id: Optional[str],
-        target_role: RoleModel
-    ) -> bool:
+        Returns:
+            Tuple of (roles, total_count)
         """
-        Check if a user can view a specific role.
+        # Build query
+        query_conditions = []
+        
+        if entity_id:
+            query_conditions.append(RoleModel.entity_id == PydanticObjectId(entity_id))
+        
+        if query:
+            query_conditions.append(
+                Or(
+                    RoleModel.name.regex(f".*{query}.*", "i"),
+                    RoleModel.display_name.regex(f".*{query}.*", "i"),
+                    RoleModel.description.regex(f".*{query}.*", "i")
+                )
+            )
+        
+        if is_global is not None:
+            query_conditions.append(RoleModel.is_global == is_global)
+        
+        if assignable_at_type:
+            query_conditions.append(
+                In(assignable_at_type, RoleModel.assignable_at_types)
+            )
+        
+        # Execute query
+        if query_conditions:
+            roles_query = RoleModel.find(And(*query_conditions))
+        else:
+            roles_query = RoleModel.find_all()
+        
+        # Get total count
+        total = await roles_query.count()
+        
+        # Apply pagination
+        skip = (page - 1) * page_size
+        roles = await roles_query.skip(skip).limit(page_size).to_list()
+        
+        return roles, total
+    
+    @staticmethod
+    async def get_assignable_roles(
+        entity_id: str,
+        entity_type: str
+    ) -> List[RoleModel]:
+        """
+        Get roles that can be assigned at a specific entity type
         
         Args:
-            user_roles: List of RoleModel objects (user's roles as Beanie Links)
-            user_client_id: User's client account ID
-            target_role: The role being viewed
+            entity_id: Entity ID
+            entity_type: Entity type
+        
+        Returns:
+            List of assignable roles
         """
-        # Super admins can view everything
-        if any(role.name == "super_admin" and role.scope == RoleScope.SYSTEM for role in user_roles):
-            return True
+        # Get entity
+        entity = await EntityModel.get(entity_id)
+        if not entity:
+            return []
         
-        # System roles - everyone can view
-        if target_role.scope == RoleScope.SYSTEM:
-            return True
+        # Get roles from entity hierarchy
+        assignable_roles = []
         
-        # Platform roles - platform users can view their platform roles
-        if target_role.scope == RoleScope.PLATFORM:
-            user_platform_roles = [
-                role for role in user_roles 
-                if (role.scope == RoleScope.PLATFORM and 
-                    role.scope_id == target_role.scope_id)
-            ]
-            return len(user_platform_roles) > 0
+        # Get roles from current entity and parents
+        current_entity = entity
+        while current_entity:
+            # Get roles from current entity
+            entity_roles = await RoleModel.find(
+                RoleModel.entity_id == current_entity.id,
+                Or(
+                    RoleModel.assignable_at_types == [],
+                    In(entity_type, RoleModel.assignable_at_types)
+                )
+            ).to_list()
             
-        # Client roles - users in that client can view
-        if target_role.scope == RoleScope.CLIENT:
-            return user_client_id == target_role.scope_id
+            assignable_roles.extend(entity_roles)
+            
+            # Move to parent entity
+            if current_entity.parent_entity:
+                current_entity = await current_entity.parent_entity.fetch()
+            else:
+                break
         
-        return False
-
-# Create service instance
-role_service = RoleService() 
+        # Get global roles
+        global_roles = await RoleModel.find(
+            RoleModel.is_global == True,
+            Or(
+                RoleModel.assignable_at_types == [],
+                In(entity_type, RoleModel.assignable_at_types)
+            )
+        ).to_list()
+        
+        assignable_roles.extend(global_roles)
+        
+        return assignable_roles
+    
+    @staticmethod
+    async def create_default_roles(entity_id: str) -> List[RoleModel]:
+        """
+        Create default roles for an entity
+        
+        Args:
+            entity_id: Entity ID
+        
+        Returns:
+            List of created roles
+        """
+        entity = await EntityModel.get(entity_id)
+        if not entity:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Entity not found"
+            )
+        
+        created_roles = []
+        
+        # Create roles based on entity type
+        if entity.entity_type == "platform":
+            roles_to_create = [
+                ("platform_admin", "Platform Admin", RoleService.PERMISSION_TEMPLATES["admin"]),
+                ("platform_manager", "Platform Manager", RoleService.PERMISSION_TEMPLATES["manager"]),
+                ("platform_viewer", "Platform Viewer", RoleService.PERMISSION_TEMPLATES["viewer"])
+            ]
+        elif entity.entity_type == "organization":
+            roles_to_create = [
+                ("org_admin", "Organization Admin", RoleService.PERMISSION_TEMPLATES["admin"]),
+                ("org_manager", "Organization Manager", RoleService.PERMISSION_TEMPLATES["manager"]),
+                ("org_member", "Organization Member", RoleService.PERMISSION_TEMPLATES["member"])
+            ]
+        elif entity.entity_type == "team":
+            roles_to_create = [
+                ("team_lead", "Team Lead", RoleService.PERMISSION_TEMPLATES["manager"]),
+                ("team_member", "Team Member", RoleService.PERMISSION_TEMPLATES["member"])
+            ]
+        else:
+            # Default roles for other entity types
+            roles_to_create = [
+                ("admin", "Admin", RoleService.PERMISSION_TEMPLATES["admin"]),
+                ("member", "Member", RoleService.PERMISSION_TEMPLATES["member"])
+            ]
+        
+        for name, display_name, permissions in roles_to_create:
+            try:
+                role = await RoleService.create_role(
+                    name=name,
+                    display_name=display_name,
+                    description=f"Default {display_name} role",
+                    permissions=permissions,
+                    entity_id=entity_id
+                )
+                created_roles.append(role)
+            except HTTPException:
+                # Role might already exist
+                pass
+        
+        return created_roles
+    
+    @staticmethod
+    async def _validate_permissions(permissions: List[str]) -> List[str]:
+        """
+        Validate and normalize permissions
+        
+        Args:
+            permissions: List of permission strings
+        
+        Returns:
+            Validated permissions
+        
+        Raises:
+            HTTPException: If permissions are invalid
+        """
+        # Define valid permissions
+        valid_permissions = {
+            # System level
+            "system:manage_all", "system:read_all",
+            
+            # Platform level
+            "platform:manage_platform", "platform:read_platform",
+            
+            # Entity level
+            "entity:manage", "entity:read", "entity:create", "entity:update", "entity:delete",
+            
+            # User level
+            "user:manage", "user:read", "user:create", "user:update", "user:delete",
+            
+            # Role level
+            "role:manage", "role:read", "role:create", "role:update", "role:delete", "role:assign",
+            
+            # Member level
+            "member:manage", "member:read", "member:add", "member:update", "member:remove",
+            
+            # Wildcard permissions
+            "*:manage_all", "*:read_all"
+        }
+        
+        validated = []
+        for perm in permissions:
+            if perm in valid_permissions:
+                validated.append(perm)
+            else:
+                # Check if it's a valid wildcard pattern
+                if ":" in perm:
+                    resource, action = perm.split(":", 1)
+                    if resource == "*" or action == "*":
+                        validated.append(perm)
+                    else:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"Invalid permission: {perm}"
+                        )
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Invalid permission format: {perm}"
+                    )
+        
+        return validated

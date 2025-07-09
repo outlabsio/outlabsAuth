@@ -1,87 +1,106 @@
-from pydantic import BaseModel, ConfigDict
-from typing import Optional, List, Dict, Any
+"""
+Authentication schemas for request/response validation
+"""
 from datetime import datetime
+from typing import Optional, Dict, Any
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
-class TokenSchema(BaseModel):
-    """
-    Schema for the JWT access token response.
-    """
+
+class LoginRequest(BaseModel):
+    """Login request schema"""
+    email: EmailStr
+    password: str = Field(..., min_length=1)
+    device_info: Optional[Dict[str, Any]] = None
+
+
+class TokenResponse(BaseModel):
+    """Token response schema"""
     access_token: str
     refresh_token: str
-    token_type: str
+    token_type: str = "bearer"
+    expires_in: int = Field(..., description="Access token expiration in seconds")
 
-class TokenDataSchema(BaseModel):
-    """
-    Schema for the data encoded within the JWT.
-    """
-    user_id: Optional[str] = None
-    jti: Optional[str] = None # JTI of the refresh token
-    client_account_id: Optional[str] = None  # String ID for client account
 
-class EnrichedTokenUserSchema(BaseModel):
-    """
-    Schema for user data within enriched JWT token.
-    """
-    email: str
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    status: str
-    is_platform_staff: bool = False
-    platform_scope: Optional[str] = None
+class RefreshTokenRequest(BaseModel):
+    """Refresh token request schema"""
+    refresh_token: str
 
-class EnrichedTokenRoleSchema(BaseModel):
-    """
-    Schema for role data within enriched JWT token.
-    """
+
+class LogoutRequest(BaseModel):
+    """Logout request schema"""
+    refresh_token: str
+
+
+class PasswordResetRequest(BaseModel):
+    """Password reset request schema"""
+    email: EmailStr
+
+
+class PasswordResetConfirm(BaseModel):
+    """Password reset confirmation schema"""
+    token: str
+    new_password: str = Field(..., min_length=8)
+    
+    @field_validator('new_password')
+    def validate_password_strength(cls, v):
+        """Ensure password meets minimum requirements"""
+        if not any(c.isupper() for c in v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        if not any(c.islower() for c in v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        if not any(c.isdigit() for c in v):
+            raise ValueError('Password must contain at least one digit')
+        return v
+
+
+class EmailVerificationRequest(BaseModel):
+    """Email verification request schema"""
+    token: str
+
+
+class UserInfoResponse(BaseModel):
+    """User info response schema"""
     id: str
-    name: str
-    scope: str
-    scope_id: Optional[str] = None
-
-class EnrichedTokenSessionSchema(BaseModel):
-    """
-    Schema for session metadata within enriched JWT token.
-    """
-    is_main_client: bool = False
-    mfa_enabled: bool = False
-    locale: str = "en-US"
-
-class EnrichedTokenDataSchema(BaseModel):
-    """
-    Schema for enriched JWT token payload with user permissions and role information.
-    This is now the standard token format that includes all data needed by frontend.
-    """
-    # Standard JWT claims
-    sub: str  # user_id
-    client_account_id: Optional[str] = None
-    jti: Optional[str] = None
-    exp: int  # expiration timestamp
-    iat: int  # issued at timestamp
-    
-    # User information
-    user: EnrichedTokenUserSchema
-    
-    # Authorization data
-    roles: List[EnrichedTokenRoleSchema]
-    permissions: List[str]  # Permission names for quick access
-    scopes: List[str]       # Available scopes
-    
-    # Session metadata
-    session: EnrichedTokenSessionSchema
-    
-    model_config = ConfigDict(
-        populate_by_name=True,
-        from_attributes=True
-    )
-
-class SessionResponseSchema(BaseModel):
-    """
-    Schema for representing a user's active session.
-    """
-    jti: str
-    ip_address: Optional[str] = None
-    user_agent: Optional[str] = None
+    email: str
+    profile: Dict[str, Any]
+    is_active: bool
+    email_verified: bool
     created_at: datetime
-    expires_at: datetime
+    last_login: Optional[datetime] = None
 
-    model_config = ConfigDict(from_attributes=True) 
+
+class ChangePasswordRequest(BaseModel):
+    """Change password request schema"""
+    current_password: str
+    new_password: str = Field(..., min_length=8)
+    
+    @field_validator('new_password')
+    def validate_password_strength(cls, v):
+        """Ensure password meets minimum requirements"""
+        if not any(c.isupper() for c in v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        if not any(c.islower() for c in v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        if not any(c.isdigit() for c in v):
+            raise ValueError('Password must contain at least one digit')
+        return v
+
+
+class RegisterRequest(BaseModel):
+    """User registration request schema"""
+    email: EmailStr
+    password: str = Field(..., min_length=8)
+    first_name: str = Field(..., min_length=1, max_length=50)
+    last_name: str = Field(..., min_length=1, max_length=50)
+    phone: Optional[str] = None
+    
+    @field_validator('password')
+    def validate_password_strength(cls, v):
+        """Ensure password meets minimum requirements"""
+        if not any(c.isupper() for c in v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        if not any(c.islower() for c in v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        if not any(c.isdigit() for c in v):
+            raise ValueError('Password must contain at least one digit')
+        return v

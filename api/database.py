@@ -1,101 +1,48 @@
-from motor.motor_asyncio import AsyncIOMotorClient
+"""
+Database connection and initialization
+"""
 from beanie import init_beanie
-from .config import settings
+from motor.motor_asyncio import AsyncIOMotorClient
+from api.config import settings
 
-# Import all document models for Beanie initialization
-from .models.user_model import UserModel
-from .models.role_model import RoleModel
-from .models.permission_model import PermissionModel
-from .models.client_account_model import ClientAccountModel
-from .models.refresh_token_model import RefreshTokenModel
-from .models.password_reset_token_model import PasswordResetTokenModel
-from .models.group_model import GroupModel
-from .models.system_settings import SystemSettingsModel
+# Import all models here
+from api.models.base_model import BaseDocument
+from api.models.user_model import UserModel
+from api.models.entity_model import EntityModel, EntityMembershipModel
+from api.models.role_model import RoleModel
+from api.models.refresh_token_model import RefreshTokenModel
 
-class Database:
-    """
-    Manages the MongoDB connection and Beanie ODM initialization.
-    """
-    client: AsyncIOMotorClient | None = None
-
-    async def connect(self):
-        """
-        Establishes the connection to MongoDB and initializes Beanie ODM.
-        """
-        print("Connecting to MongoDB...")
-        self.client = AsyncIOMotorClient(settings.DATABASE_URL)
-        
-        try:
-            # Test the connection
-            await self.client.admin.command('ismaster')
-            print("Successfully connected to MongoDB.")
-            
-            # Initialize Beanie with all document models
-            await init_beanie(
-                database=self.client[settings.MONGO_DATABASE],
-                document_models=[
-                    UserModel,
-                    RoleModel,
-                    PermissionModel,
-                    ClientAccountModel,
-                    RefreshTokenModel,
-                    PasswordResetTokenModel,
-                    GroupModel,
-                    SystemSettingsModel,
-                ]
-            )
-            print("Beanie ODM initialized successfully.")
-            
-            # Rebuild models to resolve circular references with proper namespace
-            namespace = {
-                'UserModel': UserModel,
-                'RoleModel': RoleModel,
-                'PermissionModel': PermissionModel,
-                'ClientAccountModel': ClientAccountModel,
-                'RefreshTokenModel': RefreshTokenModel,
-                'PasswordResetTokenModel': PasswordResetTokenModel,
-                'GroupModel': GroupModel,
-                'SystemSettingsModel': SystemSettingsModel,
-            }
-            UserModel.model_rebuild(_types_namespace=namespace)
-            RoleModel.model_rebuild(_types_namespace=namespace)
-            PermissionModel.model_rebuild(_types_namespace=namespace)
-            ClientAccountModel.model_rebuild(_types_namespace=namespace)
-            RefreshTokenModel.model_rebuild(_types_namespace=namespace)
-            PasswordResetTokenModel.model_rebuild(_types_namespace=namespace)
-            GroupModel.model_rebuild(_types_namespace=namespace)
-            SystemSettingsModel.model_rebuild(_types_namespace=namespace)
-            print("Model circular references resolved.")
-            
-            # Beanie handles all indexes automatically through model definitions
-            print("Database initialization complete.")
-            
-        except Exception as e:
-            print(f"Failed to connect to MongoDB: {e}")
-            if self.client:
-                self.client.close()
-                self.client = None
-            raise
+# Global database client
+client: AsyncIOMotorClient = None
 
 
+async def init_db():
+    """Initialize database connection and Beanie ODM"""
+    global client
+    
+    # Create Motor client
+    client = AsyncIOMotorClient(
+        settings.DATABASE_URL,
+        maxPoolSize=100,
+        minPoolSize=10,
+        maxIdleTimeMS=30000,
+    )
+    
+    # Initialize Beanie with all document models
+    await init_beanie(
+        database=client[settings.MONGO_DATABASE],
+        document_models=[
+            UserModel,
+            EntityModel,
+            EntityMembershipModel,
+            RoleModel,
+            RefreshTokenModel,
+        ]
+    )
 
-    async def close(self):
-        """
-        Closes the connection to the MongoDB server.
-        """
-        if self.client:
-            self.client.close()
-            print("MongoDB connection closed.")
-            self.client = None
 
-# Create a single instance of the Database to be used throughout the application
-db = Database()
-
-async def get_database():
-    """
-    A FastAPI dependency that ensures the database is connected.
-    Note: With Beanie, you typically don't need to inject the database directly.
-    """
-    if db.client is None:
-        raise RuntimeError("Database connection has not been established.")
-    return db.client[settings.MONGO_DATABASE] 
+async def close_db():
+    """Close database connection"""
+    global client
+    if client:
+        client.close()

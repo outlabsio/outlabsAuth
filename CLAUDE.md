@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**IMPORTANT**: Always check PROJECT_STATUS.md first to understand the current implementation state and next steps.
+
 ## Project Overview
 
 outlabsAuth is an enterprise-grade Role-Based Access Control (RBAC) authentication platform built with FastAPI, MongoDB, and Beanie ODM. It features a unique three-tier hierarchical permission system with automatic inheritance and multi-tenant support.
@@ -240,3 +242,15 @@ Key variables for local development:
 - **Components**: Prefer ShadCN UI components, install with `bunx --bun shadcn@latest add`
 - **Notifications**: Use Sonner toasts instead of static alerts
 - **Forms**: Use TanStack Form for form handling with built-in validation
+
+## Project Status Tracking
+
+The PROJECT_STATUS.md file contains:
+- Current implementation progress
+- Quick start commands
+- Test user credentials
+- Known issues
+- Next steps for each phase
+- API testing examples
+
+Always refer to this file when resuming work to understand the current state.
