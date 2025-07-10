@@ -8,7 +8,7 @@ from beanie import PydanticObjectId
 from beanie.operators import In, And, Or
 from fastapi import HTTPException, status
 
-from api.models import RoleModel, EntityModel, UserModel, EntityMembershipModel
+from api.models import RoleModel, EntityModel, UserModel, EntityMembershipModel, EntityClass
 from api.services.permission_service import permission_service
 
 
@@ -387,29 +387,24 @@ class RoleService:
         
         created_roles = []
         
-        # Create roles based on entity type
-        if entity.entity_type == "platform":
+        # Create roles based on entity class and metadata
+        # For structural entities, create standard admin/manager/member roles
+        # For access groups, create simplified roles
+        
+        if entity.entity_class == EntityClass.STRUCTURAL:
+            # Use entity's display name for role naming
+            entity_label = entity.display_name or entity.name
             roles_to_create = [
-                ("platform_admin", "Platform Admin", RoleService.PERMISSION_TEMPLATES["admin"]),
-                ("platform_manager", "Platform Manager", RoleService.PERMISSION_TEMPLATES["manager"]),
-                ("platform_viewer", "Platform Viewer", RoleService.PERMISSION_TEMPLATES["viewer"])
+                (f"{entity.name}_admin", f"{entity_label} Admin", RoleService.PERMISSION_TEMPLATES["admin"]),
+                (f"{entity.name}_manager", f"{entity_label} Manager", RoleService.PERMISSION_TEMPLATES["manager"]),
+                (f"{entity.name}_member", f"{entity_label} Member", RoleService.PERMISSION_TEMPLATES["member"])
             ]
-        elif entity.entity_type == "organization":
+        else:  # ACCESS_GROUP
+            # Access groups typically have simpler role structures
+            entity_label = entity.display_name or entity.name
             roles_to_create = [
-                ("org_admin", "Organization Admin", RoleService.PERMISSION_TEMPLATES["admin"]),
-                ("org_manager", "Organization Manager", RoleService.PERMISSION_TEMPLATES["manager"]),
-                ("org_member", "Organization Member", RoleService.PERMISSION_TEMPLATES["member"])
-            ]
-        elif entity.entity_type == "team":
-            roles_to_create = [
-                ("team_lead", "Team Lead", RoleService.PERMISSION_TEMPLATES["manager"]),
-                ("team_member", "Team Member", RoleService.PERMISSION_TEMPLATES["member"])
-            ]
-        else:
-            # Default roles for other entity types
-            roles_to_create = [
-                ("admin", "Admin", RoleService.PERMISSION_TEMPLATES["admin"]),
-                ("member", "Member", RoleService.PERMISSION_TEMPLATES["member"])
+                (f"{entity.name}_lead", f"{entity_label} Lead", RoleService.PERMISSION_TEMPLATES["manager"]),
+                (f"{entity.name}_member", f"{entity_label} Member", RoleService.PERMISSION_TEMPLATES["member"])
             ]
         
         for name, display_name, permissions in roles_to_create:

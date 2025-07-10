@@ -42,6 +42,7 @@ class EntityModel(BaseDocument):
     """
     # Identity
     name: str = Indexed()
+    display_name: str  # User-friendly name
     slug: str = Indexed(unique=True)
     description: Optional[str] = None
     

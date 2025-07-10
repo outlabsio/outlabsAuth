@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, Trash2, AlertTriangle, Check, ChevronsUpDown, Search } from "lucide-react";
+import { Loader2, Trash2, AlertTriangle, Check, ChevronsUpDown } from "lucide-react";
 import { authenticatedFetch } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -258,7 +258,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
       name: "",
       description: "",
       entity_class: EntityClass.STRUCTURAL,
-      entity_type: EntityType.ORGANIZATION,
+      entity_type: "" as string,  // Now allows any string
       parent_entity: "none",
       status: "active" as "active" | "inactive" | "archived",
       max_members: "",
@@ -338,15 +338,14 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
     if (!isEditMode && form.state.values.parent_entity && form.state.values.parent_entity !== "none") {
       const parentEntity = potentialParents.find(p => p.id === form.state.values.parent_entity);
       if (parentEntity) {
-        // Define hierarchy rules matching backend
-        const hierarchyRules: Record<string, EntityType[]> = {
-          [EntityType.PLATFORM]: [EntityType.ORGANIZATION, EntityType.BRANCH, EntityType.TEAM],
-          [EntityType.ORGANIZATION]: [EntityType.BRANCH, EntityType.TEAM],
-          [EntityType.BRANCH]: [EntityType.TEAM],
-          [EntityType.TEAM]: [], // Teams can't have structural children
-        };
+        // Simplified rules: structural entities can have any structural children
+        // Only restriction is access groups can't have structural children
+        if (parentEntity.entity_class === EntityClass.ACCESS_GROUP) {
+          return []; // Access groups can't have structural children
+        }
         
-        return hierarchyRules[parentEntity.entity_type] || [];
+        // Any structural entity can have any structural child
+        return structuralTypes;
       }
     }
     
@@ -485,27 +484,33 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                       </p>
                     </div>
                   ) : (
-                    <Select
-                      value={field.state.value}
-                      onValueChange={(value: EntityType) => field.handleChange(value)}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="Select an entity type" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {availableTypes.map(type => (
-                          <SelectItem key={type} value={type}>
-                            <div className="flex items-center gap-2">
-                              {(() => {
-                                const Icon = getEntityTypeIcon(type);
-                                return <Icon className="h-4 w-4" />;
-                              })()}
-                              <span>{getEntityTypeLabel(type)}</span>
-                            </div>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <div className="space-y-2">
+                      <Input
+                        id="entity_type"
+                        value={field.state.value || ""}
+                        onChange={(e) => field.handleChange(e.target.value.toLowerCase())}
+                        placeholder={selectedClass === EntityClass.STRUCTURAL 
+                          ? "e.g., department, division, region, office..." 
+                          : "e.g., admin_group, special_access, beta_testers..."}
+                      />
+                      {availableTypes.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          <span className="text-xs text-muted-foreground">Suggestions:</span>
+                          {availableTypes.map(type => (
+                            <Button
+                              key={type}
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-6 px-2 text-xs"
+                              onClick={() => field.handleChange(type)}
+                            >
+                              {getEntityTypeLabel(type)}
+                            </Button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   )}
                   {field.state.meta.errors && (
                     <p className="text-sm text-destructive">{field.state.meta.errors.join(", ")}</p>

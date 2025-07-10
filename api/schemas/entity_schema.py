@@ -21,17 +21,9 @@ class EntityCreate(BaseModel):
     
     @field_validator('entity_type')
     def validate_entity_type(cls, v, info):
-        """Validate entity type based on entity class"""
-        if info.data and 'entity_class' in info.data:
-            if info.data['entity_class'] == 'STRUCTURAL':
-                allowed_types = ['platform', 'organization', 'division', 'branch', 'team']
-                if v not in allowed_types:
-                    raise ValueError(f'For STRUCTURAL entities, type must be one of: {allowed_types}')
-            elif info.data['entity_class'] == 'ACCESS_GROUP':
-                allowed_types = ['functional_group', 'permission_group', 'project_group', 'role_group', 'access_group']
-                if v not in allowed_types:
-                    raise ValueError(f'For ACCESS_GROUP entities, type must be one of: {allowed_types}')
-        return v
+        """Validate entity type - now flexible, just ensure it's lowercase"""
+        # Convert to lowercase for consistency
+        return v.lower()
     
     @field_validator('parent_entity_id')
     def validate_parent_id(cls, v):
@@ -46,7 +38,8 @@ class EntityCreate(BaseModel):
 
 class EntityUpdate(BaseModel):
     """Update entity request schema"""
-    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    display_name: Optional[str] = Field(None, min_length=1, max_length=200)
     description: Optional[str] = Field(None, max_length=500)
     status: Optional[Literal["active", "inactive", "archived"]] = None
     config: Optional[Dict[str, Any]] = None

@@ -75,6 +75,13 @@ How different administrative levels access the outlabsAuth Admin UI:
 - Scoped data access
 - Implementation guide
 
+#### [Entity Type Flexibility Changes](./ENTITY_TYPE_FLEXIBILITY_CHANGES.md)
+Documentation of the architectural changes that allow flexible entity naming:
+- Motivation and benefits
+- Technical changes made
+- Migration notes
+- Best practices
+
 ### 📐 [Architecture Plan](../MAIN_REFACTOR_PLAN.md)
 Detailed plan for the unified Entity model architecture (for developers working on outlabsAuth itself).
 

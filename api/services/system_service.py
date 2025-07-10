@@ -96,6 +96,7 @@ class SystemService:
         # Step 1: Create root platform entity
         root_entity = await EntityModel(
             name="root_platform",
+            display_name="Root Platform",
             slug="root-platform",
             description="The root platform entity for the entire system",
             entity_class=EntityClass.STRUCTURAL,
@@ -105,8 +106,7 @@ class SystemService:
             status="active",
             metadata={
                 "is_root": True,
-                "created_during_init": True,
-                "display_name": "Root Platform"
+                "created_during_init": True
             },
             allowed_child_classes=[EntityClass.STRUCTURAL, EntityClass.ACCESS_GROUP],
             allowed_child_types=[EntityType.ORGANIZATION, EntityType.BRANCH, EntityType.TEAM]  # Platforms can have any structural entity as children
@@ -130,7 +130,7 @@ class SystemService:
                 "permission:manage_all"
             ],
             entity=root_entity,  # Link to root entity
-            assignable_at_types=[EntityType.PLATFORM],  # Only assignable at platform level
+            assignable_at_types=[],  # Can be assigned at any entity
             is_system_role=True,
             is_global=True  # Global role
         ).save()
@@ -170,7 +170,7 @@ class SystemService:
                 "role:read"
             ],
             entity=root_entity,
-            assignable_at_types=[EntityType.ORGANIZATION],
+            assignable_at_types=[],
             is_system_role=True,
             is_global=True
         ).save()
@@ -235,7 +235,7 @@ class SystemService:
                 "member:read"
             ],
             entity=root_entity,
-            assignable_at_types=[EntityType.ORGANIZATION, EntityType.BRANCH, EntityType.TEAM],
+            assignable_at_types=[],
             is_system_role=True,
             is_global=True
         ).save()
@@ -252,7 +252,7 @@ class SystemService:
                 "user:invite"
             ],
             entity=root_entity,
-            assignable_at_types=[EntityType.TEAM],
+            assignable_at_types=[],
             is_system_role=True,
             is_global=True
         ).save()
@@ -267,7 +267,7 @@ class SystemService:
                 "user:read"
             ],
             entity=root_entity,
-            assignable_at_types=[EntityType.ORGANIZATION, EntityType.BRANCH, EntityType.TEAM],
+            assignable_at_types=[],
             is_system_role=True,
             is_global=True
         ).save()

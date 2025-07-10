@@ -102,6 +102,7 @@ class EntityService:
         # Create entity
         entity = EntityModel(
             name=entity_data.name,
+            display_name=entity_data.display_name,
             slug=slug,
             description=entity_data.description,
             entity_class=entity_data.entity_class.lower(),  # Convert to lowercase
@@ -409,30 +410,18 @@ class EntityService:
         Raises:
             HTTPException: If hierarchy rules are violated
         """
-        # Define hierarchy rules
-        hierarchy_rules = {
-            "platform": ["organization", "branch", "team", "access_group"],
-            "organization": ["branch", "team", "access_group"],
-            "branch": ["team", "access_group"],
-            "team": ["access_group"],
-            "access_group": ["access_group"]  # Access groups can be nested
-        }
+        # Simplified hierarchy rules based on entity class only
+        # STRUCTURAL entities can have any children
+        # ACCESS_GROUP entities can only have other ACCESS_GROUP children
         
-        # Check if parent type allows this child type
-        allowed_children = hierarchy_rules.get(parent.entity_type, [])
+        if parent.entity_class == EntityClass.ACCESS_GROUP and child_class == "STRUCTURAL":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Access groups cannot have structural entities as children"
+            )
         
-        if child_class == "STRUCTURAL":
-            if child_type not in allowed_children:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"A {parent.entity_type} cannot have a {child_type} as a child"
-                )
-        elif child_class == "ACCESS_GROUP":
-            if "access_group" not in allowed_children:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"A {parent.entity_type} cannot have access groups as children"
-                )
+        # That's it! Any other combination is allowed
+        # This gives maximum flexibility while maintaining logical structure
         
         # Validate depth constraints
         path = await EntityService.get_entity_path(str(parent.id))
