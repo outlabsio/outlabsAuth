@@ -1,39 +1,23 @@
 import { useState, useEffect } from "react";
-import { useForm } from "@tanstack/react-form";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { authenticatedFetch } from "@/lib/auth";
 import {
-  Drawer,
-  DrawerContent,
-  DrawerDescription,
-  DrawerHeader,
-  DrawerTitle,
-  DrawerFooter,
-} from "@/components/ui/drawer";
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Loader2, Shield, Globe, Building2, Search, Info, AlertTriangle, Trash2 } from "lucide-react";
-import { authenticatedFetch } from "@/lib/auth";
-import { toast } from "sonner";
-import { cn } from "@/lib/utils";
-import { useAuthStore } from "@/stores/auth-store";
+import { Separator } from "@/components/ui/separator";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -41,722 +25,559 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { toast } from "sonner";
+import { cn } from "@/lib/utils";
+import {
+  Shield,
+  Building2,
+  Users,
+  Key,
+  Settings,
+  Globe,
+  Lock,
+  AlertCircle,
+  Info,
+  Check,
+  X,
+  ChevronRight,
+  Sparkles
+} from "lucide-react";
 
 interface RoleDrawerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   mode: "create" | "edit";
-  roleData?: Role | null;
+  role?: any;
+  entityId?: string;
 }
 
-interface Role {
-  _id: string;
-  name: string;
-  display_name: string;
-  description: string;
-  permissions: Permission[];
-  scope: "system" | "platform";
-  scope_id: string | null;
-  is_assignable_by_platform_admin: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-interface Permission {
-  id: string;
-  name: string;
-  display_name: string;
-  description: string;
-  scope: string;
-}
-
-interface PermissionGroup {
-  resource: string;
-  permissions: Permission[];
-}
-
-interface AvailablePermissionsResponse {
-  system_permissions: Permission[];
-  platform_permissions: Permission[];
-}
-
-interface Platform {
-  _id: string;
-  name: string;
-  status: string;
-}
-
-// Permission hierarchy map (two-tier system)
-const PERMISSION_HIERARCHY: Record<string, string[]> = {
-  "user:manage_all": ["user:manage_platform", "user:read_all", "user:read_platform"],
-  "user:manage_platform": ["user:read_platform"],
-  "user:read_all": ["user:read_platform"],
-  
-  "role:manage_all": ["role:manage_platform", "role:read_all", "role:read_platform"],
-  "role:manage_platform": ["role:read_platform"],
-  "role:read_all": ["role:read_platform"],
-  
-  "group:manage_all": ["group:manage_platform", "group:read_all", "group:read_platform"],
-  "group:manage_platform": ["group:read_platform"],
-  "group:read_all": ["group:read_platform"],
-  
-  "platform:manage_all": ["platform:manage", "platform:read_all", "platform:read", "platform:create"],
-  "platform:manage": ["platform:read"],
-  "platform:read_all": ["platform:read"],
-  
-  "permission:manage_all": ["permission:manage_platform", "permission:read_all", "permission:read_platform"],
-  "permission:manage_platform": ["permission:read_platform"],
-  "permission:read_all": ["permission:read_platform"],
+// Available permissions grouped by category
+const PERMISSION_GROUPS = {
+  "Entity Management": {
+    icon: Building2,
+    color: "text-blue-600 dark:text-blue-400",
+    permissions: [
+      { value: "entity:read", label: "View Entities", description: "View entity details and hierarchy" },
+      { value: "entity:create", label: "Create Entities", description: "Create new entities" },
+      { value: "entity:manage", label: "Manage Entities", description: "Edit and configure entities" },
+      { value: "entity:delete", label: "Delete Entities", description: "Remove entities from the system" },
+    ]
+  },
+  "User Management": {
+    icon: Users,
+    color: "text-green-600 dark:text-green-400",
+    permissions: [
+      { value: "user:read", label: "View Users", description: "View user profiles and details" },
+      { value: "user:create", label: "Create Users", description: "Create new user accounts" },
+      { value: "user:manage", label: "Manage Users", description: "Edit user profiles and settings" },
+      { value: "user:delete", label: "Delete Users", description: "Remove users from the system" },
+    ]
+  },
+  "Role & Permissions": {
+    icon: Shield,
+    color: "text-purple-600 dark:text-purple-400",
+    permissions: [
+      { value: "role:read", label: "View Roles", description: "View role configurations" },
+      { value: "role:create", label: "Create Roles", description: "Create new roles" },
+      { value: "role:manage", label: "Manage Roles", description: "Edit role permissions" },
+      { value: "role:delete", label: "Delete Roles", description: "Remove roles from the system" },
+    ]
+  },
+  "Membership": {
+    icon: Key,
+    color: "text-orange-600 dark:text-orange-400",
+    permissions: [
+      { value: "member:read", label: "View Members", description: "View entity memberships" },
+      { value: "member:manage", label: "Manage Members", description: "Add/remove entity members" },
+    ]
+  },
+  "System Administration": {
+    icon: Settings,
+    color: "text-red-600 dark:text-red-400",
+    permissions: [
+      { value: "system:read", label: "View System Settings", description: "View system configuration" },
+      { value: "system:manage", label: "Manage System", description: "Configure system settings" },
+      { value: "platform:manage", label: "Platform Admin", description: "Full platform administration" },
+    ]
+  }
 };
 
-async function fetchAvailablePermissions(): Promise<AvailablePermissionsResponse> {
-  const response = await authenticatedFetch("/v1/permissions/available");
-  return response.json();
-}
+// Entity types where roles can be assigned
+const ASSIGNABLE_ENTITY_TYPES = [
+  { value: "platform", label: "Platform", icon: Globe },
+  { value: "organization", label: "Organization", icon: Building2 },
+  { value: "division", label: "Division", icon: Building2 },
+  { value: "branch", label: "Branch", icon: Building2 },
+  { value: "team", label: "Team", icon: Users },
+];
 
-async function fetchPlatforms(): Promise<Platform[]> {
-  const response = await authenticatedFetch("/v1/platforms/");
-  return response.json();
-}
-
-async function createRole(data: {
-  name: string;
-  display_name: string;
-  description: string;
-  scope: string;
-  permissions: string[];
-  is_assignable_by_platform_admin: boolean;
-  platform_id?: string;
-}) {
-  const response = await authenticatedFetch("/v1/roles/", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(data),
-  });
-  
-  return response.json();
-}
-
-async function updateRole(id: string, data: {
-  name: string;
-  display_name: string;
-  description: string;
-  permissions: string[];
-  is_assignable_by_platform_admin: boolean;
-}) {
-  const response = await authenticatedFetch(`/v1/roles/${id}`, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(data),
-  });
-  
-  return response.json();
-}
-
-async function deleteRole(id: string) {
-  const response = await authenticatedFetch(`/v1/roles/${id}`, {
-    method: "DELETE",
-  });
-}
-
-function groupPermissionsByResource(permissions: Permission[]): PermissionGroup[] {
-  const groups: Record<string, Permission[]> = {};
-  
-  permissions.forEach((permission) => {
-    const resource = permission.name.split(":")[0];
-    if (!groups[resource]) {
-      groups[resource] = [];
-    }
-    groups[resource].push(permission);
-  });
-  
-  return Object.entries(groups).map(([resource, perms]) => ({
-    resource,
-    permissions: perms.sort((a, b) => {
-      // Sort by hierarchy level (manage > read, all > platform > client > self)
-      const order = ["manage_all", "manage_platform", "manage_client", "read_all", "read_platform", "read_client", "read_self", "read_own"];
-      const aIndex = order.findIndex(o => a.name.includes(o));
-      const bIndex = order.findIndex(o => b.name.includes(o));
-      return aIndex - bIndex;
-    }),
-  }));
-}
-
-function getInheritedPermissions(selectedPermissions: string[]): Set<string> {
-  const inherited = new Set<string>();
-  
-  selectedPermissions.forEach((perm) => {
-    const includes = PERMISSION_HIERARCHY[perm] || [];
-    includes.forEach((included) => inherited.add(included));
-  });
-  
-  return inherited;
-}
-
-export function RoleDrawer({ open, onOpenChange, mode, roleData }: RoleDrawerProps) {
+export function RoleDrawer({
+  open,
+  onOpenChange,
+  mode,
+  role,
+  entityId
+}: RoleDrawerProps) {
   const queryClient = useQueryClient();
-  const currentUser = useAuthStore((state) => state.user);
-  const isSystemUser = currentUser?.is_system_user || false;
-  const isEditMode = mode === "edit";
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedPermissions, setSelectedPermissions] = useState<string[]>([]);
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const inheritedPermissions = getInheritedPermissions(selectedPermissions);
-  
-  const { data: availablePermissions, isLoading: permissionsLoading } = useQuery({
-    queryKey: ["permissions", "available"],
-    queryFn: fetchAvailablePermissions,
-    enabled: open,
+  const [formData, setFormData] = useState({
+    name: "",
+    display_name: "",
+    description: "",
+    permissions: [] as string[],
+    assignable_at_types: [] as string[],
+    is_global: false,
   });
+  const [errors, setErrors] = useState<Record<string, string>>({});
   
-  const { data: platforms = [] } = useQuery({
-    queryKey: ["platforms"],
-    queryFn: fetchPlatforms,
-    enabled: open && isSystemUser, // Only fetch if user is system user
-  });
-  
-  const createMutation = useMutation({
-    mutationFn: createRole,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["roles"] });
-      toast.success("Role created successfully!");
-      onOpenChange(false);
-      form.reset();
-      setSelectedPermissions([]);
-    },
-    onError: (error: Error) => {
-      toast.error(error.message);
-    },
-  });
-  
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => updateRole(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["roles"] });
-      toast.success("Role updated successfully!");
-      onOpenChange(false);
-    },
-    onError: (error: Error) => {
-      toast.error(error.message);
-    },
-  });
-  
-  const deleteMutation = useMutation({
-    mutationFn: deleteRole,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["roles"] });
-      toast.success("Role deleted successfully!");
-      onOpenChange(false);
-      setShowDeleteDialog(false);
-    },
-    onError: (error: Error) => {
-      toast.error(error.message);
-      setShowDeleteDialog(false);
-    },
-  });
-  
-  const form = useForm({
-    defaultValues: {
-      name: "",
-      display_name: "",
-      description: "",
-      scope: "platform",
-      is_assignable_by_platform_admin: false,
-      platform_id: "",
-    },
-    onSubmit: async ({ value }) => {
-      if (isEditMode && roleData) {
-        await updateMutation.mutateAsync({
-          id: roleData._id,
-          data: {
-            ...value,
-            permissions: selectedPermissions,
-          },
-        });
-      } else {
-        await createMutation.mutateAsync({
-          ...value,
-          permissions: selectedPermissions,
-        });
-      }
-    },
-  });
-  
-  // Initialize form with role data when in edit mode
+  // Initialize form data when role changes
   useEffect(() => {
-    if (isEditMode && roleData) {
-      form.setFieldValue("name", roleData.name);
-      form.setFieldValue("display_name", roleData.display_name);
-      form.setFieldValue("description", roleData.description || "");
-      form.setFieldValue("scope", roleData.scope);
-      form.setFieldValue("is_assignable_by_platform_admin", roleData.is_assignable_by_platform_admin);
+    if (role) {
+      setFormData({
+        name: role.name || "",
+        display_name: role.display_name || "",
+        description: role.description || "",
+        permissions: role.permissions || [],
+        assignable_at_types: role.assignable_at_types || [],
+        is_global: role.is_global || false,
+      });
+    } else {
+      // Reset for new role
+      setFormData({
+        name: "",
+        display_name: "",
+        description: "",
+        permissions: [],
+        assignable_at_types: ["organization", "team"], // Default assignable types
+        is_global: false,
+      });
+    }
+    setErrors({});
+  }, [role, open]);
+  
+  // Create/Update mutation
+  const mutation = useMutation({
+    mutationFn: async (data: any) => {
+      const url = mode === "create" ? "/v1/roles/" : `/v1/roles/${role?.id}`;
+      const method = mode === "create" ? "POST" : "PUT";
       
-      // Set platform_id for platform-scoped roles
-      if (roleData.scope === "platform" && roleData.scope_id) {
-        form.setFieldValue("platform_id", roleData.scope_id);
+      const body = {
+        ...data,
+        entity_id: entityId, // Associate with current entity context
+      };
+      
+      const response = await authenticatedFetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || `Failed to ${mode} role`);
       }
       
-      // Set selected permissions
-      const permissionNames = roleData.permissions.map(p => p.name);
-      setSelectedPermissions(permissionNames);
-    } else {
-      form.reset();
-      setSelectedPermissions([]);
-    }
-  }, [isEditMode, roleData, form]);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["roles"] });
+      toast.success(`Role ${mode === "create" ? "created" : "updated"} successfully`);
+      onOpenChange(false);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
   
-  // Get all permissions based on selected scope
-  const getScopePermissions = () => {
-    if (!availablePermissions) return [];
+  const handleSubmit = () => {
+    // Validate
+    const newErrors: Record<string, string> = {};
     
-    const scope = form.state.values.scope;
-    switch (scope) {
-      case "system":
-        return availablePermissions.system_permissions || [];
-      case "platform":
-        return availablePermissions.platform_permissions || [];
-      default:
-        return [];
+    if (!formData.display_name.trim()) {
+      newErrors.display_name = "Display name is required";
+    }
+    
+    if (mode === "create" && !formData.name.trim()) {
+      newErrors.name = "System name is required";
+    }
+    
+    if (formData.permissions.length === 0) {
+      newErrors.permissions = "At least one permission is required";
+    }
+    
+    if (formData.assignable_at_types.length === 0) {
+      newErrors.assignable_at_types = "Select at least one entity type";
+    }
+    
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      return;
+    }
+    
+    // Submit
+    mutation.mutate(formData);
+  };
+  
+  const togglePermission = (permission: string) => {
+    setFormData(prev => ({
+      ...prev,
+      permissions: prev.permissions.includes(permission)
+        ? prev.permissions.filter(p => p !== permission)
+        : [...prev.permissions, permission]
+    }));
+    if (errors.permissions) {
+      setErrors(prev => ({ ...prev, permissions: "" }));
     }
   };
   
-  const scopePermissions = getScopePermissions();
-  const permissionGroups = groupPermissionsByResource(scopePermissions);
+  const toggleAssignableType = (type: string) => {
+    setFormData(prev => ({
+      ...prev,
+      assignable_at_types: prev.assignable_at_types.includes(type)
+        ? prev.assignable_at_types.filter(t => t !== type)
+        : [...prev.assignable_at_types, type]
+    }));
+    if (errors.assignable_at_types) {
+      setErrors(prev => ({ ...prev, assignable_at_types: "" }));
+    }
+  };
   
-  // Filter permissions based on search
-  const filteredGroups = permissionGroups
-    .map((group) => ({
-      ...group,
-      permissions: group.permissions.filter(
-        (perm) =>
-          perm.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          perm.display_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          perm.description?.toLowerCase().includes(searchQuery.toLowerCase())
-      ),
-    }))
-    .filter((group) => group.permissions.length > 0);
-  
-  const togglePermission = (permissionName: string) => {
-    setSelectedPermissions((prev) =>
-      prev.includes(permissionName)
-        ? prev.filter((p) => p !== permissionName)
-        : [...prev, permissionName]
-    );
+  // Quick templates
+  const applyTemplate = (template: string) => {
+    switch (template) {
+      case "viewer":
+        setFormData(prev => ({
+          ...prev,
+          permissions: ["entity:read", "user:read", "role:read", "member:read"]
+        }));
+        break;
+      case "editor":
+        setFormData(prev => ({
+          ...prev,
+          permissions: [
+            "entity:read", "entity:create", "entity:manage",
+            "user:read", "user:create", "user:manage",
+            "role:read", "member:read", "member:manage"
+          ]
+        }));
+        break;
+      case "admin":
+        setFormData(prev => ({
+          ...prev,
+          permissions: Object.values(PERMISSION_GROUPS)
+            .flatMap(group => group.permissions.map(p => p.value))
+            .filter(p => !p.includes("delete") && !p.includes("platform"))
+        }));
+        break;
+    }
   };
   
   return (
-    <Drawer open={open} onOpenChange={onOpenChange} direction="right">
-      <DrawerContent className="w-full max-w-4xl h-full flex flex-col">
-        <DrawerHeader className="px-6">
-          <DrawerTitle>{isEditMode ? "Edit Role" : "Create New Role"}</DrawerTitle>
-          <DrawerDescription>
-            {isEditMode
-              ? "Update role details and permissions"
-              : "Define a new role with specific permissions for your organization"}
-          </DrawerDescription>
-        </DrawerHeader>
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent className="w-full sm:max-w-2xl">
+        <SheetHeader>
+          <SheetTitle className="flex items-center gap-2">
+            <Shield className="h-5 w-5" />
+            {mode === "create" ? "Create New Role" : "Edit Role"}
+          </SheetTitle>
+          <SheetDescription>
+            {mode === "create" 
+              ? "Define a new role with specific permissions and access levels"
+              : "Update role configuration and permissions"
+            }
+          </SheetDescription>
+        </SheetHeader>
         
-        <div className="overflow-y-auto px-6 py-4 flex-1">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              form.handleSubmit();
-            }}
-            className="space-y-6"
-          >
-          {/* Basic Information */}
-          <div className="space-y-4">
-            <h3 className="text-sm font-medium">Basic Information</h3>
-            
-            <form.Field name="name">
-              {(field) => (
+        <ScrollArea className="h-[calc(100vh-200px)] mt-6 pr-4">
+          <div className="space-y-6">
+            {/* Basic Information */}
+            <div className="space-y-4">
+              <h3 className="text-sm font-medium flex items-center gap-2">
+                <Info className="h-4 w-4" />
+                Basic Information
+              </h3>
+              
+              <div className="space-y-2">
+                <Label htmlFor="display_name">
+                  Display Name <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="display_name"
+                  value={formData.display_name}
+                  onChange={(e) => {
+                    setFormData(prev => ({ ...prev, display_name: e.target.value }));
+                    if (errors.display_name) setErrors(prev => ({ ...prev, display_name: "" }));
+                  }}
+                  placeholder="e.g., Project Manager"
+                  className={errors.display_name ? "border-destructive" : ""}
+                />
+                {errors.display_name && (
+                  <p className="text-sm text-destructive">{errors.display_name}</p>
+                )}
+              </div>
+              
+              {mode === "create" && (
                 <div className="space-y-2">
-                  <Label htmlFor="name">Role Name</Label>
+                  <Label htmlFor="name">
+                    System Name <span className="text-destructive">*</span>
+                  </Label>
                   <Input
                     id="name"
-                    placeholder="e.g., admin, manager, viewer"
-                    value={field.state.value}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => field.handleChange(e.target.value.toLowerCase().replace(/\s+/g, "_"))}
-                    onBlur={field.handleBlur}
-                    disabled={isEditMode}
+                    value={formData.name}
+                    onChange={(e) => {
+                      const value = e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+                      setFormData(prev => ({ ...prev, name: value }));
+                      if (errors.name) setErrors(prev => ({ ...prev, name: "" }));
+                    }}
+                    placeholder="e.g., project_manager"
+                    className={cn("font-mono", errors.name ? "border-destructive" : "")}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Internal identifier (lowercase, no spaces)
+                    Lowercase letters, numbers, and underscores only
                   </p>
-                  {field.state.meta.errors && (
-                    <p className="text-sm text-destructive">{field.state.meta.errors.join(", ")}</p>
+                  {errors.name && (
+                    <p className="text-sm text-destructive">{errors.name}</p>
                   )}
                 </div>
               )}
-            </form.Field>
-            
-            <form.Field name="display_name">
-              {(field) => (
-                <div className="space-y-2">
-                  <Label htmlFor="display_name">Display Name</Label>
-                  <Input
-                    id="display_name"
-                    placeholder="e.g., Administrator, Team Manager"
-                    value={field.state.value}
-                    onChange={(e) => field.handleChange(e.target.value)}
-                    onBlur={field.handleBlur}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Human-readable name shown in the UI
-                  </p>
-                  {field.state.meta.errors && (
-                    <p className="text-sm text-destructive">{field.state.meta.errors.join(", ")}</p>
-                  )}
-                </div>
-              )}
-            </form.Field>
-            
-            <form.Field name="description">
-              {(field) => (
-                <div className="space-y-2">
-                  <Label htmlFor="description">Description</Label>
-                  <Textarea
-                    id="description"
-                    placeholder="Describe the purpose and capabilities of this role"
-                    value={field.state.value}
-                    onChange={(e) => field.handleChange(e.target.value)}
-                    onBlur={field.handleBlur}
-                    rows={3}
-                  />
-                  {field.state.meta.errors && (
-                    <p className="text-sm text-destructive">{field.state.meta.errors.join(", ")}</p>
-                  )}
-                </div>
-              )}
-            </form.Field>
-          </div>
-          
-          <Separator />
-          
-          {/* Scope Selection */}
-          <div className="space-y-4">
-            <h3 className="text-sm font-medium">Role Scope</h3>
-            
-            {isEditMode ? (
-              <div className="flex items-center gap-2 p-4 bg-muted rounded-lg">
-                {form.state.values.scope === "system" ? (
-                  <>
-                    <Shield className="h-5 w-5 text-primary" />
-                    <span className="font-medium">System Scope</span>
-                  </>
-                ) : (
-                  <>
-                    <Globe className="h-5 w-5 text-primary" />
-                    <span className="font-medium">Platform Scope</span>
-                  </>
-                )}
-                <span className="text-sm text-muted-foreground ml-2">
-                  (scope cannot be changed)
-                </span>
+              
+              <div className="space-y-2">
+                <Label htmlFor="description">Description</Label>
+                <Textarea
+                  id="description"
+                  value={formData.description}
+                  onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
+                  placeholder="Describe the purpose and responsibilities of this role"
+                  rows={3}
+                />
               </div>
-            ) : (
-            <form.Field name="scope">
-              {(field) => (
-                <RadioGroup
-                  value={field.state.value}
-                  onValueChange={(value) => {
-                    field.handleChange(value);
-                    setSelectedPermissions([]); // Reset permissions when scope changes
-                  }}
+              
+              <div className="flex items-center justify-between rounded-lg border p-3">
+                <div className="space-y-0.5">
+                  <Label htmlFor="is_global" className="text-base cursor-pointer">
+                    Global Role
+                  </Label>
+                  <p className="text-sm text-muted-foreground">
+                    Make this role available across all entities
+                  </p>
+                </div>
+                <Switch
+                  id="is_global"
+                  checked={formData.is_global}
+                  onCheckedChange={(checked) => 
+                    setFormData(prev => ({ ...prev, is_global: checked }))
+                  }
+                />
+              </div>
+            </div>
+            
+            <Separator />
+            
+            {/* Quick Templates */}
+            <div className="space-y-4">
+              <h3 className="text-sm font-medium flex items-center gap-2">
+                <Sparkles className="h-4 w-4" />
+                Quick Templates
+              </h3>
+              <div className="grid grid-cols-3 gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => applyTemplate("viewer")}
+                  className="justify-start"
                 >
-                  <div className="grid grid-cols-2 gap-3">
-                    <label
-                      htmlFor="scope-system"
-                      className={cn(
-                        "relative flex flex-col items-center space-y-2 rounded-lg border-2 p-4 cursor-pointer hover:bg-accent transition-colors",
-                        field.state.value === "system" ? "border-primary bg-primary/5" : "border-muted"
-                      )}
-                    >
-                      <RadioGroupItem value="system" id="scope-system" className="sr-only" />
-                      <Shield className={cn(
-                        "h-6 w-6",
-                        field.state.value === "system" ? "text-primary" : "text-muted-foreground"
-                      )} />
-                      <span className="text-sm font-medium">System</span>
-                      <span className="text-xs text-center text-muted-foreground">
-                        Global across all platforms
-                      </span>
-                    </label>
-                    
-                    <label
-                      htmlFor="scope-platform"
-                      className={cn(
-                        "relative flex flex-col items-center space-y-2 rounded-lg border-2 p-4 cursor-pointer hover:bg-accent transition-colors",
-                        field.state.value === "platform" ? "border-primary bg-primary/5" : "border-muted"
-                      )}
-                    >
-                      <RadioGroupItem value="platform" id="scope-platform" className="sr-only" />
-                      <Globe className={cn(
-                        "h-6 w-6",
-                        field.state.value === "platform" ? "text-primary" : "text-muted-foreground"
-                      )} />
-                      <span className="text-sm font-medium">Platform</span>
-                      <span className="text-xs text-center text-muted-foreground">
-                        Platform-specific operations
-                      </span>
-                    </label>
-                  </div>
-                </RadioGroup>
+                  <Shield className="mr-2 h-4 w-4" />
+                  Viewer
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => applyTemplate("editor")}
+                  className="justify-start"
+                >
+                  <Shield className="mr-2 h-4 w-4" />
+                  Editor
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => applyTemplate("admin")}
+                  className="justify-start"
+                >
+                  <Shield className="mr-2 h-4 w-4" />
+                  Admin
+                </Button>
+              </div>
+            </div>
+            
+            <Separator />
+            
+            {/* Permissions */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-medium flex items-center gap-2">
+                  <Key className="h-4 w-4" />
+                  Permissions <span className="text-destructive">*</span>
+                </h3>
+                <Badge variant="outline">
+                  {formData.permissions.length} selected
+                </Badge>
+              </div>
+              
+              {errors.permissions && (
+                <p className="text-sm text-destructive flex items-center gap-1">
+                  <AlertCircle className="h-4 w-4" />
+                  {errors.permissions}
+                </p>
               )}
-            </form.Field>
-            )}
-            
-            {form.state.values.scope === "system" && (
-              <form.Field name="is_assignable_by_platform_admin">
-                {(field) => (
-                  <div className="flex items-center space-x-2">
-                    <Checkbox
-                      id="assignable"
-                      checked={field.state.value}
-                      onCheckedChange={(checked) => field.handleChange(!!checked)}
-                    />
-                    <Label htmlFor="assignable" className="text-sm font-normal cursor-pointer">
-                      Allow platform administrators to assign this role
-                    </Label>
-                  </div>
-                )}
-              </form.Field>
-            )}
-            
-            {/* Platform selection for system users creating/editing platform-scoped roles */}
-            {form.state.values.scope === "platform" && isSystemUser && (
-              <form.Field 
-                name="platform_id"
-                validators={{
-                  onChange: ({ value }) => (!value ? "Platform is required for platform-scoped roles" : undefined),
-                }}
-              >
-                {(field) => (
-                  <div className="space-y-2">
-                    <Label htmlFor="platform_id">Target Platform *</Label>
-                    <Select
-                      value={field.state.value}
-                      onValueChange={(value) => field.handleChange(value)}
-                      disabled={isEditMode} // Platform cannot be changed in edit mode
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select a platform" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {platforms.map((platform) => (
-                          <SelectItem key={platform._id} value={platform._id}>
-                            {platform.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">
-                      {isEditMode 
-                        ? "Platform assignment cannot be changed" 
-                        : "Select which platform this role belongs to"}
-                    </p>
-                    {field.state.meta.errors && (
-                      <p className="text-sm text-destructive">{field.state.meta.errors.join(", ")}</p>
-                    )}
-                  </div>
-                )}
-              </form.Field>
-            )}
-          </div>
-          
-          <Separator />
-          
-          {/* Permission Selection */}
-          <div className="space-y-4">
-            <div>
-              <h3 className="text-sm font-medium">Permissions</h3>
-              <p className="text-sm text-muted-foreground mt-1">
-                Select permissions for this role. Higher-level permissions automatically include lower ones.
-              </p>
-            </div>
-            
-            {selectedPermissions.length > 0 && (
-              <Alert>
-                <Info className="h-4 w-4" />
-                <AlertDescription>
-                  <strong>{selectedPermissions.length}</strong> permissions selected
-                  {inheritedPermissions.size > 0 && (
-                    <span className="text-muted-foreground">
-                      {" "}(+{inheritedPermissions.size} inherited)
-                    </span>
-                  )}
-                </AlertDescription>
-              </Alert>
-            )}
-            
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
-              <Input
-                placeholder="Search permissions..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10"
-              />
-            </div>
-            
-            <ScrollArea className="h-[300px] border rounded-md p-4">
-              {permissionsLoading ? (
-                <div className="flex items-center justify-center h-full">
-                  <Loader2 className="h-6 w-6 animate-spin" />
-                </div>
-              ) : filteredGroups.length === 0 ? (
-                <div className="text-center text-muted-foreground py-8">
-                  {searchQuery ? "No permissions found matching your search" : "No permissions available for this scope"}
-                </div>
-              ) : (
-                <div className="space-y-6">
-                  {filteredGroups.map((group) => (
-                    <div key={group.resource} className="space-y-3">
-                      <h4 className="text-sm font-medium capitalize">{group.resource} Management</h4>
-                      <div className="space-y-2">
-                        {group.permissions.map((permission) => {
-                          const isSelected = selectedPermissions.includes(permission.name);
-                          const isInherited = inheritedPermissions.has(permission.name);
-                          const isDisabled = isInherited && !isSelected;
-                          
-                          return (
+              
+              <Accordion type="single" collapsible className="w-full">
+                {Object.entries(PERMISSION_GROUPS).map(([groupName, group]) => {
+                  const Icon = group.icon;
+                  const selectedCount = group.permissions.filter(p => 
+                    formData.permissions.includes(p.value)
+                  ).length;
+                  
+                  return (
+                    <AccordionItem key={groupName} value={groupName}>
+                      <AccordionTrigger className="hover:no-underline">
+                        <div className="flex items-center justify-between w-full mr-2">
+                          <div className="flex items-center gap-2">
+                            <Icon className={cn("h-4 w-4", group.color)} />
+                            <span>{groupName}</span>
+                          </div>
+                          {selectedCount > 0 && (
+                            <Badge variant="secondary" className="text-xs">
+                              {selectedCount}/{group.permissions.length}
+                            </Badge>
+                          )}
+                        </div>
+                      </AccordionTrigger>
+                      <AccordionContent>
+                        <div className="space-y-2 pt-2">
+                          {group.permissions.map((permission) => (
                             <div
-                              key={permission.id}
+                              key={permission.value}
                               className={cn(
-                                "flex items-start space-x-3 p-3 rounded-lg border transition-colors",
-                                isSelected && "bg-primary/5 border-primary",
-                                isInherited && !isSelected && "bg-muted/50 opacity-75",
-                                !isSelected && !isInherited && "hover:bg-muted/50"
+                                "flex items-start space-x-3 p-3 rounded-lg transition-colors",
+                                formData.permissions.includes(permission.value)
+                                  ? "bg-primary/5 border border-primary/20"
+                                  : "hover:bg-muted/50"
                               )}
                             >
                               <Checkbox
-                                id={permission.id}
-                                checked={isSelected || isInherited}
-                                disabled={isDisabled}
-                                onCheckedChange={() => togglePermission(permission.name)}
+                                id={permission.value}
+                                checked={formData.permissions.includes(permission.value)}
+                                onCheckedChange={() => togglePermission(permission.value)}
+                                className="mt-0.5"
                               />
                               <div className="flex-1 space-y-1">
                                 <Label
-                                  htmlFor={permission.id}
-                                  className={cn(
-                                    "text-sm font-medium cursor-pointer",
-                                    isDisabled && "cursor-not-allowed"
-                                  )}
+                                  htmlFor={permission.value}
+                                  className="text-sm font-medium cursor-pointer"
                                 >
-                                  {permission.display_name}
-                                  {isInherited && !isSelected && (
-                                    <Badge variant="secondary" className="ml-2 text-xs">
-                                      Inherited
-                                    </Badge>
-                                  )}
+                                  {permission.label}
                                 </Label>
                                 <p className="text-xs text-muted-foreground">
                                   {permission.description}
                                 </p>
-                                <code className="text-xs bg-muted px-1 py-0.5 rounded">
-                                  {permission.name}
+                                <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">
+                                  {permission.value}
                                 </code>
                               </div>
                             </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </ScrollArea>
-          </div>
-          </form>
-          
-          {/* Danger Zone - Only show in edit mode */}
-          {isEditMode && (
-            <div className="mt-8 space-y-4 rounded-lg border border-destructive/20 bg-destructive/5 p-4">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-destructive" />
-                <h3 className="font-semibold text-destructive">Danger Zone</h3>
+                          ))}
+                        </div>
+                      </AccordionContent>
+                    </AccordionItem>
+                  );
+                })}
+              </Accordion>
+            </div>
+            
+            <Separator />
+            
+            {/* Assignable Entity Types */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-medium flex items-center gap-2">
+                  <Building2 className="h-4 w-4" />
+                  Can be assigned at <span className="text-destructive">*</span>
+                </h3>
+                <Badge variant="outline">
+                  {formData.assignable_at_types.length} selected
+                </Badge>
               </div>
               
-              <div className="space-y-4">
-                <div>
-                  <h4 className="font-medium">Delete this role</h4>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Once you delete a role, there is no going back. This will permanently delete the role
-                    and remove it from all users who currently have it assigned.
-                  </p>
-                </div>
-                
-                <Button
-                  variant="destructive"
-                  onClick={() => setShowDeleteDialog(true)}
-                  className="w-full"
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Delete Role
-                </Button>
+              <p className="text-sm text-muted-foreground">
+                Select the entity types where this role can be assigned to users
+              </p>
+              
+              {errors.assignable_at_types && (
+                <p className="text-sm text-destructive flex items-center gap-1">
+                  <AlertCircle className="h-4 w-4" />
+                  {errors.assignable_at_types}
+                </p>
+              )}
+              
+              <div className="grid grid-cols-2 gap-3">
+                {ASSIGNABLE_ENTITY_TYPES.map((type) => {
+                  const Icon = type.icon;
+                  const isSelected = formData.assignable_at_types.includes(type.value);
+                  
+                  return (
+                    <div
+                      key={type.value}
+                      onClick={() => toggleAssignableType(type.value)}
+                      className={cn(
+                        "flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors",
+                        isSelected 
+                          ? "bg-primary/5 border-primary/50" 
+                          : "hover:bg-muted/50"
+                      )}
+                    >
+                      <Checkbox
+                        checked={isSelected}
+                        onCheckedChange={() => toggleAssignableType(type.value)}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                      <Icon className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-sm font-medium">{type.label}</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
-          )}
-        </div>
+          </div>
+        </ScrollArea>
         
-        <DrawerFooter className="px-6">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+        <SheetFooter className="mt-6">
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={mutation.isPending}
+          >
             Cancel
           </Button>
-          <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting]}>
-            {([canSubmit]) => (
-              <Button
-                type="submit"
-                disabled={!canSubmit || createMutation.isPending || updateMutation.isPending}
-                onClick={form.handleSubmit}
-              >
-                {(createMutation.isPending || updateMutation.isPending) ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {isEditMode ? "Updating..." : "Creating..."}
-                  </>
-                ) : (
-                  isEditMode ? "Update Role" : "Create Role"
-                )}
-              </Button>
-            )}
-          </form.Subscribe>
-        </DrawerFooter>
-      </DrawerContent>
-      
-      {/* Delete Confirmation Dialog */}
-      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This action cannot be undone. This will permanently delete the role
-              "{roleData?.display_name}" and remove it from all users who currently have it assigned.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => roleData && deleteMutation.mutate(roleData._id)}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {deleteMutation.isPending ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Deleting...
-                </>
-              ) : (
-                "Delete Role"
-              )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </Drawer>
+          <Button
+            onClick={handleSubmit}
+            disabled={mutation.isPending}
+          >
+            {mutation.isPending 
+              ? "Saving..." 
+              : mode === "create" ? "Create Role" : "Update Role"
+            }
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
   );
 }

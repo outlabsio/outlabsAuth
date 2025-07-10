@@ -16,7 +16,8 @@
       "Bash(find:*)",
       "Bash(ls:*)",
       "Bash(test:*)",
-      "Bash(bun:*)"
+      "Bash(bun:*)",
+      "Bash(touch:*)"
     ],
     "deny": []
   }

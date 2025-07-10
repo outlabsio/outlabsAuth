@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppSidebar } from "@/components/app-sidebar";
+import { useContextStore } from "@/stores/context-store";
+import { authenticatedFetch } from "@/lib/auth";
+import { requireAuth } from "@/lib/route-guards";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -18,169 +22,423 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, Shield, Globe, Building2 } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import { authenticatedFetch } from "@/lib/auth";
+import { RoleDrawer } from "@/components/roles/role-drawer";
+import { RoleTemplates } from "@/components/roles/role-templates";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CreateRoleDrawer } from "@/components/roles/create-role-drawer";
-import { requireAuth } from "@/lib/route-guards";
+import {
+  Shield,
+  Plus,
+  Search,
+  Building2,
+  Globe,
+  Users,
+  Key,
+  Sparkles,
+  Lock,
+  Unlock,
+  BookOpen,
+  Award,
+  Settings,
+  Edit,
+  Copy,
+  Trash2,
+  AlertCircle,
+  CheckCircle,
+  Info,
+  TrendingUp,
+  MoreVertical
+} from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/roles/")({
   beforeLoad: requireAuth,
-  component: Roles,
+  component: RolesPage,
 });
 
-interface Permission {
+interface Role {
   id: string;
   name: string;
   display_name: string;
-  description: string;
-}
-
-interface Role {
-  _id: string;
-  name: string;
-  display_name: string;
-  description: string;
-  permissions: Permission[];
-  scope: "system" | "platform" | "client";
-  scope_id: string | null;
-  is_assignable_by_main_client: boolean;
+  description?: string;
+  permissions: string[];
+  entity_id?: string;
+  entity_name?: string;
+  assignable_at_types: string[];
+  is_system_role: boolean;
+  is_global: boolean;
   created_at: string;
-  updated_at: string;
+  updated_at?: string;
 }
 
-interface RolesResponse {
-  system_roles: Role[];
-  platform_roles: Role[];
-  client_roles: Role[];
+interface RoleUsageStats {
+  role_id: string;
+  role_name: string;
+  active_assignments: number;
+  total_assignments: number;
+  entities_used_in: number;
+  last_assigned?: string;
 }
 
-async function fetchRoles(): Promise<RolesResponse> {
-  const response = await authenticatedFetch("/v1/roles/available");
-  return response.json();
+async function fetchRoles(entityId?: string, isGlobal?: boolean) {
+  const params = new URLSearchParams();
+  if (entityId) params.append("entity_id", entityId);
+  if (isGlobal !== undefined) params.append("is_global", String(isGlobal));
+  
+  const response = await authenticatedFetch(`/v1/roles/?${params}`);
+  const data = await response.json();
+  return data.items || [];
 }
 
-function RoleCard({ role }: { role: Role }) {
-  const getScopeIcon = (scope: string) => {
-    switch (scope) {
-      case "system":
-        return <Shield className="h-4 w-4" />;
-      case "platform":
-        return <Globe className="h-4 w-4" />;
-      case "client":
-        return <Building2 className="h-4 w-4" />;
-      default:
-        return <Shield className="h-4 w-4" />;
+async function fetchRoleUsage(roleId: string): Promise<RoleUsageStats> {
+  const response = await authenticatedFetch(`/v1/roles/${roleId}/usage`);
+  const data = await response.json();
+  return data.stats[0];
+}
+
+// Permission categories for better organization
+const PERMISSION_CATEGORIES = {
+  entity: {
+    label: "Entity Management",
+    icon: Building2,
+    permissions: ["entity:read", "entity:create", "entity:manage", "entity:delete"],
+    color: "text-blue-600 dark:text-blue-400"
+  },
+  user: {
+    label: "User Management",
+    icon: Users,
+    permissions: ["user:read", "user:create", "user:manage", "user:delete"],
+    color: "text-green-600 dark:text-green-400"
+  },
+  role: {
+    label: "Role Management",
+    icon: Shield,
+    permissions: ["role:read", "role:create", "role:manage", "role:delete"],
+    color: "text-purple-600 dark:text-purple-400"
+  },
+  member: {
+    label: "Membership",
+    icon: Key,
+    permissions: ["member:read", "member:manage"],
+    color: "text-orange-600 dark:text-orange-400"
+  },
+  system: {
+    label: "System",
+    icon: Settings,
+    permissions: ["system:read", "system:manage", "platform:manage"],
+    color: "text-red-600 dark:text-red-400"
+  }
+};
+
+function getPermissionCategory(permission: string) {
+  const [resource] = permission.split(":");
+  return PERMISSION_CATEGORIES[resource as keyof typeof PERMISSION_CATEGORIES] || null;
+}
+
+function RoleCard({ 
+  role, 
+  onEdit, 
+  onClone,
+  onDelete,
+  showUsage = true 
+}: { 
+  role: Role;
+  onEdit: () => void;
+  onClone: () => void;
+  onDelete: () => void;
+  showUsage?: boolean;
+}) {
+  const [showAllPermissions, setShowAllPermissions] = useState(false);
+  const queryClient = useQueryClient();
+  
+  // Fetch usage stats
+  const { data: usage } = useQuery({
+    queryKey: ["role-usage", role.id],
+    queryFn: () => fetchRoleUsage(role.id),
+    enabled: showUsage && !role.is_system_role,
+    staleTime: 60000, // Cache for 1 minute
+  });
+  
+  // Group permissions by category
+  const permissionsByCategory = role.permissions.reduce((acc, permission) => {
+    const category = getPermissionCategory(permission);
+    if (category) {
+      const key = permission.split(":")[0];
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(permission);
     }
-  };
-
-  const getScopeBadgeVariant = (scope: string) => {
-    switch (scope) {
-      case "system":
-        return "destructive";
-      case "platform":
-        return "secondary";
-      case "client":
-        return "default";
-      default:
-        return "default";
-    }
-  };
-
+    return acc;
+  }, {} as Record<string, string[]>);
+  
+  const visiblePermissions = showAllPermissions ? role.permissions : role.permissions.slice(0, 3);
+  
   return (
-    <Card className="cursor-pointer hover:shadow-md transition-shadow">
+    <Card className="group hover:shadow-lg transition-all duration-200">
       <CardHeader>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            {getScopeIcon(role.scope)}
-            <CardTitle className="text-lg">{role.display_name}</CardTitle>
-          </div>
-          <Badge variant={getScopeBadgeVariant(role.scope)}>
-            {role.scope}
-          </Badge>
-        </div>
-        <CardDescription className="mt-2">
-          {role.description || "No description available"}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-3">
-          <div>
-            <p className="text-sm font-medium mb-1">Role Name</p>
-            <code className="text-xs bg-muted px-2 py-1 rounded">
-              {role.name}
-            </code>
-          </div>
-          <div>
-            <p className="text-sm font-medium mb-1">Permissions ({role.permissions.length})</p>
-            <div className="flex flex-wrap gap-1 mt-1">
-              {role.permissions.slice(0, 3).map((permission) => (
-                <Badge key={permission.id} variant="outline" className="text-xs">
-                  {permission.name}
+        <div className="flex items-start justify-between">
+          <div className="space-y-1 flex-1">
+            <div className="flex items-center gap-2">
+              <Shield className="h-5 w-5 text-muted-foreground" />
+              <CardTitle className="text-lg">{role.display_name}</CardTitle>
+              {role.is_system_role && (
+                <Badge variant="secondary" className="gap-1">
+                  <Lock className="h-3 w-3" />
+                  System
                 </Badge>
-              ))}
-              {role.permissions.length > 3 && (
-                <Badge variant="outline" className="text-xs">
-                  +{role.permissions.length - 3} more
+              )}
+              {role.is_global && (
+                <Badge variant="outline" className="gap-1">
+                  <Globe className="h-3 w-3" />
+                  Global
                 </Badge>
               )}
             </div>
+            {role.description && (
+              <CardDescription className="mt-1">
+                {role.description}
+              </CardDescription>
+            )}
           </div>
-          {role.is_assignable_by_main_client && (
-            <Badge variant="secondary" className="text-xs">
-              Assignable by client admins
-            </Badge>
-          )}
+          
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="opacity-0 group-hover:opacity-100 transition-opacity"
+              >
+                <MoreVertical className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Actions</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={onEdit} disabled={role.is_system_role}>
+                <Edit className="mr-2 h-4 w-4" />
+                Edit Role
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={onClone}>
+                <Copy className="mr-2 h-4 w-4" />
+                Clone Role
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem 
+                onClick={onDelete} 
+                disabled={role.is_system_role || (usage && usage.active_assignments > 0)}
+                className="text-destructive"
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete Role
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
+        
+        {/* Scope Information */}
+        <div className="flex items-center gap-4 mt-3 text-sm text-muted-foreground">
+          {role.entity_name && (
+            <div className="flex items-center gap-1">
+              <Building2 className="h-3.5 w-3.5" />
+              <span>{role.entity_name}</span>
+            </div>
+          )}
+          <div className="flex items-center gap-1">
+            <Award className="h-3.5 w-3.5" />
+            <span>Assignable at: {role.assignable_at_types.join(", ")}</span>
+          </div>
+        </div>
+      </CardHeader>
+      
+      <CardContent>
+        {/* Permissions Display */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="text-sm font-medium">Permissions</h4>
+            <Badge variant="outline" className="text-xs">
+              {role.permissions.length} total
+            </Badge>
+          </div>
+          
+          {/* Visual Permission Categories */}
+          <div className="grid grid-cols-2 gap-2">
+            {Object.entries(permissionsByCategory).map(([key, perms]) => {
+              const category = PERMISSION_CATEGORIES[key as keyof typeof PERMISSION_CATEGORIES];
+              if (!category) return null;
+              const Icon = category.icon;
+              
+              return (
+                <TooltipProvider key={key}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className={cn(
+                        "flex items-center gap-2 p-2 rounded-lg bg-muted/50",
+                        "hover:bg-muted transition-colors cursor-default"
+                      )}>
+                        <Icon className={cn("h-4 w-4", category.color)} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium truncate">
+                            {category.label}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {perms.length} permissions
+                          </p>
+                        </div>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-xs">
+                      <p className="font-medium mb-1">{category.label}</p>
+                      <div className="space-y-0.5">
+                        {perms.map(perm => (
+                          <div key={perm} className="text-xs">
+                            • {perm}
+                          </div>
+                        ))}
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              );
+            })}
+          </div>
+          
+          {/* Permission List */}
+          <div className="flex flex-wrap gap-1">
+            {visiblePermissions.map((permission) => (
+              <Badge key={permission} variant="secondary" className="text-xs">
+                {permission}
+              </Badge>
+            ))}
+            {role.permissions.length > 3 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-5 px-2 text-xs"
+                onClick={() => setShowAllPermissions(!showAllPermissions)}
+              >
+                {showAllPermissions ? "Show less" : `+${role.permissions.length - 3} more`}
+              </Button>
+            )}
+          </div>
+        </div>
+        
+        {/* Usage Stats */}
+        {showUsage && usage && (
+          <div className="mt-4 pt-4 border-t">
+            <div className="grid grid-cols-3 gap-4 text-center">
+              <div>
+                <p className="text-2xl font-semibold text-primary">
+                  {usage.active_assignments}
+                </p>
+                <p className="text-xs text-muted-foreground">Active Users</p>
+              </div>
+              <div>
+                <p className="text-2xl font-semibold">
+                  {usage.entities_used_in}
+                </p>
+                <p className="text-xs text-muted-foreground">Entities</p>
+              </div>
+              <div>
+                <p className="text-2xl font-semibold">
+                  {usage.total_assignments}
+                </p>
+                <p className="text-xs text-muted-foreground">Total Assigned</p>
+              </div>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
 }
 
-function RolesList({ roles, title, description }: { roles: Role[]; title: string; description: string }) {
-  if (roles.length === 0) {
-    return (
-      <div className="text-center py-8 text-muted-foreground">
-        <p>No {title.toLowerCase()} found</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      <div>
-        <h3 className="text-lg font-semibold">{title}</h3>
-        <p className="text-sm text-muted-foreground">{description}</p>
-      </div>
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {roles.map((role) => (
-          <RoleCard key={role._id} role={role} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function RolesContent() {
-  const { data: roles, isLoading, error } = useQuery({
-    queryKey: ["roles"],
-    queryFn: fetchRoles,
+  const { selectedOrganization, isSystemContext } = useContextStore();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerMode, setDrawerMode] = useState<"create" | "edit">("create");
+  const [selectedRole, setSelectedRole] = useState<Role | null>(null);
+  const queryClient = useQueryClient();
+  
+  // Determine context for fetching roles
+  const contextEntityId = !isSystemContext() && selectedOrganization ? selectedOrganization.id : undefined;
+  
+  // Fetch roles
+  const { data: roles, isLoading } = useQuery({
+    queryKey: ["roles", contextEntityId],
+    queryFn: () => fetchRoles(contextEntityId),
   });
-
+  
+  // Filter roles
+  const filteredRoles = roles?.filter((role: Role) =>
+    role.display_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    role.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    role.permissions.some(p => p.toLowerCase().includes(searchQuery.toLowerCase()))
+  ) || [];
+  
+  // Separate roles by type
+  const systemRoles = filteredRoles.filter((r: Role) => r.is_system_role);
+  const globalRoles = filteredRoles.filter((r: Role) => r.is_global && !r.is_system_role);
+  const customRoles = filteredRoles.filter((r: Role) => !r.is_global && !r.is_system_role);
+  
+  const handleCreateRole = () => {
+    setDrawerMode("create");
+    setSelectedRole(null);
+    setDrawerOpen(true);
+  };
+  
+  const handleEditRole = (role: Role) => {
+    setDrawerMode("edit");
+    setSelectedRole(role);
+    setDrawerOpen(true);
+  };
+  
+  const handleCloneRole = (role: Role) => {
+    setDrawerMode("create");
+    setSelectedRole({
+      ...role,
+      id: "",
+      name: `${role.name}_copy`,
+      display_name: `${role.display_name} (Copy)`,
+      is_system_role: false,
+    });
+    setDrawerOpen(true);
+  };
+  
+  const handleDeleteRole = async (role: Role) => {
+    // TODO: Implement delete confirmation dialog
+    console.log("Delete role:", role);
+  };
+  
   if (isLoading) {
     return (
-      <div className="space-y-4">
+      <div className="space-y-6">
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {[1, 2, 3].map((i) => (
             <Card key={i}>
               <CardHeader>
-                <Skeleton className="h-4 w-24" />
-                <Skeleton className="h-3 w-full mt-2" />
+                <Skeleton className="h-5 w-32" />
+                <Skeleton className="h-4 w-48 mt-2" />
               </CardHeader>
               <CardContent>
-                <Skeleton className="h-20 w-full" />
+                <div className="space-y-3">
+                  <Skeleton className="h-20 w-full" />
+                  <Skeleton className="h-16 w-full" />
+                </div>
               </CardContent>
             </Card>
           ))}
@@ -188,79 +446,126 @@ function RolesContent() {
       </div>
     );
   }
-
-  if (error) {
-    return (
-      <Card>
-        <CardContent className="pt-6">
-          <p className="text-destructive">Error loading roles: {error.message}</p>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  const hasSystemRoles = roles?.system_roles && roles.system_roles.length > 0;
-  const hasPlatformRoles = roles?.platform_roles && roles.platform_roles.length > 0;
-  const hasClientRoles = roles?.client_roles && roles.client_roles.length > 0;
-
-  // If user only has access to one scope, don't show tabs
-  const scopeCount = [hasSystemRoles, hasPlatformRoles, hasClientRoles].filter(Boolean).length;
-
-  if (scopeCount === 1) {
-    if (hasSystemRoles) {
-      return <RolesList roles={roles.system_roles} title="System Roles" description="Global roles that apply across the entire system" />;
-    }
-    if (hasPlatformRoles) {
-      return <RolesList roles={roles.platform_roles} title="Platform Roles" description="Roles for managing platform-level operations" />;
-    }
-    if (hasClientRoles) {
-      return <RolesList roles={roles.client_roles} title="Client Roles" description="Roles specific to your organization" />;
-    }
-  }
-
+  
   return (
-    <Tabs defaultValue={hasSystemRoles ? "system" : hasPlatformRoles ? "platform" : "client"} className="space-y-6">
-      <TabsList>
-        {hasSystemRoles && <TabsTrigger value="system">System Roles</TabsTrigger>}
-        {hasPlatformRoles && <TabsTrigger value="platform">Platform Roles</TabsTrigger>}
-        {hasClientRoles && <TabsTrigger value="client">Client Roles</TabsTrigger>}
-      </TabsList>
-
-      {hasSystemRoles && (
-        <TabsContent value="system" className="space-y-6">
-          <RolesList 
-            roles={roles.system_roles} 
-            title="System Roles" 
-            description="Global roles that apply across the entire system"
+    <div className="space-y-6">
+      {/* Search and Actions */}
+      <div className="flex flex-col sm:flex-row gap-4">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search roles by name, description, or permissions..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-10"
           />
-        </TabsContent>
+        </div>
+        <Button onClick={handleCreateRole}>
+          <Plus className="mr-2 h-4 w-4" />
+          Create Role
+        </Button>
+      </div>
+      
+      {/* Roles by Category */}
+      {systemRoles.length > 0 && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Lock className="h-5 w-5 text-muted-foreground" />
+            <h3 className="text-lg font-semibold">System Roles</h3>
+            <Badge variant="secondary">{systemRoles.length}</Badge>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {systemRoles.map((role: Role) => (
+              <RoleCard
+                key={role.id}
+                role={role}
+                onEdit={() => handleEditRole(role)}
+                onClone={() => handleCloneRole(role)}
+                onDelete={() => handleDeleteRole(role)}
+              />
+            ))}
+          </div>
+        </div>
       )}
-
-      {hasPlatformRoles && (
-        <TabsContent value="platform" className="space-y-6">
-          <RolesList 
-            roles={roles.platform_roles} 
-            title="Platform Roles" 
-            description="Roles for managing platform-level operations"
-          />
-        </TabsContent>
+      
+      {globalRoles.length > 0 && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Globe className="h-5 w-5 text-muted-foreground" />
+            <h3 className="text-lg font-semibold">Global Roles</h3>
+            <Badge variant="secondary">{globalRoles.length}</Badge>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {globalRoles.map((role: Role) => (
+              <RoleCard
+                key={role.id}
+                role={role}
+                onEdit={() => handleEditRole(role)}
+                onClone={() => handleCloneRole(role)}
+                onDelete={() => handleDeleteRole(role)}
+              />
+            ))}
+          </div>
+        </div>
       )}
-
-      {hasClientRoles && (
-        <TabsContent value="client" className="space-y-6">
-          <RolesList 
-            roles={roles.client_roles} 
-            title="Client Roles" 
-            description="Roles specific to your organization"
-          />
-        </TabsContent>
+      
+      {customRoles.length > 0 && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-muted-foreground" />
+            <h3 className="text-lg font-semibold">Custom Roles</h3>
+            <Badge variant="secondary">{customRoles.length}</Badge>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {customRoles.map((role: Role) => (
+              <RoleCard
+                key={role.id}
+                role={role}
+                onEdit={() => handleEditRole(role)}
+                onClone={() => handleCloneRole(role)}
+                onDelete={() => handleDeleteRole(role)}
+              />
+            ))}
+          </div>
+        </div>
       )}
-    </Tabs>
+      
+      {filteredRoles.length === 0 && (
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-center py-8">
+              <Shield className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+              <h3 className="text-lg font-semibold mb-2">No Roles Found</h3>
+              <p className="text-muted-foreground mb-4">
+                {searchQuery 
+                  ? "No roles match your search criteria"
+                  : "Create your first role to start managing permissions"}
+              </p>
+              {!searchQuery && (
+                <Button onClick={handleCreateRole}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Create Your First Role
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      
+      <RoleDrawer
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        mode={drawerMode}
+        role={selectedRole}
+        entityId={contextEntityId}
+      />
+    </div>
   );
 }
 
-function Roles() {
-  const [createDrawerOpen, setCreateDrawerOpen] = useState(false);
+function RolesPage() {
+  const { selectedOrganization, isSystemContext } = useContextStore();
+  const [activeTab, setActiveTab] = useState("roles");
   
   return (
     <SidebarProvider>
@@ -283,30 +588,66 @@ function Roles() {
             </Breadcrumb>
           </div>
         </header>
+        
         <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
           <div className="mx-auto w-full max-w-7xl">
-            <div className="flex items-center justify-between mb-6">
-              <div>
-                <h1 className="text-2xl font-bold tracking-tight">Roles Management</h1>
-                <p className="text-muted-foreground">
-                  Manage roles and their permissions across different scopes
-                </p>
-              </div>
-              <Button onClick={() => setCreateDrawerOpen(true)}>
-                <Plus className="mr-2 h-4 w-4" />
-                Create Role
-              </Button>
+            <div className="mb-6">
+              <h1 className="text-2xl font-bold tracking-tight">Role Management</h1>
+              <p className="text-muted-foreground">
+                {!isSystemContext() && selectedOrganization ? (
+                  <>
+                    Managing roles for <span className="font-medium">{selectedOrganization.name}</span>
+                  </>
+                ) : (
+                  "Create and manage roles with granular permissions"
+                )}
+              </p>
             </div>
             
-            <RolesContent />
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+              <TabsList>
+                <TabsTrigger value="roles">
+                  <Shield className="mr-2 h-4 w-4" />
+                  All Roles
+                </TabsTrigger>
+                <TabsTrigger value="templates">
+                  <BookOpen className="mr-2 h-4 w-4" />
+                  Templates
+                </TabsTrigger>
+                <TabsTrigger value="insights">
+                  <TrendingUp className="mr-2 h-4 w-4" />
+                  Insights
+                </TabsTrigger>
+              </TabsList>
+              
+              <TabsContent value="roles" className="space-y-4">
+                <RolesContent />
+              </TabsContent>
+              
+              <TabsContent value="templates" className="space-y-4">
+                <RoleTemplates />
+              </TabsContent>
+              
+              <TabsContent value="insights" className="space-y-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Role Insights</CardTitle>
+                    <CardDescription>
+                      Analytics and usage patterns for your roles
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-center py-8">
+                      <TrendingUp className="h-12 w-12 text-muted-foreground mx-auto mb-2" />
+                      <p className="text-muted-foreground">Role analytics coming soon</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            </Tabs>
           </div>
         </div>
       </SidebarInset>
-      
-      <CreateRoleDrawer 
-        open={createDrawerOpen} 
-        onOpenChange={setCreateDrawerOpen} 
-      />
     </SidebarProvider>
   );
 }
