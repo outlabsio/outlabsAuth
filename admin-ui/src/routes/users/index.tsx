@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { AppSidebar } from "@/components/app-sidebar";
+import { useContextStore } from "@/stores/context-store";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -68,22 +69,33 @@ export const Route = createFileRoute("/users/")({
 interface User {
   id: string;
   email: string;
-  first_name: string;
-  last_name: string;
+  profile: {
+    first_name: string;
+    last_name: string;
+    phone?: string;
+    avatar_url?: string;
+    preferences?: Record<string, any>;
+  };
   is_active: boolean;
-  is_verified: boolean;
-  is_platform_admin: boolean;
+  is_system_user: boolean;
+  email_verified: boolean;
+  last_login?: string;
+  last_password_change?: string;
   created_at: string;
   updated_at: string;
-  roles: Array<{
-    id: string;
-    name: string;
-    entity_id?: string;
-  }>;
   entities: Array<{
     id: string;
     name: string;
+    slug: string;
     entity_type: string;
+    entity_class: string;
+    parent_id?: string;
+    roles: Array<{
+      id: string;
+      name: string;
+    }>;
+    status: string;
+    joined_at: string;
   }>;
 }
 
@@ -133,7 +145,7 @@ function UserStatusBadge({ user }: { user: User }) {
     );
   }
   
-  if (!user.is_verified) {
+  if (!user.email_verified) {
     return (
       <Badge variant="outline" className="gap-1">
         <Mail className="h-3 w-3" />
@@ -151,18 +163,24 @@ function UserStatusBadge({ user }: { user: User }) {
 }
 
 function UsersContent({ onEditUser }: { onEditUser: (user: User) => void }) {
+  const { selectedOrganization, isSystemContext } = useContextStore();
   const [currentPage, setCurrentPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedEntity, setSelectedEntity] = useState<string>("");
   
+  // In organization context, default to showing users from that org
+  const contextEntityId = !isSystemContext() && selectedOrganization ? selectedOrganization.id : undefined;
+  
   const { data: users, isLoading } = useQuery({
-    queryKey: ["users", currentPage, searchQuery, selectedEntity],
-    queryFn: () => fetchUsers(currentPage, searchQuery, selectedEntity),
+    queryKey: ["users", currentPage, searchQuery, selectedEntity || contextEntityId],
+    queryFn: () => fetchUsers(currentPage, searchQuery, selectedEntity || contextEntityId),
   });
   
+  // Only fetch entities for filtering if in system context
   const { data: entities } = useQuery({
-    queryKey: ["entities-structural"],
+    queryKey: ["entities-structural", contextEntityId],
     queryFn: fetchEntities,
+    enabled: isSystemContext(), // Only need entity filter in system context
   });
   
   if (isLoading) {
@@ -188,6 +206,23 @@ function UsersContent({ onEditUser }: { onEditUser: (user: User) => void }) {
   
   return (
     <div className="space-y-4">
+      {/* Context Information */}
+      {!isSystemContext() && selectedOrganization && (
+        <Card className="bg-muted/50">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-3">
+              <Building2 className="h-5 w-5 text-muted-foreground" />
+              <div>
+                <p className="font-medium">Organization Context: {selectedOrganization.name}</p>
+                <p className="text-sm text-muted-foreground">
+                  Showing only users who have access to this organization
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      
       {/* Filters */}
       <div className="flex flex-col sm:flex-row gap-4">
         <div className="relative flex-1">
@@ -202,25 +237,27 @@ function UsersContent({ onEditUser }: { onEditUser: (user: User) => void }) {
             className="pl-10"
           />
         </div>
-        <Select value={selectedEntity} onValueChange={(value) => {
-          setSelectedEntity(value);
-          setCurrentPage(1); // Reset to first page on filter change
-        }}>
-          <SelectTrigger className="w-full sm:w-[250px]">
-            <SelectValue placeholder="Filter by entity" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="">All Entities</SelectItem>
-            {entities?.map((entity: any) => (
-              <SelectItem key={entity.id} value={entity.id}>
-                <div className="flex items-center gap-2">
-                  <Building2 className="h-4 w-4" />
-                  {entity.name}
-                </div>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {isSystemContext() && entities && (
+          <Select value={selectedEntity || "all"} onValueChange={(value) => {
+            setSelectedEntity(value === "all" ? "" : value);
+            setCurrentPage(1); // Reset to first page on filter change
+          }}>
+            <SelectTrigger className="w-full sm:w-[250px]">
+              <SelectValue placeholder="Filter by entity" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Entities</SelectItem>
+              {entities?.map((entity: any) => (
+                <SelectItem key={entity.id} value={entity.id}>
+                  <div className="flex items-center gap-2">
+                    <Building2 className="h-4 w-4" />
+                    {entity.name}
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
       </div>
       
       {/* Users Table */}
@@ -253,16 +290,16 @@ function UsersContent({ onEditUser }: { onEditUser: (user: User) => void }) {
                     <div className="flex items-center gap-3">
                       <Avatar>
                         <AvatarFallback>
-                          {user.first_name[0]}{user.last_name[0]}
+                          {user.profile.first_name?.[0] || ''}{user.profile.last_name?.[0] || ''}
                         </AvatarFallback>
                       </Avatar>
                       <div>
                         <div className="font-medium">
-                          {user.first_name} {user.last_name}
-                          {user.is_platform_admin && (
+                          {user.profile.first_name} {user.profile.last_name}
+                          {user.is_system_user && (
                             <Badge variant="outline" className="ml-2 gap-1">
                               <Shield className="h-3 w-3" />
-                              Platform Admin
+                              System User
                             </Badge>
                           )}
                         </div>
@@ -276,18 +313,25 @@ function UsersContent({ onEditUser }: { onEditUser: (user: User) => void }) {
                     <UserStatusBadge user={user} />
                   </TableCell>
                   <TableCell>
-                    {user.roles.length === 0 ? (
+                    {user.entities.length === 0 ? (
                       <span className="text-sm text-muted-foreground">No roles</span>
                     ) : (
-                      <div className="flex flex-wrap gap-1">
-                        {user.roles.slice(0, 2).map((role) => (
-                          <Badge key={role.id} variant="secondary" className="text-xs">
-                            {role.name}
-                          </Badge>
+                      <div className="space-y-1">
+                        {/* Show roles grouped by entity */}
+                        {user.entities.slice(0, 2).map((entity) => (
+                          <div key={entity.id} className="flex items-center gap-1">
+                            <Building2 className="h-3 w-3 text-muted-foreground" />
+                            <span className="text-xs text-muted-foreground">{entity.name}:</span>
+                            {entity.roles?.map((role) => (
+                              <Badge key={role.id} variant="secondary" className="text-xs">
+                                {role.name}
+                              </Badge>
+                            )) || <span className="text-xs text-muted-foreground">No roles</span>}
+                          </div>
                         ))}
-                        {user.roles.length > 2 && (
+                        {user.entities.length > 2 && (
                           <Badge variant="outline" className="text-xs">
-                            +{user.roles.length - 2}
+                            +{user.entities.length - 2} more
                           </Badge>
                         )}
                       </div>
@@ -295,19 +339,19 @@ function UsersContent({ onEditUser }: { onEditUser: (user: User) => void }) {
                   </TableCell>
                   <TableCell>
                     {user.entities.length === 0 ? (
-                      <span className="text-sm text-muted-foreground">No entities</span>
+                      <span className="text-sm text-muted-foreground">No access</span>
                     ) : (
                       <div className="flex flex-wrap gap-1">
-                        {user.entities.slice(0, 2).map((entity) => (
-                          <Badge key={entity.id} variant="outline" className="text-xs">
+                        {user.entities.map((entity) => (
+                          <Badge 
+                            key={entity.id} 
+                            variant={entity.entity_type === "platform" ? "default" : "outline"} 
+                            className="text-xs gap-1"
+                          >
+                            <Building2 className="h-3 w-3" />
                             {entity.name}
                           </Badge>
                         ))}
-                        {user.entities.length > 2 && (
-                          <Badge variant="outline" className="text-xs">
-                            +{user.entities.length - 2}
-                          </Badge>
-                        )}
                       </div>
                     )}
                   </TableCell>
@@ -376,6 +420,7 @@ function UsersContent({ onEditUser }: { onEditUser: (user: User) => void }) {
 }
 
 function UsersPage() {
+  const { selectedOrganization, isSystemContext } = useContextStore();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<"create" | "edit">("create");
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
@@ -419,7 +464,13 @@ function UsersPage() {
               <div>
                 <h1 className="text-2xl font-bold tracking-tight">User Management</h1>
                 <p className="text-muted-foreground">
-                  Manage users, their roles, and entity access
+                  {!isSystemContext() && selectedOrganization ? (
+                    <>
+                      Showing users with access to <span className="font-medium">{selectedOrganization.name}</span>
+                    </>
+                  ) : (
+                    "Manage all users, their roles, and entity access"
+                  )}
                 </p>
               </div>
               <Button onClick={handleCreateUser}>
