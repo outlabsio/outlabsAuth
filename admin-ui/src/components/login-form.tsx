@@ -17,6 +17,7 @@ async function handleLogin(values: { username: string; password: string }) {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(values),
+    credentials: "include", // Important: Allow cookies to be set
   });
 
   if (!response.ok) {
@@ -38,10 +39,10 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"div">) 
     onSuccess: async (data) => {
       // Store tokens in Zustand store
       await login(data);
-      
+
       queryClient.invalidateQueries({ queryKey: ["user"] });
       toast.success("Login successful!");
-      
+
       // Small delay to ensure state is persisted
       setTimeout(() => {
         router.navigate({ to: "/dashboard" });
@@ -80,10 +81,9 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"div">) 
             <div className='grid gap-6'>
               <div className='grid gap-3'>
                 <form.Field
-                  name="username"
+                  name='username'
                   validators={{
-                    onChange: ({ value }) => 
-                      !value ? "Email is required" : undefined,
+                    onChange: ({ value }) => (!value ? "Email is required" : undefined),
                   }}
                 >
                   {(field) => (
@@ -98,21 +98,16 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"div">) 
                         onBlur={field.handleBlur}
                         disabled={mutation.isPending}
                       />
-                      {field.state.meta.errors ? (
-                        <p className="text-sm text-destructive mt-1">
-                          {field.state.meta.errors.join(", ")}
-                        </p>
-                      ) : null}
+                      {field.state.meta.errors ? <p className='text-sm text-destructive mt-1'>{field.state.meta.errors.join(", ")}</p> : null}
                     </>
                   )}
                 </form.Field>
               </div>
               <div className='grid gap-3'>
                 <form.Field
-                  name="password"
+                  name='password'
                   validators={{
-                    onChange: ({ value }) => 
-                      !value ? "Password is required" : undefined,
+                    onChange: ({ value }) => (!value ? "Password is required" : undefined),
                   }}
                 >
                   {(field) => (
@@ -123,42 +118,21 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"div">) 
                           Forgot your password?
                         </a>
                       </div>
-                      <Input
-                        id='password'
-                        type='password'
-                        value={field.state.value}
-                        onChange={(e) => field.handleChange(e.target.value)}
-                        onBlur={field.handleBlur}
-                        disabled={mutation.isPending}
-                      />
-                      {field.state.meta.errors ? (
-                        <p className="text-sm text-destructive mt-1">
-                          {field.state.meta.errors.join(", ")}
-                        </p>
-                      ) : null}
+                      <Input id='password' type='password' value={field.state.value} onChange={(e) => field.handleChange(e.target.value)} onBlur={field.handleBlur} disabled={mutation.isPending} />
+                      {field.state.meta.errors ? <p className='text-sm text-destructive mt-1'>{field.state.meta.errors.join(", ")}</p> : null}
                     </>
                   )}
                 </form.Field>
               </div>
-              
-              {mutation.isError && (
-                <div className="text-sm text-destructive text-center">
-                  {mutation.error?.message || "An error occurred during login"}
-                </div>
-              )}
-              
-              <form.Subscribe
-                selector={(state) => [state.canSubmit, state.isSubmitting]}
-              >
+
+              {mutation.isError && <div className='text-sm text-destructive text-center'>{mutation.error?.message || "An error occurred during login"}</div>}
+
+              <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting]}>
                 {([canSubmit, isSubmitting]) => (
-                  <Button 
-                    type='submit' 
-                    className='w-full' 
-                    disabled={!canSubmit || isSubmitting || mutation.isPending}
-                  >
+                  <Button type='submit' className='w-full' disabled={!canSubmit || isSubmitting || mutation.isPending}>
                     {mutation.isPending ? (
                       <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        <Loader2 className='mr-2 h-4 w-4 animate-spin' />
                         Signing in...
                       </>
                     ) : (
@@ -171,9 +145,7 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"div">) 
           </form>
         </CardContent>
       </Card>
-      <div className='text-muted-foreground text-center text-xs text-balance'>
-        Protected by enterprise-grade security
-      </div>
+      <div className='text-muted-foreground text-center text-xs text-balance'>Protected by enterprise-grade security</div>
     </div>
   );
 }

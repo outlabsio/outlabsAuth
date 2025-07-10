@@ -14,7 +14,7 @@ interface User {
 
 interface AuthTokens {
   access_token: string;
-  refresh_token: string;
+  refresh_token?: string; // Optional - not used in web flow (HTTP-only cookie)
   token_type: string;
 }
 
@@ -56,9 +56,10 @@ export const useAuthStore = create<AuthState>()(
       isAuthenticated: false,
       isRefreshing: false,
 
-      // Login action
+      // Login action (HTTP-only cookie based)
       login: async (tokens: AuthTokens, user?: User) => {
-        console.log("[AUTH STORE] AUTH STORE: Login called with tokens:", !!tokens.access_token, !!tokens.refresh_token);
+        console.log("[AUTH STORE] AUTH STORE: Login called with access token:", !!tokens.access_token);
+        console.log("[AUTH STORE] AUTH STORE: Refresh token now in HTTP-only cookie (not accessible to JS)");
 
         set({
           tokens,
@@ -77,6 +78,7 @@ export const useAuthStore = create<AuthState>()(
               headers: {
                 Authorization: `Bearer ${tokens.access_token}`,
               },
+              credentials: "include", // Include cookies
             });
 
             if (response.ok) {
@@ -116,26 +118,22 @@ export const useAuthStore = create<AuthState>()(
         useContextStore.getState().clearContext();
         console.log("[AUTH STORE] AUTH STORE: Cleared context");
 
-        // Optionally call logout endpoint to invalidate tokens on server
-        if (currentTokens?.refresh_token) {
-          console.log("[AUTH STORE] AUTH STORE: Calling server logout endpoint");
-          fetch(apiUrl("/auth/logout"), {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${currentTokens.access_token}`,
-            },
-            body: JSON.stringify({
-              refresh_token: currentTokens.refresh_token,
-            }),
+        // Call logout endpoint to invalidate refresh token cookie on server
+        console.log("[AUTH STORE] AUTH STORE: Calling server logout endpoint (cookie-based)");
+        fetch(apiUrl("/auth/logout"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${currentTokens?.access_token || ""}`,
+          },
+          credentials: "include", // Include HTTP-only cookie
+        })
+          .then((response) => {
+            console.log("[AUTH STORE] AUTH STORE: Server logout response:", response.status);
           })
-            .then((response) => {
-              console.log("[AUTH STORE] AUTH STORE: Server logout response:", response.status);
-            })
-            .catch((error) => {
-              console.log("[AUTH STORE] AUTH STORE: Server logout error (ignored):", error);
-            });
-        }
+          .catch((error) => {
+            console.log("[AUTH STORE] AUTH STORE: Server logout error (ignored):", error);
+          });
 
         // Only redirect if not in debug mode
         if (debugMode) {
@@ -146,13 +144,12 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      // Refresh tokens action
+      // Refresh tokens action (HTTP-only cookie based)
       refreshTokens: async () => {
-        const { tokens, isRefreshing } = get();
+        const { isRefreshing } = get();
 
-        console.log("[REFRESH] AUTH STORE: refreshTokens called");
+        console.log("[REFRESH] AUTH STORE: refreshTokens called (cookie-based)");
         console.log("[REFRESH] AUTH STORE: Current refresh state:", isRefreshing);
-        console.log("[REFRESH] AUTH STORE: Has refresh token:", !!tokens?.refresh_token);
 
         // Prevent multiple simultaneous refresh attempts
         if (isRefreshing) {
@@ -160,17 +157,11 @@ export const useAuthStore = create<AuthState>()(
           throw new Error("Token refresh already in progress");
         }
 
-        if (!tokens?.refresh_token) {
-          console.log("[REFRESH] AUTH STORE: No refresh token available, throwing error");
-          throw new Error("No refresh token available");
-        }
-
         console.log("[REFRESH] AUTH STORE: Setting isRefreshing to true");
         set({ isRefreshing: true });
 
         try {
-          console.log("[REFRESH] AUTH STORE: Making refresh request to /auth/refresh");
-          console.log("[REFRESH] AUTH STORE: Refresh token (first 20 chars):", tokens.refresh_token.substring(0, 20));
+          console.log("[REFRESH] AUTH STORE: Making refresh request to /auth/refresh (cookie will be sent automatically)");
           console.log("[REFRESH] AUTH STORE: Request URL:", apiUrl("/auth/refresh"));
 
           // Add timeout to prevent hanging requests
@@ -185,9 +176,7 @@ export const useAuthStore = create<AuthState>()(
             headers: {
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({
-              refresh_token: tokens.refresh_token,
-            }),
+            credentials: "include", // Important: Include cookies
             signal: controller.signal,
           });
 
@@ -196,15 +185,20 @@ export const useAuthStore = create<AuthState>()(
 
           if (response.ok) {
             const newTokens: AuthTokens = await response.json();
-            console.log("[REFRESH] AUTH STORE: New tokens received:", !!newTokens.access_token, !!newTokens.refresh_token);
+            console.log("[REFRESH] AUTH STORE: New access token received:", !!newTokens.access_token);
+            console.log("[REFRESH] AUTH STORE: Refresh token in cookie updated automatically");
 
+            // Only store access token (refresh token is now HTTP-only cookie)
             set({
-              tokens: newTokens,
+              tokens: {
+                access_token: newTokens.access_token,
+                token_type: newTokens.token_type,
+              },
               isAuthenticated: true,
               isRefreshing: false,
             });
 
-            console.log("[REFRESH] AUTH STORE: Tokens updated successfully");
+            console.log("[REFRESH] AUTH STORE: Access token updated successfully");
           } else {
             console.error("[REFRESH] AUTH STORE: Refresh failed with status:", response.status);
             console.error("[REFRESH] AUTH STORE: Response headers:", Object.fromEntries(response.headers.entries()));
@@ -279,19 +273,17 @@ export const useAuthStore = create<AuthState>()(
         return token;
       },
 
-      // Get refresh token
+      // Get refresh token (no longer accessible - HTTP-only cookie)
       getRefreshToken: () => {
-        const tokens = get().tokens;
-        const token = tokens?.refresh_token || null;
-        console.log("[AUTH STORE] AUTH STORE: getRefreshToken called, has token:", !!token);
-        return token;
+        console.log("[AUTH STORE] AUTH STORE: getRefreshToken called - refresh tokens are now HTTP-only cookies and not accessible to JavaScript");
+        return null; // Always null since refresh tokens are HTTP-only cookies
       },
     }),
     {
       name: "auth-storage",
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
-        tokens: state.tokens,
+        tokens: state.tokens, // Only contains access_token now (refresh token is HTTP-only cookie)
         user: state.user,
         isAuthenticated: state.isAuthenticated,
         // Don't persist isRefreshing state

@@ -10,7 +10,7 @@ services:
       - DATABASE_URL=mongodb://host.docker.internal:27017
       - MONGO_DATABASE=outlabsAuth_test
       - REDIS_URL=redis://:guest@host.docker.internal:6379
-      - SECRET_KEY=a_very_secret_key_that_should_be_changed_in_production
+      - SECRET_KEY=c3c1e8e8a0e8asdsdfaeasdf87878e8a0e8e8d0a2
       - ACCESS_TOKEN_EXPIRE_MINUTES=15
       - REFRESH_TOKEN_EXPIRE_DAYS=30
       - ALGORITHM=HS256

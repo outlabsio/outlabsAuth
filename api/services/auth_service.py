@@ -176,6 +176,21 @@ class AuthService:
         
         # Check if token is valid
         if not token_model.is_valid():
+            # DEBUG: Log why the token is invalid
+            now = datetime.now(timezone.utc)
+            expires_at = token_model.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            
+            print(f"DEBUG: Token validation failed:")
+            print(f"  - is_active: {token_model.is_active}")
+            print(f"  - used_at: {token_model.used_at}")
+            print(f"  - revoked_at: {token_model.revoked_at}")
+            print(f"  - now: {now}")
+            print(f"  - expires_at: {expires_at}")
+            print(f"  - now < expires_at: {now < expires_at}")
+            print(f"  - token_model.is_valid(): {token_model.is_valid()}")
+            
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Refresh token is invalid or expired"
@@ -197,8 +212,8 @@ class AuthService:
         token_model.used_at = datetime.now(timezone.utc)
         await token_model.save()
         
-        # Get the user
-        user = await UserModel.get(token_model.user.id)
+        # Get the user (use ID from JWT payload instead of Link object)
+        user = await UserModel.get(payload["sub"])
         if not user or not user.is_active:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

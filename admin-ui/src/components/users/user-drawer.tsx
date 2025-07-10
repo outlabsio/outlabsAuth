@@ -31,13 +31,13 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface UserDrawerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   mode: "create" | "edit";
   user?: any;
+  defaultEntityId?: string;
 }
 
 interface Entity {
@@ -83,7 +83,7 @@ async function createUser(data: any) {
 
 async function updateUser(userId: string, data: any) {
   const response = await authenticatedFetch(`/v1/users/${userId}`, {
-    method: "PATCH",
+    method: "PUT",
     headers: {
       "Content-Type": "application/json",
     },
@@ -92,7 +92,7 @@ async function updateUser(userId: string, data: any) {
   return response.json();
 }
 
-export function UserDrawer({ open, onOpenChange, mode, user }: UserDrawerProps) {
+export function UserDrawer({ open, onOpenChange, mode, user, defaultEntityId }: UserDrawerProps) {
   const queryClient = useQueryClient();
   const isEditMode = mode === "edit";
   const [selectedEntities, setSelectedEntities] = useState<string[]>([]);
@@ -144,7 +144,6 @@ export function UserDrawer({ open, onOpenChange, mode, user }: UserDrawerProps) 
       last_name: "",
       password: "",
       is_active: true,
-      is_platform_admin: false,
       send_invite: !isEditMode,
     },
     onSubmit: async ({ value }) => {
@@ -153,7 +152,6 @@ export function UserDrawer({ open, onOpenChange, mode, user }: UserDrawerProps) 
         first_name: value.first_name,
         last_name: value.last_name,
         is_active: value.is_active,
-        is_platform_admin: value.is_platform_admin,
       };
 
       // Only include password for new users or if changed
@@ -161,14 +159,24 @@ export function UserDrawer({ open, onOpenChange, mode, user }: UserDrawerProps) 
         data.password = value.password;
       }
 
-      // Add entity memberships
+      // Transform to entity_assignments format expected by backend
       if (selectedEntities.length > 0) {
-        data.entity_ids = selectedEntities;
-      }
-
-      // Add role assignments
-      if (selectedRoles.length > 0) {
-        data.role_ids = selectedRoles;
+        // Group roles by their parent entity
+        const entityAssignments = selectedEntities.map(entityId => {
+          // Find roles that belong to this entity
+          const entityRoles = selectedRoles.filter(roleId => {
+            const role = roles.find(r => r.id === roleId);
+            return role && role.entity_id === entityId;
+          });
+          
+          return {
+            entity_id: entityId,
+            role_ids: entityRoles, // Can be empty array if no roles selected
+            status: "active"
+          };
+        });
+        
+        data.entity_assignments = entityAssignments;
       }
 
       // Add send_invite flag for new users
@@ -183,19 +191,22 @@ export function UserDrawer({ open, onOpenChange, mode, user }: UserDrawerProps) 
   // Update form when user data is loaded (edit mode)
   useEffect(() => {
     if (isEditMode && user && open) {
+      console.log("UserDrawer: Editing user", user);
       form.reset({
         email: user.email || "",
-        first_name: user.first_name || "",
-        last_name: user.last_name || "",
+        first_name: user.profile?.first_name || "",
+        last_name: user.profile?.last_name || "",
         password: "", // Don't populate password
         is_active: user.is_active ?? true,
-        is_platform_admin: user.is_platform_admin ?? false,
+        is_platform_admin: false,
         send_invite: false,
       });
       setSelectedEntities(user.entities?.map((e: any) => e.id) || []);
-      setSelectedRoles(user.roles?.map((r: any) => r.id) || []);
+      // Extract all roles from all entities
+      const allRoles = user.entities?.flatMap((e: any) => e.roles?.map((r: any) => r.id) || []) || [];
+      setSelectedRoles(allRoles);
     }
-  }, [user, isEditMode, open, form]);
+  }, [user, isEditMode, open]);
 
   // Reset form when switching to create mode
   useEffect(() => {
@@ -206,13 +217,13 @@ export function UserDrawer({ open, onOpenChange, mode, user }: UserDrawerProps) 
         last_name: "",
         password: "",
         is_active: true,
-        is_platform_admin: false,
         send_invite: true,
       });
-      setSelectedEntities([]);
+      // If we have a default entity (organization context), pre-select it
+      setSelectedEntities(defaultEntityId ? [defaultEntityId] : []);
       setSelectedRoles([]);
     }
-  }, [isEditMode, open, form]);
+  }, [isEditMode, open, form, defaultEntityId]);
 
   const getSelectedEntitiesDisplay = () => {
     if (selectedEntities.length === 0) return "Select entities...";
@@ -244,7 +255,7 @@ export function UserDrawer({ open, onOpenChange, mode, user }: UserDrawerProps) 
           </DrawerDescription>
         </DrawerHeader>
 
-        <ScrollArea className="flex-1 px-6">
+        <div className="overflow-y-auto flex-1 px-6">
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -370,6 +381,11 @@ export function UserDrawer({ open, onOpenChange, mode, user }: UserDrawerProps) 
             {/* Entity Assignments */}
             <div className="space-y-4">
               <h3 className="text-sm font-semibold">Entity Access</h3>
+              {defaultEntityId && entities.find(e => e.id === defaultEntityId) && (
+                <div className="text-sm text-muted-foreground bg-muted/50 rounded-lg p-3">
+                  <p>Creating user within <span className="font-medium">{entities.find(e => e.id === defaultEntityId)?.name}</span> context</p>
+                </div>
+              )}
               <div className="space-y-2">
                 <Label>Assigned Entities</Label>
                 <Popover open={entitySearchOpen} onOpenChange={setEntitySearchOpen}>
@@ -565,25 +581,6 @@ export function UserDrawer({ open, onOpenChange, mode, user }: UserDrawerProps) 
                 )}
               </form.Field>
 
-              <form.Field name="is_platform_admin">
-                {(field) => (
-                  <div className="flex items-center justify-between rounded-lg border p-4">
-                    <div className="space-y-0.5">
-                      <Label htmlFor="is_platform_admin">Platform Administrator</Label>
-                      <p className="text-sm text-muted-foreground">
-                        {field.state.value
-                          ? "User has full platform-wide administrative access"
-                          : "User has standard access based on roles"}
-                      </p>
-                    </div>
-                    <Switch
-                      id="is_platform_admin"
-                      checked={field.state.value}
-                      onCheckedChange={field.handleChange}
-                    />
-                  </div>
-                )}
-              </form.Field>
 
               {!isEditMode && (
                 <form.Field name="send_invite">
@@ -608,30 +605,33 @@ export function UserDrawer({ open, onOpenChange, mode, user }: UserDrawerProps) 
               )}
             </div>
           </form>
-        </ScrollArea>
+        </div>
 
         <DrawerFooter className="px-6">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting]}>
-            {([canSubmit]) => (
-              <Button
-                type="submit"
-                disabled={!canSubmit || mutation.isPending}
-                onClick={form.handleSubmit}
-              >
-                {mutation.isPending ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {isEditMode ? "Updating..." : "Creating..."}
-                  </>
-                ) : (
-                  isEditMode ? "Update User" : "Create User"
-                )}
-              </Button>
-            )}
-          </form.Subscribe>
+          <div className="flex gap-3 w-full">
+            <Button variant="outline" onClick={() => onOpenChange(false)} className="flex-1">
+              Cancel
+            </Button>
+            <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting]}>
+              {([canSubmit]) => (
+                <Button
+                  type="submit"
+                  disabled={!canSubmit || mutation.isPending}
+                  onClick={form.handleSubmit}
+                  className="flex-1"
+                >
+                  {mutation.isPending ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      {isEditMode ? "Updating..." : "Creating..."}
+                    </>
+                  ) : (
+                    isEditMode ? "Update User" : "Create User"
+                  )}
+                </Button>
+              )}
+            </form.Subscribe>
+          </div>
         </DrawerFooter>
       </DrawerContent>
     </Drawer>

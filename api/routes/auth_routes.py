@@ -120,17 +120,19 @@ async def register(request: RegisterRequest):
 @router.post("/login", response_model=TokenResponse)
 async def login(
     request: Request,
+    response: Response,
     form_data: OAuth2PasswordRequestForm = Depends()
 ):
     """
-    Login with email and password
+    Login with email and password (WEB FLOW - HTTP-only cookies)
     
     Args:
         request: FastAPI request object
+        response: FastAPI response object
         form_data: OAuth2 form data (username=email, password)
     
     Returns:
-        Access and refresh tokens
+        Access token only (refresh token set as HTTP-only cookie)
     """
     # Get client IP
     ip_address = request.client.host if request.client else None
@@ -150,9 +152,19 @@ async def login(
         ip_address=ip_address
     )
     
+    # Set refresh token as HTTP-only cookie
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,  # 30 days in seconds
+        httponly=True,
+        secure=settings.ENVIRONMENT != "development",  # Only HTTPS in production
+        samesite="lax"
+    )
+    
     return TokenResponse(
         access_token=access_token,
-        refresh_token=refresh_token,
+        refresh_token="",  # Don't expose in JSON
         token_type="bearer",
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
@@ -161,17 +173,157 @@ async def login(
 @router.post("/login/json", response_model=TokenResponse)
 async def login_json(
     request: Request,
+    response: Response,
     login_data: LoginRequest
 ):
     """
-    Login with JSON payload (alternative to form data)
+    Login with JSON payload (WEB FLOW - HTTP-only cookies)
+    
+    Args:
+        request: FastAPI request object
+        response: FastAPI response object
+        login_data: Login credentials
+    
+    Returns:
+        Access token only (refresh token set as HTTP-only cookie)
+    """
+    # Get client IP
+    ip_address = request.client.host if request.client else None
+    
+    # Authenticate user
+    user = await AuthService.authenticate_user(login_data.email, login_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password"
+        )
+    
+    # Create tokens
+    access_token, refresh_token, _ = await AuthService.create_tokens(
+        user,
+        device_info=login_data.device_info or {"user_agent": request.headers.get("user-agent")},
+        ip_address=ip_address
+    )
+    
+    # Set refresh token as HTTP-only cookie
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,  # 30 days in seconds
+        httponly=True,
+        secure=settings.ENVIRONMENT != "development",  # Only HTTPS in production
+        samesite="lax"
+    )
+    
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token="",  # Don't expose in JSON
+        token_type="bearer",
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    )
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_token(
+    request: Request,
+    response: Response
+):
+    """
+    Refresh access token using HTTP-only cookie (WEB FLOW)
+    
+    Args:
+        request: FastAPI request object
+        response: FastAPI response object
+    
+    Returns:
+        New access token (new refresh token set as HTTP-only cookie)
+    """
+    ip_address = request.client.host if request.client else None
+    
+    # Get refresh token from HTTP-only cookie
+    refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No refresh token found"
+        )
+    
+    try:
+        access_token, new_refresh_token = await AuthService.refresh_access_token(
+            refresh_token,
+            ip_address=ip_address
+        )
+        
+        # Set new refresh token as HTTP-only cookie
+        response.set_cookie(
+            key="refresh_token",
+            value=new_refresh_token,
+            max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,  # 30 days in seconds
+            httponly=True,
+            secure=settings.ENVIRONMENT != "development",  # Only HTTPS in production
+            samesite="lax"
+        )
+        
+        return TokenResponse(
+            access_token=access_token,
+            refresh_token="",  # Don't expose in JSON
+            token_type="bearer",
+            expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        # DEBUG: Log the actual error instead of masking it
+        import traceback
+        print(f"DEBUG: Actual refresh token error: {str(e)}")
+        print(f"DEBUG: Error type: {type(e).__name__}")
+        print(f"DEBUG: Traceback:")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Refresh token error: {str(e)}"  # Show actual error for debugging
+        )
+
+
+@router.post("/logout")
+async def logout(request: Request, response: Response):
+    """
+    Logout by revoking HTTP-only cookie refresh token (WEB FLOW)
+    
+    Args:
+        request: FastAPI request object
+        response: FastAPI response object
+    
+    Returns:
+        Success message
+    """
+    # Get refresh token from HTTP-only cookie
+    refresh_token = request.cookies.get("refresh_token")
+    if refresh_token:
+        # Revoke the token in database
+        await AuthService.logout(refresh_token)
+    
+    # Clear the HTTP-only cookie
+    response.delete_cookie(key="refresh_token", httponly=True, samesite="lax")
+    
+    return {"message": "Successfully logged out"}
+
+
+# Mobile/App endpoints (JSON body flows)
+@router.post("/mobile/login", response_model=TokenResponse)
+async def mobile_login(
+    request: Request,
+    login_data: LoginRequest
+):
+    """
+    Login for mobile/app (JSON FLOW - tokens in response body)
     
     Args:
         request: FastAPI request object
         login_data: Login credentials
     
     Returns:
-        Access and refresh tokens
+        Both access and refresh tokens in JSON body
     """
     # Get client IP
     ip_address = request.client.host if request.client else None
@@ -193,26 +345,26 @@ async def login_json(
     
     return TokenResponse(
         access_token=access_token,
-        refresh_token=refresh_token,
+        refresh_token=refresh_token,  # Include in JSON for mobile apps
         token_type="bearer",
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
 
 
-@router.post("/refresh", response_model=TokenResponse)
-async def refresh_token(
+@router.post("/mobile/refresh", response_model=TokenResponse)
+async def mobile_refresh_token(
     request: Request,
     refresh_data: RefreshTokenRequest
 ):
     """
-    Refresh access token using refresh token
+    Refresh token for mobile/app (JSON FLOW - refresh token in request body)
     
     Args:
         request: FastAPI request object
         refresh_data: Refresh token
     
     Returns:
-        New access and refresh tokens
+        New access and refresh tokens in JSON body
     """
     ip_address = request.client.host if request.client else None
     
@@ -224,7 +376,7 @@ async def refresh_token(
         
         return TokenResponse(
             access_token=access_token,
-            refresh_token=refresh_token,
+            refresh_token=refresh_token,  # Include in JSON for mobile apps
             token_type="bearer",
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
         )
@@ -237,10 +389,10 @@ async def refresh_token(
         )
 
 
-@router.post("/logout")
-async def logout(logout_data: LogoutRequest):
+@router.post("/mobile/logout")
+async def mobile_logout(logout_data: LogoutRequest):
     """
-    Logout by revoking refresh token
+    Logout for mobile/app (JSON FLOW - refresh token in request body)
     
     Args:
         logout_data: Refresh token to revoke
@@ -392,3 +544,5 @@ async def verify_email(verification_data: EmailVerificationRequest):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired verification token"
         )
+
+

@@ -140,7 +140,12 @@ console.log = (...args) => {
   originalConsoleLog(...args);
 
   // Prevent recursive calls and only capture when debug mode is enabled
-  if (!isConsoleOverriding && debugMode && args[0]?.includes && (args[0].includes("[AUTH STORE]") || args[0].includes("[REFRESH]") || args[0].includes("[FETCH]") || args[0].includes("[TIMING]") || args[0].includes("[DEBUG]"))) {
+  if (
+    !isConsoleOverriding &&
+    debugMode &&
+    args[0]?.includes &&
+    (args[0].includes("[AUTH STORE]") || args[0].includes("[REFRESH]") || args[0].includes("[FETCH]") || args[0].includes("[TIMING]") || args[0].includes("[DEBUG]"))
+  ) {
     isConsoleOverriding = true;
     try {
       debugLogger.log(args.join(" "), "info");
@@ -154,7 +159,12 @@ console.error = (...args) => {
   originalConsoleError(...args);
 
   // Prevent recursive calls and only capture when debug mode is enabled
-  if (!isConsoleOverriding && debugMode && args[0]?.includes && (args[0].includes("[AUTH STORE]") || args[0].includes("[REFRESH]") || args[0].includes("[FETCH]") || args[0].includes("[TIMING]") || args[0].includes("[DEBUG]"))) {
+  if (
+    !isConsoleOverriding &&
+    debugMode &&
+    args[0]?.includes &&
+    (args[0].includes("[AUTH STORE]") || args[0].includes("[REFRESH]") || args[0].includes("[FETCH]") || args[0].includes("[TIMING]") || args[0].includes("[DEBUG]"))
+  ) {
     isConsoleOverriding = true;
     try {
       debugLogger.log(args.join(" "), "error");
@@ -168,7 +178,12 @@ console.warn = (...args) => {
   originalConsoleWarn(...args);
 
   // Prevent recursive calls and only capture when debug mode is enabled
-  if (!isConsoleOverriding && debugMode && args[0]?.includes && (args[0].includes("[AUTH STORE]") || args[0].includes("[REFRESH]") || args[0].includes("[FETCH]") || args[0].includes("[TIMING]") || args[0].includes("[DEBUG]"))) {
+  if (
+    !isConsoleOverriding &&
+    debugMode &&
+    args[0]?.includes &&
+    (args[0].includes("[AUTH STORE]") || args[0].includes("[REFRESH]") || args[0].includes("[FETCH]") || args[0].includes("[TIMING]") || args[0].includes("[DEBUG]"))
+  ) {
     isConsoleOverriding = true;
     try {
       debugLogger.log(args.join(" "), "warn");
@@ -290,10 +305,10 @@ export function AuthDebug() {
     },
   });
 
-  // Test refresh endpoint directly with mock token
+  // Test refresh endpoint directly without cookie (should fail)
   const testRefreshEndpoint = useMutation({
     mutationFn: async () => {
-      debugLogger.log("[DEBUG] AUTH DEBUG: Testing refresh endpoint with mock token", "info");
+      debugLogger.log("[DEBUG] AUTH DEBUG: Testing refresh endpoint without cookie (should fail)", "info");
       const url = "/api/v1/auth/refresh";
       debugLogger.log("[DEBUG] AUTH DEBUG: Testing URL: " + url, "info");
 
@@ -302,9 +317,7 @@ export function AuthDebug() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          refresh_token: "mock_token_test_123",
-        }),
+        // No credentials: "include" - should fail
       });
 
       debugLogger.log("[DEBUG] AUTH DEBUG: Refresh endpoint response status: " + response.status, "info");
@@ -318,28 +331,19 @@ export function AuthDebug() {
       return response.json();
     },
     onSuccess: (data) => {
-      debugLogger.log("[DEBUG] AUTH DEBUG: Refresh endpoint test successful: " + JSON.stringify(data), "info");
-      toast.success("Refresh endpoint is working!");
+      debugLogger.log("[DEBUG] AUTH DEBUG: Refresh endpoint test successful (unexpected): " + JSON.stringify(data), "info");
+      toast.success("Refresh endpoint is working (unexpected)!");
     },
     onError: (error: any) => {
       debugLogger.log("[DEBUG] AUTH DEBUG: Refresh endpoint test failed (expected): " + error.message, "error");
-      toast.error(`Refresh endpoint test: ${error.message}`);
+      toast.error(`Refresh endpoint test (expected failure): ${error.message}`);
     },
   });
 
-  // Test refresh endpoint with real token
+  // Test refresh endpoint with real cookie
   const testRealRefreshToken = useMutation({
     mutationFn: async () => {
-      const store = useAuthStore.getState();
-      const currentTokens = store.tokens;
-
-      if (!currentTokens?.refresh_token) {
-        throw new Error("No refresh token available");
-      }
-
-      debugLogger.log("[DEBUG] AUTH DEBUG: Testing refresh endpoint with REAL token", "info");
-      debugLogger.log("[DEBUG] AUTH DEBUG: Real token length: " + currentTokens.refresh_token.length, "info");
-      debugLogger.log("[DEBUG] AUTH DEBUG: Real token preview: " + currentTokens.refresh_token.substring(0, 50) + "...", "info");
+      debugLogger.log("[DEBUG] AUTH DEBUG: Testing refresh endpoint with REAL HTTP-only cookie", "info");
 
       const url = "/api/v1/auth/refresh";
       debugLogger.log("[DEBUG] AUTH DEBUG: Testing URL: " + url, "info");
@@ -349,9 +353,7 @@ export function AuthDebug() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          refresh_token: currentTokens.refresh_token,
-        }),
+        credentials: "include", // Include HTTP-only cookie
       });
 
       debugLogger.log("[DEBUG] AUTH DEBUG: Real refresh response status: " + response.status, "info");
@@ -377,7 +379,7 @@ export function AuthDebug() {
   // Force token refresh mutation
   const forceRefresh = useMutation({
     mutationFn: async () => {
-      debugLogger.log("[DEBUG] AUTH DEBUG: Forcing token refresh", "info");
+      debugLogger.log("[DEBUG] AUTH DEBUG: Forcing token refresh (cookie-based)", "info");
       const store = useAuthStore.getState();
 
       // Log current token state
@@ -386,9 +388,7 @@ export function AuthDebug() {
         "[DEBUG] AUTH DEBUG: Current tokens state: " +
           JSON.stringify({
             hasAccessToken: !!currentTokens?.access_token,
-            hasRefreshToken: !!currentTokens?.refresh_token,
-            refreshTokenLength: currentTokens?.refresh_token?.length || 0,
-            refreshTokenPreview: currentTokens?.refresh_token?.substring(0, 50) || "none",
+            refreshTokenLocation: "HTTP-only cookie (not accessible to JS)",
           }),
         "info"
       );
@@ -571,8 +571,8 @@ export function AuthDebug() {
                 <code className='block mt-1 p-2 bg-gray-100 dark:bg-gray-800 rounded text-xs break-all'>{tokens.access_token.substring(0, 50)}...</code>
               </div>
               <div>
-                <strong>Refresh Token (first 50 chars):</strong>
-                <code className='block mt-1 p-2 bg-gray-100 dark:bg-gray-800 rounded text-xs break-all'>{tokens.refresh_token.substring(0, 50)}...</code>
+                <strong>Refresh Token:</strong>
+                <code className='block mt-1 p-2 bg-gray-100 dark:bg-gray-800 rounded text-xs break-all'>🔒 HTTP-only cookie (not accessible to JavaScript)</code>
               </div>
             </div>
           )}
@@ -587,8 +587,8 @@ export function AuthDebug() {
               {testRefreshEndpoint.isPending ? "Testing..." : "Test Refresh Endpoint"}
             </Button>
 
-            <Button onClick={() => testRealRefreshToken.mutate()} disabled={testRealRefreshToken.isPending || !tokens?.refresh_token} variant='outline'>
-              {testRealRefreshToken.isPending ? "Testing..." : "Test Real Refresh Token"}
+            <Button onClick={() => testRealRefreshToken.mutate()} disabled={testRealRefreshToken.isPending || !isAuthenticated} variant='outline'>
+              {testRealRefreshToken.isPending ? "Testing..." : "Test Real Refresh Cookie"}
             </Button>
 
             <Button onClick={() => testApiCall.mutate()} disabled={testApiCall.isPending} variant='outline'>
@@ -664,13 +664,7 @@ export function AuthDebug() {
                         >
                           <div className='flex items-start gap-2'>
                             <div className='flex-shrink-0 mt-0.5'>
-                              {log.level === "error" ? (
-                                <AlertCircle className='h-3 w-3' />
-                              ) : log.level === "warn" ? (
-                                <AlertTriangle className='h-3 w-3' />
-                              ) : (
-                                <Info className='h-3 w-3' />
-                              )}
+                              {log.level === "error" ? <AlertCircle className='h-3 w-3' /> : log.level === "warn" ? <AlertTriangle className='h-3 w-3' /> : <Info className='h-3 w-3' />}
                             </div>
                             <div className='flex-1'>
                               <span className='font-mono'>{log.timestamp}</span>
@@ -699,17 +693,19 @@ export function AuthDebug() {
                 • <strong>Copy logs:</strong> Use "Copy Recent (20)" or "Copy All Logs" to share debug info
               </div>
               <div>
-                • <strong>Debug Token Refresh Issues:</strong>
+                • <strong>Debug Token Refresh Issues (Cookie-based):</strong>
                 <div className='ml-4 mt-1'>
                   1. Test "API Connection" - ensure backend is running
                   <br />
-                  2. Test "Refresh Endpoint" - verify endpoint responds (with mock token)
+                  2. Test "Refresh Endpoint" - verify endpoint responds (should fail without cookie)
                   <br />
-                  3. Test "Real Refresh Token" - test endpoint with your actual refresh token
+                  3. Test "Real Refresh Cookie" - test endpoint with your actual HTTP-only cookie
                   <br />
                   4. Try "Force Refresh" - test full refresh flow through auth store
                   <br />
                   5. Copy and share logs to get help with debugging
+                  <br />
+                  <strong>Note:</strong> Refresh tokens are now HTTP-only cookies (not accessible to JavaScript)
                 </div>
               </div>
             </div>

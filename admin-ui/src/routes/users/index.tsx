@@ -78,6 +78,7 @@ interface User {
   };
   is_active: boolean;
   is_system_user: boolean;
+  is_platform_admin?: boolean;
   email_verified: boolean;
   last_login?: string;
   last_password_change?: string;
@@ -489,6 +490,7 @@ function UsersPage() {
         onOpenChange={setDrawerOpen}
         mode={drawerMode}
         user={selectedUser}
+        defaultEntityId={!isSystemContext() && selectedOrganization ? selectedOrganization.id : undefined}
       />
     </SidebarProvider>
   );
