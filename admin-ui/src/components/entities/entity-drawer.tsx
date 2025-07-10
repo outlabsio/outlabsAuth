@@ -291,18 +291,23 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
   // Reset form when switching to create mode
   useEffect(() => {
     if (!isEditMode && open) {
+      // If there's only one parent option and we have a defaultParentId, use it
+      const parentValue = defaultParentId && potentialParents.length === 1 
+        ? defaultParentId 
+        : defaultParentId || "none";
+      
       form.reset({
         name: "",
         description: "",
         entity_class: EntityClass.STRUCTURAL,
-        entity_type: EntityType.ORGANIZATION,
-        parent_entity: defaultParentId || "none",
+        entity_type: "", // No default, force user to select
+        parent_entity: parentValue,
         status: "active",
         max_members: "",
       });
       setSelectedClass(EntityClass.STRUCTURAL);
     }
-  }, [isEditMode, open, defaultParentId]);
+  }, [isEditMode, open, defaultParentId, potentialParents]);
 
   // Get available entity types based on selected class and parent
   const availableTypes = useMemo(() => {
@@ -406,16 +411,12 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                     onValueChange={(value: EntityClass) => {
                       field.handleChange(value);
                       setSelectedClass(value);
-                      // Reset entity type when class changes
-                      form.setFieldValue("entity_type", 
-                        value === EntityClass.STRUCTURAL 
-                          ? EntityType.ORGANIZATION 
-                          : EntityType.FUNCTIONAL_GROUP
-                      );
+                      // Reset entity type when class changes to force selection
+                      form.setFieldValue("entity_type", "");
                     }}
                     disabled={isEditMode}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger className="w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -442,10 +443,15 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
               )}
             </form.Field>
 
-            <form.Field name="entity_type">
+            <form.Field 
+              name="entity_type"
+              validators={{
+                onChange: ({ value }) => (!value ? "Entity type is required" : undefined),
+              }}
+            >
               {(field) => (
                 <div className="space-y-2">
-                  <Label htmlFor="entity_type">Entity Type</Label>
+                  <Label htmlFor="entity_type">Entity Type *</Label>
                   {availableTypes.length === 0 && selectedClass === EntityClass.STRUCTURAL ? (
                     <div className="rounded-lg border border-muted bg-muted/50 p-3">
                       <p className="text-sm text-muted-foreground">
@@ -458,8 +464,8 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                       value={field.state.value}
                       onValueChange={(value: EntityType) => field.handleChange(value)}
                     >
-                      <SelectTrigger>
-                        <SelectValue />
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select an entity type" />
                       </SelectTrigger>
                       <SelectContent>
                         {availableTypes.map(type => (
@@ -472,6 +478,9 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                         ))}
                       </SelectContent>
                     </Select>
+                  )}
+                  {field.state.meta.errors && (
+                    <p className="text-sm text-destructive">{field.state.meta.errors.join(", ")}</p>
                   )}
                 </div>
               )}
@@ -524,10 +533,8 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                                     onSelect={() => {
                                       field.handleChange("none");
                                       setParentEntityOpen(false);
-                                      // Reset entity type to platform when no parent
-                                      if (form.state.values.entity_class === EntityClass.STRUCTURAL) {
-                                        form.setFieldValue("entity_type", EntityType.PLATFORM);
-                                      }
+                                      // Clear entity type to force selection
+                                      form.setFieldValue("entity_type", "");
                                     }}
                                   >
                                     <Check
@@ -546,19 +553,8 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                                     onSelect={() => {
                                       field.handleChange(parent.id);
                                       setParentEntityOpen(false);
-                                      // Reset entity type based on parent's allowed children
-                                      if (form.state.values.entity_class === EntityClass.STRUCTURAL) {
-                                        const hierarchyRules: Record<string, EntityType[]> = {
-                                          [EntityType.PLATFORM]: [EntityType.ORGANIZATION],
-                                          [EntityType.ORGANIZATION]: [EntityType.BRANCH, EntityType.TEAM],
-                                          [EntityType.BRANCH]: [EntityType.TEAM],
-                                          [EntityType.TEAM]: [],
-                                        };
-                                        const allowedTypes = hierarchyRules[parent.entity_type] || [];
-                                        if (allowedTypes.length > 0 && !allowedTypes.includes(form.state.values.entity_type)) {
-                                          form.setFieldValue("entity_type", allowedTypes[0]);
-                                        }
-                                      }
+                                      // Clear entity type to force selection when parent changes
+                                      form.setFieldValue("entity_type", "");
                                     }}
                                   >
                                     <Check
@@ -695,27 +691,30 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
         </div>
 
         <DrawerFooter className="px-6">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting]}>
-            {([canSubmit]) => (
-              <Button
-                type="submit"
-                disabled={!canSubmit || mutation.isPending}
-                onClick={form.handleSubmit}
-              >
-                {mutation.isPending ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {isEditMode ? "Updating..." : "Creating..."}
-                  </>
-                ) : (
-                  isEditMode ? "Update Entity" : "Create Entity"
-                )}
-              </Button>
-            )}
-          </form.Subscribe>
+          <div className="flex gap-3 w-full">
+            <Button variant="outline" onClick={() => onOpenChange(false)} className="flex-1">
+              Cancel
+            </Button>
+            <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting]}>
+              {([canSubmit]) => (
+                <Button
+                  type="submit"
+                  disabled={!canSubmit || mutation.isPending}
+                  onClick={form.handleSubmit}
+                  className="flex-1"
+                >
+                  {mutation.isPending ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      {isEditMode ? "Updating..." : "Creating..."}
+                    </>
+                  ) : (
+                    isEditMode ? "Update Entity" : "Create Entity"
+                  )}
+                </Button>
+              )}
+            </form.Subscribe>
+          </div>
         </DrawerFooter>
       </DrawerContent>
 

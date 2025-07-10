@@ -75,22 +75,9 @@ const data = {
     },
     {
       title: "Entities",
-      url: "#",
+      url: "/entities",
       icon: Building2,
-      items: [
-        {
-          title: "All Entities",
-          url: "/entities",
-        },
-        {
-          title: "Entity Tree",
-          url: "/entities/tree",
-        },
-        {
-          title: "Access Groups",
-          url: "/entities/groups",
-        },
-      ],
+      isActive: false,
     },
     {
       title: "Monitoring",

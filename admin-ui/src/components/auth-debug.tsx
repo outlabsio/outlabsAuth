@@ -5,23 +5,148 @@ import { Badge } from "@/components/ui/badge";
 import { authenticatedFetch } from "@/lib/auth";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { useState, useEffect } from "react";
+import { ScrollArea } from "@/components/ui/scroll-area";
+
+// Persistent debug logger
+class DebugLogger {
+  private static instance: DebugLogger;
+  private logs: Array<{ timestamp: string; message: string; level: "info" | "error" | "warn" }> = [];
+  private maxLogs = 1000;
+
+  static getInstance(): DebugLogger {
+    if (!DebugLogger.instance) {
+      DebugLogger.instance = new DebugLogger();
+    }
+    return DebugLogger.instance;
+  }
+
+  log(message: string, level: "info" | "error" | "warn" = "info") {
+    const timestamp = new Date().toISOString();
+    const logEntry = { timestamp, message, level };
+
+    this.logs.push(logEntry);
+
+    // Keep only the last N logs
+    if (this.logs.length > this.maxLogs) {
+      this.logs = this.logs.slice(-this.maxLogs);
+    }
+
+    // Store in localStorage
+    localStorage.setItem("auth-debug-logs", JSON.stringify(this.logs));
+
+    // Also log to console
+    console.log(`🔍 [${timestamp}] ${message}`);
+  }
+
+  getLogs() {
+    return this.logs;
+  }
+
+  loadLogs() {
+    try {
+      const stored = localStorage.getItem("auth-debug-logs");
+      if (stored) {
+        this.logs = JSON.parse(stored);
+      }
+    } catch (e) {
+      console.error("Failed to load debug logs:", e);
+    }
+  }
+
+  clearLogs() {
+    this.logs = [];
+    localStorage.removeItem("auth-debug-logs");
+  }
+}
+
+// Global debug logger instance
+const debugLogger = DebugLogger.getInstance();
+
+// Debug mode flag
+let debugMode = false;
+
+// Override console methods to capture logs
+const originalConsoleLog = console.log;
+const originalConsoleError = console.error;
+const originalConsoleWarn = console.warn;
+
+console.log = (...args) => {
+  originalConsoleLog(...args);
+  if (debugMode && args[0]?.includes && (args[0].includes("🔐") || args[0].includes("🔄") || args[0].includes("🌐") || args[0].includes("🕒") || args[0].includes("🧪"))) {
+    debugLogger.log(args.join(" "), "info");
+  }
+};
+
+console.error = (...args) => {
+  originalConsoleError(...args);
+  if (debugMode && args[0]?.includes && (args[0].includes("🔐") || args[0].includes("🔄") || args[0].includes("🌐") || args[0].includes("🕒") || args[0].includes("🧪"))) {
+    debugLogger.log(args.join(" "), "error");
+  }
+};
+
+console.warn = (...args) => {
+  originalConsoleWarn(...args);
+  if (debugMode && args[0]?.includes && (args[0].includes("🔐") || args[0].includes("🔄") || args[0].includes("🌐") || args[0].includes("🕒") || args[0].includes("🧪"))) {
+    debugLogger.log(args.join(" "), "warn");
+  }
+};
+
+// Export debug mode controls
+export const setDebugMode = (enabled: boolean) => {
+  debugMode = enabled;
+  localStorage.setItem("auth-debug-mode", enabled.toString());
+  debugLogger.log(`Debug mode ${enabled ? "enabled" : "disabled"}`, "info");
+};
+
+export const getDebugMode = () => {
+  const stored = localStorage.getItem("auth-debug-mode");
+  return stored === "true";
+};
 
 export function AuthDebug() {
   const { isAuthenticated, isRefreshing, user, tokens, getAccessToken, isTokenExpired, isTokenExpiringSoon, logout } = useAuth();
 
+  const [logs, setLogs] = useState<Array<{ timestamp: string; message: string; level: "info" | "error" | "warn" }>>([]);
+  const [showLogs, setShowLogs] = useState(false);
+  const [debugModeEnabled, setDebugModeEnabledState] = useState(getDebugMode());
+
+  useEffect(() => {
+    debugLogger.loadLogs();
+    setLogs(debugLogger.getLogs());
+
+    // Check debug mode from localStorage
+    const currentDebugMode = getDebugMode();
+    setDebugModeEnabledState(currentDebugMode);
+    setDebugMode(currentDebugMode);
+
+    // Update logs periodically
+    const interval = setInterval(() => {
+      setLogs([...debugLogger.getLogs()]);
+      // Also check if debug mode changed
+      const newDebugMode = getDebugMode();
+      if (newDebugMode !== debugModeEnabled) {
+        setDebugModeEnabledState(newDebugMode);
+        setDebugMode(newDebugMode);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
   // Test API call mutation
   const testApiCall = useMutation({
     mutationFn: async () => {
-      console.log("🧪 AUTH DEBUG: Testing API call to /auth/me");
+      debugLogger.log("🧪 AUTH DEBUG: Testing API call to /auth/me", "info");
       const response = await authenticatedFetch("/auth/me");
       return response.json();
     },
     onSuccess: (data) => {
-      console.log("🧪 AUTH DEBUG: API call successful:", data);
+      debugLogger.log("🧪 AUTH DEBUG: API call successful: " + JSON.stringify(data), "info");
       toast.success("API call successful!");
     },
     onError: (error: any) => {
-      console.error("🧪 AUTH DEBUG: API call failed:", error);
+      debugLogger.log("🧪 AUTH DEBUG: API call failed: " + error.message, "error");
       toast.error(`API call failed: ${error.message}`);
     },
   });
@@ -29,7 +154,7 @@ export function AuthDebug() {
   // Test expired token call mutation
   const testExpiredTokenCall = useMutation({
     mutationFn: async () => {
-      console.log("🧪 AUTH DEBUG: Testing API call with fake expired token");
+      debugLogger.log("🧪 AUTH DEBUG: Testing API call with fake expired token", "info");
       // Make a direct fetch with a fake expired token to test 401 handling
       const response = await fetch("/api/v1/auth/me", {
         headers: {
@@ -45,11 +170,11 @@ export function AuthDebug() {
       return response.json();
     },
     onSuccess: (data) => {
-      console.log("🧪 AUTH DEBUG: Expired token test successful (unexpected):", data);
+      debugLogger.log("🧪 AUTH DEBUG: Expired token test successful (unexpected): " + JSON.stringify(data), "info");
       toast.success("Expired token test successful (unexpected)!");
     },
     onError: (error: any) => {
-      console.error("🧪 AUTH DEBUG: Expired token test failed (expected):", error);
+      debugLogger.log("🧪 AUTH DEBUG: Expired token test failed (expected): " + error.message, "error");
       toast.error(`Expired token test failed (expected): ${error.message}`);
     },
   });
@@ -57,16 +182,16 @@ export function AuthDebug() {
   // Force token refresh mutation
   const forceRefresh = useMutation({
     mutationFn: async () => {
-      console.log("🧪 AUTH DEBUG: Forcing token refresh");
+      debugLogger.log("🧪 AUTH DEBUG: Forcing token refresh", "info");
       const store = useAuthStore.getState();
       await store.refreshTokens();
     },
     onSuccess: () => {
-      console.log("🧪 AUTH DEBUG: Force refresh successful");
+      debugLogger.log("🧪 AUTH DEBUG: Force refresh successful", "info");
       toast.success("Token refresh successful!");
     },
     onError: (error: any) => {
-      console.error("🧪 AUTH DEBUG: Force refresh failed:", error);
+      debugLogger.log("🧪 AUTH DEBUG: Force refresh failed: " + error.message, "error");
       toast.error(`Token refresh failed: ${error.message}`);
     },
   });
@@ -75,7 +200,7 @@ export function AuthDebug() {
   const getTokenInfo = () => {
     const token = getAccessToken();
     if (!token) {
-      console.log("🧪 AUTH DEBUG: No token available for info");
+      debugLogger.log("🧪 AUTH DEBUG: No token available for info", "warn");
       return null;
     }
 
@@ -95,22 +220,46 @@ export function AuthDebug() {
         subject: payload.sub || "Unknown",
       };
 
-      console.log("🧪 AUTH DEBUG: Token info:", info);
+      debugLogger.log("🧪 AUTH DEBUG: Token info: " + JSON.stringify(info), "info");
       return info;
     } catch (error) {
-      console.error("🧪 AUTH DEBUG: Error parsing token:", error);
+      debugLogger.log("🧪 AUTH DEBUG: Error parsing token: " + error, "error");
       return null;
     }
   };
 
   const tokenInfo = getTokenInfo();
 
+  const handleLogout = () => {
+    debugLogger.log("🧪 AUTH DEBUG: Manual logout triggered", "info");
+    if (debugModeEnabled) {
+      debugLogger.log("🧪 AUTH DEBUG: Debug mode enabled - preventing automatic redirect", "warn");
+      // In debug mode, just clear auth but don't redirect
+      const store = useAuthStore.getState();
+      store.clearAuth();
+      toast.error("Logout called (debug mode - no redirect)");
+    } else {
+      logout();
+    }
+  };
+
   return (
-    <Card className='w-full max-w-4xl'>
+    <Card className='w-full max-w-6xl'>
       <CardHeader>
-        <CardTitle>Authentication Debug Console</CardTitle>
+        <CardTitle className='flex items-center gap-2'>
+          Authentication Debug Console
+          {debugModeEnabled && <Badge variant='secondary'>Debug Mode Active</Badge>}
+        </CardTitle>
       </CardHeader>
       <CardContent className='space-y-4'>
+        {/* Debug Mode Status */}
+        {debugModeEnabled && (
+          <div className='p-3 bg-yellow-100 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800'>
+            <div className='text-sm font-medium text-yellow-800 dark:text-yellow-200'>🐛 Debug Mode Active</div>
+            <div className='text-xs text-yellow-700 dark:text-yellow-300 mt-1'>Automatic logout is disabled. Toggle debug mode in the user menu (top right).</div>
+          </div>
+        )}
+
         {/* Authentication Status */}
         <div className='flex items-center gap-2'>
           <span>Status:</span>
@@ -177,24 +326,69 @@ export function AuthDebug() {
             {forceRefresh.isPending ? "Refreshing..." : "Force Refresh"}
           </Button>
 
-          <Button
-            onClick={() => {
-              console.log("🧪 AUTH DEBUG: Manual logout triggered");
-              logout();
-            }}
-            variant='destructive'
-          >
+          <Button onClick={handleLogout} variant='destructive'>
             Logout
           </Button>
+
+          <Button onClick={() => setShowLogs(!showLogs)} variant='outline'>
+            {showLogs ? "Hide" : "Show"} Logs ({logs.length})
+          </Button>
+
+          <Button
+            onClick={() => {
+              debugLogger.clearLogs();
+              setLogs([]);
+              toast.success("Debug logs cleared");
+            }}
+            variant='outline'
+          >
+            Clear Logs
+          </Button>
         </div>
+
+        {/* Debug Logs */}
+        {showLogs && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Debug Logs (Persistent)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ScrollArea className='h-64'>
+                <div className='space-y-1'>
+                  {logs.length === 0 ? (
+                    <div className='text-sm text-gray-500'>No logs yet</div>
+                  ) : (
+                    logs.slice(-50).map((log, index) => (
+                      <div
+                        key={index}
+                        className={`text-xs p-2 rounded ${
+                          log.level === "error"
+                            ? "bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-200"
+                            : log.level === "warn"
+                              ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-200"
+                              : "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200"
+                        }`}
+                      >
+                        <span className='font-mono'>{log.timestamp}</span>
+                        <br />
+                        <span>{log.message}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Console Log Info */}
         <div className='mt-4 p-3 bg-gray-100 dark:bg-gray-800 rounded'>
           <div className='text-sm font-medium mb-2'>Debug Information:</div>
           <div className='text-xs text-gray-600 dark:text-gray-400'>
-            <div>• Check browser console for detailed logs</div>
+            <div>• Toggle debug mode in the user menu (click your profile picture)</div>
+            <div>• All auth logs are captured and persist across logout</div>
             <div>• Look for 🔐 (auth store), 🔄 (refresh), 🌐 (fetch), 🕒 (timing), 🧪 (debug) emojis</div>
-            <div>• All token operations are logged with timestamps</div>
+            <div>• Use "Show Logs" to see persistent debug history</div>
           </div>
         </div>
       </CardContent>

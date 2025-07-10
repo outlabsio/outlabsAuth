@@ -37,6 +37,15 @@ interface AuthState {
   getRefreshToken: () => string | null;
 }
 
+// Check if debug mode is enabled
+const isDebugMode = () => {
+  try {
+    return localStorage.getItem("auth-debug-mode") === "true";
+  } catch {
+    return false;
+  }
+};
+
 // Create the store with persistence
 export const useAuthStore = create<AuthState>()(
   persist(
@@ -86,6 +95,9 @@ export const useAuthStore = create<AuthState>()(
       // Logout action
       logout: () => {
         console.log("🔐 AUTH STORE: Logout called");
+        const debugMode = isDebugMode();
+        console.log("🔐 AUTH STORE: Debug mode status:", debugMode);
+
         const currentTokens = get().tokens;
 
         // Clear state first
@@ -125,9 +137,13 @@ export const useAuthStore = create<AuthState>()(
             });
         }
 
-        // Redirect to login
-        console.log("🔐 AUTH STORE: Redirecting to login");
-        window.location.href = "/login";
+        // Only redirect if not in debug mode
+        if (debugMode) {
+          console.log("🔐 AUTH STORE: Debug mode enabled - NOT redirecting to login");
+        } else {
+          console.log("🔐 AUTH STORE: Redirecting to login");
+          window.location.href = "/login";
+        }
       },
 
       // Refresh tokens action
@@ -213,6 +229,10 @@ export const useAuthStore = create<AuthState>()(
           isAuthenticated: false,
           isRefreshing: false,
         });
+
+        // Clear persisted data but don't redirect
+        localStorage.removeItem("auth-storage");
+        console.log("🔐 AUTH STORE: Cleared localStorage (no redirect)");
       },
 
       // Get access token
