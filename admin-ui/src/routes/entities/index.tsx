@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { AppSidebar } from "@/components/app-sidebar";
 import { useContextStore } from "@/stores/context-store";
@@ -176,7 +176,8 @@ function EntitiesContent({
   classFilter,
   typeFilter,
   currentEntityId,
-  childCounts
+  childCounts,
+  contextRootId
 }: { 
   onEditEntity: (entity: Entity) => void;
   onNavigateToEntity: (entityId: string | null) => void;
@@ -185,10 +186,14 @@ function EntitiesContent({
   typeFilter: string;
   currentEntityId: string | null;
   childCounts: Map<string, number>;
+  contextRootId: string | null;
 }) {
+  // Determine what parent to query for
+  const queryParentId = currentEntityId || contextRootId || undefined;
+  
   const { data: entities, isLoading, error } = useQuery({
-    queryKey: ["entities", currentEntityId],
-    queryFn: () => fetchEntities(currentEntityId || undefined),
+    queryKey: ["entities", queryParentId],
+    queryFn: () => fetchEntities(queryParentId),
   });
 
   // Fetch current entity details if we're not at root
@@ -263,10 +268,7 @@ function EntitiesContent({
     );
   }
 
-  // Filter to only show root entities when no current entity
-  if (!currentEntityId) {
-    filteredEntities = filteredEntities.filter(entity => !entity.parent_entity && !entity.parent_entity_id);
-  }
+  // No additional filtering needed - the API already filters by parent
 
   return (
     <div className="space-y-4">
@@ -276,11 +278,11 @@ function EntitiesContent({
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => onNavigateToEntity(null)}
+            onClick={() => onNavigateToEntity(contextRootId)}
             className="h-8 px-2"
           >
             <Building2 className="h-4 w-4 mr-1" />
-            All Entities
+            {contextRootId ? "Context Root" : "All Entities"}
           </Button>
           {breadcrumbPath.map((entity, index) => (
             <div key={entity.id} className="flex items-center gap-2">
@@ -390,11 +392,16 @@ function Entities() {
   const [searchQuery, setSearchQuery] = useState("");
   const [classFilter, setClassFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
-  const [currentEntityId, setCurrentEntityId] = useState<string | null>(null);
+  
+  // Start at the selected organization context, or null for system context
+  const contextRootId = isSystemContext() ? null : selectedOrganization?.id || null;
+  const [currentEntityId, setCurrentEntityId] = useState<string | null>(contextRootId);
   const [childCounts] = useState(new Map<string, number>());
   
-  // In system context, start at root. In org context, start at that org
-  // const rootEntityId = isSystemContext() ? null : selectedOrganization?.id || null;
+  // Reset current entity when context changes
+  useEffect(() => {
+    setCurrentEntityId(contextRootId);
+  }, [contextRootId]);
   
   // Fetch all entities to calculate child counts
   const { data: allEntities } = useQuery({
@@ -468,13 +475,17 @@ function Entities() {
                 </h1>
                 <p className="text-muted-foreground">
                   {!isSystemContext() && selectedOrganization ? (
-                    <>
-                      Managing entities for <span className="font-medium">{selectedOrganization.name}</span>
-                    </>
+                    currentEntityId && currentEntityId !== contextRootId ? (
+                      "Navigate through your organizational hierarchy"
+                    ) : (
+                      <>
+                        Showing entities within <span className="font-medium">{selectedOrganization.name}</span>
+                      </>
+                    )
                   ) : currentEntityId ? (
                     "Navigate through your organizational hierarchy"
                   ) : (
-                    "Manage your organizational structure and access groups"
+                    "Manage all organizational structures and access groups"
                   )}
                 </p>
               </div>
@@ -558,6 +569,7 @@ function Entities() {
               typeFilter={typeFilter}
               currentEntityId={currentEntityId}
               childCounts={childCounts}
+              contextRootId={contextRootId}
             />
           </div>
         </div>
