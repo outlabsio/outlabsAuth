@@ -31,6 +31,7 @@ export interface Entity {
   
   // Identity
   name: string;
+  display_name?: string; // API returns this
   slug: string;
   description?: string;
   
@@ -50,7 +51,8 @@ export interface Entity {
   
   // Permissions and configuration
   direct_permissions: string[];
-  metadata: Record<string, any>;
+  config?: Record<string, any>; // API returns config, not metadata
+  metadata?: Record<string, any>; // Keep for backward compatibility
   allowed_child_classes: EntityClass[];
   allowed_child_types: EntityType[];
   max_members?: number;
@@ -115,25 +117,8 @@ export function getEntityTypeLabel(type: EntityType): string {
   return labels[type] || type;
 }
 
-export function getEntityClassIcon(entityClass: EntityClass): string {
-  return entityClass === EntityClass.STRUCTURAL ? "🏢" : "👥";
-}
-
-export function getEntityTypeIcon(type: EntityType): string {
-  const icons: Record<EntityType, string> = {
-    [EntityType.PLATFORM]: "🌐",
-    [EntityType.ORGANIZATION]: "🏢",
-    [EntityType.DIVISION]: "🏛️",
-    [EntityType.BRANCH]: "🏪",
-    [EntityType.TEAM]: "👥",
-    [EntityType.FUNCTIONAL_GROUP]: "⚡",
-    [EntityType.PERMISSION_GROUP]: "🔐",
-    [EntityType.PROJECT_GROUP]: "📁",
-    [EntityType.ROLE_GROUP]: "👮",
-    [EntityType.ACCESS_GROUP]: "🎯"
-  };
-  return icons[type] || "📦";
-}
+// Icon helper functions have been moved to @/lib/entity-icons.tsx
+// Import getEntityClassIcon and getEntityTypeIcon from there instead
 
 // Type guards
 export function isStructuralEntity(entity: Entity): boolean {

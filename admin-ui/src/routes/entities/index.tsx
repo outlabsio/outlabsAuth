@@ -40,10 +40,9 @@ import {
   EntityClass, 
   EntityType, 
   getEntityTypeLabel, 
-  getEntityTypeIcon,
-  getEntityClassIcon,
   isStructuralEntity 
 } from "@/types/entity";
+import { getEntityTypeIcon, getEntityClassIcon } from "@/lib/entity-icons";
 
 export const Route = createFileRoute("/entities/")({
   beforeLoad: requireAuth,
@@ -95,7 +94,10 @@ function EntityTypeBadge({ type }: { type: EntityType }) {
 
   return (
     <Badge className={`${colors[type]} border-0`}>
-      <span className="mr-1">{getEntityTypeIcon(type)}</span>
+      {(() => {
+        const Icon = getEntityTypeIcon(type);
+        return <Icon className="h-3 w-3 mr-1" />;
+      })()}
       {getEntityTypeLabel(type)}
     </Badge>
   );
@@ -128,7 +130,10 @@ function EntityCard({
               {hasChildren ? (
                 <FolderOpen className="h-6 w-6 text-muted-foreground group-hover:text-foreground transition-colors" />
               ) : (
-                getEntityTypeIcon(entity.entity_type)
+                (() => {
+                  const Icon = getEntityTypeIcon(entity.entity_type);
+                  return <Icon className="h-6 w-6" />;
+                })()
               )}
             </div>
             <div>
@@ -313,7 +318,15 @@ function EntitiesContent({
                 className="h-8 px-2"
                 disabled={index === breadcrumbPath.length - 1}
               >
-                {getEntityTypeIcon(entity.entity_type)} {entity.name}
+                {(() => {
+                  const Icon = getEntityTypeIcon(entity.entity_type);
+                  return (
+                    <>
+                      <Icon className="h-3 w-3 mr-1" />
+                      {entity.name}
+                    </>
+                  );
+                })()}
               </Button>
             </div>
           ))}
@@ -326,7 +339,10 @@ function EntitiesContent({
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="text-2xl">{getEntityTypeIcon(currentEntity.entity_type)}</span>
+                {(() => {
+                  const Icon = getEntityTypeIcon(currentEntity.entity_type);
+                  return <Icon className="h-8 w-8" />;
+                })()}
                 <div>
                   <CardTitle>{currentEntity.name}</CardTitle>
                   <CardDescription>{currentEntity.description || "No description"}</CardDescription>
@@ -361,7 +377,10 @@ function EntitiesContent({
           {filteredEntities.filter(isStructuralEntity).length > 0 && (
             <div>
               <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-                <span>{getEntityClassIcon(EntityClass.STRUCTURAL)}</span>
+                {(() => {
+                  const Icon = getEntityClassIcon(EntityClass.STRUCTURAL);
+                  return <Icon className="h-5 w-5" />;
+                })()}
                 Structural Entities
               </h3>
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -382,7 +401,10 @@ function EntitiesContent({
           {filteredEntities.filter(e => !isStructuralEntity(e)).length > 0 && (
             <div>
               <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-                <span>{getEntityClassIcon(EntityClass.ACCESS_GROUP)}</span>
+                {(() => {
+                  const Icon = getEntityClassIcon(EntityClass.ACCESS_GROUP);
+                  return <Icon className="h-5 w-5" />;
+                })()}
                 Access Groups
               </h3>
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -561,10 +583,22 @@ function Entities() {
                 <SelectContent>
                   <SelectItem value="all">All Classes</SelectItem>
                   <SelectItem value={EntityClass.STRUCTURAL}>
-                    {getEntityClassIcon(EntityClass.STRUCTURAL)} Structural
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const Icon = getEntityClassIcon(EntityClass.STRUCTURAL);
+                        return <Icon className="h-4 w-4" />;
+                      })()}
+                      <span>Structural</span>
+                    </div>
                   </SelectItem>
                   <SelectItem value={EntityClass.ACCESS_GROUP}>
-                    {getEntityClassIcon(EntityClass.ACCESS_GROUP)} Access Groups
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const Icon = getEntityClassIcon(EntityClass.ACCESS_GROUP);
+                        return <Icon className="h-4 w-4" />;
+                      })()}
+                      <span>Access Groups</span>
+                    </div>
                   </SelectItem>
                 </SelectContent>
               </Select>
@@ -575,35 +609,95 @@ function Entities() {
                 <SelectContent>
                   <SelectItem value="all">All Types</SelectItem>
                   <SelectItem value={EntityType.PLATFORM}>
-                    {getEntityTypeIcon(EntityType.PLATFORM)} Platform
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const Icon = getEntityTypeIcon(EntityType.PLATFORM);
+                        return <Icon className="h-4 w-4" />;
+                      })()}
+                      <span>Platform</span>
+                    </div>
                   </SelectItem>
                   <SelectItem value={EntityType.ORGANIZATION}>
-                    {getEntityTypeIcon(EntityType.ORGANIZATION)} Organization
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const Icon = getEntityTypeIcon(EntityType.ORGANIZATION);
+                        return <Icon className="h-4 w-4" />;
+                      })()}
+                      <span>Organization</span>
+                    </div>
                   </SelectItem>
                   <SelectItem value={EntityType.DIVISION}>
-                    {getEntityTypeIcon(EntityType.DIVISION)} Division
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const Icon = getEntityTypeIcon(EntityType.DIVISION);
+                        return <Icon className="h-4 w-4" />;
+                      })()}
+                      <span>Division</span>
+                    </div>
                   </SelectItem>
                   <SelectItem value={EntityType.BRANCH}>
-                    {getEntityTypeIcon(EntityType.BRANCH)} Branch
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const Icon = getEntityTypeIcon(EntityType.BRANCH);
+                        return <Icon className="h-4 w-4" />;
+                      })()}
+                      <span>Branch</span>
+                    </div>
                   </SelectItem>
                   <SelectItem value={EntityType.TEAM}>
-                    {getEntityTypeIcon(EntityType.TEAM)} Team
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const Icon = getEntityTypeIcon(EntityType.TEAM);
+                        return <Icon className="h-4 w-4" />;
+                      })()}
+                      <span>Team</span>
+                    </div>
                   </SelectItem>
                   <Separator className="my-1" />
                   <SelectItem value={EntityType.FUNCTIONAL_GROUP}>
-                    {getEntityTypeIcon(EntityType.FUNCTIONAL_GROUP)} Functional Group
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const Icon = getEntityTypeIcon(EntityType.FUNCTIONAL_GROUP);
+                        return <Icon className="h-4 w-4" />;
+                      })()}
+                      <span>Functional Group</span>
+                    </div>
                   </SelectItem>
                   <SelectItem value={EntityType.PERMISSION_GROUP}>
-                    {getEntityTypeIcon(EntityType.PERMISSION_GROUP)} Permission Group
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const Icon = getEntityTypeIcon(EntityType.PERMISSION_GROUP);
+                        return <Icon className="h-4 w-4" />;
+                      })()}
+                      <span>Permission Group</span>
+                    </div>
                   </SelectItem>
                   <SelectItem value={EntityType.PROJECT_GROUP}>
-                    {getEntityTypeIcon(EntityType.PROJECT_GROUP)} Project Group
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const Icon = getEntityTypeIcon(EntityType.PROJECT_GROUP);
+                        return <Icon className="h-4 w-4" />;
+                      })()}
+                      <span>Project Group</span>
+                    </div>
                   </SelectItem>
                   <SelectItem value={EntityType.ROLE_GROUP}>
-                    {getEntityTypeIcon(EntityType.ROLE_GROUP)} Role Group
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const Icon = getEntityTypeIcon(EntityType.ROLE_GROUP);
+                        return <Icon className="h-4 w-4" />;
+                      })()}
+                      <span>Role Group</span>
+                    </div>
                   </SelectItem>
                   <SelectItem value={EntityType.ACCESS_GROUP}>
-                    {getEntityTypeIcon(EntityType.ACCESS_GROUP)} Access Group
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const Icon = getEntityTypeIcon(EntityType.ACCESS_GROUP);
+                        return <Icon className="h-4 w-4" />;
+                      })()}
+                      <span>Access Group</span>
+                    </div>
                   </SelectItem>
                 </SelectContent>
               </Select>

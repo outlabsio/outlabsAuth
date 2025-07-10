@@ -54,9 +54,8 @@ import {
   EntityClass,
   EntityType,
   getEntityTypeLabel,
-  getEntityTypeIcon,
-  getEntityClassIcon,
 } from "@/types/entity";
+import { getEntityTypeIcon, getEntityClassIcon } from "@/lib/entity-icons";
 
 interface EntityDrawerProps {
   open: boolean;
@@ -278,15 +277,13 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
         description: entity.description || "",
         entity_class: entity.entity_class,
         entity_type: entity.entity_type,
-        parent_entity: typeof entity.parent_entity === 'string' 
-          ? entity.parent_entity 
-          : entity.parent_entity?.id || "none",
+        parent_entity: entity.parent_entity_id || "none",
         status: entity.status || "active",
         max_members: entity.max_members?.toString() || "",
       });
       setSelectedClass(entity.entity_class);
     }
-  }, [entity, isEditMode, open, form]);
+  }, [entity, isEditMode, open]);
 
   // Reset form when switching to create mode
   useEffect(() => {
@@ -422,13 +419,19 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                     <SelectContent>
                       <SelectItem value={EntityClass.STRUCTURAL}>
                         <div className="flex items-center gap-2">
-                          <span>{getEntityClassIcon(EntityClass.STRUCTURAL)}</span>
+                          {(() => {
+                            const Icon = getEntityClassIcon(EntityClass.STRUCTURAL);
+                            return <Icon className="h-4 w-4" />;
+                          })()}
                           <span>Structural Entity</span>
                         </div>
                       </SelectItem>
                       <SelectItem value={EntityClass.ACCESS_GROUP}>
                         <div className="flex items-center gap-2">
-                          <span>{getEntityClassIcon(EntityClass.ACCESS_GROUP)}</span>
+                          {(() => {
+                            const Icon = getEntityClassIcon(EntityClass.ACCESS_GROUP);
+                            return <Icon className="h-4 w-4" />;
+                          })()}
                           <span>Access Group</span>
                         </div>
                       </SelectItem>
@@ -471,7 +474,10 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                         {availableTypes.map(type => (
                           <SelectItem key={type} value={type}>
                             <div className="flex items-center gap-2">
-                              <span>{getEntityTypeIcon(type)}</span>
+                              {(() => {
+                                const Icon = getEntityTypeIcon(type);
+                                return <Icon className="h-4 w-4" />;
+                              })()}
                               <span>{getEntityTypeLabel(type)}</span>
                             </div>
                           </SelectItem>
@@ -509,7 +515,10 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                           >
                             {selectedParent ? (
                               <div className="flex items-center gap-2">
-                                <span>{getEntityTypeIcon(selectedParent.entity_type)}</span>
+                                {(() => {
+                                  const Icon = getEntityTypeIcon(selectedParent.entity_type);
+                                  return <Icon className="h-4 w-4" />;
+                                })()}
                                 <span>{selectedParent.name}</span>
                               </div>
                             ) : (
@@ -564,7 +573,10 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                                       )}
                                     />
                                     <div className="flex items-center gap-2">
-                                      <span>{getEntityTypeIcon(parent.entity_type)}</span>
+                                      {(() => {
+                                        const Icon = getEntityTypeIcon(parent.entity_type);
+                                        return <Icon className="h-4 w-4" />;
+                                      })()}
                                       <div className="flex flex-col">
                                         <span>{parent.name}</span>
                                         {parent.description && (

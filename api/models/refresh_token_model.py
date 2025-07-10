@@ -34,11 +34,17 @@ class RefreshTokenModel(BaseDocument):
     def is_valid(self) -> bool:
         """Check if token is valid"""
         now = datetime.now(timezone.utc)
+        
+        # Ensure expires_at is timezone-aware for comparison
+        expires_at = self.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        
         return (
             self.is_active and
             not self.used_at and
             not self.revoked_at and
-            now < self.expires_at
+            now < expires_at
         )
     
     class Settings:

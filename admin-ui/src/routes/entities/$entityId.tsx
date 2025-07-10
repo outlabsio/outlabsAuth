@@ -27,10 +27,10 @@ import { EntityMembers } from "@/components/entities/entity-members";
 import { EntityDrawer } from "@/components/entities/entity-drawer";
 import { 
   Entity, 
-  getEntityTypeIcon, 
   getEntityTypeLabel,
   isStructuralEntity 
 } from "@/types/entity";
+import { getEntityTypeIcon } from "@/lib/entity-icons";
 import { 
   Building2, 
   Edit, 
@@ -175,111 +175,75 @@ function EntityDetailsPage() {
         
         <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
           <div className="mx-auto w-full max-w-7xl">
-            {/* Entity Header */}
-            <div className="mb-6">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="text-4xl">
-                    {getEntityTypeIcon(entity.entity_type)}
+            {/* Compact Entity Header */}
+            <div className="mb-6 border-b pb-6">
+              <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                <div className="flex items-start gap-4">
+                  <div className="text-3xl lg:text-4xl flex-shrink-0 mt-1">
+                    {(() => {
+                      const Icon = getEntityTypeIcon(entity.entity_type);
+                      return <Icon className="h-10 w-10 lg:h-12 lg:w-12" />;
+                    })()}
                   </div>
-                  <div>
-                    <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-                      {entity.name}
+                  <div className="space-y-2 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h1 className="text-2xl lg:text-3xl font-bold tracking-tight">
+                        {entity.name}
+                      </h1>
                       <Badge variant={entity.status === "active" ? "default" : "secondary"}>
                         {entity.status}
                       </Badge>
-                    </h1>
+                      <Badge variant="outline" className="font-mono">
+                        {getEntityTypeLabel(entity.entity_type)}
+                      </Badge>
+                      <Badge variant="outline">
+                        {entity.entity_class === "STRUCTURAL" ? "Structural" : "Access Group"}
+                      </Badge>
+                    </div>
                     {entity.description && (
-                      <p className="text-muted-foreground mt-1">{entity.description}</p>
+                      <p className="text-muted-foreground">{entity.description}</p>
                     )}
+                    <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
+                      {entity.slug && (
+                        <div className="flex items-center gap-1">
+                          <Hash className="h-3 w-3" />
+                          <span className="font-mono">{entity.slug}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-1">
+                        <Calendar className="h-3 w-3" />
+                        <span>Created {format(new Date(entity.created_at), 'PP')}</span>
+                      </div>
+                      {entity.valid_until && (
+                        <div className="flex items-center gap-1 text-destructive">
+                          <Calendar className="h-3 w-3" />
+                          <span>Expires {format(new Date(entity.valid_until), 'PP')}</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
-                <Button onClick={() => setDrawerOpen(true)}>
+                <Button onClick={() => setDrawerOpen(true)} className="flex-shrink-0">
                   <Edit className="mr-2 h-4 w-4" />
                   Edit Entity
                 </Button>
               </div>
-            </div>
-            
-            {/* Entity Details Card */}
-            <Card className="mb-6">
-              <CardContent className="pt-6">
-                <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Building2 className="h-4 w-4" />
-                      Type
-                    </div>
-                    <p className="font-medium">{getEntityTypeLabel(entity.entity_type)}</p>
-                  </div>
-                  
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Hash className="h-4 w-4" />
-                      Slug
-                    </div>
-                    <p className="font-medium font-mono">{entity.slug || "—"}</p>
-                  </div>
-                  
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Shield className="h-4 w-4" />
-                      Class
-                    </div>
-                    <p className="font-medium">
-                      {entity.entity_class === "STRUCTURAL" ? "Structural" : "Access Group"}
-                    </p>
-                  </div>
-                  
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Calendar className="h-4 w-4" />
-                      Created
-                    </div>
-                    <p className="font-medium">{format(new Date(entity.created_at), 'PPP')}</p>
-                  </div>
-                  
-                  {entity.valid_from && (
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Calendar className="h-4 w-4" />
-                        Valid From
-                      </div>
-                      <p className="font-medium">{format(new Date(entity.valid_from), 'PPP')}</p>
-                    </div>
-                  )}
-                  
-                  {entity.valid_until && (
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Calendar className="h-4 w-4" />
-                        Valid Until
-                      </div>
-                      <p className="font-medium text-destructive">
-                        {format(new Date(entity.valid_until), 'PPP')}
-                      </p>
-                    </div>
-                  )}
+              
+              {/* Direct Permissions - Compact Display */}
+              {entity.direct_permissions && entity.direct_permissions.length > 0 && (
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <span className="text-sm text-muted-foreground flex items-center gap-1">
+                    <Shield className="h-3 w-3" />
+                    Permissions:
+                  </span>
+                  {entity.direct_permissions.map((permission) => (
+                    <Badge key={permission} variant="secondary" className="text-xs">
+                      {permission}
+                    </Badge>
+                  ))}
                 </div>
-                
-                {/* Direct Permissions */}
-                {entity.direct_permissions && entity.direct_permissions.length > 0 && (
-                  <div className="mt-6 pt-6 border-t">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
-                      <Shield className="h-4 w-4" />
-                      Direct Permissions
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {entity.direct_permissions.map((permission) => (
-                        <Badge key={permission} variant="secondary">
-                          {permission}
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+              )}
+            </div>
             
             {/* Tabs for different sections */}
             <Tabs defaultValue="members" className="space-y-4">
@@ -332,7 +296,10 @@ function EntityDetailsPage() {
                               className="flex items-center justify-between p-3 rounded-lg border hover:bg-accent transition-colors"
                             >
                               <div className="flex items-center gap-3">
-                                {getEntityTypeIcon(child.entity_type)}
+                                {(() => {
+                                  const Icon = getEntityTypeIcon(child.entity_type);
+                                  return <Icon className="h-5 w-5" />;
+                                })()}
                                 <div>
                                   <p className="font-medium">{child.name}</p>
                                   {child.description && (

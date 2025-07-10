@@ -20,7 +20,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   ChevronRight,
@@ -48,9 +47,9 @@ import {
 import { 
   Entity, 
   EntityType,
-  getEntityTypeIcon,
   isStructuralEntity 
 } from "@/types/entity";
+import { getEntityTypeIcon } from "@/lib/entity-icons";
 
 interface EntityTreeNodeData extends Entity {
   children?: EntityTreeNodeData[];
@@ -66,19 +65,7 @@ interface EntityTreeSidebarProps {
   onSelectEntity: (entityId: string | null) => void;
 }
 
-// Enhanced icon mapping for better visual hierarchy
-const entityTypeIcons: Record<EntityType, React.ReactNode> = {
-  [EntityType.PLATFORM]: <Globe className="h-4 w-4" />,
-  [EntityType.ORGANIZATION]: <Building2 className="h-4 w-4" />,
-  [EntityType.DIVISION]: <Building className="h-4 w-4" />,
-  [EntityType.BRANCH]: <GitBranch className="h-4 w-4" />,
-  [EntityType.TEAM]: <Users className="h-4 w-4" />,
-  [EntityType.FUNCTIONAL_GROUP]: <Briefcase className="h-4 w-4" />,
-  [EntityType.PERMISSION_GROUP]: <Lock className="h-4 w-4" />,
-  [EntityType.PROJECT_GROUP]: <FolderOpen className="h-4 w-4" />,
-  [EntityType.ROLE_GROUP]: <Key className="h-4 w-4" />,
-  [EntityType.ACCESS_GROUP]: <UserCog className="h-4 w-4" />,
-};
+// Icon mapping moved to @/lib/entity-icons.tsx
 
 async function fetchEntityChildren(entityId: string | null): Promise<Entity[]> {
   const params = new URLSearchParams({ status: "active" });
@@ -129,7 +116,6 @@ function EntityTreeNode({
   matchedNodes: Set<string>;
   navigate: any;
 }) {
-  const queryClient = useQueryClient();
   const isExpanded = expandedNodes.has(node.id);
   const hasChildren = node.entity_class === "STRUCTURAL"; // Only structural entities can have children
   const isSelected = currentEntityId === node.id;
@@ -213,7 +199,10 @@ function EntityTreeNode({
             "flex items-center justify-center",
             isStructuralEntity(node) ? "text-blue-600 dark:text-blue-400" : "text-purple-600 dark:text-purple-400"
           )}>
-            {entityTypeIcons[node.entity_type]}
+            {(() => {
+              const Icon = getEntityTypeIcon(node.entity_type);
+              return <Icon className="h-4 w-4" />;
+            })()}
           </div>
           
           <span className="truncate flex-1">

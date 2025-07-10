@@ -7,7 +7,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Users, Shield, Building2, Activity } from "lucide-react";
 import { requireAuth } from "@/lib/route-guards";
-import { AuthDebug } from "@/components/auth-debug";
 
 export const Route = createFileRoute("/dashboard")({
   beforeLoad: requireAuth,
@@ -133,11 +132,6 @@ function Dashboard() {
                 </div>
               </CardContent>
             </Card>
-          </div>
-
-          {/* Temporary debug component for testing token refresh */}
-          <div className='mt-8'>
-            <AuthDebug />
           </div>
         </div>
       </SidebarInset>
