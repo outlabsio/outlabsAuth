@@ -158,10 +158,13 @@ class EntityService:
         """
         entity = await EntityService.get_entity(entity_id)
         
-        # Update fields
+        # Update fields using the schema - only update fields that are provided
         update_dict = update_data.model_dump(exclude_unset=True)
+        
+        # Update allowed fields from the schema
         for field, value in update_dict.items():
-            setattr(entity, field, value)
+            if hasattr(entity, field):
+                setattr(entity, field, value)
         
         entity.updated_at = datetime.now(timezone.utc)
         await entity.save()

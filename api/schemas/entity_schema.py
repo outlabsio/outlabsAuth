@@ -46,7 +46,7 @@ class EntityCreate(BaseModel):
 
 class EntityUpdate(BaseModel):
     """Update entity request schema"""
-    display_name: Optional[str] = Field(None, min_length=1, max_length=200)
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
     description: Optional[str] = Field(None, max_length=500)
     status: Optional[Literal["active", "inactive", "archived"]] = None
     config: Optional[Dict[str, Any]] = None

@@ -257,7 +257,6 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
     onSubmit: async ({ value }) => {
       const data: any = {
         name: value.name,
-        display_name: value.name, // API expects display_name
         description: value.description,
         entity_class: value.entity_class, // Already uppercase from enum
         entity_type: value.entity_type,
