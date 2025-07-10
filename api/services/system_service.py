@@ -9,7 +9,6 @@ from fastapi import HTTPException, status
 import logging
 
 from api.models import UserModel, RoleModel, EntityModel
-from api.models.entity_model import EntityType, EntityClass
 from api.services.auth_service import AuthService
 from api.services.entity_service import EntityService
 from api.services.role_service import RoleService
@@ -42,7 +41,7 @@ class SystemService:
         
         # Check if root platform entity exists
         root_entity = await EntityModel.find_one(
-            EntityModel.entity_type == EntityType.PLATFORM,
+            EntityModel.entity_type == "platform",
             EntityModel.parent_entity == None
         )
         
@@ -99,8 +98,8 @@ class SystemService:
             display_name="Root Platform",
             slug="root-platform",
             description="The root platform entity for the entire system",
-            entity_class=EntityClass.STRUCTURAL,
-            entity_type=EntityType.PLATFORM,
+            entity_class="structural",
+            entity_type="platform",
             platform_id="root",  # Self-referential for root
             parent_entity=None,  # No parent for root
             status="active",
@@ -108,8 +107,8 @@ class SystemService:
                 "is_root": True,
                 "created_during_init": True
             },
-            allowed_child_classes=[EntityClass.STRUCTURAL, EntityClass.ACCESS_GROUP],
-            allowed_child_types=[EntityType.ORGANIZATION, EntityType.BRANCH, EntityType.TEAM]  # Platforms can have any structural entity as children
+            allowed_child_classes=["structural", "access_group"],
+            allowed_child_types=[]  # Flexible entity types allowed
         ).save()
         
         logger.info(f"Created root platform entity: {root_entity.id}")
@@ -150,7 +149,7 @@ class SystemService:
                 "role:read_all"
             ],
             entity=root_entity,
-            assignable_at_types=[EntityType.PLATFORM],
+            assignable_at_types=[],
             is_system_role=True,
             is_global=True
         ).save()

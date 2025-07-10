@@ -9,6 +9,7 @@ from beanie.operators import In, Or, And
 from fastapi import HTTPException, status
 
 from api.models import EntityModel, EntityMembershipModel, UserModel, RoleModel
+from api.models.entity_model import EntityClass
 from api.schemas.entity_schema import (
     EntityCreate,
     EntityUpdate,

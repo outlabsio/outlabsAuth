@@ -52,7 +52,7 @@ async def create_entity(
         name=entity.name,
         display_name=entity.name,  # Use name as display_name
         description=entity.description,
-        entity_class=entity.entity_class.value.upper(),  # Convert to uppercase
+        entity_class=entity.entity_class.upper(),  # Convert to uppercase
         entity_type=entity.entity_type,
         parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
         platform_id=str(entity.platform_id) if entity.platform_id else None,
@@ -116,7 +116,7 @@ async def get_top_level_organizations(
                 name=entity.name,
                 display_name=entity.name,  # Use name as display_name
                 description=entity.description,
-                entity_class=entity.entity_class.value.upper(),  # Convert enum to uppercase string
+                entity_class=entity.entity_class.upper(),  # Convert to uppercase string
                 entity_type=entity.entity_type,
                 platform_id=str(entity.platform_id) if entity.platform_id else None,
                 parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
@@ -155,7 +155,7 @@ async def get_entity(
         name=entity.name,
         display_name=entity.name,  # Use name as display_name
         description=entity.description,
-        entity_class=entity.entity_class.value.upper(),  # Convert to uppercase
+        entity_class=entity.entity_class.upper(),  # Convert to uppercase
         entity_type=entity.entity_type,
         parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
         platform_id=str(entity.platform_id) if entity.platform_id else None,
@@ -188,7 +188,7 @@ async def update_entity(
         name=entity.name,
         display_name=entity.name,  # Use name as display_name
         description=entity.description,
-        entity_class=entity.entity_class.value.upper(),  # Convert to uppercase
+        entity_class=entity.entity_class.upper(),  # Convert to uppercase
         entity_type=entity.entity_type,
         parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
         platform_id=str(entity.platform_id) if entity.platform_id else None,
@@ -262,7 +262,7 @@ async def search_entities(
             name=entity.name,
             display_name=entity.name,  # Use name as display_name
             description=entity.description,
-            entity_class=entity.entity_class.value.upper(),  # Convert to uppercase
+            entity_class=entity.entity_class.upper(),  # Convert to uppercase
             entity_type=entity.entity_type,
             parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
             platform_id=str(entity.platform_id) if entity.platform_id else None,
@@ -325,7 +325,7 @@ async def get_entity_path(
             name=entity.name,
             display_name=entity.name,  # Use name as display_name
             description=entity.description,
-            entity_class=entity.entity_class.value.upper(),  # Convert to uppercase
+            entity_class=entity.entity_class.upper(),  # Convert to uppercase
             entity_type=entity.entity_type,
             parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
             platform_id=str(entity.platform_id) if entity.platform_id else None,
