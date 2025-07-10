@@ -95,7 +95,7 @@ class EntityMembershipService:
         membership = EntityMembershipModel(
             user=user,
             entity=entity,
-            role=role,
+            roles=[role],  # roles is a list
             status="active",
             valid_from=member_data.valid_from,
             valid_until=member_data.valid_until

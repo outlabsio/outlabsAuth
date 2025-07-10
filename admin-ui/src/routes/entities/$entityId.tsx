@@ -70,6 +70,8 @@ async function fetchChildEntities(entityId: string): Promise<Entity[]> {
 function EntityDetailsPage() {
   const { entityId } = Route.useParams();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerMode, setDrawerMode] = useState<"create" | "edit">("edit");
+  const [createWithParent, setCreateWithParent] = useState(false);
   
   // Fetch entity details
   const { data: entity, isLoading, error } = useQuery({
@@ -223,7 +225,11 @@ function EntityDetailsPage() {
                     </div>
                   </div>
                 </div>
-                <Button onClick={() => setDrawerOpen(true)} className="flex-shrink-0">
+                <Button onClick={() => {
+                  setDrawerMode("edit");
+                  setCreateWithParent(false);
+                  setDrawerOpen(true);
+                }} className="flex-shrink-0">
                   <Edit className="mr-2 h-4 w-4" />
                   Edit Entity
                 </Button>
@@ -280,10 +286,22 @@ function EntityDetailsPage() {
                 <TabsContent value="children" className="space-y-4">
                   <Card>
                     <CardHeader>
-                      <CardTitle>Child Entities</CardTitle>
-                      <CardDescription>
-                        Entities that belong to {entity.name}
-                      </CardDescription>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <CardTitle>Child Entities</CardTitle>
+                          <CardDescription>
+                            Entities that belong to {entity.name}
+                          </CardDescription>
+                        </div>
+                        <Button onClick={() => {
+                          setDrawerMode("create");
+                          setCreateWithParent(true);
+                          setDrawerOpen(true);
+                        }}>
+                          <Building2 className="mr-2 h-4 w-4" />
+                          Add Entity
+                        </Button>
+                      </div>
                     </CardHeader>
                     <CardContent>
                       {childEntities && childEntities.length > 0 ? (
@@ -365,8 +383,9 @@ function EntityDetailsPage() {
       <EntityDrawer 
         open={drawerOpen} 
         onOpenChange={setDrawerOpen}
-        mode="edit"
-        entity={entity}
+        mode={drawerMode}
+        entity={drawerMode === "edit" ? entity : null}
+        defaultParentId={createWithParent ? entityId : null}
       />
     </SidebarProvider>
   );

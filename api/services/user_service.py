@@ -139,18 +139,45 @@ class UserService:
         
         # Entity membership filter
         if entity_id:
-            # Get users who are members of the specified entity
+            # Get the entity and its parent hierarchy
+            entity = await EntityModel.get(entity_id, fetch_links=True)
+            if not entity:
+                return [], 0
+            
+            # Collect entity IDs from the hierarchy (including self and all parents)
+            entity_ids = [PydanticObjectId(entity_id)]
+            current_entity = entity
+            
+            # Traverse up the hierarchy to get all parent entities
+            while current_entity.parent_entity:
+                # Fetch the parent entity link if not already fetched
+                if hasattr(current_entity.parent_entity, 'id'):
+                    parent_id = current_entity.parent_entity.id
+                else:
+                    parent_ref = await current_entity.parent_entity.fetch()
+                    if not parent_ref:
+                        break
+                    parent_id = parent_ref.id
+                
+                parent = await EntityModel.get(parent_id, fetch_links=True)
+                if parent:
+                    entity_ids.append(parent.id)
+                    current_entity = parent
+                else:
+                    break
+            
+            # Get users who are members of any entity in the hierarchy
             memberships = await EntityMembershipModel.find(
-                EntityMembershipModel.entity.id == PydanticObjectId(entity_id),
+                In(EntityMembershipModel.entity.id, entity_ids),
                 EntityMembershipModel.status == "active",
                 fetch_links=True
             ).to_list()
             
             if memberships:
-                user_ids = [m.user.id for m in memberships]
+                user_ids = list(set([m.user.id for m in memberships]))  # Remove duplicates
                 conditions.append(In(UserModel.id, user_ids))
             else:
-                # No members in entity, return empty result
+                # No members in entire hierarchy, return empty result
                 return [], 0
         
         # Build final query

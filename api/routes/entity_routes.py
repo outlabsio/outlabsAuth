@@ -3,7 +3,7 @@ Entity routes
 """
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from api.models import UserModel
+from api.models import UserModel, RoleModel
 from api.schemas.entity_schema import (
     EntityCreate,
     EntityUpdate,
@@ -341,6 +341,63 @@ async def get_entity_path(
     return response_path
 
 
+# Entity Roles Operations
+
+@router.get("/{entity_id}/roles", response_model=dict)
+async def list_entity_roles(
+    entity_id: str,
+    current_user: UserModel = Depends(require_entity_read)
+):
+    """
+    List all roles available for an entity
+    
+    Requires: entity:read permission
+    """
+    # For now, return default roles that can be assigned
+    # In a full implementation, this would fetch entity-specific roles
+    roles = await RoleModel.find(
+        RoleModel.entity.id == entity_id,
+        fetch_links=True
+    ).to_list()
+    
+    # If no entity-specific roles, return some default roles
+    if not roles:
+        # Create default role structures
+        default_roles = [
+            {
+                "id": "default-admin",
+                "name": "Admin",
+                "description": "Full administrative access to this entity",
+                "permissions": ["*:manage"]
+            },
+            {
+                "id": "default-member",
+                "name": "Member",
+                "description": "Standard member access",
+                "permissions": ["*:read"]
+            },
+            {
+                "id": "default-viewer",
+                "name": "Viewer",
+                "description": "Read-only access",
+                "permissions": ["*:read"]
+            }
+        ]
+        return {"items": default_roles}
+    
+    # Convert to response format
+    items = []
+    for role in roles:
+        items.append({
+            "id": str(role.id),
+            "name": role.name,
+            "description": role.description,
+            "permissions": role.permissions
+        })
+    
+    return {"items": items}
+
+
 # Entity Membership Operations
 
 @router.post("/{entity_id}/members", response_model=EntityMemberResponse)
@@ -360,7 +417,14 @@ async def add_entity_member(
     # Fetch related data
     user = await membership.user.fetch()
     entity = await membership.entity.fetch()
-    role = await membership.role.fetch()
+    
+    # Get first role for now (TODO: support multiple roles in response)
+    roles = []
+    for role_link in membership.roles:
+        role = await role_link.fetch()
+        roles.append(role)
+    
+    first_role = roles[0] if roles else None
     
     return EntityMemberResponse(
         id=str(membership.id),
@@ -369,9 +433,9 @@ async def add_entity_member(
         user_name=f"{user.profile.first_name} {user.profile.last_name}" if user.profile else user.email,
         entity_id=str(entity.id),
         entity_name=entity.name,
-        role_id=str(role.id),
-        role_name=role.name,
-        permissions=role.permissions,
+        role_id=str(first_role.id) if first_role else "",
+        role_name=first_role.name if first_role else "No Role",
+        permissions=first_role.permissions if first_role else [],
         status=membership.status,
         valid_from=membership.valid_from,
         valid_until=membership.valid_until,
@@ -435,7 +499,14 @@ async def update_entity_member(
     # Fetch related data
     user = await membership.user.fetch()
     entity = await membership.entity.fetch()
-    role = await membership.role.fetch()
+    
+    # Get first role for now (TODO: support multiple roles in response)
+    roles = []
+    for role_link in membership.roles:
+        role = await role_link.fetch()
+        roles.append(role)
+    
+    first_role = roles[0] if roles else None
     
     return EntityMemberResponse(
         id=str(membership.id),
@@ -444,9 +515,9 @@ async def update_entity_member(
         user_name=f"{user.profile.first_name} {user.profile.last_name}" if user.profile else user.email,
         entity_id=str(entity.id),
         entity_name=entity.name,
-        role_id=str(role.id),
-        role_name=role.name,
-        permissions=role.permissions,
+        role_id=str(first_role.id) if first_role else "",
+        role_name=first_role.name if first_role else "No Role",
+        permissions=first_role.permissions if first_role else [],
         status=membership.status,
         valid_from=membership.valid_from,
         valid_until=membership.valid_until,

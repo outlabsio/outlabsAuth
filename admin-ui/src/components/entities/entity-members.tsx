@@ -113,16 +113,18 @@ async function fetchEntityMembers(entityId: string, includeInactive: boolean = f
   return response.json();
 }
 
-async function fetchAvailableRoles() {
-  // Temporarily return empty array since we don't have roles yet
-  return [];
-  // const response = await authenticatedFetch("/v1/roles/");
-  // const data = await response.json();
-  // return data.items || [];
+async function fetchAvailableRoles(entityId: string) {
+  const response = await authenticatedFetch(`/v1/entities/${entityId}/roles`);
+  const data = await response.json();
+  return data.items || [];
 }
 
-async function searchUsers(query: string) {
-  const response = await authenticatedFetch(`/v1/users/?search=${encodeURIComponent(query)}`);
+async function searchUsers(query: string, entityId?: string) {
+  const params = new URLSearchParams();
+  if (query) params.append("search", query);
+  if (entityId) params.append("entity_id", entityId);
+  
+  const response = await authenticatedFetch(`/v1/users/?${params}`);
   const data = await response.json();
   return data.items || [];
 }
@@ -200,17 +202,18 @@ function AddMemberDialog({
   const [selectedRole, setSelectedRole] = useState<string>("");
   const queryClient = useQueryClient();
   
-  // Search users
+  // Fetch users - get users scoped to this entity
   const { data: users, isLoading: isSearching } = useQuery({
-    queryKey: ["users-search", searchQuery],
-    queryFn: () => searchUsers(searchQuery),
-    enabled: searchQuery.length >= 2,
+    queryKey: ["users-available", entityId],
+    queryFn: () => searchUsers("", entityId), // Get users scoped to this entity
+    enabled: open,
   });
   
-  // Fetch available roles
+  // Fetch available roles for this entity
   const { data: roles } = useQuery({
-    queryKey: ["roles"],
-    queryFn: fetchAvailableRoles,
+    queryKey: ["entity-roles", entityId],
+    queryFn: () => fetchAvailableRoles(entityId),
+    enabled: open,
   });
   
   // Add member mutation
@@ -255,11 +258,11 @@ function AddMemberDialog({
         <div className="space-y-4 py-4">
           {/* User Search */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">Search User</label>
+            <label className="text-sm font-medium">Select User</label>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="Search by name or email..."
+                placeholder="Filter users by name or email..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-9"
@@ -267,15 +270,33 @@ function AddMemberDialog({
             </div>
             
             {/* User Results */}
-            {searchQuery.length >= 2 && (
-              <div className="mt-2 max-h-48 overflow-y-auto rounded-md border">
-                {isSearching ? (
-                  <div className="p-4 text-center text-sm text-muted-foreground">
-                    Searching...
-                  </div>
-                ) : users && users.length > 0 ? (
-                  <div className="p-1">
-                    {users.map((user: User) => (
+            <div className="mt-2 max-h-48 overflow-y-auto rounded-md border">
+              {isSearching ? (
+                <div className="p-4 text-center text-sm text-muted-foreground">
+                  Loading users...
+                </div>
+              ) : users && users.length > 0 ? (
+                <div className="p-1">
+                  {(() => {
+                    const filteredUsers = users.filter((user: User) => {
+                      if (!searchQuery) return true;
+                      const query = searchQuery.toLowerCase();
+                      return (
+                        user.email.toLowerCase().includes(query) ||
+                        user.profile.first_name.toLowerCase().includes(query) ||
+                        user.profile.last_name.toLowerCase().includes(query)
+                      );
+                    });
+                    
+                    if (filteredUsers.length === 0) {
+                      return (
+                        <div className="p-4 text-center text-sm text-muted-foreground">
+                          No users match your filter
+                        </div>
+                      );
+                    }
+                    
+                    return filteredUsers.map((user: User) => (
                       <button
                         key={user.id}
                         className={`flex w-full items-center gap-3 rounded-md p-2 text-left hover:bg-accent ${
@@ -297,7 +318,8 @@ function AddMemberDialog({
                           </p>
                         </div>
                       </button>
-                    ))}
+                    ));
+                  })()}
                   </div>
                 ) : (
                   <div className="p-4 text-center text-sm text-muted-foreground">
@@ -305,7 +327,6 @@ function AddMemberDialog({
                   </div>
                 )}
               </div>
-            )}
           </div>
           
           {/* Selected User Display */}
@@ -326,16 +347,22 @@ function AddMemberDialog({
                 <SelectValue placeholder="Select a role" />
               </SelectTrigger>
               <SelectContent>
-                {roles?.map((role: Role) => (
-                  <SelectItem key={role.id} value={role.id}>
-                    <div>
-                      <p className="font-medium">{role.name}</p>
-                      {role.description && (
-                        <p className="text-xs text-muted-foreground">{role.description}</p>
-                      )}
-                    </div>
-                  </SelectItem>
-                ))}
+                {roles && roles.length > 0 ? (
+                  roles.map((role: Role) => (
+                    <SelectItem key={role.id} value={role.id}>
+                      <div>
+                        <p className="font-medium">{role.name}</p>
+                        {role.description && (
+                          <p className="text-xs text-muted-foreground">{role.description}</p>
+                        )}
+                      </div>
+                    </SelectItem>
+                  ))
+                ) : (
+                  <div className="p-2 text-sm text-muted-foreground text-center">
+                    No roles available. Please create roles first.
+                  </div>
+                )}
               </SelectContent>
             </Select>
           </div>

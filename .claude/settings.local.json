@@ -18,7 +18,8 @@
       "Bash(test:*)",
       "Bash(bun:*)",
       "Bash(touch:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(true)"
     ],
     "deny": []
   }

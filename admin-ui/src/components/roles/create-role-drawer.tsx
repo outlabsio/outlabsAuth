@@ -224,23 +224,24 @@ export function CreateRoleDrawer({ open, onOpenChange }: CreateRoleDrawerProps) 
   
   return (
     <Drawer open={open} onOpenChange={onOpenChange} direction="right">
-      <DrawerContent className="w-full max-w-4xl h-full flex flex-col">
-        <DrawerHeader className="px-6">
-          <DrawerTitle>Create New Role</DrawerTitle>
-          <DrawerDescription>
-            Define a new role with specific permissions for your organization
-          </DrawerDescription>
-        </DrawerHeader>
-        
-        <div className="overflow-y-auto px-6 py-4 flex-1">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              form.handleSubmit();
-            }}
-            className="space-y-6"
-          >
+      <DrawerContent className="w-full max-w-4xl h-full">
+        <div className="flex h-full flex-col">
+          <DrawerHeader className="px-6">
+            <DrawerTitle>Create New Role</DrawerTitle>
+            <DrawerDescription>
+              Define a new role with specific permissions for your organization
+            </DrawerDescription>
+          </DrawerHeader>
+          
+          <div className="flex-1 overflow-y-auto px-6">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                form.handleSubmit();
+              }}
+              className="space-y-6 pb-6"
+            >
           {/* Basic Information */}
           <div className="space-y-4">
             <h3 className="text-sm font-medium">Basic Information</h3>
@@ -502,32 +503,36 @@ export function CreateRoleDrawer({ open, onOpenChange }: CreateRoleDrawerProps) 
               )}
             </ScrollArea>
           </div>
-          </form>
-        </div>
-        
-        <DrawerFooter className="px-6">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting]}>
-            {([canSubmit]) => (
-              <Button
-                type="submit"
-                disabled={!canSubmit || createMutation.isPending}
-                onClick={form.handleSubmit}
-              >
-                {createMutation.isPending ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Creating...
-                  </>
-                ) : (
-                  "Create Role"
-                )}
+            </form>
+          </div>
+          
+          <DrawerFooter className="px-6 py-4 border-t">
+            <div className="flex gap-3 w-full">
+              <Button variant="outline" onClick={() => onOpenChange(false)} className="flex-1">
+                Cancel
               </Button>
-            )}
-          </form.Subscribe>
-        </DrawerFooter>
+              <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting]}>
+                {([canSubmit]) => (
+                  <Button
+                    type="submit"
+                    disabled={!canSubmit || createMutation.isPending}
+                    onClick={form.handleSubmit}
+                    className="flex-1"
+                  >
+                    {createMutation.isPending ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      "Create Role"
+                    )}
+                  </Button>
+                )}
+              </form.Subscribe>
+            </div>
+          </DrawerFooter>
+        </div>
       </DrawerContent>
     </Drawer>
   );

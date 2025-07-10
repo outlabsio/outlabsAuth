@@ -279,8 +279,8 @@ export function RoleDrawer({
   
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full sm:max-w-2xl">
-        <SheetHeader>
+      <SheetContent className="w-full sm:max-w-2xl flex flex-col h-full p-0">
+        <SheetHeader className="px-6 pt-6">
           <SheetTitle className="flex items-center gap-2">
             <Shield className="h-5 w-5" />
             {mode === "create" ? "Create New Role" : "Edit Role"}
@@ -293,7 +293,7 @@ export function RoleDrawer({
           </SheetDescription>
         </SheetHeader>
         
-        <ScrollArea className="h-[calc(100vh-200px)] mt-6 pr-4">
+        <div className="flex-1 overflow-y-auto px-6 py-4">
           <div className="space-y-6">
             {/* Basic Information */}
             <div className="space-y-4">
@@ -557,25 +557,29 @@ export function RoleDrawer({
               </div>
             </div>
           </div>
-        </ScrollArea>
+        </div>
         
-        <SheetFooter className="mt-6">
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={mutation.isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            onClick={handleSubmit}
-            disabled={mutation.isPending}
-          >
-            {mutation.isPending 
-              ? "Saving..." 
-              : mode === "create" ? "Create Role" : "Update Role"
-            }
-          </Button>
+        <SheetFooter className="px-6 py-4 border-t">
+          <div className="flex gap-3 w-full">
+            <Button
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={mutation.isPending}
+              className="flex-1"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSubmit}
+              disabled={mutation.isPending}
+              className="flex-1"
+            >
+              {mutation.isPending 
+                ? "Saving..." 
+                : mode === "create" ? "Create Role" : "Update Role"
+              }
+            </Button>
+          </div>
         </SheetFooter>
       </SheetContent>
     </Sheet>
