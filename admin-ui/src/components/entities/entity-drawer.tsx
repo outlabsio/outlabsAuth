@@ -1,6 +1,7 @@
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, useMemo } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import {
   Drawer,
   DrawerContent,
@@ -113,6 +114,7 @@ async function updateEntity(id: string, data: Partial<Entity>) {
 
 export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId }: EntityDrawerProps) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const isEditMode = mode === "edit";
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [hasChildren, setHasChildren] = useState(false);
@@ -218,9 +220,17 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
       queryClient.invalidateQueries({ queryKey: ["all-entities"] });
       queryClient.invalidateQueries({ queryKey: ["entity"] });
       queryClient.invalidateQueries({ queryKey: ["entity-path"] });
+      queryClient.invalidateQueries({ queryKey: ["entity-children"] });
       toast.success("Entity archived successfully!");
       onOpenChange(false);
       setShowDeleteDialog(false);
+      
+      // Navigate back to entities list or parent entity
+      if (entity?.parent_entity_id) {
+        navigate({ to: '/entities/$entityId', params: { entityId: entity.parent_entity_id } });
+      } else {
+        navigate({ to: '/entities' });
+      }
     },
     onError: (error: Error) => {
       toast.error(error.message);
