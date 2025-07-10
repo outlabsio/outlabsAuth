@@ -70,9 +70,11 @@ interface EntityMember {
   user_name: string;
   entity_id: string;
   entity_name: string;
-  role_id: string;
-  role_name: string;
-  permissions: string[];
+  roles: Array<{
+    id: string;
+    name: string;
+    permissions: string[];
+  }>;
   status: "active" | "suspended" | "revoked";
   valid_from?: string;
   valid_until?: string;
@@ -236,12 +238,12 @@ function AddMemberDialog({
       <DialogTrigger asChild>
         <Button>
           <UserPlus className="mr-2 h-4 w-4" />
-          Add Member
+          Add User
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
-          <DialogTitle>Add Member to {entityName}</DialogTitle>
+          <DialogTitle>Add User to {entityName}</DialogTitle>
           <DialogDescription>
             Search for a user and assign them a role within this entity.
           </DialogDescription>
@@ -344,7 +346,7 @@ function AddMemberDialog({
             onClick={handleAdd} 
             disabled={!selectedUser || !selectedRole || addMemberMutation.isPending}
           >
-            {addMemberMutation.isPending ? "Adding..." : "Add Member"}
+            {addMemberMutation.isPending ? "Adding..." : "Add User"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -395,7 +397,7 @@ export function EntityMembers({ entityId, entityName, canManageMembers }: Entity
   const filteredMembers = members.filter((member: EntityMember) =>
     member.user_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     member.user_email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    member.role_name.toLowerCase().includes(searchQuery.toLowerCase())
+    member.roles.some(role => role.name.toLowerCase().includes(searchQuery.toLowerCase()))
   );
   
   if (isLoading) {
@@ -427,7 +429,7 @@ export function EntityMembers({ entityId, entityName, canManageMembers }: Entity
       <CardHeader>
         <div className="flex items-center justify-between">
           <div>
-            <CardTitle>Entity Members</CardTitle>
+            <CardTitle>Users</CardTitle>
             <CardDescription>
               Manage users who have access to {entityName}
             </CardDescription>
@@ -447,7 +449,7 @@ export function EntityMembers({ entityId, entityName, canManageMembers }: Entity
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Search members..."
+              placeholder="Search users..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9"
@@ -462,7 +464,7 @@ export function EntityMembers({ entityId, entityName, canManageMembers }: Entity
               className="rounded border-gray-300"
             />
             <label htmlFor="include-inactive" className="text-sm">
-              Show inactive members
+              Show inactive users
             </label>
           </div>
         </div>
@@ -507,10 +509,18 @@ export function EntityMembers({ entityId, entityName, canManageMembers }: Entity
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="outline">
-                      <Shield className="mr-1 h-3 w-3" />
-                      {member.role_name}
-                    </Badge>
+                    {member.roles.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {member.roles.map((role) => (
+                          <Badge key={role.id} variant="outline">
+                            <Shield className="mr-1 h-3 w-3" />
+                            {role.name}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">No roles assigned</span>
+                    )}
                   </TableCell>
                   <TableCell>
                     <MemberStatusBadge status={member.status} />

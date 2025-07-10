@@ -250,7 +250,7 @@ function EntityDetailsPage() {
               <TabsList>
                 <TabsTrigger value="members">
                   <Users className="mr-2 h-4 w-4" />
-                  Members
+                  Users
                 </TabsTrigger>
                 {isStructuralEntity(entity) && (
                   <TabsTrigger value="children">

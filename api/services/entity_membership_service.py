@@ -248,16 +248,25 @@ class EntityMembershipService:
         
         # Apply pagination
         skip = (page - 1) * page_size
-        memberships = await query.skip(skip).limit(page_size).to_list()
+        memberships = await query.skip(skip).limit(page_size).fetch_links().to_list()
         
         # Enrich with user and role data
         enriched_members = []
         for membership in memberships:
-            user = await membership.user.fetch()
-            role = await membership.role.fetch()
-            entity = await membership.entity.fetch()
+            user = membership.user
+            entity = membership.entity
             
-            if user and role:
+            if user:
+                # Get role information from the list of roles
+                role_info = []
+                if membership.roles:
+                    for role in membership.roles:
+                        role_info.append({
+                            "id": str(role.id),
+                            "name": role.display_name,
+                            "permissions": role.permissions
+                        })
+                
                 enriched_members.append({
                     "id": str(membership.id),
                     "user_id": str(user.id),
@@ -265,9 +274,7 @@ class EntityMembershipService:
                     "user_name": f"{user.profile.first_name} {user.profile.last_name}" if user.profile else user.email,
                     "entity_id": str(entity.id),
                     "entity_name": entity.display_name,
-                    "role_id": str(role.id),
-                    "role_name": role.display_name,
-                    "permissions": role.permissions,
+                    "roles": role_info,  # Now it's a list of roles
                     "status": membership.status,
                     "valid_from": membership.valid_from,
                     "valid_until": membership.valid_until,
