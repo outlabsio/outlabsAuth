@@ -169,7 +169,17 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
     mutationFn: (data: Partial<Entity>) =>
       isEditMode && entity ? updateEntity(entity.id, data) : createEntity(data),
     onSuccess: () => {
+      // Invalidate all entity-related queries
       queryClient.invalidateQueries({ queryKey: ["entities"] });
+      if (isEditMode && entity) {
+        // Invalidate specific entity query
+        queryClient.invalidateQueries({ queryKey: ["entity", entity.id] });
+        queryClient.invalidateQueries({ queryKey: ["entity-path", entity.id] });
+        queryClient.invalidateQueries({ queryKey: ["entity-children", entity.id] });
+        queryClient.invalidateQueries({ queryKey: ["entity-members", entity.id] });
+      }
+      queryClient.invalidateQueries({ queryKey: ["all-entities"] });
+      
       toast.success(isEditMode ? "Entity updated successfully!" : "Entity created successfully!");
       if (!isEditMode) {
         // Reset form values for create mode
