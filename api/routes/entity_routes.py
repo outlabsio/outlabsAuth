@@ -99,8 +99,8 @@ async def get_top_level_organizations(
             continue
             
         # Check if user should see this entity
-        # Platform admins see all top-level entities
-        if current_user.is_platform_admin:
+        # System users (platform admins) see all top-level entities
+        if current_user.is_system_user:
             include_entity = True
         else:
             # Regular users only see entities they have membership in
