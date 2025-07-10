@@ -207,23 +207,6 @@ function UsersContent({ onEditUser }: { onEditUser: (user: User) => void }) {
   
   return (
     <div className="space-y-4">
-      {/* Context Information */}
-      {!isSystemContext() && selectedOrganization && (
-        <Card className="bg-muted/50">
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-3">
-              <Building2 className="h-5 w-5 text-muted-foreground" />
-              <div>
-                <p className="font-medium">Organization Context: {selectedOrganization.name}</p>
-                <p className="text-sm text-muted-foreground">
-                  Showing only users who have access to this organization
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-      
       {/* Filters */}
       <div className="flex flex-col sm:flex-row gap-4">
         <div className="relative flex-1">
@@ -464,15 +447,20 @@ function UsersPage() {
             <div className="flex items-center justify-between mb-6">
               <div>
                 <h1 className="text-2xl font-bold tracking-tight">User Management</h1>
-                <p className="text-muted-foreground">
+                <div className="flex items-center gap-2 mt-1">
                   {!isSystemContext() && selectedOrganization ? (
                     <>
-                      Showing users with access to <span className="font-medium">{selectedOrganization.name}</span>
+                      <Building2 className="h-4 w-4 text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground">
+                        Showing users with access to <span className="font-medium">{selectedOrganization.name}</span>
+                      </p>
                     </>
                   ) : (
-                    "Manage all users, their roles, and entity access"
+                    <p className="text-sm text-muted-foreground">
+                      Manage all users, their roles, and entity access
+                    </p>
                   )}
-                </p>
+                </div>
               </div>
               <Button onClick={handleCreateUser}>
                 <Plus className="mr-2 h-4 w-4" />
