@@ -496,14 +496,17 @@ class PermissionService:
         
         # Process each membership
         for membership in memberships:
-            # Get role permissions
-            role_perms = await self._get_role_permissions(membership["role_id"])
-            permissions["role"].extend(role_perms)
+            # Get role permissions - now handling multiple roles per membership
+            all_role_perms = []
+            for role_id in membership.get("role_ids", []):
+                role_perms = await self._get_role_permissions(role_id)
+                permissions["role"].extend(role_perms)
+                all_role_perms.extend(role_perms)
             
             # Get inherited permissions from parent entities
             inherited_perms = await self._get_inherited_permissions(
                 membership["entity_id"],
-                role_perms
+                all_role_perms  # Pass all permissions from all roles
             )
             permissions["inherited"].extend(inherited_perms)
         
@@ -778,7 +781,8 @@ class PermissionService:
         
         # Get memberships
         memberships = await EntityMembershipModel.find(
-            And(*query_conditions)
+            And(*query_conditions),
+            fetch_links=True
         ).to_list()
         
         # Check time validity
@@ -792,10 +796,14 @@ class PermissionService:
             if membership.valid_until and now > membership.valid_until:
                 continue
             
+            # Since we have fetch_links=True, entity and roles should be populated
+            # But roles is a list, so we need to handle it differently
+            role_ids = [str(role.id) for role in membership.roles] if membership.roles else []
+            
             valid_memberships.append({
                 "id": str(membership.id),
                 "entity_id": str(membership.entity.id),
-                "role_id": str(membership.role.id),
+                "role_ids": role_ids,  # Changed to plural since it's a list
                 "valid_from": membership.valid_from,
                 "valid_until": membership.valid_until
             })
