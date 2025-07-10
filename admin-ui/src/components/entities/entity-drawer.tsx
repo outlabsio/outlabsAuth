@@ -172,7 +172,14 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
       queryClient.invalidateQueries({ queryKey: ["entities"] });
       toast.success(isEditMode ? "Entity updated successfully!" : "Entity created successfully!");
       if (!isEditMode) {
-        form.reset();
+        // Reset form values for create mode
+        form.setFieldValue("name", "");
+        form.setFieldValue("description", "");
+        form.setFieldValue("entity_class", EntityClass.STRUCTURAL);
+        form.setFieldValue("entity_type", "");
+        form.setFieldValue("parent_entity", "none");
+        form.setFieldValue("status", "active");
+        form.setFieldValue("max_members", "");
       }
       // Close drawer after a short delay to show success message
       setTimeout(() => {
@@ -272,18 +279,18 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
   // Update form when entity data is loaded (edit mode)
   useEffect(() => {
     if (isEditMode && entity && open) {
-      form.reset({
-        name: entity.name || "",
-        description: entity.description || "",
-        entity_class: entity.entity_class,
-        entity_type: entity.entity_type,
-        parent_entity: entity.parent_entity_id || "none",
-        status: entity.status || "active",
-        max_members: entity.max_members?.toString() || "",
-      });
+      // Set form values individually
+      form.setFieldValue("name", entity.name || "");
+      form.setFieldValue("description", entity.description || "");
+      form.setFieldValue("entity_class", entity.entity_class);
+      form.setFieldValue("entity_type", entity.entity_type);
+      form.setFieldValue("parent_entity", entity.parent_entity_id || "none");
+      form.setFieldValue("status", entity.status || "active");
+      form.setFieldValue("max_members", entity.max_members?.toString() || "");
+      
       setSelectedClass(entity.entity_class);
     }
-  }, [entity, isEditMode, open]);
+  }, [entity, isEditMode, open, form]);
 
   // Reset form when switching to create mode
   useEffect(() => {
@@ -293,18 +300,18 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
         ? defaultParentId 
         : defaultParentId || "none";
       
-      form.reset({
-        name: "",
-        description: "",
-        entity_class: EntityClass.STRUCTURAL,
-        entity_type: "", // No default, force user to select
-        parent_entity: parentValue,
-        status: "active",
-        max_members: "",
-      });
+      // Set form values individually
+      form.setFieldValue("name", "");
+      form.setFieldValue("description", "");
+      form.setFieldValue("entity_class", EntityClass.STRUCTURAL);
+      form.setFieldValue("entity_type", ""); // No default, force user to select
+      form.setFieldValue("parent_entity", parentValue);
+      form.setFieldValue("status", "active");
+      form.setFieldValue("max_members", "");
+      
       setSelectedClass(EntityClass.STRUCTURAL);
     }
-  }, [isEditMode, open, defaultParentId, potentialParents]);
+  }, [isEditMode, open, defaultParentId, potentialParents, form]);
 
   // Get available entity types based on selected class and parent
   const availableTypes = useMemo(() => {
