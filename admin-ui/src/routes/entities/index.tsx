@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { AppSidebar } from "@/components/app-sidebar";
 import { useContextStore } from "@/stores/context-store";
 import {
@@ -112,12 +112,16 @@ function EntityCard({
   onEdit: () => void;
   hasChildren: boolean;
 }) {
+  const navigate = useNavigate();
+  
+  const handleCardClick = () => {
+    // Always go to details page when clicking the card
+    navigate({ to: '/entities/$entityId', params: { entityId: entity.id } });
+  };
+  
   return (
     <Card className="group hover:shadow-md transition-shadow">
-      <CardHeader 
-        className="cursor-pointer" 
-        onClick={hasChildren ? onNavigate : undefined}
-      >
+      <CardHeader className="cursor-pointer" onClick={handleCardClick}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="text-2xl">
@@ -155,16 +159,28 @@ function EntityCard({
       <CardContent>
         <div className="flex items-center justify-between text-sm text-muted-foreground">
           <span>Created {new Date(entity.created_at).toLocaleDateString()}</span>
-          <Button 
-            variant="ghost" 
-            size="sm" 
-            onClick={(e) => {
-              e.stopPropagation();
-              onEdit();
-            }}
-          >
-            Edit
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button 
+              variant="ghost" 
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleCardClick();
+              }}
+            >
+              View Details
+            </Button>
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              onClick={(e) => {
+                e.stopPropagation();
+                onEdit();
+              }}
+            >
+              Edit
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>

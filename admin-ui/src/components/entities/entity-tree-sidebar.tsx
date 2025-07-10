@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { useContextStore } from "@/stores/context-store";
 import { authenticatedFetch } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -116,6 +117,7 @@ function EntityTreeNode({
   expandedNodes,
   onToggleExpand,
   matchedNodes,
+  navigate,
 }: {
   node: EntityTreeNodeData;
   level?: number;
@@ -125,6 +127,7 @@ function EntityTreeNode({
   expandedNodes: Set<string>;
   onToggleExpand: (nodeId: string) => void;
   matchedNodes: Set<string>;
+  navigate: any;
 }) {
   const queryClient = useQueryClient();
   const isExpanded = expandedNodes.has(node.id);
@@ -149,6 +152,8 @@ function EntityTreeNode({
   
   const handleSelect = () => {
     onSelectEntity(node.id);
+    // Navigate to entity details page
+    navigate({ to: '/entities/$entityId', params: { entityId: node.id } });
   };
   
   // Visual depth indicator
@@ -266,6 +271,7 @@ function EntityTreeNode({
                 expandedNodes={expandedNodes}
                 onToggleExpand={onToggleExpand}
                 matchedNodes={matchedNodes}
+                navigate={navigate}
               />
             ))}
           </div>
@@ -285,6 +291,7 @@ export function EntityTreeSidebar({
   const [searchTerm, setSearchTerm] = useState("");
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   
   // Determine the root based on context
   const contextRootId = isSystemContext() ? null : selectedOrganization?.id || null;
@@ -379,6 +386,8 @@ export function EntityTreeSidebar({
   
   const handleSelectRoot = () => {
     onSelectEntity(contextRootId);
+    // Navigate to entities list
+    navigate({ to: '/entities' });
   };
   
   // Expand all nodes when searching
