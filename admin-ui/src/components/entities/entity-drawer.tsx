@@ -340,7 +340,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
       if (parentEntity) {
         // Define hierarchy rules matching backend
         const hierarchyRules: Record<string, EntityType[]> = {
-          [EntityType.PLATFORM]: [EntityType.ORGANIZATION],
+          [EntityType.PLATFORM]: [EntityType.ORGANIZATION, EntityType.BRANCH, EntityType.TEAM],
           [EntityType.ORGANIZATION]: [EntityType.BRANCH, EntityType.TEAM],
           [EntityType.BRANCH]: [EntityType.TEAM],
           [EntityType.TEAM]: [], // Teams can't have structural children
@@ -356,7 +356,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
     }
     
     return structuralTypes;
-  }, [selectedClass, isEditMode, form.state.values.parent_entity, potentialParents, entities]);
+  }, [selectedClass, isEditMode, form.state.values.parent_entity, potentialParents, allEntities]);
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange} direction="right">

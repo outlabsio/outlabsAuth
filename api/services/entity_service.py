@@ -411,7 +411,7 @@ class EntityService:
         """
         # Define hierarchy rules
         hierarchy_rules = {
-            "platform": ["organization", "access_group"],
+            "platform": ["organization", "branch", "team", "access_group"],
             "organization": ["branch", "team", "access_group"],
             "branch": ["team", "access_group"],
             "team": ["access_group"],
