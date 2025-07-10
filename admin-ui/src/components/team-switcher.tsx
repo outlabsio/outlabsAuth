@@ -35,7 +35,9 @@ interface Organization {
 
 async function fetchTopLevelOrganizations(): Promise<Organization[]> {
   const response = await authenticatedFetch("/v1/entities/top-level-organizations");
-  return response.json();
+  const data = await response.json();
+  // Handle both array response and paginated response
+  return Array.isArray(data) ? data : (data.items || []);
 }
 
 const entityTypeIcons: Record<string, React.ElementType> = {

@@ -270,9 +270,13 @@ class EntityService:
         if params.status:
             query_conditions.append(EntityModel.status == params.status)
         
-        if params.parent_entity_id:
-            parent_id = PydanticObjectId(params.parent_entity_id)
-            query_conditions.append(EntityModel.parent_entity.id == parent_id)
+        if params.parent_entity_id is not None:
+            # Special case: "null" string means find entities with no parent
+            if params.parent_entity_id == "null":
+                query_conditions.append(EntityModel.parent_entity == None)
+            else:
+                parent_id = PydanticObjectId(params.parent_entity_id)
+                query_conditions.append(EntityModel.parent_entity.id == parent_id)
         
         if params.platform_id:
             platform_id = PydanticObjectId(params.platform_id)

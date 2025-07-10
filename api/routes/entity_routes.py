@@ -66,6 +66,78 @@ async def create_entity(
     )
 
 
+@router.get("/top-level-organizations", response_model=EntityListResponse)
+async def get_top_level_organizations(
+    status: Optional[str] = Query("active", description="Filter by status"),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Get all top-level organizations (root entities with type ORGANIZATION or PLATFORM)
+    
+    This is specifically for the context selector dropdown.
+    Returns organizations where the current user has membership or all if platform admin.
+    
+    Requires: Authenticated user
+    """
+    # For top-level entities, we want both platforms and organizations with no parent
+    # Don't filter by entity_type - we'll filter after
+    search_params = EntitySearchParams(
+        parent_entity_id="null",  # Special value to search for entities with no parent
+        status=status,
+        include_children=False,
+        page=1,
+        page_size=100  # Assuming max 100 top-level orgs
+    )
+    
+    entities, total = await EntityService.search_entities(search_params, current_user)
+    
+    # Convert to response models
+    items = []
+    for entity in entities:
+        # Filter to only organizations and platforms
+        if entity.entity_type not in ["organization", "platform"]:
+            continue
+            
+        # Check if user should see this entity
+        # Platform admins see all top-level entities
+        if current_user.is_platform_admin:
+            include_entity = True
+        else:
+            # Regular users only see entities they have membership in
+            membership = await EntityMembershipService.get_user_membership_in_entity(
+                str(current_user.id),
+                str(entity.id)
+            )
+            include_entity = bool(membership)
+        
+        if include_entity:
+            items.append(EntityResponse(
+                id=str(entity.id),
+                name=entity.name,
+                display_name=entity.name,  # Use name as display_name
+                description=entity.description,
+                entity_class=entity.entity_class.value.upper(),  # Convert enum to uppercase string
+                entity_type=entity.entity_type,
+                platform_id=str(entity.platform_id) if entity.platform_id else None,
+                parent_entity_id=str(entity.parent_entity.ref.id) if entity.parent_entity else None,
+                status=entity.status,
+                direct_permissions=entity.direct_permissions,
+                config=entity.metadata,  # Use metadata as config
+                valid_from=entity.valid_from,
+                valid_until=entity.valid_until,
+                created_at=entity.created_at,
+                updated_at=entity.updated_at
+            ))
+    
+    return EntityListResponse(
+        items=items,
+        total=len(items),
+        page=1,
+        page_size=100,
+        total_pages=1
+    )
+
+
 @router.get("/{entity_id}", response_model=EntityResponse)
 async def get_entity(
     entity_id: str,
@@ -147,64 +219,6 @@ async def delete_entity(
     return {"message": "Entity deleted successfully", "cascade": cascade}
 
 
-@router.get("/top-level-organizations", response_model=EntityListResponse)
-async def get_top_level_organizations(
-    status: Optional[str] = Query("active", description="Filter by status"),
-    current_user: UserModel = Depends(get_current_user)
-):
-    """
-    Get all top-level organizations (root entities with type ORGANIZATION)
-    
-    This is specifically for the context selector dropdown.
-    Returns organizations where the current user has membership.
-    
-    Requires: Authenticated user
-    """
-    # Build search params for top-level organizations
-    search_params = EntitySearchParams(
-        entity_type="ORGANIZATION",
-        parent_entity_id="null",  # Explicitly search for null parent
-        status=status,
-        include_children=False,
-        page=1,
-        page_size=100  # Assuming max 100 top-level orgs
-    )
-    
-    entities, total = await EntityService.search_entities(search_params, current_user)
-    
-    # Convert to response models
-    items = []
-    for entity in entities:
-        # Only include if user has membership
-        membership = await EntityMembershipService.get_user_membership_in_entity(
-            str(current_user.id),
-            str(entity.id)
-        )
-        if membership:
-            items.append(EntityResponse(
-                id=str(entity.id),
-                name=entity.name,
-                slug=entity.slug,
-                description=entity.description,
-                entity_class=entity.entity_class,
-                entity_type=entity.entity_type,
-                platform_id=entity.platform_id,
-                parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
-                status=entity.status,
-                valid_from=entity.valid_from,
-                valid_until=entity.valid_until,
-                metadata=entity.metadata,
-                created_at=entity.created_at,
-                updated_at=entity.updated_at
-            ))
-    
-    return EntityListResponse(
-        items=items,
-        total=len(items),
-        page=1,
-        page_size=100,
-        total_pages=1
-    )
 
 
 @router.get("/", response_model=EntityListResponse)
