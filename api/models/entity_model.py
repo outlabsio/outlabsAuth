@@ -48,7 +48,7 @@ class EntityModel(BaseDocument):
     
     # Classification
     entity_class: EntityClass
-    entity_type: EntityType
+    entity_type: str  # Flexible entity type
     
     # Hierarchy
     platform_id: str = Indexed()
@@ -67,7 +67,7 @@ class EntityModel(BaseDocument):
     
     # Configuration
     allowed_child_classes: List[EntityClass] = Field(default_factory=list)
-    allowed_child_types: List[EntityType] = Field(default_factory=list)
+    allowed_child_types: List[str] = Field(default_factory=list)  # Flexible child types
     max_members: Optional[int] = None
     
     @property
