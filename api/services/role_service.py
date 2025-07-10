@@ -196,7 +196,7 @@ class RoleService:
         
         # Invalidate permission cache for affected users
         if role.entity:
-            await permission_service.invalidate_entity_cache(str(role.entity.ref.id))
+            await permission_service.invalidate_entity_cache(str(role.entity.id))
         
         return role
     
@@ -241,7 +241,7 @@ class RoleService:
         
         # Invalidate permission cache
         if role.entity:
-            await permission_service.invalidate_entity_cache(str(role.entity.ref.id))
+            await permission_service.invalidate_entity_cache(str(role.entity.id))
         
         return True
     
@@ -303,6 +303,11 @@ class RoleService:
         # Apply pagination
         skip = (page - 1) * page_size
         roles = await roles_query.skip(skip).limit(page_size).to_list()
+        
+        # Fetch linked entities
+        for role in roles:
+            if role.entity:
+                await role.fetch_link(RoleModel.entity)
         
         return roles, total
     

@@ -101,8 +101,8 @@ const PERMISSION_GROUPS = {
     icon: Settings,
     color: "text-red-600 dark:text-red-400",
     permissions: [
-      { value: "system:read", label: "View System Settings", description: "View system configuration" },
-      { value: "system:manage", label: "Manage System", description: "Configure system settings" },
+      { value: "system:read_all", label: "View System Settings", description: "View system configuration" },
+      { value: "system:manage_all", label: "Manage System", description: "Full system administration" },
       { value: "platform:manage", label: "Platform Admin", description: "Full platform administration" },
     ]
   }

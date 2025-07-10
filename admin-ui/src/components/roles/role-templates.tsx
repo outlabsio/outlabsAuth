@@ -63,7 +63,7 @@ const ROLE_TEMPLATES: RoleTemplate[] = [
     icon: Eye,
     color: "text-blue-600 dark:text-blue-400",
     permissions: ["entity:read", "user:read", "role:read", "member:read"],
-    suitable_for: ["organization", "division", "team"],
+    suitable_for: ["organization", "branch", "team"],
   },
   {
     id: "editor",
@@ -77,7 +77,7 @@ const ROLE_TEMPLATES: RoleTemplate[] = [
       "user:read", "user:create", "user:manage",
       "role:read", "member:read", "member:manage"
     ],
-    suitable_for: ["organization", "division", "team"],
+    suitable_for: ["organization", "branch", "team"],
   },
   {
     id: "admin",
@@ -92,7 +92,7 @@ const ROLE_TEMPLATES: RoleTemplate[] = [
       "role:read", "role:create", "role:manage",
       "member:read", "member:manage"
     ],
-    suitable_for: ["organization", "division"],
+    suitable_for: ["organization", "branch"],
   },
   {
     id: "member_manager",
@@ -105,7 +105,7 @@ const ROLE_TEMPLATES: RoleTemplate[] = [
       "entity:read", "user:read", "user:create", "user:manage",
       "role:read", "member:read", "member:manage"
     ],
-    suitable_for: ["organization", "division", "team"],
+    suitable_for: ["organization", "branch", "team"],
   },
   {
     id: "project_lead",
@@ -118,7 +118,7 @@ const ROLE_TEMPLATES: RoleTemplate[] = [
       "entity:read", "entity:create", "entity:manage",
       "user:read", "role:read", "member:read", "member:manage"
     ],
-    suitable_for: ["division", "team"],
+    suitable_for: ["branch", "team"],
   },
   {
     id: "developer",
@@ -130,7 +130,7 @@ const ROLE_TEMPLATES: RoleTemplate[] = [
     permissions: [
       "entity:read", "entity:manage",
       "user:read", "role:read", "member:read",
-      "system:read"
+      "system:read_all"
     ],
     suitable_for: ["team"],
     is_premium: true,
@@ -143,7 +143,7 @@ const ROLE_TEMPLATES: RoleTemplate[] = [
     icon: FileText,
     color: "text-gray-600 dark:text-gray-400",
     permissions: [
-      "entity:read", "user:read", "role:read", "member:read", "system:read"
+      "entity:read", "user:read", "role:read", "member:read", "system:read_all"
     ],
     suitable_for: ["platform", "organization"],
     is_premium: true,
@@ -160,7 +160,7 @@ const ROLE_TEMPLATES: RoleTemplate[] = [
       "user:read", "user:create", "user:manage", "user:delete",
       "role:read", "role:create", "role:manage", "role:delete",
       "member:read", "member:manage",
-      "system:read", "system:manage", "platform:manage"
+      "system:read_all", "system:manage_all", "platform:manage"
     ],
     suitable_for: ["platform"],
     is_premium: true,

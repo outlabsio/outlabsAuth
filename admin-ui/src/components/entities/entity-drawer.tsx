@@ -265,8 +265,15 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
       max_members: "",
     },
     onSubmit: async ({ value }) => {
+      // Generate a system name from the display name
+      const systemName = value.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_|_$/g, '');
+      
       const data: any = {
-        name: value.name,
+        name: systemName,
+        display_name: value.name,
         description: value.description,
         entity_class: value.entity_class, // Already uppercase from enum
         entity_type: value.entity_type,
@@ -390,7 +397,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                     onBlur={field.handleBlur}
                   />
                   <p className="text-xs text-muted-foreground">
-                    A unique name to identify this entity
+                    A display name for this entity (system name will be generated automatically)
                   </p>
                   {field.state.meta.errors && (
                     <p className="text-sm text-destructive">{field.state.meta.errors.join(", ")}</p>

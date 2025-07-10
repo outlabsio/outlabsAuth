@@ -426,7 +426,7 @@ class PermissionManagementService:
             active_only=True
         )
         
-        available_names = {p.name for p in available}
+        available_names = {p['name'] if isinstance(p, dict) else p.name for p in available}
         
         # Add wildcard patterns
         available_names.add("*")

@@ -46,12 +46,14 @@ async def create_role(
         created_by=current_user
     )
     
-    # Get entity name if applicable
+    # Get entity name and ID if applicable
     entity_name = None
+    entity_id = None
     if role.entity:
         entity = await role.entity.fetch()
         if entity:
             entity_name = entity.display_name
+            entity_id = str(entity.id)
     
     return RoleResponse(
         id=str(role.id),
@@ -59,7 +61,7 @@ async def create_role(
         display_name=role.display_name,
         description=role.description,
         permissions=role.permissions,
-        entity_id=str(role.entity.ref.id) if role.entity else None,
+        entity_id=entity_id,
         entity_name=entity_name,
         assignable_at_types=role.assignable_at_types,
         is_system_role=role.is_system_role,
@@ -78,12 +80,14 @@ async def get_role(role_id: str):
     """
     role = await RoleService.get_role(role_id)
     
-    # Get entity name if applicable
+    # Get entity name and ID if applicable
     entity_name = None
+    entity_id = None
     if role.entity:
         entity = await role.entity.fetch()
         if entity:
             entity_name = entity.display_name
+            entity_id = str(entity.id)
     
     return RoleResponse(
         id=str(role.id),
@@ -91,7 +95,7 @@ async def get_role(role_id: str):
         display_name=role.display_name,
         description=role.description,
         permissions=role.permissions,
-        entity_id=str(role.entity.ref.id) if role.entity else None,
+        entity_id=entity_id,
         entity_name=entity_name,
         assignable_at_types=role.assignable_at_types,
         is_system_role=role.is_system_role,
@@ -121,12 +125,14 @@ async def update_role(
         updated_by=current_user
     )
     
-    # Get entity name if applicable
+    # Get entity name and ID if applicable
     entity_name = None
+    entity_id = None
     if role.entity:
         entity = await role.entity.fetch()
         if entity:
             entity_name = entity.display_name
+            entity_id = str(entity.id)
     
     return RoleResponse(
         id=str(role.id),
@@ -134,7 +140,7 @@ async def update_role(
         display_name=role.display_name,
         description=role.description,
         permissions=role.permissions,
-        entity_id=str(role.entity.ref.id) if role.entity else None,
+        entity_id=entity_id,
         entity_name=entity_name,
         assignable_at_types=role.assignable_at_types,
         is_system_role=role.is_system_role,
@@ -184,13 +190,14 @@ async def search_roles(
     # Convert to response models
     items = []
     for role in roles:
-        # Get entity name if applicable
+        # Get entity name and ID if applicable
         entity_name = None
-        if role.entity_id:
-            from api.models import EntityModel
-            entity = await role.entity.fetch() if role.entity else None
+        entity_id = None
+        if role.entity:
+            entity = await role.entity.fetch() if hasattr(role.entity, 'fetch') else role.entity
             if entity:
-                entity_name = entity.display_name
+                entity_name = entity.name
+                entity_id = str(entity.id)
         
         items.append(RoleResponse(
             id=str(role.id),
@@ -198,7 +205,7 @@ async def search_roles(
             display_name=role.display_name,
             description=role.description,
             permissions=role.permissions,
-            entity_id=str(role.entity.ref.id) if role.entity else None,
+            entity_id=entity_id,
             entity_name=entity_name,
             assignable_at_types=role.assignable_at_types,
             is_system_role=role.is_system_role,
@@ -243,12 +250,14 @@ async def get_assignable_roles(
     # Convert to response models
     response_roles = []
     for role in roles:
-        # Get entity name if applicable
+        # Get entity name and ID if applicable
         entity_name = None
+        entity_id = None
         if role.entity:
             role_entity = await role.entity.fetch()
             if role_entity:
                 entity_name = role_entity.display_name
+                entity_id = str(role_entity.id)
         
         response_roles.append(RoleResponse(
             id=str(role.id),
@@ -256,7 +265,7 @@ async def get_assignable_roles(
             display_name=role.display_name,
             description=role.description,
             permissions=role.permissions,
-            entity_id=str(role.entity.ref.id) if role.entity else None,
+            entity_id=entity_id,
             entity_name=entity_name,
             assignable_at_types=role.assignable_at_types,
             is_system_role=role.is_system_role,
@@ -294,7 +303,7 @@ async def create_default_roles(
             display_name=role.display_name,
             description=role.description,
             permissions=role.permissions,
-            entity_id=str(role.entity.ref.id) if role.entity else None,
+            entity_id=str(entity.id) if entity else None,
             entity_name=entity_name,
             assignable_at_types=role.assignable_at_types,
             is_system_role=role.is_system_role,

@@ -14,6 +14,8 @@ from api.services.auth_service import AuthService
 from api.services.entity_service import EntityService
 from api.services.role_service import RoleService
 from api.services.entity_membership_service import EntityMembershipService
+from api.services.permission_management_service import permission_management_service
+from api.models import PermissionModel
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +177,10 @@ class SystemService:
         
         logger.info("Created system roles")
         
+        # Step 2.5: Create common custom permissions
+        await SystemService._create_custom_permissions(root_entity)
+        logger.info("Created custom permissions")
+        
         # Step 3: Create the superuser
         # Hash the password first
         auth_service = AuthService()
@@ -326,6 +332,207 @@ class SystemService:
             "deleted": deleted_counts,
             "message": "System has been reset. Please reinitialize."
         }
+    
+    @staticmethod
+    async def _create_custom_permissions(root_entity: EntityModel):
+        """
+        Create common custom permissions during system initialization
+        
+        Args:
+            root_entity: The root platform entity
+        """
+        # Define common custom permissions that extend beyond system permissions
+        custom_permissions = [
+            # Organization-level permissions
+            {
+                "name": "organization:manage_all",
+                "display_name": "Manage All Organizations",
+                "description": "Full control over all organizations in the platform",
+                "resource": "organization",
+                "action": "manage_all",
+                "tags": ["platform", "organization"]
+            },
+            {
+                "name": "organization:create",
+                "display_name": "Create Organizations",
+                "description": "Create new organizations",
+                "resource": "organization",
+                "action": "create",
+                "tags": ["platform", "organization"]
+            },
+            {
+                "name": "organization:read",
+                "display_name": "View Organizations",
+                "description": "View organization details",
+                "resource": "organization",
+                "action": "read",
+                "tags": ["organization"]
+            },
+            {
+                "name": "organization:update",
+                "display_name": "Update Organizations",
+                "description": "Update organization settings",
+                "resource": "organization",
+                "action": "update",
+                "tags": ["organization"]
+            },
+            {
+                "name": "organization:delete",
+                "display_name": "Delete Organizations",
+                "description": "Remove organizations",
+                "resource": "organization",
+                "action": "delete",
+                "tags": ["platform", "organization"]
+            },
+            
+            # Team/Branch permissions
+            {
+                "name": "team:create",
+                "display_name": "Create Teams",
+                "description": "Create new teams or branches",
+                "resource": "team",
+                "action": "create",
+                "tags": ["team", "branch"]
+            },
+            {
+                "name": "team:manage",
+                "display_name": "Manage Teams",
+                "description": "Manage team settings and members",
+                "resource": "team",
+                "action": "manage",
+                "tags": ["team", "branch"]
+            },
+            {
+                "name": "team:read",
+                "display_name": "View Teams",
+                "description": "View team information",
+                "resource": "team",
+                "action": "read",
+                "tags": ["team", "branch"]
+            },
+            
+            # Project/Resource permissions (for future use)
+            {
+                "name": "project:create",
+                "display_name": "Create Projects",
+                "description": "Create new projects",
+                "resource": "project",
+                "action": "create",
+                "tags": ["project"]
+            },
+            {
+                "name": "project:manage",
+                "display_name": "Manage Projects",
+                "description": "Full project management",
+                "resource": "project",
+                "action": "manage",
+                "tags": ["project"]
+            },
+            {
+                "name": "project:read",
+                "display_name": "View Projects",
+                "description": "View project details",
+                "resource": "project",
+                "action": "read",
+                "tags": ["project"]
+            },
+            
+            # Analytics/Reporting permissions
+            {
+                "name": "analytics:view",
+                "display_name": "View Analytics",
+                "description": "Access analytics and reports",
+                "resource": "analytics",
+                "action": "view",
+                "tags": ["analytics", "reporting"]
+            },
+            {
+                "name": "analytics:export",
+                "display_name": "Export Analytics",
+                "description": "Export analytics data",
+                "resource": "analytics",
+                "action": "export",
+                "tags": ["analytics", "reporting"]
+            },
+            
+            # Audit/Compliance permissions
+            {
+                "name": "audit:view",
+                "display_name": "View Audit Logs",
+                "description": "Access audit logs and compliance data",
+                "resource": "audit",
+                "action": "view",
+                "tags": ["audit", "compliance"]
+            },
+            {
+                "name": "audit:export",
+                "display_name": "Export Audit Data",
+                "description": "Export audit logs",
+                "resource": "audit",
+                "action": "export",
+                "tags": ["audit", "compliance"]
+            },
+            
+            # API/Integration permissions
+            {
+                "name": "api:manage",
+                "display_name": "Manage API Access",
+                "description": "Manage API keys and integrations",
+                "resource": "api",
+                "action": "manage",
+                "tags": ["api", "integration"]
+            },
+            {
+                "name": "api:create",
+                "display_name": "Create API Keys",
+                "description": "Create new API keys",
+                "resource": "api",
+                "action": "create",
+                "tags": ["api"]
+            },
+            
+            # Settings/Configuration permissions
+            {
+                "name": "settings:manage",
+                "display_name": "Manage Settings",
+                "description": "Manage entity settings and configuration",
+                "resource": "settings",
+                "action": "manage",
+                "tags": ["settings", "configuration"]
+            },
+            {
+                "name": "settings:view",
+                "display_name": "View Settings",
+                "description": "View entity settings",
+                "resource": "settings",
+                "action": "view",
+                "tags": ["settings"]
+            }
+        ]
+        
+        # Create each custom permission
+        for perm_data in custom_permissions:
+            try:
+                permission = PermissionModel(
+                    name=perm_data["name"],
+                    display_name=perm_data["display_name"],
+                    description=perm_data["description"],
+                    resource=perm_data["resource"],
+                    action=perm_data["action"],
+                    entity_id=None,  # Global permissions
+                    created_by=None,  # System-created
+                    tags=perm_data.get("tags", []),
+                    is_system=False,  # Custom permissions, not system
+                    is_active=True,
+                    metadata={
+                        "created_during_init": True,
+                        "is_common": True
+                    }
+                )
+                await permission.save()
+                logger.debug(f"Created custom permission: {permission.name}")
+            except Exception as e:
+                logger.warning(f"Failed to create permission {perm_data['name']}: {str(e)}")
 
 
 # Global instance
