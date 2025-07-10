@@ -3,7 +3,7 @@ Entity Service
 Handles entity CRUD operations and hierarchy management
 """
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple
 from beanie import PydanticObjectId
 from beanie.operators import In, Or, And
 from fastapi import HTTPException, status
@@ -197,9 +197,10 @@ class EntityService:
                 detail="Cannot delete the root platform entity"
             )
         
-        # Check for children
+        # Check for active children only
         children_count = await EntityModel.find(
-            EntityModel.parent_entity.id == entity.id
+            EntityModel.parent_entity.id == entity.id,
+            EntityModel.status == "active"
         ).count()
         
         if children_count > 0 and not cascade:
@@ -209,9 +210,10 @@ class EntityService:
             )
         
         if cascade:
-            # Recursively delete children
+            # Recursively delete active children only
             children = await EntityModel.find(
-                EntityModel.parent_entity.id == entity.id
+                EntityModel.parent_entity.id == entity.id,
+                EntityModel.status == "active"
             ).to_list()
             
             for child in children:
@@ -235,15 +237,13 @@ class EntityService:
     
     @staticmethod
     async def search_entities(
-        params: EntitySearchParams,
-        user: Optional[UserModel] = None
+        params: EntitySearchParams
     ) -> Tuple[List[EntityModel], int]:
         """
         Search entities with filtering and pagination
         
         Args:
             params: Search parameters
-            user: User performing search (for permission filtering)
         
         Returns:
             Tuple of (entities, total_count)
@@ -432,8 +432,7 @@ class EntityService:
     @staticmethod
     async def validate_entity_access(
         entity_id: str,
-        user: UserModel,
-        required_permission: str
+        user: UserModel
     ) -> bool:
         """
         Check if user has permission on entity

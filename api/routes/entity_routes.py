@@ -89,7 +89,7 @@ async def get_top_level_organizations(
         page_size=100  # Assuming max 100 top-level orgs
     )
     
-    entities, total = await EntityService.search_entities(search_params, current_user)
+    entities, total = await EntityService.search_entities(search_params)
     
     # Convert to response models
     items = []
@@ -252,7 +252,7 @@ async def search_entities(
         page_size=page_size
     )
     
-    entities, total = await EntityService.search_entities(search_params, current_user)
+    entities, total = await EntityService.search_entities(search_params)
     
     # Convert to response models
     items = []
