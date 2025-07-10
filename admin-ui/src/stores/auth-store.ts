@@ -49,6 +49,8 @@ export const useAuthStore = create<AuthState>()(
 
       // Login action
       login: async (tokens: AuthTokens, user?: User) => {
+        console.log("🔐 AUTH STORE: Login called with tokens:", !!tokens.access_token, !!tokens.refresh_token);
+
         set({
           tokens,
           isAuthenticated: true,
@@ -57,8 +59,10 @@ export const useAuthStore = create<AuthState>()(
 
         // If user is provided, set it, otherwise fetch it
         if (user) {
+          console.log("🔐 AUTH STORE: Setting user from login data:", user.email);
           set({ user });
         } else {
+          console.log("🔐 AUTH STORE: Fetching user data from /auth/me");
           try {
             const response = await fetch(apiUrl("/auth/me"), {
               headers: {
@@ -68,16 +72,20 @@ export const useAuthStore = create<AuthState>()(
 
             if (response.ok) {
               const userData = await response.json();
+              console.log("🔐 AUTH STORE: User data fetched successfully:", userData.email);
               set({ user: userData });
+            } else {
+              console.error("🔐 AUTH STORE: Failed to fetch user data:", response.status, response.statusText);
             }
           } catch (error) {
-            console.error("Failed to fetch user data:", error);
+            console.error("🔐 AUTH STORE: Error fetching user data:", error);
           }
         }
       },
 
       // Logout action
       logout: () => {
+        console.log("🔐 AUTH STORE: Logout called");
         const currentTokens = get().tokens;
 
         // Clear state first
@@ -90,12 +98,15 @@ export const useAuthStore = create<AuthState>()(
 
         // Clear persisted data
         localStorage.removeItem("auth-storage");
+        console.log("🔐 AUTH STORE: Cleared localStorage");
 
         // Clear organization context
         useContextStore.getState().clearContext();
+        console.log("🔐 AUTH STORE: Cleared context");
 
         // Optionally call logout endpoint to invalidate tokens on server
         if (currentTokens?.refresh_token) {
+          console.log("🔐 AUTH STORE: Calling server logout endpoint");
           fetch(apiUrl("/auth/logout"), {
             method: "POST",
             headers: {
@@ -105,12 +116,17 @@ export const useAuthStore = create<AuthState>()(
             body: JSON.stringify({
               refresh_token: currentTokens.refresh_token,
             }),
-          }).catch(() => {
-            // Ignore errors from logout endpoint
-          });
+          })
+            .then((response) => {
+              console.log("🔐 AUTH STORE: Server logout response:", response.status);
+            })
+            .catch((error) => {
+              console.log("🔐 AUTH STORE: Server logout error (ignored):", error);
+            });
         }
 
         // Redirect to login
+        console.log("🔐 AUTH STORE: Redirecting to login");
         window.location.href = "/login";
       },
 
@@ -118,18 +134,26 @@ export const useAuthStore = create<AuthState>()(
       refreshTokens: async () => {
         const { tokens, isRefreshing } = get();
 
+        console.log("🔄 AUTH STORE: refreshTokens called");
+        console.log("🔄 AUTH STORE: Current refresh state:", isRefreshing);
+        console.log("🔄 AUTH STORE: Has refresh token:", !!tokens?.refresh_token);
+
         // Prevent multiple simultaneous refresh attempts
         if (isRefreshing) {
+          console.log("🔄 AUTH STORE: Already refreshing, throwing error");
           throw new Error("Token refresh already in progress");
         }
 
         if (!tokens?.refresh_token) {
+          console.log("🔄 AUTH STORE: No refresh token available, throwing error");
           throw new Error("No refresh token available");
         }
 
+        console.log("🔄 AUTH STORE: Setting isRefreshing to true");
         set({ isRefreshing: true });
 
         try {
+          console.log("🔄 AUTH STORE: Making refresh request to /auth/refresh");
           const response = await fetch(apiUrl("/auth/refresh"), {
             method: "POST",
             headers: {
@@ -140,22 +164,35 @@ export const useAuthStore = create<AuthState>()(
             }),
           });
 
+          console.log("🔄 AUTH STORE: Refresh response status:", response.status);
+
           if (response.ok) {
             const newTokens: AuthTokens = await response.json();
+            console.log("🔄 AUTH STORE: New tokens received:", !!newTokens.access_token, !!newTokens.refresh_token);
+
             set({
               tokens: newTokens,
               isAuthenticated: true,
               isRefreshing: false,
             });
+
+            console.log("🔄 AUTH STORE: Tokens updated successfully");
           } else {
+            console.error("🔄 AUTH STORE: Refresh failed with status:", response.status);
+            const errorData = await response.json().catch(() => null);
+            console.error("🔄 AUTH STORE: Refresh error data:", errorData);
+
             // Refresh failed, logout
             set({ isRefreshing: false });
+            console.log("🔄 AUTH STORE: Calling logout due to refresh failure");
             get().logout();
             throw new Error("Token refresh failed");
           }
         } catch (error) {
+          console.error("🔄 AUTH STORE: Refresh error:", error);
           // Refresh failed, logout
           set({ isRefreshing: false });
+          console.log("🔄 AUTH STORE: Calling logout due to refresh error");
           get().logout();
           throw error;
         }
@@ -163,11 +200,13 @@ export const useAuthStore = create<AuthState>()(
 
       // Set user data
       setUser: (user: User) => {
+        console.log("🔐 AUTH STORE: setUser called:", user.email);
         set({ user });
       },
 
       // Clear auth data (without redirect)
       clearAuth: () => {
+        console.log("🔐 AUTH STORE: clearAuth called");
         set({
           user: null,
           tokens: null,
@@ -179,13 +218,17 @@ export const useAuthStore = create<AuthState>()(
       // Get access token
       getAccessToken: () => {
         const tokens = get().tokens;
-        return tokens?.access_token || null;
+        const token = tokens?.access_token || null;
+        console.log("🔐 AUTH STORE: getAccessToken called, has token:", !!token);
+        return token;
       },
 
       // Get refresh token
       getRefreshToken: () => {
         const tokens = get().tokens;
-        return tokens?.refresh_token || null;
+        const token = tokens?.refresh_token || null;
+        console.log("🔐 AUTH STORE: getRefreshToken called, has token:", !!token);
+        return token;
       },
     }),
     {

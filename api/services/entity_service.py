@@ -40,7 +40,7 @@ class EntityService:
         # Validate parent entity if provided
         parent_entity = None
         if entity_data.parent_entity_id:
-            parent_entity = await EntityModel.get(entity_data.parent_entity_id)
+            parent_entity = await EntityModel.get(entity_data.parent_entity_id, fetch_links=True)
             if not parent_entity:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -128,7 +128,7 @@ class EntityService:
         Raises:
             HTTPException: If entity not found
         """
-        entity = await EntityModel.get(entity_id)
+        entity = await EntityModel.get(entity_id, fetch_links=True)
         if not entity:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -213,7 +213,8 @@ class EntityService:
             # Recursively delete active children only
             children = await EntityModel.find(
                 EntityModel.parent_entity.id == entity.id,
-                EntityModel.status == "active"
+                EntityModel.status == "active",
+                fetch_links=True
             ).to_list()
             
             for child in children:
@@ -284,9 +285,9 @@ class EntityService:
         
         # Combine conditions
         if query_conditions:
-            query = EntityModel.find(And(*query_conditions))
+            query = EntityModel.find(And(*query_conditions), fetch_links=True)
         else:
-            query = EntityModel.find_all()
+            query = EntityModel.find_all(fetch_links=True)
         
         # Get total count
         total = await query.count()
@@ -321,7 +322,8 @@ class EntityService:
             # Get children
             children = await EntityModel.find(
                 EntityModel.parent_entity.id == entity.id,
-                EntityModel.status == "active"
+                EntityModel.status == "active",
+                fetch_links=True
             ).to_list()
             
             # Get member count
@@ -370,7 +372,8 @@ class EntityService:
         # Traverse up to root
         current = entity
         while current.parent_entity:
-            parent = await current.parent_entity.fetch()
+            # Get parent with its links populated
+            parent = await EntityModel.get(current.parent_entity.id, fetch_links=True)
             if parent:
                 path.insert(0, parent)
                 current = parent

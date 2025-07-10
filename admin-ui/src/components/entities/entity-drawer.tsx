@@ -477,8 +477,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
               )}
             </form.Field>
 
-            {selectedClass === EntityClass.STRUCTURAL && (
-              <form.Field name="parent_entity">
+            <form.Field name="parent_entity">
                 {(field) => {
                   const selectedParent = field.state.value && field.state.value !== "none" 
                     ? potentialParents.find(p => p.id === field.state.value)
@@ -486,7 +485,11 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                   
                   return (
                     <div className="space-y-2">
-                      <Label htmlFor="parent_entity">Parent Entity</Label>
+                      <Label htmlFor="parent_entity">
+                        {selectedClass === EntityClass.ACCESS_GROUP 
+                          ? "Assign to Entity" 
+                          : "Parent Entity"}
+                      </Label>
                       <Popover open={parentEntityOpen} onOpenChange={setParentEntityOpen}>
                         <PopoverTrigger asChild>
                           <Button
@@ -581,15 +584,20 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                         </PopoverContent>
                       </Popover>
                       <p className="text-xs text-muted-foreground">
-                        {defaultParentId && !isEditMode 
-                          ? "Parent selection is limited to the current context and its ancestors"
-                          : "Create a hierarchy by selecting a parent entity"}
+                        {selectedClass === EntityClass.ACCESS_GROUP ? (
+                          defaultParentId && !isEditMode 
+                            ? "Access groups will be assigned to the current context"
+                            : "Access groups are assigned to structural entities for organization"
+                        ) : (
+                          defaultParentId && !isEditMode 
+                            ? "Parent selection is limited to the current context and its ancestors"
+                            : "Create a hierarchy by selecting a parent entity"
+                        )}
                       </p>
                     </div>
                   );
                 }}
               </form.Field>
-            )}
 
             <form.Field name="max_members">
               {(field) => (

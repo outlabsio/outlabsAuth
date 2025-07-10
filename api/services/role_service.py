@@ -195,8 +195,8 @@ class RoleService:
         await role.save()
         
         # Invalidate permission cache for affected users
-        if role.entity_id:
-            await permission_service.invalidate_entity_cache(str(role.entity_id))
+        if role.entity:
+            await permission_service.invalidate_entity_cache(str(role.entity.ref.id))
         
         return role
     
@@ -240,8 +240,8 @@ class RoleService:
         await role.delete()
         
         # Invalidate permission cache
-        if role.entity_id:
-            await permission_service.invalidate_entity_cache(str(role.entity_id))
+        if role.entity:
+            await permission_service.invalidate_entity_cache(str(role.entity.ref.id))
         
         return True
     
@@ -272,7 +272,7 @@ class RoleService:
         query_conditions = []
         
         if entity_id:
-            query_conditions.append(RoleModel.entity_id == PydanticObjectId(entity_id))
+            query_conditions.append(RoleModel.entity.id == PydanticObjectId(entity_id))
         
         if query:
             query_conditions.append(
@@ -334,7 +334,7 @@ class RoleService:
         while current_entity:
             # Get roles from current entity
             entity_roles = await RoleModel.find(
-                RoleModel.entity_id == current_entity.id,
+                RoleModel.entity.id == current_entity.id,
                 Or(
                     RoleModel.assignable_at_types == [],
                     In(entity_type, RoleModel.assignable_at_types)

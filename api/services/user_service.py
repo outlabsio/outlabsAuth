@@ -689,7 +689,7 @@ class UserService:
             # Assign roles
             for role_id in assignment.get("role_ids", []):
                 role = await RoleModel.get(role_id)
-                if role and role.entity_id == str(entity.id):
+                if role and role.entity and str(role.entity.ref.id) == str(entity.id):
                     membership.roles.append(role)
             
             await membership.save()
@@ -753,7 +753,7 @@ class UserService:
             # Assign roles
             for role_id in assignment.get("role_ids", []):
                 role = await RoleModel.get(role_id)
-                if role and role.entity_id == str(entity.id):
+                if role and role.entity and str(role.entity.ref.id) == str(entity.id):
                     membership.roles.append(role)
             
             await membership.save()

@@ -237,8 +237,8 @@ class AuthHelper:
                 global_icon = "🌍" if role.is_global else "🏢"
                 system_icon = "⚙️" if role.is_system_role else "👤"
                 entity_info = ""
-                if role.entity_id:
-                    entity = await EntityModel.get(role.entity_id)
+                if role.entity:
+                    entity = await role.entity.fetch()
                     entity_info = f" (entity: {entity.name})" if entity else " (entity: unknown)"
                     
                 print(f"  {global_icon} {system_icon} {role.name:<20} - {role.display_name}{entity_info}")
