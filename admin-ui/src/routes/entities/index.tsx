@@ -27,12 +27,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Search, Building2, ChevronRight, FolderOpen } from "lucide-react";
+import { Plus, Search, Building2, ChevronRight, FolderOpen, FolderTree } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { authenticatedFetch } from "@/lib/auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EntityDrawer } from "@/components/entities/entity-drawer";
+import { EntityTreeSidebar } from "@/components/entities/entity-tree-sidebar";
 import { requireAuth } from "@/lib/route-guards";
+import { cn } from "@/lib/utils";
 import { 
   Entity, 
   EntityClass, 
@@ -177,7 +179,8 @@ function EntitiesContent({
   typeFilter,
   currentEntityId,
   childCounts,
-  contextRootId
+  contextRootId,
+  treeOpen
 }: { 
   onEditEntity: (entity: Entity) => void;
   onNavigateToEntity: (entityId: string | null) => void;
@@ -353,6 +356,7 @@ function EntitiesContent({
                     onNavigate={() => onNavigateToEntity(entity.id)}
                     onEdit={() => onEditEntity(entity)}
                     hasChildren={childCounts.get(entity.id) > 0}
+                    isInTreeView={treeOpen}
                   />
                 ))}
               </div>
@@ -373,6 +377,7 @@ function EntitiesContent({
                     onNavigate={() => onNavigateToEntity(entity.id)}
                     onEdit={() => onEditEntity(entity)}
                     hasChildren={childCounts.get(entity.id) > 0}
+                    isInTreeView={treeOpen}
                   />
                 ))}
               </div>
@@ -392,11 +397,25 @@ function Entities() {
   const [searchQuery, setSearchQuery] = useState("");
   const [classFilter, setClassFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [treeOpen, setTreeOpen] = useState(false);
   
   // Start at the selected organization context, or null for system context
   const contextRootId = isSystemContext() ? null : selectedOrganization?.id || null;
   const [currentEntityId, setCurrentEntityId] = useState<string | null>(contextRootId);
   const [childCounts] = useState(new Map<string, number>());
+  
+  // Keyboard shortcut for tree view (Cmd/Ctrl + K)
+  useEffect(() => {
+    const handleKeyPress = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setTreeOpen(prev => !prev);
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, []);
   
   // Reset current entity when context changes
   useEffect(() => {
@@ -489,10 +508,23 @@ function Entities() {
                   )}
                 </p>
               </div>
-              <Button onClick={handleCreateEntity}>
-                <Plus className="mr-2 h-4 w-4" />
-                Create Entity
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button 
+                  variant="outline" 
+                  onClick={() => setTreeOpen(true)}
+                  className="relative"
+                >
+                  <FolderTree className="mr-2 h-4 w-4" />
+                  Tree View
+                  <kbd className="ml-2 pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground opacity-100">
+                    <span className="text-xs">⌘</span>K
+                  </kbd>
+                </Button>
+                <Button onClick={handleCreateEntity}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Create Entity
+                </Button>
+              </div>
             </div>
             
             {/* Filters */}
@@ -581,6 +613,13 @@ function Entities() {
         mode={drawerMode}
         entity={selectedEntity}
         defaultParentId={currentEntityId}
+      />
+      
+      <EntityTreeSidebar
+        open={treeOpen}
+        onOpenChange={setTreeOpen}
+        currentEntityId={currentEntityId}
+        onSelectEntity={handleNavigateToEntity}
       />
     </SidebarProvider>
   );

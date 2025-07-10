@@ -15,7 +15,8 @@
       "Bash(rm:*)",
       "Bash(find:*)",
       "Bash(ls:*)",
-      "Bash(test:*)"
+      "Bash(test:*)",
+      "Bash(bun:*)"
     ],
     "deny": []
   }
