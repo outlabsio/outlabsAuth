@@ -99,6 +99,9 @@ export function UserDrawer({ open, onOpenChange, mode, user, defaultEntityId }: 
   const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
   const [entitySearchOpen, setEntitySearchOpen] = useState(false);
   const [roleSearchOpen, setRoleSearchOpen] = useState(false);
+  
+  // Use a key to force form recreation when user changes
+  const formKey = isEditMode && user ? `edit-${user.id}` : 'create';
 
   // Fetch entities and roles
   const { data: entities = [] } = useQuery({
@@ -107,11 +110,8 @@ export function UserDrawer({ open, onOpenChange, mode, user, defaultEntityId }: 
     enabled: open,
   });
 
-  const { data: roles = [] } = useQuery({
-    queryKey: ["roles-all"],
-    queryFn: fetchRoles,
-    enabled: open,
-  });
+  // Temporarily disable roles fetching until backend is fixed
+  const roles: Role[] = [];
 
   // Group roles by entity
   const rolesByEntity = roles.reduce((acc, role) => {
@@ -137,15 +137,25 @@ export function UserDrawer({ open, onOpenChange, mode, user, defaultEntityId }: 
     },
   });
 
+  // Set initial values based on mode and user data
+  const initialValues = isEditMode && user ? {
+    email: user.email || "",
+    first_name: user.profile?.first_name || "",
+    last_name: user.profile?.last_name || "",
+    password: "",
+    is_active: user.is_active ?? true,
+    send_invite: false,
+  } : {
+    email: "",
+    first_name: "",
+    last_name: "",
+    password: "",
+    is_active: true,
+    send_invite: true,
+  };
+
   const form = useForm({
-    defaultValues: {
-      email: "",
-      first_name: "",
-      last_name: "",
-      password: "",
-      is_active: true,
-      send_invite: !isEditMode,
-    },
+    defaultValues: initialValues,
     onSubmit: async ({ value }) => {
       const data: any = {
         email: value.email,
@@ -188,19 +198,12 @@ export function UserDrawer({ open, onOpenChange, mode, user, defaultEntityId }: 
     },
   });
 
-  // Update form when user data is loaded (edit mode)
+  // Update selected entities when user data is loaded (edit mode)
   useEffect(() => {
     if (isEditMode && user && open) {
       console.log("UserDrawer: Editing user", user);
-      form.reset({
-        email: user.email || "",
-        first_name: user.profile?.first_name || "",
-        last_name: user.profile?.last_name || "",
-        password: "", // Don't populate password
-        is_active: user.is_active ?? true,
-        is_platform_admin: false,
-        send_invite: false,
-      });
+      console.log("User profile:", user.profile);
+      
       setSelectedEntities(user.entities?.map((e: any) => e.id) || []);
       // Extract all roles from all entities
       const allRoles = user.entities?.flatMap((e: any) => e.roles?.map((r: any) => r.id) || []) || [];
@@ -257,6 +260,7 @@ export function UserDrawer({ open, onOpenChange, mode, user, defaultEntityId }: 
 
         <div className="overflow-y-auto flex-1 px-6">
           <form
+            key={formKey}
             onSubmit={(e) => {
               e.preventDefault();
               e.stopPropagation();
