@@ -241,18 +241,20 @@ class EntityMembershipService:
         if not include_inactive:
             query_conditions.append(EntityMembershipModel.status == "active")
         
-        query = EntityMembershipModel.find(And(*query_conditions))
+        # Get total count first
+        total = await EntityMembershipModel.find(And(*query_conditions)).count()
         
-        # Get total count
-        total = await query.count()
-        
-        # Apply pagination
+        # Apply pagination with fetch_links
         skip = (page - 1) * page_size
-        memberships = await query.skip(skip).limit(page_size).fetch_links().to_list()
+        memberships = await EntityMembershipModel.find(
+            And(*query_conditions),
+            fetch_links=True
+        ).skip(skip).limit(page_size).to_list()
         
         # Enrich with user and role data
         enriched_members = []
         for membership in memberships:
+            # Links should already be fetched
             user = membership.user
             entity = membership.entity
             
@@ -261,11 +263,13 @@ class EntityMembershipService:
                 role_info = []
                 if membership.roles:
                     for role in membership.roles:
-                        role_info.append({
-                            "id": str(role.id),
-                            "name": role.display_name,
-                            "permissions": role.permissions
-                        })
+                        # Since we used fetch_links=True, roles should be populated
+                        if role:
+                            role_info.append({
+                                "id": str(role.id),
+                                "name": role.name,
+                                "permissions": role.permissions
+                            })
                 
                 enriched_members.append({
                     "id": str(membership.id),
@@ -273,7 +277,7 @@ class EntityMembershipService:
                     "user_email": user.email,
                     "user_name": f"{user.profile.first_name} {user.profile.last_name}" if user.profile else user.email,
                     "entity_id": str(entity.id),
-                    "entity_name": entity.display_name,
+                    "entity_name": entity.name,
                     "roles": role_info,  # Now it's a list of roles
                     "status": membership.status,
                     "valid_from": membership.valid_from,
@@ -344,7 +348,7 @@ class EntityMembershipService:
                 enriched_memberships.append({
                     "id": str(membership.id),
                     "entity_id": str(entity.id),
-                    "entity_name": entity.display_name,
+                    "entity_name": entity.name,
                     "entity_type": entity.entity_type,
                     "entity_class": entity.entity_class,
                     "entity_path": path,

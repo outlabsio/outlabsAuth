@@ -59,7 +59,8 @@ import {
   CalendarOff,
   UserCheck,
   UserX,
-  AlertCircle
+  AlertCircle,
+  Users
 } from "lucide-react";
 import { format } from "date-fns";
 
@@ -113,9 +114,11 @@ async function fetchEntityMembers(entityId: string, includeInactive: boolean = f
 }
 
 async function fetchAvailableRoles() {
-  const response = await authenticatedFetch("/v1/roles/");
-  const data = await response.json();
-  return data.items || [];
+  // Temporarily return empty array since we don't have roles yet
+  return [];
+  // const response = await authenticatedFetch("/v1/roles/");
+  // const data = await response.json();
+  // return data.items || [];
 }
 
 async function searchUsers(query: string) {
@@ -361,7 +364,7 @@ export function EntityMembers({ entityId, entityName, canManageMembers }: Entity
   const queryClient = useQueryClient();
   
   // Fetch members
-  const { data: membersData, isLoading } = useQuery({
+  const { data: membersData, isLoading, error } = useQuery({
     queryKey: ["entity-members", entityId, includeInactive],
     queryFn: () => fetchEntityMembers(entityId, includeInactive),
   });
@@ -472,12 +475,12 @@ export function EntityMembers({ entityId, entityName, canManageMembers }: Entity
         {/* Members Table */}
         {filteredMembers.length === 0 ? (
           <div className="text-center py-8">
-            <Shield className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <h3 className="text-lg font-semibold mb-2">No Members Found</h3>
+            <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+            <h3 className="text-lg font-semibold mb-2">No Users Found</h3>
             <p className="text-muted-foreground">
               {searchQuery 
-                ? "No members match your search criteria"
-                : "This entity doesn't have any members yet"}
+                ? "No users match your search criteria"
+                : "This entity doesn't have any users yet"}
             </p>
           </div>
         ) : (
@@ -513,7 +516,6 @@ export function EntityMembers({ entityId, entityName, canManageMembers }: Entity
                       <div className="flex flex-wrap gap-1">
                         {member.roles.map((role) => (
                           <Badge key={role.id} variant="outline">
-                            <Shield className="mr-1 h-3 w-3" />
                             {role.name}
                           </Badge>
                         ))}
