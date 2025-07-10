@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-outlabsAuth is an enterprise-grade Role-Based Access Control (RBAC) authentication platform built with FastAPI, MongoDB, and Beanie ODM. It features a unique three-tier hierarchical permission system with automatic inheritance and multi-tenant support.
+outlabsAuth is an enterprise-grade Role-Based Access Control (RBAC) authentication platform built with FastAPI, MongoDB, and Beanie ODM. It provides centralized authentication and authorization for multiple platforms through a flexible unified entity system that supports diverse organizational structures from flat role-based access to complex multi-level hierarchies.
 
 ### Frontend Tech Stack
 - **React 19** with TypeScript
@@ -77,25 +77,47 @@ docker compose down -v               # Stop and remove volumes
 
 ## Architecture & Key Concepts
 
+### Unified Entity System
+The system uses a flexible entity hierarchy that can adapt to any organizational structure:
+
+#### Entity Types
+1. **Structural Entities**: Form the organizational hierarchy
+   - `platform`: Root level (e.g., Diverse, uaya)
+   - `organization`: Top-level clients/companies
+   - `branch`: Geographic or functional divisions
+   - `team`: Working groups within branches
+
+2. **Access Groups**: Cross-cutting permission groups
+   - `functional_group`: Department-based access
+   - `permission_group`: Feature-specific access
+   - `project_group`: Temporary project teams
+   - `role_group`: Role-based collections
+   - `access_group`: General purpose groups
+
+#### Entity Rules
+- Platforms cannot have parent entities (always root level)
+- Structural entities can contain other structural entities or access groups
+- Access groups can be created at any level in the hierarchy
+- Users are members of entities, not entities themselves
+
 ### Hierarchical Permission System
-The permission system has automatic inheritance where "manage" permissions include "read":
+Permissions automatically inherit based on scope and action:
 
-1. **System Level** (`*:manage_all`): Global platform administration
-   - Example: `user:manage_all` automatically includes `user:read_all`
+1. **Action Inheritance**: `manage` includes all lesser actions
+   - `entity:manage` → `entity:update` → `entity:read`
    
-2. **Platform Level** (`*:manage_platform`): Cross-client operations
-   - Example: `client:manage_platform` for managing multiple clients
+2. **Scope Inheritance**: Higher scopes include lower scopes
+   - `user:manage_all` → `user:manage_platform` → `user:manage_organization` → `user:manage`
    
-3. **Client Level** (`*:manage_client`): Organization-specific management
-   - Example: `user:manage_client` for managing users within a client
-   
-4. **Self-Access Level**: Individual user operations (automatic)
+3. **Entity Context**: Permissions can be scoped to specific entities
+   - A user with `user:manage` in Team A can only manage Team A users
+   - A user with `user:manage_organization` can manage all users in their organization
 
-### Multi-Tenant Architecture
-- **Complete isolation**: All operations are automatically filtered by client_id
-- **Platform staff**: Can manage multiple clients with platform-level permissions
-- **Client context**: Every request includes client_id validation
-- **Data boundaries**: Never mix data between different client organizations
+### Multi-Platform Architecture
+- **Platform Isolation**: Each platform is completely isolated
+- **Shared Admin UI**: Platform admins can use OutlabsAuth Admin UI with scoped access
+- **Flexible Structure**: Platforms can have different organizational models
+- **Cross-Platform Users**: Users can belong to multiple platforms
 
 ### Service Layer Pattern
 ```
@@ -130,9 +152,21 @@ from api.dependencies import check_hierarchical_permissions
 ```
 
 ### Database Operations
-- Use Beanie's async methods: `await User.find_all()`, `await user.save()`
-- Always filter by client_id for multi-tenant queries
+- Use Beanie's async methods: `await EntityModel.find_all()`, `await entity.save()`
+- Always handle Link objects properly: fetch before accessing properties
+- Filter by platform_id for platform isolation
 - Use transactions for multi-document operations
+
+### Working with Link Objects
+```python
+# WRONG - Will cause AttributeError
+entity_name = role.entity.name
+
+# CORRECT - Fetch the linked document first
+if role.entity:
+    entity = await role.entity.fetch() if hasattr(role.entity, 'fetch') else role.entity
+    entity_name = entity.name if entity else None
+```
 
 ### Testing Requirements
 - Maintain 98%+ test success rate
@@ -149,17 +183,31 @@ from api.dependencies import check_hierarchical_permissions
 
 ```
 api/
-├── models/          # Beanie ODM models (always inherit from BaseDocument)
+├── models/          # Beanie ODM models
+│   ├── entity_model.py      # Unified entity system (structural & access groups)
+│   ├── user_model.py        # User accounts and profiles
+│   ├── role_model.py        # Roles with entity scope
+│   └── permission_model.py  # System and custom permissions
 ├── routes/          # FastAPI endpoints (use dependency injection)
 ├── services/        # Business logic (handle permissions here)
+│   ├── entity_service.py    # Entity hierarchy management
+│   ├── membership_service.py # User-entity relationships
+│   └── permission_service.py # Permission checking logic
 ├── schemas/         # Pydantic models for request/response
 ├── middleware/      # Rate limiting, CORS, etc.
 └── dependencies.py  # Auth helpers, permission checkers
 
 tests/
-├── conftest.py      # Shared fixtures (test users, roles, etc.)
+├── conftest.py      # Shared fixtures (test users, roles, entities)
 ├── test_*_routes.py # API endpoint tests
 └── test_*_service.py # Service layer tests
+
+docs/
+├── PLATFORM_SCENARIOS.md    # Real-world platform examples
+├── PLATFORM_SETUP_GUIDE.md  # Step-by-step platform setup
+├── API_INTEGRATION_PATTERNS.md # Common integration patterns
+├── ADMIN_ACCESS_LEVELS.md   # Multi-level admin access
+└── PLATFORM_INTEGRATION_*.md # Platform-specific guides
 ```
 
 ## Frontend Architecture & Patterns
@@ -220,17 +268,34 @@ const response = await authenticatedFetch('/v1/endpoint', {
 4. Add comprehensive tests covering success/error cases
 5. Update route documentation in `docs/routes/`
 
+### Creating a New Platform
+1. Create platform entity with type="platform"
+2. Define platform-specific permissions
+3. Create role templates for the platform
+4. Set up default organization for individual users
+5. Configure platform admin access
+6. See `docs/PLATFORM_SETUP_GUIDE.md` for detailed steps
+
+### Working with Entities
+1. Always validate entity type and class combinations
+2. Ensure platforms have no parent_entity
+3. Use proper system names (lowercase, underscores)
+4. Include both name and display_name fields
+5. Set appropriate metadata for business logic
+
 ### Modifying Permissions
-1. Update permission definitions in the service layer
-2. Ensure hierarchical inheritance is maintained
-3. Test all affected permission levels
-4. Verify multi-tenant isolation remains intact
+1. System permissions are immutable (defined in code)
+2. Custom permissions can be created per platform
+3. Follow naming convention: `resource:action_scope`
+4. Test permission inheritance thoroughly
+5. Document new permissions in platform guides
 
 ### Database Schema Changes
 1. Update Beanie model in `models/`
-2. Consider migration strategy for existing data
-3. Update related services and routes
-4. Add tests for new fields/behaviors
+2. Handle Link object changes carefully
+3. Consider impact on existing platforms
+4. Update related services and routes
+5. Add migration scripts if needed
 
 ## Environment Variables
 
@@ -249,15 +314,30 @@ Key variables for local development:
 - **Components**: Prefer ShadCN UI components, install with `bunx --bun shadcn@latest add`
 - **Notifications**: Use Sonner toasts instead of static alerts
 - **Forms**: Use TanStack Form for form handling with built-in validation
+- **Entity UI**: EntityDrawer for creation/editing, EntityTreeSidebar for navigation
 
-## Project Status Tracking
+## Key Documentation
 
-The PROJECT_STATUS.md file contains:
-- Current implementation progress
-- Quick start commands
-- Test user credentials
-- Known issues
-- Next steps for each phase
-- API testing examples
+### For Understanding the System
+- **PROJECT_STATUS.md**: Current implementation state and next steps
+- **docs/PLATFORM_SCENARIOS.md**: Real-world examples of different platform types
+- **docs/ARCHITECTURE.md**: Deep technical architecture dive
 
-Always refer to this file when resuming work to understand the current state.
+### For Platform Integration
+- **docs/PLATFORM_SETUP_GUIDE.md**: Step-by-step guide for new platforms
+- **docs/API_INTEGRATION_PATTERNS.md**: Common integration patterns
+- **docs/ADMIN_ACCESS_LEVELS.md**: How platform admins use the admin UI
+
+### For Specific Examples
+- **docs/PLATFORM_INTEGRATION_DIVERSE.md**: Complex hierarchical platform example
+- Check other PLATFORM_INTEGRATION_*.md files as they're added
+
+## Common Pitfalls to Avoid
+
+1. **Link Objects**: Always fetch before accessing properties
+2. **Entity Types**: Platforms must be root level (no parent)
+3. **Permissions**: System permissions cannot be modified
+4. **Testing**: Maintain 98%+ test pass rate
+5. **Frontend**: Use bun, not npm; use authenticatedFetch for APIs
+
+Always refer to PROJECT_STATUS.md when resuming work to understand the current state.

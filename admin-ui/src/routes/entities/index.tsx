@@ -200,8 +200,7 @@ function EntitiesContent({
   typeFilter,
   currentEntityId,
   childCounts,
-  contextRootId,
-  treeOpen
+  contextRootId
 }: { 
   onEditEntity: (entity: Entity) => void;
   onNavigateToEntity: (entityId: string | null) => void;
@@ -391,7 +390,6 @@ function EntitiesContent({
                     onNavigate={() => onNavigateToEntity(entity.id)}
                     onEdit={() => onEditEntity(entity)}
                     hasChildren={childCounts.get(entity.id) > 0}
-                    isInTreeView={treeOpen}
                   />
                 ))}
               </div>
@@ -415,7 +413,6 @@ function EntitiesContent({
                     onNavigate={() => onNavigateToEntity(entity.id)}
                     onEdit={() => onEditEntity(entity)}
                     hasChildren={childCounts.get(entity.id) > 0}
-                    isInTreeView={treeOpen}
                   />
                 ))}
               </div>

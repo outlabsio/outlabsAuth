@@ -88,6 +88,14 @@ OutLabs Auth is designed to support diverse business models through its flexible
 
 See [Platform Scenarios](docs/PLATFORM_SCENARIOS.md) for detailed examples.
 
+### Platform Integration
+
+For comprehensive integration guidance:
+- 📘 [Platform Setup Guide](docs/PLATFORM_SETUP_GUIDE.md) - Step-by-step guide for setting up a new platform
+- 🔧 [API Integration Patterns](docs/API_INTEGRATION_PATTERNS.md) - Common patterns for platform integration
+- 🏢 [Platform Integration: Diverse](docs/PLATFORM_INTEGRATION_DIVERSE.md) - Real-world example of complex platform integration
+- 👥 [Admin Access Levels](docs/ADMIN_ACCESS_LEVELS.md) - Multi-level admin access and UI adaptation
+
 ### Permission System
 
 The platform uses a sophisticated permission system with automatic inheritance:

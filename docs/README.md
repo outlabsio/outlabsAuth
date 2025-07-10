@@ -45,6 +45,36 @@ Real-world deployment scenarios showing how different business models use outlab
 - Multi-sided marketplaces (qdarte)
 - Hybrid optional hierarchies (Referral Brokerage)
 
+### 🚀 Platform Integration Documentation
+
+#### [Platform Setup Guide](./PLATFORM_SETUP_GUIDE.md)
+Complete guide for setting up a new platform from scratch, including:
+- Initial platform creation
+- Permission and role configuration
+- Entity structure setup
+- Administrator onboarding
+
+#### [API Integration Patterns](./API_INTEGRATION_PATTERNS.md)
+Common patterns and best practices for integrating with outlabsAuth:
+- Authentication flows
+- Permission checking patterns
+- Entity management
+- Performance optimization
+
+#### [Platform Integration: Diverse](./PLATFORM_INTEGRATION_DIVERSE.md)
+Detailed real-world example showing how Diverse (a complex real estate platform) integrates with outlabsAuth:
+- Business requirements mapping
+- User journey scenarios
+- Implementation examples
+- Best practices
+
+#### [Admin Access Levels](./ADMIN_ACCESS_LEVELS.md)
+How different administrative levels access the outlabsAuth Admin UI:
+- System, Platform, Organization, and Team admin levels
+- Permission-based UI adaptation
+- Scoped data access
+- Implementation guide
+
 ### 📐 [Architecture Plan](../MAIN_REFACTOR_PLAN.md)
 Detailed plan for the unified Entity model architecture (for developers working on outlabsAuth itself).
 
