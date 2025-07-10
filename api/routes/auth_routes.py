@@ -273,15 +273,9 @@ async def refresh_token(
     except HTTPException:
         raise
     except Exception as e:
-        # DEBUG: Log the actual error instead of masking it
-        import traceback
-        print(f"DEBUG: Actual refresh token error: {str(e)}")
-        print(f"DEBUG: Error type: {type(e).__name__}")
-        print(f"DEBUG: Traceback:")
-        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Refresh token error: {str(e)}"  # Show actual error for debugging
+            detail="Invalid refresh token"
         )
 
 
