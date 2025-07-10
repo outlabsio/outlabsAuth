@@ -69,7 +69,6 @@ interface EntityDrawerProps {
 const structuralTypes = [
   EntityType.PLATFORM,
   EntityType.ORGANIZATION,
-  EntityType.DIVISION,
   EntityType.BRANCH,
   EntityType.TEAM,
 ];
@@ -351,13 +350,13 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
       }
     }
     
-    // If no parent selected, only platforms can be created at root
+    // If no parent selected, allow platforms and organizations at root level
     if (!form.state.values.parent_entity || form.state.values.parent_entity === "none") {
-      return [EntityType.PLATFORM];
+      return [EntityType.PLATFORM, EntityType.ORGANIZATION];
     }
     
     return structuralTypes;
-  }, [selectedClass, isEditMode, form.state.values.parent_entity, potentialParents]);
+  }, [selectedClass, isEditMode, form.state.values.parent_entity, potentialParents, entities]);
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange} direction="right">

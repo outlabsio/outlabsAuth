@@ -77,6 +77,17 @@ The frontend will be available at http://localhost:5173
 
 ## 🏗️ System Architecture
 
+### Multi-Tenant Platform Support
+
+OutLabs Auth is designed to support diverse business models through its flexible entity system:
+
+1. **Complex Hierarchical Organizations** - Multi-level real estate brokerages with divisions, branches, and teams
+2. **Simple Flat Platforms** - Role-based access without organizational hierarchy  
+3. **Multi-Sided Marketplaces** - Separate portals for different user types (clients vs. service providers)
+4. **Hybrid Models** - Start flat and optionally add team structures as you grow
+
+See [Platform Scenarios](docs/PLATFORM_SCENARIOS.md) for detailed examples.
+
 ### Permission System
 
 The platform uses a sophisticated permission system with automatic inheritance:

@@ -109,7 +109,7 @@ class SystemService:
                 "display_name": "Root Platform"
             },
             allowed_child_classes=[EntityClass.STRUCTURAL, EntityClass.ACCESS_GROUP],
-            allowed_child_types=[EntityType.ORGANIZATION, EntityType.PLATFORM]
+            allowed_child_types=[EntityType.ORGANIZATION]  # Only organizations as children of platforms
         ).save()
         
         logger.info(f"Created root platform entity: {root_entity.id}")

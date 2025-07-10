@@ -38,6 +38,13 @@ Step-by-step guide to integrate your platform:
 - Common patterns
 - Troubleshooting
 
+### 🏢 [Platform Scenarios](./PLATFORM_SCENARIOS.md)
+Real-world deployment scenarios showing how different business models use outlabsAuth:
+- Complex hierarchical organizations (Diverse)
+- Simple flat platforms (uaya)
+- Multi-sided marketplaces (qdarte)
+- Hybrid optional hierarchies (Referral Brokerage)
+
 ### 📐 [Architecture Plan](../MAIN_REFACTOR_PLAN.md)
 Detailed plan for the unified Entity model architecture (for developers working on outlabsAuth itself).
 
