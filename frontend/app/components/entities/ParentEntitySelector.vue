@@ -1,6 +1,6 @@
 <template>
   <div class="w-full">
-    <UPopover>
+    <UPopover ref="popoverRef">
       <UButton :variant="selectedEntity ? 'outline' : 'outline'" :color="selectedEntity ? 'primary' : 'neutral'" class="w-full justify-between">
         <div class="flex items-center gap-2 min-w-0 flex-1">
           <UIcon name="i-lucide-building" class="w-4 h-4 text-muted-foreground shrink-0" />
@@ -12,23 +12,30 @@
       </UButton>
 
       <template #content>
-        <UCommandPalette
-          v-model="selectedEntity"
-          :groups="commandGroups"
-          placeholder="Search for parent entity..."
-          :fuse="{
-            fuseOptions: {
-              includeMatches: true,
-              threshold: 0.3,
-              keys: ['display_name', 'name', 'entity_type', 'description'],
-            },
-            resultLimit: 20,
-          }"
-          :ui="{ input: '[&>input]:h-8 [&>input]:text-sm' }"
-          class="h-80"
-          @update:model-value="onSelect"
-          v-model:search-term="searchTerm"
-        />
+        <div class="flex flex-col">
+          <UCommandPalette
+            v-model="selectedEntity"
+            :groups="commandGroups"
+            placeholder="Search for parent entity..."
+            :fuse="{
+              fuseOptions: {
+                includeMatches: true,
+                threshold: 0.3,
+                keys: ['display_name', 'name', 'entity_type', 'description'],
+              },
+              resultLimit: 20,
+            }"
+            :ui="{ input: '[&>input]:h-8 [&>input]:text-sm' }"
+            class="h-80"
+            @update:model-value="onSelect"
+            v-model:search-term="searchTerm"
+            @keydown.enter="handleEnter"
+          />
+          <div class="flex items-center justify-end gap-2 p-2 border-t border-gray-200 dark:border-gray-700">
+            <UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-x" @click="handleCancel"> Cancel </UButton>
+            <UButton color="primary" variant="solid" size="xs" icon="i-lucide-check" @click="handleOk"> OK </UButton>
+          </div>
+        </div>
       </template>
     </UPopover>
 
@@ -87,6 +94,25 @@ interface CommandItem extends Entity {
 
 const selectedEntity = ref<CommandItem | null>(null);
 const searchTerm = ref("");
+const popoverRef = ref();
+
+// Stores
+const contextStore = useContextStore();
+
+// Determine the effective context entity ID
+const effectiveContextEntityId = computed(() => {
+  // If explicit context is provided, use it
+  if (props.contextEntityId) {
+    return props.contextEntityId;
+  }
+
+  // Otherwise, use the current selected organization from context store
+  if (!contextStore.isSystemContext && contextStore.selectedOrganization) {
+    return contextStore.selectedOrganization.id;
+  }
+
+  return null;
+});
 
 // Build entity hierarchy
 const entityMap = computed(() => {
@@ -144,10 +170,10 @@ const potentialParents = computed(() => {
   });
 
   // If we have a context entity (creating within a specific entity)
-  if (props.contextEntityId) {
-    const contextEntity = entityMap.value.get(props.contextEntityId);
+  if (effectiveContextEntityId.value) {
+    const contextEntity = entityMap.value.get(effectiveContextEntityId.value);
     if (contextEntity) {
-      const allowedIds = new Set<string>([props.contextEntityId]);
+      const allowedIds = new Set<string>([effectiveContextEntityId.value]);
 
       // Add all ancestors
       let current = contextEntity;
@@ -248,6 +274,34 @@ watch(
 function onSelect(item: any) {
   selectedEntity.value = item;
   emit("update:modelValue", item?.value || "");
+  // Close popover after selection
+  if (popoverRef.value) {
+    popoverRef.value.close?.();
+  }
+}
+
+// Handle Enter key press
+function handleEnter(event: KeyboardEvent) {
+  // Close popover when Enter is pressed
+  if (popoverRef.value) {
+    popoverRef.value.close?.();
+  }
+}
+
+// Handle OK button click
+function handleOk() {
+  // Close popover when OK is clicked
+  if (popoverRef.value) {
+    popoverRef.value.close?.();
+  }
+}
+
+// Handle Cancel button click
+function handleCancel() {
+  // Just close the popover without emitting any changes
+  if (popoverRef.value) {
+    popoverRef.value.close?.();
+  }
 }
 
 function clearSelection() {

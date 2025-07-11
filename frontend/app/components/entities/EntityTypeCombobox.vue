@@ -1,5 +1,5 @@
 <template>
-  <UPopover>
+  <UPopover ref="popoverRef">
     <UButton :variant="selectedValue ? 'outline' : 'outline'" :color="selectedValue ? 'primary' : 'neutral'" class="w-full justify-between" :disabled="disabled">
       <div class="flex items-center gap-2 min-w-0 flex-1">
         <UIcon name="i-lucide-hash" class="w-4 h-4 text-muted-foreground shrink-0" />
@@ -11,23 +11,30 @@
     </UButton>
 
     <template #content>
-      <UCommandPalette
-        v-model="selectedValue"
-        :groups="commandGroups"
-        :placeholder="placeholder"
-        :fuse="{
-          fuseOptions: {
-            includeMatches: true,
-            threshold: 0.3,
-            keys: ['entity_type', 'label'],
-          },
-          resultLimit: 20,
-        }"
-        :ui="{ input: '[&>input]:h-8 [&>input]:text-sm' }"
-        class="h-80"
-        @update:model-value="handleSelect"
-        v-model:search-term="searchTerm"
-      />
+      <div class="flex flex-col">
+        <UCommandPalette
+          v-model="selectedValue"
+          :groups="commandGroups"
+          :placeholder="placeholder"
+          :fuse="{
+            fuseOptions: {
+              includeMatches: true,
+              threshold: 0.3,
+              keys: ['entity_type', 'label'],
+            },
+            resultLimit: 20,
+          }"
+          :ui="{ input: '[&>input]:h-8 [&>input]:text-sm' }"
+          class="h-80"
+          @update:model-value="handleSelect"
+          v-model:search-term="searchTerm"
+          @keydown.enter="handleEnter"
+        />
+        <div class="flex items-center justify-end gap-2 p-2 border-t border-gray-200 dark:border-gray-700">
+          <UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-x" @click="handleCancel"> Cancel </UButton>
+          <UButton color="primary" variant="solid" size="xs" icon="i-lucide-check" @click="handleOk"> OK </UButton>
+        </div>
+      </div>
     </template>
   </UPopover>
 </template>
@@ -63,6 +70,7 @@ const entitiesStore = useEntitiesStore();
 // State
 const selectedValue = ref<any>(null);
 const searchTerm = ref("");
+const popoverRef = ref();
 
 // Fetch entity type suggestions
 const { data: suggestions, pending } = await useLazyAsyncData(
@@ -101,8 +109,6 @@ const commandGroups = computed(() => {
       chip: { label: "New", color: "primary" },
       icon: "i-lucide-plus",
     };
-
-    console.log("Creating new item with chip:", newItem);
 
     groups.push({
       id: "create-new",
@@ -156,6 +162,46 @@ function formatEntityTypeLabel(entityType: string): string {
 function handleSelect(item: any) {
   if (item && item.entity_type) {
     emit("update:modelValue", item.entity_type);
+  }
+  // Close popover after selection
+  if (popoverRef.value) {
+    popoverRef.value.close?.();
+  }
+}
+
+// Handle Enter key press
+function handleEnter(event: KeyboardEvent) {
+  if (searchTerm.value && !selectedValue.value) {
+    // If user typed something but didn't select anything, create new entity type
+    const formattedInput = searchTerm.value.toLowerCase().replace(/\s+/g, "_");
+    emit("update:modelValue", formattedInput);
+  }
+
+  // Close popover
+  if (popoverRef.value) {
+    popoverRef.value.close?.();
+  }
+}
+
+// Handle OK button click
+function handleOk() {
+  if (searchTerm.value && !selectedValue.value) {
+    // If user typed something but didn't select anything, create new entity type
+    const formattedInput = searchTerm.value.toLowerCase().replace(/\s+/g, "_");
+    emit("update:modelValue", formattedInput);
+  }
+
+  // Close popover
+  if (popoverRef.value) {
+    popoverRef.value.close?.();
+  }
+}
+
+// Handle Cancel button click
+function handleCancel() {
+  // Just close the popover without emitting any changes
+  if (popoverRef.value) {
+    popoverRef.value.close?.();
   }
 }
 
