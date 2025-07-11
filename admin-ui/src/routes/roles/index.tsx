@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { AppSidebar } from "@/components/app-sidebar";
 import { PageHeader } from "@/components/layout/page-header";
 import { useContextStore } from "@/stores/context-store";
-import { authenticatedFetch } from "@/lib/auth";
+import { useRoles, useRoleUsage } from "@/hooks/api/use-roles";
 import { requireAuth } from "@/lib/route-guards";
 import {
   SidebarInset,
@@ -62,45 +62,7 @@ export const Route = createFileRoute("/roles/")({
   component: RolesPage,
 });
 
-interface Role {
-  id: string;
-  name: string;
-  display_name: string;
-  description?: string;
-  permissions: string[];
-  entity_id?: string;
-  entity_name?: string;
-  assignable_at_types: string[];
-  is_system_role: boolean;
-  is_global: boolean;
-  created_at: string;
-  updated_at?: string;
-}
-
-interface RoleUsageStats {
-  role_id: string;
-  role_name: string;
-  active_assignments: number;
-  total_assignments: number;
-  entities_used_in: number;
-  last_assigned?: string;
-}
-
-async function fetchRoles(entityId?: string, isGlobal?: boolean) {
-  const params = new URLSearchParams();
-  if (entityId) params.append("entity_id", entityId);
-  if (isGlobal !== undefined) params.append("is_global", String(isGlobal));
-  
-  const response = await authenticatedFetch(`/v1/roles/?${params}`);
-  const data = await response.json();
-  return data.items || [];
-}
-
-async function fetchRoleUsage(roleId: string): Promise<RoleUsageStats> {
-  const response = await authenticatedFetch(`/v1/roles/${roleId}/usage`);
-  const data = await response.json();
-  return data.stats[0];
-}
+import type { Role } from "@/lib/api/types";
 
 // Permission categories for better organization
 const PERMISSION_CATEGORIES = {
@@ -158,12 +120,9 @@ function RoleCard({
   const queryClient = useQueryClient();
   
   // Fetch usage stats
-  const { data: usage } = useQuery({
-    queryKey: ["role-usage", role.id],
-    queryFn: () => fetchRoleUsage(role.id),
-    enabled: showUsage && !role.is_system_role,
-    staleTime: 60000, // Cache for 1 minute
-  });
+  const { data: usage } = useRoleUsage(
+    showUsage && !role.is_system_role ? role.id : null
+  );
   
   // Group permissions by category
   const permissionsByCategory = role.permissions.reduce((acc, permission) => {
@@ -369,10 +328,11 @@ function RolesContent() {
   const contextEntityId = !isSystemContext() && selectedOrganization ? selectedOrganization.id : undefined;
   
   // Fetch roles
-  const { data: roles, isLoading } = useQuery({
-    queryKey: ["roles", contextEntityId],
-    queryFn: () => fetchRoles(contextEntityId),
+  const { data: rolesData, isLoading } = useRoles({
+    entityId: contextEntityId,
   });
+  
+  const roles = rolesData?.items || [];
   
   // Filter roles
   const filteredRoles = roles?.filter((role: Role) =>

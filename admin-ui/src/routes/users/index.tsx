@@ -37,8 +37,8 @@ import {
   UserX,
   Mail
 } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import { authenticatedFetch } from "@/lib/auth";
+import { useUsers } from "@/hooks/api/use-users";
+import { useEntities } from "@/hooks/api/use-entities";
 import { Skeleton } from "@/components/ui/skeleton";
 import { requireAuth } from "@/lib/route-guards";
 import {
@@ -57,75 +57,7 @@ export const Route = createFileRoute("/users/")({
   component: UsersPage,
 });
 
-interface User {
-  id: string;
-  email: string;
-  profile: {
-    first_name: string;
-    last_name: string;
-    phone?: string;
-    avatar_url?: string;
-    preferences?: Record<string, any>;
-  };
-  is_active: boolean;
-  is_system_user: boolean;
-  is_platform_admin?: boolean;
-  email_verified: boolean;
-  last_login?: string;
-  last_password_change?: string;
-  created_at: string;
-  updated_at: string;
-  entities: Array<{
-    id: string;
-    name: string;
-    slug: string;
-    entity_type: string;
-    entity_class: string;
-    parent_id?: string;
-    roles: Array<{
-      id: string;
-      name: string;
-    }>;
-    status: string;
-    joined_at: string;
-  }>;
-}
-
-interface PaginatedResponse<T> {
-  items: T[];
-  total: number;
-  page: number;
-  page_size: number;
-  pages: number;
-}
-
-async function fetchUsers(
-  page: number = 1,
-  search?: string,
-  entityId?: string
-): Promise<PaginatedResponse<User>> {
-  const params = new URLSearchParams({
-    page: page.toString(),
-    page_size: "10",
-  });
-  
-  if (search) {
-    params.append("search", search);
-  }
-  
-  if (entityId) {
-    params.append("entity_id", entityId);
-  }
-  
-  const response = await authenticatedFetch(`/v1/users/?${params}`);
-  return response.json();
-}
-
-async function fetchEntities() {
-  const response = await authenticatedFetch("/v1/entities/?entity_class=STRUCTURAL");
-  const data = await response.json();
-  return data.items || [];
-}
+import type { User } from "@/lib/api/types";
 
 function UserStatusBadge({ user }: { user: User }) {
   if (!user.is_active) {
@@ -163,15 +95,16 @@ function UsersContent({ onEditUser }: { onEditUser: (user: User) => void }) {
   // In organization context, default to showing users from that org
   const contextEntityId = !isSystemContext() && selectedOrganization ? selectedOrganization.id : undefined;
   
-  const { data: users, isLoading } = useQuery({
-    queryKey: ["users", currentPage, searchQuery, selectedEntity || contextEntityId],
-    queryFn: () => fetchUsers(currentPage, searchQuery, selectedEntity || contextEntityId),
+  const { data: users, isLoading } = useUsers({
+    page: currentPage,
+    pageSize: 10,
+    search: searchQuery || undefined,
+    entityId: selectedEntity || contextEntityId,
   });
   
   // Only fetch entities for filtering if in system context
-  const { data: entities } = useQuery({
-    queryKey: ["entities-structural", contextEntityId],
-    queryFn: fetchEntities,
+  const { data: entities } = useEntities({
+    entityClass: "STRUCTURAL",
     enabled: isSystemContext(), // Only need entity filter in system context
   });
   
@@ -222,7 +155,7 @@ function UsersContent({ onEditUser }: { onEditUser: (user: User) => void }) {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Entities</SelectItem>
-              {entities?.map((entity: any) => (
+              {entities?.items?.map((entity) => (
                 <SelectItem key={entity.id} value={entity.id}>
                   <div className="flex items-center gap-2">
                     <Building2 className="h-4 w-4" />

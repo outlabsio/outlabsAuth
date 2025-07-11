@@ -46,9 +46,8 @@ import {
 } from "lucide-react";
 import { 
   Entity, 
-  EntityType,
   isStructuralEntity 
-} from "@/types/entity";
+} from "@/lib/api/types";
 import { getEntityTypeIcon } from "@/lib/entity-icons";
 
 interface EntityTreeNodeData extends Entity {

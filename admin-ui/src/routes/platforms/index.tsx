@@ -10,8 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Globe } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import { authenticatedFetch } from "@/lib/auth";
+import { usePlatforms } from "@/hooks/api/use-platforms";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PlatformDrawer } from "@/components/platforms/platform-drawer";
 import { requireAuth } from "@/lib/route-guards";
@@ -21,21 +20,7 @@ export const Route = createFileRoute("/platforms/")({
   component: Platforms,
 });
 
-interface Platform {
-  _id: string;
-  name: string;
-  description: string;
-  status: "active" | "suspended" | "maintenance";
-  created_at: string;
-  updated_at: string;
-  platform_url?: string;
-  user_count?: number;
-}
-
-async function fetchPlatforms(): Promise<Platform[]> {
-  const response = await authenticatedFetch("/v1/platforms/");
-  return response.json();
-}
+import type { Platform } from "@/lib/api/types";
 
 function PlatformCard({ platform, onClick }: { platform: Platform; onClick: () => void }) {
   return (
@@ -71,10 +56,8 @@ function PlatformCard({ platform, onClick }: { platform: Platform; onClick: () =
 }
 
 function PlatformsContent({ onEditPlatform }: { onEditPlatform: (platform: Platform) => void }) {
-  const { data: platforms, isLoading, error } = useQuery({
-    queryKey: ["platforms"],
-    queryFn: fetchPlatforms,
-  });
+  const { data: platformsData, isLoading, error } = usePlatforms();
+  const platforms = platformsData?.items || [];
 
   if (isLoading) {
     return (

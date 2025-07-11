@@ -27,7 +27,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Plus, Search, Shield, Globe, MoreHorizontal, Pencil, Trash2, Building2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { authenticatedFetch } from "@/lib/auth";
+import { usePermissions } from "@/hooks/api/use-permissions";
+import { usePlatforms } from "@/hooks/api/use-platforms";
+import { api } from "@/lib/api/safe-fetch";
+import { z } from "zod";
 import { Skeleton } from "@/components/ui/skeleton";
 import { requireAuth } from "@/lib/route-guards";
 import { PermissionDrawer } from "@/components/permissions/permission-drawer";
@@ -44,39 +47,37 @@ export const Route = createFileRoute("/permissions/")({
   component: Permissions,
 });
 
-interface Permission {
-  id: string;
-  name: string;
-  display_name: string;
-  description: string;
-  scope: "system" | "platform";
-  scope_id?: string | null;
-  resource: string;
-  action: string;
-  created_at: string;
-  updated_at: string;
-}
+import type { Permission, Platform } from "@/lib/api/types";
 
-interface Platform {
-  _id: string;
-  name: string;
-  status: string;
-}
+// Available permissions response schema
+const availablePermissionsSchema = z.object({
+  system_permissions: z.array(z.object({
+    id: z.string(),
+    name: z.string(),
+    display_name: z.string(),
+    description: z.string(),
+    scope: z.enum(["system", "platform"]),
+    scope_id: z.string().nullable().optional(),
+    resource: z.string(),
+    action: z.string(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })),
+  platform_permissions: z.array(z.object({
+    id: z.string(),
+    name: z.string(),
+    display_name: z.string(),
+    description: z.string(),
+    scope: z.enum(["system", "platform"]),
+    scope_id: z.string().nullable().optional(),
+    resource: z.string(),
+    action: z.string(),
+    created_at: z.string(),
+    updated_at: z.string(),
+  })),
+});
 
-interface PermissionsResponse {
-  system_permissions: Permission[];
-  platform_permissions: Permission[];
-}
-
-async function fetchPermissions(): Promise<PermissionsResponse> {
-  const response = await authenticatedFetch("/v1/permissions/available");
-  return response.json();
-}
-
-async function fetchPlatforms(): Promise<Platform[]> {
-  const response = await authenticatedFetch("/v1/platforms/");
-  return response.json();
-}
+type PermissionsResponse = z.infer<typeof availablePermissionsSchema>;
 
 function Permissions() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -86,14 +87,12 @@ function Permissions() {
   const [selectedPermission, setSelectedPermission] = useState<Permission | null>(null);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["permissions"],
-    queryFn: fetchPermissions,
+    queryKey: ["permissions-available"],
+    queryFn: () => api.get("/v1/permissions/available", availablePermissionsSchema),
   });
 
-  const { data: platforms = [] } = useQuery({
-    queryKey: ["platforms"],
-    queryFn: fetchPlatforms,
-  });
+  const { data: platformsData } = usePlatforms();
+  const platforms = platformsData?.items || [];
 
   // Combine and filter permissions
   const allPermissions = [

@@ -16,7 +16,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { useEntityTypes } from '@/hooks/use-entity-types';
-import { EntityClass, getEntityTypeLabel } from '@/types/entity';
+import { getEntityTypeLabel } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 
 interface EntityTypesResponse {
@@ -32,7 +32,7 @@ interface EntityTypesResponse {
 interface EntityTypeComboboxProps {
   value: string;
   onChange: (value: string) => void;
-  entityClass?: EntityClass;
+  entityClass?: "STRUCTURAL" | "ACCESS_GROUP";
   platformId?: string;
   disabled?: boolean;
   placeholder?: string;

@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import { MoreVertical, Users } from "lucide-react";
-import { Entity, isStructuralEntity } from "@/types/entity";
+import { Entity, isStructuralEntity } from "@/lib/api/types";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

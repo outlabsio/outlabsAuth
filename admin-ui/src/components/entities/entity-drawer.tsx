@@ -51,8 +51,7 @@ import {
 } from "@/components/ui/popover";
 import {
   Entity,
-  EntityClass,
-} from "@/types/entity";
+} from "@/lib/api/types";
 import { getEntityTypeIcon, getEntityClassIcon } from "@/lib/entity-icons";
 import { EntityTypeCombobox } from "./entity-type-combobox";
 import { useContextStore } from "@/stores/context-store";
@@ -102,7 +101,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [hasChildren, setHasChildren] = useState(false);
   const [enableCascade, setEnableCascade] = useState(false);
-  const [selectedClass, setSelectedClass] = useState<EntityClass>(EntityClass.STRUCTURAL);
+  const [selectedClass, setSelectedClass] = useState<"STRUCTURAL" | "ACCESS_GROUP">("STRUCTURAL");
   const [parentEntityOpen, setParentEntityOpen] = useState(false);
 
   // Fetch all entities for parent selection
@@ -117,7 +116,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
     if (!allEntities) return [];
     
     let filtered = allEntities.filter(
-      e => e.entity_class === EntityClass.STRUCTURAL && 
+      e => e.entity_class === "STRUCTURAL" && 
            e.status === "active" && 
            (!isEditMode || e.id !== entity?.id)
     );
@@ -169,7 +168,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
         // Reset form values for create mode
         form.setFieldValue("name", "");
         form.setFieldValue("description", "");
-        form.setFieldValue("entity_class", EntityClass.STRUCTURAL);
+        form.setFieldValue("entity_class", "STRUCTURAL");
         form.setFieldValue("entity_type", "");
         form.setFieldValue("parent_entity", "none");
         form.setFieldValue("status", "active");
@@ -242,7 +241,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
     defaultValues: {
       name: "",
       description: "",
-      entity_class: EntityClass.STRUCTURAL,
+      entity_class: "STRUCTURAL" as "STRUCTURAL" | "ACCESS_GROUP",
       entity_type: "" as string,  // Now allows any string
       parent_entity: "none",
       status: "active" as "active" | "inactive" | "archived",
@@ -303,13 +302,13 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
       // Set form values individually
       form.setFieldValue("name", "");
       form.setFieldValue("description", "");
-      form.setFieldValue("entity_class", EntityClass.STRUCTURAL);
+      form.setFieldValue("entity_class", "STRUCTURAL");
       form.setFieldValue("entity_type", ""); // No default, force user to select
       form.setFieldValue("parent_entity", parentValue);
       form.setFieldValue("status", "active");
       form.setFieldValue("max_members", "");
       
-      setSelectedClass(EntityClass.STRUCTURAL);
+      setSelectedClass("STRUCTURAL");
     }
   }, [isEditMode, open, defaultParentId, potentialParents, form]);
 
@@ -317,7 +316,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
   const cannotHaveStructuralChildren = useMemo(() => {
     if (!isEditMode && form.state.values.parent_entity && form.state.values.parent_entity !== "none") {
       const parentEntity = potentialParents.find(p => p.id === form.state.values.parent_entity);
-      return parentEntity?.entity_class === EntityClass.ACCESS_GROUP && selectedClass === EntityClass.STRUCTURAL;
+      return parentEntity?.entity_class === "ACCESS_GROUP" && selectedClass === "STRUCTURAL";
     }
     return false;
   }, [selectedClass, isEditMode, form.state.values.parent_entity, potentialParents]);
@@ -391,7 +390,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                   <Label htmlFor="entity_class">Entity Class</Label>
                   <Select
                     value={field.state.value}
-                    onValueChange={(value: EntityClass) => {
+                    onValueChange={(value: "STRUCTURAL" | "ACCESS_GROUP") => {
                       field.handleChange(value);
                       setSelectedClass(value);
                       // Reset entity type when class changes to force selection
@@ -403,19 +402,19 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value={EntityClass.STRUCTURAL}>
+                      <SelectItem value="STRUCTURAL">
                         <div className="flex items-center gap-2">
                           {(() => {
-                            const Icon = getEntityClassIcon(EntityClass.STRUCTURAL);
+                            const Icon = getEntityClassIcon("STRUCTURAL");
                             return <Icon className="h-4 w-4" />;
                           })()}
                           <span>Structural Entity</span>
                         </div>
                       </SelectItem>
-                      <SelectItem value={EntityClass.ACCESS_GROUP}>
+                      <SelectItem value="ACCESS_GROUP">
                         <div className="flex items-center gap-2">
                           {(() => {
-                            const Icon = getEntityClassIcon(EntityClass.ACCESS_GROUP);
+                            const Icon = getEntityClassIcon("ACCESS_GROUP");
                             return <Icon className="h-4 w-4" />;
                           })()}
                           <span>Access Group</span>
@@ -424,7 +423,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    {selectedClass === EntityClass.STRUCTURAL
+                    {selectedClass === "STRUCTURAL"
                       ? "Organizational units in your hierarchy"
                       : "Groups for managing permissions and access"}
                   </p>
@@ -455,7 +454,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                       entityClass={selectedClass}
                       platformId={selectedOrganization?.id}
                       disabled={form.state.isSubmitting}
-                      placeholder={selectedClass === EntityClass.STRUCTURAL 
+                      placeholder={selectedClass === "STRUCTURAL" 
                         ? "Select or type (e.g., department, division)..." 
                         : "Select or type (e.g., admin_group, beta_testers)..."}
                     />
@@ -476,7 +475,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                   return (
                     <div className="space-y-2">
                       <Label htmlFor="parent_entity">
-                        {selectedClass === EntityClass.ACCESS_GROUP 
+                        {selectedClass === "ACCESS_GROUP" 
                           ? "Assign to Entity" 
                           : "Parent Entity"}
                       </Label>
@@ -567,7 +566,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                         </PopoverContent>
                       </Popover>
                       <p className="text-xs text-muted-foreground">
-                        {selectedClass === EntityClass.ACCESS_GROUP ? (
+                        {selectedClass === "ACCESS_GROUP" ? (
                           defaultParentId && !isEditMode 
                             ? "Access groups will be assigned to the current context"
                             : "Access groups are assigned to structural entities for organization"

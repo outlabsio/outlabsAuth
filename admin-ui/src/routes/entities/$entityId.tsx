@@ -1,8 +1,7 @@
 import { useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
 import { AppSidebar } from "@/components/app-sidebar";
-import { authenticatedFetch } from "@/lib/auth";
+import { useEntity, useEntityPath, useEntities } from "@/hooks/api/use-entities";
 import { requireAuth } from "@/lib/route-guards";
 import {
   Breadcrumb,
@@ -27,9 +26,9 @@ import { EntityMembers } from "@/components/entities/entity-members";
 import { EntityDrawer } from "@/components/entities/entity-drawer";
 import { 
   Entity, 
-  getEntityTypeLabel,
   isStructuralEntity 
-} from "@/types/entity";
+} from "@/lib/api/types";
+import { getEntityTypeLabel } from "@/lib/utils";
 import { getEntityTypeIcon } from "@/lib/entity-icons";
 import { 
   Building2, 
@@ -51,21 +50,6 @@ export const Route = createFileRoute("/entities/$entityId")({
   component: EntityDetailsPage,
 });
 
-async function fetchEntity(entityId: string): Promise<Entity> {
-  const response = await authenticatedFetch(`/v1/entities/${entityId}`);
-  return response.json();
-}
-
-async function fetchEntityPath(entityId: string): Promise<Entity[]> {
-  const response = await authenticatedFetch(`/v1/entities/${entityId}/path`);
-  return response.json();
-}
-
-async function fetchChildEntities(entityId: string): Promise<Entity[]> {
-  const response = await authenticatedFetch(`/v1/entities/?parent_entity_id=${entityId}&status=active`);
-  const data = await response.json();
-  return data.items || [];
-}
 
 function EntityDetailsPage() {
   const { entityId } = Route.useParams();
@@ -74,24 +58,19 @@ function EntityDetailsPage() {
   const [createWithParent, setCreateWithParent] = useState(false);
   
   // Fetch entity details
-  const { data: entity, isLoading, error } = useQuery({
-    queryKey: ["entity", entityId],
-    queryFn: () => fetchEntity(entityId),
-  });
+  const { data: entity, isLoading, error } = useEntity(entityId);
   
   // Fetch entity path for breadcrumbs
-  const { data: entityPath } = useQuery({
-    queryKey: ["entity-path", entityId],
-    queryFn: () => fetchEntityPath(entityId),
-    enabled: !!entity,
-  });
+  const { data: entityPath } = useEntityPath(entity ? entityId : null);
   
   // Fetch child entities
-  const { data: childEntities } = useQuery({
-    queryKey: ["entity-children", entityId],
-    queryFn: () => fetchChildEntities(entityId),
+  const { data: childEntitiesData } = useEntities({
+    parentId: entityId,
+    status: "active",
     enabled: !!entity && isStructuralEntity(entity),
   });
+  
+  const childEntities = childEntitiesData?.items || [];
   
   if (isLoading) {
     return (

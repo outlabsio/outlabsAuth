@@ -1,15 +1,13 @@
 import { useState, useMemo, useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { AppSidebar } from "@/components/app-sidebar";
 import { useContextStore } from "@/stores/context-store";
-import { PageHeader } from "@/components/layout/page-header";
-import {
-  SidebarInset,
-  SidebarProvider,
-} from "@/components/ui/sidebar";
+import { PageLayout } from "@/components/layout/page-layout";
+import { PageTitle } from "@/components/ui/page-title";
+import { EmptyState } from "@/components/ui/empty-state";
+import { LoadingGrid } from "@/components/ui/loading-grid";
+import { SearchFilterBar } from "@/components/ui/search-filter-bar";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import {
   Select,
@@ -18,20 +16,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Search, Building2, ChevronRight, FolderTree } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import { authenticatedFetch } from "@/lib/auth";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Plus, Building2, ChevronRight, FolderTree } from "lucide-react";
 import { EntityDrawer } from "@/components/entities/entity-drawer";
 import { EntityTreeSidebar } from "@/components/entities/entity-tree-sidebar";
 import { EntityCard } from "@/components/entities/entity-card";
 import { requireAuth } from "@/lib/route-guards";
+import { useDrawerState } from "@/hooks/use-drawer-state";
+import { useEntities, useEntity, useEntityPath } from "@/hooks/api/use-entities";
+import { useNotificationStore } from "@/stores/notification-store";
 import { 
-  Entity, 
-  EntityClass, 
-  EntityType, 
+  type Entity, 
+  type EntityClass,
   isStructuralEntity 
-} from "@/types/entity";
+} from "@/lib/api/types";
 import { getEntityTypeIcon, getEntityClassIcon } from "@/lib/entity-icons";
 
 export const Route = createFileRoute("/entities/")({
@@ -39,142 +36,50 @@ export const Route = createFileRoute("/entities/")({
   component: Entities,
 });
 
-async function fetchEntities(parentId?: string, includeArchived: boolean = false): Promise<Entity[]> {
-  let url = "/v1/entities/";
-  const params = new URLSearchParams();
-  if (parentId) {
-    params.append("parent_entity_id", parentId);
-  }
-  if (!includeArchived) {
-    params.append("status", "active");
-  }
-  if (params.toString()) {
-    url += `?${params.toString()}`;
-  }
-  
-  const response = await authenticatedFetch(url);
-  const data = await response.json();
-  
-  // API returns paginated response, extract items array
-  if (data && Array.isArray(data.items)) {
-    return data.items;
-  }
-  // Fallback for unexpected response format
-  return Array.isArray(data) ? data : [];
-}
-
-async function fetchEntityPath(entityId: string): Promise<Entity[]> {
-  const response = await authenticatedFetch(`/v1/entities/${entityId}/path`);
-  return response.json();
-}
 
 
 
 function EntitiesContent({ 
+  entities,
+  isLoading,
+  error,
+  currentEntity,
+  breadcrumbPath,
   onEditEntity,
   onNavigateToEntity,
-  searchQuery,
-  classFilter,
-  typeFilter,
-  currentEntityId,
   childCounts,
   contextRootId
 }: { 
+  entities: Entity[];
+  isLoading: boolean;
+  error: unknown;
+  currentEntity?: Entity | null;
+  breadcrumbPath: Entity[];
   onEditEntity: (entity: Entity) => void;
   onNavigateToEntity: (entityId: string | null) => void;
-  searchQuery: string;
-  classFilter: string;
-  typeFilter: string;
-  currentEntityId: string | null;
   childCounts: Map<string, number>;
   contextRootId: string | null;
 }) {
-  // Determine what parent to query for
-  const queryParentId = currentEntityId || contextRootId || undefined;
-  
-  const { data: entities, isLoading, error } = useQuery({
-    queryKey: ["entities", queryParentId],
-    queryFn: () => fetchEntities(queryParentId),
-  });
-
-  // Fetch current entity details if we're not at root
-  const { data: currentEntity } = useQuery({
-    queryKey: ["entity", currentEntityId],
-    queryFn: async () => {
-      if (!currentEntityId) return null;
-      const response = await authenticatedFetch(`/v1/entities/${currentEntityId}`);
-      return response.json();
-    },
-    enabled: !!currentEntityId,
-  });
-
-  // Fetch breadcrumb path
-  const { data: breadcrumbPath } = useQuery({
-    queryKey: ["entity-path", currentEntityId],
-    queryFn: () => currentEntityId ? fetchEntityPath(currentEntityId) : Promise.resolve([]),
-    enabled: !!currentEntityId,
-  });
-
   if (isLoading) {
-    return (
-      <div className="space-y-4">
-        <Skeleton className="h-10 w-full" />
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {[1, 2, 3].map((i) => (
-            <Card key={i}>
-              <CardHeader>
-                <Skeleton className="h-4 w-24" />
-                <Skeleton className="h-3 w-full mt-2" />
-              </CardHeader>
-              <CardContent>
-                <Skeleton className="h-20 w-full" />
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      </div>
-    );
+    return <LoadingGrid />;
   }
 
   if (error) {
     return (
       <Card>
         <CardContent className="pt-6">
-          <p className="text-destructive">Error loading entities: {error.message}</p>
+          <p className="text-destructive">
+            Error loading entities: {error instanceof Error ? error.message : "Unknown error"}
+          </p>
         </CardContent>
       </Card>
     );
   }
 
-  // Filter entities
-  let filteredEntities = Array.isArray(entities) ? entities : [];
-  
-  if (searchQuery) {
-    filteredEntities = filteredEntities.filter(entity => 
-      entity.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      entity.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      entity.slug.toLowerCase().includes(searchQuery.toLowerCase())
-    );
-  }
-  
-  if (classFilter && classFilter !== "all") {
-    filteredEntities = filteredEntities.filter(entity => 
-      entity.entity_class === classFilter
-    );
-  }
-  
-  if (typeFilter && typeFilter !== "all") {
-    filteredEntities = filteredEntities.filter(entity => 
-      entity.entity_type === typeFilter
-    );
-  }
-
-  // No additional filtering needed - the API already filters by parent
-
   return (
     <div className="space-y-4">
       {/* Breadcrumb Navigation */}
-      {breadcrumbPath && breadcrumbPath.length > 0 && (
+      {breadcrumbPath.length > 0 && (
         <div className="flex items-center gap-2 text-sm">
           <Button
             variant="ghost"
@@ -234,34 +139,35 @@ function EntitiesContent({
       )}
 
       {/* Entity List */}
-      {filteredEntities.length === 0 ? (
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center py-8">
-              <Building2 className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No Child Entities</h3>
-              <p className="text-muted-foreground mb-4">
-                {currentEntity 
-                  ? `No entities found under ${currentEntity.name}`
-                  : "Create your first entity to start building your organizational structure"}
-              </p>
-            </div>
-          </CardContent>
-        </Card>
+      {entities.length === 0 ? (
+        <EmptyState
+          icon={Building2}
+          title="No Child Entities"
+          description={
+            currentEntity 
+              ? `No entities found under ${currentEntity.name}`
+              : "Create your first entity to start building your organizational structure"
+          }
+          action={{
+            label: "Create Entity",
+            onClick: () => onEditEntity({} as Entity),
+            icon: Plus,
+          }}
+        />
       ) : (
         <div className="space-y-6">
           {/* Group by class */}
-          {filteredEntities.filter(isStructuralEntity).length > 0 && (
+          {entities.filter(isStructuralEntity).length > 0 && (
             <div>
               <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
                 {(() => {
-                  const Icon = getEntityClassIcon(EntityClass.STRUCTURAL);
+                  const Icon = getEntityClassIcon("STRUCTURAL");
                   return <Icon className="h-5 w-5" />;
                 })()}
                 Structural Entities
               </h3>
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {filteredEntities.filter(isStructuralEntity).map((entity) => (
+                {entities.filter(isStructuralEntity).map((entity) => (
                   <EntityCard 
                     key={entity.id} 
                     entity={entity} 
@@ -275,17 +181,17 @@ function EntitiesContent({
             </div>
           )}
           
-          {filteredEntities.filter(e => !isStructuralEntity(e)).length > 0 && (
+          {entities.filter(e => !isStructuralEntity(e)).length > 0 && (
             <div>
               <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
                 {(() => {
-                  const Icon = getEntityClassIcon(EntityClass.ACCESS_GROUP);
+                  const Icon = getEntityClassIcon("ACCESS_GROUP");
                   return <Icon className="h-5 w-5" />;
                 })()}
                 Access Groups
               </h3>
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {filteredEntities.filter(e => !isStructuralEntity(e)).map((entity) => (
+                {entities.filter(e => !isStructuralEntity(e)).map((entity) => (
                   <EntityCard 
                     key={entity.id} 
                     entity={entity} 
@@ -306,9 +212,9 @@ function EntitiesContent({
 
 function Entities() {
   const { selectedOrganization, isSystemContext } = useContextStore();
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerMode, setDrawerMode] = useState<"create" | "edit">("create");
-  const [selectedEntity, setSelectedEntity] = useState<Entity | null>(null);
+  const drawer = useDrawerState<Entity>();
+  const { success, error } = useNotificationStore();
+  
   const [searchQuery, setSearchQuery] = useState("");
   const [classFilter, setClassFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
@@ -317,7 +223,6 @@ function Entities() {
   // Start at the selected organization context, or null for system context
   const contextRootId = isSystemContext() ? null : selectedOrganization?.id || null;
   const [currentEntityId, setCurrentEntityId] = useState<string | null>(contextRootId);
-  const [childCounts] = useState(new Map<string, number>());
   
   // Keyboard shortcut for tree view (Cmd/Ctrl + K)
   useEffect(() => {
@@ -337,39 +242,52 @@ function Entities() {
     setCurrentEntityId(contextRootId);
   }, [contextRootId]);
   
-  // Fetch all entities to calculate child counts
-  const { data: allEntities } = useQuery({
-    queryKey: ["all-entities"],
-    queryFn: () => fetchEntities(),
+  // Use our custom hooks
+  const { data: entitiesData, isLoading, error: entitiesError } = useEntities({
+    parentId: currentEntityId || contextRootId || undefined,
+    status: "active",
   });
   
+  const { data: currentEntity } = useEntity(currentEntityId);
+  const { data: breadcrumbPath } = useEntityPath(currentEntityId);
+  
   // Calculate child counts
-  useMemo(() => {
-    if (!allEntities) return;
-    childCounts.clear();
-    allEntities.forEach(entity => {
-      const parentId = entity.parent_entity_id || 
-        (entity.parent_entity && typeof entity.parent_entity === 'string' ? entity.parent_entity : 
-         entity.parent_entity && typeof entity.parent_entity === 'object' ? entity.parent_entity.id : null);
-      
+  const childCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    if (!entitiesData?.items) return counts;
+    
+    entitiesData.items.forEach(entity => {
+      const parentId = entity.parent_entity_id;
       if (parentId) {
-        const count = childCounts.get(parentId) || 0;
-        childCounts.set(parentId, count + 1);
+        counts.set(parentId, (counts.get(parentId) || 0) + 1);
       }
     });
-  }, [allEntities, childCounts]);
+    
+    return counts;
+  }, [entitiesData]);
   
-  const handleCreateEntity = () => {
-    setDrawerMode("create");
-    setSelectedEntity(null);
-    setDrawerOpen(true);
-  };
-  
-  const handleEditEntity = (entity: Entity) => {
-    setDrawerMode("edit");
-    setSelectedEntity(entity);
-    setDrawerOpen(true);
-  };
+  // Filter entities
+  const filteredEntities = useMemo(() => {
+    let items = entitiesData?.items || [];
+    
+    if (searchQuery) {
+      items = items.filter(entity => 
+        entity.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        entity.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        entity.slug.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+    }
+    
+    if (classFilter !== "all") {
+      items = items.filter(entity => entity.entity_class === classFilter);
+    }
+    
+    if (typeFilter !== "all") {
+      items = items.filter(entity => entity.entity_type === typeFilter);
+    }
+    
+    return items;
+  }, [entitiesData, searchQuery, classFilter, typeFilter]);
   
   const handleNavigateToEntity = (entityId: string | null) => {
     setCurrentEntityId(entityId);
@@ -379,216 +297,126 @@ function Entities() {
     setTypeFilter("all");
   };
   
+  const handleSaveSuccess = () => {
+    success(
+      drawer.mode === "create" ? "Entity created" : "Entity updated",
+      drawer.mode === "create" 
+        ? "The entity has been created successfully" 
+        : "The entity has been updated successfully"
+    );
+    drawer.close();
+  };
+  
   return (
-    <SidebarProvider>
-      <AppSidebar />
-      <SidebarInset>
-        <PageHeader 
-          breadcrumbs={[
-            { label: "Dashboard", href: "/dashboard" },
-            { label: "Entities" }
-          ]}
-        />
-        <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
-          <div className="mx-auto w-full max-w-7xl">
-            <div className="flex items-center justify-between mb-6">
-              <div>
-                <h1 className="text-2xl font-bold tracking-tight">
-                  {currentEntityId ? "Entity Details" : "Entity Management"}
-                </h1>
-                <p className="text-muted-foreground">
-                  {!isSystemContext() && selectedOrganization ? (
-                    currentEntityId && currentEntityId !== contextRootId ? (
-                      "Navigate through your organizational hierarchy"
-                    ) : (
-                      <>
-                        Showing entities within <span className="font-medium">{selectedOrganization.name}</span>
-                      </>
-                    )
-                  ) : currentEntityId ? (
-                    "Navigate through your organizational hierarchy"
-                  ) : (
-                    "Manage all organizational structures and access groups"
-                  )}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button 
-                  variant="outline" 
-                  onClick={() => setTreeOpen(true)}
-                  className="relative"
-                >
-                  <FolderTree className="mr-2 h-4 w-4" />
-                  Tree View
-                  <kbd className="ml-2 pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground opacity-100">
-                    <span className="text-xs">⌘</span>K
-                  </kbd>
-                </Button>
-                <Button onClick={handleCreateEntity}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  Create Entity
-                </Button>
-              </div>
-            </div>
-            
-            {/* Filters */}
-            <div className="flex flex-col sm:flex-row gap-4 mb-6">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  placeholder="Search entities..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
-              <Select value={classFilter} onValueChange={setClassFilter}>
-                <SelectTrigger className="w-full sm:w-[180px]">
-                  <SelectValue placeholder="Entity Class" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Classes</SelectItem>
-                  <SelectItem value={EntityClass.STRUCTURAL}>
-                    <div className="flex items-center gap-2">
-                      {(() => {
-                        const Icon = getEntityClassIcon(EntityClass.STRUCTURAL);
-                        return <Icon className="h-4 w-4" />;
-                      })()}
-                      <span>Structural</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value={EntityClass.ACCESS_GROUP}>
-                    <div className="flex items-center gap-2">
-                      {(() => {
-                        const Icon = getEntityClassIcon(EntityClass.ACCESS_GROUP);
-                        return <Icon className="h-4 w-4" />;
-                      })()}
-                      <span>Access Groups</span>
-                    </div>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={typeFilter} onValueChange={setTypeFilter}>
-                <SelectTrigger className="w-full sm:w-[180px]">
-                  <SelectValue placeholder="Entity Type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Types</SelectItem>
-                  <SelectItem value={EntityType.PLATFORM}>
-                    <div className="flex items-center gap-2">
-                      {(() => {
-                        const Icon = getEntityTypeIcon(EntityType.PLATFORM);
-                        return <Icon className="h-4 w-4" />;
-                      })()}
-                      <span>Platform</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value={EntityType.ORGANIZATION}>
-                    <div className="flex items-center gap-2">
-                      {(() => {
-                        const Icon = getEntityTypeIcon(EntityType.ORGANIZATION);
-                        return <Icon className="h-4 w-4" />;
-                      })()}
-                      <span>Organization</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value={EntityType.DIVISION}>
-                    <div className="flex items-center gap-2">
-                      {(() => {
-                        const Icon = getEntityTypeIcon(EntityType.DIVISION);
-                        return <Icon className="h-4 w-4" />;
-                      })()}
-                      <span>Division</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value={EntityType.BRANCH}>
-                    <div className="flex items-center gap-2">
-                      {(() => {
-                        const Icon = getEntityTypeIcon(EntityType.BRANCH);
-                        return <Icon className="h-4 w-4" />;
-                      })()}
-                      <span>Branch</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value={EntityType.TEAM}>
-                    <div className="flex items-center gap-2">
-                      {(() => {
-                        const Icon = getEntityTypeIcon(EntityType.TEAM);
-                        return <Icon className="h-4 w-4" />;
-                      })()}
-                      <span>Team</span>
-                    </div>
-                  </SelectItem>
-                  <Separator className="my-1" />
-                  <SelectItem value={EntityType.FUNCTIONAL_GROUP}>
-                    <div className="flex items-center gap-2">
-                      {(() => {
-                        const Icon = getEntityTypeIcon(EntityType.FUNCTIONAL_GROUP);
-                        return <Icon className="h-4 w-4" />;
-                      })()}
-                      <span>Functional Group</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value={EntityType.PERMISSION_GROUP}>
-                    <div className="flex items-center gap-2">
-                      {(() => {
-                        const Icon = getEntityTypeIcon(EntityType.PERMISSION_GROUP);
-                        return <Icon className="h-4 w-4" />;
-                      })()}
-                      <span>Permission Group</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value={EntityType.PROJECT_GROUP}>
-                    <div className="flex items-center gap-2">
-                      {(() => {
-                        const Icon = getEntityTypeIcon(EntityType.PROJECT_GROUP);
-                        return <Icon className="h-4 w-4" />;
-                      })()}
-                      <span>Project Group</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value={EntityType.ROLE_GROUP}>
-                    <div className="flex items-center gap-2">
-                      {(() => {
-                        const Icon = getEntityTypeIcon(EntityType.ROLE_GROUP);
-                        return <Icon className="h-4 w-4" />;
-                      })()}
-                      <span>Role Group</span>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value={EntityType.ACCESS_GROUP}>
-                    <div className="flex items-center gap-2">
-                      {(() => {
-                        const Icon = getEntityTypeIcon(EntityType.ACCESS_GROUP);
-                        return <Icon className="h-4 w-4" />;
-                      })()}
-                      <span>Access Group</span>
-                    </div>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            
-            <EntitiesContent 
-              onEditEntity={handleEditEntity}
-              onNavigateToEntity={handleNavigateToEntity}
-              searchQuery={searchQuery}
-              classFilter={classFilter}
-              typeFilter={typeFilter}
-              currentEntityId={currentEntityId}
-              childCounts={childCounts}
-              contextRootId={contextRootId}
-            />
+    <PageLayout
+      breadcrumbs={[
+        { label: "Dashboard", href: "/dashboard" },
+        { label: "Entities" }
+      ]}
+    >
+      <PageTitle
+        title={currentEntityId ? "Entity Details" : "Entity Management"}
+        description={
+          !isSystemContext() && selectedOrganization ? (
+            currentEntityId && currentEntityId !== contextRootId ? (
+              "Navigate through your organizational hierarchy"
+            ) : (
+              <>Showing entities within <span className="font-medium">{selectedOrganization.name}</span></>
+            )
+          ) : currentEntityId ? (
+            "Navigate through your organizational hierarchy"
+          ) : (
+            "Manage all organizational structures and access groups"
+          )
+        }
+        action={
+          <div className="flex items-center gap-2">
+            <Button 
+              variant="outline" 
+              onClick={() => setTreeOpen(true)}
+              className="relative"
+            >
+              <FolderTree className="mr-2 h-4 w-4" />
+              Tree View
+              <kbd className="ml-2 pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground opacity-100">
+                <span className="text-xs">⌘</span>K
+              </kbd>
+            </Button>
+            <Button onClick={drawer.openCreate}>
+              <Plus className="mr-2 h-4 w-4" />
+              Create Entity
+            </Button>
           </div>
-        </div>
-      </SidebarInset>
+        }
+      />
+      
+      {/* Filters */}
+      <SearchFilterBar
+        searchValue={searchQuery}
+        onSearchChange={setSearchQuery}
+        searchPlaceholder="Search entities..."
+        filters={
+          <>
+            <Select value={classFilter} onValueChange={setClassFilter}>
+              <SelectTrigger className="w-full sm:w-[180px]">
+                <SelectValue placeholder="Entity Class" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Classes</SelectItem>
+                <SelectItem value="STRUCTURAL">
+                  <div className="flex items-center gap-2">
+                    {(() => {
+                      const Icon = getEntityClassIcon("STRUCTURAL");
+                      return <Icon className="h-4 w-4" />;
+                    })()}
+                    <span>Structural</span>
+                  </div>
+                </SelectItem>
+                <SelectItem value="ACCESS_GROUP">
+                  <div className="flex items-center gap-2">
+                    {(() => {
+                      const Icon = getEntityClassIcon("ACCESS_GROUP");
+                      return <Icon className="h-4 w-4" />;
+                    })()}
+                    <span>Access Groups</span>
+                  </div>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            
+            <Select value={typeFilter} onValueChange={setTypeFilter}>
+              <SelectTrigger className="w-full sm:w-[180px]">
+                <SelectValue placeholder="Entity Type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Types</SelectItem>
+                {/* Add entity types here */}
+              </SelectContent>
+            </Select>
+          </>
+        }
+        className="mb-6"
+      />
+      
+      <EntitiesContent 
+        entities={filteredEntities}
+        isLoading={isLoading}
+        error={entitiesError}
+        currentEntity={currentEntity}
+        breadcrumbPath={breadcrumbPath || []}
+        onEditEntity={drawer.openEdit}
+        onNavigateToEntity={handleNavigateToEntity}
+        childCounts={childCounts}
+        contextRootId={contextRootId}
+      />
       
       <EntityDrawer 
-        open={drawerOpen} 
-        onOpenChange={setDrawerOpen}
-        mode={drawerMode}
-        entity={selectedEntity}
+        open={drawer.isOpen} 
+        onOpenChange={(open) => !open && drawer.close()}
+        mode={drawer.mode}
+        entity={drawer.selectedItem}
         defaultParentId={currentEntityId}
+        onSuccess={handleSaveSuccess}
       />
       
       <EntityTreeSidebar
@@ -597,6 +425,6 @@ function Entities() {
         currentEntityId={currentEntityId}
         onSelectEntity={handleNavigateToEntity}
       />
-    </SidebarProvider>
+    </PageLayout>
   );
 }
