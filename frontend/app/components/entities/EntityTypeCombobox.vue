@@ -12,24 +12,30 @@
 
     <template #content>
       <div class="flex flex-col">
-        <UCommandPalette
-          v-model="selectedValue"
-          :groups="commandGroups"
-          :placeholder="placeholder"
-          :fuse="{
-            fuseOptions: {
-              includeMatches: true,
-              threshold: 0.3,
-              keys: ['entity_type', 'label'],
-            },
-            resultLimit: 20,
-          }"
-          :ui="{ input: '[&>input]:h-8 [&>input]:text-sm' }"
-          class="h-80"
-          @update:model-value="handleSelect"
-          v-model:search-term="searchTerm"
-          @keydown.enter="handleEnter"
-        />
+        <div class="relative">
+          <UCommandPalette
+            v-model="selectedValue"
+            :groups="commandGroups"
+            :placeholder="placeholder"
+            :fuse="{
+              fuseOptions: {
+                includeMatches: true,
+                threshold: 0.3,
+                keys: ['entity_type', 'label'],
+              },
+              resultLimit: 20,
+            }"
+            :ui="{ input: '[&>input]:h-8 [&>input]:text-sm' }"
+            class="h-80"
+            @update:model-value="handleSelect"
+            v-model:search-term="searchTerm"
+            @keydown.enter="handleEnter"
+          />
+          <!-- New badge overlay -->
+          <div v-if="isCreatingNew" class="absolute top-2 right-2 z-10 pointer-events-none">
+            <UBadge label="New" color="primary" variant="solid" size="sm" />
+          </div>
+        </div>
         <div class="flex items-center justify-end gap-2 p-2 border-t border-gray-200 dark:border-gray-700">
           <UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-x" @click="handleCancel"> Cancel </UButton>
           <UButton color="primary" variant="solid" size="xs" icon="i-lucide-check" @click="handleOk"> OK </UButton>
@@ -87,6 +93,13 @@ const { data: suggestions, pending } = await useLazyAsyncData(
   }
 );
 
+// Check if current input would create a new entity type
+const isCreatingNew = computed(() => {
+  if (!searchTerm.value) return false;
+  const formattedInput = searchTerm.value.toLowerCase().replace(/\s+/g, "_");
+  return !suggestions.value?.suggestions.some((s) => s.entity_type === formattedInput);
+});
+
 // Computed command groups
 const commandGroups = computed(() => {
   const groups: any[] = [];
@@ -96,26 +109,6 @@ const commandGroups = computed(() => {
   // Separate suggestions by type
   const predefinedSuggestions = suggestions.value.suggestions.filter((s) => s.is_predefined);
   const recentSuggestions = suggestions.value.suggestions.filter((s) => !s.is_predefined && s.count > 0);
-
-  // Create new option if input doesn't match existing
-  const formattedInput = searchTerm.value ? searchTerm.value.toLowerCase().replace(/\s+/g, "_") : "";
-  const matchesExisting = suggestions.value.suggestions.some((s) => s.entity_type === formattedInput);
-
-  if (searchTerm.value && !matchesExisting) {
-    const newItem = {
-      id: `create-${formattedInput}`,
-      label: `Create "${formatEntityTypeLabel(formattedInput)}"`,
-      entity_type: formattedInput,
-      chip: { label: "New", color: "primary" },
-      icon: "i-lucide-plus",
-    };
-
-    groups.push({
-      id: "create-new",
-      label: "Create New",
-      items: [newItem],
-    });
-  }
 
   // Recently used types
   if (recentSuggestions.length > 0) {
@@ -162,6 +155,8 @@ function formatEntityTypeLabel(entityType: string): string {
 function handleSelect(item: any) {
   if (item && item.entity_type) {
     emit("update:modelValue", item.entity_type);
+    // Update search term to show the selected value
+    searchTerm.value = formatEntityTypeLabel(item.entity_type);
   }
   // Close popover after selection
   if (popoverRef.value) {
@@ -171,10 +166,13 @@ function handleSelect(item: any) {
 
 // Handle Enter key press
 function handleEnter(event: KeyboardEvent) {
-  if (searchTerm.value && !selectedValue.value) {
-    // If user typed something but didn't select anything, create new entity type
+  if (searchTerm.value && isCreatingNew.value) {
+    // If user typed something new, create new entity type
     const formattedInput = searchTerm.value.toLowerCase().replace(/\s+/g, "_");
     emit("update:modelValue", formattedInput);
+  } else if (selectedValue.value && selectedValue.value.entity_type) {
+    // If user selected an existing item
+    emit("update:modelValue", selectedValue.value.entity_type);
   }
 
   // Close popover
@@ -185,10 +183,13 @@ function handleEnter(event: KeyboardEvent) {
 
 // Handle OK button click
 function handleOk() {
-  if (searchTerm.value && !selectedValue.value) {
-    // If user typed something but didn't select anything, create new entity type
+  if (searchTerm.value && isCreatingNew.value) {
+    // If user typed something new, create new entity type
     const formattedInput = searchTerm.value.toLowerCase().replace(/\s+/g, "_");
     emit("update:modelValue", formattedInput);
+  } else if (selectedValue.value && selectedValue.value.entity_type) {
+    // If user selected an existing item
+    emit("update:modelValue", selectedValue.value.entity_type);
   }
 
   // Close popover
@@ -215,8 +216,11 @@ watch(
         label: formatEntityTypeLabel(newValue),
         entity_type: newValue,
       };
+      // Update search term to show the selected value
+      searchTerm.value = formatEntityTypeLabel(newValue);
     } else {
       selectedValue.value = null;
+      searchTerm.value = "";
     }
   },
   { immediate: true }
