@@ -81,10 +81,12 @@
 
     <!-- Footer for Create/Edit Mode -->
     <template v-if="mode === 'create' || mode === 'edit'" #footer>
-      <UButton @click="submitForm" :loading="isSubmitting" color="primary" class="justify-center">
-        {{ mode === "create" ? "Create Entity" : "Update Entity" }}
-      </UButton>
-      <UButton @click="handleCancel" color="neutral" variant="outline" class="justify-center"> Cancel </UButton>
+      <div class="flex flex-col sm:flex-row gap-3 w-full">
+        <UButton @click="submitForm" :loading="isSubmitting" color="primary" class="justify-center flex-1">
+          {{ mode === "create" ? "Create Entity" : "Update Entity" }}
+        </UButton>
+        <UButton @click="handleCancel" color="neutral" variant="outline" class="justify-center flex-1"> Cancel </UButton>
+      </div>
     </template>
   </UDrawer>
 
