@@ -45,7 +45,7 @@ function openCreateDrawer() {
 
 function openEntityDrawer(entity: Entity) {
   selectedEntity.value = entity
-  drawerMode.value = 'view'
+  drawerMode.value = 'edit'
   drawerOpen.value = true
 }
 
@@ -132,7 +132,7 @@ function handleEntityDeleted() {
       <!-- Error State -->
       <UAlert 
         v-else-if="entitiesStore.error" 
-        color="red" 
+        color="error" 
         variant="subtle"
         icon="i-lucide-alert-circle"
         :title="entitiesStore.error"
@@ -165,7 +165,7 @@ function handleEntityDeleted() {
               </p>
             </div>
             <UBadge 
-              :color="entity.status === 'active' ? 'green' : 'gray'"
+              :color="entity.status === 'active' ? 'success' : 'neutral'"
               variant="subtle"
               size="xs"
             >
@@ -205,7 +205,7 @@ function handleEntityDeleted() {
     </div>
 
     <!-- Entity Drawer -->
-    <EntitiesEntityDrawer
+    <EntitiesDrawer
       v-model:open="drawerOpen"
       :entity="selectedEntity"
       :mode="drawerMode"

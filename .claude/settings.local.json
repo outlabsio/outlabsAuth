@@ -21,7 +21,9 @@
       "Bash(grep:*)",
       "Bash(true)",
       "Bash(tsc --noEmit)",
-      "Bash(cp:*)"
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "WebFetch(domain:ui.nuxt.com)"
     ],
     "deny": []
   }

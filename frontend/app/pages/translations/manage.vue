@@ -343,63 +343,64 @@
     </UDrawer>
 
     <!-- Bulk Import Modal -->
-    <UModal v-model="showBulkImportModal">
-      <div class="p-6">
-        <h3 class="text-lg font-semibold mb-4">Bulk Import Translations</h3>
+    <UModal v-model:open="showBulkImportModal" title="Bulk Import Translations">
+      <template #body>
+        <div class="space-y-4">
+          <UFormField label="Import Format" name="format">
+            <USelect
+              v-model="bulkImportFormat"
+              :options="[
+                { label: 'CSV', value: 'CSV' },
+                { label: 'JSON', value: 'JSON' },
+              ]"
+            />
+          </UFormField>
 
-        <UFormField label="Import Format" name="format" class="mb-4">
-          <USelect
-            v-model="bulkImportFormat"
-            :options="[
-              { label: 'CSV', value: 'CSV' },
-              { label: 'JSON', value: 'JSON' },
-            ]"
-          />
-        </UFormField>
+          <UFormField label="Upload File" name="file">
+            <input
+              type="file"
+              :accept="bulkImportFormat === 'CSV' ? '.csv' : '.json'"
+              @change="handleFileUpload"
+              class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100"
+            />
+          </UFormField>
 
-        <UFormField label="Upload File" name="file" class="mb-4">
-          <input
-            type="file"
-            :accept="bulkImportFormat === 'CSV' ? '.csv' : '.json'"
-            @change="handleFileUpload"
-            class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100"
-          />
-        </UFormField>
-
-        <div v-if="bulkImportFormat === 'CSV'" class="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mb-4">
-          <h5 class="text-sm font-medium mb-2">CSV Format:</h5>
-          <code class="text-xs">key,lang,text</code>
-          <p class="text-xs text-gray-500 mt-1">Header row required. One translation per row.</p>
+          <div v-if="bulkImportFormat === 'CSV'" class="bg-gray-50 dark:bg-gray-800 rounded-lg p-4">
+            <h5 class="text-sm font-medium mb-2">CSV Format:</h5>
+            <code class="text-xs">key,lang,text</code>
+            <p class="text-xs text-gray-500 mt-1">Header row required. One translation per row.</p>
+          </div>
         </div>
+      </template>
 
+      <template #footer>
         <div class="flex justify-end space-x-3">
           <UButton variant="outline" @click="showBulkImportModal = false">Cancel</UButton>
           <UButton @click="performBulkImport" :loading="bulkImportLoading" :disabled="!bulkImportFile"> Import </UButton>
         </div>
-      </div>
+      </template>
     </UModal>
 
     <!-- Delete Confirmation Modal -->
-    <UModal v-model="showDeleteModal">
-      <div class="p-6">
+    <UModal v-model:open="showDeleteModal" title="Delete Translation" description="This action cannot be undone">
+      <template #body>
         <div class="flex items-center space-x-4 mb-4">
           <UIcon name="i-lucide-alert-triangle" class="text-red-500 text-2xl" />
           <div>
-            <h3 class="text-lg font-semibold">Delete Translation</h3>
-            <p class="text-sm text-gray-500">This action cannot be undone</p>
+            <p class="text-sm">
+              Are you sure you want to delete the <strong>{{ deleteTarget?.lang }}</strong> translation for <code class="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded">{{ deleteTarget?.key }}</code
+              >?
+            </p>
           </div>
         </div>
+      </template>
 
-        <p class="mb-6">
-          Are you sure you want to delete the <strong>{{ deleteTarget?.lang }}</strong> translation for <code class="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded">{{ deleteTarget?.key }}</code
-          >?
-        </p>
-
+      <template #footer>
         <div class="flex justify-end space-x-3">
           <UButton variant="outline" @click="showDeleteModal = false">Cancel</UButton>
           <UButton color="error" @click="deleteTranslation" :loading="deleteLoading" icon="i-lucide-trash-2"> Delete Translation </UButton>
         </div>
-      </div>
+      </template>
     </UModal>
   </UDashboardPage>
 </template>
