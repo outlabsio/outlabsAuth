@@ -1,25 +1,16 @@
 import { useState, useMemo, useEffect } from "react";
-import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { AppSidebar } from "@/components/app-sidebar";
 import { useContextStore } from "@/stores/context-store";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-  BreadcrumbLink,
-} from "@/components/ui/breadcrumb";
-import { Separator } from "@/components/ui/separator";
+import { PageHeader } from "@/components/layout/page-header";
 import {
   SidebarInset,
   SidebarProvider,
-  SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
 import {
   Select,
   SelectContent,
@@ -27,20 +18,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Search, Building2, ChevronRight, FolderTree, Users, Calendar, MoreVertical, ArrowRight } from "lucide-react";
-import { ThemeToggle } from "@/components/theme-toggle";
+import { Plus, Search, Building2, ChevronRight, FolderTree } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { authenticatedFetch } from "@/lib/auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EntityDrawer } from "@/components/entities/entity-drawer";
 import { EntityTreeSidebar } from "@/components/entities/entity-tree-sidebar";
+import { EntityCard } from "@/components/entities/entity-card";
 import { requireAuth } from "@/lib/route-guards";
-import { cn } from "@/lib/utils";
 import { 
   Entity, 
   EntityClass, 
   EntityType, 
-  getEntityTypeLabel, 
   isStructuralEntity 
 } from "@/types/entity";
 import { getEntityTypeIcon, getEntityClassIcon } from "@/lib/entity-icons";
@@ -80,96 +69,6 @@ async function fetchEntityPath(entityId: string): Promise<Entity[]> {
 }
 
 
-function EntityCard({ 
-  entity, 
-  onNavigate, 
-  onEdit,
-  hasChildren,
-  childCount = 0
-}: { 
-  entity: Entity; 
-  onNavigate: () => void; 
-  onEdit: () => void;
-  hasChildren: boolean;
-  childCount?: number;
-}) {
-  const navigate = useNavigate();
-  
-  const handleCardClick = () => {
-    navigate({ to: '/entities/$entityId', params: { entityId: entity.id } });
-  };
-  
-  // Get the appropriate icon
-  const Icon = getEntityTypeIcon(entity.entity_type);
-  
-  // Determine card style based on entity type
-  const isStructural = isStructuralEntity(entity);
-  
-  return (
-    <Card className={cn(
-      "group relative overflow-hidden transition-all duration-200",
-      "hover:shadow-md hover:-translate-y-0.5",
-      "bg-card hover:bg-accent/50",
-      isStructural 
-        ? "border-border dark:border-border" 
-        : "border-muted dark:border-muted"
-    )}>
-      <div 
-        className="px-3 py-1.5 cursor-pointer"
-        onClick={handleCardClick}
-      >
-        {/* Ultra-compact single row */}
-        <div className="flex items-center gap-2">
-          {/* Icon with grayscale styling */}
-          <Icon className={cn(
-            "h-3.5 w-3.5 flex-shrink-0",
-            isStructural ? "text-foreground" : "text-muted-foreground"
-          )} />
-          
-          {/* Title */}
-          <h3 className="font-medium text-sm leading-none truncate flex-1">
-            {entity.display_name || entity.name}
-          </h3>
-          
-          {/* Child count if has children */}
-          {hasChildren && (
-            <div className="flex items-center gap-0.5 text-muted-foreground">
-              <Users className="h-3 w-3" />
-              <span className="text-xs">{childCount}</span>
-            </div>
-          )}
-          
-          {/* Status badge if not active */}
-          {entity.status !== "active" && (
-            <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
-              {entity.status}
-            </Badge>
-          )}
-          
-          {/* Action button */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-5 w-5 -mr-1 opacity-0 group-hover:opacity-100 transition-opacity"
-            onClick={(e) => {
-              e.stopPropagation();
-              onEdit();
-            }}
-          >
-            <MoreVertical className="h-3 w-3" />
-          </Button>
-        </div>
-        
-        {/* Description on second line if present */}
-        {entity.description && (
-          <p className="text-xs text-muted-foreground truncate mt-0.5 pl-5 leading-none">
-            {entity.description}
-          </p>
-        )}
-      </div>
-    </Card>
-  );
-}
 
 function EntitiesContent({ 
   onEditEntity,
@@ -484,26 +383,12 @@ function Entities() {
     <SidebarProvider>
       <AppSidebar />
       <SidebarInset>
-        <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
-          <div className="flex items-center justify-between gap-2 px-4 w-full">
-            <div className="flex items-center gap-2">
-              <SidebarTrigger className="-ml-1" />
-              <Separator orientation="vertical" className="mr-2 h-4" />
-              <Breadcrumb>
-                <BreadcrumbList>
-                  <BreadcrumbItem>
-                    <BreadcrumbLink href="/dashboard">Dashboard</BreadcrumbLink>
-                  </BreadcrumbItem>
-                  <BreadcrumbSeparator />
-                  <BreadcrumbItem>
-                    <BreadcrumbPage>Entities</BreadcrumbPage>
-                  </BreadcrumbItem>
-                </BreadcrumbList>
-              </Breadcrumb>
-            </div>
-            <ThemeToggle />
-          </div>
-        </header>
+        <PageHeader 
+          breadcrumbs={[
+            { label: "Dashboard", href: "/dashboard" },
+            { label: "Entities" }
+          ]}
+        />
         <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
           <div className="mx-auto w-full max-w-7xl">
             <div className="flex items-center justify-between mb-6">

@@ -1,13 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppSidebar } from "@/components/app-sidebar";
-import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage } from "@/components/ui/breadcrumb";
-import { Separator } from "@/components/ui/separator";
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { PageHeader } from "@/components/layout/page-header";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Users, Shield, Building2, Activity } from "lucide-react";
 import { requireAuth } from "@/lib/route-guards";
-import { ThemeToggle } from "@/components/theme-toggle";
 
 export const Route = createFileRoute("/dashboard")({
   beforeLoad: requireAuth,
@@ -19,22 +17,11 @@ function Dashboard() {
     <SidebarProvider>
       <AppSidebar />
       <SidebarInset>
-        <header className='flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12'>
-          <div className='flex items-center justify-between gap-2 px-4 w-full'>
-            <div className='flex items-center gap-2'>
-              <SidebarTrigger className='-ml-1' />
-              <Separator orientation='vertical' className='mr-2 h-4' />
-              <Breadcrumb>
-                <BreadcrumbList>
-                  <BreadcrumbItem>
-                    <BreadcrumbPage>Dashboard</BreadcrumbPage>
-                  </BreadcrumbItem>
-                </BreadcrumbList>
-              </Breadcrumb>
-            </div>
-            <ThemeToggle />
-          </div>
-        </header>
+        <PageHeader 
+          breadcrumbs={[
+            { label: "Dashboard" }
+          ]}
+        />
         <div className='flex flex-1 flex-col gap-4 p-4 pt-0'>
           <div className='grid gap-4 md:grid-cols-2 lg:grid-cols-4'>
             <Card>
