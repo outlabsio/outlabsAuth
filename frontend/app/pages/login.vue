@@ -102,7 +102,7 @@ onMounted(() => {
       <UCard>
         <form @submit.prevent="handleSubmit" class="space-y-6">
           <!-- Server Error Alert -->
-          <UAlert v-if="errorMessage" color="red" variant="subtle" icon="i-lucide-alert-circle" :title="errorMessage" :close-button="{ icon: 'i-lucide-x' }" @close="errorMessage = ''" />
+          <UAlert v-if="errorMessage" color="error" variant="subtle" icon="i-lucide-alert-circle" :title="errorMessage" :close-button="{ icon: 'i-lucide-x' }" @close="errorMessage = ''" />
 
           <!-- Username Field -->
           <UFormField label="Username" :error="errors.username" required>
