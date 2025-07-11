@@ -1,64 +1,80 @@
 <script setup lang="ts">
-import type { Entity } from '~/types/auth.types'
+import type { Entity } from "~/types/auth.types";
 
 // Store
-const entitiesStore = useEntitiesStore()
+const entitiesStore = useEntitiesStore();
+const contextStore = useContextStore();
 
 // State
-const selectedEntity = ref<Entity | null>(null)
-const drawerOpen = ref(false)
-const drawerMode = ref<'view' | 'create' | 'edit'>('view')
+const selectedEntity = ref<Entity | null>(null);
+const drawerOpen = ref(false);
+const drawerMode = ref<"view" | "create" | "edit">("view");
 
 // Entity class options
 const entityClassOptions = [
-  { label: 'All', value: '' },
-  { label: 'Structural', value: 'STRUCTURAL' },
-  { label: 'Access Group', value: 'ACCESS_GROUP' }
-]
+  { label: "All", value: "" },
+  { label: "Structural", value: "STRUCTURAL" },
+  { label: "Access Group", value: "ACCESS_GROUP" },
+];
 
 // Fetch entities on mount
 onMounted(() => {
-  entitiesStore.fetchEntities()
-})
+  entitiesStore.fetchEntities();
+});
 
 // Get entity types for filter
-const { data: entityTypes } = await useAsyncData('entity-types', () => entitiesStore.fetchEntityTypes())
-const entityTypeOptions = computed(() => {
-  const options = [{ label: 'All Types', value: '' }]
-  if (entityTypes.value && Array.isArray(entityTypes.value)) {
-    entityTypes.value.forEach(type => {
-      options.push({ 
-        label: type.charAt(0).toUpperCase() + type.slice(1).replace(/_/g, ' '), 
-        value: type 
-      })
-    })
+const { data: entityTypes } = await useAsyncData("entity-types", () => entitiesStore.fetchEntityTypes());
+
+// Context-aware breadcrumb items
+const breadcrumbItems = computed(() => {
+  const items = [{ label: "Dashboard", to: "/dashboard" }];
+
+  if (contextStore.isSystemContext) {
+    items.push({ label: "All Entities", to: "/entities" });
+  } else if (contextStore.selectedOrganization) {
+    items.push({ label: "Entities", to: "/entities" }, { label: contextStore.selectedOrganization.name, to: "/entities" });
+  } else {
+    items.push({ label: "Entities", to: "/entities" });
   }
-  return options
-})
+
+  return items;
+});
+const entityTypeOptions = computed(() => {
+  const options = [{ label: "All Types", value: "" }];
+  if (entityTypes.value && Array.isArray(entityTypes.value)) {
+    entityTypes.value.forEach((type) => {
+      options.push({
+        label: type.charAt(0).toUpperCase() + type.slice(1).replace(/_/g, " "),
+        value: type,
+      });
+    });
+  }
+  return options;
+});
 
 // Methods
 function openCreateDrawer() {
-  selectedEntity.value = null
-  drawerMode.value = 'create'
-  drawerOpen.value = true
+  selectedEntity.value = null;
+  drawerMode.value = "create";
+  drawerOpen.value = true;
 }
 
 function openEntityDrawer(entity: Entity) {
-  selectedEntity.value = entity
-  drawerMode.value = 'edit'
-  drawerOpen.value = true
+  selectedEntity.value = entity;
+  drawerMode.value = "edit";
+  drawerOpen.value = true;
 }
 
 function handleEntityCreated() {
-  entitiesStore.fetchEntities()
+  entitiesStore.fetchEntities();
 }
 
 function handleEntityUpdated() {
-  entitiesStore.fetchEntities()
+  entitiesStore.fetchEntities();
 }
 
 function handleEntityDeleted() {
-  entitiesStore.fetchEntities()
+  entitiesStore.fetchEntities();
 }
 </script>
 
@@ -69,31 +85,24 @@ function handleEntityDeleted() {
         <UDashboardSidebarCollapse />
       </template>
       <template #right>
-        <UButton 
-          icon="i-lucide-plus" 
-          @click="openCreateDrawer"
-        >
-          Create Entity
-        </UButton>
+        <UButton icon="i-lucide-plus" @click="openCreateDrawer"> Create Entity </UButton>
       </template>
     </UDashboardNavbar>
 
     <div class="px-4 py-6 lg:px-8">
+      <!-- Breadcrumb Navigation -->
+      <div class="mb-6">
+        <UBreadcrumb :items="breadcrumbItems" />
+      </div>
 
       <!-- Filters -->
       <UCard class="mb-6">
         <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
           <!-- Search -->
-          <UInput 
-            :model-value="entitiesStore.filters.search"
-            @update:model-value="entitiesStore.setFilters({ search: $event })" 
-            placeholder="Search entities..."
-            icon="i-lucide-search"
-            size="md"
-          />
+          <UInput :model-value="entitiesStore.filters.search" @update:model-value="entitiesStore.setFilters({ search: $event })" placeholder="Search entities..." icon="i-lucide-search" size="md" />
 
           <!-- Entity Class Filter -->
-          <USelectMenu 
+          <USelectMenu
             :model-value="entitiesStore.filters.entity_class"
             @update:model-value="entitiesStore.setFilters({ entity_class: $event })"
             :options="entityClassOptions"
@@ -103,7 +112,7 @@ function handleEntityDeleted() {
           />
 
           <!-- Entity Type Filter -->
-          <USelectMenu 
+          <USelectMenu
             :model-value="entitiesStore.filters.entity_type"
             @update:model-value="entitiesStore.setFilters({ entity_type: $event })"
             :options="entityTypeOptions"
@@ -113,13 +122,7 @@ function handleEntityDeleted() {
           />
 
           <!-- Reset Button -->
-          <UButton 
-            @click="entitiesStore.resetFilters"
-            variant="outline"
-            icon="i-lucide-rotate-ccw"
-          >
-            Reset
-          </UButton>
+          <UButton @click="entitiesStore.resetFilters" variant="outline" icon="i-lucide-rotate-ccw"> Reset </UButton>
         </div>
       </UCard>
 
@@ -130,45 +133,27 @@ function handleEntityDeleted() {
       </div>
 
       <!-- Error State -->
-      <UAlert 
-        v-else-if="entitiesStore.error" 
-        color="error" 
-        variant="subtle"
-        icon="i-lucide-alert-circle"
-        :title="entitiesStore.error"
-      />
+      <UAlert v-else-if="entitiesStore.error" color="error" variant="subtle" icon="i-lucide-alert-circle" :title="entitiesStore.error" />
 
       <!-- Entities Grid -->
       <div v-else-if="entitiesStore.entities.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <UCard 
-          v-for="entity in entitiesStore.entities" 
-          :key="entity.id"
-          @click="openEntityDrawer(entity)"
-          class="cursor-pointer hover:shadow-lg transition-shadow"
-        >
+        <UCard v-for="entity in entitiesStore.entities" :key="entity.id" @click="openEntityDrawer(entity)" class="cursor-pointer hover:shadow-lg transition-shadow">
           <div class="flex items-start justify-between">
             <div class="flex-1">
               <div class="flex items-center gap-2 mb-1">
-                <UIcon 
-                  :name="entity.entity_class === 'STRUCTURAL' ? 'i-lucide-building' : 'i-lucide-users'"
-                  class="h-4 w-4 text-primary"
-                />
+                <UIcon :name="entity.entity_class === 'STRUCTURAL' ? 'i-lucide-building' : 'i-lucide-users'" class="h-4 w-4 text-primary" />
                 <h3 class="font-semibold">
                   {{ entity.display_name || entity.name }}
                 </h3>
               </div>
               <p class="text-sm text-gray-600 dark:text-gray-400">
-                {{ entity.entity_type.replace(/_/g, ' ') }}
+                {{ entity.entity_type.replace(/_/g, " ") }}
               </p>
               <p v-if="entity.description" class="text-sm text-gray-500 mt-1 line-clamp-2">
                 {{ entity.description }}
               </p>
             </div>
-            <UBadge 
-              :color="entity.status === 'active' ? 'success' : 'neutral'"
-              variant="subtle"
-              size="xs"
-            >
+            <UBadge :color="entity.status === 'active' ? 'success' : 'neutral'" variant="subtle" size="xs">
               {{ entity.status }}
             </UBadge>
           </div>
@@ -180,38 +165,20 @@ function handleEntityDeleted() {
         <UIcon name="i-lucide-building" class="h-12 w-12 text-gray-400 mb-4" />
         <h3 class="text-lg font-semibold mb-2">No entities found</h3>
         <p class="text-gray-600 dark:text-gray-400 mb-4">
-          {{ entitiesStore.filters.search || entitiesStore.filters.entity_class || entitiesStore.filters.entity_type 
-            ? 'Try adjusting your filters' 
-            : 'Get started by creating your first entity' }}
+          {{ entitiesStore.filters.search || entitiesStore.filters.entity_class || entitiesStore.filters.entity_type ? "Try adjusting your filters" : "Get started by creating your first entity" }}
         </p>
-        <UButton 
-          v-if="!entitiesStore.filters.search && !entitiesStore.filters.entity_class && !entitiesStore.filters.entity_type"
-          icon="i-lucide-plus" 
-          @click="openCreateDrawer"
-        >
+        <UButton v-if="!entitiesStore.filters.search && !entitiesStore.filters.entity_class && !entitiesStore.filters.entity_type" icon="i-lucide-plus" @click="openCreateDrawer">
           Create Entity
         </UButton>
       </UCard>
 
       <!-- Pagination -->
       <div v-if="entitiesStore.pagination.total > entitiesStore.pagination.pageSize" class="mt-6 flex justify-center">
-        <UPagination 
-          :model-value="entitiesStore.pagination.page"
-          @update:model-value="entitiesStore.setPage"
-          :page-count="entitiesStore.pagination.pageSize"
-          :total="entitiesStore.pagination.total"
-        />
+        <UPagination :model-value="entitiesStore.pagination.page" @update:model-value="entitiesStore.setPage" :page-count="entitiesStore.pagination.pageSize" :total="entitiesStore.pagination.total" />
       </div>
     </div>
 
     <!-- Entity Drawer -->
-    <EntitiesDrawer
-      v-model:open="drawerOpen"
-      :entity="selectedEntity"
-      :mode="drawerMode"
-      @created="handleEntityCreated"
-      @updated="handleEntityUpdated"
-      @deleted="handleEntityDeleted"
-    />
+    <EntitiesDrawer v-model:open="drawerOpen" :entity="selectedEntity" :mode="drawerMode" @created="handleEntityCreated" @updated="handleEntityUpdated" @deleted="handleEntityDeleted" />
   </UDashboardPanel>
 </template>

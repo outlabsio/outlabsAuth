@@ -31,7 +31,7 @@ export const useAuthStore = defineStore("auth", () => {
         state.accessToken = response.access_token;
         state.refreshToken = "httponly-cookie"; // Refresh token remains as httpOnly cookie
         state.isAuthenticated = true;
-        
+
         return response.access_token;
       }
 
@@ -47,7 +47,12 @@ export const useAuthStore = defineStore("auth", () => {
     const userStore = useUserStore();
 
     const makeRequest = async (token: string | null) => {
+      // Get context headers from context store
+      const contextStore = useContextStore();
+      const contextHeaders = contextStore?.getContextHeaders || {};
+
       const headers = {
+        ...contextHeaders,
         ...options.headers,
         ...(token && { Authorization: `Bearer ${token}` }),
       };
@@ -108,7 +113,7 @@ export const useAuthStore = defineStore("auth", () => {
         state.isAuthenticated = true;
         return true;
       }
-      
+
       // No access token, check for refresh token cookie
       // The refresh token is httpOnly, so we can't read it directly
       // Try to refresh and see if it works
@@ -167,7 +172,7 @@ export const useAuthStore = defineStore("auth", () => {
       // Fetch user data
       const userData = await apiCall<User>("/v1/auth/me");
       console.log("User data fetched:", userData);
-      
+
       state.user = userData;
 
       const userStore = useUserStore();
@@ -184,11 +189,11 @@ export const useAuthStore = defineStore("auth", () => {
   const logout = async () => {
     try {
       if (state.refreshToken) {
-        await apiCall("/v1/auth/logout", { 
+        await apiCall("/v1/auth/logout", {
           method: "POST",
           body: {
-            refresh_token: state.refreshToken
-          }
+            refresh_token: state.refreshToken,
+          },
         });
       }
     } catch (error) {
@@ -197,12 +202,12 @@ export const useAuthStore = defineStore("auth", () => {
       clearAuth();
       const userStore = useUserStore();
       userStore.$reset();
-      
+
       // Clear cookie
-      const tokenCookie = useCookie('auth-token');
+      const tokenCookie = useCookie("auth-token");
       tokenCookie.value = null;
-      
-      await navigateTo('/login');
+
+      await navigateTo("/login");
       return true;
     }
   };
@@ -308,7 +313,7 @@ export const useAuthStore = defineStore("auth", () => {
     refreshToken: computed(() => state.refreshToken),
     user: computed(() => state.user),
     isReady,
-    
+
     // Actions
     initialize,
     login,
@@ -322,7 +327,7 @@ export const useAuthStore = defineStore("auth", () => {
     resendVerificationEmail,
     verifyUser,
     signup,
-    
+
     // Debug helper
     getState: () => state,
   };

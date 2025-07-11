@@ -1,0 +1,43 @@
+{
+  "name": "nuxt-ui-pro-template-dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "nuxt build",
+    "dev": "nuxt dev",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare",
+    "lint": "eslint .",
+    "typecheck": "nuxt typecheck"
+  },
+  "dependencies": {
+    "@iconify-json/lucide": "^1.2.53",
+    "@iconify-json/simple-icons": "^1.2.40",
+    "@nuxt/ui-pro": "^3.2.0",
+    "@unovis/ts": "^1.5.2",
+    "@unovis/vue": "^1.5.2",
+    "@vueuse/nuxt": "^13.4.0",
+    "date-fns": "^4.1.0",
+    "nuxt": "^3.17.6",
+    "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "@nuxt/eslint": "^1.4.1",
+    "eslint": "^9.30.0",
+    "typescript": "^5.8.3",
+    "vue-tsc": "^2.2.10"
+  },
+  "resolutions": {
+    "unimport": "4.1.1"
+  },
+  "pnpm": {
+    "ignoredBuiltDependencies": [
+      "@parcel/watcher",
+      "esbuild",
+      "maplibre-gl",
+      "vue-demi"
+    ]
+  },
+  "packageManager": "pnpm@10.12.4"
+}
