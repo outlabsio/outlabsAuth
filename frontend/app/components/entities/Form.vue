@@ -76,19 +76,17 @@ const { data: entityTypes } = await useAsyncData("entity-types", () => entitiesS
   default: () => [],
 });
 
-// Entity class options with icons and descriptions
-const entityClassOptions = [
+// Entity class tabs
+const entityClassTabs = [
   {
     value: "STRUCTURAL",
     label: "Structural Entity",
-    description: "Organizational units in your hierarchy",
     icon: "i-lucide-building",
     disabled: props.mode === "edit",
   },
   {
     value: "ACCESS_GROUP",
     label: "Access Group",
-    description: "Groups for managing permissions and access",
     icon: "i-lucide-users",
     disabled: props.mode === "edit",
   },
@@ -240,17 +238,10 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
 
       <!-- Entity Class -->
       <UFormField label="Entity Class" name="entity_class" class="w-full">
-        <URadioGroup v-model="selectedClass" :options="entityClassOptions" class="w-full">
-          <template #label="{ option }">
-            <div class="flex items-center gap-2">
-              <UIcon :name="option.icon" class="h-4 w-4" />
-              <span>{{ option.label }}</span>
-            </div>
-          </template>
-          <template #description="{ option }">
-            <span class="text-xs">{{ option.description }}</span>
-          </template>
-        </URadioGroup>
+        <UTabs v-model="selectedClass" :content="false" :items="entityClassTabs" variant="pill" color="primary" class="w-full" />
+        <div class="mt-2 text-xs text-muted-foreground">
+          {{ selectedClass === "STRUCTURAL" ? "Organizational units in your hierarchy" : "Groups for managing permissions and access" }}
+        </div>
       </UFormField>
 
       <!-- Entity Type and Parent in Grid -->
