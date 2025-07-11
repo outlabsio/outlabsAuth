@@ -1,75 +1,70 @@
 <script setup lang="ts">
+import { useForm } from "@tanstack/vue-form";
+import * as z from "zod";
+
 definePageMeta({
   layout: "auth",
-})
+});
+
+// Validation schema
+const loginSchema = z.object({
+  username: z.string().min(1, "Email is required").email("Please enter a valid email address"),
+  password: z.string().min(1, "Password is required").min(6, "Password must be at least 6 characters"),
+  rememberMe: z.boolean().optional(),
+});
+
+type LoginFormData = z.infer<typeof loginSchema>;
 
 // Store references
-const authStore = useAuthStore()
-const router = useRouter()
+const authStore = useAuthStore();
+const router = useRouter();
 
 // Form state
-const isLoading = ref(false)
-const errorMessage = ref('')
-const formData = reactive({
-  username: '',
-  password: '',
-  rememberMe: false
-})
+const serverError = ref("");
 
-// Form errors
-const errors = reactive({
-  username: '',
-  password: ''
-})
+// Initialize TanStack Form
+const form = useForm({
+  defaultValues: {
+    username: "",
+    password: "",
+    rememberMe: false,
+  } as LoginFormData,
+  onSubmit: async ({ value }) => {
+    serverError.value = "";
 
-// Validate form
-function validateForm() {
-  errors.username = formData.username ? '' : 'Username is required'
-  errors.password = formData.password ? '' : 'Password is required'
-  
-  return !errors.username && !errors.password
-}
+    try {
+      console.log("Submitting login with:", { username: value.username, password: "***" });
+      await authStore.login(value.username, value.password);
+      await router.push("/dashboard");
+    } catch (error: any) {
+      console.error("Login error:", error);
 
-// Handle form submission
-async function handleSubmit() {
-  if (!validateForm()) return
-  
-  isLoading.value = true
-  errorMessage.value = ''
-  
-  try {
-    console.log('Submitting login with:', { username: formData.username, password: '***' })
-    await authStore.login(formData.username, formData.password)
-    await router.push('/dashboard')
-  } catch (error: any) {
-    console.error('Login error:', error)
-    if (error.data?.detail) {
-      // Handle array of validation errors
-      if (Array.isArray(error.data.detail)) {
-        errorMessage.value = error.data.detail.map((err: any) => err.msg).join(', ')
-      } else if (typeof error.data.detail === 'string') {
-        errorMessage.value = error.data.detail
+      // Handle different error formats
+      if (error.data?.detail) {
+        if (Array.isArray(error.data.detail)) {
+          serverError.value = error.data.detail.map((err: any) => err.msg).join(", ");
+        } else if (typeof error.data.detail === "string") {
+          serverError.value = error.data.detail;
+        } else {
+          serverError.value = JSON.stringify(error.data.detail);
+        }
+      } else if (error.statusMessage) {
+        serverError.value = error.statusMessage;
+      } else if (error.status === 422) {
+        serverError.value = "Invalid credentials. Please check your username and password.";
       } else {
-        errorMessage.value = JSON.stringify(error.data.detail)
+        serverError.value = "Login failed. Please check your credentials.";
       }
-    } else if (error.statusMessage) {
-      errorMessage.value = error.statusMessage
-    } else if (error.status === 422) {
-      errorMessage.value = 'Invalid credentials. Please check your username and password.'
-    } else {
-      errorMessage.value = 'Login failed. Please check your credentials.'
     }
-  } finally {
-    isLoading.value = false
-  }
-}
+  },
+});
 
 // Redirect if already authenticated
 onMounted(() => {
   if (authStore.isAuthenticated) {
-    router.push('/dashboard')
+    router.push("/dashboard");
   }
-})
+});
 </script>
 
 <template>
@@ -80,92 +75,131 @@ onMounted(() => {
         <div class="flex justify-center mb-6">
           <UIcon name="i-lucide-shield-check" class="h-12 w-12 text-primary" />
         </div>
-        <h2 class="text-3xl font-bold tracking-tight">
-          Sign in to OutlabsAuth
-        </h2>
-        <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
-          Enter your credentials to access the admin dashboard
-        </p>
+        <h2 class="text-3xl font-bold tracking-tight">Sign in to OutlabsAuth</h2>
+        <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">Enter your credentials to access the admin dashboard</p>
       </div>
 
       <!-- Login Form Card -->
       <UCard>
-        <form @submit.prevent="handleSubmit" class="space-y-6">
-          <!-- Error Alert -->
-          <UAlert 
-            v-if="errorMessage" 
-            color="red" 
-            variant="subtle"
-            icon="i-lucide-alert-circle"
-            :title="errorMessage"
-            :close-button="{ icon: 'i-lucide-x' }"
-            @close="errorMessage = ''"
-          />
+        <form @submit.prevent.stop="form.handleSubmit" class="space-y-6">
+          <!-- Server Error Alert -->
+          <UAlert v-if="serverError" color="error" variant="subtle" icon="i-lucide-alert-circle" :title="serverError" :close-button="{ icon: 'i-lucide-x' }" @close="serverError = ''" />
 
-          <!-- Email Field -->
-          <UFormField 
-            label="Email" 
-            :error="errors.username"
-            required
+          <!-- Email Field with Live Validation -->
+          <form.Field
+            name="username"
+            :validators="{
+              onChange: ({ value }) => {
+                if (!value) return 'Email is required';
+                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                if (!emailRegex.test(value)) return 'Please enter a valid email address';
+                return undefined;
+              },
+              onBlur: ({ value }) => {
+                if (!value) return 'Email is required';
+                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                if (!emailRegex.test(value)) return 'Please enter a valid email address';
+                return undefined;
+              },
+            }"
           >
-            <UInput 
-              v-model="formData.username" 
-              type="email"
-              placeholder="Enter your email"
-              size="lg"
-              :disabled="isLoading"
-              @blur="validateForm"
-              autofocus
-            />
-          </UFormField>
-
-          <!-- Password Field -->
-          <UFormField 
-            label="Password" 
-            :error="errors.password"
-            required
-          >
-            <template #hint>
-              <NuxtLink to="/recovery" class="text-sm text-primary hover:underline">
-                Forgot password?
-              </NuxtLink>
+            <template v-slot="{ field }">
+              <UFormField label="Email" :error="field.state.meta.errors.length ? field.state.meta.errors[0] : undefined" required>
+                <UInput
+                  :model-value="field.state.value"
+                  @update:model-value="(value) => field.handleChange(String(value))"
+                  @blur="field.handleBlur"
+                  type="email"
+                  placeholder="Enter your email"
+                  size="lg"
+                  autofocus
+                />
+              </UFormField>
             </template>
-            <UInput 
-              v-model="formData.password" 
-              type="password"
-              placeholder="Enter your password"
-              size="lg"
-              :disabled="isLoading"
-              @blur="validateForm"
-            />
-          </UFormField>
+          </form.Field>
+
+          <!-- Password Field with Live Validation -->
+          <form.Field
+            name="password"
+            :validators="{
+              onChange: ({ value }) => {
+                if (!value) return 'Password is required';
+                if (value.length < 6) return 'Password must be at least 6 characters';
+                return undefined;
+              },
+              onBlur: ({ value }) => {
+                if (!value) return 'Password is required';
+                if (value.length < 6) return 'Password must be at least 6 characters';
+                return undefined;
+              },
+            }"
+          >
+            <template v-slot="{ field }">
+              <UFormField label="Password" :error="field.state.meta.errors.length ? field.state.meta.errors[0] : undefined" required>
+                <template #hint>
+                  <NuxtLink to="/recovery" class="text-sm text-primary hover:underline"> Forgot password? </NuxtLink>
+                </template>
+                <UInput
+                  :model-value="field.state.value"
+                  @update:model-value="(value) => field.handleChange(String(value))"
+                  @blur="field.handleBlur"
+                  type="password"
+                  placeholder="Enter your password"
+                  size="lg"
+                />
+              </UFormField>
+            </template>
+          </form.Field>
 
           <!-- Remember Me Checkbox -->
-          <UCheckbox 
-            v-model="formData.rememberMe"
-            label="Remember me"
-            :disabled="isLoading"
-          />
+          <form.Field name="rememberMe">
+            <template v-slot="{ field }">
+              <UCheckbox :model-value="field.state.value" @update:model-value="(value) => field.handleChange(Boolean(value))" label="Remember me" />
+            </template>
+          </form.Field>
 
-          <!-- Submit Button -->
-          <UButton 
-            type="submit" 
-            block 
-            size="lg"
-            :loading="isLoading"
-            :disabled="isLoading"
-          >
-            {{ isLoading ? 'Signing in...' : 'Sign in' }}
-          </UButton>
+          <!-- Submit Button with Form State -->
+          <form.Subscribe>
+            <template v-slot="{ canSubmit, isSubmitting }">
+              <UButton type="submit" block size="lg" :loading="isSubmitting" :disabled="!canSubmit || isSubmitting">
+                {{ isSubmitting ? "Signing in..." : "Sign in" }}
+              </UButton>
+            </template>
+          </form.Subscribe>
 
           <!-- Sign up link -->
           <div class="text-center text-sm">
-            Don't have an account? 
-            <NuxtLink to="/signup" class="text-primary font-medium hover:underline">
-              Sign up
-            </NuxtLink>
+            Don't have an account?
+            <NuxtLink to="/signup" class="text-primary font-medium hover:underline"> Sign up </NuxtLink>
           </div>
         </form>
+
+        <!-- Debug Form State (only in development) -->
+        <div v-if="$dev" class="mt-6 p-4 bg-gray-50 dark:bg-gray-900 rounded-lg">
+          <h4 class="font-medium mb-2 text-sm">Form State (Dev Only)</h4>
+          <form.Subscribe>
+            <template v-slot="{ values, errors, isValid, canSubmit }">
+              <div class="space-y-2 text-xs">
+                <div class="flex gap-2">
+                  <UBadge :color="isValid ? 'success' : 'error'" size="xs">
+                    {{ isValid ? "Valid" : "Invalid" }}
+                  </UBadge>
+                  <UBadge :color="canSubmit ? 'success' : 'warning'" size="xs">
+                    {{ canSubmit ? "Can Submit" : "Cannot Submit" }}
+                  </UBadge>
+                </div>
+                <div>
+                  <strong>Values:</strong>
+                  <pre class="text-xs mt-1 p-2 bg-white dark:bg-gray-800 rounded">{{ JSON.stringify(values, null, 2) }}</pre>
+                </div>
+                <div v-if="Object.keys(errors).length">
+                  <strong>Errors:</strong>
+                  <pre class="text-xs mt-1 p-2 bg-red-50 dark:bg-red-900/20 rounded">{{ JSON.stringify(errors, null, 2) }}</pre>
+                </div>
+              </div>
+            </template>
+          </form.Subscribe>
+        </div>
       </UCard>
     </div>
   </div>
