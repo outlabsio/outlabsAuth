@@ -27,7 +27,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Search, Building2, ChevronRight, FolderOpen, FolderTree } from "lucide-react";
+import { Plus, Search, Building2, ChevronRight, FolderTree, Users, Calendar, MoreVertical, ArrowRight } from "lucide-react";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { useQuery } from "@tanstack/react-query";
 import { authenticatedFetch } from "@/lib/auth";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -78,116 +79,122 @@ async function fetchEntityPath(entityId: string): Promise<Entity[]> {
   return response.json();
 }
 
-function EntityTypeBadge({ type }: { type: EntityType }) {
-  const colors: Record<EntityType, string> = {
-    [EntityType.PLATFORM]: "bg-purple-100 text-purple-800",
-    [EntityType.ORGANIZATION]: "bg-blue-100 text-blue-800",
-    [EntityType.DIVISION]: "bg-green-100 text-green-800",
-    [EntityType.BRANCH]: "bg-yellow-100 text-yellow-800",
-    [EntityType.TEAM]: "bg-orange-100 text-orange-800",
-    [EntityType.FUNCTIONAL_GROUP]: "bg-pink-100 text-pink-800",
-    [EntityType.PERMISSION_GROUP]: "bg-red-100 text-red-800",
-    [EntityType.PROJECT_GROUP]: "bg-indigo-100 text-indigo-800",
-    [EntityType.ROLE_GROUP]: "bg-teal-100 text-teal-800",
-    [EntityType.ACCESS_GROUP]: "bg-gray-100 text-gray-800",
-  };
-
-  return (
-    <Badge className={`${colors[type]} border-0`}>
-      {(() => {
-        const Icon = getEntityTypeIcon(type);
-        return <Icon className="h-3 w-3 mr-1" />;
-      })()}
-      {getEntityTypeLabel(type)}
-    </Badge>
-  );
-}
 
 function EntityCard({ 
   entity, 
   onNavigate, 
   onEdit,
-  hasChildren 
+  hasChildren,
+  childCount = 0
 }: { 
   entity: Entity; 
   onNavigate: () => void; 
   onEdit: () => void;
   hasChildren: boolean;
+  childCount?: number;
 }) {
   const navigate = useNavigate();
   
   const handleCardClick = () => {
-    // Always go to details page when clicking the card
     navigate({ to: '/entities/$entityId', params: { entityId: entity.id } });
   };
   
+  // Get the appropriate icon
+  const Icon = getEntityTypeIcon(entity.entity_type);
+  
+  // Determine card style based on entity type
+  const isStructural = isStructuralEntity(entity);
+  
   return (
-    <Card className="group hover:shadow-md transition-shadow">
-      <CardHeader className="cursor-pointer" onClick={handleCardClick}>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="text-2xl">
-              {hasChildren ? (
-                <FolderOpen className="h-6 w-6 text-muted-foreground group-hover:text-foreground transition-colors" />
-              ) : (
-                (() => {
-                  const Icon = getEntityTypeIcon(entity.entity_type);
-                  return <Icon className="h-6 w-6" />;
-                })()
-              )}
+    <Card className={cn(
+      "group relative overflow-hidden transition-all duration-200",
+      "hover:shadow-md hover:-translate-y-0.5",
+      "border-border/50 hover:border-border"
+    )}>
+      {/* Subtle accent line at top */}
+      <div className={cn(
+        "absolute top-0 left-0 right-0 h-0.5 transition-all duration-200",
+        "bg-gradient-to-r",
+        isStructural ? "from-primary/60 to-primary/20" : "from-muted-foreground/40 to-muted-foreground/10",
+        "group-hover:h-1"
+      )} />
+      
+      <div 
+        className="p-4 cursor-pointer space-y-2"
+        onClick={handleCardClick}
+      >
+        {/* Compact header row */}
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            {/* Compact icon */}
+            <div className={cn(
+              "rounded p-1.5 flex-shrink-0",
+              isStructural ? "bg-primary/10" : "bg-muted-foreground/10"
+            )}>
+              <Icon className={cn(
+                "h-4 w-4",
+                isStructural ? "text-primary" : "text-muted-foreground"
+              )} />
             </div>
-            <div>
-              <CardTitle className="text-lg flex items-center gap-2">
-                {entity.name}
-                {hasChildren && (
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                )}
-              </CardTitle>
-              {entity.slug && (
-                <p className="text-xs text-muted-foreground mt-0.5">{entity.slug}</p>
+            
+            {/* Title and type in one line */}
+            <div className="flex-1 min-w-0 flex items-center gap-2">
+              <h3 className="font-medium text-sm truncate">
+                {entity.display_name || entity.name}
+              </h3>
+              <Badge 
+                variant="secondary" 
+                className="text-[10px] px-1.5 py-0 h-4 flex-shrink-0"
+              >
+                {getEntityTypeLabel(entity.entity_type)}
+              </Badge>
+              {hasChildren && (
+                <div className="flex items-center gap-0.5 text-muted-foreground flex-shrink-0">
+                  <Users className="h-3 w-3" />
+                  <span className="text-xs">{childCount}</span>
+                </div>
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <EntityTypeBadge type={entity.entity_type} />
-            <Badge variant={entity.status === "active" ? "default" : "secondary"}>
+          
+          {/* Compact action menu */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 -mr-1 opacity-0 group-hover:opacity-100 transition-opacity"
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit();
+            }}
+          >
+            <MoreVertical className="h-3 w-3" />
+          </Button>
+        </div>
+        
+        {/* System name if different */}
+        {entity.name !== entity.display_name && entity.display_name && (
+          <p className="text-[10px] text-muted-foreground font-mono pl-6">
+            {entity.name}
+          </p>
+        )}
+        
+        {/* Description - only if present */}
+        {entity.description && (
+          <p className="text-xs text-muted-foreground line-clamp-1 pl-6">
+            {entity.description}
+          </p>
+        )}
+        
+        {/* Compact footer with date and status */}
+        <div className="flex items-center justify-between pl-6 text-[10px] text-muted-foreground">
+          <span>Created {new Date(entity.created_at).toLocaleDateString()}</span>
+          {entity.status !== "active" && (
+            <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
               {entity.status}
             </Badge>
-          </div>
+          )}
         </div>
-        {entity.description && (
-          <CardDescription className="mt-2">
-            {entity.description}
-          </CardDescription>
-        )}
-      </CardHeader>
-      <CardContent>
-        <div className="flex items-center justify-between text-sm text-muted-foreground">
-          <span>Created {new Date(entity.created_at).toLocaleDateString()}</span>
-          <div className="flex items-center gap-2">
-            <Button 
-              variant="ghost" 
-              size="sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleCardClick();
-              }}
-            >
-              View Details
-            </Button>
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              onClick={(e) => {
-                e.stopPropagation();
-                onEdit();
-              }}
-            >
-              Edit
-            </Button>
-          </div>
-        </div>
-      </CardContent>
+      </div>
     </Card>
   );
 }
@@ -389,7 +396,8 @@ function EntitiesContent({
                     entity={entity} 
                     onNavigate={() => onNavigateToEntity(entity.id)}
                     onEdit={() => onEditEntity(entity)}
-                    hasChildren={childCounts.get(entity.id) > 0}
+                    hasChildren={(childCounts.get(entity.id) || 0) > 0}
+                    childCount={childCounts.get(entity.id) || 0}
                   />
                 ))}
               </div>
@@ -412,7 +420,8 @@ function EntitiesContent({
                     entity={entity} 
                     onNavigate={() => onNavigateToEntity(entity.id)}
                     onEdit={() => onEditEntity(entity)}
-                    hasChildren={childCounts.get(entity.id) > 0}
+                    hasChildren={(childCounts.get(entity.id) || 0) > 0}
+                    childCount={childCounts.get(entity.id) || 0}
                   />
                 ))}
               </div>
@@ -504,20 +513,23 @@ function Entities() {
       <AppSidebar />
       <SidebarInset>
         <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
-          <div className="flex items-center gap-2 px-4">
-            <SidebarTrigger className="-ml-1" />
-            <Separator orientation="vertical" className="mr-2 h-4" />
-            <Breadcrumb>
-              <BreadcrumbList>
-                <BreadcrumbItem>
-                  <BreadcrumbLink href="/dashboard">Dashboard</BreadcrumbLink>
-                </BreadcrumbItem>
-                <BreadcrumbSeparator />
-                <BreadcrumbItem>
-                  <BreadcrumbPage>Entities</BreadcrumbPage>
-                </BreadcrumbItem>
-              </BreadcrumbList>
-            </Breadcrumb>
+          <div className="flex items-center justify-between gap-2 px-4 w-full">
+            <div className="flex items-center gap-2">
+              <SidebarTrigger className="-ml-1" />
+              <Separator orientation="vertical" className="mr-2 h-4" />
+              <Breadcrumb>
+                <BreadcrumbList>
+                  <BreadcrumbItem>
+                    <BreadcrumbLink href="/dashboard">Dashboard</BreadcrumbLink>
+                  </BreadcrumbItem>
+                  <BreadcrumbSeparator />
+                  <BreadcrumbItem>
+                    <BreadcrumbPage>Entities</BreadcrumbPage>
+                  </BreadcrumbItem>
+                </BreadcrumbList>
+              </Breadcrumb>
+            </div>
+            <ThemeToggle />
           </div>
         </header>
         <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
