@@ -26,7 +26,7 @@
         :ui="{ input: '[&>input]:h-8 [&>input]:text-sm' }"
         class="h-80"
         @update:model-value="handleSelect"
-        v-model:search-term="inputValue"
+        v-model:search-term="searchTerm"
       />
     </template>
   </UPopover>
@@ -62,15 +62,7 @@ const entitiesStore = useEntitiesStore();
 
 // State
 const selectedValue = ref<any>(null);
-const inputValue = ref(props.modelValue || "");
-
-// Watch for changes in modelValue prop
-watch(
-  () => props.modelValue,
-  (newValue) => {
-    inputValue.value = newValue || "";
-  }
-);
+const searchTerm = ref("");
 
 // Fetch entity type suggestions
 const { data: suggestions, pending } = await useLazyAsyncData(
@@ -79,11 +71,11 @@ const { data: suggestions, pending } = await useLazyAsyncData(
     entitiesStore.fetchEntityTypeSuggestions({
       entityClass: props.entityClass,
       platformId: props.platformId,
-      search: inputValue.value,
+      search: searchTerm.value,
     }),
   {
     default: () => ({ suggestions: [], total: 0 }),
-    watch: [() => props.entityClass, () => props.platformId],
+    watch: [() => props.entityClass, () => props.platformId, searchTerm],
   }
 );
 
@@ -98,22 +90,24 @@ const commandGroups = computed(() => {
   const recentSuggestions = suggestions.value.suggestions.filter((s) => !s.is_predefined && s.count > 0);
 
   // Create new option if input doesn't match existing
-  const formattedInput = inputValue.value ? inputValue.value.toLowerCase().replace(/\s+/g, "_") : "";
+  const formattedInput = searchTerm.value ? searchTerm.value.toLowerCase().replace(/\s+/g, "_") : "";
   const matchesExisting = suggestions.value.suggestions.some((s) => s.entity_type === formattedInput);
 
-  if (inputValue.value && !matchesExisting) {
+  if (searchTerm.value && !matchesExisting) {
+    const newItem = {
+      id: `create-${formattedInput}`,
+      label: `Create "${formatEntityTypeLabel(formattedInput)}"`,
+      entity_type: formattedInput,
+      chip: { label: "New", color: "primary" },
+      icon: "i-lucide-plus",
+    };
+
+    console.log("Creating new item with chip:", newItem);
+
     groups.push({
       id: "create-new",
       label: "Create New",
-      items: [
-        {
-          id: `create-${formattedInput}`,
-          label: `Create "${formatEntityTypeLabel(formattedInput)}"`,
-          entity_type: formattedInput,
-          chip: { label: "New", color: "primary" },
-          icon: "i-lucide-plus",
-        },
-      ],
+      items: [newItem],
     });
   }
 
@@ -165,15 +159,7 @@ function handleSelect(item: any) {
   }
 }
 
-// Watch inputValue changes for auto-formatting
-watch(inputValue, (newValue) => {
-  if (newValue && typeof newValue === "string") {
-    const formattedValue = newValue.toLowerCase().replace(/\s+/g, "_");
-    emit("update:modelValue", formattedValue);
-  }
-});
-
-// Watch for external value changes
+// Watch for external value changes (when form resets or loads existing data)
 watch(
   () => props.modelValue,
   (newValue) => {
@@ -189,11 +175,4 @@ watch(
   },
   { immediate: true }
 );
-
-// Initialize input value
-watchEffect(() => {
-  if (props.modelValue && !inputValue.value) {
-    inputValue.value = formatEntityTypeLabel(props.modelValue);
-  }
-});
 </script>

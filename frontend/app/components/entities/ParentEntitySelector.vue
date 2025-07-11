@@ -27,6 +27,7 @@
           :ui="{ input: '[&>input]:h-8 [&>input]:text-sm' }"
           class="h-80"
           @update:model-value="onSelect"
+          v-model:search-term="searchTerm"
         />
       </template>
     </UPopover>
@@ -85,6 +86,7 @@ interface CommandItem extends Entity {
 }
 
 const selectedEntity = ref<CommandItem | null>(null);
+const searchTerm = ref("");
 
 // Build entity hierarchy
 const entityMap = computed(() => {
