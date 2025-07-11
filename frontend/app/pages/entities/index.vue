@@ -80,9 +80,12 @@ function handleEntityDeleted() {
 
 <template>
   <UDashboardPanel>
-    <UDashboardNavbar title="Entities">
+    <UDashboardNavbar>
       <template #left>
-        <UDashboardSidebarCollapse />
+        <div class="flex items-center gap-4">
+          <UDashboardSidebarCollapse />
+          <UBreadcrumb :items="breadcrumbItems" />
+        </div>
       </template>
       <template #right>
         <UButton icon="i-lucide-plus" @click="openCreateDrawer"> Create Entity </UButton>
@@ -90,21 +93,22 @@ function handleEntityDeleted() {
     </UDashboardNavbar>
 
     <div class="px-4 py-6 lg:px-8">
-      <!-- Breadcrumb Navigation -->
-      <div class="mb-6">
-        <UBreadcrumb :items="breadcrumbItems" />
-      </div>
-
       <!-- Filters -->
       <UCard class="mb-6">
         <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
           <!-- Search -->
-          <UInput :model-value="entitiesStore.filters.search" @update:model-value="entitiesStore.setFilters({ search: $event })" placeholder="Search entities..." icon="i-lucide-search" size="md" />
+          <UInput
+            :model-value="entitiesStore.filters.search"
+            @update:model-value="entitiesStore.setFilters({ search: String($event) })"
+            placeholder="Search entities..."
+            icon="i-lucide-search"
+            size="md"
+          />
 
           <!-- Entity Class Filter -->
           <USelectMenu
             :model-value="entitiesStore.filters.entity_class"
-            @update:model-value="entitiesStore.setFilters({ entity_class: $event })"
+            @update:model-value="entitiesStore.setFilters({ entity_class: String($event) })"
             :options="entityClassOptions"
             placeholder="All Classes"
             value-attribute="value"
@@ -114,7 +118,7 @@ function handleEntityDeleted() {
           <!-- Entity Type Filter -->
           <USelectMenu
             :model-value="entitiesStore.filters.entity_type"
-            @update:model-value="entitiesStore.setFilters({ entity_type: $event })"
+            @update:model-value="entitiesStore.setFilters({ entity_type: String($event) })"
             :options="entityTypeOptions"
             placeholder="All Types"
             value-attribute="value"
