@@ -109,59 +109,48 @@ function EntityCard({
     <Card className={cn(
       "group relative overflow-hidden transition-all duration-200",
       "hover:shadow-md hover:-translate-y-0.5",
-      "border-border/50 hover:border-border"
+      "bg-card hover:bg-accent/50",
+      isStructural 
+        ? "border-border dark:border-border" 
+        : "border-muted dark:border-muted"
     )}>
-      {/* Subtle accent line at top */}
-      <div className={cn(
-        "absolute top-0 left-0 right-0 h-0.5 transition-all duration-200",
-        "bg-gradient-to-r",
-        isStructural ? "from-primary/60 to-primary/20" : "from-muted-foreground/40 to-muted-foreground/10",
-        "group-hover:h-1"
-      )} />
-      
       <div 
-        className="p-4 cursor-pointer space-y-2"
+        className="px-3 py-1.5 cursor-pointer"
         onClick={handleCardClick}
       >
-        {/* Compact header row */}
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex items-center gap-2 flex-1 min-w-0">
-            {/* Compact icon */}
-            <div className={cn(
-              "rounded p-1.5 flex-shrink-0",
-              isStructural ? "bg-primary/10" : "bg-muted-foreground/10"
-            )}>
-              <Icon className={cn(
-                "h-4 w-4",
-                isStructural ? "text-primary" : "text-muted-foreground"
-              )} />
-            </div>
-            
-            {/* Title and type in one line */}
-            <div className="flex-1 min-w-0 flex items-center gap-2">
-              <h3 className="font-medium text-sm truncate">
-                {entity.display_name || entity.name}
-              </h3>
-              <Badge 
-                variant="secondary" 
-                className="text-[10px] px-1.5 py-0 h-4 flex-shrink-0"
-              >
-                {getEntityTypeLabel(entity.entity_type)}
-              </Badge>
-              {hasChildren && (
-                <div className="flex items-center gap-0.5 text-muted-foreground flex-shrink-0">
-                  <Users className="h-3 w-3" />
-                  <span className="text-xs">{childCount}</span>
-                </div>
-              )}
-            </div>
-          </div>
+        {/* Ultra-compact single row */}
+        <div className="flex items-center gap-2">
+          {/* Icon with grayscale styling */}
+          <Icon className={cn(
+            "h-3.5 w-3.5 flex-shrink-0",
+            isStructural ? "text-foreground" : "text-muted-foreground"
+          )} />
           
-          {/* Compact action menu */}
+          {/* Title */}
+          <h3 className="font-medium text-sm leading-none truncate flex-1">
+            {entity.display_name || entity.name}
+          </h3>
+          
+          {/* Child count if has children */}
+          {hasChildren && (
+            <div className="flex items-center gap-0.5 text-muted-foreground">
+              <Users className="h-3 w-3" />
+              <span className="text-xs">{childCount}</span>
+            </div>
+          )}
+          
+          {/* Status badge if not active */}
+          {entity.status !== "active" && (
+            <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
+              {entity.status}
+            </Badge>
+          )}
+          
+          {/* Action button */}
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6 -mr-1 opacity-0 group-hover:opacity-100 transition-opacity"
+            className="h-5 w-5 -mr-1 opacity-0 group-hover:opacity-100 transition-opacity"
             onClick={(e) => {
               e.stopPropagation();
               onEdit();
@@ -171,29 +160,12 @@ function EntityCard({
           </Button>
         </div>
         
-        {/* System name if different */}
-        {entity.name !== entity.display_name && entity.display_name && (
-          <p className="text-[10px] text-muted-foreground font-mono pl-6">
-            {entity.name}
-          </p>
-        )}
-        
-        {/* Description - only if present */}
+        {/* Description on second line if present */}
         {entity.description && (
-          <p className="text-xs text-muted-foreground line-clamp-1 pl-6">
+          <p className="text-xs text-muted-foreground truncate mt-0.5 pl-5 leading-none">
             {entity.description}
           </p>
         )}
-        
-        {/* Compact footer with date and status */}
-        <div className="flex items-center justify-between pl-6 text-[10px] text-muted-foreground">
-          <span>Created {new Date(entity.created_at).toLocaleDateString()}</span>
-          {entity.status !== "active" && (
-            <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
-              {entity.status}
-            </Badge>
-          )}
-        </div>
       </div>
     </Card>
   );
