@@ -299,17 +299,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
         </UFormField>
 
         <!-- Status -->
-        <UFormField label="Status" name="status" required :class="{ 'md:col-span-2': selectedClass !== 'ACCESS_GROUP' }">
+        <UFormField label="Status" name="status" :class="{ 'md:col-span-2': selectedClass !== 'ACCESS_GROUP' }">
           <div class="flex items-center gap-3">
             <USwitch v-model="isActive" :color="isActive ? 'success' : 'neutral'" />
-            <div class="flex items-center gap-2">
-              <UBadge :color="isActive ? 'success' : 'neutral'" variant="subtle" size="xs">
-                {{ isActive ? "Active" : "Inactive" }}
-              </UBadge>
-              <span class="text-xs text-muted-foreground">
-                {{ isActive ? "Entity is operational and can be used" : "Entity is disabled and cannot be used" }}
-              </span>
-            </div>
+            <span class="text-sm text-muted-foreground">
+              {{ isActive ? "Entity is operational and can be used" : "Entity is disabled and cannot be used" }}
+            </span>
           </div>
         </UFormField>
       </div>
