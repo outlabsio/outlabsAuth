@@ -1,24 +1,35 @@
 <template>
   <div class="w-full">
-    <UCommandPalette
-      v-model="selectedEntity"
-      :groups="commandGroups"
-      placeholder="Search for parent entity..."
-      :fuse="{
-        fuseOptions: {
-          includeMatches: true,
-          threshold: 0.3,
-          keys: ['display_name', 'name', 'entity_type', 'description'],
-        },
-        resultLimit: 20,
-      }"
-      class="w-full"
-      @update:model-value="onSelect"
-    >
-      <template #leading>
-        <UIcon name="i-lucide-building" class="w-4 h-4 text-muted-foreground" />
+    <UPopover>
+      <UButton :variant="selectedEntity ? 'outline' : 'outline'" :color="selectedEntity ? 'primary' : 'neutral'" class="w-full justify-between">
+        <div class="flex items-center gap-2 min-w-0 flex-1">
+          <UIcon name="i-lucide-building" class="w-4 h-4 text-muted-foreground shrink-0" />
+          <span class="truncate">
+            {{ selectedEntity ? selectedEntity.display_name || selectedEntity.name : "Search for parent entity..." }}
+          </span>
+        </div>
+        <UIcon name="i-lucide-chevrons-up-down" class="w-4 h-4 text-muted-foreground shrink-0 ml-2" />
+      </UButton>
+
+      <template #content>
+        <UCommandPalette
+          v-model="selectedEntity"
+          :groups="commandGroups"
+          placeholder="Search for parent entity..."
+          :fuse="{
+            fuseOptions: {
+              includeMatches: true,
+              threshold: 0.3,
+              keys: ['display_name', 'name', 'entity_type', 'description'],
+            },
+            resultLimit: 20,
+          }"
+          :ui="{ input: '[&>input]:h-8 [&>input]:text-sm' }"
+          class="h-80"
+          @update:model-value="onSelect"
+        />
       </template>
-    </UCommandPalette>
+    </UPopover>
 
     <!-- Selected Entity Display -->
     <div v-if="selectedEntity && selectedEntity.value" class="mt-2 p-2 bg-elevated rounded-md border">

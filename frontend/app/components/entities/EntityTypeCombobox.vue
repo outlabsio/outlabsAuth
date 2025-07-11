@@ -1,29 +1,35 @@
 <template>
-  <UCommandPalette
-    v-model="selectedValue"
-    :groups="commandGroups"
-    :placeholder="placeholder"
-    :disabled="disabled"
-    :fuse="{
-      fuseOptions: {
-        includeMatches: true,
-        threshold: 0.3,
-        keys: ['entity_type', 'label'],
-      },
-      resultLimit: 20,
-    }"
-    class="w-full"
-    @update:model-value="handleSelect"
-    v-model:search-term="inputValue"
-  >
-    <template #leading>
-      <UIcon name="i-lucide-hash" class="w-4 h-4 text-muted-foreground" />
-    </template>
+  <UPopover>
+    <UButton :variant="selectedValue ? 'outline' : 'outline'" :color="selectedValue ? 'primary' : 'neutral'" class="w-full justify-between" :disabled="disabled">
+      <div class="flex items-center gap-2 min-w-0 flex-1">
+        <UIcon name="i-lucide-hash" class="w-4 h-4 text-muted-foreground shrink-0" />
+        <span class="truncate">
+          {{ selectedValue ? formatEntityTypeLabel(selectedValue.entity_type) : placeholder }}
+        </span>
+      </div>
+      <UIcon name="i-lucide-chevrons-up-down" class="w-4 h-4 text-muted-foreground shrink-0 ml-2" />
+    </UButton>
 
-    <template #trailing>
-      <UIcon name="i-lucide-chevrons-up-down" class="w-4 h-4 text-muted-foreground" />
+    <template #content>
+      <UCommandPalette
+        v-model="selectedValue"
+        :groups="commandGroups"
+        :placeholder="placeholder"
+        :fuse="{
+          fuseOptions: {
+            includeMatches: true,
+            threshold: 0.3,
+            keys: ['entity_type', 'label'],
+          },
+          resultLimit: 20,
+        }"
+        :ui="{ input: '[&>input]:h-8 [&>input]:text-sm' }"
+        class="h-80"
+        @update:model-value="handleSelect"
+        v-model:search-term="inputValue"
+      />
     </template>
-  </UCommandPalette>
+  </UPopover>
 </template>
 
 <script setup lang="ts">
@@ -57,7 +63,6 @@ const entitiesStore = useEntitiesStore();
 // State
 const selectedValue = ref<any>(null);
 const inputValue = ref(props.modelValue || "");
-const isOpen = ref(false);
 
 // Watch for changes in modelValue prop
 watch(
@@ -105,7 +110,7 @@ const commandGroups = computed(() => {
           id: `create-${formattedInput}`,
           label: `Create "${formatEntityTypeLabel(formattedInput)}"`,
           entity_type: formattedInput,
-          suffix: "New",
+          chip: { label: "New", color: "primary" },
           icon: "i-lucide-plus",
         },
       ],
@@ -142,7 +147,6 @@ const commandGroups = computed(() => {
     });
   }
 
-  console.log("EntityTypeCombobox: computed groups:", groups);
   return groups;
 });
 
@@ -156,7 +160,6 @@ function formatEntityTypeLabel(entityType: string): string {
 
 // Handle selection
 function handleSelect(item: any) {
-  console.log("EntityTypeCombobox: handleSelect called with:", item);
   if (item && item.entity_type) {
     emit("update:modelValue", item.entity_type);
   }
