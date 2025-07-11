@@ -33,6 +33,32 @@ export const useContextStore = defineStore("context", {
     // Set selected organization
     setSelectedOrganization(org: OrganizationContext | null) {
       this.selectedOrganization = org;
+
+      // Persist to localStorage
+      if (process.client) {
+        if (org) {
+          localStorage.setItem("outlabs-auth-selected-org", JSON.stringify(org));
+        } else {
+          localStorage.removeItem("outlabs-auth-selected-org");
+        }
+      }
+    },
+
+    // Load selected organization from localStorage
+    loadPersistedOrganization() {
+      if (process.client) {
+        try {
+          const stored = localStorage.getItem("outlabs-auth-selected-org");
+          if (stored) {
+            const org = JSON.parse(stored) as OrganizationContext;
+            this.selectedOrganization = org;
+            console.log("Context Store: Loaded persisted organization:", org.name);
+          }
+        } catch (error) {
+          console.error("Failed to load persisted organization:", error);
+          localStorage.removeItem("outlabs-auth-selected-org");
+        }
+      }
     },
 
     // Set available organizations
@@ -61,13 +87,30 @@ export const useContextStore = defineStore("context", {
 
         // Handle both array response and paginated response
         const organizations = Array.isArray(response) ? response : response.items || [];
-        this.setAvailableOrganizations(organizations);
+
+        console.log(
+          "Context Store: Fetched organizations from API:",
+          organizations.map((org) => org.name)
+        );
+
+        // Always include system context for platform admins
+        const withSystem = [SYSTEM_CONTEXT, ...organizations];
+        this.availableOrganizations = withSystem;
+
+        // If no organization is selected, select the first one
+        if (!this.selectedOrganization && withSystem.length > 0) {
+          this.selectedOrganization = withSystem[0] || null;
+          console.log("Context Store: Auto-selected first organization:", this.selectedOrganization?.name);
+        }
 
         return organizations;
       } catch (error) {
         console.error("Failed to fetch organizations:", error);
         // Fallback to just system context
-        this.setAvailableOrganizations([]);
+        this.availableOrganizations = [SYSTEM_CONTEXT];
+        if (!this.selectedOrganization) {
+          this.selectedOrganization = SYSTEM_CONTEXT;
+        }
         return [];
       }
     },

@@ -54,6 +54,12 @@ export const useEntitiesStore = defineStore("entities", () => {
       // Get context information
       const contextStore = useContextStore();
 
+      console.log("Entities Store: Fetching entities with context:", {
+        isSystemContext: contextStore.isSystemContext,
+        selectedOrg: contextStore.selectedOrganization?.name,
+        currentParentFilter: state.filters.parent_entity_id,
+      });
+
       // Build query params
       const params = new URLSearchParams();
       params.append("page", state.pagination.page.toString());
@@ -64,7 +70,10 @@ export const useEntitiesStore = defineStore("entities", () => {
         // When in organization context, default to showing children of that org
         if (!state.filters.parent_entity_id) {
           params.append("parent_entity_id", contextStore.selectedOrganization.id);
+          console.log("Entities Store: Adding parent filter for organization:", contextStore.selectedOrganization.name);
         }
+      } else {
+        console.log("Entities Store: Using system context - showing all entities");
       }
 
       // Add filters
@@ -74,7 +83,10 @@ export const useEntitiesStore = defineStore("entities", () => {
       if (state.filters.parent_entity_id) params.append("parent_entity_id", state.filters.parent_entity_id);
       if (state.filters.status) params.append("status", state.filters.status);
 
-      const response = await authStore.apiCall<PaginatedResponse<Entity>>(`/v1/entities?${params.toString()}`);
+      const apiUrl = `/v1/entities?${params.toString()}`;
+      console.log("Entities Store: API call URL:", apiUrl);
+
+      const response = await authStore.apiCall<PaginatedResponse<Entity>>(apiUrl);
 
       state.entities = response.items;
       state.pagination = {

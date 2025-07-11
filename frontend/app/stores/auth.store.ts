@@ -51,6 +51,12 @@ export const useAuthStore = defineStore("auth", () => {
       const contextStore = useContextStore();
       const contextHeaders = contextStore?.getContextHeaders || {};
 
+      // Debug logging for context headers
+      if (Object.keys(contextHeaders).length > 0) {
+        console.log("Auth Store: Adding context headers to API call:", contextHeaders);
+        console.log("Auth Store: Selected org:", contextStore?.selectedOrganization?.name);
+      }
+
       const headers = {
         ...contextHeaders,
         ...options.headers,

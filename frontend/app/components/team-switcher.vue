@@ -120,10 +120,17 @@ const dropdownItems = computed<DropdownMenuItem[][]>(() => {
 
 // Handle context switch
 const handleContextSwitch = (org: OrganizationContext) => {
+  console.log("Team Switcher: Switching to organization:", org.name, org);
+  console.log("Team Switcher: Current context before switch:", contextStore.selectedOrganization?.name);
+
   contextStore.setSelectedOrganization(org);
+
+  console.log("Team Switcher: Context after switch:", contextStore.selectedOrganization?.name);
+  console.log("Team Switcher: Context headers:", contextStore.getContextHeaders);
 
   // Force a page refresh to reload data with new context
   // This ensures all API calls use the new context headers
+  console.log("Team Switcher: Reloading page...");
   window.location.reload();
 };
 
