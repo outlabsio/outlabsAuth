@@ -1,0 +1,39 @@
+{
+  "name": "outlabs-auth-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "nuxt build",
+    "dev": "nuxt dev",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare",
+    "lint": "eslint .",
+    "typecheck": "nuxt typecheck"
+  },
+  "dependencies": {
+    "@iconify-json/lucide": "^1.2.34",
+    "@iconify-json/simple-icons": "^1.2.30",
+    "@nuxt/ui-pro": "^3.0.2",
+    "@pinia/nuxt": "^0.11.0",
+    "@unovis/ts": "^1.5.1",
+    "@unovis/vue": "^1.5.1",
+    "@vueuse/nuxt": "^13.0.0",
+    "date-fns": "^4.1.0",
+    "nuxt": "^3.16.2",
+    "zod": "^3.24.2",
+    "@tanstack/vue-form": "^0.36.0",
+    "@tanstack/zod-form-adapter": "^0.36.0",
+    "@tanstack/vue-query": "^5.62.0"
+  },
+  "devDependencies": {
+    "@nuxt/eslint": "^1.3.0",
+    "eslint": "^9.23.0",
+    "typescript": "^5.8.2",
+    "vue-tsc": "^2.2.2"
+  },
+  "overrides": {
+    "unimport": "4.1.1",
+    "vue-tsc": "2.2.2"
+  }
+}

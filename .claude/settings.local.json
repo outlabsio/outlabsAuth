@@ -20,7 +20,8 @@
       "Bash(touch:*)",
       "Bash(grep:*)",
       "Bash(true)",
-      "Bash(tsc --noEmit)"
+      "Bash(tsc --noEmit)",
+      "Bash(cp:*)"
     ],
     "deny": []
   }
