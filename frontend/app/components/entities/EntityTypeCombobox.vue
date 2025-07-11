@@ -1,5 +1,5 @@
 <template>
-  <UPopover ref="popoverRef">
+  <UPopover ref="popoverRef" v-model:open="isOpen">
     <UButton :variant="selectedValue ? 'outline' : 'outline'" :color="selectedValue ? 'primary' : 'neutral'" class="w-full justify-between" :disabled="disabled">
       <div class="flex items-center gap-2 min-w-0 flex-1">
         <UIcon name="i-lucide-hash" class="w-4 h-4 text-muted-foreground shrink-0" />
@@ -31,9 +31,9 @@
             v-model:search-term="searchTerm"
             @keydown.enter="handleEnter"
           />
-          <!-- New badge overlay -->
-          <div v-if="isCreatingNew" class="absolute top-2 right-2 z-10 pointer-events-none">
-            <UBadge label="New" color="primary" variant="solid" size="sm" />
+          <!-- New badge positioned in the top-right corner of the input area -->
+          <div v-if="isCreatingNew" class="absolute top-0.5 right-3 z-10 pointer-events-none">
+            <UBadge label="New" color="success" variant="soft" size="xs" />
           </div>
         </div>
         <div class="flex items-center justify-end gap-2 p-2 border-t border-gray-200 dark:border-gray-700">
@@ -77,6 +77,7 @@ const entitiesStore = useEntitiesStore();
 const selectedValue = ref<any>(null);
 const searchTerm = ref("");
 const popoverRef = ref();
+const isOpen = ref(false);
 
 // Fetch entity type suggestions
 const { data: suggestions, pending } = await useLazyAsyncData(
@@ -159,9 +160,7 @@ function handleSelect(item: any) {
     searchTerm.value = formatEntityTypeLabel(item.entity_type);
   }
   // Close popover after selection
-  if (popoverRef.value) {
-    popoverRef.value.close?.();
-  }
+  isOpen.value = false;
 }
 
 // Handle Enter key press
@@ -176,9 +175,7 @@ function handleEnter(event: KeyboardEvent) {
   }
 
   // Close popover
-  if (popoverRef.value) {
-    popoverRef.value.close?.();
-  }
+  isOpen.value = false;
 }
 
 // Handle OK button click
@@ -193,17 +190,13 @@ function handleOk() {
   }
 
   // Close popover
-  if (popoverRef.value) {
-    popoverRef.value.close?.();
-  }
+  isOpen.value = false;
 }
 
 // Handle Cancel button click
 function handleCancel() {
   // Just close the popover without emitting any changes
-  if (popoverRef.value) {
-    popoverRef.value.close?.();
-  }
+  isOpen.value = false;
 }
 
 // Watch for external value changes (when form resets or loads existing data)

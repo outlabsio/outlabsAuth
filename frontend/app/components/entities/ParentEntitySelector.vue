@@ -1,6 +1,6 @@
 <template>
   <div class="w-full">
-    <UPopover ref="popoverRef">
+    <UPopover ref="popoverRef" v-model:open="isOpen">
       <UButton :variant="selectedEntity ? 'outline' : 'outline'" :color="selectedEntity ? 'primary' : 'neutral'" class="w-full justify-between">
         <div class="flex items-center gap-2 min-w-0 flex-1">
           <UIcon name="i-lucide-building" class="w-4 h-4 text-muted-foreground shrink-0" />
@@ -95,6 +95,7 @@ interface CommandItem extends Entity {
 const selectedEntity = ref<CommandItem | null>(null);
 const searchTerm = ref("");
 const popoverRef = ref();
+const isOpen = ref(false);
 
 // Stores
 const contextStore = useContextStore();
@@ -275,33 +276,25 @@ function onSelect(item: any) {
   selectedEntity.value = item;
   emit("update:modelValue", item?.value || "");
   // Close popover after selection
-  if (popoverRef.value) {
-    popoverRef.value.close?.();
-  }
+  isOpen.value = false;
 }
 
 // Handle Enter key press
 function handleEnter(event: KeyboardEvent) {
   // Close popover when Enter is pressed
-  if (popoverRef.value) {
-    popoverRef.value.close?.();
-  }
+  isOpen.value = false;
 }
 
 // Handle OK button click
 function handleOk() {
   // Close popover when OK is clicked
-  if (popoverRef.value) {
-    popoverRef.value.close?.();
-  }
+  isOpen.value = false;
 }
 
 // Handle Cancel button click
 function handleCancel() {
   // Just close the popover without emitting any changes
-  if (popoverRef.value) {
-    popoverRef.value.close?.();
-  }
+  isOpen.value = false;
 }
 
 function clearSelection() {
