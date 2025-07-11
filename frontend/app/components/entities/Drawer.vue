@@ -74,9 +74,17 @@
 
         <!-- Create/Edit Mode -->
         <div v-else-if="mode === 'create' || mode === 'edit'">
-          <EntitiesForm :entity="entity" :mode="mode" :default-parent-id="defaultParentId" @submit="handleSubmit" @cancel="handleCancel" @delete="confirmDelete" />
+          <EntitiesForm ref="formRef" :entity="entity" :mode="mode" :default-parent-id="defaultParentId" @submit="handleSubmit" @cancel="handleCancel" @delete="confirmDelete" />
         </div>
       </div>
+    </template>
+
+    <!-- Footer for Create/Edit Mode -->
+    <template v-if="mode === 'create' || mode === 'edit'" #footer>
+      <UButton @click="submitForm" :loading="isSubmitting" color="primary" class="justify-center">
+        {{ mode === "create" ? "Create Entity" : "Update Entity" }}
+      </UButton>
+      <UButton @click="handleCancel" color="neutral" variant="outline" class="justify-center"> Cancel </UButton>
     </template>
   </UDrawer>
 
@@ -153,6 +161,8 @@ const authStore = useAuthStore();
 const isDeleting = ref(false);
 const hasChildren = ref(false);
 const enableCascade = ref(false);
+const isSubmitting = ref(false);
+const formRef = ref();
 
 // Watch for prop changes
 watch(
@@ -190,6 +200,7 @@ const handleCancel = () => {
 };
 
 const handleSubmit = async (data: Partial<Entity>) => {
+  isSubmitting.value = true;
   try {
     if (mode.value === "create") {
       const newEntity = await entitiesStore.createEntity(data);
@@ -216,6 +227,15 @@ const handleSubmit = async (data: Partial<Entity>) => {
       description: error.data?.detail || error.message || "Operation failed",
       color: "error",
     });
+  } finally {
+    isSubmitting.value = false;
+  }
+};
+
+const submitForm = () => {
+  // Trigger form submission
+  if (formRef.value) {
+    formRef.value.$el.dispatchEvent(new Event("submit", { bubbles: true }));
   }
 };
 

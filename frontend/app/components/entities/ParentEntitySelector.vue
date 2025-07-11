@@ -38,34 +38,6 @@
         </div>
       </template>
     </UPopover>
-
-    <!-- Selected Entity Display -->
-    <div v-if="selectedEntity && selectedEntity.value" class="mt-2 p-2 bg-elevated rounded-md border">
-      <div class="flex items-center gap-2">
-        <UIcon :name="selectedEntity.entity_class === 'STRUCTURAL' ? 'i-lucide-building' : 'i-lucide-users'" class="w-4 h-4" />
-        <span class="font-medium">{{ selectedEntity.display_name || selectedEntity.name }}</span>
-        <UBadge :label="selectedEntity.entity_type" variant="subtle" size="sm" />
-        <UButton icon="i-lucide-x" size="xs" color="neutral" variant="ghost" @click="clearSelection" class="ml-auto" />
-      </div>
-
-      <!-- Entity Path Breadcrumb -->
-      <div v-if="entityPath.length > 0" class="mt-1">
-        <UBreadcrumb :items="entityPath" class="text-xs" />
-      </div>
-    </div>
-
-    <!-- No Parent Option -->
-    <div class="mt-2">
-      <UButton
-        :variant="!selectedEntity?.value ? 'soft' : 'ghost'"
-        :color="!selectedEntity?.value ? 'primary' : 'neutral'"
-        size="sm"
-        icon="i-lucide-minus"
-        label="No Parent (Top Level)"
-        @click="selectNoParent"
-        class="w-full justify-start"
-      />
-    </div>
   </div>
 </template>
 

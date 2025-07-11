@@ -37,12 +37,20 @@ const state = reactive<Partial<Schema>>({
   entity_class: props.entity?.entity_class || "STRUCTURAL",
   entity_type: props.entity?.entity_type || "",
   parent_entity_id: props.entity?.parent_entity_id || props.defaultParentId || "",
-  status: props.entity?.status || "active",
+  status: (props.entity?.status as "active" | "inactive") || "active",
   max_members: props.entity?.max_members?.toString() || "",
 });
 
 const isLoading = ref(false);
 const selectedClass = ref<"STRUCTURAL" | "ACCESS_GROUP">(state.entity_class || "STRUCTURAL");
+
+// Computed for switch
+const isActive = computed({
+  get: () => state.status === "active",
+  set: (value: boolean) => {
+    state.status = value ? "active" : "inactive";
+  },
+});
 
 // Stores
 const entitiesStore = useEntitiesStore();
@@ -286,8 +294,6 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
       </div>
     </div>
 
-    <UDivider />
-
     <!-- Configuration Section -->
     <div class="space-y-6">
       <h5 class="text-sm font-medium uppercase tracking-wider text-primary-600 dark:text-primary-400">Configuration</h5>
@@ -303,24 +309,17 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
 
         <!-- Status -->
         <UFormField label="Status" name="status" required :class="{ 'md:col-span-2': selectedClass !== 'ACCESS_GROUP' }">
-          <URadioGroup
-            v-model="state.status"
-            :options="[
-              { value: 'active', label: 'Active', description: 'Entity is operational and can be used' },
-              { value: 'inactive', label: 'Inactive', description: 'Entity is disabled and cannot be used' },
-            ]"
-          >
-            <template #label="{ option }">
-              <div class="flex items-center gap-2">
-                <UBadge :color="option.value === 'active' ? 'success' : 'neutral'" variant="subtle" size="xs">
-                  {{ option.label }}
-                </UBadge>
-              </div>
-            </template>
-            <template #description="{ option }">
-              <span class="text-xs">{{ option.description }}</span>
-            </template>
-          </URadioGroup>
+          <div class="flex items-center gap-3">
+            <USwitch v-model="isActive" :color="isActive ? 'success' : 'neutral'" />
+            <div class="flex items-center gap-2">
+              <UBadge :color="isActive ? 'success' : 'neutral'" variant="subtle" size="xs">
+                {{ isActive ? "Active" : "Inactive" }}
+              </UBadge>
+              <span class="text-xs text-muted-foreground">
+                {{ isActive ? "Entity is operational and can be used" : "Entity is disabled and cannot be used" }}
+              </span>
+            </div>
+          </div>
         </UFormField>
       </div>
     </div>
@@ -346,12 +345,6 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           <UButton color="error" @click="emit('delete')" class="w-full" icon="i-lucide-trash"> Archive Entity </UButton>
         </div>
       </div>
-    </div>
-
-    <!-- Actions -->
-    <div class="flex justify-end gap-3 pt-4 border-t">
-      <UButton @click="emit('cancel')" variant="outline" type="button"> Cancel </UButton>
-      <UButton type="submit" :loading="isLoading"> {{ mode === "create" ? "Create" : "Update" }} Entity </UButton>
     </div>
   </UForm>
 </template>
