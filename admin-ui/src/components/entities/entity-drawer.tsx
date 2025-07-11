@@ -52,10 +52,10 @@ import {
 import {
   Entity,
   EntityClass,
-  EntityType,
-  getEntityTypeLabel,
 } from "@/types/entity";
 import { getEntityTypeIcon, getEntityClassIcon } from "@/lib/entity-icons";
+import { EntityTypeCombobox } from "./entity-type-combobox";
+import { useContextStore } from "@/stores/context-store";
 
 interface EntityDrawerProps {
   open: boolean;
@@ -64,22 +64,6 @@ interface EntityDrawerProps {
   entity?: Entity | null;
   defaultParentId?: string | null;
 }
-
-// Entity type options based on class
-const structuralTypes = [
-  EntityType.PLATFORM,
-  EntityType.ORGANIZATION,
-  EntityType.BRANCH,
-  EntityType.TEAM,
-];
-
-const accessGroupTypes = [
-  EntityType.FUNCTIONAL_GROUP,
-  EntityType.PERMISSION_GROUP,
-  EntityType.PROJECT_GROUP,
-  EntityType.ROLE_GROUP,
-  EntityType.ACCESS_GROUP,
-];
 
 async function fetchEntities(): Promise<Entity[]> {
   const response = await authenticatedFetch("/v1/entities/");
@@ -113,6 +97,7 @@ async function updateEntity(id: string, data: Partial<Entity>) {
 export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId }: EntityDrawerProps) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { selectedOrganization } = useContextStore();
   const isEditMode = mode === "edit";
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [hasChildren, setHasChildren] = useState(false);
@@ -328,34 +313,14 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
     }
   }, [isEditMode, open, defaultParentId, potentialParents, form]);
 
-  // Get available entity types based on selected class and parent
-  const availableTypes = useMemo(() => {
-    if (selectedClass === EntityClass.ACCESS_GROUP) {
-      return accessGroupTypes;
-    }
-    
-    // For structural entities, filter based on parent's allowed children
+  // Check if access group parent can't have structural children
+  const cannotHaveStructuralChildren = useMemo(() => {
     if (!isEditMode && form.state.values.parent_entity && form.state.values.parent_entity !== "none") {
       const parentEntity = potentialParents.find(p => p.id === form.state.values.parent_entity);
-      if (parentEntity) {
-        // Simplified rules: structural entities can have any structural children
-        // Only restriction is access groups can't have structural children
-        if (parentEntity.entity_class === EntityClass.ACCESS_GROUP) {
-          return []; // Access groups can't have structural children
-        }
-        
-        // Any structural entity can have any structural child
-        return structuralTypes;
-      }
+      return parentEntity?.entity_class === EntityClass.ACCESS_GROUP && selectedClass === EntityClass.STRUCTURAL;
     }
-    
-    // If no parent selected, allow platforms and organizations at root level
-    if (!form.state.values.parent_entity || form.state.values.parent_entity === "none") {
-      return [EntityType.PLATFORM, EntityType.ORGANIZATION];
-    }
-    
-    return structuralTypes;
-  }, [selectedClass, isEditMode, form.state.values.parent_entity, potentialParents, allEntities]);
+    return false;
+  }, [selectedClass, isEditMode, form.state.values.parent_entity, potentialParents]);
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange} direction="right">
@@ -476,7 +441,7 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
               {(field) => (
                 <div className="space-y-2">
                   <Label htmlFor="entity_type">Entity Type *</Label>
-                  {availableTypes.length === 0 && selectedClass === EntityClass.STRUCTURAL ? (
+                  {cannotHaveStructuralChildren ? (
                     <div className="rounded-lg border border-muted bg-muted/50 p-3">
                       <p className="text-sm text-muted-foreground">
                         The selected parent entity cannot have structural children.
@@ -484,33 +449,16 @@ export function EntityDrawer({ open, onOpenChange, mode, entity, defaultParentId
                       </p>
                     </div>
                   ) : (
-                    <div className="space-y-2">
-                      <Input
-                        id="entity_type"
-                        value={field.state.value || ""}
-                        onChange={(e) => field.handleChange(e.target.value.toLowerCase())}
-                        placeholder={selectedClass === EntityClass.STRUCTURAL 
-                          ? "e.g., department, division, region, office..." 
-                          : "e.g., admin_group, special_access, beta_testers..."}
-                      />
-                      {availableTypes.length > 0 && (
-                        <div className="flex flex-wrap gap-1">
-                          <span className="text-xs text-muted-foreground">Suggestions:</span>
-                          {availableTypes.map(type => (
-                            <Button
-                              key={type}
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-6 px-2 text-xs"
-                              onClick={() => field.handleChange(type)}
-                            >
-                              {getEntityTypeLabel(type)}
-                            </Button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                    <EntityTypeCombobox
+                      value={field.state.value || ""}
+                      onChange={field.handleChange}
+                      entityClass={selectedClass}
+                      platformId={selectedOrganization?.id}
+                      disabled={form.state.isSubmitting}
+                      placeholder={selectedClass === EntityClass.STRUCTURAL 
+                        ? "Select or type (e.g., department, division)..." 
+                        : "Select or type (e.g., admin_group, beta_testers)..."}
+                    />
                   )}
                   {field.state.meta.errors && (
                     <p className="text-sm text-destructive">{field.state.meta.errors.join(", ")}</p>

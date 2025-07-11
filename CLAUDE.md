@@ -4,6 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **IMPORTANT**: Always check PROJECT_STATUS.md first to understand the current implementation state and next steps.
 
+**LATEST UPDATE (2025-07-10)**: Entity types are now flexible strings instead of fixed enums. Platforms can use any organizational terminology (e.g., "division", "region", "bureau"). The frontend provides autocomplete suggestions to maintain consistency. See docs/ENTITY_TYPE_FLEXIBILITY_CHANGES.md for details.
+
 ## Project Overview
 
 outlabsAuth is an enterprise-grade Role-Based Access Control (RBAC) authentication platform built with FastAPI, MongoDB, and Beanie ODM. It provides centralized authentication and authorization for multiple platforms through a flexible unified entity system that supports diverse organizational structures from flat role-based access to complex multi-level hierarchies.
@@ -80,25 +82,33 @@ docker compose down -v               # Stop and remove volumes
 ### Unified Entity System
 The system uses a flexible entity hierarchy that can adapt to any organizational structure:
 
-#### Entity Types
-1. **Structural Entities**: Form the organizational hierarchy
-   - `platform`: Root level (e.g., Diverse, uaya)
-   - `organization`: Top-level clients/companies
-   - `branch`: Geographic or functional divisions
-   - `team`: Working groups within branches
+#### Entity Classes (Fixed)
+1. **STRUCTURAL**: Forms the organizational hierarchy
+   - Can contain other structural entities or access groups
+   - Examples: platform, organization, division, department, office, team
 
-2. **Access Groups**: Cross-cutting permission groups
-   - `functional_group`: Department-based access
-   - `permission_group`: Feature-specific access
-   - `project_group`: Temporary project teams
-   - `role_group`: Role-based collections
-   - `access_group`: General purpose groups
+2. **ACCESS_GROUP**: Cross-cutting permission groups
+   - Can only contain other access groups
+   - Examples: admin_group, viewer_group, project_team, committee
+
+#### Entity Types (Flexible)
+Entity types are now flexible strings, allowing platforms to use their own terminology:
+- **Traditional**: organization → division → department → team
+- **Real Estate**: organization → region → office → team
+- **Government**: organization → bureau → section → unit
+- **Custom**: Any naming that fits your business model
+
+#### Entity Type Consistency
+- Use the `/v1/entities/entity-types` endpoint to see existing types
+- Frontend provides autocomplete suggestions to maintain consistency
+- Types are automatically lowercased and stored with underscores
+- Use `display_name` for user-friendly labels
 
 #### Entity Rules
-- Platforms cannot have parent entities (always root level)
+- Top-level entities (no parent) can use any entity_type ("platform" is suggested but not required)
 - Structural entities can contain other structural entities or access groups
-- Access groups can be created at any level in the hierarchy
-- Users are members of entities, not entities themselves
+- Access groups can only contain other access groups (not structural entities)
+- Users are members of entities through EntityMembership
 
 ### Hierarchical Permission System
 Permissions automatically inherit based on scope and action:
@@ -269,7 +279,7 @@ const response = await authenticatedFetch('/v1/endpoint', {
 5. Update route documentation in `docs/routes/`
 
 ### Creating a New Platform
-1. Create platform entity with type="platform"
+1. Create a top-level entity (no parent) - can use any entity_type
 2. Define platform-specific permissions
 3. Create role templates for the platform
 4. Set up default organization for individual users
@@ -277,11 +287,13 @@ const response = await authenticatedFetch('/v1/endpoint', {
 6. See `docs/PLATFORM_SETUP_GUIDE.md` for detailed steps
 
 ### Working with Entities
-1. Always validate entity type and class combinations
-2. Ensure platforms have no parent_entity
-3. Use proper system names (lowercase, underscores)
-4. Include both name and display_name fields
-5. Set appropriate metadata for business logic
+1. Choose entity class based on purpose (STRUCTURAL vs ACCESS_GROUP)
+2. Use flexible entity types that match your business (e.g., "region", "bureau", "cost_center")
+3. Check existing types with `/v1/entities/entity-types` for consistency
+4. Top-level entities have no parent (entity_type can be anything, "platform" is just a suggestion)
+5. Use proper system names (lowercase, underscores) for `name` field
+6. Include user-friendly `display_name` for UI presentation
+7. Remember: Access groups cannot have structural children
 
 ### Modifying Permissions
 1. System permissions are immutable (defined in code)
@@ -335,9 +347,13 @@ Key variables for local development:
 ## Common Pitfalls to Avoid
 
 1. **Link Objects**: Always fetch before accessing properties
-2. **Entity Types**: Platforms must be root level (no parent)
-3. **Permissions**: System permissions cannot be modified
-4. **Testing**: Maintain 98%+ test pass rate
-5. **Frontend**: Use bun, not npm; use authenticatedFetch for APIs
+2. **Entity Creation**: 
+   - Top-level entities have no parent (any entity_type is allowed)
+   - Entity types are strings now, not enums
+   - Use lowercase with underscores for consistency
+3. **Entity Hierarchy**: Access groups cannot have structural children
+4. **Permissions**: System permissions cannot be modified
+5. **Testing**: Maintain 98%+ test pass rate
+6. **Frontend**: Use bun, not npm; use authenticatedFetch for APIs
 
 Always refer to PROJECT_STATUS.md when resuming work to understand the current state.

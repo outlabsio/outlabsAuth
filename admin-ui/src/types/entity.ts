@@ -7,6 +7,7 @@ export enum EntityClass {
   ACCESS_GROUP = "ACCESS_GROUP"
 }
 
+// Keep EntityType enum for predefined suggestions, but entity_type is now a string
 export enum EntityType {
   // Structural types
   PLATFORM = "platform",
@@ -23,6 +24,14 @@ export enum EntityType {
   ACCESS_GROUP = "access_group"
 }
 
+// Type for entity type suggestions from API
+export interface EntityTypeSuggestion {
+  entity_type: string;
+  count: number;
+  last_used?: string;
+  is_predefined?: boolean;
+}
+
 export interface Entity {
   _id: string;
   id: string;
@@ -37,7 +46,7 @@ export interface Entity {
   
   // Classification
   entity_class: EntityClass;
-  entity_type: EntityType;
+  entity_type: string;  // Now flexible, any string allowed
   
   // Hierarchy
   platform_id: string;
@@ -54,7 +63,7 @@ export interface Entity {
   config?: Record<string, any>; // API returns config, not metadata
   metadata?: Record<string, any>; // Keep for backward compatibility
   allowed_child_classes: EntityClass[];
-  allowed_child_types: EntityType[];
+  allowed_child_types: string[];  // Now flexible array of strings
   max_members?: number;
 }
 
@@ -101,20 +110,12 @@ export interface Role {
 }
 
 // Helper functions
-export function getEntityTypeLabel(type: EntityType): string {
-  const labels: Record<EntityType, string> = {
-    [EntityType.PLATFORM]: "Platform",
-    [EntityType.ORGANIZATION]: "Organization",
-    [EntityType.DIVISION]: "Division",
-    [EntityType.BRANCH]: "Branch",
-    [EntityType.TEAM]: "Team",
-    [EntityType.FUNCTIONAL_GROUP]: "Functional Group",
-    [EntityType.PERMISSION_GROUP]: "Permission Group",
-    [EntityType.PROJECT_GROUP]: "Project Group",
-    [EntityType.ROLE_GROUP]: "Role Group",
-    [EntityType.ACCESS_GROUP]: "Access Group"
-  };
-  return labels[type] || type;
+export function getEntityTypeLabel(type: string): string {
+  // Convert snake_case to Title Case
+  return type
+    .split('_')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
 }
 
 // Icon helper functions have been moved to @/lib/entity-icons.tsx

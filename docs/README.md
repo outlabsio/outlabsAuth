@@ -75,10 +75,11 @@ How different administrative levels access the outlabsAuth Admin UI:
 - Scoped data access
 - Implementation guide
 
-#### [Entity Type Flexibility Changes](./ENTITY_TYPE_FLEXIBILITY_CHANGES.md)
+#### [Entity Type Flexibility Changes](./ENTITY_TYPE_FLEXIBILITY_CHANGES.md) 🆕
 Documentation of the architectural changes that allow flexible entity naming:
-- Motivation and benefits
+- Motivation and benefits  
 - Technical changes made
+- Entity type autocomplete feature
 - Migration notes
 - Best practices
 
@@ -98,9 +99,13 @@ Detailed plan for the unified Entity model architecture (for developers working 
 Independent applications that use outlabsAuth for authentication (e.g., Diverse Leads, uaya, qdarte).
 
 ### Entities
-The organizational structure within platforms. Two types:
-- **Structural Entities**: Organizations, branches, teams
-- **Access Groups**: Functional groups, permission groups, project teams
+The organizational structure within platforms. Two classes with flexible types:
+- **Structural Entities**: Forms the organizational hierarchy
+  - Flexible types: organization, division, department, region, office, team, or any custom type
+  - Can contain other structural entities or access groups
+- **Access Groups**: Cross-cutting permission groups
+  - Flexible types: admin_group, viewer_group, project_team, committee, or any custom type
+  - Can only contain other access groups
 
 ### Permissions
 Granular access controls (e.g., `lead:read`, `user:create`) that determine what actions users can perform.

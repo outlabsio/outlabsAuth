@@ -98,7 +98,67 @@ The original system enforced strict entity types (platform, organization, branch
 1. **Flexibility**: Platforms can use terminology that matches their business
 2. **Simplicity**: Less validation code to maintain
 3. **User Experience**: Users see familiar terms instead of forced conventions
-4. **Extensibility**: No code changes needed to support new entity types
+
+## Special Handling for "platform" Entity Type
+
+While entity types are flexible, the system has special handling for entities with `entity_type: "platform"`:
+- Cannot have a parent entity
+- Their platform_id is set to their own ID
+- Used for platform-level management
+
+However, top-level entities are NOT required to use "platform" as their type. You can create a top-level entity with any type (e.g., "organization", "company", "network").
+
+## Entity Type Autocomplete Feature (Added 2025-07-10)
+
+To help maintain consistency while preserving flexibility, we added an autocomplete feature for entity types.
+
+### Backend Implementation
+
+#### New Endpoint: GET /v1/entities/entity-types
+- Returns distinct entity types used in the system with usage counts
+- Uses MongoDB aggregation for efficient querying
+- Platform-scoped to maintain data isolation
+- Merges predefined suggestions with actual usage
+
+#### Service Method: `get_distinct_entity_types()`
+- Aggregates entity types by platform and class
+- Tracks usage frequency and last used date
+- Sorts by popularity and recency
+- Limited to top 50 types for performance
+
+### Frontend Implementation
+
+#### EntityTypeCombobox Component
+- Searchable dropdown with type-ahead functionality
+- Shows "Recently Used" section with actual usage counts
+- Shows "Common Types" section with predefined suggestions
+- Allows creating new custom types on the fly
+- Automatically formats input (lowercase with underscores)
+
+#### React Query Integration
+- 5-minute cache for performance
+- Lazy loading (only fetches when dropdown opens)
+- Platform-aware suggestions
+
+### Usage Example
+
+```typescript
+<EntityTypeCombobox
+  value={entityType}
+  onChange={setEntityType}
+  entityClass="STRUCTURAL"
+  platformId={currentPlatformId}
+  placeholder="Select or type entity type..."
+/>
+```
+
+### Benefits of Autocomplete
+
+1. **Consistency**: Encourages reuse of existing entity types
+2. **Discovery**: Users can see what types others have used
+3. **Flexibility**: Still allows any custom type to be created
+4. **Analytics**: Shows usage patterns across the platform
+5. **Performance**: Cached suggestions reduce API calls
 
 ## Potential Issues and Solutions
 

@@ -3,7 +3,7 @@ Entity Service
 Handles entity CRUD operations and hierarchy management
 """
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from beanie import PydanticObjectId
 from beanie.operators import In, Or, And
 from fastapi import HTTPException, status
@@ -431,6 +431,57 @@ class EntityService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Maximum hierarchy depth (10) reached"
             )
+    
+    @staticmethod
+    async def get_distinct_entity_types(
+        platform_id: Optional[str] = None,
+        entity_class: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get distinct entity types with usage counts
+        
+        Args:
+            platform_id: Filter by platform (optional)
+            entity_class: Filter by entity class (optional)
+        
+        Returns:
+            List of entity types with counts
+        """
+        # Build match conditions
+        match_conditions = {"status": "active"}
+        
+        if platform_id:
+            match_conditions["platform_id"] = platform_id
+        
+        if entity_class:
+            match_conditions["entity_class"] = entity_class.lower()
+        
+        # Aggregation pipeline
+        pipeline = [
+            {"$match": match_conditions},
+            {
+                "$group": {
+                    "_id": "$entity_type",
+                    "count": {"$sum": 1},
+                    "last_used": {"$max": "$created_at"}
+                }
+            },
+            {"$sort": {"count": -1, "last_used": -1}},
+            {"$limit": 50},  # Limit to top 50 types
+            {
+                "$project": {
+                    "entity_type": "$_id",
+                    "count": 1,
+                    "last_used": 1,
+                    "_id": 0
+                }
+            }
+        ]
+        
+        # Execute aggregation
+        results = await EntityModel.aggregate(pipeline).to_list()
+        
+        return results
     
     @staticmethod
     async def validate_entity_access(

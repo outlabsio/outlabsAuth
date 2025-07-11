@@ -32,6 +32,86 @@ from api.dependencies import (
 router = APIRouter()
 
 
+# Entity Type Suggestions
+
+@router.get("/entity-types", response_model=dict)
+async def get_entity_types(
+    platform_id: Optional[str] = Query(None, description="Filter by platform"),
+    entity_class: Optional[str] = Query(None, description="Filter by entity class"),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Get distinct entity types with usage counts
+    
+    Returns list of entity types that have been used in the system,
+    sorted by usage frequency and recency.
+    
+    Requires: Authenticated user
+    """
+    # For non-system users, always filter by their platform
+    if not current_user.is_system_user and platform_id is None:
+        # Get user's primary platform from their memberships
+        # For now, we'll require platform_id to be specified
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="platform_id is required for non-system users"
+        )
+    
+    entity_types = await EntityService.get_distinct_entity_types(
+        platform_id=platform_id,
+        entity_class=entity_class
+    )
+    
+    # Add predefined suggestions based on entity class
+    predefined_suggestions = []
+    if not entity_class or entity_class.upper() == "STRUCTURAL":
+        predefined_suggestions = [
+            {"entity_type": "platform", "count": 0, "is_predefined": True},
+            {"entity_type": "organization", "count": 0, "is_predefined": True},
+            {"entity_type": "division", "count": 0, "is_predefined": True},
+            {"entity_type": "department", "count": 0, "is_predefined": True},
+            {"entity_type": "branch", "count": 0, "is_predefined": True},
+            {"entity_type": "team", "count": 0, "is_predefined": True},
+            {"entity_type": "region", "count": 0, "is_predefined": True},
+            {"entity_type": "sector", "count": 0, "is_predefined": True},
+            {"entity_type": "office", "count": 0, "is_predefined": True},
+            {"entity_type": "unit", "count": 0, "is_predefined": True}
+        ]
+    elif entity_class and entity_class.upper() == "ACCESS_GROUP":
+        predefined_suggestions = [
+            {"entity_type": "functional_group", "count": 0, "is_predefined": True},
+            {"entity_type": "permission_group", "count": 0, "is_predefined": True},
+            {"entity_type": "project_group", "count": 0, "is_predefined": True},
+            {"entity_type": "role_group", "count": 0, "is_predefined": True},
+            {"entity_type": "access_group", "count": 0, "is_predefined": True},
+            {"entity_type": "workgroup", "count": 0, "is_predefined": True},
+            {"entity_type": "committee", "count": 0, "is_predefined": True},
+            {"entity_type": "task_force", "count": 0, "is_predefined": True}
+        ]
+    
+    # Merge predefined with actual usage, keeping actual counts where they exist
+    existing_types = {et["entity_type"]: et for et in entity_types}
+    merged_suggestions = []
+    
+    # Add predefined suggestions with actual counts if they exist
+    for suggestion in predefined_suggestions:
+        if suggestion["entity_type"] in existing_types:
+            merged_suggestions.append(existing_types[suggestion["entity_type"]])
+        else:
+            merged_suggestions.append(suggestion)
+    
+    # Add any custom types that aren't in predefined
+    predefined_names = {s["entity_type"] for s in predefined_suggestions}
+    for entity_type in entity_types:
+        if entity_type["entity_type"] not in predefined_names:
+            merged_suggestions.append(entity_type)
+    
+    return {
+        "suggestions": merged_suggestions,
+        "total": len(merged_suggestions)
+    }
+
+
 # Entity CRUD Operations
 
 @router.post("/", response_model=EntityResponse)

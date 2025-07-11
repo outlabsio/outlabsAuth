@@ -35,7 +35,7 @@ platform_data = {
     "name": "your_platform_name",  # lowercase, no spaces
     "display_name": "Your Platform Name",
     "entity_type": "platform",
-    "entity_class": "structural",
+    "entity_class": "STRUCTURAL",
     "metadata": {
         "description": "Lead generation platform for real estate",
         "contact_email": "admin@yourplatform.com",
@@ -246,7 +246,7 @@ default_org = {
     "name": f"{platform_name}_individual_users",
     "display_name": "Individual Users",
     "entity_type": "organization",
-    "entity_class": "structural",
+    "entity_class": "STRUCTURAL",
     "parent_entity_id": platform_id,
     "metadata": {
         "is_default": True,
@@ -267,7 +267,7 @@ client_org = {
     "name": "acme_realty",
     "display_name": "ACME Realty Inc",
     "entity_type": "organization",
-    "entity_class": "structural",
+    "entity_class": "STRUCTURAL",
     "parent_entity_id": platform_id,
     "metadata": {
         "client_id": "ACME-001",
@@ -280,17 +280,89 @@ client_org = {
 response = await outlabs_auth.post("/v1/entities/", client_org)
 ```
 
-## Phase 5: Configure Access Groups
+## Phase 5: Create Your Organizational Structure
+
+### Flexible Entity Types
+
+outlabsAuth now supports flexible entity types, allowing you to use terminology that matches your business model. Here are examples for different industries:
+
+```python
+# Real Estate Platform
+entities = [
+    {
+        "name": "west_region",
+        "display_name": "West Coast Region",
+        "entity_type": "region",  # Custom type: "region"
+        "entity_class": "STRUCTURAL",
+        "parent_entity_id": platform_id
+    },
+    {
+        "name": "seattle_office",
+        "display_name": "Seattle Office",
+        "entity_type": "office",  # Custom type: "office"
+        "entity_class": "STRUCTURAL",
+        "parent_entity_id": west_region_id
+    }
+]
+
+# Corporate Structure
+entities = [
+    {
+        "name": "sales_division",
+        "display_name": "Sales Division",
+        "entity_type": "division",  # Custom type: "division"
+        "entity_class": "STRUCTURAL",
+        "parent_entity_id": platform_id
+    },
+    {
+        "name": "enterprise_sales",
+        "display_name": "Enterprise Sales Department",
+        "entity_type": "department",  # Custom type: "department"
+        "entity_class": "STRUCTURAL",
+        "parent_entity_id": sales_division_id
+    }
+]
+
+# Government Agency
+entities = [
+    {
+        "name": "transport_bureau",
+        "display_name": "Bureau of Transportation",
+        "entity_type": "bureau",  # Custom type: "bureau"
+        "entity_class": "STRUCTURAL",
+        "parent_entity_id": platform_id
+    },
+    {
+        "name": "highways_section",
+        "display_name": "Highways and Roads Section",
+        "entity_type": "section",  # Custom type: "section"
+        "entity_class": "STRUCTURAL",
+        "parent_entity_id": transport_bureau_id
+    }
+]
+```
+
+**Entity Type Best Practices:**
+- Use lowercase with underscores (e.g., "cost_center", "profit_center")
+- Be consistent across your platform
+- Use the entity-types endpoint to see existing types and maintain consistency
+- Choose names that are meaningful to your users
+
+## Phase 6: Configure Access Groups
 
 ### Step 1: Create Common Access Groups
 
 ```python
+# Check existing entity types for consistency
+existing_types = await outlabs_auth.get("/v1/entities/entity-types?entity_class=ACCESS_GROUP")
+print("Existing access group types:", [t["entity_type"] for t in existing_types["suggestions"]])
+
 access_groups = [
     {
         "name": "platform_admins",
         "display_name": "Platform Administrators",
-        "entity_type": "access_group",
-        "entity_class": "access_group",
+        "entity_type": "admin_group",
+        "entity_class": "ACCESS_GROUP",
         "parent_entity_id": platform_id,
         "metadata": {
             "description": "Platform-wide administrators",
@@ -301,8 +373,8 @@ access_groups = [
     {
         "name": "top_performers",
         "display_name": "Top Performers Club",
-        "entity_type": "access_group",
-        "entity_class": "access_group",
+        "entity_type": "performance_group",
+        "entity_class": "ACCESS_GROUP",
         "parent_entity_id": platform_id,
         "metadata": {
             "description": "High-performing agents with special privileges",
@@ -313,8 +385,8 @@ access_groups = [
     {
         "name": "beta_testers",
         "display_name": "Beta Feature Access",
-        "entity_type": "access_group",
-        "entity_class": "access_group",
+        "entity_type": "feature_access_group",
+        "entity_class": "ACCESS_GROUP",
         "parent_entity_id": platform_id,
         "metadata": {
             "description": "Users with access to beta features",

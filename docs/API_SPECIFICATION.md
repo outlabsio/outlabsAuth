@@ -386,86 +386,165 @@ List entities accessible to the user.
 
 **Query Parameters:**
 - `platform_id`: Filter by platform
-- `entity_class`: Filter by class ("structural" or "access_group")
-- `entity_type`: Filter by type ("organization", "team", "permission_group", etc.)
-- `parent_id`: Filter by parent entity
+- `entity_class`: Filter by class ("STRUCTURAL" or "ACCESS_GROUP")
+- `entity_type`: Filter by type (flexible string, e.g., "organization", "division", "sector")
+- `parent_entity_id`: Filter by parent entity (use "null" for root entities)
+- `status`: Filter by status ("active", "inactive", "archived")
+- `query`: Search in name, display_name, description
+- `page`: Page number (default: 1)
+- `page_size`: Items per page (default: 20, max: 100)
 
 **Response:**
 ```json
 {
-  "entities": [
+  "items": [
     {
       "id": "ent_diverse_leads",
       "name": "Diverse Leads",
-      "entity_class": "structural",
+      "display_name": "Diverse Leads LLC",
+      "entity_class": "STRUCTURAL",
       "entity_type": "organization",
       "platform_id": "plat_diverse",
       "parent_entity_id": null,
-      "metadata": {
+      "config": {
         "employee_count": 150,
         "headquarters": "Miami, FL"
       },
-      "member_count": 150,
-      "child_count": 5
+      "status": "active",
+      "created_at": "2024-01-15T10:00:00Z",
+      "updated_at": "2024-01-15T10:00:00Z"
+    },
+    {
+      "id": "ent_north_america",
+      "name": "north_america",
+      "display_name": "North America Region",
+      "entity_class": "STRUCTURAL",
+      "entity_type": "region",
+      "platform_id": "plat_diverse",
+      "parent_entity_id": "ent_diverse_leads",
+      "config": {
+        "timezone": "EST",
+        "coverage_area": "US, Canada, Mexico"
+      },
+      "status": "active"
     },
     {
       "id": "ent_vip_handlers",
       "name": "VIP Handlers",
-      "entity_class": "access_group",
-      "entity_type": "functional_group",
+      "entity_class": "ACCESS_GROUP",
+      "entity_type": "special_access_team",
       "platform_id": "plat_diverse",
       "parent_entity_id": "ent_miami_office",
-      "metadata": {
-        "description": "Agents handling VIP clients"
+      "config": {
+        "description": "Agents handling VIP clients",
+        "access_level": "premium"
       },
-      "member_count": 12
+      "status": "active"
     }
   ],
-  "total": 2
+  "total": 3,
+  "page": 1,
+  "page_size": 20,
+  "total_pages": 1
 }
 ```
 
-#### POST /v1/entities/
-Create a new entity with optional initial members.
+**Note on Entity Types:**
+Entity types are now flexible strings, not limited to predefined values. Common examples:
+- **Structural**: "organization", "division", "department", "region", "sector", "office", "branch", "unit", "zone", "district"
+- **Access Groups**: "admin_group", "viewer_group", "special_access", "beta_testers", "project_team", "committee"
 
-**Request:**
-```json
-{
-  "name": "California Branch",
-  "entity_class": "structural",
-  "entity_type": "branch",
-  "parent_entity_id": "ent_diverse_leads",
-  "platform_id": "plat_diverse",
-  "metadata": {
-    "location": "Los Angeles, CA",
-    "timezone": "PST"
-  },
-  "initial_members": [  // Optional: Add members during creation
-    {
-      "user_id": "user_creator",
-      "role_ids": ["role_branch_manager"]
-    }
-  ]
-}
-```
+#### GET /v1/entities/entity-types
+Get entity type suggestions based on usage and predefined options.
+
+**Query Parameters:**
+- `platform_id`: Filter by platform (required for non-system users)
+- `entity_class`: Filter by entity class ("STRUCTURAL" or "ACCESS_GROUP")
 
 **Response:**
 ```json
 {
-  "id": "ent_california_branch",
-  "name": "California Branch",
-  "entity_class": "structural",
-  "entity_type": "branch",
-  "created_at": "2024-01-15T10:00:00Z",
-  "members": [
+  "suggestions": [
     {
-      "user_id": "user_creator",
-      "roles": ["branch_manager"],
-      "joined_at": "2024-01-15T10:00:00Z"
+      "entity_type": "organization",
+      "count": 5,
+      "last_used": "2024-01-15T10:00:00Z",
+      "is_predefined": false
+    },
+    {
+      "entity_type": "department",
+      "count": 0,
+      "is_predefined": true
+    },
+    {
+      "entity_type": "regional_office",
+      "count": 3,
+      "last_used": "2024-01-14T15:30:00Z",
+      "is_predefined": false
     }
-  ]
+  ],
+  "total": 15
 }
 ```
+
+**Usage:**
+This endpoint helps maintain consistency by showing:
+- Previously used entity types with usage counts
+- Predefined suggestions for common patterns
+- Platform-specific suggestions for data isolation
+
+#### POST /v1/entities/
+Create a new entity.
+
+**Request:**
+```json
+{
+  "name": "west_coast",
+  "display_name": "West Coast Division",
+  "description": "Handles all west coast operations",
+  "entity_class": "STRUCTURAL",
+  "entity_type": "division",
+  "parent_entity_id": "ent_diverse_leads",
+  "status": "active"
+}
+```
+
+**Required Fields:**
+- `name`: Unique identifier (lowercase, no spaces)
+- `entity_class`: Either "STRUCTURAL" or "ACCESS_GROUP"
+- `entity_type`: Flexible string (e.g., "division", "sector", "office")
+
+**Optional Fields:**
+- `display_name`: User-friendly name
+- `description`: Entity description
+- `parent_entity_id`: ID of parent entity (omit for root entities)
+- `status`: "active" (default), "inactive", or "archived"
+
+**Response:**
+```json
+{
+  "id": "ent_west_coast",
+  "name": "west_coast",
+  "display_name": "West Coast Division",
+  "description": "Handles all west coast operations",
+  "entity_class": "STRUCTURAL",
+  "entity_type": "division",
+  "parent_entity_id": "ent_diverse_leads",
+  "platform_id": "plat_diverse",
+  "status": "active",
+  "direct_permissions": [],
+  "config": {},
+  "created_at": "2024-01-15T10:00:00Z",
+  "updated_at": "2024-01-15T10:00:00Z"
+}
+```
+
+**Entity Type Flexibility:**
+Platforms can use any entity type that fits their organizational structure:
+- Real Estate: "region", "district", "office", "team"
+- Corporate: "division", "department", "unit", "group"
+- Government: "bureau", "agency", "section", "office"
+- Non-profit: "chapter", "branch", "committee", "workgroup"
 
 #### POST /v1/entities/{entity_id}/members
 Add a member to an entity with optional role assignment.

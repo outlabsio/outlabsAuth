@@ -71,12 +71,13 @@ PlatformModel:
 # Entity - Unified model for orgs and groups
 EntityModel:
   - id: str
-  - name: str
-  - entity_class: "structural" | "access_group"
-  - entity_type: "organization" | "team" | "permission_group" | etc
+  - name: str  # System identifier (lowercase, no spaces)
+  - display_name: str  # User-friendly name
+  - entity_class: "STRUCTURAL" | "ACCESS_GROUP"
+  - entity_type: str  # Flexible: "organization", "division", "region", or any custom type
   - platform_id: str
   - parent_entity: Link[EntityModel]
-  - metadata: dict
+  - metadata: dict  # Flexible configuration data
 
 # User - Platform users
 UserModel:
@@ -148,24 +149,60 @@ outlabsAuth -> Platform App: Return ["lead:read", "lead:create", ...]
 
 ## Entity Hierarchy System
 
-### Structural Entities
-Form the organizational backbone:
+### Flexible Entity Types
+Platforms can use any entity type names that match their business model:
+
+**Traditional Corporate Structure:**
+```
+Platform (Acme Corp)
+└── Organization (Acme Industries)
+    ├── Division (Sales Division)
+    │   ├── Department (Enterprise Sales)
+    │   │   └── Unit (West Coast Unit)
+    │   └── Department (SMB Sales)
+    └── Division (Engineering Division)
+```
+
+**Real Estate Platform:**
 ```
 Platform (Diverse)
 └── Organization (Diverse Leads)
-    ├── Branch (Miami Office)
-    │   └── Team (Sales Team)
-    └── Division (Corporate)
+    ├── Region (West Coast)
+    │   ├── Office (Los Angeles Office)
+    │   │   └── Team (Luxury Properties Team)
+    │   └── Office (Seattle Office)
+    └── Region (East Coast)
 ```
 
-### Access Groups (as Entities)
-Provide flexible permissions:
+**Government Agency:**
 ```
-Miami Office
-├── [Structural] Sales Team
-├── [Access Group] VIP Handlers
-├── [Access Group] Admin Group
-└── [Access Group] Q4 Project Team
+Platform (City Services)
+└── Organization (Municipal Government)
+    ├── Bureau (Transportation Bureau)
+    │   ├── Section (Roads & Highways)
+    │   └── Section (Public Transit)
+    └── Bureau (Public Safety Bureau)
+```
+
+### Entity Classes (Fixed)
+While entity types are flexible, entity classes remain fixed:
+
+1. **STRUCTURAL**: Forms the organizational hierarchy
+   - Can contain other structural entities or access groups
+   - Examples: Any organizational unit (division, office, team, etc.)
+
+2. **ACCESS_GROUP**: Cross-cutting permission groups
+   - Can only contain other access groups
+   - Examples: admin_group, viewer_group, project_team, committee
+
+### Access Groups (as Entities)
+Provide flexible permissions across the hierarchy:
+```
+Los Angeles Office
+├── [Structural] Luxury Properties Team
+├── [Access Group] VIP Client Handlers
+├── [Access Group] Regional Admins
+└── [Access Group] Q4 Sales Initiative
 ```
 
 ### Permission Inheritance
@@ -202,8 +239,8 @@ class RoleModel(BaseDocument):
     
     # Scoping
     entity: Link[EntityModel]  # Which entity owns this role
-    assignable_at_types: List[EntityType]  # Where it can be assigned
-    # e.g., ["branch", "team"] means assignable at branch or team level
+    assignable_at_types: List[str]  # Flexible entity types where it can be assigned
+    # e.g., ["office", "team"] means assignable at office or team level
     
     # Metadata
     is_system_role: bool = False  # Platform-defined vs custom
