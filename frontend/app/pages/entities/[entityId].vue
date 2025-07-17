@@ -1,7 +1,7 @@
 <template>
   <div class="w-full">
     <!-- Breadcrumb Navigation -->
-    <div class="mb-6">
+    <div class="m-4">
       <UBreadcrumb :items="breadcrumbItems" />
     </div>
 
@@ -18,37 +18,77 @@
 
     <!-- Entity Details -->
     <div v-else-if="entity" class="space-y-6">
-      <!-- Header Section -->
-      <div class="bg-default border rounded-lg p-6">
-        <div class="flex items-start justify-between mb-4">
-          <div class="flex items-center gap-4">
-            <UIcon :name="entity.entity_class === 'STRUCTURAL' ? 'i-lucide-building' : 'i-lucide-users'" class="h-12 w-12 text-primary" />
-            <div>
-              <h1 class="text-3xl font-bold">{{ entity.display_name || entity.name }}</h1>
-              <div class="flex items-center gap-2 mt-1">
-                <UBadge :label="entity.entity_type" variant="subtle" />
-                <UBadge :label="entity.entity_class" :color="entity.entity_class === 'STRUCTURAL' ? 'primary' : 'secondary'" variant="outline" size="sm" />
-                <UBadge :label="entity.status" :color="entity.status === 'active' ? 'success' : 'neutral'" variant="subtle" size="sm" />
+      <!-- Compact Header Section -->
+      <div class="bg-neutral-100 dark:bg-neutral-800 p-4">
+        <div class="flex items-center justify-between gap-4">
+          <!-- Left side - Entity info -->
+          <div class="flex items-center gap-3 min-w-0">
+            <div class="flex-shrink-0">
+              <div class="p-2 bg-primary/10 rounded-md">
+                <UIcon
+                  :name="entity.entity_class === 'STRUCTURAL' ? 'i-lucide-building' : 'i-lucide-users'"
+                  class="h-5 w-5 text-primary"
+                />
+              </div>
+            </div>
+
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2 flex-wrap">
+                <h1 class="text-lg font-semibold truncate">
+                  {{ entity.display_name || entity.name }}
+                </h1>
+                <UBadge
+                  :label="entity.status"
+                  :color="entity.status === 'active' ? 'success' : 'neutral'"
+                  variant="subtle"
+                  size="xs"
+                />
+              </div>
+
+              <div class="flex items-center gap-2 mt-0.5 text-sm text-muted">
+                <span>
+                  {{ entity.entity_type.charAt(0).toUpperCase() + entity.entity_type.slice(1).replace(/_/g, " ") }}
+                </span>
+                <span>•</span>
+                <span>
+                  {{ entity.entity_class === 'STRUCTURAL' ? 'Structural' : 'Access Group' }}
+                </span>
+                <span v-if="entity.description" class="hidden sm:inline">•</span>
+                <span v-if="entity.description" class="hidden sm:inline truncate max-w-xs">
+                  {{ entity.description }}
+                </span>
               </div>
             </div>
           </div>
 
-          <!-- Actions -->
-          <div class="flex gap-2">
-            <UButton icon="i-lucide-edit" label="Edit" @click="openEditDrawer" variant="outline" />
-            <UButton icon="i-lucide-plus" label="Add Child" @click="openCreateDrawer" v-if="entity.entity_class === 'STRUCTURAL'" />
+          <!-- Right side - Actions -->
+          <div class="flex items-center gap-2 flex-shrink-0">
+            <UButton
+              icon="i-lucide-pencil"
+              variant="subtle"
+              size="sm"
+              class="hidden sm:flex"
+              @click="openEditDrawer"
+            >
+              Modify
+            </UButton>
+            <UButton
+              icon="i-lucide-pencil"
+              variant="subtle"
+              size="sm"
+              class="sm:hidden"
+              square
+              @click="openEditDrawer"
+            />
+            <UButton
+              v-if="entity.entity_class === 'STRUCTURAL'"
+              icon="i-lucide-plus"
+              size="sm"
+              @click="openCreateDrawer"
+            >
+              <span class="hidden sm:inline">Add Child</span>
+            </UButton>
           </div>
-        </div>
-
-        <!-- Description -->
-        <p v-if="entity.description" class="text-muted-foreground">
-          {{ entity.description }}
-        </p>
-
-        <!-- Entity Path -->
-        <div v-if="entityPath.length > 1" class="mt-4 p-3 bg-elevated rounded-md">
-          <p class="text-sm font-medium mb-2">Entity Path:</p>
-          <UBreadcrumb :items="entityPath" />
         </div>
       </div>
 
@@ -227,7 +267,6 @@ const entityId = computed(() => route.params.entityId as string);
 
 // Store
 const authStore = useAuthStore();
-const entitiesStore = useEntitiesStore();
 
 // State
 const activeTab = ref(0); // Use index for tab selection
