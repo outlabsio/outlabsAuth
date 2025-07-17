@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import type { Entity } from "~/types/auth.types";
+import type { Entity } from '~/types/auth.types';
 
 // Store
 const entitiesStore = useEntitiesStore();
-const contextStore = useContextStore();
+const contextStore = useContextStore()
 
 // State
 const selectedEntity = ref<Entity | null>(null);
