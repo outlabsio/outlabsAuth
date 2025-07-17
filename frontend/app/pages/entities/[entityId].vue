@@ -98,9 +98,7 @@
         :items="tabItems" 
         class="w-full"
         :ui="{
-          list: 'rounded-none',
-          indicator: 'rounded-none',
-          trigger: 'rounded-none'
+          list: 'rounded-none'
         }"
       >
         <!-- Overview Tab -->
