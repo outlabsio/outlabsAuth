@@ -103,7 +103,7 @@
       >
         <!-- Overview Tab -->
         <template #overview>
-          <div class="space-y-6">
+          <div class="space-y-4 p-4">
             <!-- Entity Information -->
             <UCard>
               <template #header>
@@ -184,12 +184,7 @@
 
         <!-- Children Tab -->
         <template #children>
-          <div class="space-y-4">
-            <div class="flex justify-between items-center">
-              <h3 class="text-lg font-semibold">Child Entities</h3>
-              <UButton icon="i-lucide-plus" label="Add Child Entity" @click="openCreateDrawer" v-if="entity.entity_class === 'STRUCTURAL'" />
-            </div>
-
+          <div class="space-y-4 p-4">
             <!-- Children List -->
             <div v-if="childEntities && childEntities.length > 0" class="space-y-3">
               <UCard v-for="child in childEntities" :key="child.id" class="hover:shadow-md transition-shadow cursor-pointer" @click="navigateToEntity(child.id)">
@@ -213,15 +208,14 @@
             <div v-else class="text-center py-12">
               <UIcon name="i-lucide-folder-open" class="h-12 w-12 mx-auto text-muted-foreground mb-3" />
               <h3 class="font-medium mb-1">No child entities</h3>
-              <p class="text-muted-foreground mb-4">This entity doesn't have any child entities yet.</p>
-              <UButton icon="i-lucide-plus" label="Add First Child" @click="openCreateDrawer" v-if="entity.entity_class === 'STRUCTURAL'" />
+              <p class="text-muted-foreground">This entity doesn't have any child entities yet.</p>
             </div>
           </div>
         </template>
 
         <!-- Members Tab -->
         <template #members>
-          <div class="space-y-4">
+          <div class="space-y-4 p-4">
             <div class="flex justify-between items-center">
               <h3 class="text-lg font-semibold">Members</h3>
               <UButton icon="i-lucide-user-plus" label="Add Member" @click="openMemberManagement" />
@@ -238,7 +232,7 @@
 
         <!-- Activity Tab -->
         <template #activity>
-          <div class="space-y-4">
+          <div class="space-y-4 p-4">
             <h3 class="text-lg font-semibold">Activity Log</h3>
 
             <div class="text-center py-12">
