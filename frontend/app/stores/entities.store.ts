@@ -17,6 +17,7 @@ interface EntitiesState {
     entity_type: string;
     parent_entity_id: string | null;
     status: string;
+    include_children: boolean;
   };
 }
 
@@ -37,8 +38,9 @@ export const useEntitiesStore = defineStore("entities", () => {
       search: "",
       entity_class: "",
       entity_type: "",
-      parent_entity_id: null,
+      parent_entity_id: null, // Will be set based on context
       status: "",
+      include_children: false,
     },
   });
 
@@ -65,28 +67,41 @@ export const useEntitiesStore = defineStore("entities", () => {
       params.append("page", state.pagination.page.toString());
       params.append("page_size", state.pagination.pageSize.toString());
 
-      // Add context-aware filtering
-      if (!contextStore.isSystemContext && contextStore.selectedOrganization) {
-        // When in organization context, default to showing children of that org
-        if (!state.filters.parent_entity_id) {
-          params.append("parent_entity_id", contextStore.selectedOrganization.id);
-          console.log("Entities Store: Adding parent filter for organization:", contextStore.selectedOrganization.name);
-        }
-      } else {
-        console.log("Entities Store: Using system context - showing all entities");
-      }
+      // Let the filters determine what to show - don't override based on context
+      console.log("Entities Store: Context aware fetch with filters:", {
+        isSystemContext: contextStore.isSystemContext,
+        selectedOrg: contextStore.selectedOrganization?.name,
+        parentFilter: state.filters.parent_entity_id,
+      });
 
       // Add filters
       if (state.filters.search) params.append("search", state.filters.search);
       if (state.filters.entity_class) params.append("entity_class", state.filters.entity_class);
       if (state.filters.entity_type) params.append("entity_type", state.filters.entity_type);
-      if (state.filters.parent_entity_id) params.append("parent_entity_id", state.filters.parent_entity_id);
+      
+      // Handle parent_entity_id filter
+      if (state.filters.parent_entity_id === "null") {
+        // Special case for filtering top-level entities (no parent)
+        params.append("parent_entity_id", "null");
+      } else if (state.filters.parent_entity_id) {
+        params.append("parent_entity_id", state.filters.parent_entity_id);
+      }
+      
+      // Include children flag
+      if (state.filters.include_children) {
+        params.append("include_children", "true");
+      }
+      
       if (state.filters.status) params.append("status", state.filters.status);
 
       const apiUrl = `/v1/entities?${params.toString()}`;
       console.log("Entities Store: API call URL:", apiUrl);
 
-      const response = await authStore.apiCall<PaginatedResponse<Entity>>(apiUrl);
+      // Include context headers from context store
+      const headers = contextStore.getContextHeaders;
+      const response = await authStore.apiCall<PaginatedResponse<Entity>>(apiUrl, {
+        headers
+      });
 
       state.entities = response.items;
       state.pagination = {
@@ -105,7 +120,9 @@ export const useEntitiesStore = defineStore("entities", () => {
 
   const fetchEntity = async (id: string) => {
     try {
-      const entity = await authStore.apiCall<Entity>(`/v1/entities/${id}`);
+      const contextStore = useContextStore();
+      const headers = contextStore.getContextHeaders;
+      const entity = await authStore.apiCall<Entity>(`/v1/entities/${id}`, { headers });
       state.selectedEntity = entity;
       return entity;
     } catch (error: any) {
@@ -117,9 +134,12 @@ export const useEntitiesStore = defineStore("entities", () => {
 
   const createEntity = async (data: Partial<Entity>) => {
     try {
+      const contextStore = useContextStore();
+      const headers = contextStore.getContextHeaders;
       const entity = await authStore.apiCall<Entity>("/v1/entities", {
         method: "POST",
         body: data,
+        headers
       });
 
       // Refresh the list
@@ -134,9 +154,12 @@ export const useEntitiesStore = defineStore("entities", () => {
 
   const updateEntity = async (id: string, data: Partial<Entity>) => {
     try {
+      const contextStore = useContextStore();
+      const headers = contextStore.getContextHeaders;
       const entity = await authStore.apiCall<Entity>(`/v1/entities/${id}`, {
         method: "PATCH",
         body: data,
+        headers
       });
 
       // Update in local state
@@ -158,8 +181,11 @@ export const useEntitiesStore = defineStore("entities", () => {
 
   const deleteEntity = async (id: string) => {
     try {
+      const contextStore = useContextStore();
+      const headers = contextStore.getContextHeaders;
       await authStore.apiCall(`/v1/entities/${id}`, {
         method: "DELETE",
+        headers
       });
 
       // Remove from local state
@@ -190,14 +216,59 @@ export const useEntitiesStore = defineStore("entities", () => {
     state.pagination.page = 1; // Reset to first page
     fetchEntities();
   };
+  
+  // Set specific filter for hierarchy level
+  const setHierarchyLevel = (level: "top" | "all") => {
+    const contextStore = useContextStore();
+    
+    if (level === "top") {
+      if (contextStore.isSystemContext) {
+        // In system context, show top-level entities (no parent)
+        state.filters.parent_entity_id = "null";
+        state.filters.include_children = false;
+      } else if (contextStore.selectedOrganization) {
+        // In organization context, show direct children of the organization
+        state.filters.parent_entity_id = contextStore.selectedOrganization.id;
+        state.filters.include_children = false;
+      }
+    } else {
+      // Show all entities within the context
+      if (contextStore.isSystemContext) {
+        // In system context, show all entities
+        state.filters.parent_entity_id = null;
+        state.filters.include_children = false;
+      } else if (contextStore.selectedOrganization) {
+        // In organization context, show the org and all its descendants
+        state.filters.parent_entity_id = contextStore.selectedOrganization.id;
+        state.filters.include_children = true;
+      }
+    }
+    state.pagination.page = 1;
+    fetchEntities();
+  };
 
   const resetFilters = () => {
+    const contextStore = useContextStore();
+    
+    // Set default parent filter based on context
+    let defaultParentFilter: string | null;
+    if (contextStore.isSystemContext) {
+      // In system context, default to top-level entities
+      defaultParentFilter = "null";
+    } else if (contextStore.selectedOrganization) {
+      // In organization context, default to direct children of the org
+      defaultParentFilter = contextStore.selectedOrganization.id;
+    } else {
+      defaultParentFilter = null;
+    }
+    
     state.filters = {
       search: "",
       entity_class: "",
       entity_type: "",
-      parent_entity_id: null,
+      parent_entity_id: defaultParentFilter,
       status: "",
+      include_children: false,
     };
     state.pagination.page = 1;
     fetchEntities();
@@ -206,7 +277,9 @@ export const useEntitiesStore = defineStore("entities", () => {
   // Fetch entity types for autocomplete
   const fetchEntityTypes = async () => {
     try {
-      return await authStore.apiCall<string[]>("/v1/entities/entity-types");
+      const contextStore = useContextStore();
+      const headers = contextStore.getContextHeaders;
+      return await authStore.apiCall<string[]>("/v1/entities/entity-types", { headers });
     } catch (error: any) {
       console.error("Failed to fetch entity types:", error);
       return [];
@@ -229,6 +302,8 @@ export const useEntitiesStore = defineStore("entities", () => {
 
       console.log("Fetching entity type suggestions with params:", params);
 
+      const contextStore = useContextStore();
+      const headers = contextStore.getContextHeaders;
       const response = await authStore.apiCall<{
         suggestions: Array<{
           entity_type: string;
@@ -237,7 +312,7 @@ export const useEntitiesStore = defineStore("entities", () => {
           is_predefined?: boolean;
         }>;
         total: number;
-      }>(`/v1/entities/entity-types?${queryParams.toString()}`);
+      }>(`/v1/entities/entity-types?${queryParams.toString()}`, { headers });
 
       console.log("Entity type suggestions response:", response);
 
@@ -270,6 +345,7 @@ export const useEntitiesStore = defineStore("entities", () => {
     setPage,
     setPageSize,
     setFilters,
+    setHierarchyLevel,
     resetFilters,
     fetchEntityTypes,
     fetchEntityTypeSuggestions,

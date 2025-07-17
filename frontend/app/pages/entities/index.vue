@@ -17,9 +17,42 @@ const entityClassOptions = [
   { label: "Access Group", value: "ACCESS_GROUP" },
 ];
 
-// Fetch entities on mount
+// Entity level options - dynamic based on context
+const entityLevelOptions = computed(() => {
+  if (contextStore.isSystemContext) {
+    return [
+      { label: "Top-level only", value: "top", icon: "i-lucide-home" },
+      { label: "All entities", value: "all", icon: "i-lucide-layers" },
+    ];
+  } else if (contextStore.selectedOrganization) {
+    return [
+      { label: `Direct children of ${contextStore.selectedOrganization.name}`, value: "top", icon: "i-lucide-home" },
+      { label: `All in ${contextStore.selectedOrganization.name}`, value: "all", icon: "i-lucide-layers" },
+    ];
+  }
+  return [
+    { label: "All entities", value: "all", icon: "i-lucide-layers" },
+  ];
+});
+
+// Computed property for current hierarchy level
+const hierarchyLevel = computed({
+  get: () => {
+    const includeChildren = entitiesStore.filters.include_children;
+    // If include_children is true, we're showing "all"
+    return includeChildren ? "all" : "top";
+  },
+  set: (value) => entitiesStore.setHierarchyLevel(value as "top" | "all")
+});
+
+// Fetch entities on mount with context-aware default
 onMounted(() => {
-  entitiesStore.fetchEntities();
+  // Set initial hierarchy level based on context
+  if (contextStore.isSystemContext) {
+    entitiesStore.setHierarchyLevel("top"); // Show top-level entities
+  } else if (contextStore.selectedOrganization) {
+    entitiesStore.setHierarchyLevel("top"); // Show direct children of the org
+  }
 });
 
 // Get entity types for filter
@@ -53,6 +86,15 @@ const entityTypeOptions = computed(() => {
 });
 
 // Methods
+function handleSearch(searchValue: string | number) {
+  const search = String(searchValue);
+  // When searching, automatically switch to "all entities" view
+  if (search && hierarchyLevel.value === "top") {
+    entitiesStore.setHierarchyLevel("all");
+  }
+  entitiesStore.setFilters({ search });
+}
+
 function openCreateDrawer() {
   selectedEntity.value = null;
   drawerMode.value = "create";
@@ -90,11 +132,24 @@ function handleEntityDeleted() {
     <div class="px-4 py-6 lg:px-8">
       <!-- Filters -->
       <UCard class="mb-6">
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+          <!-- Hierarchy Level Filter -->
+          <USelectMenu
+            v-model="hierarchyLevel"
+            :options="entityLevelOptions"
+            placeholder="Hierarchy"
+            value-attribute="value"
+            option-attribute="label"
+          >
+            <template #leading>
+              <UIcon :name="hierarchyLevel === 'top' ? 'i-lucide-home' : 'i-lucide-layers'" class="w-4 h-4" />
+            </template>
+          </USelectMenu>
+
           <!-- Search -->
           <UInput
             :model-value="entitiesStore.filters.search"
-            @update:model-value="entitiesStore.setFilters({ search: String($event) })"
+            @update:model-value="handleSearch"
             placeholder="Search entities..."
             icon="i-lucide-search"
             size="md"
@@ -121,7 +176,13 @@ function handleEntityDeleted() {
           />
 
           <!-- Reset Button -->
-          <UButton @click="entitiesStore.resetFilters" variant="outline" icon="i-lucide-rotate-ccw"> Reset </UButton>
+          <UButton 
+            @click="entitiesStore.resetFilters" 
+            variant="outline" 
+            icon="i-lucide-rotate-ccw"
+          >
+            Reset
+          </UButton>
         </div>
       </UCard>
 

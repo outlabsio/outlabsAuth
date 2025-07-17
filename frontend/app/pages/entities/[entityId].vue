@@ -223,14 +223,14 @@ import type { Entity } from "~/types/auth.types";
 // Route params
 const route = useRoute();
 const router = useRouter();
-const entityId = route.params.entityId as string;
+const entityId = computed(() => route.params.entityId as string);
 
 // Store
 const authStore = useAuthStore();
 const entitiesStore = useEntitiesStore();
 
 // State
-const activeTab = ref("overview");
+const activeTab = ref(0); // Use index for tab selection
 const drawerOpen = ref(false);
 const drawerMode = ref<"view" | "create" | "edit">("view");
 const drawerEntity = ref<Entity | null>(null);
@@ -242,51 +242,78 @@ const {
   error,
   refresh,
 } = await useAsyncData(
-  `entity-${entityId}`,
+  `entity-${entityId.value}`,
   async () => {
-    const response = await authStore.apiCall<Entity>(`/v1/entities/${entityId}`);
+    const contextStore = useContextStore();
+    const headers = contextStore.getContextHeaders;
+    const response = await authStore.apiCall<Entity>(`/v1/entities/${entityId.value}`, { headers });
     return response;
   },
   {
-    key: `entity-${entityId}`,
+    key: `entity-${entityId.value}`,
     lazy: false,
   }
 );
 
-// Fetch child entities
-const { data: childEntities } = await useAsyncData(
-  `entity-children-${entityId}`,
-  async () => {
-    if (!entity.value) return [];
-    const response = await authStore.apiCall<{ items: Entity[] }>(`/v1/entities?parent_entity_id=${entityId}&page_size=50`);
-    return response.items || [];
-  },
-  {
-    lazy: true,
-    default: () => [],
-  }
-);
+// State for child entities
+const childEntities = ref<Entity[]>([]);
 
-// Fetch parent entity if exists
-const { data: parentEntity } = await useAsyncData(
-  `entity-parent-${entity.value?.parent_entity_id}`,
-  async () => {
-    if (!entity.value?.parent_entity_id) return null;
-    const response = await authStore.apiCall<Entity>(`/v1/entities/${entity.value.parent_entity_id}`);
-    return response;
-  },
-  {
-    lazy: true,
-    default: () => null,
+// Fetch child entities
+const fetchChildEntities = async () => {
+  try {
+    const contextStore = useContextStore();
+    const headers = contextStore.getContextHeaders;
+    const response = await authStore.apiCall<{ items: Entity[] }>(`/v1/entities?parent_entity_id=${entityId.value}&page_size=50`, { headers });
+    childEntities.value = response.items || [];
+  } catch (error) {
+    console.error('Failed to fetch child entities:', error);
+    childEntities.value = [];
   }
-);
+};
+
+// Fetch children when entity is loaded
+watchEffect(() => {
+  if (entity.value) {
+    fetchChildEntities();
+  }
+});
+
+// Watch for route changes and refresh data
+watch(entityId, async (newId, oldId) => {
+  if (newId !== oldId) {
+    await refresh();
+    await fetchChildEntities();
+  }
+});
+
+// State for parent entity
+const parentEntity = ref<Entity | null>(null);
+
+// Fetch parent entity when entity changes
+watchEffect(async () => {
+  if (entity.value && entity.value.parent_entity_id) {
+    try {
+      const contextStore = useContextStore();
+      const headers = contextStore.getContextHeaders;
+      const response = await authStore.apiCall<Entity>(`/v1/entities/${entity.value.parent_entity_id}`, { headers });
+      parentEntity.value = response;
+    } catch (error) {
+      console.error('Failed to fetch parent entity:', error);
+      parentEntity.value = null;
+    }
+  } else {
+    parentEntity.value = null;
+  }
+});
 
 // Fetch entity statistics
 const { data: entityStats } = await useAsyncData(
-  `entity-stats-${entityId}`,
+  `entity-stats-${entityId.value}`,
   async () => {
     try {
-      const response = await authStore.apiCall<any>(`/v1/entities/${entityId}/stats`);
+      const contextStore = useContextStore();
+      const headers = contextStore.getContextHeaders;
+      const response = await authStore.apiCall<any>(`/v1/entities/${entityId.value}/stats`, { headers });
       return response;
     } catch (error) {
       return null;
@@ -303,23 +330,16 @@ const entityPath = computed(() => {
   if (!entity.value) return [];
 
   const path: { label: string; to: string }[] = [];
-  let current = entity.value;
 
   // Add current entity
-  path.unshift({
-    label: current.display_name || current.name,
-    to: `/entities/${current.id}`,
+  path.push({
+    label: entity.value.display_name || entity.value.name,
+    to: `/entities/${entity.value.id}`,
   });
 
-  // Add parent chain
-  while (current.parent_entity_id && parentEntity.value) {
-    current = parentEntity.value;
-    path.unshift({
-      label: current.display_name || current.name,
-      to: `/entities/${current.id}`,
-    });
-  }
-
+  // Note: For now, we only show the current entity in the path
+  // A full parent chain would require recursive fetching or a different API endpoint
+  
   return path;
 });
 
@@ -337,22 +357,22 @@ const breadcrumbItems = computed(() => {
 // Tab configuration
 const tabItems = computed(() => [
   {
-    key: "overview",
+    slot: "overview",
     label: "Overview",
     icon: "i-lucide-info",
   },
   {
-    key: "children",
-    label: `Children (${childEntities.value?.length || 0})`,
+    slot: "children",
+    label: `Children (${childEntities.value.length})`,
     icon: "i-lucide-folder",
   },
   {
-    key: "members",
+    slot: "members",
     label: "Members",
     icon: "i-lucide-users",
   },
   {
-    key: "activity",
+    slot: "activity",
     label: "Activity",
     icon: "i-lucide-activity",
   },
@@ -390,9 +410,9 @@ function navigateToEntity(entityId: string) {
   router.push(`/entities/${entityId}`);
 }
 
-function handleEntityCreated(newEntity: Entity) {
+async function handleEntityCreated(newEntity: Entity) {
   // Refresh child entities
-  refresh();
+  await fetchChildEntities();
 }
 
 function handleEntityUpdated(updatedEntity: Entity) {
