@@ -5,11 +5,6 @@ import type { Role } from '~/types/auth.types'
 const rolesStore = useRolesStore()
 const contextStore = useContextStore()
 
-// State
-const selectedRole = ref<Role | null>(null)
-const drawerOpen = ref(false)
-const drawerMode = ref<"view" | "create" | "edit">("view")
-
 // Role type options
 const roleTypeOptions = [
   { label: "All Types", value: "" },
@@ -74,9 +69,7 @@ function handleSystemFilter(value: string) {
 }
 
 function openCreateDrawer() {
-  selectedRole.value = null
-  drawerMode.value = "create"
-  drawerOpen.value = true
+  rolesStore.openDrawer('create')
 }
 
 function handleRoleCreated() {
@@ -236,6 +229,6 @@ function handleRoleDeleted() {
     </div>
 
     <!-- Role Drawer -->
-    <RolesDrawer v-model:open="drawerOpen" :role="selectedRole" :mode="drawerMode" @created="handleRoleCreated" @updated="handleRoleUpdated" @deleted="handleRoleDeleted" />
+    <RolesDrawer v-model:open="rolesStore.ui.drawerOpen" :role="rolesStore.selectedRole" :mode="rolesStore.ui.drawerMode" @created="handleRoleCreated" @updated="handleRoleUpdated" @deleted="handleRoleDeleted" />
   </UDashboardPanel>
 </template>

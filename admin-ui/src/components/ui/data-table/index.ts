@@ -1,6 +1,0 @@
-export { DataTable } from "./data-table"
-export { DataTableColumnHeader } from "./data-table-column-header"
-export { DataTableRowActions } from "./data-table-row-actions"
-export { DataTableFacetedFilter } from "./data-table-faceted-filter"
-export { createSelectColumn } from "./data-table-checkbox"
-export type { ColumnDef } from "@tanstack/react-table"

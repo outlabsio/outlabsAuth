@@ -20,9 +20,7 @@ const expandedGroups = ref<Set<string>>(new Set())
 
 // Fetch permissions on mount
 onMounted(() => {
-  if (!permissionsStore.permissions.length) {
-    permissionsStore.fetchPermissions()
-  }
+  permissionsStore.fetchPermissions()
 })
 
 // Group permissions by resource
@@ -43,7 +41,14 @@ const groupedPermissions = computed(() => {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([resource, perms]) => ({
       resource,
-      permissions: perms.sort((a, b) => a.name.localeCompare(b.name))
+      permissions: perms.sort((a, b) => {
+        // System permissions first
+        if (a.is_system !== b.is_system) {
+          return a.is_system ? -1 : 1
+        }
+        // Then by action
+        return a.action.localeCompare(b.action)
+      })
     }))
   
   return sortedGroups
@@ -167,7 +172,7 @@ onMounted(() => {
     </div>
 
     <!-- Permission Groups -->
-    <div class="space-y-2 max-h-96 overflow-y-auto border rounded-lg">
+    <div class="border rounded-lg bg-gray-50 dark:bg-gray-900/50">
       <div v-if="permissionsStore.isLoading" class="p-8 text-center">
         <UIcon name="i-lucide-loader-2" class="h-6 w-6 animate-spin mx-auto mb-2" />
         <p class="text-sm text-muted-foreground">Loading permissions...</p>
@@ -178,7 +183,7 @@ onMounted(() => {
         <p class="text-sm text-muted-foreground">No permissions found</p>
       </div>
 
-      <div v-else class="divide-y">
+      <div v-else class="divide-y max-h-96 overflow-y-auto">
         <div v-for="group in filteredGroups" :key="group.resource" class="p-3">
           <!-- Group Header -->
           <div class="flex items-center gap-2 mb-2">
@@ -222,10 +227,16 @@ onMounted(() => {
                 <div class="flex items-center gap-2">
                   <span class="font-mono text-sm">{{ permission.name }}</span>
                   <UBadge
-                    v-if="permission.permission_type === 'system'"
+                    v-if="permission.is_system"
                     label="System"
                     variant="subtle"
                     size="xs"
+                  />
+                  <UIcon
+                    v-if="permission.conditions && permission.conditions.length > 0"
+                    name="i-lucide-zap"
+                    class="h-3 w-3 text-yellow-500"
+                    title="Has conditions"
                   />
                 </div>
                 <p v-if="permission.description" class="text-xs text-muted-foreground mt-0.5">

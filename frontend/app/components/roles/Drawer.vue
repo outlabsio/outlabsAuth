@@ -2,31 +2,47 @@
 import type { Role } from '~/types/auth.types'
 
 const props = defineProps<{
-  open: boolean
   role: Role | null
   mode: 'view' | 'create' | 'edit'
   defaultEntityId?: string | null
 }>()
 
 const emit = defineEmits<{
-  'update:open': [value: boolean]
   created: [role: Role]
   updated: [role: Role]
   deleted: []
 }>()
 
+// State
+const open = defineModel<boolean>("open", { default: false })
+const currentMode = ref(props.mode)
+
 // Stores
 const rolesStore = useRolesStore()
 const toast = useToast()
 
-// State
+// Other state
 const isDeleting = ref(false)
+const isSubmitting = ref(false)
 const showDeleteConfirm = ref(false)
+const formRef = ref()
+
+// Watch for mode changes
+watch(
+  () => props.mode,
+  (newMode) => {
+    currentMode.value = newMode
+  }
+)
+
+// Computed
+const mode = computed(() => currentMode.value)
 
 // Methods
 async function handleSubmit(data: any) {
+  isSubmitting.value = true
   try {
-    if (props.mode === 'create') {
+    if (mode.value === 'create') {
       const newRole = await rolesStore.createRole(data)
       toast.add({
         title: "Success",
@@ -34,8 +50,8 @@ async function handleSubmit(data: any) {
         color: "success"
       })
       emit('created', newRole)
-      emit('update:open', false)
-    } else if (props.mode === 'edit' && props.role) {
+      open.value = false
+    } else if (mode.value === 'edit' && props.role) {
       const updatedRole = await rolesStore.updateRole(props.role.id, data)
       toast.add({
         title: "Success",
@@ -43,15 +59,24 @@ async function handleSubmit(data: any) {
         color: "success"
       })
       emit('updated', updatedRole)
-      emit('update:open', false)
+      open.value = false
     }
   } catch (error: any) {
     console.error('Failed to save role:', error)
     toast.add({
       title: "Error",
-      description: error.data?.detail || error.message || `Failed to ${props.mode} role`,
+      description: error.data?.detail || error.message || `Failed to ${mode.value} role`,
       color: "error"
     })
+  } finally {
+    isSubmitting.value = false
+  }
+}
+
+const submitForm = () => {
+  // Trigger form submission
+  if (formRef.value) {
+    formRef.value.$el.dispatchEvent(new Event("submit", { bubbles: true }))
   }
 }
 
@@ -67,7 +92,7 @@ async function handleDelete() {
       color: "success"
     })
     emit('deleted')
-    emit('update:open', false)
+    open.value = false
   } catch (error: any) {
     console.error('Failed to delete role:', error)
     toast.add({
@@ -83,7 +108,7 @@ async function handleDelete() {
 
 // Computed
 const title = computed(() => {
-  switch (props.mode) {
+  switch (mode.value) {
     case 'create':
       return 'Create New Role'
     case 'edit':
@@ -95,13 +120,12 @@ const title = computed(() => {
   }
 })
 
-const showForm = computed(() => props.mode === 'create' || props.mode === 'edit')
+const showForm = computed(() => mode.value === 'create' || mode.value === 'edit')
 </script>
 
 <template>
   <UDrawer
-    :model-value="open"
-    @update:model-value="$emit('update:open', $event)"
+    v-model:open="open"
     direction="right"
     :ui="{
       content: 'w-full max-w-2xl',
@@ -124,11 +148,13 @@ const showForm = computed(() => props.mode === 'create' || props.mode === 'edit'
         <!-- Form Content -->
         <div v-if="showForm">
           <RolesForm
+            ref="formRef"
             :mode="mode"
             :role="role"
             :default-entity-id="defaultEntityId"
             @submit="handleSubmit"
-            @cancel="$emit('update:open', false)"
+            @cancel="open = false"
+            @delete="showDeleteConfirm = true"
           />
         </div>
 
@@ -199,7 +225,7 @@ const showForm = computed(() => props.mode === 'create' || props.mode === 'edit'
               <UButton
                 v-if="!role.is_system_role"
                 icon="i-lucide-pencil"
-                @click="$emit('update:open', false); $emit('update:open', true); mode = 'edit'"
+                @click="currentMode = 'edit'"
               >
                 Edit Role
               </UButton>
@@ -239,6 +265,16 @@ const showForm = computed(() => props.mode === 'create' || props.mode === 'edit'
               </template>
             </UAlert>
         </div>
+      </div>
+    </template>
+
+    <!-- Footer for Create/Edit Mode -->
+    <template v-if="mode === 'create' || mode === 'edit'" #footer>
+      <div class="flex flex-col sm:flex-row gap-3 w-full">
+        <UButton @click="open = false" color="neutral" variant="outline" class="justify-center flex-1"> Cancel </UButton>
+        <UButton @click="submitForm" :loading="isSubmitting" color="primary" class="justify-center flex-1">
+          {{ mode === "create" ? "Create Role" : "Update Role" }}
+        </UButton>
       </div>
     </template>
   </UDrawer>

@@ -82,23 +82,47 @@ export interface Role {
   updated_at: string;
 }
 
-// Permission type
+// Permission types
+export type OperatorType = 
+  | "EQUALS" 
+  | "NOT_EQUALS" 
+  | "LESS_THAN" 
+  | "LESS_THAN_OR_EQUAL"
+  | "GREATER_THAN" 
+  | "GREATER_THAN_OR_EQUAL" 
+  | "IN" 
+  | "NOT_IN"
+  | "CONTAINS" 
+  | "NOT_CONTAINS" 
+  | "STARTS_WITH" 
+  | "ENDS_WITH"
+  | "REGEX_MATCH" 
+  | "EXISTS" 
+  | "NOT_EXISTS";
+
+export interface Condition {
+  attribute: string; // Must start with user., resource., entity., or environment.
+  operator: OperatorType;
+  value: string | number | boolean | any[] | Record<string, any>;
+}
+
 export interface Permission {
-  _id?: string;
-  id: string;
-  code: string;
-  name: string;
-  description?: string | null;
+  id?: string;
+  name: string; // resource:action format
+  display_name: string;
+  description?: string;
   resource: string;
   action: string;
-  scope?: string | null;
-  permission_type: "system" | "custom";
-  platform_id?: string | null;
-  requires_all?: string[];
-  requires_any?: string[];
-  excludes?: string[];
-  created_at: string;
-  updated_at: string;
+  scope?: string;
+  entity_id?: string;
+  is_system: boolean;
+  is_active: boolean;
+  tags: string[];
+  conditions: Condition[];
+  metadata: Record<string, any>;
+  created_at?: string;
+  updated_at?: string;
+  created_by?: string;
 }
 
 // Platform type

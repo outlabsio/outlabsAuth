@@ -18,6 +18,11 @@ interface RolesState {
     is_system_role: boolean | null;
     assignable_at_type: string | null;
   };
+  // UI State
+  ui: {
+    drawerOpen: boolean;
+    drawerMode: 'view' | 'create' | 'edit';
+  };
 }
 
 export const useRolesStore = defineStore("roles", () => {
@@ -39,6 +44,10 @@ export const useRolesStore = defineStore("roles", () => {
       is_global: null,
       is_system_role: null,
       assignable_at_type: null,
+    },
+    ui: {
+      drawerOpen: false,
+      drawerMode: 'view',
     },
   });
 
@@ -237,6 +246,25 @@ export const useRolesStore = defineStore("roles", () => {
     }
   };
 
+  // UI Actions
+  const openDrawer = (mode: 'view' | 'create' | 'edit' = 'view', role: Role | null = null) => {
+    state.ui.drawerMode = mode;
+    state.selectedRole = role;
+    state.ui.drawerOpen = true;
+  };
+
+  const closeDrawer = () => {
+    state.ui.drawerOpen = false;
+    // Reset selected role after animation
+    setTimeout(() => {
+      state.selectedRole = null;
+    }, 300);
+  };
+
+  const setDrawerMode = (mode: 'view' | 'create' | 'edit') => {
+    state.ui.drawerMode = mode;
+  };
+
   return {
     // State (as computed for reactivity)
     roles: computed(() => state.roles),
@@ -245,6 +273,7 @@ export const useRolesStore = defineStore("roles", () => {
     error: computed(() => state.error),
     pagination: computed(() => state.pagination),
     filters: computed(() => state.filters),
+    ui: computed(() => state.ui),
 
     // Actions
     fetchRoles,
@@ -258,5 +287,10 @@ export const useRolesStore = defineStore("roles", () => {
     resetFilters,
     fetchRoleTemplates,
     fetchRoleUsage,
+
+    // UI Actions
+    openDrawer,
+    closeDrawer,
+    setDrawerMode,
   };
 });

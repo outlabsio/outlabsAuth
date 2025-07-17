@@ -1,453 +1,403 @@
-export interface Permission {
-  _id?: string;
-  name: string;
-  description: string;
-  resource?: string;
-  action?: string;
-}
+import type { Permission, Condition } from "~/types/auth.types";
 
-export interface PermissionGroup {
-  resource: string;
+interface PermissionListResponse {
   permissions: Permission[];
+  total: number;
+  system_count: number;
+  custom_count: number;
 }
 
-interface UserWithPermission {
-  _id: string;
-  name: string;
-  permissions?: string[];
-}
-
-interface PaginationState {
-  pageIndex: number;
-  pageSize: number;
+interface PermissionsState {
+  permissions: Permission[];
+  selectedPermission: Permission | null;
+  isLoading: boolean;
+  error: string | null;
+  // Counters
+  totalPermissions: number;
+  systemCount: number;
+  customCount: number;
+  // Filters
+  filters: {
+    search: string;
+    resource: string | null;
+    is_system: boolean | null;
+    is_active: boolean | null;
+    has_conditions: boolean | null;
+    tags: string[];
+  };
+  // UI State
+  ui: {
+    drawerOpen: boolean;
+    drawerMode: "view" | "create" | "edit";
+  };
 }
 
 export const usePermissionsStore = defineStore("permissions", () => {
-  const permissions = ref<Permission[]>([]);
-  const totalPermissions = ref(0);
-  const currentPage = ref(1);
-  const searchQuery = ref("");
-  const sortColumn = ref("");
-  const sortDirection = ref<"asc" | "desc">("asc");
-  const isLoading = ref(false);
-
-  // Add specific loading states for different actions
-  const isCreating = ref(false);
-  const isUpdating = ref(false);
-  const isDeleting = ref(false);
-  const isLoadingUsers = ref(false);
-
-  const pagination = ref<PaginationState>({
-    pageIndex: 0,
-    pageSize: 10,
+  // State
+  const state = reactive<PermissionsState>({
+    permissions: [],
+    selectedPermission: null,
+    isLoading: false,
+    error: null,
+    totalPermissions: 0,
+    systemCount: 0,
+    customCount: 0,
+    filters: {
+      search: "",
+      resource: null,
+      is_system: null,
+      is_active: null,
+      has_conditions: null,
+      tags: [],
+    },
+    ui: {
+      drawerOpen: false,
+      drawerMode: "view",
+    },
   });
 
-  // Standard CRUD actions for permissions
-  const standardActions = ["create", "read", "update", "delete", "all"] as const;
+  // Use auth and context stores
+  const authStore = useAuthStore();
+  const contextStore = useContextStore();
 
-  const parsePermissionName = (permission: Permission): Permission => {
-    const result = { ...permission };
-    if (permission.name && permission.name.includes(":")) {
-      const [resource, action] = permission.name.split(":");
-      result.resource = resource;
-      result.action = action;
+  // Actions
+  const fetchPermissions = async () => {
+    state.isLoading = true;
+    state.error = null;
+
+    try {
+      // Get context headers
+      const headers = contextStore.getContextHeaders;
+
+      // Build query params
+      const params = new URLSearchParams();
+      
+      // Add entity context if not in system context
+      if (!contextStore.isSystemContext && contextStore.selectedOrganization) {
+        params.append("entity_id", contextStore.selectedOrganization.id);
+      }
+      
+      params.append("include_system", "true");
+      params.append("include_inherited", "true");
+      params.append("active_only", state.filters.is_active === false ? "false" : "true");
+
+      const apiUrl = `/v1/permissions/available?${params.toString()}`;
+
+      const response = await authStore.apiCall<PermissionListResponse>(apiUrl, {
+        headers,
+      });
+
+      // Parse permissions to ensure they have the right structure
+      state.permissions = response.permissions.map((p) => ({
+        ...p,
+        conditions: p.conditions || [],
+        tags: p.tags || [],
+        metadata: p.metadata || {},
+      }));
+
+      state.totalPermissions = response.total;
+      state.systemCount = response.system_count;
+      state.customCount = response.custom_count;
+    } catch (error: any) {
+      console.error("Failed to fetch permissions:", error);
+      state.error = error.message || "Failed to fetch permissions";
+      state.permissions = [];
+    } finally {
+      state.isLoading = false;
     }
-    return result;
   };
 
+  const fetchPermission = async (id: string) => {
+    try {
+      const headers = contextStore.getContextHeaders;
+      const permission = await authStore.apiCall<Permission>(`/v1/permissions/${id}`, { headers });
+      state.selectedPermission = permission;
+      return permission;
+    } catch (error: any) {
+      console.error("Failed to fetch permission:", error);
+      state.error = error.message || "Failed to fetch permission";
+      throw error;
+    }
+  };
+
+  const createPermission = async (data: {
+    name: string;
+    display_name: string;
+    description?: string;
+    tags?: string[];
+    conditions?: Condition[];
+    metadata?: Record<string, any>;
+  }) => {
+    try {
+      const headers = contextStore.getContextHeaders;
+      
+      // Add entity_id if not in system context
+      const requestData: any = { ...data };
+      if (!contextStore.isSystemContext && contextStore.selectedOrganization) {
+        requestData.entity_id = contextStore.selectedOrganization.id;
+      }
+
+      const permission = await authStore.apiCall<Permission>("/v1/permissions", {
+        method: "POST",
+        body: requestData,
+        headers,
+      });
+
+      // Refresh the list
+      await fetchPermissions();
+
+      return permission;
+    } catch (error: any) {
+      console.error("Failed to create permission:", error);
+      throw error;
+    }
+  };
+
+  const updatePermission = async (
+    id: string,
+    data: {
+      display_name?: string;
+      description?: string;
+      is_active?: boolean;
+      tags?: string[];
+      conditions?: Condition[];
+      metadata?: Record<string, any>;
+    }
+  ) => {
+    try {
+      const headers = contextStore.getContextHeaders;
+      const permission = await authStore.apiCall<Permission>(`/v1/permissions/${id}`, {
+        method: "PUT",
+        body: data,
+        headers,
+      });
+
+      // Update in local state
+      const index = state.permissions.findIndex((p) => p.id === id);
+      if (index !== -1) {
+        state.permissions[index] = permission;
+      }
+
+      if (state.selectedPermission?.id === id) {
+        state.selectedPermission = permission;
+      }
+
+      return permission;
+    } catch (error: any) {
+      console.error("Failed to update permission:", error);
+      throw error;
+    }
+  };
+
+  const deletePermission = async (id: string) => {
+    try {
+      const headers = contextStore.getContextHeaders;
+      await authStore.apiCall(`/v1/permissions/${id}`, {
+        method: "DELETE",
+        headers,
+      });
+
+      // Remove from local state
+      state.permissions = state.permissions.filter((p) => p.id !== id);
+
+      if (state.selectedPermission?.id === id) {
+        state.selectedPermission = null;
+      }
+    } catch (error: any) {
+      console.error("Failed to delete permission:", error);
+      throw error;
+    }
+  };
+
+  const validatePermissions = async (permissions: string[]) => {
+    try {
+      const headers = contextStore.getContextHeaders;
+      
+      // Add entity context to validation
+      const params = new URLSearchParams();
+      if (!contextStore.isSystemContext && contextStore.selectedOrganization) {
+        params.append("entity_id", contextStore.selectedOrganization.id);
+      }
+
+      const response = await authStore.apiCall<{
+        valid: boolean;
+        permissions: string[];
+        count: number;
+      }>(`/v1/permissions/validate?${params.toString()}`, {
+        method: "POST",
+        body: permissions,
+        headers,
+      });
+
+      return response;
+    } catch (error: any) {
+      console.error("Failed to validate permissions:", error);
+      throw error;
+    }
+  };
+
+  // UI Actions
+  const openDrawer = (mode: "view" | "create" | "edit" = "view", permission: Permission | null = null) => {
+    state.ui.drawerMode = mode;
+    state.selectedPermission = permission;
+    state.ui.drawerOpen = true;
+  };
+
+  const closeDrawer = () => {
+    state.ui.drawerOpen = false;
+    // Reset selected permission after animation
+    setTimeout(() => {
+      state.selectedPermission = null;
+    }, 300);
+  };
+
+  const setDrawerMode = (mode: "view" | "create" | "edit") => {
+    state.ui.drawerMode = mode;
+  };
+
+  const setFilters = (filters: Partial<PermissionsState["filters"]>) => {
+    state.filters = { ...state.filters, ...filters };
+    // Note: In a real app, you might want to debounce and refetch
+  };
+
+  const resetFilters = () => {
+    state.filters = {
+      search: "",
+      resource: null,
+      is_system: null,
+      is_active: null,
+      has_conditions: null,
+      tags: [],
+    };
+  };
+
+  // Computed
+  const filteredPermissions = computed(() => {
+    let filtered = state.permissions;
+
+    // Search filter
+    if (state.filters.search) {
+      const search = state.filters.search.toLowerCase();
+      filtered = filtered.filter(
+        (p) =>
+          p.name.toLowerCase().includes(search) ||
+          p.display_name.toLowerCase().includes(search) ||
+          p.description?.toLowerCase().includes(search) ||
+          p.resource.toLowerCase().includes(search) ||
+          p.action.toLowerCase().includes(search)
+      );
+    }
+
+    // Resource filter
+    if (state.filters.resource) {
+      filtered = filtered.filter((p) => p.resource === state.filters.resource);
+    }
+
+    // System filter
+    if (state.filters.is_system !== null) {
+      filtered = filtered.filter((p) => p.is_system === state.filters.is_system);
+    }
+
+    // Active filter
+    if (state.filters.is_active !== null) {
+      filtered = filtered.filter((p) => p.is_active === state.filters.is_active);
+    }
+
+    // Has conditions filter
+    if (state.filters.has_conditions !== null) {
+      filtered = filtered.filter((p) => 
+        state.filters.has_conditions ? p.conditions.length > 0 : p.conditions.length === 0
+      );
+    }
+
+    // Tags filter
+    if (state.filters.tags.length > 0) {
+      filtered = filtered.filter((p) =>
+        state.filters.tags.some((tag) => p.tags.includes(tag))
+      );
+    }
+
+    return filtered;
+  });
+
+  // Get unique resources for filtering
   const uniqueResources = computed(() => {
     const resources = new Set<string>();
-    permissions.value.forEach((permission) => {
-      if (permission.resource) {
-        resources.add(permission.resource);
+    state.permissions.forEach((p) => {
+      if (p.resource) {
+        resources.add(p.resource);
       }
     });
     return Array.from(resources).sort();
   });
 
-  const isResourceSet = (group: PermissionGroup) => {
-    return group.permissions.some((p) => {
-      if (!p.name) return false;
-      const parts = p.name.split(":");
-      return parts.length > 1 && standardActions.includes(parts[1] as (typeof standardActions)[number]);
+  // Get all unique tags
+  const allTags = computed(() => {
+    const tags = new Set<string>();
+    state.permissions.forEach((p) => {
+      p.tags.forEach((tag) => tags.add(tag));
     });
-  };
-
-  const getResourceSetDescription = (group: PermissionGroup) => {
-    // Try to get the description from the "all" permission
-    const allPerm = group.permissions.find((p) => p.name?.includes(":all"));
-    if (allPerm?.description) {
-      return allPerm.description;
-    }
-
-    // Fall back to the first permission description
-    const firstPerm = group.permissions[0];
-    if (firstPerm?.description) {
-      return firstPerm.description;
-    }
-
-    return `${group.resource} permissions`;
-  };
-
-  const resourceSets = computed(() => {
-    return permissionsByResource.value.filter(isResourceSet);
+    return Array.from(tags).sort();
   });
 
-  const getCustomPermissions = (permissions: Permission[]) => {
-    return permissions.filter((p) => {
-      if (!p.name) return true;
-      const parts = p.name.split(":");
-      return !(parts.length > 1 && standardActions.includes(parts[1] as (typeof standardActions)[number]));
-    });
-  };
-
-  const customPermissions = computed(() => {
-    const result: Permission[] = [];
-
-    permissionsByResource.value.forEach((group) => {
-      // If the group has any standard permissions, consider only non-standard ones from it
-      if (isResourceSet(group)) {
-        const customPerms = getCustomPermissions(group.permissions);
-        result.push(...customPerms);
-      } else {
-        // If the group has no standard permissions, all of its permissions are custom
-        result.push(...group.permissions);
-      }
-    });
-
-    return result;
-  });
-
-  const resourceSetsCount = computed(() => resourceSets.value.length);
-  const customPermissionsCount = computed(() => customPermissions.value.length);
-
+  // Group permissions by resource
   const permissionsByResource = computed(() => {
-    const groups: PermissionGroup[] = [];
+    const grouped: Record<string, Permission[]> = {};
+    
+    filteredPermissions.value.forEach((permission) => {
+      const resource = permission.resource || "other";
+      if (!grouped[resource]) {
+        grouped[resource] = [];
+      }
+      grouped[resource].push(permission);
+    });
 
-    uniqueResources.value.forEach((resource) => {
-      const resourcePermissions = permissions.value
-        .filter((p) => p.resource === resource)
-        .sort((a, b) => {
-          if (a.action === "all") return -1;
-          if (b.action === "all") return 1;
-          return (a.action || "").localeCompare(b.action || "");
-        });
-
-      groups.push({
-        resource,
-        permissions: resourcePermissions,
+    // Sort permissions within each group
+    Object.keys(grouped).forEach((resource) => {
+      grouped[resource].sort((a, b) => {
+        // System permissions first
+        if (a.is_system !== b.is_system) {
+          return a.is_system ? -1 : 1;
+        }
+        // Then by action
+        return a.action.localeCompare(b.action);
       });
     });
 
-    const otherPermissions = permissions.value.filter((p) => !p.resource);
-    if (otherPermissions.length > 0) {
-      groups.push({
-        resource: "Other",
-        permissions: otherPermissions,
-      });
-    }
-
-    return groups;
+    return grouped;
   });
-
-  // User-related functions
-  const getUsersWithPermission = async (permissionName: string): Promise<UserWithPermission[]> => {
-    try {
-      isLoadingUsers.value = true;
-      const authStore = useAuthStore();
-      const users = await authStore.apiCall<UserWithPermission[]>(`/permissions/${permissionName}/users`);
-      return users;
-    } catch (error) {
-      console.error("Error fetching users with permission:", error);
-      return [];
-    } finally {
-      isLoadingUsers.value = false;
-    }
-  };
-
-  const getUsersForPermissionSet = async (group: PermissionGroup): Promise<UserWithPermission[]> => {
-    try {
-      isLoadingUsers.value = true;
-      // Get all permission names in this set
-      const permissionNames = group.permissions.map((p) => p.name);
-      const usersByPermission: Record<string, UserWithPermission> = {};
-
-      // Get users for each permission in the set
-      for (const permName of permissionNames) {
-        if (!permName) continue;
-        try {
-          const users = await getUsersWithPermission(permName);
-
-          // Merge users into the collection
-          for (const user of users) {
-            const userId = user._id;
-            if (!usersByPermission[userId]) {
-              usersByPermission[userId] = {
-                _id: userId,
-                name: user.name,
-                permissions: [],
-              };
-            }
-            if (permName && usersByPermission[userId].permissions) {
-              usersByPermission[userId].permissions?.push(permName);
-            }
-          }
-        } catch (err) {
-          console.error(`Error fetching users for permission ${permName}:`, err);
-        }
-      }
-
-      return Object.values(usersByPermission);
-    } catch (error) {
-      console.error("Error fetching users with permission set:", error);
-      return [];
-    } finally {
-      isLoadingUsers.value = false;
-    }
-  };
-
-  const createResourceSet = async (resourceName: string, description: string = "") => {
-    isCreating.value = true;
-    try {
-      const permissionsToCreate = [];
-      const baseDescription = description.trim();
-
-      // Add all permission first
-      permissionsToCreate.push({
-        name: `${resourceName}:all`,
-        description: baseDescription ? `Full access to all ${resourceName} operations (${baseDescription})` : `Full access to all ${resourceName} operations`,
-      });
-
-      // Add CRUD permissions
-      [
-        { action: "create", desc: `Create ${resourceName} resources` },
-        { action: "read", desc: `View ${resourceName} resources` },
-        { action: "update", desc: `Update ${resourceName} resources` },
-        { action: "delete", desc: `Delete ${resourceName} resources` },
-      ].forEach((item) => {
-        permissionsToCreate.push({
-          name: `${resourceName}:${item.action}`,
-          description: baseDescription ? `${item.desc} (${baseDescription})` : item.desc,
-        });
-      });
-
-      let createdCount = 0;
-      const errors: string[] = [];
-
-      for (const perm of permissionsToCreate) {
-        try {
-          await createPermission({
-            name: perm.name,
-            description: perm.description,
-          });
-          createdCount++;
-        } catch (error: any) {
-          errors.push(`${perm.name}: ${error.message || "Unknown error"}`);
-          console.error(`Error creating permission ${perm.name}:`, error);
-        }
-      }
-
-      return { createdCount, total: permissionsToCreate.length, errors };
-    } finally {
-      isCreating.value = false;
-    }
-  };
-
-  const deleteResourceSet = async (group: PermissionGroup) => {
-    isDeleting.value = true;
-    try {
-      const errors: string[] = [];
-      let deletedCount = 0;
-
-      for (const permission of group.permissions) {
-        if (permission._id) {
-          try {
-            await deletePermission(permission._id);
-            deletedCount++;
-          } catch (error: any) {
-            errors.push(`${permission.name}: ${error.message || "Unknown error"}`);
-          }
-        }
-      }
-
-      return { deletedCount, total: group.permissions.length, errors };
-    } finally {
-      isDeleting.value = false;
-    }
-  };
-
-  // Pagination and data fetching
-  const fetchPermissions = async (skip?: number, limit?: number) => {
-    console.log("fetchPermissions called with skip:", skip, "limit:", limit);
-    isLoading.value = true;
-    try {
-      const authStore = useAuthStore();
-      const skipValue = skip ?? pagination.value.pageIndex * pagination.value.pageSize;
-      const limitValue = limit ?? pagination.value.pageSize;
-
-      console.log("Calling API with params:", {
-        skip: skipValue,
-        limit: limitValue,
-        search: searchQuery.value,
-        sort_column: sortColumn.value,
-        sort_direction: sortDirection.value,
-      });
-
-      // API returns a direct array of permissions
-      const data = await authStore.apiCall<Permission[]>("/permissions", {
-        params: {
-          skip: skipValue,
-          limit: limitValue,
-          search: searchQuery.value,
-          sort_column: sortColumn.value,
-          sort_direction: sortDirection.value,
-        },
-      });
-
-      console.log("API returned data:", data);
-      console.log("Data is array:", Array.isArray(data));
-      console.log("Data length:", data?.length);
-
-      // Assign permissions directly from the array
-      permissions.value = data.map(parsePermissionName);
-      console.log("After mapping:", permissions.value.length, "permissions");
-
-      // Set total based on the length of the returned array
-      totalPermissions.value = data.length;
-      console.log("Set totalPermissions to:", totalPermissions.value);
-
-      // Debug computed values
-      console.log("uniqueResources:", uniqueResources.value);
-      console.log("permissionsByResource count:", permissionsByResource.value.length);
-      console.log("resourceSets count:", resourceSets.value.length);
-      console.log("customPermissions count:", customPermissions.value.length);
-    } catch (error) {
-      console.error("Error fetching permissions:", error);
-      permissions.value = [];
-      totalPermissions.value = 0;
-    } finally {
-      isLoading.value = false;
-    }
-  };
-
-  const setPagination = (newPagination: Partial<PaginationState>) => {
-    pagination.value = { ...pagination.value, ...newPagination };
-    fetchPermissions();
-  };
-
-  const setSearchQuery = (query: string) => {
-    searchQuery.value = query;
-    currentPage.value = 1;
-    fetchPermissions();
-  };
-
-  const setCurrentPage = (page: number) => {
-    currentPage.value = page;
-    fetchPermissions();
-  };
-
-  const sortPermissions = (column: string, direction: "asc" | "desc") => {
-    sortColumn.value = column;
-    sortDirection.value = direction;
-    fetchPermissions();
-  };
-
-  // Basic CRUD operations
-  const createPermission = async (permission: Omit<Permission, "_id">) => {
-    try {
-      isCreating.value = true;
-      const authStore = useAuthStore();
-      const data = await authStore.apiCall<Permission>("/permissions", {
-        method: "POST",
-        body: permission,
-      });
-      permissions.value.push(data);
-      totalPermissions.value++;
-    } catch (error) {
-      console.error("Error creating permission:", error);
-      throw error;
-    } finally {
-      isCreating.value = false;
-    }
-  };
-
-  const updatePermission = async (permission: Permission) => {
-    try {
-      isUpdating.value = true;
-      if (!permission._id) {
-        throw new Error("Cannot update permission without an _id");
-      }
-      const authStore = useAuthStore();
-      const data = await authStore.apiCall<Permission>(`/permissions/${permission._id}`, {
-        method: "PUT",
-        body: permission,
-      });
-      const index = permissions.value.findIndex((p) => p._id === permission._id);
-      if (index !== -1) {
-        permissions.value[index] = data;
-      }
-    } catch (error) {
-      console.error("Error updating permission:", error);
-      throw error;
-    } finally {
-      isUpdating.value = false;
-    }
-  };
-
-  const deletePermission = async (_id: string) => {
-    try {
-      isDeleting.value = true;
-      const authStore = useAuthStore();
-      await authStore.apiCall(`/permissions/${_id}`, {
-        method: "DELETE",
-      });
-      permissions.value = permissions.value.filter((p) => p._id !== _id);
-      totalPermissions.value--;
-    } catch (error) {
-      console.error("Error deleting permission:", error);
-      throw error;
-    } finally {
-      isDeleting.value = false;
-    }
-  };
 
   return {
-    // State
-    permissions,
-    totalPermissions,
-    currentPage,
-    searchQuery,
-    sortColumn,
-    sortDirection,
-    isLoading,
-    pagination,
-    // Loading states
-    isCreating,
-    isUpdating,
-    isDeleting,
-    isLoadingUsers,
+    // State (as computed for reactivity)
+    permissions: computed(() => state.permissions),
+    selectedPermission: computed(() => state.selectedPermission),
+    isLoading: computed(() => state.isLoading),
+    error: computed(() => state.error),
+    totalPermissions: computed(() => state.totalPermissions),
+    systemCount: computed(() => state.systemCount),
+    customCount: computed(() => state.customCount),
+    filters: computed(() => state.filters),
+    ui: state.ui, // Return reactive reference directly, not computed
 
     // Computed
+    filteredPermissions,
     uniqueResources,
+    allTags,
     permissionsByResource,
-    resourceSets,
-    customPermissions,
-    resourceSetsCount,
-    customPermissionsCount,
 
-    // Methods
-    getResourceSetDescription,
-    createResourceSet,
-    deleteResourceSet,
-    getUsersWithPermission,
-    getUsersForPermissionSet,
+    // Actions
     fetchPermissions,
+    fetchPermission,
     createPermission,
     updatePermission,
     deletePermission,
-    setPagination,
-    setSearchQuery,
-    setCurrentPage,
-    sortPermissions,
+    validatePermissions,
+
+    // UI Actions
+    openDrawer,
+    closeDrawer,
+    setDrawerMode,
+    setFilters,
+    resetFilters,
   };
 });
