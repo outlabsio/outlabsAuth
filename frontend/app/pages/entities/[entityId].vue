@@ -17,7 +17,7 @@
     <UAlert v-else-if="error" color="error" variant="subtle" icon="i-lucide-alert-circle" :title="error.statusMessage || 'Failed to load entity'" class="mb-6" />
 
     <!-- Entity Details -->
-    <div v-else-if="entity" class="space-y-6">
+    <div v-else-if="entity" class="space-y-0">
       <!-- Compact Header Section -->
       <div class="bg-neutral-100 dark:bg-neutral-800 p-4">
         <div class="flex items-center justify-between gap-4">
@@ -93,7 +93,16 @@
       </div>
 
       <!-- Tabs Section -->
-      <UTabs v-model="activeTab" :items="tabItems" class="w-full">
+      <UTabs 
+        v-model="activeTab" 
+        :items="tabItems" 
+        class="w-full"
+        :ui="{
+          list: 'rounded-none',
+          indicator: 'rounded-none',
+          trigger: 'rounded-none'
+        }"
+      >
         <!-- Overview Tab -->
         <template #overview>
           <div class="space-y-6">
