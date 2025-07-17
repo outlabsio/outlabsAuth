@@ -98,7 +98,7 @@
         :items="tabItems" 
         class="w-full"
         :ui="{
-          list: 'rounded-none'
+          list: 'rounded-none bg-neutral-500/10'
         }"
       >
         <!-- Overview Tab -->
