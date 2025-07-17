@@ -148,7 +148,8 @@ const currentConditionFilter = computed(() => {
       </template>
     </UDashboardNavbar>
 
-    <div class="px-4 py-6 lg:px-8">
+    <UDashboardPanelContent>
+      <div class="px-4 py-6 lg:px-8">
       <!-- Context Banner -->
       <div v-if="!contextStore.isSystemContext" class="mb-6">
         <UAlert
@@ -388,7 +389,8 @@ const currentConditionFilter = computed(() => {
           Create Permission
         </UButton>
       </UCard>
-    </div>
+      </div>
+    </UDashboardPanelContent>
 
     <!-- Permission Drawer -->
     <PermissionsDrawer 

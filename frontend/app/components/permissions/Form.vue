@@ -283,7 +283,7 @@ function removeCondition(index: number) {
       </div>
     </div>
 
-    <UDivider />
+    <USeparator />
 
     <!-- Configuration Section -->
     <div class="space-y-6 w-full">
