@@ -19,7 +19,7 @@
     <!-- Entity Details -->
     <div v-else-if="entity" class="space-y-0">
       <!-- Compact Header Section -->
-      <div class="bg-neutral-100 dark:bg-neutral-800 p-4">
+      <div class="bg-primary-100 dark:bg-primary-500/10 p-4">
         <div class="flex items-center justify-between gap-4">
           <!-- Left side - Entity info -->
           <div class="flex items-center gap-3 min-w-0">
