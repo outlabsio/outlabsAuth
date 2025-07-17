@@ -269,7 +269,7 @@ const entityId = computed(() => route.params.entityId as string);
 const authStore = useAuthStore();
 
 // State
-const activeTab = ref(0); // Use index for tab selection
+const activeTab = ref('overview'); // Use slot name for tab selection
 const drawerOpen = ref(false);
 const drawerMode = ref<"view" | "create" | "edit">("view");
 const drawerEntity = ref<Entity | null>(null);
@@ -422,21 +422,25 @@ const tabItems = computed(() => [
     slot: "overview",
     label: "Overview",
     icon: "i-lucide-info",
+    value: "overview",
   },
   {
     slot: "children",
     label: `Children (${childEntities.value.length})`,
     icon: "i-lucide-folder",
+    value: "children",
   },
   {
     slot: "members",
     label: "Members",
     icon: "i-lucide-users",
+    value: "members",
   },
   {
     slot: "activity",
     label: "Activity",
     icon: "i-lucide-activity",
+    value: "activity",
   },
 ]);
 
