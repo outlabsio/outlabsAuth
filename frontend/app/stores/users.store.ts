@@ -1,343 +1,455 @@
-import type { LoginResponse, TokenResponse } from "~/types/auth.types";
-// Remove UserAdminUpdate import if not defined yet or needed immediately
-// import type { UserAdminUpdate } from "~/schemas/user_schema";
+import type { 
+  User, 
+  UserListResponse, 
+  UserCreateRequest, 
+  UserUpdateRequest, 
+  UserInviteRequest, 
+  UserInviteResponse,
+  UserMembershipListResponse,
+  UserBulkActionRequest,
+  UserBulkActionResponse,
+  UserStatsResponse
+} from "~/types/auth.types";
 
-export interface User {
-  id: string; // Ensure this is always populated, either from _id or id
-  _id?: string; // Keep _id if backend sends it
-  email: string;
-  is_active: boolean;
-  is_superuser: boolean;
-  is_verified: boolean;
-  name: string | null; // Allow null for name
-  is_team_member: boolean;
-  last_login: string | null; // Allow null
-  created_at: string;
-  updated_at?: string | null; // Add updated_at
-  permissions: string[];
-  locale?: string; // Add locale
-}
-
-// Frontend type mirroring UserAdminUpdate Pydantic schema
-// Define based on fields allowed for PATCH /users/{user_id}
-export interface UserAdminUpdatePayload {
-  name?: string | null;
-  is_active?: boolean;
-  is_superuser?: boolean; // Be cautious allowing this from frontend
-  is_team_member?: boolean;
-  permissions?: string[]; // Permissions might be handled separately
-  locale?: string;
+interface UsersState {
+  users: User[];
+  selectedUser: User | null;
+  isLoading: boolean;
+  error: string | null;
+  // Pagination
+  currentPage: number;
+  pageSize: number;
+  totalUsers: number;
+  totalPages: number;
+  // Filters
+  filters: {
+    search: string;
+    entity_id: string | null;
+    status: string | null;
+  };
+  // Stats
+  stats: UserStatsResponse | null;
+  // UI State
+  ui: {
+    drawerOpen: boolean;
+    drawerMode: "view" | "create" | "edit";
+  };
 }
 
 export const useUsersStore = defineStore("users", () => {
-  const users = ref<User[]>([]);
-  const totalUsers = ref(0); // Consider how to get total count from API
-  const currentPage = ref(1);
-  const searchQuery = ref("");
-  const sortColumn = ref("");
-  const sortDirection = ref<"asc" | "desc">("asc");
-  const loading = ref(false); // Add loading state
-  const error = ref<string | null>(null); // Add error state
+  // State
+  const state = reactive<UsersState>({
+    users: [],
+    selectedUser: null,
+    isLoading: false,
+    error: null,
+    currentPage: 1,
+    pageSize: 20,
+    totalUsers: 0,
+    totalPages: 0,
+    filters: {
+      search: "",
+      entity_id: null,
+      status: null,
+    },
+    stats: null,
+    ui: {
+      drawerOpen: false,
+      drawerMode: "view",
+    },
+  });
 
-  const columns = ref([
-    { key: "id", label: "ID", visible: false }, // Hide ID by default
-    { key: "name", label: "Name", visible: true, sortable: true },
-    { key: "email", label: "Email", visible: true, sortable: true },
-    { key: "userType", label: "Role", visible: true }, // Changed label
-    { key: "is_active", label: "Status", visible: true },
-    { key: "is_verified", label: "Verified", visible: true },
-    { key: "created_at", label: "Created At", visible: true, sortable: true },
-    // { key: "last_login", label: "Last Login", visible: true }, // Often not needed
-    { key: "actions", label: "Actions", visible: true },
-  ]);
+  // Use auth and context stores
+  const authStore = useAuthStore();
+  const contextStore = useContextStore();
+  const toast = useToast();
 
-  // Use role parameter instead of is_team_member boolean
-  const fetchUsers = async (skip = 0, limit = 10, roleFilter: "team_member" | "admin" | "superuser" | null = null) => {
-    loading.value = true;
-    error.value = null;
-    console.log(`Fetching users: skip=${skip}, limit=${limit}, role=${roleFilter}, search=${searchQuery.value}`);
+  // Actions
+  const fetchUsers = async () => {
+    state.isLoading = true;
+    state.error = null;
+
     try {
-      const authStore = useAuthStore();
-      const params: Record<string, any> = {
-        // FastAPI pagination uses skip/limit convention typically
-        skip: skip,
-        limit: limit,
-        // Assuming backend handles search and sorting via query params
-        search: searchQuery.value || undefined, // Send undefined if empty
-        sort_column: sortColumn.value || undefined,
-        sort_direction: sortDirection.value || undefined,
-      };
-
-      // Add role filter if provided
-      if (roleFilter) {
-        params["role"] = roleFilter;
+      // Build query params
+      const params = new URLSearchParams();
+      
+      if (state.filters.search) {
+        params.append("query", state.filters.search);
       }
+      
+      if (state.filters.entity_id) {
+        params.append("entity_id", state.filters.entity_id);
+      }
+      
+      if (state.filters.status) {
+        params.append("status", state.filters.status);
+      }
+      
+      params.append("page", state.currentPage.toString());
+      params.append("page_size", state.pageSize.toString());
 
-      // Fetch using UserAdminRead compatible type if backend sends more fields
-      // Use the correct endpoint from the docs
-      const data = await authStore.apiCall<User[]>("/users/all", {
-        method: "GET", // Explicitly GET
-        params: params,
-      });
+      const response = await authStore.apiCall<UserListResponse>(`/v1/users/?${params.toString()}`);
 
-      // Map response, ensuring 'id' exists, defaulting permissions
-      users.value = data
-        .map((user) => {
-          const id = user._id || user.id; // Prefer _id if present from backend
-          if (!id) {
-            console.error("User object missing ID:", user);
-            return null; // Skip user if ID is missing
-          }
-          return {
-            ...user,
-            id: id, // Ensure 'id' field is populated for frontend use
-            _id: id, // Also keep _id if needed elsewhere
-            permissions: user.permissions || [],
-            name: user.name || null, // Handle potentially missing name
-            last_login: user.last_login || null,
-          };
-        })
-        .filter((user) => user !== null) as User[]; // Filter out any null entries
-
-      // TODO: Get total count from API response (e.g., headers or body)
-      // For now, using fetched length which is incorrect for pagination
-      totalUsers.value = data.length; // Placeholder - Needs proper total count
-    } catch (err: any) {
-      console.error("Error fetching users:", err);
-      const detail = err?.data?.detail || err.message || "Failed to fetch users";
-      error.value = `Error fetching users: ${detail}`;
-      users.value = []; // Clear users on error
-      totalUsers.value = 0;
+      // Ensure each user has entities array initialized
+      state.users = response.items.map(user => ({
+        ...user,
+        entities: user.entities || []
+      }));
+      state.totalUsers = response.total;
+      state.totalPages = response.total_pages;
+    } catch (error: any) {
+      console.error("Failed to fetch users:", error);
+      state.error = error.message || "Failed to fetch users";
+      state.users = [];
     } finally {
-      loading.value = false;
+      state.isLoading = false;
     }
   };
 
-  const sortUsers = (columnKey: string) => {
-    if (sortColumn.value === columnKey) {
-      sortDirection.value = sortDirection.value === "asc" ? "desc" : "asc";
-    } else {
-      sortColumn.value = columnKey;
-      sortDirection.value = "asc";
-    }
-    // Refetch users with new sort parameters - need to know current filter
-    // Assuming fetchUsers is called elsewhere after sort update (e.g., in component watcher)
-    console.log(`Sorting by ${sortColumn.value} ${sortDirection.value}`);
-    // Trigger refetch (e.g., fetchUsers(0, 10, currentFilter)) - needs state for currentFilter
-  };
-
-  const setSearchQuery = (query: string) => {
-    searchQuery.value = query;
-    currentPage.value = 1; // Reset page on new search
-    // Debounce this call in the component or add debounce here
-    // Trigger refetch (e.g., fetchUsers(0, 10, currentFilter)) - needs state for currentFilter
-    console.log(`Search query set to: ${query}`);
-  };
-
-  const setCurrentPage = (page: number) => {
-    currentPage.value = page;
-    const limit = 10; // Define limit or get from state
-    const skip = (page - 1) * limit;
-    // Trigger refetch for the specific page (e.g., fetchUsers(skip, limit, currentFilter)) - needs state for currentFilter
-    console.log(`Setting current page to: ${page}`);
-  };
-
-  const inviteUser = async (userData: { email: string; name?: string }) => {
-    // Endpoint needs confirmation - is it /users/invite or different?
-    loading.value = true;
-    error.value = null;
+  const fetchUser = async (userId: string) => {
     try {
-      const authStore = useAuthStore();
-      const newUser = await authStore.apiCall<User>("/users/invite", {
-        // Verify this endpoint
+      const user = await authStore.apiCall<User>(`/v1/users/${userId}`);
+      state.selectedUser = user;
+      return user;
+    } catch (error: any) {
+      console.error("Failed to fetch user:", error);
+      state.error = error.message || "Failed to fetch user";
+      throw error;
+    }
+  };
+
+  const createUser = async (data: UserCreateRequest) => {
+    try {
+      const user = await authStore.apiCall<User>("/v1/users/", {
         method: "POST",
-        body: userData,
+        body: data,
       });
-      // Add to local state or refetch? Refetching might be safer for consistency.
-      // await fetchUsers(0, 10, 'admin'); // Example: Refetch admins after invite
-      // Or add locally:
-      users.value.push({
-        ...newUser,
-        id: newUser._id || newUser.id,
-        _id: newUser._id || newUser.id,
-        permissions: newUser.permissions || [],
+
+      toast.add({
+        title: "User Created",
+        description: `User ${user.email} has been created successfully`,
+        color: "success",
       });
-      totalUsers.value++; // Increment if adding locally AND total isn't from API
-      return newUser; // Return the created user
-    } catch (err: any) {
-      console.error("Error inviting user:", err);
-      const detail = err?.data?.detail || err.message || "Failed to invite user";
-      error.value = `Error inviting user: ${detail}`;
-      throw err;
-    } finally {
-      loading.value = false;
+
+      // Refresh the list
+      await fetchUsers();
+
+      return user;
+    } catch (error: any) {
+      console.error("Failed to create user:", error);
+      toast.add({
+        title: "Error",
+        description: error.message || "Failed to create user",
+        color: "error",
+      });
+      throw error;
     }
   };
 
-  // Update user using PATCH and specific payload
-  const updateUser = async (userId: string, updateData: UserAdminUpdatePayload) => {
-    loading.value = true;
-    error.value = null;
-    console.log(`Updating user ${userId} with data:`, updateData);
+  const updateUser = async (userId: string, data: UserUpdateRequest) => {
     try {
-      const authStore = useAuthStore();
-      // Use PATCH method and send only the allowed fields
-      const updatedUserFromApi = await authStore.apiCall<User>(`/users/${userId}`, {
-        method: "PATCH",
-        body: updateData,
+      const user = await authStore.apiCall<User>(`/v1/users/${userId}`, {
+        method: "PUT",
+        body: data,
       });
-      const index = users.value.findIndex((u) => u.id === userId);
 
+      // Update in local state
+      const index = state.users.findIndex((u) => u.id === userId);
       if (index !== -1) {
-        const currentUser = users.value[index]; // Get user at the found index
-        // Double-check if the user still exists at that index (although findIndex implies it should)
-        if (currentUser) {
-          // Merge updates: Take existing user and overwrite with API response fields
-          users.value[index] = {
-            ...currentUser, // Keep existing fields
-            ...updatedUserFromApi, // Overwrite with response
-            id: userId, // Ensure ID remains correct
-            _id: userId, // Ensure _id also remains correct
-          };
-          console.log(`User ${userId} updated locally.`);
-        } else {
-          console.warn(`User ${userId} was found at index ${index} but is now undefined.`);
-          // Consider refetching the list here
-        }
-      } else {
-        console.warn(`User ${userId} not found locally for update.`);
-        // Optionally refetch the list here if user wasn't found
+        state.users[index] = user;
       }
-      return users.value[index]; // Return the updated user from local state
-    } catch (err: any) {
-      console.error("Error updating user:", err);
-      const detail = err?.data?.detail || err.message || "Failed to update user";
-      error.value = `Error updating user ${userId}: ${detail}`;
-      throw err;
-    } finally {
-      loading.value = false;
+
+      if (state.selectedUser?.id === userId) {
+        state.selectedUser = user;
+      }
+
+      toast.add({
+        title: "User Updated",
+        description: "User has been updated successfully",
+        color: "success",
+      });
+
+      return user;
+    } catch (error: any) {
+      console.error("Failed to update user:", error);
+      toast.add({
+        title: "Error",
+        description: error.message || "Failed to update user",
+        color: "error",
+      });
+      throw error;
     }
   };
 
-  // Add delete user function
-  const deleteUser = async (userId: string) => {
-    loading.value = true;
-    error.value = null;
-    console.log(`Attempting to delete user ${userId}`);
+  const deleteUser = async (userId: string, hardDelete = false) => {
     try {
-      const authStore = useAuthStore();
-      // API returns 204 No Content on success, so response might be null/empty
-      await authStore.apiCall(`/users/${userId}`, {
+      await authStore.apiCall(`/v1/users/${userId}?hard_delete=${hardDelete}`, {
         method: "DELETE",
       });
-      console.log(`User ${userId} deleted via API.`);
-      // Remove user from local state
-      const initialLength = users.value.length;
-      users.value = users.value.filter((u) => u.id !== userId);
-      if (users.value.length < initialLength) {
-        console.log(`User ${userId} removed locally.`);
-        totalUsers.value--; // Decrement total count ONLY if API doesn't provide total
-      } else {
-        console.warn(`User ${userId} not found locally for removal.`);
+
+      // Remove from local state
+      state.users = state.users.filter((u) => u.id !== userId);
+
+      if (state.selectedUser?.id === userId) {
+        state.selectedUser = null;
       }
-    } catch (err: any) {
-      console.error("Error deleting user:", err);
-      const detail = err?.data?.detail || err.message || "Failed to delete user";
-      error.value = `Error deleting user ${userId}: ${detail}`;
-      throw err;
-    } finally {
-      loading.value = false;
+
+      toast.add({
+        title: hardDelete ? "User Deleted" : "User Deactivated",
+        description: hardDelete 
+          ? "User has been permanently deleted" 
+          : "User has been deactivated",
+        color: "success",
+      });
+    } catch (error: any) {
+      console.error("Failed to delete user:", error);
+      toast.add({
+        title: "Error",
+        description: error.message || "Failed to delete user",
+        color: "error",
+      });
+      throw error;
     }
   };
 
-  // --- Permission related functions ---
-  // Review these carefully based on your actual permission endpoints/logic
-
-  const assignPermissionsToUser = async (userId: string, permissionNames: string[]) => {
-    // Verify endpoint and payload
-    console.log(`Assigning permissions ${permissionNames} to user ${userId}`);
+  const updateUserStatus = async (userId: string, status: "active" | "inactive" | "locked") => {
     try {
-      const authStore = useAuthStore();
-      // Assuming endpoint is /permissions/assign and returns updated User
-      const updatedUser = await authStore.apiCall<User>("/permissions/assign", {
-        // Verify endpoint
+      const user = await authStore.apiCall<User>(`/v1/users/${userId}/status`, {
         method: "POST",
-        body: { user_id: userId, permission_names: permissionNames },
+        body: { status },
       });
-      const userIndex = users.value.findIndex((u) => u.id === userId);
-      if (userIndex !== -1) {
-        users.value[userIndex] = { ...updatedUser, id: userId, _id: userId }; // Ensure ID
-        console.log(`Permissions updated locally for ${userId}.`);
+
+      // Update in local state
+      const index = state.users.findIndex((u) => u.id === userId);
+      if (index !== -1) {
+        state.users[index] = user;
       }
-    } catch (err: any) {
-      console.error("Error assigning permissions:", err);
-      // Handle error state
+
+      if (state.selectedUser?.id === userId) {
+        state.selectedUser = user;
+      }
+
+      toast.add({
+        title: "Status Updated",
+        description: `User status changed to ${status}`,
+        color: "success",
+      });
+
+      return user;
+    } catch (error: any) {
+      console.error("Failed to update user status:", error);
+      toast.add({
+        title: "Error",
+        description: error.message || "Failed to update user status",
+        color: "error",
+      });
+      throw error;
     }
   };
 
-  const removePermissionsFromUser = async (userId: string, permissionNames: string[]) => {
-    // Verify endpoint and payload
-    console.log(`Removing permissions ${permissionNames} from user ${userId}`);
+  const inviteUser = async (data: UserInviteRequest) => {
     try {
-      const authStore = useAuthStore();
-      // Assuming endpoint is /permissions/remove and returns updated User
-      const updatedUser = await authStore.apiCall<User>(`/permissions/remove`, {
-        // Verify endpoint
-        method: "DELETE", // Or POST/PATCH depending on API design
-        body: { user_id: userId, permission_names: permissionNames }, // Verify payload
+      const response = await authStore.apiCall<UserInviteResponse>("/v1/users/invite", {
+        method: "POST",
+        body: data,
       });
-      const userIndex = users.value.findIndex((u) => u.id === userId);
-      if (userIndex !== -1) {
-        users.value[userIndex] = { ...updatedUser, id: userId, _id: userId }; // Ensure ID
-        console.log(`Permissions removed locally for ${userId}.`);
-      }
-    } catch (err: any) {
-      console.error("Error removing permissions:", err);
-      // Handle error state
+
+      toast.add({
+        title: "User Invited",
+        description: response.message,
+        color: "success",
+      });
+
+      // Refresh the list
+      await fetchUsers();
+
+      return response;
+    } catch (error: any) {
+      console.error("Failed to invite user:", error);
+      toast.add({
+        title: "Error",
+        description: error.message || "Failed to invite user",
+        color: "error",
+      });
+      throw error;
     }
   };
 
-  const getUserPermissions = async (userId: string): Promise<string[]> => {
-    // Verify endpoint
-    console.log("Getting permissions for userId:", userId);
+  const resetUserPassword = async (userId: string, sendEmail = true) => {
     try {
-      const authStore = useAuthStore();
-      // Assuming /permissions/user?user_id=... endpoint returns string[]
-      const permissions = await authStore.apiCall<string[]>(`/permissions/user`, {
-        // Verify endpoint
-        params: { user_id: userId },
+      const response = await authStore.apiCall<{
+        message: string;
+        temporary_password?: string;
+        email_sent: boolean;
+      }>(`/v1/users/${userId}/reset-password`, {
+        method: "POST",
+        body: { send_email: sendEmail },
       });
-      console.log(`Permissions fetched for ${userId}:`, permissions);
-      if (Array.isArray(permissions)) {
-        // Optional: Update local state if necessary
-        const userIndex = users.value.findIndex((u) => u.id === userId);
-        if (userIndex !== -1) {
-          const user = users.value[userIndex];
-          if (user) {
-            user.permissions = [...permissions];
-          }
-        }
-        return permissions;
-      }
-    } catch (err: any) {
-      console.error("Error fetching user permissions:", err);
-      // Handle error state
+
+      toast.add({
+        title: "Password Reset",
+        description: response.message,
+        color: "success",
+      });
+
+      return response;
+    } catch (error: any) {
+      console.error("Failed to reset password:", error);
+      toast.add({
+        title: "Error",
+        description: error.message || "Failed to reset password",
+        color: "error",
+      });
+      throw error;
     }
-    return []; // Return empty on error
   };
 
-  // --- Helper Functions ---
+  const fetchUserMemberships = async (userId: string, includeInactive = false) => {
+    try {
+      const params = new URLSearchParams();
+      if (includeInactive) {
+        params.append("include_inactive", "true");
+      }
 
-  // Helper function to determine user type string
-  const getUserType = (user: User): string => {
-    if (user.is_superuser) return "Super User";
-    if (user.is_team_member) return "Team Member";
-    return "User";
+      const response = await authStore.apiCall<UserMembershipListResponse>(
+        `/v1/users/${userId}/memberships?${params.toString()}`
+      );
+
+      return response;
+    } catch (error: any) {
+      console.error("Failed to fetch user memberships:", error);
+      throw error;
+    }
   };
 
-  // Helper function to format date string
+  const fetchUserStats = async () => {
+    try {
+      const stats = await authStore.apiCall<UserStatsResponse>("/v1/users/stats/overview");
+      state.stats = stats;
+      return stats;
+    } catch (error: any) {
+      console.error("Failed to fetch user stats:", error);
+      // Don't throw error for stats, just use default values
+      state.stats = {
+        total_users: 0,
+        active_users: 0,
+        recent_logins: 0,
+        locked_users: 0
+      };
+      return state.stats;
+    }
+  };
+
+  const bulkAction = async (data: UserBulkActionRequest) => {
+    try {
+      const response = await authStore.apiCall<UserBulkActionResponse>("/v1/users/bulk-action", {
+        method: "POST",
+        body: data,
+      });
+
+      toast.add({
+        title: "Bulk Action Completed",
+        description: `${response.total_successful} successful, ${response.total_failed} failed`,
+        color: response.total_failed > 0 ? "warning" : "success",
+      });
+
+      // Refresh the list
+      await fetchUsers();
+
+      return response;
+    } catch (error: any) {
+      console.error("Failed to perform bulk action:", error);
+      toast.add({
+        title: "Error",
+        description: error.message || "Failed to perform bulk action",
+        color: "error",
+      });
+      throw error;
+    }
+  };
+
+  // UI Actions
+  const openDrawer = (mode: "view" | "create" | "edit" = "view", user: User | null = null) => {
+    state.ui.drawerMode = mode;
+    state.selectedUser = user;
+    state.ui.drawerOpen = true;
+  };
+
+  const closeDrawer = () => {
+    state.ui.drawerOpen = false;
+    // Reset selected user after animation
+    setTimeout(() => {
+      state.selectedUser = null;
+    }, 300);
+  };
+
+  const setDrawerMode = (mode: "view" | "create" | "edit") => {
+    state.ui.drawerMode = mode;
+  };
+
+  const setFilters = (filters: Partial<UsersState["filters"]>) => {
+    state.filters = { ...state.filters, ...filters };
+    state.currentPage = 1; // Reset to first page when filters change
+  };
+
+  const resetFilters = () => {
+    state.filters = {
+      search: "",
+      entity_id: null,
+      status: null,
+    };
+    state.currentPage = 1;
+  };
+
+  const setPage = (page: number) => {
+    state.currentPage = page;
+    fetchUsers();
+  };
+
+  const setPageSize = (pageSize: number) => {
+    state.pageSize = pageSize;
+    state.currentPage = 1;
+    fetchUsers();
+  };
+
+  // Computed
+  const hasActiveFilters = computed(() => {
+    return (
+      state.filters.search || 
+      state.filters.entity_id || 
+      state.filters.status
+    );
+  });
+
+  const getUserDisplayName = (user: User) => {
+    if (user.profile.full_name) {
+      return user.profile.full_name;
+    }
+    const parts = [user.profile.first_name, user.profile.last_name].filter(Boolean);
+    return parts.length > 0 ? parts.join(" ") : user.email;
+  };
+
+  const getUserStatus = (user: User) => {
+    if (user.locked_until && new Date(user.locked_until) > new Date()) {
+      return "locked";
+    }
+    return user.is_active ? "active" : "inactive";
+  };
+
+  const getUserStatusColor = (user: User) => {
+    const status = getUserStatus(user);
+    switch (status) {
+      case "active":
+        return "success";
+      case "locked":
+        return "error";
+      default:
+        return "neutral";
+    }
+  };
+
   const formatDate = (dateString: string | null | undefined): string => {
-    if (!dateString) return "N/A";
+    if (!dateString) return "Never";
     try {
       return new Date(dateString).toLocaleString();
     } catch (e) {
@@ -345,111 +457,49 @@ export const useUsersStore = defineStore("users", () => {
     }
   };
 
-  // Helper function for badge color based on user type (using Nuxt UI color names)
-  const getUserTypeBadgeColor = (user: User): "blue" | "purple" | "green" => {
-    if (user.is_superuser) return "blue";
-    if (user.is_team_member) return "purple";
-    return "green";
-  };
-
-  // --- Combined Update Logic ---
-  // Consider simplifying or moving this logic to the component level if it becomes too complex.
-  const updateUserWithPermissions = async (editingUserId: string, updates: Partial<User>, newPermissions: string[]) => {
-    if (!editingUserId) throw new Error("User ID is required for update");
-
-    const originalUser = users.value.find((u) => u.id === editingUserId);
-    if (!originalUser) throw new Error("User not found for update");
-
-    loading.value = true;
-    error.value = null;
-    console.log(`Updating user ${editingUserId} with details and permissions.`);
-
-    try {
-      // 1. Handle User Detail Updates
-      const userUpdatePayload: UserAdminUpdatePayload = {};
-      const fieldsToUpdate: (keyof UserAdminUpdatePayload)[] = ["name", "is_active", "is_superuser", "is_team_member", "locale"];
-      let userDetailsChanged = false;
-      fieldsToUpdate.forEach((field) => {
-        const updateValue = updates[field];
-
-        // Check if the field exists in 'updates' and is different from original
-        if (updateValue !== undefined && updateValue !== originalUser[field]) {
-          // Assign carefully based on expected type in UserAdminUpdatePayload
-          if (field === "name" || field === "locale") {
-            // Convert null to undefined to satisfy TypeScript
-            userUpdatePayload[field] = updateValue === null ? undefined : (updateValue as string);
-          } else if (field === "is_active" || field === "is_superuser" || field === "is_team_member") {
-            userUpdatePayload[field] = updateValue as boolean;
-          } else if (field === "permissions") {
-            userUpdatePayload[field] = updateValue as string[];
-          }
-          userDetailsChanged = true;
-        }
-      });
-
-      if (userDetailsChanged) {
-        console.log("Updating User Details:", userUpdatePayload);
-        await updateUser(editingUserId, userUpdatePayload); // Call the dedicated update function
-      } else {
-        console.log("No user detail changes detected.");
-      }
-
-      // 2. Handle Permission Changes
-      const originalPermissionNames = originalUser.permissions || [];
-      const permissionsToAdd = newPermissions.filter((name) => !originalPermissionNames.includes(name));
-      const permissionsToRemove = originalPermissionNames.filter((name) => !newPermissions.includes(name));
-
-      // Chain permission updates sequentially
-      if (permissionsToRemove.length > 0) {
-        console.log("Removing Permissions:", permissionsToRemove);
-        await removePermissionsFromUser(editingUserId, permissionsToRemove);
-      }
-      if (permissionsToAdd.length > 0) {
-        console.log("Assigning Permissions:", permissionsToAdd);
-        await assignPermissionsToUser(editingUserId, permissionsToAdd);
-      }
-
-      console.log(`User ${editingUserId} update process complete.`);
-      // Optionally refetch the user or list here if needed
-      // await fetchUsers(0, 10, 'admin'); // Example refetch
-    } catch (err: any) {
-      console.error(`Error in updateUserWithPermissions for ${editingUserId}:`, err);
-      const detail = err?.data?.detail || err.message || "Failed to update user and permissions";
-      error.value = `Update Error: ${detail}`;
-      throw err; // Re-throw error
-    } finally {
-      loading.value = false;
-    }
-  };
-
   return {
-    // State
-    users,
-    totalUsers,
-    currentPage,
-    searchQuery,
-    sortColumn,
-    sortDirection,
-    loading,
-    error,
-    columns, // Expose columns definition
+    // State (as computed for reactivity)
+    users: computed(() => state.users),
+    selectedUser: computed(() => state.selectedUser),
+    isLoading: computed(() => state.isLoading),
+    error: computed(() => state.error),
+    currentPage: computed(() => state.currentPage),
+    pageSize: computed(() => state.pageSize),
+    totalUsers: computed(() => state.totalUsers),
+    totalPages: computed(() => state.totalPages),
+    filters: computed(() => state.filters),
+    stats: computed(() => state.stats),
+    ui: state.ui, // Return reactive reference directly
+
+    // Computed
+    hasActiveFilters,
 
     // Actions
     fetchUsers,
-    inviteUser,
+    fetchUser,
+    createUser,
     updateUser,
     deleteUser,
-    assignPermissionsToUser,
-    removePermissionsFromUser,
-    getUserPermissions,
-    sortUsers, // Expose sorting action trigger
-    setSearchQuery, // Expose search action trigger
-    setCurrentPage, // Expose pagination action trigger
+    updateUserStatus,
+    inviteUser,
+    resetUserPassword,
+    fetchUserMemberships,
+    fetchUserStats,
+    bulkAction,
 
-    // Helpers (exposed for use in components)
-    getUserType,
+    // UI Actions
+    openDrawer,
+    closeDrawer,
+    setDrawerMode,
+    setFilters,
+    resetFilters,
+    setPage,
+    setPageSize,
+
+    // Helpers
+    getUserDisplayName,
+    getUserStatus,
+    getUserStatusColor,
     formatDate,
-    getUserTypeBadgeColor,
-    updateUserWithPermissions, // Expose combined update if used
   };
 });

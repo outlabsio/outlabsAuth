@@ -101,9 +101,9 @@ const closeModal = () => {
         <!-- Resource Set Permission - Create a complete permission set -->
         <div v-if="localPermissionType === 'resource-set'" class="space-y-5">
           <div class="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-4 rounded-md">
-            <UFormGroup label="Resource Name" help="Will create a complete permission set">
+            <UFormField label="Resource Name" help="Will create a complete permission set">
               <UInput v-model="localResourceSetName" placeholder="e.g., products, users, etc." icon="i-lucide-layers" autofocus class="w-full" />
-            </UFormGroup>
+            </UFormField>
 
             <!-- Preview of permissions that will be created -->
             <div class="mt-4 space-y-3">
@@ -137,18 +137,18 @@ const closeModal = () => {
           </div>
 
           <div class="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-4 rounded-md">
-            <UFormGroup label="Resource Description" help="Descriptions will be auto-generated, but you can provide a custom base description">
+            <UFormField label="Resource Description" help="Descriptions will be auto-generated, but you can provide a custom base description">
               <UTextarea v-model="localResourceDescription" placeholder="e.g., 'Products displayed in the store'" class="min-h-20 w-full" icon="i-lucide-text" />
-            </UFormGroup>
+            </UFormField>
           </div>
         </div>
 
         <!-- Custom Permission -->
         <div v-else-if="localSelectedPermission" class="space-y-5">
           <div class="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-4 rounded-md">
-            <UFormGroup label="Permission Name" required help="Unique identifier for this permission">
+            <UFormField label="Permission Name" required help="Unique identifier for this permission">
               <UInput v-model="localSelectedPermission.name" placeholder="Enter permission name (e.g., 'reports:export')" icon="i-lucide-key" autofocus class="w-full" />
-            </UFormGroup>
+            </UFormField>
 
             <div class="mt-3 text-sm text-gray-500 dark:text-gray-400">
               <div class="flex items-center mb-2">
@@ -173,14 +173,14 @@ const closeModal = () => {
           </div>
 
           <div class="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-4 rounded-md">
-            <UFormGroup label="Description" required help="Explain what this permission grants access to">
+            <UFormField label="Description" required help="Explain what this permission grants access to">
               <UTextarea
                 v-model="localSelectedPermission.description"
                 placeholder="Enter a clear description of what this permission allows (e.g., 'Allows exporting reports to CSV/PDF')"
                 class="min-h-24 w-full"
                 icon="i-lucide-file-text"
               />
-            </UFormGroup>
+            </UFormField>
 
             <div class="mt-3 text-sm text-gray-500 dark:text-gray-400">
               <div class="flex items-start">

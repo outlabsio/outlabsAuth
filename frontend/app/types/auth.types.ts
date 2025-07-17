@@ -23,43 +23,148 @@ export interface Entity {
 
 // User types
 export interface UserProfile {
-  first_name: string;
-  last_name: string;
+  first_name?: string | null;
+  last_name?: string | null;
   phone?: string | null;
   avatar_url?: string | null;
-  preferences?: Record<string, any> | null;
+  preferences?: Record<string, any>;
+  full_name?: string;
 }
 
-export interface EntityMembership {
+export interface UserEntityRole {
+  id: string;
+  name: string;
+  display_name: string;
+  permissions: string[];
+}
+
+export interface UserEntity {
   id: string;
   name: string;
   slug: string;
   entity_type: string;
-  entity_class: "STRUCTURAL" | "ACCESS_GROUP";
+  entity_class: EntityClass;
   parent_id?: string | null;
-  roles: Array<{ id: string; name: string }>;
+  roles: UserEntityRole[];
   status: string;
   joined_at: string;
 }
 
 export interface User {
-  _id?: string;
   id: string;
-  username?: string;
   email: string;
   profile: UserProfile;
   is_active: boolean;
   is_system_user: boolean;
-  is_platform_admin?: boolean;
-  is_superuser?: boolean;
   email_verified: boolean;
   last_login?: string | null;
   last_password_change?: string | null;
   created_at: string;
-  updated_at: string;
-  platform_id?: string | null;
-  entities: EntityMembership[];
-  entity_memberships?: any[];
+  updated_at?: string | null;
+  entities: UserEntity[];
+  failed_login_attempts?: number;
+  locked_until?: string | null;
+}
+
+export interface UserListResponse {
+  items: User[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface UserEntityAssignment {
+  entity_id: string;
+  role_ids: string[];
+  status?: string;
+  valid_from?: string | null;
+  valid_until?: string | null;
+}
+
+export interface UserCreateRequest {
+  email: string;
+  password?: string;
+  first_name?: string;
+  last_name?: string;
+  phone?: string;
+  entity_assignments: UserEntityAssignment[];
+  is_active?: boolean;
+  send_welcome_email?: boolean;
+}
+
+export interface UserUpdateRequest {
+  email?: string;
+  first_name?: string;
+  last_name?: string;
+  phone?: string;
+  is_active?: boolean;
+  entity_assignments?: UserEntityAssignment[];
+}
+
+export interface UserInviteRequest {
+  email: string;
+  entity_id: string;
+  role_id: string;
+  first_name?: string;
+  last_name?: string;
+  send_email?: boolean;
+}
+
+export interface UserInviteResponse {
+  user: User;
+  temporary_password?: string | null;
+  invitation_sent: boolean;
+  message: string;
+}
+
+export interface UserMembership {
+  user_id: string;
+  entity: {
+    id: string;
+    name: string;
+    slug: string;
+    entity_type: string;
+    entity_class: EntityClass;
+  };
+  roles: UserEntityRole[];
+  joined_at: string;
+  joined_by?: {
+    id: string;
+    email: string;
+    full_name: string;
+  };
+  valid_from?: string | null;
+  valid_until?: string | null;
+  status: string;
+}
+
+export interface UserMembershipListResponse {
+  user_id: string;
+  memberships: UserMembership[];
+  total: number;
+}
+
+export interface UserBulkActionRequest {
+  user_ids: string[];
+  action: "activate" | "deactivate" | "lock";
+}
+
+export interface UserBulkActionResponse {
+  successful: string[];
+  failed: Array<{ user_id: string; error: string }>;
+  total_processed: number;
+  total_successful: number;
+  total_failed: number;
+}
+
+export interface UserStatsResponse {
+  total_users: number;
+  active_users: number;
+  inactive_users: number;
+  locked_users: number;
+  recent_signups: number;
+  recent_logins: number;
 }
 
 // Role type
