@@ -283,6 +283,7 @@ watch(entityId, async (newId, oldId) => {
   if (newId !== oldId) {
     await refresh();
     await fetchChildEntities();
+    await fetchEntityPath();
   }
 });
 
@@ -325,22 +326,44 @@ const { data: entityStats } = await useAsyncData(
   }
 );
 
-// Build entity path for breadcrumbs
-const entityPath = computed(() => {
-  if (!entity.value) return [];
+// State for entity path
+const entityPath = ref<{ label: string; to: string }[]>([]);
 
-  const path: { label: string; to: string }[] = [];
+// Fetch full entity path using the dedicated API endpoint
+const fetchEntityPath = async () => {
+  if (!entity.value) {
+    entityPath.value = [];
+    return;
+  }
 
-  // Add current entity
-  path.push({
-    label: entity.value.display_name || entity.value.name,
-    to: `/entities/${entity.value.id}`,
-  });
+  try {
+    const contextStore = useContextStore();
+    const headers = contextStore.getContextHeaders;
+    const pathResponse = await authStore.apiCall<Entity[]>(
+      `/v1/entities/${entityId.value}/path`, 
+      { headers }
+    );
+    
+    // Convert the response to breadcrumb format
+    entityPath.value = pathResponse.map(entity => ({
+      label: entity.display_name || entity.name,
+      to: `/entities/${entity.id}`,
+    }));
+  } catch (error) {
+    console.error('Failed to fetch entity path:', error);
+    // Fallback to just the current entity
+    entityPath.value = [{
+      label: entity.value.display_name || entity.value.name,
+      to: `/entities/${entity.value.id}`,
+    }];
+  }
+};
 
-  // Note: For now, we only show the current entity in the path
-  // A full parent chain would require recursive fetching or a different API endpoint
-  
-  return path;
+// Watch for entity changes and fetch path
+watchEffect(() => {
+  if (entity.value) {
+    fetchEntityPath();
+  }
 });
 
 // Build breadcrumb items
