@@ -59,11 +59,6 @@ function openCreateDrawer() {
   drawerOpen.value = true;
 }
 
-function openEntityDrawer(entity: Entity) {
-  selectedEntity.value = entity;
-  drawerMode.value = "edit";
-  drawerOpen.value = true;
-}
 
 function handleEntityCreated() {
   entitiesStore.fetchEntities();
@@ -141,27 +136,29 @@ function handleEntityDeleted() {
 
       <!-- Entities Grid -->
       <div v-else-if="entitiesStore.entities.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <UCard v-for="entity in entitiesStore.entities" :key="entity.id" @click="openEntityDrawer(entity)" class="cursor-pointer hover:shadow-lg transition-shadow">
-          <div class="flex items-start justify-between">
-            <div class="flex-1">
-              <div class="flex items-center gap-2 mb-1">
-                <UIcon :name="entity.entity_class === 'STRUCTURAL' ? 'i-lucide-building' : 'i-lucide-users'" class="h-4 w-4 text-primary" />
-                <h3 class="font-semibold">
-                  {{ entity.display_name || entity.name }}
-                </h3>
+        <NuxtLink v-for="entity in entitiesStore.entities" :key="entity.id" :to="`/entities/${entity.id}`" class="block">
+          <UCard class="cursor-pointer hover:shadow-lg transition-shadow h-full">
+            <div class="flex items-start justify-between">
+              <div class="flex-1">
+                <div class="flex items-center gap-2 mb-1">
+                  <UIcon :name="entity.entity_class === 'STRUCTURAL' ? 'i-lucide-building' : 'i-lucide-users'" class="h-4 w-4 text-primary" />
+                  <h3 class="font-semibold">
+                    {{ entity.display_name || entity.name }}
+                  </h3>
+                </div>
+                <p class="text-sm text-gray-600 dark:text-gray-400">
+                  {{ entity.entity_type.replace(/_/g, " ") }}
+                </p>
+                <p v-if="entity.description" class="text-sm text-gray-500 mt-1 line-clamp-2">
+                  {{ entity.description }}
+                </p>
               </div>
-              <p class="text-sm text-gray-600 dark:text-gray-400">
-                {{ entity.entity_type.replace(/_/g, " ") }}
-              </p>
-              <p v-if="entity.description" class="text-sm text-gray-500 mt-1 line-clamp-2">
-                {{ entity.description }}
-              </p>
+              <UBadge :color="entity.status === 'active' ? 'success' : 'neutral'" variant="subtle" size="xs">
+                {{ entity.status }}
+              </UBadge>
             </div>
-            <UBadge :color="entity.status === 'active' ? 'success' : 'neutral'" variant="subtle" size="xs">
-              {{ entity.status }}
-            </UBadge>
-          </div>
-        </UCard>
+          </UCard>
+        </NuxtLink>
       </div>
 
       <!-- Empty State -->
