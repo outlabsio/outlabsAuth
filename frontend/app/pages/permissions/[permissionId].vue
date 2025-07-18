@@ -75,8 +75,8 @@ function handlePermissionDeleted() {
 </script>
 
 <template>
-  <UDashboardPanel>
-    <UDashboardNavbar>
+  <UDashboardPanel class="min-h-0 flex flex-col">
+    <UDashboardNavbar class="flex-shrink-0">
       <template #left>
         <div class="flex items-center gap-4">
           <UDashboardSidebarCollapse />
@@ -89,12 +89,12 @@ function handlePermissionDeleted() {
           icon="i-lucide-pencil" 
           @click="handleEdit"
         >
-          Edit
+          Edit Permission
         </UButton>
       </template>
     </UDashboardNavbar>
 
-    <div class="px-4 py-6 lg:px-8">
+    <div class="flex-1 flex flex-col min-h-0">
       <!-- Loading State -->
       <div v-if="pending" class="text-center py-12">
         <UIcon name="i-lucide-loader-2" class="h-8 w-8 animate-spin text-primary" />
@@ -113,42 +113,71 @@ function handlePermissionDeleted() {
       </UAlert>
 
       <!-- Permission Content -->
-      <div v-else-if="permission">
-        <!-- Header -->
-        <div class="mb-8">
-          <div class="flex items-start justify-between">
-            <div>
-              <div class="flex items-center gap-3 mb-2">
-                <UIcon name="i-lucide-key" class="h-8 w-8 text-primary" />
-                <h1 class="text-3xl font-bold">{{ permission.display_name }}</h1>
-                <UBadge 
-                  v-if="permission.is_system" 
-                  color="blue" 
-                  variant="subtle"
-                >
-                  System
-                </UBadge>
-                <UBadge 
-                  v-if="!permission.is_active" 
-                  color="neutral" 
-                  variant="subtle"
-                >
-                  Inactive
-                </UBadge>
+      <div v-else-if="permission" class="flex flex-col min-h-0">
+        <!-- Compact Header Section -->
+        <div class="bg-primary-100 dark:bg-primary-500/10 p-4">
+          <div class="flex items-center justify-between gap-4">
+            <!-- Left side - Permission info -->
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="flex-shrink-0">
+                <div class="p-2 bg-primary/10 rounded-md">
+                  <UIcon
+                    name="i-lucide-key"
+                    class="h-5 w-5 text-primary"
+                  />
+                </div>
               </div>
-              <p class="text-gray-600 dark:text-gray-400 font-mono text-sm">{{ permission.name }}</p>
-              <p v-if="permission.description" class="text-gray-600 dark:text-gray-400 mt-2">
-                {{ permission.description }}
-              </p>
+
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <h1 class="text-lg font-semibold truncate">
+                    {{ permission.display_name }}
+                  </h1>
+                  <UBadge
+                    v-if="permission.is_system"
+                    label="System"
+                    color="blue"
+                    variant="subtle"
+                    size="xs"
+                  />
+                  <UBadge
+                    v-if="!permission.is_active"
+                    label="Inactive"
+                    color="neutral"
+                    variant="subtle"
+                    size="xs"
+                  />
+                </div>
+
+                <div class="flex items-center gap-2 mt-0.5 text-sm text-muted">
+                  <span class="font-mono">{{ permission.name }}</span>
+                  <span v-if="permission.description" class="hidden sm:inline">•</span>
+                  <span v-if="permission.description" class="hidden sm:inline truncate max-w-xs">
+                    {{ permission.description }}
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
 
         <!-- Tabs -->
-        <UTabs v-model="activeTab" :items="tabItems">
+        <UTabs 
+          v-model="activeTab" 
+          :items="tabItems"
+          class="flex-1 flex flex-col min-h-0"
+          :ui="{
+            wrapper: 'flex flex-col h-full',
+            list: {
+              base: 'rounded-none bg-neutral-500/10 flex-shrink-0',
+              wrapper: 'flex-shrink-0'
+            },
+            content: 'flex-1 overflow-y-auto'
+          }"
+        >
           <!-- Overview Tab -->
           <template #overview>
-            <div class="space-y-6 mt-6">
+            <div class="space-y-4 p-4">
               <!-- Basic Information -->
               <UCard>
                 <template #header>
@@ -235,7 +264,7 @@ function handlePermissionDeleted() {
 
           <!-- Usage Tab -->
           <template #usage>
-            <div class="mt-6">
+            <div class="space-y-4 p-4">
               <UCard>
                 <template #header>
                   <h3 class="text-lg font-semibold">Roles Using This Permission</h3>
@@ -250,7 +279,7 @@ function handlePermissionDeleted() {
 
           <!-- Activity Tab -->
           <template #activity>
-            <div class="mt-6">
+            <div class="space-y-4 p-4">
               <UCard>
                 <template #header>
                   <h3 class="text-lg font-semibold">Recent Activity</h3>

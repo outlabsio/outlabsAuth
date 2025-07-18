@@ -20,20 +20,20 @@
       </template>
     </UDashboardNavbar>
 
-    <div class="flex-1 overflow-y-auto">
+    <div class="flex-1 flex flex-col min-h-0">
       <!-- Loading State -->
       <div v-if="pending" class="flex justify-center py-12">
-      <div class="text-center space-y-3">
-        <UIcon name="i-lucide-loader" class="h-8 w-8 animate-spin mx-auto text-primary" />
-        <p class="text-muted-foreground">Loading role details...</p>
+        <div class="text-center space-y-3">
+          <UIcon name="i-lucide-loader" class="h-8 w-8 animate-spin mx-auto text-primary" />
+          <p class="text-muted-foreground">Loading role details...</p>
+        </div>
       </div>
-    </div>
 
-    <!-- Error State -->
-    <UAlert v-else-if="error" color="error" variant="subtle" icon="i-lucide-alert-circle" :title="error.statusMessage || 'Failed to load role'" class="mb-6" />
+      <!-- Error State -->
+      <UAlert v-else-if="error" color="error" variant="subtle" icon="i-lucide-alert-circle" :title="error.statusMessage || 'Failed to load role'" class="m-4" />
 
-    <!-- Role Details -->
-    <div v-else-if="role" class="space-y-0">
+      <!-- Role Details -->
+      <div v-else-if="role" class="flex flex-col min-h-0">
       <!-- Compact Header Section -->
       <div class="bg-primary-100 dark:bg-primary-500/10 p-4">
         <div class="flex items-center justify-between gap-4">
@@ -110,9 +110,14 @@
       <UTabs 
         v-model="activeTab" 
         :items="tabItems" 
-        class="w-full"
+        class="flex-1 flex flex-col min-h-0"
         :ui="{
-          list: 'rounded-none bg-neutral-500/10'
+          wrapper: 'flex flex-col h-full',
+          list: {
+            base: 'rounded-none bg-neutral-500/10 flex-shrink-0',
+            wrapper: 'flex-shrink-0'
+          },
+          content: 'flex-1 overflow-y-auto'
         }"
       >
         <!-- Overview Tab -->
