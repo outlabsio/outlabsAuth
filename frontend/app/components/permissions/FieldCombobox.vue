@@ -1,19 +1,18 @@
 <template>
-  <USelectMenu
-    :model-value="selectedItem"
-    @update:model-value="handleSelect"
-    :search-input="{
-      placeholder: searchPlaceholder,
-      icon: fieldType === 'resource' ? 'i-lucide-box' : 'i-lucide-zap'
-    }"
+  <UInputMenu
+    v-model="selectedItem"
     :items="items"
-    :searchable="searchFunction"
-    class="w-full"
+    :placeholder="placeholder"
     :disabled="disabled"
-    value-attribute="value"
-    option-attribute="label"
-    :popper="{ placement: 'bottom-start' }"
+    :icon="fieldType === 'resource' ? 'i-lucide-box' : 'i-lucide-zap'"
+    :create-item="true"
+    value-key="value"
+    @create="handleCreate"
   >
+    <template #item-leading="{ item }">
+      <UIcon :name="item.icon" class="w-4 h-4" />
+    </template>
+    
     <template #empty>
       <div class="flex flex-col items-center justify-center py-6 px-4 gap-3">
         <UIcon :name="fieldType === 'resource' ? 'i-lucide-box' : 'i-lucide-zap'" class="w-8 h-8 text-gray-400" />
@@ -25,22 +24,16 @@
         </p>
       </div>
     </template>
-
-    <template #option="{ option }">
-      <div class="flex items-center gap-2">
-        <UIcon :name="option.icon" class="w-4 h-4" />
-        <span>{{ option.label }}</span>
-        <UBadge v-if="option.isNew" label="New" color="success" variant="soft" size="xs" class="ml-auto" />
-      </div>
-    </template>
-  </USelectMenu>
+  </UInputMenu>
 </template>
 
 <script setup lang="ts">
+import type { InputMenuItem } from '@nuxt/ui'
+
 interface Props {
   modelValue: string;
   fieldType: 'resource' | 'action';
-  selectedResource?: string; // For action field, to filter by resource
+  selectedResource?: string;
   disabled?: boolean;
   placeholder?: string;
 }
@@ -56,11 +49,6 @@ const emit = defineEmits<{
 
 // Store
 const permissionsStore = usePermissionsStore();
-
-// Computed
-const searchPlaceholder = computed(() => 
-  props.placeholder || `Search or create ${props.fieldType}...`
-);
 
 // Get existing values
 const existingValues = computed(() => {
@@ -80,92 +68,57 @@ const commonSuggestions = computed(() => {
   }
 });
 
-// Custom search function that includes ability to create new items
-const searchFunction = (items: any[], query: string) => {
-  const search = query.toLowerCase().trim();
-  
-  if (!search) {
-    return items;
-  }
-  
-  // Filter existing items
-  let filtered = items.filter(item => 
-    item.label.toLowerCase().includes(search) || 
-    item.value.toLowerCase().includes(search)
-  );
-  
-  // Format the search query (lowercase, replace spaces with underscores)
-  const formattedValue = search.replace(/\s+/g, '_').replace(/[^a-z0-9_-]/g, '_');
-  
-  // Check if this would be a new value
-  const existsInItems = items.some(item => item.value === formattedValue);
-  
-  // Add "create new" option if it doesn't exist
-  if (!existsInItems && formattedValue) {
-    filtered.unshift({
-      label: formattedValue,
-      value: formattedValue,
-      icon: 'i-lucide-plus-circle',
-      isNew: true
-    });
-  }
-  
-  return filtered;
-};
-
 // Build items list
-const items = computed(() => {
-  const allItems: any[] = [];
+const items = computed<InputMenuItem[]>(() => {
+  const allItems: InputMenuItem[] = [];
   
-  // Add existing custom values
-  if (existingValues.value.length > 0) {
-    existingValues.value.forEach(value => {
-      allItems.push({
-        label: value,
-        value: value,
-        icon: 'i-lucide-check-circle',
-      });
+  // Add existing custom values with check icon
+  existingValues.value.forEach(value => {
+    allItems.push({
+      label: value,
+      value: value,
+      icon: 'i-lucide-check-circle',
     });
-  }
+  });
   
-  // Add common suggestions that aren't already used
+  // Add common suggestions that aren't already used with lightbulb icon
   const unusedSuggestions = commonSuggestions.value.filter(s => 
     !existingValues.value.includes(s)
   );
   
-  if (unusedSuggestions.length > 0) {
-    unusedSuggestions.forEach(value => {
-      allItems.push({
-        label: value,
-        value: value,
-        icon: 'i-lucide-lightbulb',
-      });
+  unusedSuggestions.forEach(value => {
+    allItems.push({
+      label: value,
+      value: value,
+      icon: 'i-lucide-lightbulb',
     });
-  }
+  });
   
   return allItems;
 });
 
-// Current selected item
-const selectedItem = computed(() => {
-  if (!props.modelValue) return null;
-  
-  // Find in items or create a new one
-  const existing = items.value.find(item => item.value === props.modelValue);
-  if (existing) return existing;
-  
-  // Return a custom item for the current value
-  return {
-    label: props.modelValue,
-    value: props.modelValue,
-    icon: props.fieldType === 'resource' ? 'i-lucide-box' : 'i-lucide-zap'
-  };
+// The selected item - find it from items based on modelValue
+const selectedItem = computed({
+  get: () => {
+    if (!props.modelValue) return undefined;
+    // Find the item that matches the current modelValue
+    return items.value.find(item => item.value === props.modelValue);
+  },
+  set: (item: InputMenuItem | undefined) => {
+    // When an item is selected, emit just the value string
+    emit("update:modelValue", item?.value || '');
+  }
 });
 
-// Handle selection
-function handleSelect(item: any) {
-  if (item && item.value) {
-    emit("update:modelValue", item.value);
-  }
+// Format value
+const formatValue = (value: string) => {
+  if (!value) return '';
+  return value.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_-]/g, '_');
+};
+
+// Handle create new item
+function handleCreate(value: string) {
+  const formattedValue = formatValue(value);
+  emit("update:modelValue", formattedValue);
 }
 </script>
