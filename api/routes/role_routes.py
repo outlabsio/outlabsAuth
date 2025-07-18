@@ -25,6 +25,32 @@ from api.dependencies import (
 router = APIRouter()
 
 
+async def _get_entity_info(role):
+    """Helper function to extract entity name and ID from a role's entity link"""
+    entity_name = None
+    entity_id = None
+    if role.entity:
+        # Handle both populated and non-populated links (per BEANIE_PATTERNS.md line 104-117)
+        if hasattr(role.entity, 'id') and hasattr(role.entity, 'display_name'):
+            # It's already a populated document
+            entity_name = role.entity.display_name
+            entity_id = str(role.entity.id)
+        elif hasattr(role.entity, 'ref'):
+            # It's a Link object that wasn't populated (link to non-existent document)
+            # Skip this - the entity doesn't exist
+            entity_id = None
+        elif hasattr(role.entity, 'fetch'):
+            # It's a Link that needs fetching
+            entity = await role.entity.fetch()
+            if entity:
+                entity_name = entity.display_name
+                entity_id = str(entity.id)
+        else:
+            # It's just an ObjectId
+            entity_id = str(role.entity)
+    return entity_name, entity_id
+
+
 @router.post("/", response_model=RoleResponse, dependencies=[Depends(require_role_manage)])
 async def create_role(
     role_data: RoleCreate,
@@ -47,13 +73,7 @@ async def create_role(
     )
     
     # Get entity name and ID if applicable
-    entity_name = None
-    entity_id = None
-    if role.entity:
-        entity = await role.entity.fetch()
-        if entity:
-            entity_name = entity.display_name
-            entity_id = str(entity.id)
+    entity_name, entity_id = await _get_entity_info(role)
     
     return RoleResponse(
         id=str(role.id),
@@ -81,13 +101,7 @@ async def get_role(role_id: str):
     role = await RoleService.get_role(role_id)
     
     # Get entity name and ID if applicable
-    entity_name = None
-    entity_id = None
-    if role.entity:
-        entity = await role.entity.fetch()
-        if entity:
-            entity_name = entity.display_name
-            entity_id = str(entity.id)
+    entity_name, entity_id = await _get_entity_info(role)
     
     return RoleResponse(
         id=str(role.id),
@@ -126,13 +140,7 @@ async def update_role(
     )
     
     # Get entity name and ID if applicable
-    entity_name = None
-    entity_id = None
-    if role.entity:
-        entity = await role.entity.fetch()
-        if entity:
-            entity_name = entity.display_name
-            entity_id = str(entity.id)
+    entity_name, entity_id = await _get_entity_info(role)
     
     return RoleResponse(
         id=str(role.id),
@@ -191,17 +199,7 @@ async def search_roles(
     items = []
     for role in roles:
         # Get entity name and ID if applicable
-        entity_name = None
-        entity_id = None
-        if role.entity:
-            # Handle both populated and non-populated links (per BEANIE_PATTERNS.md line 104-117)
-            if hasattr(role.entity, 'id'):
-                # It's a populated document
-                entity_name = role.entity.display_name
-                entity_id = str(role.entity.id)
-            else:
-                # It's just an ObjectId/Link that wasn't populated
-                entity_id = str(role.entity)
+        entity_name, entity_id = await _get_entity_info(role)
         
         items.append(RoleResponse(
             id=str(role.id),
@@ -255,13 +253,7 @@ async def get_assignable_roles(
     response_roles = []
     for role in roles:
         # Get entity name and ID if applicable
-        entity_name = None
-        entity_id = None
-        if role.entity:
-            role_entity = await role.entity.fetch()
-            if role_entity:
-                entity_name = role_entity.display_name
-                entity_id = str(role_entity.id)
+        entity_name, entity_id = await _get_entity_info(role)
         
         response_roles.append(RoleResponse(
             id=str(role.id),
@@ -297,9 +289,7 @@ async def create_default_roles(
     response_roles = []
     for role in roles:
         # Get entity name
-        from api.models import EntityModel
-        entity = await role.entity.fetch() if role.entity else None
-        entity_name = entity.display_name if entity else None
+        entity_name, entity_id = await _get_entity_info(role)
         
         response_roles.append(RoleResponse(
             id=str(role.id),
@@ -307,7 +297,7 @@ async def create_default_roles(
             display_name=role.display_name,
             description=role.description,
             permissions=role.permissions,
-            entity_id=str(entity.id) if entity else None,
+            entity_id=entity_id,
             entity_name=entity_name,
             assignable_at_types=role.assignable_at_types,
             is_system_role=role.is_system_role,

@@ -157,8 +157,11 @@ bun run lint
 ```
 
 ### Docker
+
+**IMPORTANT**: The FastAPI server is always running in Docker and automatically reloads when you make changes. You never need to manually start the server - it's continuously running on port 8030.
+
 ```bash
-docker compose up -d --build         # Build and start all services
+docker compose up -d --build         # Build and start all services (already running in dev)
 docker compose logs -f api           # View API logs
 docker compose down -v               # Stop and remove volumes
 ```
@@ -642,6 +645,67 @@ Key variables for local development:
 For local development testing:
 - **Username**: `system@outlabs.io`
 - **Password**: `Asd123$$$`
+
+## Testing API Routes with curl
+
+To test protected API endpoints, you need to authenticate first and use the JWT token:
+
+```bash
+# 1. Login to get access token (use /login/json for JSON payload)
+curl -X POST http://localhost:8030/v1/auth/login/json \
+  -H "Content-Type: application/json" \
+  -d '{"email": "system@outlabs.io", "password": "Asd123$$$"}'
+
+# Response will include access_token:
+# {
+#   "access_token": "eyJ...",
+#   "refresh_token": "eyJ...",
+#   "token_type": "bearer"
+# }
+
+# 2. Use the access token for authenticated requests
+export TOKEN="<your-access-token-here>"
+
+# Example: Get all roles
+curl -X GET http://localhost:8030/v1/roles \
+  -H "Authorization: Bearer $TOKEN"
+
+# Example: Get roles with query parameters
+curl -X GET "http://localhost:8030/v1/roles?page=1&limit=20" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Example: Get a specific role
+curl -X GET http://localhost:8030/v1/roles/<role-id> \
+  -H "Authorization: Bearer $TOKEN"
+
+# Example: Create a new role
+curl -X POST http://localhost:8030/v1/roles \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "test_role",
+    "display_name": "Test Role",
+    "description": "A test role",
+    "permissions": ["user:read"],
+    "is_global": false
+  }'
+```
+
+### Common API Endpoints for Testing
+
+- **Auth**: `/v1/auth/login`, `/v1/auth/logout`, `/v1/auth/refresh`
+- **Users**: `/v1/users`, `/v1/users/{id}`
+- **Roles**: `/v1/roles`, `/v1/roles/{id}`
+- **Permissions**: `/v1/permissions`, `/v1/permissions/{id}`
+- **Entities**: `/v1/entities`, `/v1/entities/{id}`, `/v1/entities/entity-types`
+
+### Tips for API Testing
+
+1. The access token expires in 15 minutes, so you may need to refresh it
+2. Include `X-Entity-Context-Id` header when testing entity-scoped operations
+3. Use `jq` to parse JSON responses: `curl ... | jq .`
+4. Save tokens in environment variables to reuse across commands
+5. Check response status codes: add `-w "\nHTTP Status: %{http_code}\n"` to curl commands
 
 ## Important Frontend Notes
 
