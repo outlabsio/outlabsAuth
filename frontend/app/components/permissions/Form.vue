@@ -19,43 +19,7 @@ const contextStore = useContextStore()
 
 // State
 const isLoading = ref(false)
-const selectedResource = ref('')
-const selectedAction = ref('')
 const showConditions = ref(false)
-
-// Common resources and actions for dropdowns
-const commonResources = [
-  { label: 'User', value: 'user' },
-  { label: 'Entity', value: 'entity' },
-  { label: 'Role', value: 'role' },
-  { label: 'Permission', value: 'permission' },
-  { label: 'Member', value: 'member' },
-  { label: 'Organization', value: 'organization' },
-  { label: 'Team', value: 'team' },
-  { label: 'Project', value: 'project' },
-  { label: 'Document', value: 'document' },
-  { label: 'Report', value: 'report' },
-  { label: 'Analytics', value: 'analytics' },
-  { label: 'Settings', value: 'settings' },
-  { label: 'API', value: 'api' }
-]
-
-const commonActions = [
-  { label: 'Create', value: 'create' },
-  { label: 'Read', value: 'read' },
-  { label: 'Update', value: 'update' },
-  { label: 'Delete', value: 'delete' },
-  { label: 'Manage', value: 'manage' },
-  { label: 'View', value: 'view' },
-  { label: 'Edit', value: 'edit' },
-  { label: 'Approve', value: 'approve' },
-  { label: 'Reject', value: 'reject' },
-  { label: 'Export', value: 'export' },
-  { label: 'Import', value: 'import' },
-  { label: 'Assign', value: 'assign' },
-  { label: 'Remove', value: 'remove' },
-  { label: 'Invite', value: 'invite' }
-]
 
 // Form validation schema
 const schema = z.object({
@@ -107,20 +71,12 @@ const generatedName = computed(() => {
   return ''
 })
 
-// Initialize resource and action if editing
+// Initialize conditions visibility if editing
 if (props.mode === 'edit' && props.permission) {
-  selectedResource.value = props.permission.resource
-  selectedAction.value = props.permission.action
   if (props.permission.conditions && props.permission.conditions.length > 0) {
     showConditions.value = true
   }
 }
-
-// Watch for resource/action changes
-watch([selectedResource, selectedAction], ([resource, action]) => {
-  state.resource = resource
-  state.action = action
-})
 
 // Handle form submission
 async function onSubmit(event: FormSubmitEvent<Schema>) {
@@ -209,17 +165,14 @@ function removeCondition(index: number) {
           required
           class="w-full"
         >
-          <USelectMenu
-            v-model="selectedResource"
-            :options="commonResources"
-            searchable
-            placeholder="Select resource..."
-            value-attribute="value"
-            option-attribute="label"
+          <UInput
+            v-model="state.resource"
+            placeholder="e.g., invoice, report, budget"
+            size="lg"
             class="w-full"
           />
           <template #description>
-            <span class="text-xs text-muted-foreground">The resource this permission applies to</span>
+            <span class="text-xs text-muted-foreground">The resource this permission applies to (lowercase, no spaces)</span>
           </template>
         </UFormField>
 
@@ -229,17 +182,14 @@ function removeCondition(index: number) {
           required
           class="w-full"
         >
-          <USelectMenu
-            v-model="selectedAction"
-            :options="commonActions"
-            searchable
-            placeholder="Select action..."
-            value-attribute="value"
-            option-attribute="label"
+          <UInput
+            v-model="state.action"
+            placeholder="e.g., approve, submit, export"
+            size="lg"
             class="w-full"
           />
           <template #description>
-            <span class="text-xs text-muted-foreground">The action allowed on the resource</span>
+            <span class="text-xs text-muted-foreground">The action allowed on the resource (lowercase, no spaces)</span>
           </template>
         </UFormField>
       </div>
