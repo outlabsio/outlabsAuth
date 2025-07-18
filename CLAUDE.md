@@ -11,16 +11,42 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 outlabsAuth is an enterprise-grade Role-Based Access Control (RBAC) authentication platform built with FastAPI, MongoDB, and Beanie ODM. It provides centralized authentication and authorization for multiple platforms through a flexible unified entity system that supports diverse organizational structures from flat role-based access to complex multi-level hierarchies.
 
 ### Frontend Tech Stack
-- **React 19** with TypeScript
-- **Vite** for build tooling
-- **TanStack Router** for type-safe routing
-- **TanStack Query** for server state management
-- **TanStack Form** for form handling
-- **Zustand** for client state management (auth, UI state)
-- **ShadCN UI** components with Radix UI primitives
-- **Tailwind CSS v4** for styling
-- **Sonner** for toast notifications
+- **Nuxt 3** (v3.16.2) with TypeScript
+- **Vue 3** as the underlying framework
+- **Nuxt UI Pro v3** for premium UI components
+- **Tailwind CSS v4** (via Nuxt UI)
+- **Pinia** for state management and API calls
+- **Zod** for form validation
+- **VueUse** for composition utilities
 - **Bun** as package manager
+- **Auto-imports** for components and composables
+
+### Available MCP Tools
+
+#### Nuxt UI MCP Server
+The Nuxt UI MCP Server provides comprehensive access to Nuxt UI component documentation and usage examples. It's globally installed and available for use.
+
+**Available Tools:**
+1. `list_nuxtui_components` - Get a list of all available Nuxt UI components
+2. `get_component_details` - Get detailed information about a specific component (props, slots, events, examples)
+3. `get_component_source` - Retrieve the source code of a Nuxt UI component
+4. `search_components` - Search for components by keyword
+5. `get_installation_guide` - Get installation instructions for Nuxt UI
+
+**Usage:**
+```bash
+# Basic usage
+npx xflo-nuxtui-mcp-server
+
+# With GitHub token for better rate limits
+GITHUB_TOKEN=your_token_here npx xflo-nuxtui-mcp-server
+```
+
+**Example AI Prompts:**
+- "List all Nuxt UI form components"
+- "Show me details about the Nuxt UI button component"
+- "Get the source code for the Nuxt UI modal component"
+- "Search for Nuxt UI components related to navigation"
 
 ## Essential Commands
 
@@ -52,22 +78,25 @@ uv run python scripts/seed_test_environment.py # Seed test data
 ### Frontend Development
 ```bash
 # Navigate to frontend directory
-cd admin-ui
+cd frontend
 
 # Install dependencies (use bun, NOT npm)
 bun install
 
 # Development server
-bun dev                              # Start Vite dev server on port 5173
+bun dev                              # Start Nuxt dev server on port 3000
 
 # Build for production
 bun run build
 
-# Add ShadCN components
-bunx --bun shadcn@latest add <component-name>
+# Preview production build
+bun run preview
 
 # Type checking
-bun run type-check
+bun run typecheck
+
+# Linting
+bun run lint
 ```
 
 ### Docker
@@ -207,6 +236,29 @@ api/
 ├── middleware/      # Rate limiting, CORS, etc.
 └── dependencies.py  # Auth helpers, permission checkers
 
+frontend/
+├── app/             # Main app directory
+│   ├── assets/      # Stylesheets and static assets
+│   ├── components/  # Vue components (auto-imported)
+│   │   ├── entities/    # Entity management components
+│   │   ├── users/       # User management components
+│   │   ├── roles/       # Role management components
+│   │   └── permissions/ # Permission components
+│   ├── composables/ # Reusable composition functions (auto-imported)
+│   ├── layouts/     # Page layouts
+│   ├── middleware/  # Route middleware
+│   ├── pages/       # File-based routing
+│   ├── plugins/     # Nuxt plugins
+│   ├── stores/      # Pinia stores
+│   └── utils/       # Utility functions (auto-imported)
+├── public/          # Static files
+├── server/          # Nitro server directory
+│   ├── api/         # Server API routes
+│   └── utils/       # Server utilities
+├── nuxt.config.ts   # Nuxt configuration
+├── app.config.ts    # App configuration (theme, etc.)
+└── tailwind.config.ts # Tailwind CSS configuration
+
 tests/
 ├── conftest.py      # Shared fixtures (test users, roles, entities)
 ├── test_*_routes.py # API endpoint tests
@@ -222,56 +274,244 @@ docs/
 
 ## Frontend Architecture & Patterns
 
-### State Management with Zustand
-The frontend uses Zustand for client-side state management:
+### Nuxt-Specific Patterns
+
+#### Auto-imports
+Nuxt automatically imports components, composables, and utilities:
+```typescript
+// No need to import these - they're auto-imported
+const route = useRoute()
+const router = useRouter()
+const config = useRuntimeConfig()
+const { $fetch } = useNuxtApp()
+```
+
+#### File-based Routing
+Pages are automatically generated from the `pages/` directory:
+```
+pages/
+├── index.vue          → /
+├── users/
+│   ├── index.vue      → /users
+│   └── [id].vue       → /users/:id
+└── entities/
+    └── [...slug].vue  → /entities/** (catch-all)
+```
+
+#### Server API Routes
+Create API endpoints in `server/api/`:
+```typescript
+// server/api/auth/login.post.ts
+export default defineEventHandler(async (event) => {
+  const body = await readBody(event)
+  // Handle login
+  return { token: '...' }
+})
+```
+
+#### Composables Pattern
+Create reusable logic in `composables/`:
+```typescript
+// composables/useAuth.ts
+export const useAuth = () => {
+  const user = useState<User | null>('auth.user', () => null)
+  
+  const login = async (credentials: LoginCredentials) => {
+    // Login logic
+  }
+  
+  return { user: readonly(user), login }
+}
+```
+
+### State Management with Pinia
+The frontend uses Pinia stores for all state management and API calls:
 
 ```typescript
-// Auth store example (stores/auth-store.ts)
-export const useAuthStore = create<AuthState>()(
-  persist(
-    (set, get) => ({
-      user: null,
-      tokens: null,
-      isAuthenticated: false,
+// Standard store pattern
+export const useFeatureStore = defineStore('feature', () => {
+  // 1. Reactive state
+  const state = reactive({
+    items: [],
+    selectedItem: null,
+    isLoading: false,
+    error: null,
+    pagination: { page: 1, limit: 20, total: 0 },
+    filters: {}
+  })
+  
+  // 2. Dependencies
+  const authStore = useAuthStore()
+  const contextStore = useContextStore()
+  const toast = useToast()
+  
+  // 3. Actions (all API calls go through authStore.apiCall)
+  const fetchItems = async () => {
+    state.isLoading = true
+    try {
+      const params = new URLSearchParams({
+        page: state.pagination.page.toString(),
+        limit: state.pagination.limit.toString(),
+        ...state.filters
+      })
       
-      login: async (tokens, user) => { /* ... */ },
-      logout: () => { /* ... */ },
-      refreshTokens: async () => { /* ... */ }
-    }),
-    { name: 'auth-storage' }
-  )
-);
+      const response = await authStore.apiCall<ItemsResponse>(
+        `/v1/items?${params}`,
+        { headers: contextStore.getContextHeaders() }
+      )
+      
+      state.items = response.items
+      state.pagination.total = response.total
+    } catch (error) {
+      state.error = error.message
+      toast.add({ title: 'Error', description: error.message, color: 'red' })
+    } finally {
+      state.isLoading = false
+    }
+  }
+  
+  // 4. Return computed refs and actions
+  return {
+    items: computed(() => state.items),
+    isLoading: computed(() => state.isLoading),
+    pagination: computed(() => state.pagination),
+    fetchItems,
+    // ... other actions
+  }
+})
 ```
 
 ### Authentication Flow
-1. **Login**: Tokens stored in Zustand with localStorage persistence
-2. **API Calls**: Use `authenticatedFetch` wrapper that handles:
-   - Automatic token injection
-   - 401 error handling with token refresh
-   - Automatic logout on refresh failure
-3. **Protected Routes**: Check auth state in route `beforeLoad`
+1. **Login**: JWT tokens managed by auth store
+   - Access token (15 min) stored in Pinia state
+   - Refresh token (30 days) stored as httpOnly cookie
+2. **API Calls**: All API calls go through `authStore.apiCall()`:
+   - Automatically includes Bearer token
+   - Handles token refresh on 401 errors
+   - Includes context headers from context store
+   - Manages the entire auth flow transparently
+3. **Protected Routes**: Route middleware checks auth state
+4. **Token Management**: Automatic refresh on 401 responses
 
 ### UI Patterns
-- **Forms**: TanStack Form with validation
-- **Notifications**: Sonner toasts for user feedback
-- **Components**: ShadCN UI components, add with `bunx --bun shadcn@latest add`
-- **Styling**: Tailwind CSS v4 with CSS variables for theming
+- **Forms**: Nuxt UI form components with Zod validation
+- **Notifications**: Nuxt UI toast notifications via `useToast()`
+- **Components**: Nuxt UI Pro v3 components with full customization
+- **Icons**: Iconify with Lucide and Simple Icons collections
+- **Styling**: Tailwind CSS v4 via Nuxt UI's design system
+- **Dark Mode**: Built-in dark mode support with color mode module
+- **Modals**: UModal component for overlays and dialogs
+- **Tables**: UTable with sorting, filtering, and pagination
+- **Data Fetching**: Pinia stores handle all API calls and state
 
 ### API Integration
 ```typescript
-// Use authenticatedFetch for all API calls
-import { authenticatedFetch } from '@/lib/auth';
+// All API calls go through authStore.apiCall() for automatic auth handling
+const authStore = useAuthStore()
 
-const response = await authenticatedFetch('/v1/endpoint', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(data)
-});
+// In a Pinia store
+export const useEntityStore = defineStore('entities', () => {
+  const state = reactive({
+    entities: [],
+    isLoading: false,
+    error: null
+  })
+  
+  const fetchEntities = async () => {
+    state.isLoading = true
+    try {
+      const response = await authStore.apiCall<EntitiesResponse>('/v1/entities')
+      state.entities = response.items
+    } catch (error) {
+      state.error = error.message
+      toast.add({ title: 'Error', description: error.message, color: 'red' })
+    } finally {
+      state.isLoading = false
+    }
+  }
+  
+  return {
+    entities: computed(() => state.entities),
+    isLoading: computed(() => state.isLoading),
+    fetchEntities
+  }
+})
 ```
 
 ## Common Development Tasks
 
-### Adding a New Endpoint
+### Frontend Development
+
+#### Adding a New Page
+1. Create a `.vue` file in `pages/` directory
+2. Use `definePageMeta()` for middleware and layout
+3. Implement data fetching with `useFetch` or `useAsyncData`
+4. Handle loading and error states
+5. Add navigation links using `<NuxtLink>`
+
+#### Creating a Component
+1. Add component to `components/` directory (auto-imported)
+2. Use TypeScript with `defineProps` and `defineEmits`
+3. Leverage Nuxt UI components as building blocks
+4. Follow Vue 3 Composition API patterns
+5. Add proper TypeScript types
+
+#### Working with Nuxt UI Forms and Zod Validation
+```vue
+<template>
+  <UForm :schema="schema" :state="state" @submit="onSubmit">
+    <UFormField name="email" label="Email">
+      <UInput v-model="state.email" placeholder="Enter email" />
+    </UFormField>
+    
+    <UFormField name="name" label="Name">
+      <UInput v-model="state.name" placeholder="Enter name" />
+    </UFormField>
+    
+    <UButton type="submit" :loading="isSubmitting">
+      Submit
+    </UButton>
+  </UForm>
+</template>
+
+<script setup lang="ts">
+import { z } from 'zod'
+
+// Define Zod schema
+const schema = z.object({
+  email: z.string().email('Invalid email'),
+  name: z.string().min(2, 'Name must be at least 2 characters')
+})
+
+// Form state
+const state = reactive({
+  email: '',
+  name: ''
+})
+
+const isSubmitting = ref(false)
+
+// Handle form submission
+const onSubmit = async (event: FormSubmitEvent<z.infer<typeof schema>>) => {
+  isSubmitting.value = true
+  try {
+    await authStore.apiCall('/v1/users', {
+      method: 'POST',
+      body: event.data
+    })
+    toast.add({ title: 'Success', description: 'User created' })
+  } catch (error) {
+    toast.add({ title: 'Error', description: error.message, color: 'red' })
+  } finally {
+    isSubmitting.value = false
+  }
+}
+</script>
+```
+
+### Backend Development
+
+#### Adding a New Endpoint
 1. Define Pydantic schemas in `schemas/`
 2. Implement service logic in `services/`
 3. Create route in `routes/` with proper permission dependencies
@@ -321,12 +561,16 @@ Key variables for local development:
 ## Important Frontend Notes
 
 - **Package Manager**: ALWAYS use `bun`, never `npm` or `yarn`
-- **State Management**: Use Zustand for client state, TanStack Query for server state
-- **Auth**: All API calls should use `authenticatedFetch` for automatic token handling
-- **Components**: Prefer ShadCN UI components, install with `bunx --bun shadcn@latest add`
-- **Notifications**: Use Sonner toasts instead of static alerts
-- **Forms**: Use TanStack Form for form handling with built-in validation
-- **Entity UI**: EntityDrawer for creation/editing, EntityTreeSidebar for navigation
+- **State Management**: Use Pinia stores for ALL state and API calls
+- **API Pattern**: All API calls MUST go through `authStore.apiCall()` - never use $fetch directly
+- **Auth**: Custom JWT implementation - tokens managed in auth store
+- **Components**: Use Nuxt UI Pro v3 components - they're auto-imported
+- **Notifications**: Use `const toast = useToast()` for notifications
+- **Forms**: Use Nuxt UI form components with Zod validation schemas
+- **Entity UI**: Use UModal for creation/editing, USlideover for entity details
+- **Navigation**: Use NuxtLink for internal navigation, not <a> tags
+- **Composables**: Leverage auto-imported composables from `composables/` directory
+- **Context Headers**: Use `contextStore.getContextHeaders()` for multi-tenant requests
 
 ## Key Documentation
 

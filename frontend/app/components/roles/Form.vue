@@ -203,7 +203,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
       </UFormField>
     </div>
 
-    <UDivider />
+    <USeparator />
 
     <!-- Scope Configuration Section -->
     <div class="space-y-6 w-full">
@@ -246,13 +246,15 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
 
       <!-- Assignable At Types -->
       <UFormField label="Can Be Assigned At" name="assignable_at_types" required class="w-full">
-        <div class="p-4 border rounded-lg bg-gray-50 dark:bg-gray-900/50 space-y-3">
-          <p class="text-sm text-muted-foreground mb-3">Select the entity types where users can be assigned this role:</p>
+        <div class="p-4  rounded-lg bg-neutral-50 dark:bg-neutral-800/50 space-y-3">
+          <p class="text-sm text-muted-foreground mb-3">
+            Select the entity types where users can be assigned this role:
+          </p>
           <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
             <label
               v-for="option in assignableTypeOptions"
               :key="option.value"
-              class="flex items-center gap-2 p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer"
+              class="flex items-center gap-2 p-2 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
             >
               <UCheckbox
                 :model-value="state.assignable_at_types?.includes(option.value)"

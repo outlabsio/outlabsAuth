@@ -172,7 +172,7 @@ onMounted(() => {
     </div>
 
     <!-- Permission Groups -->
-    <div class="border rounded-lg bg-gray-50 dark:bg-gray-900/50">
+    <div class=" rounded-lg bg-neutral-50 dark:bg-neutral-800/50">
       <div v-if="permissionsStore.isLoading" class="p-8 text-center">
         <UIcon name="i-lucide-loader-2" class="h-6 w-6 animate-spin mx-auto mb-2" />
         <p class="text-sm text-muted-foreground">Loading permissions...</p>
