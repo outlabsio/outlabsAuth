@@ -1,12 +1,28 @@
 <template>
-  <div class="w-full">
-    <!-- Breadcrumb Navigation -->
-    <div class="m-4">
-      <UBreadcrumb :items="breadcrumbItems" />
-    </div>
+  <UDashboardPanel class="min-h-0 flex flex-col">
+    <UDashboardNavbar class="flex-shrink-0">
+      <template #left>
+        <div class="flex items-center gap-4">
+          <UDashboardSidebarCollapse />
+          <UBreadcrumb :items="breadcrumbItems" />
+        </div>
+      </template>
+      <template #right>
+        <UButton
+          v-if="role && !role.is_system_role"
+          icon="i-lucide-pencil"
+          variant="subtle"
+          size="sm"
+          @click="openEditDrawer"
+        >
+          Edit Role
+        </UButton>
+      </template>
+    </UDashboardNavbar>
 
-    <!-- Loading State -->
-    <div v-if="pending" class="flex justify-center py-12">
+    <div class="flex-1 overflow-y-auto">
+      <!-- Loading State -->
+      <div v-if="pending" class="flex justify-center py-12">
       <div class="text-center space-y-3">
         <UIcon name="i-lucide-loader" class="h-8 w-8 animate-spin mx-auto text-primary" />
         <p class="text-muted-foreground">Loading role details...</p>
@@ -253,6 +269,7 @@
         </template>
       </UTabs>
     </div>
+    </div>
 
     <!-- Drawers -->
     <RolesDrawer
@@ -262,7 +279,7 @@
       @updated="handleRoleUpdated"
       @deleted="handleRoleDeleted"
     />
-  </div>
+  </UDashboardPanel>
 </template>
 
 <script setup lang="ts">
