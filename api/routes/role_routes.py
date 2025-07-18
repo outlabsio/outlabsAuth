@@ -194,10 +194,14 @@ async def search_roles(
         entity_name = None
         entity_id = None
         if role.entity:
-            entity = await role.entity.fetch() if hasattr(role.entity, 'fetch') else role.entity
-            if entity:
-                entity_name = entity.name
-                entity_id = str(entity.id)
+            # Handle both populated and non-populated links (per BEANIE_PATTERNS.md line 104-117)
+            if hasattr(role.entity, 'id'):
+                # It's a populated document
+                entity_name = role.entity.display_name
+                entity_id = str(role.entity.id)
+            else:
+                # It's just an ObjectId/Link that wasn't populated
+                entity_id = str(role.entity)
         
         items.append(RoleResponse(
             id=str(role.id),

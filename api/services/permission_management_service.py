@@ -385,7 +385,7 @@ class PermissionManagementService:
         # Check if permission is in use by any roles
         from api.models import RoleModel
         roles_using = await RoleModel.find(
-            In(permission.name, RoleModel.permissions)
+            RoleModel.permissions == permission.name
         ).count()
         
         if roles_using > 0:

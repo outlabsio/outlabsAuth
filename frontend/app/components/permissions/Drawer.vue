@@ -24,7 +24,7 @@ const toast = useToast()
 // Other state
 const isDeleting = ref(false)
 const isSubmitting = ref(false)
-const showDeleteConfirm = ref(false)
+const showDeleteDialog = ref(false)
 const formRef = ref()
 
 // Watch for mode changes
@@ -80,6 +80,10 @@ const submitForm = () => {
   }
 }
 
+const confirmDelete = () => {
+  showDeleteDialog.value = true
+}
+
 async function handleDelete() {
   if (!props.permission || !props.permission.id) return
   
@@ -102,7 +106,7 @@ async function handleDelete() {
     })
   } finally {
     isDeleting.value = false
-    showDeleteConfirm.value = false
+    showDeleteDialog.value = false
   }
 }
 
@@ -165,7 +169,7 @@ const canEdit = computed(() => {
             :permission="permission"
             @submit="handleSubmit"
             @cancel="open = false"
-            @delete="showDeleteConfirm = true"
+            @delete="confirmDelete"
           />
         </div>
 
@@ -281,37 +285,11 @@ const canEdit = computed(() => {
               icon="i-lucide-trash"
               color="error"
               variant="outline"
-              @click="showDeleteConfirm = true"
+              @click="confirmDelete"
             >
               Delete
             </UButton>
           </div>
-
-          <!-- Delete Confirmation -->
-          <UAlert v-if="showDeleteConfirm" color="error" icon="i-lucide-alert-triangle" class="mt-4">
-            <template #title>Delete Permission</template>
-            <template #description>
-              <p class="mb-4">Are you sure you want to delete this permission? This action cannot be undone.</p>
-              <p class="mb-4 text-sm">Deleting this permission will remove it from all roles that currently have it.</p>
-              <div class="flex gap-2">
-                <UButton
-                  size="sm"
-                  color="error"
-                  :loading="isDeleting"
-                  @click="handleDelete"
-                >
-                  Yes, Delete
-                </UButton>
-                <UButton
-                  size="sm"
-                  variant="outline"
-                  @click="showDeleteConfirm = false"
-                >
-                  Cancel
-                </UButton>
-              </div>
-            </template>
-          </UAlert>
         </div>
       </div>
     </template>
@@ -326,4 +304,46 @@ const canEdit = computed(() => {
       </div>
     </template>
   </UDrawer>
+
+  <!-- Delete Confirmation Modal -->
+  <UModal v-model:open="showDeleteDialog">
+    <template #header>
+      <h3 class="text-lg font-semibold">Delete Permission</h3>
+    </template>
+    
+    <template #body>
+      <div class="space-y-4">
+        <p class="text-sm">
+          Are you sure you want to delete the permission
+          <span class="font-semibold">"{{ permission?.display_name }}"</span>?
+        </p>
+
+        <UAlert color="error" variant="subtle" icon="i-lucide-alert-triangle">
+          <template #title>This action cannot be undone</template>
+          <template #description>
+            <p class="text-sm">Deleting this permission will remove it from all roles that currently have it assigned.</p>
+          </template>
+        </UAlert>
+      </div>
+    </template>
+
+    <template #footer>
+      <div class="flex justify-end gap-3">
+        <UButton 
+          color="neutral" 
+          variant="outline" 
+          @click="showDeleteDialog = false"
+        >
+          Cancel
+        </UButton>
+        <UButton 
+          color="error" 
+          :loading="isDeleting"
+          @click="handleDelete"
+        >
+          Delete Permission
+        </UButton>
+      </div>
+    </template>
+  </UModal>
 </template>

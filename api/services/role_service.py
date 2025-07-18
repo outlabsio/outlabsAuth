@@ -293,9 +293,9 @@ class RoleService:
         
         # Execute query
         if query_conditions:
-            roles_query = RoleModel.find(And(*query_conditions))
+            roles_query = RoleModel.find(And(*query_conditions), fetch_links=True)
         else:
-            roles_query = RoleModel.find_all()
+            roles_query = RoleModel.find_all(fetch_links=True)
         
         # Get total count
         total = await roles_query.count()
@@ -303,11 +303,6 @@ class RoleService:
         # Apply pagination
         skip = (page - 1) * page_size
         roles = await roles_query.skip(skip).limit(page_size).to_list()
-        
-        # Fetch linked entities
-        for role in roles:
-            if role.entity:
-                await role.fetch_link(RoleModel.entity)
         
         return roles, total
     
