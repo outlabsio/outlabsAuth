@@ -134,6 +134,7 @@ function removeCondition(index: number) {
     ref="formRef"
     :schema="schema"
     :state="state"
+    :validate-on="[]"
     class="space-y-8"
     @submit="onSubmit"
   >
@@ -170,7 +171,7 @@ function removeCondition(index: number) {
           required
           class="w-full"
         >
-          <PermissionsSimpleFieldCombobox
+          <PermissionsFieldCombobox
             v-model="state.resource"
             field-type="resource"
             placeholder="Select or type resource..."
@@ -186,7 +187,7 @@ function removeCondition(index: number) {
           required
           class="w-full"
         >
-          <PermissionsSimpleFieldCombobox
+          <PermissionsFieldCombobox
             v-model="state.action"
             field-type="action"
             :selected-resource="state.resource"
