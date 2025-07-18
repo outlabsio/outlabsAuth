@@ -152,8 +152,7 @@ function removeCondition(index: number) {
         class="w-full"
       >
         <UInput
-          :model-value="state.display_name"
-          @update:model-value="(value) => permissionsStore.setFormField('display_name', value)"
+          v-model="state.display_name"
           placeholder="e.g., Approve Invoices, Create Projects"
           size="lg"
           class="w-full"
@@ -210,8 +209,7 @@ function removeCondition(index: number) {
       <!-- Description -->
       <UFormField label="Description" name="description" class="w-full">
         <UTextarea
-          :model-value="state.description"
-          @update:model-value="(value) => permissionsStore.setFormField('description', value)"
+          v-model="state.description"
           placeholder="Describe what this permission allows and when it should be used"
           :rows="3"
           class="w-full"
