@@ -6,7 +6,7 @@ from datetime import datetime
 from beanie import Link, Indexed
 from pydantic import Field
 from api.models.base_model import BaseDocument
-from api.models.entity_model import EntityModel, EntityType
+from api.models.entity_model import EntityModel
 from api.models.user_model import UserModel
 
 
@@ -25,8 +25,8 @@ class RoleModel(BaseDocument):
     # Scoping - which entity owns this role
     entity: Link[EntityModel]
     
-    # Where this role can be assigned
-    assignable_at_types: List[EntityType] = Field(default_factory=list)
+    # Where this role can be assigned (flexible entity type strings)
+    assignable_at_types: List[str] = Field(default_factory=list)
     
     # Configuration
     is_system_role: bool = Field(default=False)

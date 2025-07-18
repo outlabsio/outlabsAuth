@@ -134,7 +134,7 @@ class RoleService:
         Raises:
             HTTPException: If role not found
         """
-        role = await RoleModel.get(role_id)
+        role = await RoleModel.get(role_id, fetch_links=True)
         if not role:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -185,7 +185,20 @@ class RoleService:
             role.description = description
         
         if permissions is not None:
-            validated_permissions = await RoleService._validate_permissions(permissions, role.entity)
+            # For global roles, entity_id should be None
+            entity_id = None
+            if not role.is_global and role.entity:
+                if hasattr(role.entity, 'id'):
+                    # It's a populated document
+                    entity_id = str(role.entity.id)
+                elif hasattr(role.entity, 'ref'):
+                    # It's a Link object
+                    entity_id = str(role.entity.ref.id) if role.entity.ref else None
+                else:
+                    # It's an ObjectId
+                    entity_id = str(role.entity)
+            
+            validated_permissions = await RoleService._validate_permissions(permissions, entity_id)
             role.permissions = validated_permissions
         
         if assignable_at_types is not None:
@@ -196,7 +209,17 @@ class RoleService:
         
         # Invalidate permission cache for affected users
         if role.entity:
-            await permission_service.invalidate_entity_cache(str(role.entity.id))
+            # Handle Link object properly
+            if hasattr(role.entity, 'id'):
+                # It's a populated document
+                await permission_service.invalidate_entity_cache(str(role.entity.id))
+            elif hasattr(role.entity, 'ref'):
+                # It's a Link object
+                if role.entity.ref:
+                    await permission_service.invalidate_entity_cache(str(role.entity.ref.id))
+            else:
+                # It's an ObjectId
+                await permission_service.invalidate_entity_cache(str(role.entity))
         
         return role
     
@@ -226,7 +249,7 @@ class RoleService:
         
         # Check if role is in use
         memberships_count = await EntityMembershipModel.find(
-            EntityMembershipModel.role.id == role.id,
+            In(role.id, EntityMembershipModel.roles.id),
             EntityMembershipModel.status == "active"
         ).count()
         
@@ -241,7 +264,17 @@ class RoleService:
         
         # Invalidate permission cache
         if role.entity:
-            await permission_service.invalidate_entity_cache(str(role.entity.id))
+            # Handle Link object properly
+            if hasattr(role.entity, 'id'):
+                # It's a populated document
+                await permission_service.invalidate_entity_cache(str(role.entity.id))
+            elif hasattr(role.entity, 'ref'):
+                # It's a Link object
+                if role.entity.ref:
+                    await permission_service.invalidate_entity_cache(str(role.entity.ref.id))
+            else:
+                # It's an ObjectId
+                await permission_service.invalidate_entity_cache(str(role.entity))
         
         return True
     

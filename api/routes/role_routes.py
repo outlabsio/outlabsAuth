@@ -3,6 +3,7 @@ Role routes
 """
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from beanie.operators import In
 from api.models import UserModel
 from api.schemas.role_schema import (
     RoleCreate,
@@ -348,18 +349,18 @@ async def get_role_usage_stats(
     
     # Count active assignments
     active_assignments = await EntityMembershipModel.find(
-        EntityMembershipModel.role.id == role.id,
+        In(role.id, EntityMembershipModel.roles.id),
         EntityMembershipModel.status == "active"
     ).count()
     
     # Count total assignments
     total_assignments = await EntityMembershipModel.find(
-        EntityMembershipModel.role.id == role.id
+        In(role.id, EntityMembershipModel.roles.id)
     ).count()
     
     # Count entities used in
     memberships = await EntityMembershipModel.find(
-        EntityMembershipModel.role.id == role.id
+        In(role.id, EntityMembershipModel.roles.id)
     ).to_list()
     
     unique_entities = set()

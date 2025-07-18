@@ -150,7 +150,7 @@ export const useRolesStore = defineStore("roles", () => {
       const contextStore = useContextStore();
       const headers = contextStore.getContextHeaders;
       const role = await authStore.apiCall<Role>(`/v1/roles/${id}`, {
-        method: "PATCH",
+        method: "PUT",
         body: data,
         headers
       });

@@ -27,10 +27,11 @@ class RoleCreate(BaseModel):
     @field_validator('assignable_at_types')
     def validate_assignable_types(cls, v):
         """Validate assignable entity types"""
-        valid_types = ["platform", "organization", "branch", "team", "access_group"]
-        for entity_type in v:
-            if entity_type not in valid_types:
-                raise ValueError(f"Invalid entity type: {entity_type}")
+        # Entity types are now flexible strings, so we just ensure they're not empty
+        if v:
+            for entity_type in v:
+                if not entity_type or not isinstance(entity_type, str):
+                    raise ValueError(f"Invalid entity type: {entity_type}")
         return v
 
 
