@@ -14,8 +14,9 @@ const emit = defineEmits<{
   delete: []
 }>()
 
-// Context store
+// Stores
 const contextStore = useContextStore()
+const permissionsStore = usePermissionsStore()
 
 // State
 const isLoading = ref(false)
@@ -70,6 +71,7 @@ const generatedName = computed(() => {
   }
   return ''
 })
+
 
 // Initialize conditions visibility if editing
 if (props.mode === 'edit' && props.permission) {
@@ -165,11 +167,10 @@ function removeCondition(index: number) {
           required
           class="w-full"
         >
-          <UInput
+          <PermissionsFieldCombobox
             v-model="state.resource"
-            placeholder="e.g., invoice, report, budget"
-            size="lg"
-            class="w-full"
+            field-type="resource"
+            placeholder="Select or type resource..."
           />
           <template #description>
             <span class="text-xs text-muted-foreground">The resource this permission applies to (lowercase, no spaces)</span>
@@ -182,11 +183,11 @@ function removeCondition(index: number) {
           required
           class="w-full"
         >
-          <UInput
+          <PermissionsFieldCombobox
             v-model="state.action"
-            placeholder="e.g., approve, submit, export"
-            size="lg"
-            class="w-full"
+            field-type="action"
+            :selected-resource="state.resource"
+            placeholder="Select or type action..."
           />
           <template #description>
             <span class="text-xs text-muted-foreground">The action allowed on the resource (lowercase, no spaces)</span>
