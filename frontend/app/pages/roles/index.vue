@@ -86,8 +86,8 @@ function handleRoleDeleted() {
 </script>
 
 <template>
-  <UDashboardPanel>
-    <UDashboardNavbar>
+  <UDashboardPanel class="min-h-0 flex flex-col">
+    <UDashboardNavbar class="flex-shrink-0">
       <template #left>
         <div class="flex items-center gap-4">
           <UDashboardSidebarCollapse />
@@ -101,7 +101,7 @@ function handleRoleDeleted() {
       </template>
     </UDashboardNavbar>
 
-    <UDashboardPanelContent>
+    <div class="flex-1 overflow-y-auto">
       <div class="px-4 py-6 lg:px-8">
       <!-- Filters -->
       <UCard class="mb-6">
@@ -228,7 +228,7 @@ function handleRoleDeleted() {
         <UPagination :model-value="rolesStore.pagination.page" @update:model-value="rolesStore.setPage" :page-count="rolesStore.pagination.pageSize" :total="rolesStore.pagination.total" />
       </div>
       </div>
-    </UDashboardPanelContent>
+    </div>
 
     <!-- Role Drawer -->
     <RolesDrawer v-model:open="rolesStore.ui.drawerOpen" :role="rolesStore.selectedRole" :mode="rolesStore.ui.drawerMode" @created="handleRoleCreated" @updated="handleRoleUpdated" @deleted="handleRoleDeleted" />

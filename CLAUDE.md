@@ -637,6 +637,12 @@ Key variables for local development:
 - `ACCESS_TOKEN_EXPIRE_MINUTES`: Default 15
 - `REFRESH_TOKEN_EXPIRE_DAYS`: Default 30
 
+## Development Credentials
+
+For local development testing:
+- **Username**: `system@outlabs.io`
+- **Password**: `Asd123$$$`
+
 ## Important Frontend Notes
 
 - **Package Manager**: ALWAYS use `bun`, never `npm` or `yarn`

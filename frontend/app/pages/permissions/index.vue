@@ -129,8 +129,8 @@ const currentConditionFilter = computed(() => {
 </script>
 
 <template>
-  <UDashboardPanel>
-    <UDashboardNavbar>
+  <UDashboardPanel class="min-h-0 flex flex-col">
+    <UDashboardNavbar class="flex-shrink-0">
       <template #left>
         <div class="flex items-center gap-4">
           <UDashboardSidebarCollapse />
@@ -148,7 +148,7 @@ const currentConditionFilter = computed(() => {
       </template>
     </UDashboardNavbar>
 
-    <UDashboardPanelContent>
+    <div class="flex-1 overflow-y-auto">
       <div class="px-4 py-6 lg:px-8">
       <!-- Context Banner -->
       <div v-if="!contextStore.isSystemContext" class="mb-6">
@@ -390,7 +390,7 @@ const currentConditionFilter = computed(() => {
         </UButton>
       </UCard>
       </div>
-    </UDashboardPanelContent>
+    </div>
 
     <!-- Permission Drawer -->
     <PermissionsDrawer 

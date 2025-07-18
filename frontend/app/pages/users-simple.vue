@@ -62,8 +62,7 @@ watch(() => usersStore.filters, () => {
       </template>
     </UDashboardNavbar>
 
-    <UDashboardPanelContent>
-      <div class="px-4 py-6 lg:px-8">
+    <div class="px-4 py-6 lg:px-8">
         <!-- Search -->
         <div class="mb-6">
           <UInput
@@ -176,8 +175,7 @@ watch(() => usersStore.filters, () => {
             :total="usersStore.totalUsers" 
           />
         </div>
-      </div>
-    </UDashboardPanelContent>
+    </div>
 
     <!-- User Drawer -->
     <UsersDrawer 
