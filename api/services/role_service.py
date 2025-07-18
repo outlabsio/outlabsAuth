@@ -248,10 +248,23 @@ class RoleService:
             )
         
         # Check if role is in use
-        memberships_count = await EntityMembershipModel.find(
-            In(role.id, EntityMembershipModel.roles.id),
+        # Since roles is a list of Links, we need to fetch and check manually
+        all_memberships = await EntityMembershipModel.find(
             EntityMembershipModel.status == "active"
-        ).count()
+        ).to_list()
+        
+        memberships_count = 0
+        for membership in all_memberships:
+            for member_role in membership.roles:
+                # Handle Link object
+                if hasattr(member_role, 'ref') and member_role.ref:
+                    if str(member_role.ref.id) == str(role.id):
+                        memberships_count += 1
+                        break
+                elif hasattr(member_role, 'id'):
+                    if str(member_role.id) == str(role.id):
+                        memberships_count += 1
+                        break
         
         if memberships_count > 0:
             raise HTTPException(

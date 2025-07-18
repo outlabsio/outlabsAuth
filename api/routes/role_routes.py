@@ -3,7 +3,6 @@ Role routes
 """
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from beanie.operators import In
 from api.models import UserModel
 from api.schemas.role_schema import (
     RoleCreate,
@@ -348,26 +347,60 @@ async def get_role_usage_stats(
     from api.models import EntityMembershipModel
     
     # Count active assignments
-    active_assignments = await EntityMembershipModel.find(
-        In(role.id, EntityMembershipModel.roles.id),
+    # Since roles is a list of Links, we need to use a different approach
+    # We'll fetch all memberships and filter in Python
+    all_memberships = await EntityMembershipModel.find(
         EntityMembershipModel.status == "active"
-    ).count()
+    ).to_list()
+    
+    active_assignments = 0
+    for membership in all_memberships:
+        # Check if this role is in the membership's roles list
+        for member_role in membership.roles:
+            # Handle Link object
+            if hasattr(member_role, 'ref') and member_role.ref:
+                if str(member_role.ref.id) == str(role.id):
+                    active_assignments += 1
+                    break
+            elif hasattr(member_role, 'id'):
+                if str(member_role.id) == str(role.id):
+                    active_assignments += 1
+                    break
     
     # Count total assignments
-    total_assignments = await EntityMembershipModel.find(
-        In(role.id, EntityMembershipModel.roles.id)
-    ).count()
+    all_memberships_total = await EntityMembershipModel.find_all().to_list()
     
-    # Count entities used in
-    memberships = await EntityMembershipModel.find(
-        In(role.id, EntityMembershipModel.roles.id)
-    ).to_list()
+    total_assignments = 0
+    memberships_with_role = []
+    
+    for membership in all_memberships_total:
+        # Check if this role is in the membership's roles list
+        for member_role in membership.roles:
+            # Handle Link object
+            if hasattr(member_role, 'ref') and member_role.ref:
+                if str(member_role.ref.id) == str(role.id):
+                    total_assignments += 1
+                    memberships_with_role.append(membership)
+                    break
+            elif hasattr(member_role, 'id'):
+                if str(member_role.id) == str(role.id):
+                    total_assignments += 1
+                    memberships_with_role.append(membership)
+                    break
+    
+    # Use the filtered memberships for entity counting
+    memberships = memberships_with_role
     
     unique_entities = set()
     last_assigned = None
     
     for membership in memberships:
-        unique_entities.add(str(membership.entity.id))
+        # Handle entity Link object
+        if hasattr(membership.entity, 'id'):
+            unique_entities.add(str(membership.entity.id))
+        elif hasattr(membership.entity, 'ref') and membership.entity.ref:
+            unique_entities.add(str(membership.entity.ref.id))
+        
         if not last_assigned or membership.created_at > last_assigned:
             last_assigned = membership.created_at
     
