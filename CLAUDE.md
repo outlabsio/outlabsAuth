@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **IMPORTANT**: Always check PROJECT_STATUS.md first to understand the current implementation state and next steps.
 
-**LATEST UPDATE (2025-07-10)**: Entity types are now flexible strings instead of fixed enums. Platforms can use any organizational terminology (e.g., "division", "region", "bureau"). The frontend provides autocomplete suggestions to maintain consistency. See docs/ENTITY_TYPE_FLEXIBILITY_CHANGES.md for details.
+**LATEST UPDATE (2025-07-10)**: Entity types are now flexible strings instead of fixed enums. Platforms can use any organizational terminology (e.g., "division", "region", "bureau"). The frontend provides autocomplete suggestions to maintain consistency.
 
 ## Project Overview
 
@@ -21,32 +21,81 @@ outlabsAuth is an enterprise-grade Role-Based Access Control (RBAC) authenticati
 - **Bun** as package manager
 - **Auto-imports** for components and composables
 
-### Available MCP Tools
+### IMPORTANT: Nuxt UI Documentation Access
+**ALWAYS use the Nuxt MCP server to check Nuxt UI documentation before implementing UI components:**
+- The built-in Nuxt MCP server provides access to all Nuxt UI components (including Pro components)
+- Access component lists, details, props, slots, and examples through the MCP resource
+- This ensures you're using the latest Nuxt UI v3 patterns and best practices
+- Never guess component APIs - always verify through the documentation
 
-#### Nuxt UI MCP Server
-The Nuxt UI MCP Server provides comprehensive access to Nuxt UI component documentation and usage examples. It's globally installed and available for use.
+### Nuxt 3 Auto-imports (CRITICAL)
 
-**Available Tools:**
-1. `list_nuxtui_components` - Get a list of all available Nuxt UI components
-2. `get_component_details` - Get detailed information about a specific component (props, slots, events, examples)
-3. `get_component_source` - Retrieve the source code of a Nuxt UI component
-4. `search_components` - Search for components by keyword
-5. `get_installation_guide` - Get installation instructions for Nuxt UI
+**NEVER manually import the following - they are auto-imported by Nuxt:**
 
-**Usage:**
-```bash
-# Basic usage
-npx xflo-nuxtui-mcp-server
+#### Vue & Nuxt Composables
+```typescript
+// ❌ NEVER DO THIS
+import { ref, computed, watch, reactive } from 'vue'
+import { useRoute, useRouter, useState, useFetch } from '#app'
 
-# With GitHub token for better rate limits
-GITHUB_TOKEN=your_token_here npx xflo-nuxtui-mcp-server
+// ✅ Just use them directly
+const count = ref(0)
+const route = useRoute()
+const { data } = await useFetch('/api/users')
 ```
 
-**Example AI Prompts:**
-- "List all Nuxt UI form components"
-- "Show me details about the Nuxt UI button component"
-- "Get the source code for the Nuxt UI modal component"
-- "Search for Nuxt UI components related to navigation"
+#### Components
+```typescript
+// ❌ NEVER DO THIS
+import UButton from '@nuxt/ui/components/UButton.vue'
+import MyComponent from '~/components/MyComponent.vue'
+
+// ✅ Just use them in templates
+<UButton>Click me</UButton>
+<MyComponent />
+```
+
+#### Utilities & Composables
+```typescript
+// ❌ NEVER DO THIS
+import { useAuth } from '~/composables/useAuth'
+import { formatDate } from '~/utils/formatDate'
+
+// ✅ Just use them directly
+const { user, login } = useAuth()
+const formatted = formatDate(new Date())
+```
+
+#### What IS manually imported:
+- External packages (zod, @tanstack/vue-query, etc.)
+- Types/interfaces from type files
+- Store imports from Pinia
+- Assets (images, styles)
+
+### Nuxt UI Component Usage
+
+**ALWAYS consult Nuxt UI documentation via MCP before using components:**
+
+```vue
+<!-- Example: Check documentation first, then use -->
+<UForm :schema="schema" :state="state" @submit="onSubmit">
+  <UFormField name="email" label="Email" required>
+    <UInput v-model="state.email" placeholder="Enter email" />
+  </UFormField>
+  
+  <UButton type="submit" :loading="isLoading">
+    Submit
+  </UButton>
+</UForm>
+```
+
+Common Nuxt UI v3 components:
+- **Forms**: UForm, UFormField, UInput, USelect, UCheckbox, URadio, USwitch
+- **Feedback**: UToast, UNotification, UAlert, USkeleton
+- **Overlays**: UModal, UDrawer, USlideover, UPopover, UTooltip
+- **Navigation**: UTabs, UBreadcrumb, UPagination, UCommandPalette
+- **Data**: UTable, UCard, UBadge, UAvatar, UChip
+- **Layout**: UContainer, UDivider, USeparator, UPage
 
 ## Essential Commands
 
@@ -442,19 +491,25 @@ export const useEntityStore = defineStore('entities', () => {
 
 ### Frontend Development
 
+#### IMPORTANT: Component Development Workflow
+1. **ALWAYS check Nuxt UI documentation first** using the MCP resource
+2. Verify component props, slots, and events before implementation
+3. Use the exact API as documented - don't guess or assume
+4. Reference examples from the documentation
+
 #### Adding a New Page
-1. Create a `.vue` file in `pages/` directory
+1. Create a `.vue` file in `pages/` directory (auto-routed)
 2. Use `definePageMeta()` for middleware and layout
-3. Implement data fetching with `useFetch` or `useAsyncData`
-4. Handle loading and error states
-5. Add navigation links using `<NuxtLink>`
+3. Data fetching: use Pinia stores, NOT `useFetch` directly
+4. Handle loading and error states via store state
+5. Navigation: use `<NuxtLink>` for internal routes
 
 #### Creating a Component
-1. Add component to `components/` directory (auto-imported)
-2. Use TypeScript with `defineProps` and `defineEmits`
-3. Leverage Nuxt UI components as building blocks
-4. Follow Vue 3 Composition API patterns
-5. Add proper TypeScript types
+1. Add to `components/` directory (auto-imported - NO manual imports!)
+2. Use `<script setup lang="ts">` always
+3. Type props with TypeScript: `defineProps<{ ... }>()`
+4. Check Nuxt UI docs for which components to use
+5. Never import Vue reactivity functions - they're auto-imported
 
 #### Working with Nuxt UI Forms and Zod Validation
 ```vue
@@ -588,16 +643,78 @@ Key variables for local development:
 - **docs/PLATFORM_INTEGRATION_DIVERSE.md**: Complex hierarchical platform example
 - Check other PLATFORM_INTEGRATION_*.md files as they're added
 
+## Common Nuxt UI 3 Patterns
+
+### Modal with Form
+```vue
+<UModal v-model="isOpen">
+  <UCard>
+    <template #header>
+      <h3 class="text-lg font-semibold">Create User</h3>
+    </template>
+    
+    <UForm :schema="schema" :state="state" @submit="onSubmit">
+      <UFormField name="email" label="Email">
+        <UInput v-model="state.email" />
+      </UFormField>
+      
+      <template #footer>
+        <div class="flex gap-3">
+          <UButton variant="outline" @click="isOpen = false">Cancel</UButton>
+          <UButton type="submit">Create</UButton>
+        </div>
+      </template>
+    </UForm>
+  </UCard>
+</UModal>
+```
+
+### Table with Actions
+```vue
+<UTable :columns="columns" :rows="users">
+  <template #actions-data="{ row }">
+    <UDropdown :items="getActions(row)">
+      <UButton variant="ghost" icon="i-lucide-more-vertical" />
+    </UDropdown>
+  </template>
+</UTable>
+```
+
+### Toast Notifications
+```typescript
+const toast = useToast()
+
+// Success
+toast.add({ 
+  title: 'Success', 
+  description: 'User created successfully',
+  color: 'success' 
+})
+
+// Error
+toast.add({ 
+  title: 'Error', 
+  description: 'Failed to create user',
+  color: 'error' 
+})
+```
+
 ## Common Pitfalls to Avoid
 
-1. **Link Objects**: Always fetch before accessing properties
-2. **Entity Creation**: 
+1. **Auto-imports**: Never manually import Vue/Nuxt composables or components
+2. **Nuxt UI Docs**: Always check component documentation via MCP before use
+3. **Link Objects**: Always fetch before accessing properties
+4. **Entity Creation**: 
    - Top-level entities have no parent (any entity_type is allowed)
    - Entity types are strings now, not enums
    - Use lowercase with underscores for consistency
-3. **Entity Hierarchy**: Access groups cannot have structural children
-4. **Permissions**: System permissions cannot be modified
-5. **Testing**: Maintain 98%+ test pass rate
-6. **Frontend**: Use bun, not npm; use authenticatedFetch for APIs
+5. **Entity Hierarchy**: Access groups cannot have structural children
+6. **Permissions**: System permissions cannot be modified
+7. **Testing**: Maintain 98%+ test pass rate
+8. **Frontend**: 
+   - Use bun, not npm
+   - Use authStore.apiCall() for all API calls
+   - Never use $fetch directly
+   - Check Nuxt UI docs before implementing components
 
 Always refer to PROJECT_STATUS.md when resuming work to understand the current state.

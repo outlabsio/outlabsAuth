@@ -1,6 +1,6 @@
 # OutLabs Auth - Enterprise RBAC Authentication Platform
 
-A modern, enterprise-grade Role-Based Access Control (RBAC) authentication platform built with FastAPI, MongoDB, and React. Features a unique three-tier hierarchical permission system with automatic inheritance and multi-tenant support.
+A modern, enterprise-grade Role-Based Access Control (RBAC) authentication platform built with FastAPI, MongoDB, and Nuxt 3. Features a unified entity model where everything is an entity (STRUCTURAL or ACCESS_GROUP), hierarchical permission system with automatic inheritance, and multi-tenant support.
 
 ## 🚀 Features
 
@@ -9,7 +9,7 @@ A modern, enterprise-grade Role-Based Access Control (RBAC) authentication platf
 - **Flexible Entity Structure**: Platform → Organization → Branch → Team hierarchy
 - **Custom Permissions**: Create domain-specific permissions beyond system defaults
 - **Role Templates**: Pre-configured role templates for common use cases
-- **Modern Tech Stack**: FastAPI backend with React/TypeScript frontend
+- **Modern Tech Stack**: FastAPI backend with Nuxt 3/Vue 3/TypeScript frontend
 - **Type Safety**: Full type safety with Pydantic and TypeScript
 - **Async Architecture**: Built on async/await patterns for high performance
 
@@ -60,7 +60,7 @@ uv run uvicorn api.main:app --reload --port 8030
 
 1. Navigate to the frontend directory:
 ```bash
-cd admin-ui
+cd frontend
 ```
 
 2. Install dependencies with Bun:
@@ -73,7 +73,7 @@ bun install
 bun dev
 ```
 
-The frontend will be available at http://localhost:5173
+The frontend will be available at http://localhost:3000
 
 ## 🏗️ System Architecture
 
@@ -336,10 +336,11 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 Built with:
 - [FastAPI](https://fastapi.tiangolo.com/) - Modern Python web framework
 - [Beanie](https://github.com/roman-right/beanie) - Async MongoDB ODM
-- [React](https://react.dev/) - UI library
-- [TanStack](https://tanstack.com/) - Powerful React tools
+- [Nuxt 3](https://nuxt.com/) - The intuitive Vue framework
+- [Vue 3](https://vuejs.org/) - Progressive JavaScript framework
+- [Nuxt UI Pro](https://ui.nuxt.com/pro) - Premium Vue components
 - [Tailwind CSS](https://tailwindcss.com/) - Utility-first CSS framework
-- [ShadCN UI](https://ui.shadcn.com/) - Re-usable components
+- [Pinia](https://pinia.vuejs.org/) - Vue store management
 
 ## 📞 Support
 

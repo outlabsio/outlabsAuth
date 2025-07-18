@@ -150,25 +150,32 @@ You might worry that this real-time check will be slow. However, our backend emp
 
 **Use Tier 1 Caching:**
 
-```javascript
-// React component example
-function LeadManagementView() {
-  const [permissions, setPermissions] = useState([])
-  
-  useEffect(() => {
-    // Fetch permissions once on component mount
-    authService.getPermissions(currentEntityId)
-      .then(perms => setPermissions(perms))
-  }, [currentEntityId])
-  
-  return (
-    <div>
-      {permissions.includes('lead:read') && <LeadList />}
-      {permissions.includes('lead:create') && <CreateLeadButton />}
-      {permissions.includes('lead:export') && <ExportButton />}
-    </div>
-  )
-}
+```vue
+<!-- Vue component example -->
+<template>
+  <div>
+    <LeadList v-if="permissions.includes('lead:read')" />
+    <CreateLeadButton v-if="permissions.includes('lead:create')" />
+    <ExportButton v-if="permissions.includes('lead:export')" />
+  </div>
+</template>
+
+<script setup>
+import { ref, onMounted, watch } from 'vue'
+import authService from './auth-service'
+
+const props = defineProps(['currentEntityId'])
+const permissions = ref([])
+
+onMounted(async () => {
+  // Fetch permissions once on component mount
+  permissions.value = await authService.getPermissions(props.currentEntityId)
+})
+
+watch(() => props.currentEntityId, async (newEntityId) => {
+  permissions.value = await authService.getPermissions(newEntityId)
+})
+</script>
 ```
 
 ### API Endpoint Protection

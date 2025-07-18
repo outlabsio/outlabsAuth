@@ -7,7 +7,7 @@
 │                        External Platforms                         │
 ├─────────────────┬─────────────────┬─────────────┬───────────────┤
 │  Diverse Leads  │ Referral Broker │     uaya    │    qdarte     │
-│   (Nuxt.js)     │ (React+FastAPI) │ (Flutter)   │  (Next.js)    │
+│   (Nuxt.js)     │ (Nuxt+FastAPI)  │ (Flutter)   │  (Next.js)    │
 └────────┬────────┴────────┬────────┴──────┬──────┴───────┬───────┘
          │                 │                │              │
          └─────────────────┴────────────────┴──────────────┘

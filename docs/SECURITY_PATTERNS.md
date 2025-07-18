@@ -55,7 +55,7 @@ async def login(credentials: LoginSchema, response: Response):
 ```javascript
 class SecureAuthService {
   constructor() {
-    this.baseURL = process.env.REACT_APP_AUTH_API
+    this.baseURL = process.env.NUXT_PUBLIC_AUTH_API
   }
 
   async login(email, password) {

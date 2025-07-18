@@ -15,7 +15,7 @@ Think of it as "Auth0 meets AWS IAM" - a centralized service that multiple platf
 outlabsAuth is designed to serve multiple, completely different platforms:
 
 - **Diverse Leads**: A real estate lead management system (might be built in Nuxt.js)
-- **Referral Brokerage**: A referral network platform (might use React + FastAPI)
+- **Referral Brokerage**: A referral network platform (might use Nuxt + FastAPI)
 - **uaya**: A social platform (might be a mobile app with Flutter)
 - **qdarte**: An art marketplace (might be built in Next.js)
 

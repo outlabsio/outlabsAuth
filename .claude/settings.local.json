@@ -23,7 +23,8 @@
       "Bash(tsc --noEmit)",
       "Bash(cp:*)",
       "Bash(mv:*)",
-      "WebFetch(domain:ui.nuxt.com)"
+      "WebFetch(domain:ui.nuxt.com)",
+      "mcp__ide__getDiagnostics"
     ],
     "deny": []
   }
