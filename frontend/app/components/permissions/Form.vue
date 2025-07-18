@@ -45,22 +45,14 @@ const schema = z.object({
 
 type Schema = z.output<typeof schema>
 
-// Form state
-const state = reactive<Partial<Schema>>({
-  display_name: props.permission?.display_name || '',
-  description: props.permission?.description || '',
-  resource: props.permission?.resource || '',
-  action: props.permission?.action || '',
-  is_active: props.permission?.is_active ?? true,
-  tags: props.permission?.tags || [],
-  conditions: props.permission?.conditions || []
-})
+// Use store form state directly (not computed)
+const state = permissionsStore.formState
 
 // Computed
 const isActive = computed({
   get: () => state.is_active ?? true,
   set: (value: boolean) => {
-    state.is_active = value
+    permissionsStore.setFormField('is_active', value)
   }
 })
 
@@ -105,26 +97,26 @@ const tagInput = ref('')
 
 function addTag() {
   if (tagInput.value && !state.tags?.includes(tagInput.value)) {
-    state.tags = [...(state.tags || []), tagInput.value.toLowerCase()]
+    permissionsStore.setFormField('tags', [...(state.tags || []), tagInput.value.toLowerCase()])
     tagInput.value = ''
   }
 }
 
 function removeTag(tag: string) {
-  state.tags = state.tags?.filter(t => t !== tag) || []
+  permissionsStore.setFormField('tags', state.tags?.filter(t => t !== tag) || [])
 }
 
 // Condition management
 function addCondition() {
-  state.conditions = [...(state.conditions || []), {
+  permissionsStore.setFormField('conditions', [...(state.conditions || []), {
     attribute: '',
     operator: 'EQUALS',
     value: ''
-  }]
+  }])
 }
 
 function removeCondition(index: number) {
-  state.conditions = state.conditions?.filter((_, i) => i !== index) || []
+  permissionsStore.setFormField('conditions', state.conditions?.filter((_, i) => i !== index) || [])
 }
 </script>
 
@@ -149,7 +141,8 @@ function removeCondition(index: number) {
         class="w-full"
       >
         <UInput
-          v-model="state.display_name"
+          :model-value="state.display_name"
+          @update:model-value="(value) => permissionsStore.setFormField('display_name', value)"
           placeholder="e.g., Approve Invoices, Create Projects"
           size="lg"
           class="w-full"
@@ -168,9 +161,10 @@ function removeCondition(index: number) {
           class="w-full"
         >
           <PermissionsFieldCombobox
-            v-model="state.resource"
+            :model-value="state.resource"
             field-type="resource"
             placeholder="Select or type resource..."
+            @update:model-value="(value) => permissionsStore.setFormField('resource', value)"
           />
           <template #description>
             <span class="text-xs text-muted-foreground">The resource this permission applies to (lowercase, no spaces)</span>
@@ -184,10 +178,11 @@ function removeCondition(index: number) {
           class="w-full"
         >
           <PermissionsFieldCombobox
-            v-model="state.action"
+            :model-value="state.action"
             field-type="action"
             :selected-resource="state.resource"
             placeholder="Select or type action..."
+            @update:model-value="(value) => permissionsStore.setFormField('action', value)"
           />
           <template #description>
             <span class="text-xs text-muted-foreground">The action allowed on the resource (lowercase, no spaces)</span>
@@ -206,7 +201,8 @@ function removeCondition(index: number) {
       <!-- Description -->
       <UFormField label="Description" name="description" class="w-full">
         <UTextarea
-          v-model="state.description"
+          :model-value="state.description"
+          @update:model-value="(value) => permissionsStore.setFormField('description', value)"
           placeholder="Describe what this permission allows and when it should be used"
           :rows="3"
           class="w-full"
@@ -318,7 +314,11 @@ function removeCondition(index: number) {
             :key="index"
             :model-value="state.conditions[index]"
             :index="index"
-            @update:model-value="(val) => state.conditions[index] = val"
+            @update:model-value="(val) => {
+              const newConditions = [...state.conditions]
+              newConditions[index] = val
+              permissionsStore.setFormField('conditions', newConditions)
+            }"
             @remove="removeCondition(index)"
           />
         </div>

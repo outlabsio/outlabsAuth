@@ -30,6 +30,16 @@ interface PermissionsState {
     drawerOpen: boolean;
     drawerMode: "view" | "create" | "edit";
   };
+  // Form State
+  formState: {
+    display_name: string;
+    resource: string;
+    action: string;
+    description: string;
+    is_active: boolean;
+    tags: string[];
+    conditions: Condition[];
+  };
 }
 
 export const usePermissionsStore = defineStore("permissions", () => {
@@ -53,6 +63,15 @@ export const usePermissionsStore = defineStore("permissions", () => {
     ui: {
       drawerOpen: false,
       drawerMode: "view",
+    },
+    formState: {
+      display_name: "",
+      resource: "",
+      action: "",
+      description: "",
+      is_active: true,
+      tags: [],
+      conditions: [],
     },
   });
 
@@ -237,9 +256,22 @@ export const usePermissionsStore = defineStore("permissions", () => {
   };
 
   // UI Actions
-  const openDrawer = (mode: "view" | "create" | "edit" = "view", permission: Permission | null = null) => {
+  const openDrawer = async (mode: "view" | "create" | "edit" = "view", permission: Permission | null = null) => {
     state.ui.drawerMode = mode;
     state.selectedPermission = permission;
+    
+    // Ensure permissions are loaded
+    if (state.permissions.length === 0) {
+      await fetchPermissions();
+    }
+    
+    // Reset form state for create mode, load from permission for edit mode
+    if (mode === 'create') {
+      resetFormState();
+    } else if (mode === 'edit' && permission) {
+      loadFormFromPermission(permission);
+    }
+    
     state.ui.drawerOpen = true;
   };
 
@@ -367,6 +399,68 @@ export const usePermissionsStore = defineStore("permissions", () => {
     return grouped;
   });
 
+  // Get custom resources only (non-system permissions)
+  const customResources = computed(() => {
+    const resources = new Set<string>();
+    state.permissions
+      .filter(p => !p.is_system && p.resource)
+      .forEach(p => resources.add(p.resource));
+    return Array.from(resources).sort();
+  });
+
+  // Get custom actions, optionally filtered by resource
+  const customActions = computed(() => {
+    return (resource?: string) => {
+      let perms = state.permissions.filter(p => !p.is_system);
+      if (resource) {
+        perms = perms.filter(p => p.resource === resource);
+      }
+      const actions = new Set<string>();
+      perms.forEach(p => {
+        if (p.action) actions.add(p.action);
+      });
+      return Array.from(actions).sort();
+    };
+  });
+
+  // Common resource suggestions
+  const commonResourceSuggestions = computed(() => ['invoice', 'report', 'document', 'budget', 'expense', 'contract', 'purchase_order']);
+  
+  // Common action suggestions
+  const commonActionSuggestions = computed(() => ['approve', 'submit', 'export', 'import', 'review', 'sign', 'publish', 'archive', 'reject']);
+
+  // Form Methods
+  const resetFormState = () => {
+    state.formState = {
+      display_name: "",
+      resource: "",
+      action: "",
+      description: "",
+      is_active: true,
+      tags: [],
+      conditions: [],
+    };
+  };
+
+  const setFormField = <K extends keyof PermissionsState['formState']>(
+    field: K,
+    value: PermissionsState['formState'][K]
+  ) => {
+    state.formState[field] = value;
+  };
+
+  const loadFormFromPermission = (permission: Permission) => {
+    state.formState = {
+      display_name: permission.display_name || "",
+      resource: permission.resource || "",
+      action: permission.action || "",
+      description: permission.description || "",
+      is_active: permission.is_active ?? true,
+      tags: permission.tags || [],
+      conditions: permission.conditions || [],
+    };
+  };
+
   return {
     // State (as computed for reactivity)
     permissions: computed(() => state.permissions),
@@ -378,12 +472,17 @@ export const usePermissionsStore = defineStore("permissions", () => {
     customCount: computed(() => state.customCount),
     filters: computed(() => state.filters),
     ui: state.ui, // Return reactive reference directly, not computed
+    formState: state.formState,
 
     // Computed
     filteredPermissions,
     uniqueResources,
     allTags,
     permissionsByResource,
+    customResources,
+    customActions,
+    commonResourceSuggestions,
+    commonActionSuggestions,
 
     // Actions
     fetchPermissions,
@@ -399,5 +498,10 @@ export const usePermissionsStore = defineStore("permissions", () => {
     setDrawerMode,
     setFilters,
     resetFilters,
+
+    // Form Actions
+    resetFormState,
+    setFormField,
+    loadFormFromPermission,
   };
 });
