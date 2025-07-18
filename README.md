@@ -1,17 +1,37 @@
-# OutLabs Auth - Enterprise RBAC Authentication Platform
+# OutLabs Auth - Enterprise RBAC Authentication API
 
-A modern, enterprise-grade Role-Based Access Control (RBAC) authentication platform built with FastAPI, MongoDB, and Nuxt 3. Features a unified entity model where everything is an entity (STRUCTURAL or ACCESS_GROUP), hierarchical permission system with automatic inheritance, and multi-tenant support.
+**A production-ready FastAPI authentication and authorization service** with enterprise-grade Role-Based Access Control (RBAC), built on MongoDB with Beanie ODM. Designed to be integrated into your applications as a centralized auth service.
 
-## 🚀 Features
+## 🎯 What is OutLabs Auth?
 
-- **Hierarchical Permission System**: Three-tier permission inheritance (System → Platform → Client)
-- **Multi-Tenant Architecture**: Complete data isolation between client organizations
-- **Flexible Entity Structure**: Platform → Organization → Branch → Team hierarchy
-- **Custom Permissions**: Create domain-specific permissions beyond system defaults
-- **Role Templates**: Pre-configured role templates for common use cases
-- **Modern Tech Stack**: FastAPI backend with Nuxt 3/Vue 3/TypeScript frontend
-- **Type Safety**: Full type safety with Pydantic and TypeScript
-- **Async Architecture**: Built on async/await patterns for high performance
+OutLabs Auth is a **standalone authentication API** that provides:
+- JWT-based authentication with refresh tokens
+- Hierarchical RBAC with permission inheritance
+- Multi-tenant platform isolation
+- Flexible entity system for any organizational structure
+- RESTful API endpoints for all auth operations
+
+**Includes an admin UI** built with Nuxt 3 for managing users, roles, and permissions - but the core value is the authentication API itself.
+
+## 🚀 Core Features
+
+### Authentication API
+- **JWT Authentication**: Access tokens (15min) and refresh tokens (30 days)
+- **Multi-device Sessions**: Support for multiple concurrent sessions
+- **Rate Limiting**: Built-in brute force protection
+- **Password Policies**: Configurable password requirements
+- **Account Security**: Email verification, password reset, account locking
+
+### Authorization System  
+- **Hierarchical Permissions**: Automatic inheritance (manage → update → read)
+- **Scope-based Permissions**: Platform-wide, organization-wide, or entity-specific
+- **Custom Permissions**: Create domain-specific permissions for your application
+- **Role Templates**: Pre-configured roles for common use cases
+
+### Multi-Tenant Support
+- **Platform Isolation**: Complete data separation between platforms
+- **Flexible Entity Model**: Adapt to any organizational structure
+- **Cross-Platform Users**: Users can belong to multiple platforms
 
 ## 📋 Prerequisites
 
@@ -21,9 +41,9 @@ A modern, enterprise-grade Role-Based Access Control (RBAC) authentication platf
 - UV package manager for Python
 - Bun package manager for frontend
 
-## 🛠️ Installation
+## 🚦 Quick Start
 
-### Backend Setup
+### Running the Auth API
 
 1. Clone the repository:
 ```bash
@@ -56,24 +76,59 @@ mongod
 uv run uvicorn api.main:app --reload --port 8030
 ```
 
-### Frontend Setup
+### API Documentation
 
-1. Navigate to the frontend directory:
+Once running, access the interactive API documentation:
+- **Swagger UI**: http://localhost:8030/docs
+- **ReDoc**: http://localhost:8030/redoc
+
+### Optional: Admin UI Setup
+
+The admin UI is included for managing users, roles, and permissions:
+
 ```bash
 cd frontend
-```
-
-2. Install dependencies with Bun:
-```bash
 bun install
-```
-
-3. Start the development server:
-```bash
 bun dev
 ```
 
-The frontend will be available at http://localhost:3000
+Access at http://localhost:3000 (requires API to be running)
+
+## 📡 API Endpoints
+
+### Authentication Endpoints
+```
+POST   /v1/auth/register          # Register new user
+POST   /v1/auth/login             # Login with email/password
+POST   /v1/auth/refresh           # Refresh access token
+POST   /v1/auth/logout            # Logout and revoke refresh token
+POST   /v1/auth/forgot-password   # Request password reset
+POST   /v1/auth/reset-password    # Reset password with token
+GET    /v1/auth/me               # Get current user info
+```
+
+### User Management
+```
+GET    /v1/users                  # List users (with pagination/filters)
+POST   /v1/users                  # Create new user
+GET    /v1/users/{id}            # Get user details
+PATCH  /v1/users/{id}            # Update user
+DELETE /v1/users/{id}            # Delete user
+POST   /v1/users/{id}/roles      # Assign roles to user
+DELETE /v1/users/{id}/roles/{role_id}  # Remove role from user
+```
+
+### Role & Permission Management
+```
+GET    /v1/roles                  # List roles
+POST   /v1/roles                  # Create role
+PATCH  /v1/roles/{id}            # Update role
+DELETE /v1/roles/{id}            # Delete role
+GET    /v1/permissions           # List permissions
+POST   /v1/permissions           # Create custom permission
+```
+
+See full [API Documentation](docs/API_ENDPOINTS.md) for complete endpoint reference.
 
 ## 🏗️ System Architecture
 

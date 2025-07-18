@@ -8,7 +8,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-outlabsAuth is an enterprise-grade Role-Based Access Control (RBAC) authentication platform built with FastAPI, MongoDB, and Beanie ODM. It provides centralized authentication and authorization for multiple platforms through a flexible unified entity system that supports diverse organizational structures from flat role-based access to complex multi-level hierarchies.
+**OutlabsAuth is a FastAPI-based authentication and authorization API service** designed to be integrated into applications as a centralized auth solution. The core product is the REST API that provides:
+
+- JWT-based authentication with refresh tokens
+- Hierarchical RBAC with permission inheritance  
+- Multi-tenant platform isolation
+- Flexible entity system for any organizational structure
+- Complete REST API for all auth operations
+
+**The frontend admin UI is a supplementary tool** built with Nuxt 3 for managing the auth system, but the primary deliverable is the authentication API itself.
 
 ### Frontend Tech Stack
 - **Nuxt 3** (v3.16.2) with TypeScript
@@ -67,7 +75,7 @@ const formatted = formatDate(new Date())
 ```
 
 #### What IS manually imported:
-- External packages (zod, @tanstack/vue-query, etc.)
+- External packages (zod, date-fns, etc.)
 - Types/interfaces from type files
 - Store imports from Pinia
 - Assets (images, styles)
@@ -154,6 +162,22 @@ docker compose up -d --build         # Build and start all services
 docker compose logs -f api           # View API logs
 docker compose down -v               # Stop and remove volumes
 ```
+
+## Primary Focus: Authentication API
+
+**When working on this project, remember:**
+1. The FastAPI authentication service is the main product
+2. API endpoints should be well-documented and follow REST conventions
+3. The admin UI is a management tool, not the core deliverable
+4. Focus on API performance, security, and reliability
+5. Ensure the API can be easily integrated into any application
+
+### Key API Design Principles
+- **Stateless**: All requests should be self-contained
+- **RESTful**: Follow REST conventions for resource naming and HTTP methods
+- **Secure**: JWT tokens, rate limiting, permission checks on all endpoints
+- **Documented**: All endpoints documented in OpenAPI/Swagger format
+- **Versioned**: API versioned at `/v1/` to allow future updates
 
 ## Architecture & Key Concepts
 

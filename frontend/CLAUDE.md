@@ -3,14 +3,13 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with the OutlabsAuth Nuxt 3 frontend.
 
 ## Project Overview
-OutlabsAuth Frontend is a modern admin dashboard for managing the OutlabsAuth RBAC system. It's built as a Nuxt 3 SPA using Nuxt UI Pro v3 components with TanStack Form integration.
+OutlabsAuth Frontend is a modern admin dashboard for managing the OutlabsAuth RBAC system. It's built as a Nuxt 3 SPA using Nuxt UI Pro v3 components.
 
 ## Tech Stack
 - **Framework**: Nuxt 3.16.2 (Vue 3)
 - **UI Components**: Nuxt UI Pro 3.0.2 (Premium component library)
-- **Forms**: TanStack Form + Zod validation
-- **API Client**: TanStack Query for caching and state management
-- **State Management**: Pinia
+- **Forms**: Nuxt UI Form components + Zod validation
+- **State Management**: Pinia (handles all API calls and caching)
 - **Styling**: UnoCSS/Tailwind (via Nuxt UI)
 - **Package Manager**: Bun
 - **TypeScript**: Full type safety
@@ -21,12 +20,12 @@ OutlabsAuth Frontend is a modern admin dashboard for managing the OutlabsAuth RB
 - **Role Management**: Define roles with permissions at any entity level
 - **Permission System**: Hierarchical permission inheritance
 - **Platform Management**: Multi-tenant platform support
-- **Real-time Updates**: Using TanStack Query for optimistic updates
+- **Real-time Updates**: Using Pinia stores for state management and updates
 
 ## API Integration
 - Backend runs on http://localhost:8030
 - Token-based authentication (JWT)
-- All API calls go through TanStack Query for caching
+- All API calls go through Pinia stores for state management
 
 ## Development Commands
 ```bash
@@ -60,64 +59,83 @@ bun typecheck    # TypeScript checking
 1. Login via `/login` page
 2. JWT tokens stored in auth store
 3. Access token (15 min) and refresh token (30 days)
-4. Auto-refresh handled by TanStack Query
+4. Auto-refresh handled by auth store
 5. Global middleware checks auth status
 
 ## Key Patterns
 
-### TanStack Form with Nuxt UI
+### Nuxt UI Forms with Zod
 ```vue
 <script setup lang="ts">
-import { useForm } from '@tanstack/vue-form'
-import { zodValidator } from '@tanstack/zod-form-adapter'
 import { z } from 'zod'
+import type { FormSubmitEvent } from '@nuxt/ui'
 
-const form = useForm({
-  defaultValues: {
-    name: '',
-    email: ''
-  },
-  onSubmit: async ({ value }) => {
-    // Handle submission
-  },
-  validatorAdapter: zodValidator()
+const schema = z.object({
+  name: z.string().min(2),
+  email: z.string().email()
 })
+
+const state = reactive({
+  name: '',
+  email: ''
+})
+
+const onSubmit = async (event: FormSubmitEvent<z.infer<typeof schema>>) => {
+  // Handle submission with validated data
+  console.log(event.data)
+}
 </script>
 
 <template>
-  <form @submit="form.handleSubmit">
-    <form.Field name="name">
-      <template v-slot="{ field }">
-        <UFormField :error="field.state.meta.errors[0]">
-          <UInput 
-            v-model="field.state.value" 
-            @blur="field.handleBlur"
-            placeholder="Name"
-          />
-        </UFormField>
-      </template>
-    </form.Field>
-  </form>
+  <UForm :schema="schema" :state="state" @submit="onSubmit">
+    <UFormField name="name" label="Name">
+      <UInput v-model="state.name" />
+    </UFormField>
+    
+    <UFormField name="email" label="Email">
+      <UInput v-model="state.email" type="email" />
+    </UFormField>
+    
+    <UButton type="submit">Submit</UButton>
+  </UForm>
 </template>
 ```
 
-### TanStack Query Pattern
+### Pinia Store Pattern
 ```typescript
-// composables/useEntities.ts
-export const useEntities = () => {
-  return useQuery({
-    queryKey: ['entities'],
-    queryFn: () => $fetch('/api/v1/entities'),
-    staleTime: 5 * 60 * 1000, // 5 minutes
+// stores/entities.store.ts
+export const useEntitiesStore = defineStore('entities', () => {
+  const state = reactive({
+    entities: [],
+    isLoading: false,
+    error: null
   })
-}
+  
+  const fetchEntities = async () => {
+    state.isLoading = true
+    try {
+      const response = await authStore.apiCall('/v1/entities')
+      state.entities = response.items
+    } catch (error) {
+      state.error = error.message
+    } finally {
+      state.isLoading = false
+    }
+  }
+  
+  return {
+    entities: computed(() => state.entities),
+    isLoading: computed(() => state.isLoading),
+    fetchEntities
+  }
+})
 ```
 
 ## Component Conventions
 1. Use `<script setup lang="ts">` for all components
 2. Prefer composables for shared logic
 3. Use Nuxt UI Pro components for consistency
-4. Integrate TanStack Form for complex forms
+4. Use Nuxt UI Form components with Zod validation
 5. Type all props and emits
 
 ## State Management
@@ -133,7 +151,7 @@ export const useEntities = () => {
 
 ## Key Differences from React Version
 - Vue 3 Composition API instead of React hooks
-- File-based routing instead of TanStack Router
+- File-based routing instead of React Router
 - Nuxt UI Pro instead of ShadCN
 - Pinia instead of Zustand
 - Auto-imports for components and composables
