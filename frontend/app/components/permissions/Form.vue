@@ -21,6 +21,7 @@ const permissionsStore = usePermissionsStore()
 // State
 const isLoading = ref(false)
 const showConditions = ref(false)
+const formRef = ref()
 
 // Form validation schema
 const schema = z.object({
@@ -47,6 +48,14 @@ type Schema = z.output<typeof schema>
 
 // Use store form state directly (not computed)
 const state = permissionsStore.formState
+
+// Watch form state changes for debugging
+watch(() => state.resource, (newVal) => {
+  console.log('[Form] Resource in form state changed to:', newVal)
+})
+watch(() => state.action, (newVal) => {
+  console.log('[Form] Action in form state changed to:', newVal)
+})
 
 // Computed
 const isActive = computed({
@@ -122,6 +131,7 @@ function removeCondition(index: number) {
 
 <template>
   <UForm
+    ref="formRef"
     :schema="schema"
     :state="state"
     class="space-y-8"
@@ -160,11 +170,10 @@ function removeCondition(index: number) {
           required
           class="w-full"
         >
-          <PermissionsFieldCombobox
-            :model-value="state.resource"
+          <PermissionsSimpleFieldCombobox
+            v-model="state.resource"
             field-type="resource"
             placeholder="Select or type resource..."
-            @update:model-value="(value) => permissionsStore.setFormField('resource', value)"
           />
           <template #description>
             <span class="text-xs text-muted-foreground">The resource this permission applies to (lowercase, no spaces)</span>
@@ -177,12 +186,11 @@ function removeCondition(index: number) {
           required
           class="w-full"
         >
-          <PermissionsFieldCombobox
-            :model-value="state.action"
+          <PermissionsSimpleFieldCombobox
+            v-model="state.action"
             field-type="action"
             :selected-resource="state.resource"
             placeholder="Select or type action..."
-            @update:model-value="(value) => permissionsStore.setFormField('action', value)"
           />
           <template #description>
             <span class="text-xs text-muted-foreground">The action allowed on the resource (lowercase, no spaces)</span>

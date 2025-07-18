@@ -446,7 +446,9 @@ export const usePermissionsStore = defineStore("permissions", () => {
     field: K,
     value: PermissionsState['formState'][K]
   ) => {
+    console.log(`[PermissionsStore] Setting form field '${field}' to:`, value);
     state.formState[field] = value;
+    console.log(`[PermissionsStore] Form state after update:`, state.formState);
   };
 
   const loadFormFromPermission = (permission: Permission) => {
@@ -459,6 +461,35 @@ export const usePermissionsStore = defineStore("permissions", () => {
       tags: permission.tags || [],
       conditions: permission.conditions || [],
     };
+  };
+
+  // Add a temporary custom permission to the list (for newly created resources/actions)
+  const addTemporaryCustomPermission = (resource: string, action?: string) => {
+    // Check if we already have a permission with this resource/action combo
+    const exists = state.permissions.some(p => 
+      p.resource === resource && (!action || p.action === action)
+    );
+    
+    if (!exists && resource) {
+      // Create a temporary permission object
+      const tempPermission: Permission = {
+        id: `temp_${Date.now()}`,
+        name: action ? `${resource}:${action}` : `${resource}:temp`,
+        display_name: action ? `${resource} ${action}` : resource,
+        resource: resource,
+        action: action || 'temp',
+        is_system: false,
+        is_active: true,
+        conditions: [],
+        tags: [],
+        metadata: {},
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      
+      console.log('[PermissionsStore] Adding temporary permission:', tempPermission);
+      state.permissions.push(tempPermission);
+    }
   };
 
   return {
@@ -503,5 +534,6 @@ export const usePermissionsStore = defineStore("permissions", () => {
     resetFormState,
     setFormField,
     loadFormFromPermission,
+    addTemporaryCustomPermission,
   };
 });
