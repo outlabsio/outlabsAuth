@@ -26,10 +26,14 @@ const entityAssignments = ref<UserEntityAssignment[]>([])
 
 // Load entities and roles
 onMounted(async () => {
+  console.log('[UserForm] Loading entities and roles...')
   await Promise.all([
     entitiesStore.fetchEntities(),
     rolesStore.fetchRoles()
   ])
+  
+  console.log('[UserForm] Loaded entities:', entitiesStore.entities.length)
+  console.log('[UserForm] Loaded roles:', rolesStore.roles.length)
   
   // Initialize entity assignments from user data
   if (props.mode === 'edit' && props.user) {
@@ -287,40 +291,31 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           <div class="space-y-4">
             <!-- Entity Selection -->
             <UFormField label="Entity" required class="w-full">
-              <USelectMenu
+              <USelect
                 v-model="assignment.entity_id"
-                :options="[
-                  { label: 'Select entity...', value: '', disabled: true },
-                  ...availableEntities.map(e => ({
-                    label: `${e.display_name} (${e.entity_type})`,
-                    value: e.id
-                  }))
-                ]"
-                value-attribute="value"
-                option-attribute="label"
+                :items="availableEntities.map(e => ({
+                  label: `${e.display_name} (${e.entity_type})`,
+                  value: e.id
+                }))"
+                placeholder="Select entity..."
+                value-key="value"
                 class="w-full"
               />
             </UFormField>
 
             <!-- Role Selection -->
             <UFormField v-if="assignment.entity_id" label="Roles" required class="w-full">
-              <USelectMenu
+              <USelect
                 v-model="assignment.role_ids"
-                :options="getRolesForEntity(assignment.entity_id).map(r => ({
+                :items="getRolesForEntity(assignment.entity_id).map(r => ({
                   label: r.display_name,
                   value: r.id
                 }))"
                 multiple
                 placeholder="Select roles..."
-                value-attribute="value"
-                option-attribute="label"
+                value-key="value"
                 class="w-full"
-              >
-                <template #label>
-                  <span v-if="assignment.role_ids.length === 0">Select roles...</span>
-                  <span v-else>{{ assignment.role_ids.length }} role(s) selected</span>
-                </template>
-              </USelectMenu>
+              />
               <template #description>
                 <span class="text-xs text-muted-foreground">
                   Select one or more roles for this entity membership
