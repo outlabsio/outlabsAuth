@@ -265,13 +265,6 @@ export const usePermissionsStore = defineStore("permissions", () => {
       await fetchPermissions();
     }
     
-    // Reset form state for create mode, load from permission for edit mode
-    if (mode === 'create') {
-      resetFormState();
-    } else if (mode === 'edit' && permission) {
-      loadFormFromPermission(permission);
-    }
-    
     state.ui.drawerOpen = true;
   };
 

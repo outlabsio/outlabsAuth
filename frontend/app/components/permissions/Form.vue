@@ -46,8 +46,56 @@ const schema = z.object({
 
 type Schema = z.output<typeof schema>
 
-// Use store form state directly (not computed)
-const state = permissionsStore.formState
+// Define the state type properly
+interface FormState {
+  display_name: string
+  description?: string
+  resource: string
+  action: string
+  is_active: boolean
+  tags: string[]
+  conditions: Condition[]
+}
+
+// Create reactive state initialized from props or store
+const state = reactive<FormState>({
+  display_name: '',
+  description: '',
+  resource: '',
+  action: '',
+  is_active: true,
+  tags: [],
+  conditions: []
+})
+
+// Initialize state when component mounts or props change
+watchEffect(() => {
+  if (props.mode === 'edit' && props.permission) {
+    // Load from permission prop
+    state.display_name = props.permission.display_name || ''
+    state.description = props.permission.description || ''
+    state.resource = props.permission.resource || ''
+    state.action = props.permission.action || ''
+    state.is_active = props.permission.is_active ?? true
+    state.tags = [...(props.permission.tags || [])]
+    state.conditions = [...(props.permission.conditions || [])]
+    
+    // Also update conditions visibility
+    if (props.permission.conditions && props.permission.conditions.length > 0) {
+      showConditions.value = true
+    }
+  } else if (props.mode === 'create') {
+    // Reset to defaults for create mode
+    state.display_name = ''
+    state.description = ''
+    state.resource = ''
+    state.action = ''
+    state.is_active = true
+    state.tags = []
+    state.conditions = []
+    showConditions.value = false
+  }
+})
 
 // Watch form state changes for debugging
 watch(() => state.resource, (newVal) => {
@@ -61,7 +109,7 @@ watch(() => state.action, (newVal) => {
 const isActive = computed({
   get: () => state.is_active ?? true,
   set: (value: boolean) => {
-    permissionsStore.setFormField('is_active', value)
+    state.is_active = value
   }
 })
 
@@ -72,14 +120,6 @@ const generatedName = computed(() => {
   }
   return ''
 })
-
-
-// Initialize conditions visibility if editing
-if (props.mode === 'edit' && props.permission) {
-  if (props.permission.conditions && props.permission.conditions.length > 0) {
-    showConditions.value = true
-  }
-}
 
 // Handle form submission
 async function onSubmit(event: FormSubmitEvent<Schema>) {
@@ -106,26 +146,26 @@ const tagInput = ref('')
 
 function addTag() {
   if (tagInput.value && !state.tags?.includes(tagInput.value)) {
-    permissionsStore.setFormField('tags', [...(state.tags || []), tagInput.value.toLowerCase()])
+    state.tags = [...(state.tags || []), tagInput.value.toLowerCase()]
     tagInput.value = ''
   }
 }
 
 function removeTag(tag: string) {
-  permissionsStore.setFormField('tags', state.tags?.filter(t => t !== tag) || [])
+  state.tags = state.tags?.filter(t => t !== tag) || []
 }
 
 // Condition management
 function addCondition() {
-  permissionsStore.setFormField('conditions', [...(state.conditions || []), {
+  state.conditions = [...(state.conditions || []), {
     attribute: '',
     operator: 'EQUALS',
     value: ''
-  }])
+  }]
 }
 
 function removeCondition(index: number) {
-  permissionsStore.setFormField('conditions', state.conditions?.filter((_, i) => i !== index) || [])
+  state.conditions = state.conditions?.filter((_, i) => i !== index) || []
 }
 </script>
 
@@ -324,7 +364,7 @@ function removeCondition(index: number) {
             @update:model-value="(val) => {
               const newConditions = [...state.conditions]
               newConditions[index] = val
-              permissionsStore.setFormField('conditions', newConditions)
+              state.conditions = newConditions
             }"
             @remove="removeCondition(index)"
           />
