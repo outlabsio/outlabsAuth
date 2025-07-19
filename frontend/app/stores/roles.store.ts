@@ -68,6 +68,11 @@ export const useRolesStore = defineStore("roles", () => {
       params.append("page", state.pagination.page.toString());
       params.append("page_size", state.pagination.pageSize.toString());
 
+      // Add entity_id if we have a context selected (not system context)
+      if (!contextStore.isSystemContext && contextStore.selectedOrganization?.id) {
+        params.append("entity_id", contextStore.selectedOrganization.id);
+      }
+      
       // Add filters
       if (state.filters.search) params.append("query", state.filters.search);
       if (state.filters.entity_id) params.append("entity_id", state.filters.entity_id);
@@ -124,9 +129,16 @@ export const useRolesStore = defineStore("roles", () => {
     try {
       const contextStore = useContextStore();
       const headers = contextStore.getContextHeaders;
+      
+      // Add entity_id if not in system context and not provided
+      const requestData = { ...data };
+      if (!contextStore.isSystemContext && contextStore.selectedOrganization && !requestData.entity_id) {
+        requestData.entity_id = contextStore.selectedOrganization.id;
+      }
+      
       const role = await authStore.apiCall<Role>("/v1/roles", {
         method: "POST",
-        body: data,
+        body: requestData,
         headers
       });
 

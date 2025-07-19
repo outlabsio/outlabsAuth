@@ -300,6 +300,11 @@ class RoleService:
         page: int = 1,
         page_size: int = 20
     ) -> Tuple[List[RoleModel], int]:
+        print(f"[RoleService] search_roles called with:")
+        print(f"  - entity_id: {entity_id}")
+        print(f"  - query: {query}")
+        print(f"  - is_global: {is_global}")
+        print(f"  - assignable_at_type: {assignable_at_type}")
         """
         Search roles with filtering
         
@@ -318,7 +323,19 @@ class RoleService:
         query_conditions = []
         
         if entity_id:
-            query_conditions.append(RoleModel.entity.id == PydanticObjectId(entity_id))
+            # When filtering by entity, include:
+            # 1. Roles specific to this entity
+            # 2. Global roles (always available)
+            # 3. TODO: Roles from parent entities (if implementing inheritance)
+            entity_conditions = [
+                RoleModel.entity.id == PydanticObjectId(entity_id),
+                RoleModel.is_global == True
+            ]
+            
+            # TODO: Add parent entity roles if needed
+            # For now, just include the current entity and global roles
+            
+            query_conditions.append(Or(*entity_conditions))
         
         if query:
             query_conditions.append(
@@ -349,6 +366,23 @@ class RoleService:
         # Apply pagination
         skip = (page - 1) * page_size
         roles = await roles_query.skip(skip).limit(page_size).to_list()
+        
+        print(f"[RoleService] Found {len(roles)} roles (total: {total})")
+        for role in roles:
+            # Handle Link object properly
+            entity_id_str = None
+            if role.entity:
+                if hasattr(role.entity, 'id'):
+                    # It's a populated document
+                    entity_id_str = str(role.entity.id)
+                elif hasattr(role.entity, 'ref'):
+                    # It's a Link object
+                    if role.entity.ref:
+                        entity_id_str = str(role.entity.ref.id)
+                else:
+                    # It's an ObjectId
+                    entity_id_str = str(role.entity)
+            print(f"  - {role.name} (entity_id: {entity_id_str}, is_global: {role.is_global})")
         
         return roles, total
     
