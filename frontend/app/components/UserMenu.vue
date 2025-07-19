@@ -9,6 +9,8 @@ const colorMode = useColorMode();
 const appConfig = useAppConfig();
 const authStore = useAuthStore();
 const userStore = useUserStore();
+const contextStore = useContextStore();
+const debugStore = useDebugStore();
 const router = useRouter();
 
 const colors = ["red", "orange", "amber", "yellow", "lime", "green", "emerald", "teal", "cyan", "sky", "blue", "indigo", "violet", "purple", "fuchsia", "pink", "rose"];
@@ -33,26 +35,68 @@ const handleLogout = async () => {
   router.push("/login");
 };
 
-const items = computed<DropdownMenuItem[][]>(() => [
-  [
-    {
-      type: "label",
-      label: user.value.name,
-      avatar: user.value.avatar,
-    },
-  ],
-  [
-    {
-      label: "Profile",
-      icon: "i-lucide-user",
-      to: "/profile",
-    },
-    {
-      label: "Settings",
-      icon: "i-lucide-settings",
-      to: "/settings",
-    },
-  ],
+// Check if user is system admin
+const isSystemAdmin = computed(() => {
+  // Use userStore which has the proper getters
+  const isAdmin = userStore.email === 'system@outlabs.io' || userStore.isSystemUser || userStore.isAdmin;
+  console.log('[UserMenu] System admin check:', {
+    email: userStore.email,
+    isSystemUser: userStore.isSystemUser,
+    isAdmin: userStore.isAdmin,
+    result: isAdmin
+  });
+  return isAdmin;
+});
+
+const items = computed<DropdownMenuItem[][]>(() => {
+  console.log('[UserMenu] Building menu items, isSystemAdmin:', isSystemAdmin.value);
+  
+  const menuItems: DropdownMenuItem[][] = [
+    [
+      {
+        type: "label",
+        label: user.value.name,
+        avatar: user.value.avatar,
+      },
+    ],
+    [
+      {
+        label: "Profile",
+        icon: "i-lucide-user",
+        to: "/profile",
+      },
+      {
+        label: "Settings",
+        icon: "i-lucide-settings",
+        to: "/settings",
+      },
+    ],
+  ];
+
+  // Add debug section for system admins
+  if (isSystemAdmin.value) {
+    console.log('[UserMenu] Adding debug panel menu item');
+    menuItems.push([
+      {
+        label: "Debug Panel",
+        icon: "i-lucide-bug",
+        type: "checkbox",
+        checked: debugStore.enabled,
+        onUpdateChecked(checked: boolean) {
+          console.log('[UserMenu] Debug panel toggled:', checked);
+          debugStore.toggleDebug();
+        },
+        onSelect(e: Event) {
+          e.preventDefault();
+        },
+      },
+    ]);
+  } else {
+    console.log('[UserMenu] Not adding debug panel - user is not system admin');
+  }
+
+  // Continue with the rest of the menu items
+  menuItems.push(
   [
     {
       label: "Theme",
@@ -134,27 +178,30 @@ const items = computed<DropdownMenuItem[][]>(() => [
       ],
     },
   ],
-  [
-    {
-      label: userStore.isAdmin ? "Admin Dashboard" : "Dashboard",
-      icon: "i-lucide-layout-dashboard",
-      to: userStore.isAdmin ? "/admin" : "/dashboard",
-    },
-    {
-      label: "Documentation",
-      icon: "i-lucide-book-open",
-      to: "/docs",
-      target: "_blank",
-    },
-  ],
-  [
-    {
-      label: "Log out",
-      icon: "i-lucide-log-out",
-      onClick: handleLogout,
-    },
-  ],
-]);
+    [
+      {
+        label: userStore.isAdmin ? "Admin Dashboard" : "Dashboard",
+        icon: "i-lucide-layout-dashboard",
+        to: userStore.isAdmin ? "/admin" : "/dashboard",
+      },
+      {
+        label: "Documentation",
+        icon: "i-lucide-book-open",
+        to: "/docs",
+        target: "_blank",
+      },
+    ],
+    [
+      {
+        label: "Log out",
+        icon: "i-lucide-log-out",
+        onClick: handleLogout,
+      },
+    ],
+  );
+
+  return menuItems;
+});
 </script>
 
 <template>

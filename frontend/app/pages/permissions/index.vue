@@ -170,7 +170,7 @@ const currentConditionFilter = computed(() => {
           <div class="flex items-center justify-between">
             <div>
               <p class="text-sm text-gray-600 dark:text-gray-400">Total Permissions</p>
-              <p class="text-2xl font-bold">{{ permissionsStore.totalPermissions }}</p>
+              <p class="text-2xl font-bold">{{ permissionsStore.displayCounts.total }}</p>
             </div>
             <UIcon name="i-lucide-shield" class="h-8 w-8 text-primary" />
           </div>
@@ -180,7 +180,7 @@ const currentConditionFilter = computed(() => {
           <div class="flex items-center justify-between">
             <div>
               <p class="text-sm text-gray-600 dark:text-gray-400">System Permissions</p>
-              <p class="text-2xl font-bold">{{ permissionsStore.systemCount }}</p>
+              <p class="text-2xl font-bold">{{ permissionsStore.displayCounts.system }}</p>
             </div>
             <UIcon name="i-lucide-lock" class="h-8 w-8 text-blue-500" />
           </div>
@@ -190,7 +190,7 @@ const currentConditionFilter = computed(() => {
           <div class="flex items-center justify-between">
             <div>
               <p class="text-sm text-gray-600 dark:text-gray-400">Custom Permissions</p>
-              <p class="text-2xl font-bold">{{ permissionsStore.customCount }}</p>
+              <p class="text-2xl font-bold">{{ permissionsStore.displayCounts.custom }}</p>
             </div>
             <UIcon name="i-lucide-settings" class="h-8 w-8 text-green-500" />
           </div>

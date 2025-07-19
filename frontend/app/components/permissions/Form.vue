@@ -129,6 +129,8 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
     const data: any = {
       name: generatedName.value,
       display_name: event.data.display_name,
+      resource: state.resource,
+      action: state.action,
       description: event.data.description,
       tags: event.data.tags,
       conditions: event.data.conditions,

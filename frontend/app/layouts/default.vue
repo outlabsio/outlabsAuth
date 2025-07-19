@@ -4,6 +4,12 @@ import type { NavigationMenuItem } from "@nuxt/ui";
 const route = useRoute();
 const open = ref(false);
 const userStore = useUserStore();
+const debugStore = useDebugStore();
+
+// Initialize debug state
+onMounted(() => {
+  debugStore.loadDebugState();
+});
 
 const links = computed(() => {
   const mainLinks = [
@@ -108,5 +114,6 @@ const groups: any[] = [];
     <slot />
 
     <NotificationsSlideover />
+    <DebugPanel />
   </UDashboardGroup>
 </template>

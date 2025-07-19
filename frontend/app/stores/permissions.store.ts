@@ -12,10 +12,6 @@ interface PermissionsState {
   selectedPermission: Permission | null;
   isLoading: boolean;
   error: string | null;
-  // Counters
-  totalPermissions: number;
-  systemCount: number;
-  customCount: number;
   // Filters
   filters: {
     search: string;
@@ -49,9 +45,6 @@ export const usePermissionsStore = defineStore("permissions", () => {
     selectedPermission: null,
     isLoading: false,
     error: null,
-    totalPermissions: 0,
-    systemCount: 0,
-    customCount: 0,
     filters: {
       search: "",
       resource: null,
@@ -87,15 +80,23 @@ export const usePermissionsStore = defineStore("permissions", () => {
     try {
       // Get context headers
       const headers = contextStore.getContextHeaders;
+      
+      console.log('[PermissionsStore] Fetching permissions with context:', {
+        isSystemContext: contextStore.isSystemContext,
+        selectedOrg: contextStore.selectedOrganization,
+        headers: headers
+      });
 
       // Build query params
       const params = new URLSearchParams();
       
-      // Add entity context if not in system context
-      if (!contextStore.isSystemContext && contextStore.selectedOrganization) {
+      // Add entity_id if we have a context selected (not system context)
+      if (!contextStore.isSystemContext && contextStore.selectedOrganization?.id) {
         params.append("entity_id", contextStore.selectedOrganization.id);
       }
       
+      // Always include system permissions and inherited permissions
+      // The frontend will filter based on context
       params.append("include_system", "true");
       params.append("include_inherited", "true");
       params.append("active_only", state.filters.is_active === false ? "false" : "true");
@@ -106,6 +107,14 @@ export const usePermissionsStore = defineStore("permissions", () => {
         headers,
       });
 
+      console.log('[PermissionsStore] Raw API response:', {
+        total: response.total,
+        system_count: response.system_count,
+        custom_count: response.custom_count,
+        permissions_count: response.permissions.length,
+        permissions: response.permissions
+      });
+
       // Parse permissions to ensure they have the right structure
       state.permissions = response.permissions.map((p) => ({
         ...p,
@@ -113,10 +122,8 @@ export const usePermissionsStore = defineStore("permissions", () => {
         tags: p.tags || [],
         metadata: p.metadata || {},
       }));
-
-      state.totalPermissions = response.total;
-      state.systemCount = response.system_count;
-      state.customCount = response.custom_count;
+      
+      console.log('[PermissionsStore] After mapping, total permissions:', state.permissions.length);
     } catch (error: any) {
       console.error("Failed to fetch permissions:", error);
       state.error = error.message || "Failed to fetch permissions";
@@ -129,7 +136,7 @@ export const usePermissionsStore = defineStore("permissions", () => {
   const fetchPermission = async (id: string) => {
     try {
       const headers = contextStore.getContextHeaders;
-      const permission = await authStore.apiCall<Permission>(`/v1/permissions/${id}`, { headers });
+      const permission = await authStore.apiCall<Permission>(`/v1/permissions/${id}/`, { headers });
       state.selectedPermission = permission;
       return permission;
     } catch (error: any) {
@@ -155,12 +162,20 @@ export const usePermissionsStore = defineStore("permissions", () => {
       if (!contextStore.isSystemContext && contextStore.selectedOrganization) {
         requestData.entity_id = contextStore.selectedOrganization.id;
       }
+      
+      console.log('[PermissionsStore] Creating permission with data:', requestData);
+      console.log('[PermissionsStore] Current context:', {
+        isSystemContext: contextStore.isSystemContext,
+        selectedOrgId: contextStore.selectedOrganization?.id
+      });
 
-      const permission = await authStore.apiCall<Permission>("/v1/permissions", {
+      const permission = await authStore.apiCall<Permission>("/v1/permissions/", {
         method: "POST",
         body: requestData,
         headers,
       });
+
+      console.log('[PermissionsStore] Created permission:', permission);
 
       // Refresh the list
       await fetchPermissions();
@@ -185,7 +200,7 @@ export const usePermissionsStore = defineStore("permissions", () => {
   ) => {
     try {
       const headers = contextStore.getContextHeaders;
-      const permission = await authStore.apiCall<Permission>(`/v1/permissions/${id}`, {
+      const permission = await authStore.apiCall<Permission>(`/v1/permissions/${id}/`, {
         method: "PUT",
         body: data,
         headers,
@@ -214,7 +229,7 @@ export const usePermissionsStore = defineStore("permissions", () => {
   const deletePermission = async (id: string) => {
     try {
       const headers = contextStore.getContextHeaders;
-      await authStore.apiCall(`/v1/permissions/${id}`, {
+      await authStore.apiCall(`/v1/permissions/${id}/`, {
         method: "DELETE",
         headers,
       });
@@ -299,9 +314,17 @@ export const usePermissionsStore = defineStore("permissions", () => {
     };
   };
 
-  // Computed
+  // Computed - No frontend filtering needed, backend handles context filtering
+  const contextFilteredPermissions = computed(() => {
+    // Backend already filters based on entity_id query param
+    // Just return all permissions received from the API
+    console.log('[PermissionsStore] Total permissions from backend:', state.permissions.length);
+    return state.permissions;
+  });
+
   const filteredPermissions = computed(() => {
-    let filtered = state.permissions;
+    // Start with context-filtered permissions
+    let filtered = contextFilteredPermissions.value;
 
     // Search filter
     if (state.filters.search) {
@@ -348,10 +371,11 @@ export const usePermissionsStore = defineStore("permissions", () => {
     return filtered;
   });
 
-  // Get unique resources for filtering
+  // Get unique resources for filtering (context-aware)
   const uniqueResources = computed(() => {
     const resources = new Set<string>();
-    state.permissions.forEach((p) => {
+    // Use context-filtered permissions for consistency
+    contextFilteredPermissions.value.forEach((p) => {
       if (p.resource) {
         resources.add(p.resource);
       }
@@ -359,10 +383,11 @@ export const usePermissionsStore = defineStore("permissions", () => {
     return Array.from(resources).sort();
   });
 
-  // Get all unique tags
+  // Get all unique tags (context-aware)
   const allTags = computed(() => {
     const tags = new Set<string>();
-    state.permissions.forEach((p) => {
+    // Use context-filtered permissions for consistency
+    contextFilteredPermissions.value.forEach((p) => {
       p.tags.forEach((tag) => tags.add(tag));
     });
     return Array.from(tags).sort();
@@ -395,19 +420,21 @@ export const usePermissionsStore = defineStore("permissions", () => {
     return grouped;
   });
 
-  // Get custom resources only (non-system permissions)
+  // Get custom resources only (non-system permissions, context-aware)
   const customResources = computed(() => {
     const resources = new Set<string>();
-    state.permissions
+    // Use context-filtered permissions for consistency
+    contextFilteredPermissions.value
       .filter(p => !p.is_system && p.resource)
       .forEach(p => resources.add(p.resource));
     return Array.from(resources).sort();
   });
 
-  // Get custom actions, optionally filtered by resource
+  // Get custom actions, optionally filtered by resource (context-aware)
   const customActions = computed(() => {
     return (resource?: string) => {
-      let perms = state.permissions.filter(p => !p.is_system);
+      // Use context-filtered permissions for consistency
+      let perms = contextFilteredPermissions.value.filter(p => !p.is_system);
       if (resource) {
         perms = perms.filter(p => p.resource === resource);
       }
@@ -424,6 +451,11 @@ export const usePermissionsStore = defineStore("permissions", () => {
   
   // Common action suggestions
   const commonActionSuggestions = computed(() => ['approve', 'submit', 'export', 'import', 'review', 'sign', 'publish', 'archive', 'reject']);
+  
+  // Context-aware counts
+  const contextAwareTotalPermissions = computed(() => contextFilteredPermissions.value.length);
+  const contextAwareSystemCount = computed(() => contextFilteredPermissions.value.filter(p => p.is_system).length);
+  const contextAwareCustomCount = computed(() => contextFilteredPermissions.value.filter(p => !p.is_system).length);
 
   // Form Methods
   const resetFormState = () => {
@@ -467,7 +499,7 @@ export const usePermissionsStore = defineStore("permissions", () => {
     );
     
     if (!exists && resource) {
-      // Create a temporary permission object
+      // Create a temporary permission object with proper context
       const tempPermission: Permission = {
         id: `temp_${Date.now()}`,
         name: action ? `${resource}:${action}` : `${resource}:temp`,
@@ -476,6 +508,7 @@ export const usePermissionsStore = defineStore("permissions", () => {
         action: action || 'temp',
         is_system: false,
         is_active: true,
+        entity_id: !contextStore.isSystemContext ? contextStore.selectedOrganization?.id : undefined,
         conditions: [],
         tags: [],
         metadata: {},
@@ -488,21 +521,47 @@ export const usePermissionsStore = defineStore("permissions", () => {
     }
   };
 
-  return {
-    // State (as computed for reactivity)
-    permissions: computed(() => state.permissions),
-    selectedPermission: computed(() => state.selectedPermission),
-    isLoading: computed(() => state.isLoading),
-    error: computed(() => state.error),
-    totalPermissions: computed(() => state.totalPermissions),
-    systemCount: computed(() => state.systemCount),
-    customCount: computed(() => state.customCount),
-    filters: computed(() => state.filters),
-    ui: state.ui, // Return reactive reference directly, not computed
-    formState: state.formState,
+  // Getters - These are reactive and will update automatically
+  const permissions = computed(() => state.permissions);
+  const selectedPermission = computed(() => state.selectedPermission);
+  const isLoading = computed(() => state.isLoading);
+  const error = computed(() => state.error);
+  const filters = computed(() => state.filters);
+  
+  // UI state can be returned as reactive ref directly
+  const ui = toRef(state, 'ui');
+  const formState = toRef(state, 'formState');
 
-    // Computed
+  // Context-aware getters - these will automatically update when context changes
+  const currentContext = computed(() => ({
+    isSystemContext: contextStore.isSystemContext,
+    organizationId: contextStore.selectedOrganization?.id
+  }));
+
+  // Use the actual filtered permissions count for display instead of API counts
+  const displayCounts = computed(() => ({
+    total: contextFilteredPermissions.value.length,
+    system: contextFilteredPermissions.value.filter(p => p.is_system).length,
+    custom: contextFilteredPermissions.value.filter(p => !p.is_system).length
+  }));
+
+  return {
+    // State getters
+    permissions,
+    selectedPermission,
+    isLoading,
+    error,
+    filters,
+    ui,
+    formState,
+
+    // Context-aware getters
+    currentContext,
+    displayCounts,
+    
+    // Filtered/computed data
     filteredPermissions,
+    contextFilteredPermissions,
     uniqueResources,
     allTags,
     permissionsByResource,

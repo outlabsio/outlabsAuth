@@ -171,6 +171,11 @@ class PermissionManagementService:
         include_inherited: bool = True,
         active_only: bool = True
     ) -> List[any]:
+        print(f"[PermissionService] get_available_permissions called with:")
+        print(f"  - entity_id: {entity_id}")
+        print(f"  - include_system: {include_system}")
+        print(f"  - include_inherited: {include_inherited}")
+        print(f"  - active_only: {active_only}")
         """
         Get all available permissions for an entity
         
@@ -227,32 +232,48 @@ class PermissionManagementService:
         # Get entity and its parents if needed
         entity_ids = []
         if entity_id:
-            entity_ids.append(entity_id)
+            from bson import ObjectId
+            # Convert string ID to ObjectId for query
+            try:
+                entity_obj_id = ObjectId(entity_id)
+                entity_ids.append(entity_obj_id)
+            except:
+                print(f"[PermissionService] Invalid entity_id format: {entity_id}")
+                entity_ids.append(entity_id)  # Fallback to string
             
             if include_inherited:
                 # Get parent entities
                 entity = await EntityModel.get(entity_id)
                 if entity:
                     parent_entities = await EntityService.get_entity_path(entity_id)
-                    entity_ids.extend([str(e.id) for e in parent_entities])
+                    # Convert parent IDs to ObjectId too
+                    for parent in parent_entities:
+                        try:
+                            entity_ids.append(ObjectId(str(parent.id)))
+                        except:
+                            entity_ids.append(str(parent.id))
+                    print(f"[PermissionService] Entity path for {entity_id}: {[str(e.id) for e in parent_entities]}")
+        
+        print(f"[PermissionService] Entity IDs to query: {entity_ids}")
         
         # Query for custom permissions
         if entity_ids:
-            query_conditions.append(
-                Or(
-                    PermissionModel.entity_id == None,  # Global permissions
-                    In(PermissionModel.entity_id, entity_ids)
-                )
-            )
+            # When in entity context, only show permissions for that entity (and parents if inherited)
+            query_conditions.append(In(PermissionModel.entity_id, entity_ids))
+            print(f"[PermissionService] Querying for permissions with entity_id in: {entity_ids}")
         else:
-            # Only global permissions
-            query_conditions.append(PermissionModel.entity_id == None)
+            print(f"[PermissionService] No entity filter - returning all permissions")
         
         if query_conditions:
             custom_permissions = await PermissionModel.find(
                 And(*query_conditions)
             ).to_list()
+            print(f"[PermissionService] Found {len(custom_permissions)} custom permissions")
+            for perm in custom_permissions:
+                print(f"  - {perm.name} (entity_id: {perm.entity_id})")
             permissions.extend(custom_permissions)
+        
+        print(f"[PermissionService] Total permissions to return: {len(permissions)} (system: {len([p for p in permissions if isinstance(p, dict) or p.is_system])}, custom: {len([p for p in permissions if not isinstance(p, dict) and not p.is_system])})")
         
         # Sort by resource and action (handle both dict and model)
         permissions.sort(key=lambda p: (
