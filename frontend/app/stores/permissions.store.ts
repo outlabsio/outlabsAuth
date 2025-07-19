@@ -191,10 +191,13 @@ export const usePermissionsStore = defineStore("permissions", () => {
         headers,
       });
 
-      // Update in local state
+      // Update in local state - ensure reactivity by replacing the array
       const index = state.permissions.findIndex((p) => p.id === id);
       if (index !== -1) {
-        state.permissions[index] = permission;
+        // Create a new array to trigger Vue's reactivity
+        const updatedPermissions = [...state.permissions];
+        updatedPermissions[index] = permission;
+        state.permissions = updatedPermissions;
       }
 
       if (state.selectedPermission?.id === id) {

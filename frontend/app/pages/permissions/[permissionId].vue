@@ -14,7 +14,7 @@ const router = useRouter()
 const activeTab = ref('overview')
 
 // Fetch permission on mount
-const { data: permission, pending, error } = await useAsyncData(
+const { data: permission, pending, error, refresh } = await useAsyncData(
   `permission-${permissionId.value}`,
   () => permissionsStore.fetchPermission(permissionId.value),
   {
@@ -63,9 +63,9 @@ function handleEdit() {
   permissionsStore.openDrawer('edit', permission.value)
 }
 
-function handlePermissionUpdated() {
-  // Refresh permission data
-  permissionsStore.fetchPermission(permissionId.value)
+async function handlePermissionUpdated() {
+  // Refresh permission data using the useAsyncData refresh method
+  await refresh()
 }
 
 function handlePermissionDeleted() {

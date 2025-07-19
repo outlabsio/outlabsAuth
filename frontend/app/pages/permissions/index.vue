@@ -97,14 +97,17 @@ function openCreateDrawer() {
 }
 
 function handlePermissionCreated() {
+  // Refresh the list after creating a new permission
   permissionsStore.fetchPermissions()
 }
 
 function handlePermissionUpdated() {
-  permissionsStore.fetchPermissions()
+  // No need to refetch - the store already updates the local state
+  // The updatePermission method in the store handles updating the permission in the array
 }
 
 function handlePermissionDeleted() {
+  // The store already removes the permission from local state, but refetch to ensure consistency
   permissionsStore.fetchPermissions()
 }
 
