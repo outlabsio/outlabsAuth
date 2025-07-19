@@ -80,6 +80,12 @@ const availableEntities = computed(() => {
   return entitiesStore.entities.filter(e => !assignedIds.includes(e.id))
 })
 
+// Helper to get entity display label
+const getEntityLabel = (entityId: string) => {
+  const entity = entitiesStore.entities.find(e => e.id === entityId)
+  return entity ? `${entity.display_name} (${entity.entity_type})` : ''
+}
+
 const getRolesForEntity = (entityId: string) => {
   const entity = entitiesStore.entities.find(e => e.id === entityId)
   if (!entity) return []
@@ -105,8 +111,28 @@ function addEntityAssignment() {
   })
 }
 
+// Debug entity selection
+watch(entityAssignments, (newAssignments) => {
+  console.log('[UserForm] Entity assignments changed:', JSON.stringify(newAssignments, null, 2))
+}, { deep: true })
+
+// Debug available entities
+watch(availableEntities, (entities) => {
+  console.log('[UserForm] Available entities:', entities.map(e => ({ id: e.id, name: e.display_name })))
+}, { immediate: true })
+
 function removeEntityAssignment(index: number) {
   entityAssignments.value.splice(index, 1)
+}
+
+function updateEntityAssignment(index: number, field: string, value: any) {
+  console.log(`[UserForm] Updating assignment ${index} field ${field} to:`, value)
+  const assignments = [...entityAssignments.value]
+  assignments[index] = {
+    ...assignments[index],
+    [field]: value
+  }
+  entityAssignments.value = assignments
 }
 
 async function onSubmit(event: FormSubmitEvent<Schema>) {
@@ -291,30 +317,34 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           <div class="space-y-4">
             <!-- Entity Selection -->
             <UFormField label="Entity" required class="w-full">
+              <div class="text-xs text-gray-500 mb-1">
+                Current value: {{ assignment.entity_id || 'none' }}
+                <span v-if="assignment.entity_id"> - {{ getEntityLabel(assignment.entity_id) }}</span>
+              </div>
               <USelect
-                v-model="assignment.entity_id"
+                :model-value="assignment.entity_id"
                 :items="availableEntities.map(e => ({
                   label: `${e.display_name} (${e.entity_type})`,
                   value: e.id
                 }))"
                 placeholder="Select entity..."
-                value-key="value"
                 class="w-full"
+                @update:model-value="(val) => updateEntityAssignment(index, 'entity_id', val)"
               />
             </UFormField>
 
             <!-- Role Selection -->
             <UFormField v-if="assignment.entity_id" label="Roles" required class="w-full">
               <USelect
-                v-model="assignment.role_ids"
+                :model-value="assignment.role_ids"
                 :items="getRolesForEntity(assignment.entity_id).map(r => ({
                   label: r.display_name,
                   value: r.id
                 }))"
                 multiple
                 placeholder="Select roles..."
-                value-key="value"
                 class="w-full"
+                @update:model-value="(val) => updateEntityAssignment(index, 'role_ids', val)"
               />
               <template #description>
                 <span class="text-xs text-muted-foreground">

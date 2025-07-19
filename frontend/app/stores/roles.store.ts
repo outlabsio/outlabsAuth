@@ -71,19 +71,27 @@ export const useRolesStore = defineStore("roles", () => {
       // Add entity_id if we have a context selected (not system context)
       if (!contextStore.isSystemContext && contextStore.selectedOrganization?.id) {
         params.append("entity_id", contextStore.selectedOrganization.id);
+        console.log('[RolesStore] Adding entity_id to query:', contextStore.selectedOrganization.id);
+      } else {
+        console.log('[RolesStore] No entity context - isSystemContext:', contextStore.isSystemContext, 'selectedOrg:', contextStore.selectedOrganization);
       }
       
       // Add filters
       if (state.filters.search) params.append("query", state.filters.search);
-      if (state.filters.entity_id) params.append("entity_id", state.filters.entity_id);
+      // Don't add entity_id from filters if we already added it from context
+      if (state.filters.entity_id && (!contextStore.selectedOrganization?.id || contextStore.isSystemContext)) {
+        params.append("entity_id", state.filters.entity_id);
+      }
       if (state.filters.is_global !== null) params.append("is_global", state.filters.is_global.toString());
       if (state.filters.is_system_role !== null) params.append("is_system_role", state.filters.is_system_role.toString());
       if (state.filters.assignable_at_type) params.append("assignable_at_type", state.filters.assignable_at_type);
 
       const apiUrl = `/v1/roles?${params.toString()}`;
+      console.log('[RolesStore] Fetching roles with URL:', apiUrl);
 
       // Include context headers from context store
       const headers = contextStore.getContextHeaders;
+      console.log('[RolesStore] Context headers:', headers);
       const response = await authStore.apiCall<PaginatedResponse<Role>>(apiUrl, {
         headers
       });

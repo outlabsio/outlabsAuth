@@ -32,7 +32,16 @@ const assignableTypeOptions = [
 
 // Fetch roles on mount
 onMounted(() => {
+  console.log('[RolesPage] Mounted - current context:', contextStore.selectedOrganization?.name)
   rolesStore.fetchRoles()
+})
+
+// Watch for context changes
+watch(() => contextStore.selectedOrganization, (newOrg, oldOrg) => {
+  console.log('[RolesPage] Context changed from', oldOrg?.name, 'to', newOrg?.name)
+  if (newOrg?.id !== oldOrg?.id) {
+    rolesStore.fetchRoles()
+  }
 })
 
 // Context-aware breadcrumb items

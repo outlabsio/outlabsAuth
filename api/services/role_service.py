@@ -300,11 +300,13 @@ class RoleService:
         page: int = 1,
         page_size: int = 20
     ) -> Tuple[List[RoleModel], int]:
-        print(f"[RoleService] search_roles called with:")
-        print(f"  - entity_id: {entity_id}")
-        print(f"  - query: {query}")
-        print(f"  - is_global: {is_global}")
-        print(f"  - assignable_at_type: {assignable_at_type}")
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[RoleService] search_roles called with:")
+        logger.info(f"  - entity_id: {entity_id}")
+        logger.info(f"  - query: {query}")
+        logger.info(f"  - is_global: {is_global}")
+        logger.info(f"  - assignable_at_type: {assignable_at_type}")
         """
         Search roles with filtering
         
@@ -367,7 +369,7 @@ class RoleService:
         skip = (page - 1) * page_size
         roles = await roles_query.skip(skip).limit(page_size).to_list()
         
-        print(f"[RoleService] Found {len(roles)} roles (total: {total})")
+        logger.info(f"[RoleService] Found {len(roles)} roles (total: {total})")
         for role in roles:
             # Handle Link object properly
             entity_id_str = None
@@ -382,7 +384,7 @@ class RoleService:
                 else:
                     # It's an ObjectId
                     entity_id_str = str(role.entity)
-            print(f"  - {role.name} (entity_id: {entity_id_str}, is_global: {role.is_global})")
+            logger.info(f"  - {role.name} (entity_id: {entity_id_str}, is_global: {role.is_global})")
         
         return roles, total
     

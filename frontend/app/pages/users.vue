@@ -42,10 +42,19 @@ const columnOptions = computed(() => {
 
 // Fetch users and entities on mount
 onMounted(async () => {
+  console.log('[UsersPage] Mounted - current context:', contextStore.selectedOrganization?.name)
   await Promise.all([
     usersStore.fetchUsers(),
     entitiesStore.fetchEntities()
   ])
+})
+
+// Watch for context changes
+watch(() => contextStore.selectedOrganization, (newOrg, oldOrg) => {
+  console.log('[UsersPage] Context changed from', oldOrg?.name, 'to', newOrg?.name)
+  if (newOrg?.id !== oldOrg?.id) {
+    usersStore.fetchUsers()
+  }
 })
 
 // Entity options for filter

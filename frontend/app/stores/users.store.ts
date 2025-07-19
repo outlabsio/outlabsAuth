@@ -77,7 +77,12 @@ export const useUsersStore = defineStore("users", () => {
         params.append("query", state.filters.search);
       }
       
-      if (state.filters.entity_id) {
+      // Add entity_id from context if not in system context
+      if (!contextStore.isSystemContext && contextStore.selectedOrganization?.id) {
+        params.append("entity_id", contextStore.selectedOrganization.id);
+        console.log('[UsersStore] Adding entity_id from context:', contextStore.selectedOrganization.id);
+      } else if (state.filters.entity_id) {
+        // Only use filter entity_id if no context is set
         params.append("entity_id", state.filters.entity_id);
       }
       
@@ -88,7 +93,11 @@ export const useUsersStore = defineStore("users", () => {
       params.append("page", state.currentPage.toString());
       params.append("page_size", state.pageSize.toString());
 
-      const response = await authStore.apiCall<UserListResponse>(`/v1/users/?${params.toString()}`);
+      const headers = contextStore.getContextHeaders;
+      console.log('[UsersStore] Fetching users with headers:', headers);
+      const response = await authStore.apiCall<UserListResponse>(`/v1/users/?${params.toString()}`, {
+        headers
+      });
 
       // Ensure each user has entities array initialized
       state.users = response.items.map(user => ({
@@ -108,7 +117,8 @@ export const useUsersStore = defineStore("users", () => {
 
   const fetchUser = async (userId: string) => {
     try {
-      const user = await authStore.apiCall<User>(`/v1/users/${userId}`);
+      const headers = contextStore.getContextHeaders;
+      const user = await authStore.apiCall<User>(`/v1/users/${userId}`, { headers });
       state.selectedUser = user;
       return user;
     } catch (error: any) {
@@ -120,9 +130,14 @@ export const useUsersStore = defineStore("users", () => {
 
   const createUser = async (data: UserCreateRequest) => {
     try {
+      const headers = contextStore.getContextHeaders;
+      console.log('[UsersStore] Creating user with headers:', headers);
+      console.log('[UsersStore] User creation data:', data);
+      
       const user = await authStore.apiCall<User>("/v1/users/", {
         method: "POST",
         body: data,
+        headers
       });
 
       toast.add({
@@ -148,9 +163,14 @@ export const useUsersStore = defineStore("users", () => {
 
   const updateUser = async (userId: string, data: UserUpdateRequest) => {
     try {
+      const headers = contextStore.getContextHeaders;
+      console.log('[UsersStore] Updating user with headers:', headers);
+      console.log('[UsersStore] User update data:', data);
+      
       const user = await authStore.apiCall<User>(`/v1/users/${userId}`, {
         method: "PUT",
         body: data,
+        headers
       });
 
       // Update in local state
@@ -183,8 +203,10 @@ export const useUsersStore = defineStore("users", () => {
 
   const deleteUser = async (userId: string, hardDelete = false) => {
     try {
+      const headers = contextStore.getContextHeaders;
       await authStore.apiCall(`/v1/users/${userId}?hard_delete=${hardDelete}`, {
         method: "DELETE",
+        headers
       });
 
       // Remove from local state
@@ -214,9 +236,11 @@ export const useUsersStore = defineStore("users", () => {
 
   const updateUserStatus = async (userId: string, status: "active" | "inactive" | "locked") => {
     try {
+      const headers = contextStore.getContextHeaders;
       const user = await authStore.apiCall<User>(`/v1/users/${userId}/status`, {
         method: "POST",
         body: { status },
+        headers
       });
 
       // Update in local state
@@ -249,9 +273,11 @@ export const useUsersStore = defineStore("users", () => {
 
   const inviteUser = async (data: UserInviteRequest) => {
     try {
+      const headers = contextStore.getContextHeaders;
       const response = await authStore.apiCall<UserInviteResponse>("/v1/users/invite", {
         method: "POST",
         body: data,
+        headers
       });
 
       toast.add({
@@ -277,6 +303,7 @@ export const useUsersStore = defineStore("users", () => {
 
   const resetUserPassword = async (userId: string, sendEmail = true) => {
     try {
+      const headers = contextStore.getContextHeaders;
       const response = await authStore.apiCall<{
         message: string;
         temporary_password?: string;
@@ -284,6 +311,7 @@ export const useUsersStore = defineStore("users", () => {
       }>(`/v1/users/${userId}/reset-password`, {
         method: "POST",
         body: { send_email: sendEmail },
+        headers
       });
 
       toast.add({
@@ -311,8 +339,10 @@ export const useUsersStore = defineStore("users", () => {
         params.append("include_inactive", "true");
       }
 
+      const headers = contextStore.getContextHeaders;
       const response = await authStore.apiCall<UserMembershipListResponse>(
-        `/v1/users/${userId}/memberships?${params.toString()}`
+        `/v1/users/${userId}/memberships?${params.toString()}`,
+        { headers }
       );
 
       return response;
@@ -324,7 +354,8 @@ export const useUsersStore = defineStore("users", () => {
 
   const fetchUserStats = async () => {
     try {
-      const stats = await authStore.apiCall<UserStatsResponse>("/v1/users/stats/overview");
+      const headers = contextStore.getContextHeaders;
+      const stats = await authStore.apiCall<UserStatsResponse>("/v1/users/stats/overview", { headers });
       state.stats = stats;
       return stats;
     } catch (error: any) {
@@ -342,9 +373,11 @@ export const useUsersStore = defineStore("users", () => {
 
   const bulkAction = async (data: UserBulkActionRequest) => {
     try {
+      const headers = contextStore.getContextHeaders;
       const response = await authStore.apiCall<UserBulkActionResponse>("/v1/users/bulk-action", {
         method: "POST",
         body: data,
+        headers
       });
 
       toast.add({
