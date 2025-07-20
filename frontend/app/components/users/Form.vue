@@ -41,10 +41,10 @@ onMounted(async () => {
     entitiesStore.fetchEntities(),
     rolesStore.fetchRoles()
   ])
-  
+
   console.log('[UserForm] Loaded entities:', entitiesStore.entities.length)
   console.log('[UserForm] Loaded roles:', rolesStore.roles.length)
-  
+
   // Initialize entity assignments from user data
   if (props.mode === 'edit' && props.user) {
     entityAssignments.value = props.user.entities.map(entity => ({
@@ -60,9 +60,9 @@ onMounted(async () => {
 // Form validation schema
 const schema = z.object({
   email: z.string().email('Invalid email address'),
-  password: props.mode === 'create' 
-    ? z.string().min(8, 'Password must be at least 8 characters').optional()
-    : z.string().optional(),
+  password: props.mode === 'create'
+      ? z.string().min(8, 'Password must be at least 8 characters').optional()
+      : z.string().optional(),
   first_name: z.string().optional(),
   last_name: z.string().optional(),
   phone: z.string().optional(),
@@ -83,41 +83,44 @@ const state = reactive<Partial<Schema>>({
   send_welcome_email: true,
 })
 
-// Computed
-const availableEntities = computed(() => {
-  // Filter out already assigned entities
-  const assignedIds = entityAssignments.value.map(a => a.entity_id)
-  return entitiesStore.entities.filter(e => !assignedIds.includes(e.id))
+// Computed property to check if there are any entities left to assign.
+// This is used to disable the "Add Membership" button.
+const unassignedEntitiesCount = computed(() => {
+  if (!entitiesStore.entities) return 0
+  const assignedIds = entityAssignments.value.map(a => a.entity_id).filter(Boolean)
+  return entitiesStore.entities.filter(e => !assignedIds.includes(e.id)).length
 })
 
-// Helper to get entity display label
-const getEntityLabel = (entityId: string) => {
-  const entity = entitiesStore.entities.find(e => e.id === entityId)
-  return entity ? `${entity.display_name} (${entity.entity_type})` : ''
-}
+// Generates the list of available entities for a specific assignment dropdown.
+// It includes all unassigned entities PLUS the entity currently selected in this specific row.
+const getAvailableEntitiesForAssignment = (assignmentIndex: number) => {
+  // Get IDs of entities assigned in OTHER rows.
+  const assignedIdsInOtherRows = entityAssignments.value
+      .filter((_, index) => index !== assignmentIndex)
+      .map(a => a.entity_id)
+      .filter(Boolean)
 
-// Helper to get selected entity item for USelect
-const getSelectedEntityItem = (entityId: string) => {
-  if (!entityId) return null
-  const entity = entitiesStore.entities.find(e => e.id === entityId)
-  return entity ? {
-    label: `${entity.display_name} (${entity.entity_type})`,
-    value: entity.id
-  } : null
+  // Filter the master list of entities.
+  return entitiesStore.entities
+      .filter(e => !assignedIdsInOtherRows.includes(e.id))
+      .map(e => ({
+        label: `${e.display_name} (${e.entity_type})`,
+        value: e.id
+      }))
 }
 
 const getRolesForEntity = (entityId: string) => {
   const entity = entitiesStore.entities.find(e => e.id === entityId)
   if (!entity) return []
-  
+
   // Get roles that can be assigned at this entity type
   return rolesStore.roles.filter(role => {
     // Global roles or roles for this entity
     if (role.is_global || role.entity_id === entityId) return true
-    
+
     // Roles assignable at this entity type
     if (role.assignable_at_types?.includes(entity.entity_type)) return true
-    
+
     return false
   })
 }
@@ -136,11 +139,6 @@ watch(entityAssignments, (newAssignments) => {
   console.log('[UserForm] Entity assignments changed:', JSON.stringify(newAssignments, null, 2))
 }, { deep: true })
 
-// Debug available entities
-watch(availableEntities, (entities) => {
-  console.log('[UserForm] Available entities:', entities.map(e => ({ id: e.id, name: e.display_name })))
-}, { immediate: true })
-
 function removeEntityAssignment(index: number) {
   entityAssignments.value.splice(index, 1)
 }
@@ -148,14 +146,14 @@ function removeEntityAssignment(index: number) {
 async function onSubmit(event: FormSubmitEvent<Schema>) {
   // Filter and convert assignments to ensure entity_id is string
   const validAssignments = entityAssignments.value
-    .filter(a => a.entity_id)
-    .map(a => ({
-      entity_id: a.entity_id as string,
-      role_ids: a.role_ids,
-      status: a.status,
-      valid_from: a.valid_from,
-      valid_until: a.valid_until
-    }))
+      .filter(a => a.entity_id)
+      .map(a => ({
+        entity_id: a.entity_id as string,
+        role_ids: a.role_ids,
+        status: a.status,
+        valid_from: a.valid_from,
+        valid_until: a.valid_until
+      }))
 
   const data = props.mode === 'create' ? {
     email: event.data.email,
@@ -174,7 +172,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
     is_active: event.data.is_active,
     entity_assignments: validAssignments,
   }
-  
+
   emit('submit', data)
 }
 </script>
@@ -186,16 +184,16 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
       <h5 class="text-sm font-medium uppercase tracking-wider text-primary-600 dark:text-primary-400">
         Basic Information
       </h5>
-      
+
       <!-- Email -->
       <UFormField label="Email Address" name="email" required class="w-full">
-        <UInput 
-          v-model="state.email" 
-          type="email"
-          placeholder="user@example.com" 
-          icon="i-lucide-mail"
-          size="lg"
-          class="w-full"
+        <UInput
+            v-model="state.email"
+            type="email"
+            placeholder="user@example.com"
+            icon="i-lucide-mail"
+            size="lg"
+            class="w-full"
         />
         <template #description>
           <span class="text-xs text-muted-foreground">
@@ -207,20 +205,20 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
       <!-- Password (Create Mode Only) -->
       <div v-if="mode === 'create'" class="space-y-6">
         <UFormField label="Password" name="password" class="w-full">
-          <UInput 
-            v-model="state.password" 
-            :type="showPassword ? 'text' : 'password'"
-            placeholder="Leave blank to auto-generate" 
-            icon="i-lucide-lock"
-            size="lg"
-            class="w-full"
+          <UInput
+              v-model="state.password"
+              :type="showPassword ? 'text' : 'password'"
+              placeholder="Leave blank to auto-generate"
+              icon="i-lucide-lock"
+              size="lg"
+              class="w-full"
           >
             <template #trailing>
               <UButton
-                variant="ghost"
-                size="xs"
-                :icon="showPassword ? 'i-lucide-eye-off' : 'i-lucide-eye'"
-                @click="showPassword = !showPassword"
+                  variant="ghost"
+                  size="xs"
+                  :icon="showPassword ? 'i-lucide-eye-off' : 'i-lucide-eye'"
+                  @click="showPassword = !showPassword"
               />
             </template>
           </UInput>
@@ -248,33 +246,33 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
       <!-- Name Fields -->
       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
         <UFormField label="First Name" name="first_name" class="w-full">
-          <UInput 
-            v-model="state.first_name" 
-            placeholder="John" 
-            icon="i-lucide-user"
-            size="lg"
-            class="w-full"
+          <UInput
+              v-model="state.first_name"
+              placeholder="John"
+              icon="i-lucide-user"
+              size="lg"
+              class="w-full"
           />
         </UFormField>
 
         <UFormField label="Last Name" name="last_name" class="w-full">
-          <UInput 
-            v-model="state.last_name" 
-            placeholder="Doe" 
-            size="lg"
-            class="w-full"
+          <UInput
+              v-model="state.last_name"
+              placeholder="Doe"
+              size="lg"
+              class="w-full"
           />
         </UFormField>
       </div>
 
       <!-- Phone -->
       <UFormField label="Phone Number" name="phone" class="w-full">
-        <UInput 
-          v-model="state.phone" 
-          placeholder="+1 (555) 123-4567" 
-          icon="i-lucide-phone"
-          size="lg"
-          class="w-full"
+        <UInput
+            v-model="state.phone"
+            placeholder="+1 (555) 123-4567"
+            icon="i-lucide-phone"
+            size="lg"
+            class="w-full"
         />
         <template #description>
           <span class="text-xs text-muted-foreground">
@@ -318,11 +316,11 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           </span>
         </h5>
         <UButton
-          variant="outline"
-          size="sm"
-          icon="i-lucide-plus"
-          @click="addEntityAssignment"
-          :disabled="availableEntities.length === 0"
+            variant="outline"
+            size="sm"
+            icon="i-lucide-plus"
+            @click="addEntityAssignment"
+            :disabled="unassignedEntitiesCount === 0"
         >
           Add Membership
         </UButton>
@@ -339,14 +337,11 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             <!-- Entity Selection -->
             <UFormField label="Entity" required class="w-full">
               <USelect
-                v-if="entitiesStore.entities.length > 0"
-                v-model="assignment.entity_id"
-                :items="availableEntities.map(e => ({
-                  label: `${e.display_name} (${e.entity_type})`,
-                  value: e.id
-                }))"
-                placeholder="Select entity..."
-                class="w-full"
+                  v-if="entitiesStore.entities.length > 0"
+                  v-model="assignment.entity_id"
+                  :items="getAvailableEntitiesForAssignment(index)"
+                  placeholder="Select entity..."
+                  class="w-full"
               />
               <div v-else class="text-sm text-gray-500">Loading entities...</div>
             </UFormField>
@@ -354,14 +349,14 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             <!-- Role Selection -->
             <UFormField v-if="assignment.entity_id" label="Roles" required class="w-full">
               <USelect
-                v-model="assignment.role_ids"
-                :items="getRolesForEntity(assignment.entity_id).map(r => ({
+                  v-model="assignment.role_ids"
+                  :items="getRolesForEntity(assignment.entity_id).map(r => ({
                   label: r.display_name,
                   value: r.id
                 }))"
-                multiple
-                placeholder="Select roles..."
-                class="w-full"
+                  multiple
+                  placeholder="Select roles..."
+                  class="w-full"
               />
               <template #description>
                 <span class="text-xs text-muted-foreground">
@@ -376,13 +371,13 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                 <UCheckbox v-model="assignment.status" true-value="active" false-value="inactive" />
                 <span class="text-sm">Active membership</span>
               </div>
-              
+
               <UButton
-                variant="ghost"
-                size="sm"
-                icon="i-lucide-trash"
-                color="error"
-                @click="removeEntityAssignment(index)"
+                  variant="ghost"
+                  size="sm"
+                  icon="i-lucide-trash"
+                  color="error"
+                  @click="removeEntityAssignment(index)"
               >
                 Remove
               </UButton>
@@ -399,12 +394,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           Add memberships to grant access to entities
         </p>
         <UButton
-          variant="outline"
-          size="sm"
-          icon="i-lucide-plus"
-          class="mt-4"
-          @click="addEntityAssignment"
-          :disabled="availableEntities.length === 0"
+            variant="outline"
+            size="sm"
+            icon="i-lucide-plus"
+            class="mt-4"
+            @click="addEntityAssignment"
+            :disabled="unassignedEntitiesCount === 0"
         >
           Add First Membership
         </UButton>
