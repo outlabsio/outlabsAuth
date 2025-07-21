@@ -23,8 +23,11 @@ OutLabs Auth is a **standalone authentication API** that provides:
 - **Account Security**: Email verification, password reset, account locking
 
 ### Authorization System  
-- **Hierarchical Permissions**: Automatic inheritance (manage → update → read)
-- **Scope-based Permissions**: Platform-wide, organization-wide, or entity-specific
+- **Explicit Permission Scoping**: Three levels of access control
+  - **Entity-specific**: `entity:read` - Access only the specific entity
+  - **Hierarchical**: `entity:read_tree` - Access entity and all descendants
+  - **Platform-wide**: `entity:read_all` - Access all entities in platform
+- **Action-based Permissions**: Separate permissions for each action (read, create, update, delete)
 - **Custom Permissions**: Create domain-specific permissions for your application
 - **Role Templates**: Pre-configured roles for common use cases
 
@@ -153,14 +156,38 @@ For comprehensive integration guidance:
 
 ### Permission System
 
-The platform uses a sophisticated permission system with automatic inheritance:
+The platform uses a sophisticated permission system with explicit scoping for maximum flexibility and security:
+
+#### Permission Scoping Levels
+
+Permissions follow a three-tier scoping model:
+
+1. **Entity-Specific Permissions** (Most Restrictive)
+   - Format: `resource:action`
+   - Example: `entity:read`, `user:update`, `role:delete`
+   - Scope: Only the specific entity where the permission is granted
+   - Use Case: Team members who should only access their own team
+
+2. **Hierarchical Permissions** (Tree Access)
+   - Format: `resource:action_tree`
+   - Example: `entity:read_tree`, `user:update_tree`, `role:delete_tree`
+   - Scope: The entity and ALL its descendants in the hierarchy
+   - Use Case: Organization admins who manage all teams within their org
+
+3. **Platform-Wide Permissions** (Least Restrictive)
+   - Format: `resource:action_all`
+   - Example: `entity:read_all`, `user:manage_all`, `role:create_all`
+   - Scope: All entities across the entire platform
+   - Use Case: Platform administrators with global access
 
 #### System Permissions (Built-in)
 These permissions are hardcoded and always available:
 - `system:manage_all`, `system:read_all` - Full system access
-- `platform:manage` - Platform administration
-- `entity:*`, `user:*`, `role:*`, `member:*` - Core CRUD operations
-- Wildcard patterns: `*:manage_all`, `*:read_all`
+- `platform:manage_platform` - Platform administration
+- `entity:create`, `entity:read`, `entity:update`, `entity:delete` - Entity operations
+- `user:manage`, `user:read`, `user:create`, `user:update`, `user:delete` - User operations
+- `role:manage`, `role:read`, `role:create`, `role:update`, `role:delete` - Role operations
+- `member:manage`, `member:read`, `member:add`, `member:update`, `member:remove` - Membership operations
 
 #### Custom Permissions
 Created during system initialization for common use cases:
@@ -171,11 +198,42 @@ Created during system initialization for common use cases:
 - **API**: `api:manage`, `api:create`
 - **Settings**: `settings:manage`, `settings:view`
 
-#### Permission Inheritance
-Permissions automatically inherit based on scope:
-- `manage` permissions include `read` permissions
-- `*_all` permissions include client-level permissions
-- Example: `user:manage_all` → `user:manage_client` → `user:manage` → `user:read`
+#### Permission Examples
+
+```python
+# Organization Admin Role
+{
+    "name": "org_admin",
+    "permissions": [
+        "entity:read_tree",      # Read org and all child entities
+        "entity:update",         # Update only the org entity itself
+        "entity:create",         # Create child entities
+        "user:manage_tree",      # Manage users in org and children
+        "role:manage"            # Manage roles at org level
+    ]
+}
+
+# Team Lead Role
+{
+    "name": "team_lead",
+    "permissions": [
+        "entity:read",           # Read only their team
+        "entity:update",         # Update team settings
+        "user:manage",           # Manage team members
+        "member:manage"          # Manage team memberships
+    ]
+}
+
+# Platform Viewer Role
+{
+    "name": "platform_viewer",
+    "permissions": [
+        "entity:read_all",       # Read all entities
+        "user:read_all",         # Read all users
+        "role:read_all"          # Read all roles
+    ]
+}
+```
 
 📚 **For detailed permission documentation, see [docs/PERMISSIONS.md](docs/PERMISSIONS.md)**
 

@@ -22,7 +22,8 @@ from api.services.entity_membership_service import EntityMembershipService
 from api.dependencies import (
     require_entity_create,
     require_entity_read,
-    require_entity_manage,
+    require_entity_update,
+    require_entity_delete,
     require_member_read,
     require_member_manage,
     require_self_or_permission,
@@ -199,7 +200,7 @@ async def get_top_level_organizations(
                 entity_class=entity.entity_class.upper(),  # Convert to uppercase string
                 entity_type=entity.entity_type,
                 platform_id=str(entity.platform_id) if entity.platform_id else None,
-                parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
+                parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity and hasattr(entity.parent_entity, 'id') else None,
                 status=entity.status,
                 direct_permissions=entity.direct_permissions,
                 config=entity.metadata,  # Use metadata as config
@@ -253,12 +254,12 @@ async def get_entity(
 async def update_entity(
     entity_id: str,
     update_data: EntityUpdate,
-    current_user: UserModel = Depends(require_entity_manage)
+    current_user: UserModel = Depends(require_entity_update)
 ):
     """
     Update an entity
     
-    Requires: entity:manage permission in entity
+    Requires: entity:update permission in entity
     """
     
     entity = await EntityService.update_entity(entity_id, update_data, current_user)
@@ -286,12 +287,12 @@ async def update_entity(
 async def delete_entity(
     entity_id: str,
     cascade: bool = Query(False, description="Delete all child entities"),
-    current_user: UserModel = Depends(require_entity_manage)
+    current_user: UserModel = Depends(require_entity_delete)
 ):
     """
     Delete an entity (soft delete by default)
     
-    Requires: entity:manage permission in entity
+    Requires: entity:delete permission in entity
     """
     
     success = await EntityService.delete_entity(entity_id, current_user, cascade)
@@ -334,6 +335,38 @@ async def search_entities(
     
     entities, total = await EntityService.search_entities(search_params)
     
+    # Filter entities based on user permissions
+    # System users see all entities
+    if not current_user.is_system_user:
+        try:
+            # Get entities user can see (includes tree permissions)
+            visible_entity_ids = await EntityService.get_user_visible_entities(
+                str(current_user.id),
+                include_tree_permissions=True
+            )
+            
+            # Filter entities to only those the user can access
+            filtered_entities = []
+            for entity in entities:
+                if entity.id in visible_entity_ids:
+                    filtered_entities.append(entity)
+            
+            entities = filtered_entities
+            # Update total count after filtering
+            total = len(entities)
+            
+            # Apply pagination to filtered results
+            start_idx = (page - 1) * page_size
+            end_idx = start_idx + page_size
+            entities = entities[start_idx:end_idx]
+        except Exception as e:
+            # Log the error and raise a proper HTTP exception
+            import traceback
+            error_detail = f"Error in entity filtering: {str(e)}\n{traceback.format_exc()}"
+            print(error_detail)
+            # Re-raise to see the actual error
+            raise
+    
     # Convert to response models
     items = []
     for entity in entities:
@@ -344,7 +377,7 @@ async def search_entities(
             description=entity.description,
             entity_class=entity.entity_class.upper(),  # Convert to uppercase
             entity_type=entity.entity_type,
-            parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
+            parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity and hasattr(entity.parent_entity, 'id') else None,
             platform_id=str(entity.platform_id) if entity.platform_id else None,
             status=entity.status,
             direct_permissions=entity.direct_permissions,
@@ -407,7 +440,7 @@ async def get_entity_path(
             description=entity.description,
             entity_class=entity.entity_class.upper(),  # Convert to uppercase
             entity_type=entity.entity_type,
-            parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity else None,
+            parent_entity_id=str(entity.parent_entity.id) if entity.parent_entity and hasattr(entity.parent_entity, 'id') else None,
             platform_id=str(entity.platform_id) if entity.platform_id else None,
             status=entity.status,
             direct_permissions=entity.direct_permissions,
@@ -494,14 +527,24 @@ async def add_entity_member(
     
     membership = await EntityMembershipService.add_member(entity_id, member_data, current_user)
     
-    # Fetch related data
-    user = await membership.user.fetch()
-    entity = await membership.entity.fetch()
+    # Fetch related data if needed
+    if hasattr(membership.user, 'fetch'):
+        user = await membership.user.fetch()
+    else:
+        user = membership.user
+        
+    if hasattr(membership.entity, 'fetch'):
+        entity = await membership.entity.fetch()
+    else:
+        entity = membership.entity
     
     # Get first role for now (TODO: support multiple roles in response)
     roles = []
     for role_link in membership.roles:
-        role = await role_link.fetch()
+        if hasattr(role_link, 'fetch'):
+            role = await role_link.fetch()
+        else:
+            role = role_link
         roles.append(role)
     
     first_role = roles[0] if roles else None
@@ -576,14 +619,24 @@ async def update_entity_member(
         current_user
     )
     
-    # Fetch related data
-    user = await membership.user.fetch()
-    entity = await membership.entity.fetch()
+    # Fetch related data if needed
+    if hasattr(membership.user, 'fetch'):
+        user = await membership.user.fetch()
+    else:
+        user = membership.user
+        
+    if hasattr(membership.entity, 'fetch'):
+        entity = await membership.entity.fetch()
+    else:
+        entity = membership.entity
     
     # Get first role for now (TODO: support multiple roles in response)
     roles = []
     for role_link in membership.roles:
-        role = await role_link.fetch()
+        if hasattr(role_link, 'fetch'):
+            role = await role_link.fetch()
+        else:
+            role = role_link
         roles.append(role)
     
     first_role = roles[0] if roles else None

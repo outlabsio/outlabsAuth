@@ -247,38 +247,114 @@ ABC Brokerage:
 
 ## Permission Resolution
 
+### Three-Tier Permission Scoping Model
+
+Our permission system uses explicit scoping to provide maximum flexibility and security:
+
+1. **Entity-Specific Permissions** (`resource:action`)
+   - Scope: Only the specific entity where granted
+   - Example: `entity:read`, `user:update`
+   - Use case: Team members accessing only their team
+
+2. **Hierarchical Permissions** (`resource:action_tree`)
+   - Scope: Entity and ALL descendants in the hierarchy
+   - Example: `entity:read_tree`, `user:manage_tree`
+   - Use case: Organization admins managing all child entities
+
+3. **Platform-Wide Permissions** (`resource:action_all`)
+   - Scope: All entities across the platform
+   - Example: `entity:read_all`, `user:manage_all`
+   - Use case: Platform administrators
+
+### Permission Resolution Algorithm
+
 ```python
-async def get_user_permissions(user: UserModel, context: EntityModel) -> Set[str]:
-    permissions = set()
+async def check_permission(
+    user: UserModel, 
+    permission: str, 
+    target_entity: EntityModel
+) -> bool:
+    """
+    Check if user has permission on target entity.
+    Handles all three permission scoping levels.
+    """
+    # Parse permission components
+    resource, action_with_scope = permission.split(":")
     
-    # Get all user's entity memberships
-    memberships = await EntityMembershipModel.find(
-        EntityMembershipModel.user.id == user.id,
-        fetch_links=True  # Populates entity and roles
-    ).to_list()
+    # Check for platform-wide permissions
+    if action_with_scope.endswith("_all"):
+        action = action_with_scope[:-4]  # Remove _all suffix
+        return await user_has_permission(user, f"{resource}:{action}_all")
+    
+    # Get user's entity memberships
+    memberships = await get_user_memberships(user)
     
     for membership in memberships:
-        # Check if membership and entity are active
-        if not membership.is_active() or not membership.entity.is_active():
-            continue
-            
-        # Get permissions from roles assigned in this membership
-        for role in membership.roles:
-            permissions.update(role.permissions)
+        entity = membership.entity
+        roles = membership.roles
         
-        # Get direct permissions from the entity (if any)
-        if membership.entity.direct_permissions:
-            permissions.update(membership.entity.direct_permissions)
+        # Aggregate permissions from all roles
+        user_permissions = set()
+        for role in roles:
+            user_permissions.update(role.permissions)
         
-        # Context-aware permissions: If user has access to parent, 
-        # they may have permissions on children
-        if membership.entity.is_ancestor_of(context):
-            # Add hierarchical permissions based on entity type
-            permissions.add(f"{context.entity_type}:read")
-            if "manage" in str(membership.roles):  # If any management role
-                permissions.add(f"{context.entity_type}:manage")
+        # Check entity-specific permission
+        if entity.id == target_entity.id:
+            if permission in user_permissions:
+                return True
+        
+        # Check hierarchical permissions (_tree)
+        tree_permission = f"{resource}:{action_with_scope}_tree"
+        if tree_permission in user_permissions:
+            # Check if target is descendant of user's entity
+            if await is_descendant(target_entity, entity):
+                return True
+        
+        # Check if user has _all permission at any level
+        all_permission = f"{resource}:{action_with_scope}_all"
+        if all_permission in user_permissions:
+            return True
     
-    return permissions
+    return False
+```
+
+### Example Role Configurations
+
+```python
+# Organization Administrator
+org_admin_role = {
+    "name": "org_admin",
+    "permissions": [
+        "entity:read_tree",      # Read org and all children
+        "entity:create",         # Create direct children only
+        "entity:update",         # Update org entity only
+        "entity:delete_tree",    # Delete org and children
+        "user:manage_tree",      # Manage all users in org tree
+        "role:manage",           # Manage roles at org level
+    ]
+}
+
+# Team Lead
+team_lead_role = {
+    "name": "team_lead", 
+    "permissions": [
+        "entity:read",           # Read team only
+        "entity:update",         # Update team settings
+        "user:manage",           # Manage team users only
+        "member:manage",         # Manage team memberships
+    ]
+}
+
+# Platform Administrator
+platform_admin_role = {
+    "name": "platform_admin",
+    "permissions": [
+        "entity:manage_all",     # Full entity control
+        "user:manage_all",       # Full user control
+        "role:manage_all",       # Full role control
+        "permission:manage_all", # Full permission control
+    ]
+}
 ```
 
 ## Implementation Architecture

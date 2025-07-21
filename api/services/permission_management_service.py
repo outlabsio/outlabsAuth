@@ -28,20 +28,31 @@ class PermissionManagementService:
         # Platform level
         "platform:manage", "platform:manage_platform", "platform:read_platform",
         
-        # Entity management
-        "entity:manage", "entity:manage_all", "entity:read", "entity:read_all",
-        "entity:create", "entity:update", "entity:delete",
+        # Entity management - with hierarchical scoping
+        "entity:manage_all", "entity:read_all",
+        "entity:read", "entity:read_tree",
+        "entity:create", "entity:create_tree",
+        "entity:update", "entity:update_tree", 
+        "entity:delete", "entity:delete_tree",
         
-        # User management
-        "user:manage", "user:manage_all", "user:manage_client", "user:read", "user:read_all",
-        "user:create", "user:update", "user:delete", "user:invite",
+        # User management - with hierarchical scoping
+        "user:manage", "user:manage_tree", "user:manage_all",
+        "user:manage_client", "user:read", "user:read_tree", "user:read_all",
+        "user:create", "user:create_tree", "user:update", "user:update_tree",
+        "user:delete", "user:delete_tree", "user:invite", "user:invite_tree",
         
-        # Role management
-        "role:manage", "role:manage_all", "role:read", "role:read_all",
-        "role:create", "role:update", "role:delete", "role:assign",
+        # Role management - with hierarchical scoping
+        "role:manage", "role:manage_tree", "role:manage_all",
+        "role:read", "role:read_tree", "role:read_all",
+        "role:create", "role:create_tree", "role:update", "role:update_tree",
+        "role:delete", "role:delete_tree", "role:assign", "role:assign_tree",
         
-        # Member management
-        "member:manage", "member:read", "member:add", "member:update", "member:remove",
+        # Member management - with hierarchical scoping
+        "member:manage", "member:manage_tree",
+        "member:read", "member:read_tree",
+        "member:add", "member:add_tree",
+        "member:update", "member:update_tree",
+        "member:remove", "member:remove_tree",
         
         # Permission management
         "permission:manage", "permission:read", "permission:create", "permission:update", "permission:delete",

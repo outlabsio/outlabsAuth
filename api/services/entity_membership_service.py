@@ -328,16 +328,26 @@ class EntityMembershipService:
         enriched_memberships = []
         for membership in memberships:
             entity = await membership.entity.fetch()
-            role = await membership.role.fetch()
             
-            if entity and role:
+            # Handle roles (it's a list)
+            roles = []
+            if membership.roles:
+                for role_link in membership.roles:
+                    role = await role_link.fetch()
+                    if role:
+                        roles.append(role)
+            
+            # Use first role for backwards compatibility
+            primary_role = roles[0] if roles else None
+            
+            if entity:
                 # Get entity path for context
                 path = []
                 current = entity
                 while current:
                     path.insert(0, {
                         "id": str(current.id),
-                        "name": current.display_name,
+                        "name": current.display_name if hasattr(current, 'display_name') else current.name,
                         "type": current.entity_type
                     })
                     if current.parent_entity:
@@ -352,9 +362,9 @@ class EntityMembershipService:
                     "entity_type": entity.entity_type,
                     "entity_class": entity.entity_class,
                     "entity_path": path,
-                    "role_id": str(role.id),
-                    "role_name": role.display_name,
-                    "permissions": role.permissions,
+                    "role_id": str(primary_role.id) if primary_role else None,
+                    "role_name": primary_role.display_name if primary_role and hasattr(primary_role, 'display_name') else (primary_role.name if primary_role else None),
+                    "permissions": primary_role.permissions if primary_role else [],
                     "status": membership.status,
                     "valid_from": membership.valid_from,
                     "valid_until": membership.valid_until,
@@ -457,12 +467,18 @@ class EntityMembershipService:
         Returns:
             True if this is the last admin
         """
-        # Get role
-        role = await membership.role.fetch()
-        if not role:
+        # Get roles (it's a list now)
+        roles = []
+        if membership.roles:
+            for role_link in membership.roles:
+                role = await role_link.fetch()
+                if role:
+                    roles.append(role)
+        
+        if not roles:
             return False
         
-        # Check if role has admin permissions
+        # Check if any role has admin permissions
         admin_permissions = [
             "entity:manage",
             "entity:manage_all",
@@ -470,7 +486,11 @@ class EntityMembershipService:
             "user:manage_all"
         ]
         
-        is_admin = any(perm in role.permissions for perm in admin_permissions)
+        is_admin = False
+        for role in roles:
+            if any(perm in role.permissions for perm in admin_permissions):
+                is_admin = True
+                break
         if not is_admin:
             return False
         
@@ -482,9 +502,17 @@ class EntityMembershipService:
         ).to_list()
         
         for other in other_admins:
-            other_role = await other.role.fetch()
-            if other_role and any(perm in other_role.permissions for perm in admin_permissions):
-                return False
+            # Check if other membership has admin role
+            other_roles = []
+            if other.roles:
+                for role_link in other.roles:
+                    role = await role_link.fetch()
+                    if role:
+                        other_roles.append(role)
+            
+            for role in other_roles:
+                if any(perm in role.permissions for perm in admin_permissions):
+                    return False
         
         return True
     
@@ -511,3 +539,92 @@ class EntityMembershipService:
                 break
         
         return ancestors
+    
+    @staticmethod
+    async def get_user_membership_in_entity(
+        user_id: str,
+        entity_id: str
+    ) -> Optional[EntityMembershipModel]:
+        """
+        Get a user's membership in a specific entity
+        
+        Args:
+            user_id: User ID
+            entity_id: Entity ID
+        
+        Returns:
+            EntityMembershipModel if found, None otherwise
+        """
+        membership = await EntityMembershipModel.find_one(
+            EntityMembershipModel.user.id == PydanticObjectId(user_id),
+            EntityMembershipModel.entity.id == PydanticObjectId(entity_id),
+            EntityMembershipModel.status == "active"
+        )
+        
+        return membership
+    
+    @staticmethod
+    async def get_user_accessible_entities(
+        user_id: str,
+        include_children: bool = True
+    ) -> List[PydanticObjectId]:
+        """
+        Get all entities a user has access to (direct membership or through hierarchy)
+        
+        Args:
+            user_id: User ID
+            include_children: Whether to include child entities of accessible entities
+        
+        Returns:
+            List of entity IDs the user can access
+        """
+        # Get all active memberships for the user
+        memberships = await EntityMembershipModel.find(
+            EntityMembershipModel.user.id == PydanticObjectId(user_id),
+            EntityMembershipModel.status == "active"
+        ).to_list()
+        
+        accessible_entity_ids = set()
+        
+        for membership in memberships:
+            # Add the direct entity
+            if membership.entity:
+                # Handle Link vs Document
+                entity = membership.entity
+                if hasattr(entity, 'fetch'):
+                    entity = await entity.fetch()
+                
+                if entity:
+                    accessible_entity_ids.add(entity.id)
+                    
+                    if include_children:
+                        # Get all children of this entity
+                        await EntityMembershipService._add_child_entities(
+                            entity.id, 
+                            accessible_entity_ids
+                        )
+        
+        return list(accessible_entity_ids)
+    
+    @staticmethod
+    async def _add_child_entities(
+        parent_id: PydanticObjectId,
+        entity_set: set
+    ) -> None:
+        """
+        Recursively add all child entities to the set
+        
+        Args:
+            parent_id: Parent entity ID
+            entity_set: Set to add entity IDs to
+        """
+        # Find all children of the parent entity
+        children = await EntityModel.find(
+            EntityModel.parent_entity.id == parent_id,
+            EntityModel.status == "active"
+        ).to_list()
+        
+        for child in children:
+            entity_set.add(child.id)
+            # Recursively add children of children
+            await EntityMembershipService._add_child_entities(child.id, entity_set)

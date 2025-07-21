@@ -1,8 +1,34 @@
 # outlabsAuth Project Status
 
-**Last Updated**: 2025-07-18
+**Last Updated**: 2025-07-21
 
 This file tracks the current implementation status of the outlabsAuth unified entity model system.
+
+## Recent Updates (2025-07-21)
+
+### ✅ New Permission Scoping Model - FULLY IMPLEMENTED
+
+We've successfully implemented a new hierarchical permission scoping model to replace the previous flat permission system:
+
+**Three-Tier Permission Scoping**:
+1. **Entity-Specific** (`resource:action`) - Access only the specific entity
+2. **Hierarchical** (`resource:action_tree`) - Access entity and all descendants
+3. **Platform-Wide** (`resource:action_all`) - Access all entities in platform
+
+**Implementation Details**:
+- ✅ System permissions updated to include _tree variants for all resources
+- ✅ Permission checking logic handles hierarchical inheritance through entity tree
+- ✅ System initialization roles use appropriate _tree permissions
+- ✅ Entity visibility in search/list endpoints respects _tree permissions
+- ✅ Removed composite `entity:manage` permission in favor of specific actions
+- ✅ All permission enforcement tests passing (25/25 tests)
+
+**Benefits**:
+- Clear, explicit permission intent
+- Flexible access control at any organizational level
+- Backward compatible with existing entity-specific permissions
+- Supports both strict and inherited access models
+- Entity lists now properly show descendant entities for users with _tree permissions
 
 ## Project Overview
 

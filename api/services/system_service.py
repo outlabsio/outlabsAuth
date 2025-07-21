@@ -154,19 +154,22 @@ class SystemService:
             is_global=True
         ).save()
         
-        # Organization Admin role
+        # Organization Admin role - with hierarchical permissions
         org_admin_role = await RoleModel(
             name="organization_admin",
             display_name="Organization Administrator",
-            description="Organization-level administration access",
+            description="Organization-level administration access with hierarchical control",
             permissions=[
-                "entity:manage",
-                "user:manage",
-                "role:manage",
-                "member:manage",
-                "entity:read",
-                "user:read",
-                "role:read"
+                "entity:create",          # Create direct children
+                "entity:read_tree",       # Read org and all descendants
+                "entity:update",          # Update org itself
+                "entity:update_tree",     # Update all descendants
+                "entity:delete_tree",     # Delete org and descendants
+                "user:manage_tree",       # Manage users in entire tree
+                "role:manage",            # Manage roles at org level
+                "role:read_tree",         # Read roles in tree
+                "member:manage_tree",     # Manage members in tree
+                "user:read_tree",         # Read all users in tree
             ],
             entity=root_entity,
             assignable_at_types=[],
@@ -384,6 +387,32 @@ class SystemService:
                 "tags": ["platform", "organization"]
             },
             
+            # Hierarchical organization permissions
+            {
+                "name": "organization:read_tree",
+                "display_name": "View Organization Tree",
+                "description": "View organization and all sub-entities",
+                "resource": "organization",
+                "action": "read_tree",
+                "tags": ["organization", "hierarchical"]
+            },
+            {
+                "name": "organization:update_tree",
+                "display_name": "Update Organization Tree",
+                "description": "Update organization and all sub-entities",
+                "resource": "organization",
+                "action": "update_tree",
+                "tags": ["organization", "hierarchical"]
+            },
+            {
+                "name": "organization:delete_tree",
+                "display_name": "Delete Organization Tree",
+                "description": "Delete organization and all sub-entities",
+                "resource": "organization",
+                "action": "delete_tree",
+                "tags": ["platform", "organization", "hierarchical"]
+            },
+            
             # Team/Branch permissions
             {
                 "name": "team:create",
@@ -408,6 +437,24 @@ class SystemService:
                 "resource": "team",
                 "action": "read",
                 "tags": ["team", "branch"]
+            },
+            
+            # Hierarchical team permissions
+            {
+                "name": "team:read_tree",
+                "display_name": "View Team Tree",
+                "description": "View team and all sub-teams",
+                "resource": "team",
+                "action": "read_tree",
+                "tags": ["team", "hierarchical"]
+            },
+            {
+                "name": "team:manage_tree",
+                "display_name": "Manage Team Tree",
+                "description": "Manage team and all sub-teams",
+                "resource": "team",
+                "action": "manage_tree",
+                "tags": ["team", "hierarchical"]
             },
             
             # Project/Resource permissions (for future use)

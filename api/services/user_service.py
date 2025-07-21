@@ -615,13 +615,21 @@ class UserService:
                     "permissions": role.permissions
                 })
             
+            # Handle parent entity Link object
+            parent_id = None
+            if entity.parent_entity:
+                if hasattr(entity.parent_entity, 'id'):
+                    parent_id = str(entity.parent_entity.id)
+                elif hasattr(entity.parent_entity, 'ref'):
+                    parent_id = str(entity.parent_entity.ref.id)
+            
             entities.append({
                 "id": str(entity.id),
                 "name": entity.name,
                 "slug": entity.slug,
                 "entity_type": entity.entity_type,
                 "entity_class": entity.entity_class,
-                "parent_id": str(entity.parent_entity.id) if entity.parent_entity else None,
+                "parent_id": parent_id,
                 "roles": roles,
                 "status": membership.status,
                 "joined_at": membership.joined_at

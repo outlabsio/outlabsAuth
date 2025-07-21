@@ -67,6 +67,12 @@ class PolicyEvaluationEngine:
             if cached_result:
                 return cached_result
         
+        # Check if it's a system permission first
+        from api.services.permission_management_service import PermissionManagementService
+        if permission_name in PermissionManagementService.SYSTEM_PERMISSIONS:
+            # System permissions have no conditions - pure RBAC
+            return PolicyResult(True, "No conditions to evaluate")
+        
         # Get the permission definition
         permission = await self._get_permission_definition(permission_name, entity.id if entity else None)
         if not permission:
@@ -335,9 +341,9 @@ class PolicyEvaluationEngine:
             sorted_attrs = json.dumps(resource_attributes, sort_keys=True)
             attr_hash = hashlib.md5(sorted_attrs.encode()).hexdigest()[:8]
         
-        parts = ["policy", user_id, permission]
+        parts = ["policy", str(user_id), permission]
         if entity_id:
-            parts.append(entity_id)
+            parts.append(str(entity_id))
         if attr_hash:
             parts.append(attr_hash)
         
@@ -535,6 +541,11 @@ class PermissionService:
         """
         Check if user has a specific permission
         
+        Handles three permission scoping levels:
+        1. Entity-specific: resource:action (only in specific entity)
+        2. Hierarchical: resource:action_tree (in entity and descendants)
+        3. Platform-wide: resource:action_all (across entire platform)
+        
         Args:
             user_id: User ID
             permission: Permission to check (e.g., "entity:read")
@@ -544,19 +555,46 @@ class PermissionService:
         Returns:
             Tuple of (has_permission, source)
         """
-        # Get all user permissions
+        # Parse permission components
+        if ":" not in permission:
+            resource, action = permission, ""
+        else:
+            resource, action = permission.split(":", 1)
+        
+        # Check direct permission at target entity
         user_permissions = await self.resolve_user_permissions(
             user_id, entity_id, use_cache
         )
         
-        # Check each source
+        # Check each source for exact permission
         for source, perms in user_permissions.items():
             if permission in perms or "*:manage_all" in perms:
                 return True, source
         
-        # Check for wildcard permissions
-        resource, action = permission.split(":", 1) if ":" in permission else (permission, "")
+        # Check for _all permissions (platform-wide)
+        all_permission = f"{resource}:{action}_all"
+        for source, perms in user_permissions.items():
+            if all_permission in perms:
+                return True, source
         
+        # Check for _tree permissions in parent entities
+        if entity_id and not action.endswith("_tree") and not action.endswith("_all"):
+            # Get parent entities
+            from api.services.entity_service import EntityService
+            entity_path = await EntityService.get_entity_path(entity_id)
+            
+            # Check each parent for _tree permission
+            tree_permission = f"{resource}:{action}_tree"
+            for parent_entity in entity_path[1:]:  # Skip the target entity itself
+                parent_permissions = await self.resolve_user_permissions(
+                    user_id, str(parent_entity.id), use_cache
+                )
+                
+                for source, perms in parent_permissions.items():
+                    if tree_permission in perms or f"{resource}:manage_tree" in perms:
+                        return True, f"{source}_tree"
+        
+        # Check for wildcard permissions
         for source, perms in user_permissions.items():
             # Check for resource-level wildcards
             if f"{resource}:*" in perms:

@@ -158,3 +158,6 @@ out/
 
 # Admin token for testing
 .admin_token
+
+# Test auth tokens
+test/auth_tokens.json

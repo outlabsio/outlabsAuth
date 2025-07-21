@@ -266,11 +266,13 @@ class EntityService:
         
         if params.query:
             # Text search in name, display_name, description
+            import re
+            pattern = re.compile(f".*{re.escape(params.query)}.*", re.IGNORECASE)
             query_conditions.append(
                 Or(
-                    EntityModel.name.regex(f".*{params.query}.*", "i"),
-                    EntityModel.display_name.regex(f".*{params.query}.*", "i"),
-                    EntityModel.description.regex(f".*{params.query}.*", "i")
+                    {"name": {"$regex": pattern}},
+                    {"display_name": {"$regex": pattern}},
+                    {"description": {"$regex": pattern}}
                 )
             )
         
@@ -292,8 +294,8 @@ class EntityService:
                 query_conditions.append(EntityModel.parent_entity.id == parent_id)
         
         if params.platform_id:
-            platform_id = PydanticObjectId(params.platform_id)
-            query_conditions.append(EntityModel.platform_id == platform_id)
+            # platform_id is stored as a string in the model
+            query_conditions.append(EntityModel.platform_id == params.platform_id)
         
         # Combine conditions
         if query_conditions:
@@ -486,7 +488,8 @@ class EntityService:
     @staticmethod
     async def validate_entity_access(
         entity_id: str,
-        user: UserModel
+        user: UserModel,
+        required_permission: str = "entity:read"
     ) -> bool:
         """
         Check if user has permission on entity
@@ -498,15 +501,113 @@ class EntityService:
         
         Returns:
             True if user has permission
-        
-        Note: This is a placeholder - full implementation will come with permission service
         """
-        # TODO: Implement with permission service
-        # For now, just check if user is a member
-        membership = await EntityMembershipModel.find_one(
-            EntityMembershipModel.entity.id == PydanticObjectId(entity_id),
-            EntityMembershipModel.user.id == user.id,
-            EntityMembershipModel.status == "active"
+        from api.services.permission_service import permission_service
+        
+        # System users have full access
+        if user.is_system_user:
+            return True
+            
+        # Check permission
+        has_permission, _ = await permission_service.check_permission(
+            str(user.id),
+            required_permission,
+            entity_id
         )
         
-        return membership is not None
+        return has_permission
+    
+    @staticmethod
+    async def get_user_visible_entities(
+        user_id: str,
+        include_tree_permissions: bool = True
+    ) -> List[PydanticObjectId]:
+        """
+        Get all entities a user can see based on their permissions
+        
+        This considers:
+        1. Direct membership entities
+        2. Child entities of entities where user has _tree permissions
+        
+        Args:
+            user_id: User ID
+            include_tree_permissions: Whether to include entities accessible via _tree permissions
+        
+        Returns:
+            List of entity IDs the user can see
+        """
+        from api.services.permission_service import permission_service
+        
+        visible_entity_ids = set()
+        
+        # Get all user memberships with entity links fetched
+        memberships = await EntityMembershipModel.find(
+            EntityMembershipModel.user.id == PydanticObjectId(user_id),
+            EntityMembershipModel.status == "active"
+        ).to_list()
+        
+        for membership in memberships:
+            # Add direct membership entity
+            if membership.entity:
+                # Fetch entity if it's a link
+                if hasattr(membership.entity, 'fetch'):
+                    entity = await membership.entity.fetch()
+                    if entity:
+                        entity_id = entity.id
+                    else:
+                        continue
+                else:
+                    entity_id = membership.entity.id if hasattr(membership.entity, 'id') else membership.entity
+                
+                visible_entity_ids.add(entity_id)
+                if include_tree_permissions:
+                    # Check if user has any _tree permissions in this entity
+                    tree_permissions = [
+                        "entity:read_tree", "entity:update_tree", "entity:delete_tree",
+                        "entity:manage_tree", "user:read_tree", "user:manage_tree",
+                        "role:read_tree", "member:read_tree"
+                    ]
+                    
+                    for perm in tree_permissions:
+                        try:
+                            has_perm, _ = await permission_service.check_permission(
+                                user_id,
+                                perm,
+                                str(entity_id),
+                                use_cache=True  # Use cache to improve performance
+                            )
+                            if has_perm:
+                                # User has tree permission - add all descendants
+                                await EntityService._add_descendant_entities(
+                                    entity_id,
+                                    visible_entity_ids
+                                )
+                                break  # No need to check other permissions
+                        except Exception:
+                            # Skip on permission check error
+                            continue
+        
+        return list(visible_entity_ids)
+    
+    @staticmethod
+    async def _add_descendant_entities(
+        parent_id: PydanticObjectId,
+        entity_set: set
+    ) -> None:
+        """
+        Recursively add all descendant entities to the set
+        
+        Args:
+            parent_id: Parent entity ID
+            entity_set: Set to add entity IDs to
+        """
+        # Find all children of the parent entity
+        children = await EntityModel.find(
+            EntityModel.parent_entity.id == parent_id,
+            EntityModel.status == "active"
+        ).to_list()
+        
+        for child in children:
+            entity_set.add(child.id)
+            # Recursively add descendants
+            await EntityService._add_descendant_entities(child.id, entity_set)
