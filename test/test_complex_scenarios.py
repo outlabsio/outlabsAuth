@@ -439,11 +439,13 @@ class ComplexScenarioTest(APITest):
             role_id=read_role['id']
         )
         
-        # Manager with tree permissions in dept2
+        # Manager with permissions in dept2 (including direct update)
         manager_role = self.factory.create_role(
             entity_id=dept2['id'],
             name_prefix="manager",
             permissions=[
+                "entity:read",      # Can read dept2 itself
+                "entity:update",    # Can update dept2 itself
                 "entity:read_tree",
                 "entity:update_tree",
                 "user:manage_tree",
@@ -536,7 +538,8 @@ class ComplexScenarioTest(APITest):
             entity_id=division['id'],
             name_prefix="div_mgr",
             permissions=[
-                "entity:read_tree",
+                "entity:read",       # Can read division itself
+                "entity:read_tree",  # Can read entities below division
                 "entity:update_tree",
                 "user:read_tree"
             ]

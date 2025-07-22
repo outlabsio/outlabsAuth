@@ -55,6 +55,9 @@ class EntityService:
                 entity_data.entity_type
             )
             
+            # Check for circular hierarchy (not needed for new entities, but good to have the method)
+            # This is more relevant when updating parent_entity in the future
+            
             # Inherit platform_id from parent
             if not entity_data.platform_id:
                 entity_data.platform_id = parent_entity.platform_id
@@ -433,6 +436,52 @@ class EntityService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Maximum hierarchy depth (10) reached"
             )
+    
+    @staticmethod
+    async def _check_circular_hierarchy(
+        potential_parent: EntityModel,
+        entity_id: Optional[str]
+    ) -> None:
+        """
+        Check if setting a parent would create a circular hierarchy
+        
+        Args:
+            potential_parent: The entity that would become the parent
+            entity_id: The entity being updated (None for new entities)
+        
+        Raises:
+            HTTPException: If circular hierarchy would be created
+        """
+        # For new entities, circular hierarchy is impossible
+        if not entity_id:
+            return
+        
+        # Walk up the parent chain from the potential parent
+        current = potential_parent
+        visited = set()
+        
+        while current:
+            # Check if we've seen this entity before (loop detection)
+            if str(current.id) in visited:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Circular hierarchy detected - an entity is its own ancestor"
+                )
+            
+            visited.add(str(current.id))
+            
+            # Check if the potential parent is actually a descendant of the entity
+            if str(current.id) == entity_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot set parent - would create circular hierarchy"
+                )
+            
+            # Move up the chain
+            if current.parent_entity:
+                current = await EntityModel.get(current.parent_entity.id, fetch_links=True)
+            else:
+                current = None
     
     @staticmethod
     async def get_distinct_entity_types(

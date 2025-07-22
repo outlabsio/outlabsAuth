@@ -38,7 +38,8 @@
       "mcp__playwright__browser_press_key",
       "mcp__nuxtui__get_component_source",
       "mcp__playwright__browser_wait_for",
-      "Bash(/dev/null)"
+      "Bash(/dev/null)",
+      "Bash(cat:*)"
     ],
     "deny": []
   }

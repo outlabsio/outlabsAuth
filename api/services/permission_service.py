@@ -500,6 +500,7 @@ class PermissionService:
         # Get user memberships
         memberships = await self._get_user_memberships(user_id, entity_id)
         
+        
         # Process each membership
         for membership in memberships:
             # Get role permissions - now handling multiple roles per membership
@@ -583,15 +584,24 @@ class PermissionService:
             from api.services.entity_service import EntityService
             entity_path = await EntityService.get_entity_path(entity_id)
             
+            
             # Check each parent for _tree permission
             tree_permission = f"{resource}:{action}_tree"
-            for parent_entity in entity_path[1:]:  # Skip the target entity itself
+            manage_tree_permission = f"{resource}:manage_tree"
+            
+            
+            # entity_path[:-1] gets all entities except the last one (the target entity)
+            for i, parent_entity in enumerate(entity_path[:-1], 1):  # Check all parents
+                
                 parent_permissions = await self.resolve_user_permissions(
                     user_id, str(parent_entity.id), use_cache
                 )
                 
+                
                 for source, perms in parent_permissions.items():
-                    if tree_permission in perms or f"{resource}:manage_tree" in perms:
+                    if tree_permission in perms:
+                        return True, f"{source}_tree"
+                    if manage_tree_permission in perms:
                         return True, f"{source}_tree"
         
         # Check for wildcard permissions
@@ -819,8 +829,7 @@ class PermissionService:
         
         # Get memberships
         memberships = await EntityMembershipModel.find(
-            And(*query_conditions),
-            fetch_links=True
+            And(*query_conditions)
         ).to_list()
         
         # Check time validity
@@ -834,17 +843,31 @@ class PermissionService:
             if membership.valid_until and now > membership.valid_until:
                 continue
             
-            # Since we have fetch_links=True, entity and roles should be populated
-            # But roles is a list, so we need to handle it differently
-            role_ids = [str(role.id) for role in membership.roles] if membership.roles else []
+            # Handle entity and roles - they might be Link objects
+            entity_id = None
+            if hasattr(membership.entity, 'id'):
+                entity_id = str(membership.entity.id)
+            elif hasattr(membership.entity, 'ref'):
+                entity_id = str(membership.entity.ref.id)
             
-            valid_memberships.append({
-                "id": str(membership.id),
-                "entity_id": str(membership.entity.id),
-                "role_ids": role_ids,  # Changed to plural since it's a list
-                "valid_from": membership.valid_from,
-                "valid_until": membership.valid_until
-            })
+            # Extract role IDs from the list of roles/links
+            role_ids = []
+            if membership.roles:
+                for role in membership.roles:
+                    if hasattr(role, 'id'):
+                        role_ids.append(str(role.id))
+                    elif hasattr(role, 'ref'):
+                        # It's a Link object
+                        role_ids.append(str(role.ref.id))
+            
+            if entity_id:
+                valid_memberships.append({
+                    "id": str(membership.id),
+                    "entity_id": entity_id,
+                    "role_ids": role_ids,
+                    "valid_from": membership.valid_from,
+                    "valid_until": membership.valid_until
+                })
         
         return valid_memberships
     

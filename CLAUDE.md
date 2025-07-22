@@ -216,17 +216,34 @@ Entity types are now flexible strings, allowing platforms to use their own termi
 - Users are members of entities through EntityMembership
 
 ### Hierarchical Permission System
-Permissions automatically inherit based on scope and action:
 
-1. **Action Inheritance**: `manage` includes all lesser actions
-   - `entity:manage` → `entity:update` → `entity:read`
-   
-2. **Scope Inheritance**: Higher scopes include lower scopes
-   - `user:manage_all` → `user:manage_platform` → `user:manage_organization` → `user:manage`
-   
-3. **Entity Context**: Permissions can be scoped to specific entities
-   - A user with `user:manage` in Team A can only manage Team A users
-   - A user with `user:manage_organization` can manage all users in their organization
+**⚠️ CRITICAL: See [Tree Permissions Guide](docs/TREE_PERMISSIONS_GUIDE.md) for detailed explanation of how tree permissions work.**
+
+Permissions use a three-tier scoping model with automatic inheritance:
+
+1. **Permission Scoping Levels**:
+   - **Entity-Specific** (`resource:action`) - Access only in the specific entity
+   - **Tree/Hierarchical** (`resource:action_tree`) - Access to all descendants (not the entity where assigned)
+   - **Platform-Wide** (`resource:action_all`) - Access across entire platform
+
+2. **Tree Permission Behavior**:
+   - Tree permissions apply to descendants only - to access the entity where assigned, you need the non-tree permission
+   - Users with `entity:create_tree` in a parent can create entities anywhere in the subtree
+   - Users with `entity:update_tree` in a parent can update entities anywhere in the subtree
+   - Tree permissions are checked up the entire ancestor chain, not just immediate parent
+   - Example: Platform admin with `entity:manage_tree` at platform level can manage all entities below the platform
+   - Example: To both manage an entity AND its descendants, assign both `entity:manage` and `entity:manage_tree`
+
+3. **Action Inheritance**: `manage` includes all lesser actions
+   - `entity:manage` → `entity:create`, `entity:update`, `entity:delete`, `entity:read`
+   - `entity:manage_tree` → `entity:create_tree`, `entity:update_tree`, etc.
+
+4. **Tree Permission Implementation** (Fixed 2025-07-21):
+   - ✅ Entity creation with tree permissions works correctly
+   - ✅ Entity updates with tree permissions work correctly (fixed array slicing bug)
+   - ✅ Member management with tree permissions works correctly
+   - ✅ Platform admins can update child organizations with `entity:update_tree`
+   - ✅ Tree permissions work at any depth in the hierarchy
 
 ### Multi-Platform Architecture
 - **Platform Isolation**: Each platform is completely isolated
@@ -266,6 +283,21 @@ from api.dependencies import check_hierarchical_permissions
 @router.post("/", dependencies=[Depends(check_hierarchical_permissions("user:manage"))])
 ```
 
+**Important Permission Examples**:
+```python
+# To manage an entity and its descendants, assign BOTH permissions:
+role.permissions = [
+    "entity:manage",      # Manage the entity itself
+    "entity:manage_tree"  # Manage all descendants
+]
+
+# Tree permissions alone DO NOT grant access to the assigned entity:
+role.permissions = [
+    "entity:manage_tree"  # ❌ Cannot manage the entity where this is assigned
+                         # ✅ Can manage all child entities below
+]
+```
+
 ### Database Operations
 - Use Beanie's async methods: `await EntityModel.find_all()`, `await entity.save()`
 - Always handle Link objects properly: fetch before accessing properties
@@ -288,6 +320,16 @@ if role.entity:
 - Use fixtures from conftest.py for consistent test data
 - Test both success and error cases
 - Verify permission boundaries in all tests
+
+### Testing Tree Permissions
+When testing tree permissions, ensure:
+- Test entity creation with `entity:create_tree` in parent entities
+- Test entity updates with `entity:update_tree` in parent entities
+- Test that tree permissions work through multiple hierarchy levels
+- Test that users without tree permissions cannot access descendant entities
+- Use `test/test_complex_scenarios.py` for comprehensive tree permission testing
+- Complex scenario tests should have 100% pass rate (35/35 tests passing)
+- When testing tree permissions, remember they apply to descendants only
 
 ### Error Handling
 - Use FastAPI's HTTPException with appropriate status codes

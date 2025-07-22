@@ -27,7 +27,8 @@ from api.dependencies import (
     require_member_read,
     require_member_manage,
     require_self_or_permission,
-    get_current_user
+    get_current_user,
+    require_entity_create_with_parent
 )
 
 router = APIRouter()
@@ -118,13 +119,21 @@ async def get_entity_types(
 @router.post("/", response_model=EntityResponse)
 async def create_entity(
     entity_data: EntityCreate,
-    current_user: UserModel = Depends(require_entity_create)
+    current_user: UserModel = Depends(get_current_user)
 ):
     """
     Create a new entity
     
-    Requires: entity:create permission
+    Requires one of:
+    - entity:create permission (platform-wide)
+    - entity:create_tree permission in parent entity
+    - entity:create_all permission (system-wide)
     """
+    # Check permissions with parent entity context
+    await require_entity_create_with_parent(
+        parent_entity_id=entity_data.parent_entity_id,
+        current_user=current_user
+    )
     
     entity = await EntityService.create_entity(entity_data, current_user)
     

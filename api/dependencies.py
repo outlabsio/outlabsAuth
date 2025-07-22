@@ -4,7 +4,7 @@ Authentication and permission dependencies
 from typing import Optional, List, Callable, Any
 from functools import wraps
 from fastapi import Depends, HTTPException, status, Path
-from api.models import UserModel
+from api.models import UserModel, EntityModel
 from api.routes.auth_routes import get_current_user
 from api.services.permission_service import permission_service
 
@@ -170,9 +170,9 @@ def require_self_or_permission(permission: str) -> Callable:
 require_user_read = require_permission("user:read")
 require_user_manage = require_permission("user:manage")
 require_entity_read = require_entity_access("entity:read")
-require_entity_update = require_entity_access("entity:update")
+require_entity_update = require_entity_access("entity:update")  # Will be replaced below after definition
 require_entity_delete = require_entity_access("entity:delete")
-require_entity_create = require_permission("entity:create")
+require_entity_create = require_permission("entity:create")  # Will be replaced in routes with tree-aware version
 require_member_read = require_entity_access("member:read")
 require_member_manage = require_entity_access("member:manage")
 require_role_read = require_permission("role:read")
@@ -327,3 +327,140 @@ async def require_user_manage(current_user: UserModel = Depends(get_current_user
     """Require user:manage permission"""
     await PermissionChecker.require_user_permission(current_user, "user:manage")
     return current_user
+
+
+async def require_entity_create_with_parent(
+    parent_entity_id: Optional[str] = None,
+    current_user: UserModel = Depends(get_current_user)
+) -> UserModel:
+    """
+    Check entity:create permission considering parent entity tree permissions.
+    
+    Allows:
+    1. Direct entity:create permission (platform-wide)
+    2. entity:create_tree permission in parent entity
+    3. entity:create_all permission (system-wide)
+    """
+    # For system users, allow all operations
+    if current_user.is_system_user:
+        return current_user
+    
+    # Check platform-wide entity:create permission first
+    has_direct, _ = await permission_service.check_permission(
+        str(current_user.id),
+        "entity:create"
+    )
+    
+    if has_direct:
+        return current_user
+    
+    # If parent_entity_id is provided, check tree permissions in parent and ancestors
+    if parent_entity_id:
+        # Get the parent entity's path to check tree permissions in all ancestors
+        from api.services.entity_service import EntityService
+        try:
+            parent_path = await EntityService.get_entity_path(parent_entity_id)
+            
+            # Check tree permissions in all ancestors (including the parent itself)
+            for ancestor in parent_path:
+                # Check for entity:create_tree in ancestor
+                has_tree_perm, _ = await permission_service.check_permission(
+                    str(current_user.id),
+                    "entity:create_tree",
+                    str(ancestor.id)
+                )
+                
+                if has_tree_perm:
+                    return current_user
+                
+                # Also check for entity:manage_tree in ancestor (which includes create)
+                has_manage_tree, _ = await permission_service.check_permission(
+                    str(current_user.id),
+                    "entity:manage_tree",
+                    str(ancestor.id)
+                )
+                
+                if has_manage_tree:
+                    return current_user
+        except Exception as e:
+            # If we can't get the parent path, just check the direct parent
+            # Check for entity:create_tree in parent
+            has_tree_perm, _ = await permission_service.check_permission(
+                str(current_user.id),
+                "entity:create_tree",
+                parent_entity_id
+            )
+            
+            if has_tree_perm:
+                return current_user
+            
+            # Also check for entity:manage_tree in parent (which includes create)
+            has_manage_tree, _ = await permission_service.check_permission(
+                str(current_user.id),
+                "entity:manage_tree",
+                parent_entity_id
+            )
+            
+            if has_manage_tree:
+                return current_user
+    
+    # Check for system-wide permissions
+    has_create_all, _ = await permission_service.check_permission(
+        str(current_user.id),
+        "entity:create_all"
+    )
+    
+    if has_create_all:
+        return current_user
+    
+    # No permission found
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Missing required permission: entity:create or entity:create_tree in parent entity"
+    )
+
+
+def require_entity_update_with_tree(entity_id_param: str = "entity_id") -> Callable:
+    """
+    Dependency factory for entity update with tree permission checking.
+    
+    The permission service already handles tree permission checking internally.
+    This dependency just needs to check if the user has entity:update permission,
+    which will automatically check for entity:update_tree in parent entities.
+    """
+    async def entity_update_dependency(
+        current_user: UserModel = Depends(get_current_user),
+        entity_id: str = Path(..., alias=entity_id_param)
+    ) -> UserModel:
+        # For system users, allow all operations
+        if current_user.is_system_user:
+            return current_user
+        
+        # The permission service handles all the logic:
+        # 1. Direct entity:update in the entity
+        # 2. entity:update_tree in any parent entity  
+        # 3. entity:update_all platform-wide
+        has_permission, source = await permission_service.check_permission(
+            str(current_user.id),
+            "entity:update",
+            entity_id
+        )
+        
+        # Debug logging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Permission check for entity:update in {entity_id}: {has_permission} (source: {source})")
+        
+        if has_permission:
+            return current_user
+        
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Missing required permission: entity:update or entity:update_tree in parent entity"
+        )
+    
+    return entity_update_dependency
+
+
+# Override the common dependency with tree-aware version
+require_entity_update = require_entity_update_with_tree()
