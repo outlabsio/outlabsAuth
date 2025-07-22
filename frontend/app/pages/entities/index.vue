@@ -116,8 +116,8 @@ function handleEntityDeleted() {
 </script>
 
 <template>
-  <UDashboardPanel>
-    <UDashboardNavbar>
+  <UDashboardPanel class="min-h-0 flex flex-col">
+    <UDashboardNavbar class="flex-shrink-0">
       <template #left>
         <div class="flex items-center gap-4">
           <UDashboardSidebarCollapse />
@@ -129,7 +129,8 @@ function handleEntityDeleted() {
       </template>
     </UDashboardNavbar>
 
-    <div class="px-4 py-6 lg:px-8">
+    <div class="flex-1 overflow-y-auto">
+      <div class="px-4 py-6 lg:px-8">
       <!-- Filters -->
       <UCard class="mb-6">
         <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
@@ -242,6 +243,7 @@ function handleEntityDeleted() {
           :items-per-page="entitiesStore.pagination.pageSize" 
           @update:page="entitiesStore.setPage" 
         />
+      </div>
       </div>
     </div>
 
