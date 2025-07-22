@@ -11,51 +11,68 @@ OutLabs Auth uses a sophisticated hierarchical permission system that combines R
 System permissions are hardcoded and always available. They cannot be modified or deleted.
 
 #### Core System Permissions
-- `system:manage_all` - Full system administration
 - `system:read_all` - Read all system configuration
-- `platform:manage` - Platform-level management
-- `platform:manage_platform` - Manage platform entities
 - `platform:read_platform` - Read platform data
 
 #### Resource-Based Permissions
 Each core resource has a standard set of permissions:
 
 **Entity Permissions:**
-- `entity:manage_all` - Manage all entities
-- `entity:manage` - Manage entities within scope
 - `entity:create` - Create new entities
 - `entity:read` - View entities
 - `entity:update` - Update entity details
 - `entity:delete` - Delete entities
+- `entity:create_tree` - Create entities in descendants
+- `entity:read_tree` - View descendant entities
+- `entity:update_tree` - Update descendant entities
+- `entity:delete_tree` - Delete descendant entities
+- `entity:read_all` - View all entities platform-wide
 
 **User Permissions:**
-- `user:manage_all` - Full user management
-- `user:manage_client` - Manage users within client
-- `user:manage` - Standard user management
 - `user:create` - Create new users
 - `user:read` - View user profiles
 - `user:update` - Update user details
 - `user:delete` - Delete users
 - `user:invite` - Send user invitations
+- `user:create_tree` - Create users in descendant entities
+- `user:read_tree` - View users in descendant entities
+- `user:update_tree` - Update users in descendant entities
+- `user:delete_tree` - Delete users in descendant entities
+- `user:invite_tree` - Invite users to descendant entities
+- `user:read_all` - View all users platform-wide
+- `user:create_all` - Create users anywhere
+- `user:update_all` - Update users anywhere
+- `user:delete_all` - Delete users anywhere
+- `user:invite_all` - Invite users anywhere
 
 **Role Permissions:**
-- `role:manage_all` - Full role management
-- `role:manage` - Manage roles
 - `role:create` - Create new roles
 - `role:read` - View roles
 - `role:update` - Update role permissions
 - `role:delete` - Delete roles
 - `role:assign` - Assign roles to users
+- `role:create_tree` - Create roles in descendant entities
+- `role:read_tree` - View roles in descendant entities
+- `role:update_tree` - Update roles in descendant entities
+- `role:delete_tree` - Delete roles in descendant entities
+- `role:assign_tree` - Assign roles in descendant entities
+- `role:read_all` - View all roles platform-wide
+- `role:create_all` - Create roles anywhere
+- `role:update_all` - Update roles anywhere
+- `role:delete_all` - Delete roles anywhere
+- `role:assign_all` - Assign roles anywhere
 
 **Member Permissions:**
-- `member:manage` - Manage entity members
 - `member:read` - View memberships
 - `member:add` - Add new members
 - `member:update` - Update member roles
 - `member:remove` - Remove members
+- `member:read_tree` - View memberships in descendant entities
+- `member:add_tree` - Add members to descendant entities
+- `member:update_tree` - Update members in descendant entities
+- `member:remove_tree` - Remove members from descendant entities
 
 #### Wildcard Permissions
-- `*:manage_all` - All permissions
 - `*:read_all` - Read everything
 - `*` - Absolute wildcard (system admin only)
 
@@ -112,32 +129,33 @@ settings:manage - Manage entity settings
 settings:view - View entity settings
 ```
 
-## Permission Inheritance
+## Permission Scoping
 
-### Hierarchical Inheritance
+### Permission Scope Levels
 
-The permission system uses automatic inheritance based on permission names:
+The permission system uses three explicit scoping levels without automatic inheritance:
 
-1. **Action-based inheritance:**
-   - `manage` → includes `read`
-   - `manage` → includes `create`, `update`, `delete`
+1. **Entity-specific permissions**: Grant access only to the specific entity
+   - Format: `resource:action` (e.g., `user:create`, `role:update`)
    
-2. **Scope-based inheritance:**
-   - `*:manage_all` → `*:manage_platform` → `*:manage_client` → `*:manage`
-   - `*:read_all` → `*:read_platform` → `*:read`
+2. **Tree permissions**: Grant access to all descendant entities
+   - Format: `resource:action_tree` (e.g., `user:create_tree`, `role:update_tree`)
+   - Note: Tree permissions do NOT apply to the entity where assigned, only descendants
+   
+3. **Platform-wide permissions**: Grant access across the entire platform
+   - Format: `resource:action_all` (e.g., `user:read_all`, `role:create_all`)
 
 ### Examples
 
-```
-user:manage_all (granted)
-├── user:manage_platform ✓ (inherited)
-├── user:manage_client ✓ (inherited)
-├── user:manage ✓ (inherited)
-├── user:create ✓ (inherited)
-├── user:read ✓ (inherited)
-├── user:update ✓ (inherited)
-└── user:delete ✓ (inherited)
-```
+For a user with `user:create_tree` at the organization level:
+- ❌ Cannot create users in the organization itself
+- ✅ Can create users in all divisions under the organization
+- ✅ Can create users in all teams under those divisions
+
+For a user with `entity:update` and `entity:update_tree` at the division level:
+- ✅ Can update the division itself (due to `entity:update`)
+- ✅ Can update all teams under the division (due to `entity:update_tree`)
+- ❌ Cannot update the parent organization
 
 ## Creating Custom Permissions
 
@@ -182,9 +200,9 @@ permission = await permission_management_service.create_permission(
 ### In Routes
 
 ```python
-from api.dependencies import check_hierarchical_permissions
+from api.dependencies import require_permission
 
-@router.post("/", dependencies=[Depends(check_hierarchical_permissions("user:manage"))])
+@router.post("/", dependencies=[Depends(require_permission("user:create"))])
 async def create_user(user_data: UserCreate):
     # Route is protected by permission check
     pass
@@ -237,20 +255,20 @@ permissions = [
 ### Editor Template
 ```python
 permissions = [
-    "entity:read", "entity:create", "entity:manage",
-    "user:read", "user:create", "user:manage",
+    "entity:read", "entity:create", "entity:update",
+    "user:read", "user:create", "user:update",
     "role:read", 
-    "member:read", "member:manage"
+    "member:read", "member:add", "member:update"
 ]
 ```
 
 ### Administrator Template
 ```python
 permissions = [
-    "entity:read", "entity:create", "entity:manage", "entity:delete",
-    "user:read", "user:create", "user:manage", "user:delete",
-    "role:read", "role:create", "role:manage",
-    "member:read", "member:manage"
+    "entity:read", "entity:create", "entity:update", "entity:delete",
+    "user:read", "user:create", "user:update", "user:delete",
+    "role:read", "role:create", "role:update", "role:delete", "role:assign",
+    "member:read", "member:add", "member:update", "member:remove"
 ]
 ```
 

@@ -2,6 +2,15 @@
 
 **A production-ready FastAPI authentication and authorization service** with enterprise-grade Role-Based Access Control (RBAC), built on MongoDB with Beanie ODM. Designed to be integrated into your applications as a centralized auth service.
 
+## 🎯 Project Status
+
+**Backend API**: ✅ Production Ready (100% core features, all tests passing)  
+**Frontend Admin UI**: 🔄 85% Complete (optional management interface)  
+**Documentation**: 📚 70% Complete  
+**Test Coverage**: ✅ 236 tests, 100% pass rate
+
+See [PROJECT_STATUS.md](PROJECT_STATUS.md) for detailed status and roadmap.
+
 ## 🎯 What is OutLabs Auth?
 
 OutLabs Auth is a **standalone authentication API** that provides:
@@ -19,13 +28,14 @@ OutLabs Auth is a **standalone authentication API** that provides:
 - **JWT Authentication**: Access tokens (15min) and refresh tokens (30 days)
 - **Multi-device Sessions**: Support for multiple concurrent sessions
 - **Rate Limiting**: Built-in brute force protection
-- **Password Policies**: Configurable password requirements
+- **Strong Password Policies**: Enforced uppercase, lowercase, digit, and special character requirements
 - **Account Security**: Email verification, password reset, account locking
+- **Input Validation**: SQL/NoSQL injection prevention with input sanitization
 
 ### Authorization System  
 - **Explicit Permission Scoping**: Three levels of access control
   - **Entity-specific**: `entity:read` - Access only the specific entity
-  - **Hierarchical**: `entity:read_tree` - Access entity and all descendants
+  - **Hierarchical**: `entity:read_tree` - Access all descendants (not the entity itself)
   - **Platform-wide**: `entity:read_all` - Access all entities in platform
 - **Action-based Permissions**: Separate permissions for each action (read, create, update, delete)
 - **Custom Permissions**: Create domain-specific permissions for your application
@@ -156,7 +166,9 @@ For comprehensive integration guidance:
 
 ### Permission System
 
-The platform uses a sophisticated permission system with explicit scoping for maximum flexibility and security:
+The platform uses a sophisticated permission system with explicit scoping for maximum flexibility and security.
+
+> **Important**: Tree permissions grant access to descendants only, not the entity where assigned. See the [Tree Permissions Guide](docs/TREE_PERMISSIONS_GUIDE.md) for detailed information.
 
 #### Permission Scoping Levels
 
@@ -171,7 +183,7 @@ Permissions follow a three-tier scoping model:
 2. **Hierarchical Permissions** (Tree Access)
    - Format: `resource:action_tree`
    - Example: `entity:read_tree`, `user:update_tree`, `role:delete_tree`
-   - Scope: The entity and ALL its descendants in the hierarchy
+   - Scope: ALL descendants of the entity (NOT the entity where assigned)
    - Use Case: Organization admins who manage all teams within their org
 
 3. **Platform-Wide Permissions** (Least Restrictive)
@@ -181,13 +193,23 @@ Permissions follow a three-tier scoping model:
    - Use Case: Platform administrators with global access
 
 #### System Permissions (Built-in)
-These permissions are hardcoded and always available:
-- `system:manage_all`, `system:read_all` - Full system access
-- `platform:manage_platform` - Platform administration
+
+All system permissions follow a consistent CRUD pattern for predictability:
+
+**Core Resources**:
 - `entity:create`, `entity:read`, `entity:update`, `entity:delete` - Entity operations
-- `user:manage`, `user:read`, `user:create`, `user:update`, `user:delete` - User operations
-- `role:manage`, `role:read`, `role:create`, `role:update`, `role:delete` - Role operations
-- `member:manage`, `member:read`, `member:add`, `member:update`, `member:remove` - Membership operations
+- `user:create`, `user:read`, `user:update`, `user:delete` - User operations  
+- `role:create`, `role:read`, `role:update`, `role:delete` - Role operations
+- `member:create`, `member:read`, `member:update`, `member:delete` - Membership operations
+- `permission:create`, `permission:read`, `permission:update`, `permission:delete` - Permission operations
+
+**Special Permissions**:
+- `system:read_all` - Full system read access
+- `platform:read_platform` - Platform administration
+- `user:invite` - Compound operation to create user + assign to entity
+- `*` - Wildcard permission (system users only)
+
+Each permission also has `_tree` and `_all` variants for hierarchical and platform-wide access.
 
 #### Custom Permissions
 Created during system initialization for common use cases:
@@ -205,11 +227,18 @@ Created during system initialization for common use cases:
 {
     "name": "org_admin",
     "permissions": [
-        "entity:read_tree",      # Read org and all child entities
+        "entity:read",           # Read the org entity itself
+        "entity:read_tree",      # Read all child entities below org
         "entity:update",         # Update only the org entity itself
         "entity:create",         # Create child entities
-        "user:manage_tree",      # Manage users in org and children
-        "role:manage"            # Manage roles at org level
+        "user:read_tree",        # Read users in org and children
+        "user:create_tree",      # Create users in org and children
+        "user:update_tree",      # Update users in org and children
+        "user:delete_tree",      # Delete users in org and children
+        "role:read",             # Read roles at org level
+        "role:create",           # Create roles at org level
+        "role:update",           # Update roles at org level
+        "role:delete"            # Delete roles at org level
     ]
 }
 
@@ -219,8 +248,14 @@ Created during system initialization for common use cases:
     "permissions": [
         "entity:read",           # Read only their team
         "entity:update",         # Update team settings
-        "user:manage",           # Manage team members
-        "member:manage"          # Manage team memberships
+        "user:read",             # Read team members
+        "user:create",           # Create team members
+        "user:update",           # Update team members
+        "user:delete",           # Delete team members
+        "member:read",           # Read team memberships
+        "member:create",         # Add team members
+        "member:update",         # Update memberships
+        "member:delete"          # Remove team members
     ]
 }
 
@@ -333,19 +368,56 @@ POST /v1/permissions/
 
 ## 🧪 Testing
 
-### Run Backend Tests
+### Comprehensive Test Suite
+
+OutlabsAuth includes a comprehensive test suite with **230+ tests** covering all critical functionality:
+
+**Test Coverage** (94.7% pass rate):
+- ✅ **Authentication**: Login, logout, token refresh, password reset
+- ✅ **User Management**: CRUD operations, profile updates, bulk operations  
+- ✅ **Entity Hierarchy**: Tree validation, circular prevention, multi-level operations
+- ✅ **Entity Access**: Search, filtering, visibility with tree permissions
+- ✅ **Roles & Permissions**: Assignment, inheritance, tree permissions
+- ✅ **Memberships**: User-entity relationships, multi-role support
+- ✅ **Permission Enforcement**: Endpoint protection, hierarchical access
+- ✅ **Complex Scenarios**: Real-world multi-entity workflows
+- ✅ **Security**: Permission escalation prevention, data isolation
+
+### Running Tests
+
 ```bash
-# Run all tests
-uv run pytest
+# Run the comprehensive test suite
+uv run python test/run_all_tests.py
 
-# Run with coverage
-uv run pytest --cov
+# Run specific test suite
+uv run python test/run_all_tests.py --test authentication
+uv run python test/run_all_tests.py --test complex_scenarios
 
-# Run specific test file
-uv run pytest tests/test_auth_routes.py
+# List available test suites
+uv run python test/run_all_tests.py --list
+
+# Run with pytest directly (for debugging)
+uv run pytest test/test_authentication.py -v
+
+# Clear auth token cache before testing
+uv run python test/run_all_tests.py --clear-cache
 ```
 
+### Test Organization
+
+Tests are organized into focused suites:
+- `test_authentication.py` - Auth flows and token management
+- `test_user_management.py` - User CRUD and profiles
+- `test_entity_hierarchy.py` - Entity relationships and validation
+- `test_entity_access.py` - Entity visibility and search
+- `test_roles_permissions.py` - Role and permission management
+- `test_memberships.py` - User-entity relationships
+- `test_permission_enforcement.py` - Endpoint access control
+- `test_complex_scenarios.py` - Real-world workflows
+- `test_security.py` - Security vulnerability tests
+
 ### Code Quality Checks
+
 ```bash
 # Format code
 uv run black .
@@ -354,8 +426,11 @@ uv run isort .
 # Lint
 uv run flake8 .
 
-# Type checking
+# Type checking  
 uv run mypy .
+
+# Run all quality checks before committing
+uv run black . && uv run isort . && uv run flake8 . && uv run mypy .
 ```
 
 ## 📚 API Documentation

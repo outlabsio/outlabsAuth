@@ -168,15 +168,15 @@ def require_self_or_permission(permission: str) -> Callable:
 
 # Common permission dependencies
 require_user_read = require_permission("user:read")
-require_user_manage = require_permission("user:manage")
+# Removed require_user_manage - routes should check individual permissions
 require_entity_read = require_entity_access("entity:read")
 require_entity_update = require_entity_access("entity:update")  # Will be replaced below after definition
 require_entity_delete = require_entity_access("entity:delete")
 require_entity_create = require_permission("entity:create")  # Will be replaced in routes with tree-aware version
 require_member_read = require_entity_access("member:read")
-require_member_manage = require_entity_access("member:manage")
+# Removed require_member_manage - routes should check individual permissions
 require_role_read = require_permission("role:read")
-require_role_manage = require_permission("role:manage")
+# Removed require_role_manage - routes should check individual permissions
 
 
 class PermissionChecker:
@@ -323,10 +323,7 @@ async def require_user_read(current_user: UserModel = Depends(get_current_user))
     return current_user
 
 
-async def require_user_manage(current_user: UserModel = Depends(get_current_user)) -> UserModel:
-    """Require user:manage permission"""
-    await PermissionChecker.require_user_permission(current_user, "user:manage")
-    return current_user
+# Removed require_user_manage - use specific permissions instead
 
 
 async def require_entity_create_with_parent(
@@ -373,15 +370,7 @@ async def require_entity_create_with_parent(
                 if has_tree_perm:
                     return current_user
                 
-                # Also check for entity:manage_tree in ancestor (which includes create)
-                has_manage_tree, _ = await permission_service.check_permission(
-                    str(current_user.id),
-                    "entity:manage_tree",
-                    str(ancestor.id)
-                )
-                
-                if has_manage_tree:
-                    return current_user
+                # No need to check manage_tree since we removed compound permissions
         except Exception as e:
             # If we can't get the parent path, just check the direct parent
             # Check for entity:create_tree in parent
@@ -394,15 +383,7 @@ async def require_entity_create_with_parent(
             if has_tree_perm:
                 return current_user
             
-            # Also check for entity:manage_tree in parent (which includes create)
-            has_manage_tree, _ = await permission_service.check_permission(
-                str(current_user.id),
-                "entity:manage_tree",
-                parent_entity_id
-            )
-            
-            if has_manage_tree:
-                return current_user
+            # No need to check manage_tree since we removed compound permissions
     
     # Check for system-wide permissions
     has_create_all, _ = await permission_service.check_permission(

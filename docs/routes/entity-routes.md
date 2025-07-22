@@ -4,6 +4,8 @@
 
 Entity routes handle all operations related to the unified entity system, including structural entities (organizations, divisions, teams) and access groups (functional groups, permission groups).
 
+> **Important**: Entity operations support tree permissions. See the [Tree Permissions Guide](../TREE_PERMISSIONS_GUIDE.md) for detailed information about how tree permissions work.
+
 ## Endpoints
 
 ### Get Entity Type Suggestions
@@ -125,7 +127,10 @@ Creates a new entity in the system.
 
 #### Authentication
 
-Requires `entity:create` permission.
+Requires one of:
+- `entity:create` permission in the parent entity (to create a sibling)
+- `entity:create_tree` permission in any ancestor of the parent entity (to create descendants)
+- `entity:create_all` permission (platform-wide access)
 
 ---
 
@@ -169,7 +174,12 @@ Same as create entity, but all fields are optional. Only provided fields will be
 
 #### Authentication
 
-Requires `entity:manage` permission in the entity.
+Requires one of:
+- `entity:update` permission in the entity itself
+- `entity:update_tree` permission in any ancestor entity (parent, grandparent, etc.)
+- `entity:update_all` permission (platform-wide access)
+
+Note: `entity:update_tree` only allows updating descendant entities, not the entity where it's assigned.
 
 ---
 
@@ -193,7 +203,12 @@ Soft deletes an entity (marks as archived).
 
 #### Authentication
 
-Requires `entity:manage` permission in the entity.
+Requires one of:
+- `entity:update` permission in the entity itself
+- `entity:update_tree` permission in any ancestor entity (parent, grandparent, etc.)
+- `entity:update_all` permission (platform-wide access)
+
+Note: `entity:update_tree` only allows updating descendant entities, not the entity where it's assigned.
 
 ---
 

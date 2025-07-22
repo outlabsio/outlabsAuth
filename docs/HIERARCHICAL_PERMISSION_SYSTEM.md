@@ -1,5 +1,7 @@
 # Hierarchical Permission System
 
+> **Important**: For detailed information about tree permission behavior, see the [Tree Permissions Guide](TREE_PERMISSIONS_GUIDE.md).
+
 ## Overview
 
 OutlabsAuth implements a sophisticated three-tier permission scoping model that provides flexible access control across entity hierarchies. This system allows permissions to be granted at specific entities, across entire subtrees, or platform-wide.
@@ -12,9 +14,9 @@ OutlabsAuth implements a sophisticated three-tier permission scoping model that 
 - **Use Case**: Team lead who can only manage their own team
 
 ### 2. Tree/Hierarchical Permissions (`resource:action_tree`)
-- **Scope**: Access within the entity and all its descendants
-- **Example**: `entity:create_tree` - Can create entities anywhere in the subtree
-- **Use Case**: Regional manager who can manage all offices and teams in their region
+- **Scope**: Access to all descendants only (NOT the entity where assigned)
+- **Example**: `entity:create_tree` - Can create entities anywhere below the assigned entity
+- **Use Case**: Regional manager who can manage all offices and teams below their region (but needs `entity:update` to modify the region itself)
 
 ### 3. Platform-Wide Permissions (`resource:action_all`)
 - **Scope**: Access across the entire platform
@@ -82,22 +84,25 @@ Platform (OutlabsAuth)
 ```
 
 **Regional Manager** with `entity:manage_tree` at "West Region":
-- ✅ Can create new offices in West Region
+- ✅ Can create new offices under West Region
 - ✅ Can update Seattle Office details
 - ✅ Can create teams under any West Region office
+- ❌ Cannot update West Region itself (would need `entity:manage` for that)
 - ❌ Cannot access East Region entities
 
 ### 2. Platform Administrator
 ```
 Platform Admin with permissions at platform level:
-- entity:manage_tree
+- entity:manage        # Manage the platform entity
+- entity:manage_tree   # Manage all orgs/divisions below
 - user:manage_tree
 - role:manage_tree
 ```
 
 **Can**:
-- ✅ Create organizations
-- ✅ Manage any entity in the platform
+- ✅ Update platform settings (due to entity:manage)
+- ✅ Create organizations under the platform
+- ✅ Manage any entity below the platform
 - ✅ Create users anywhere
 - ✅ Assign roles at any level
 

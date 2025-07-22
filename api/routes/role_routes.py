@@ -18,7 +18,7 @@ from api.schemas.role_schema import (
 from api.services.role_service import RoleService
 from api.dependencies import (
     require_role_read,
-    require_role_manage,
+    require_permission,
     get_current_user
 )
 
@@ -51,7 +51,7 @@ async def _get_entity_info(role):
     return entity_name, entity_id
 
 
-@router.post("/", response_model=RoleResponse, dependencies=[Depends(require_role_manage)])
+@router.post("/", response_model=RoleResponse, dependencies=[Depends(require_permission("role:create"))])
 async def create_role(
     role_data: RoleCreate,
     current_user: UserModel = Depends(get_current_user)
@@ -59,7 +59,7 @@ async def create_role(
     """
     Create a new role
     
-    Requires: role:manage permission
+    Requires: role:create permission
     """
     role = await RoleService.create_role(
         name=role_data.name,
@@ -119,7 +119,7 @@ async def get_role(role_id: str):
     )
 
 
-@router.put("/{role_id}", response_model=RoleResponse, dependencies=[Depends(require_role_manage)])
+@router.put("/{role_id}", response_model=RoleResponse, dependencies=[Depends(require_permission("role:update"))])
 async def update_role(
     role_id: str,
     update_data: RoleUpdate,
@@ -128,7 +128,7 @@ async def update_role(
     """
     Update a role
     
-    Requires: role:manage permission
+    Requires: role:update permission
     """
     role = await RoleService.update_role(
         role_id=role_id,
@@ -158,7 +158,7 @@ async def update_role(
     )
 
 
-@router.delete("/{role_id}", dependencies=[Depends(require_role_manage)])
+@router.delete("/{role_id}", dependencies=[Depends(require_permission("role:delete"))])
 async def delete_role(
     role_id: str,
     current_user: UserModel = Depends(get_current_user)
@@ -166,7 +166,7 @@ async def delete_role(
     """
     Delete a role
     
-    Requires: role:manage permission
+    Requires: role:delete permission
     """
     await RoleService.delete_role(role_id, current_user)
     return {"message": "Role deleted successfully"}
@@ -276,12 +276,12 @@ async def get_assignable_roles(
 @router.post("/entity/{entity_id}/defaults", response_model=List[RoleResponse])
 async def create_default_roles(
     entity_id: str,
-    current_user: UserModel = Depends(require_role_manage)
+    current_user: UserModel = Depends(require_permission("role:create"))
 ):
     """
     Create default roles for an entity
     
-    Requires: role:manage permission
+    Requires: role:create permission
     """
     roles = await RoleService.create_default_roles(entity_id)
     

@@ -231,12 +231,12 @@ Permissions use a three-tier scoping model with automatic inheritance:
    - Users with `entity:create_tree` in a parent can create entities anywhere in the subtree
    - Users with `entity:update_tree` in a parent can update entities anywhere in the subtree
    - Tree permissions are checked up the entire ancestor chain, not just immediate parent
-   - Example: Platform admin with `entity:manage_tree` at platform level can manage all entities below the platform
-   - Example: To both manage an entity AND its descendants, assign both `entity:manage` and `entity:manage_tree`
+   - Example: Platform admin with tree permissions at platform level can perform actions on all entities below the platform
+   - Example: To both update an entity AND its descendants, assign both `entity:update` and `entity:update_tree`
 
-3. **Action Inheritance**: `manage` includes all lesser actions
-   - `entity:manage` → `entity:create`, `entity:update`, `entity:delete`, `entity:read`
-   - `entity:manage_tree` → `entity:create_tree`, `entity:update_tree`, etc.
+3. **No Compound Permissions**: Each action must be explicitly granted
+   - No automatic expansion of permissions
+   - Grant each permission individually: `entity:create`, `entity:update`, `entity:delete`, `entity:read`
 
 4. **Tree Permission Implementation** (Fixed 2025-07-21):
    - ✅ Entity creation with tree permissions works correctly
@@ -275,25 +275,23 @@ routes/ → services/ → models/
 ## Critical Implementation Notes
 
 ### Permission Checks
-Always use the hierarchical permission checker:
+Always use the permission checker:
 ```python
-from api.dependencies import check_hierarchical_permissions
+from api.dependencies import require_permission
 
 # In routes
-@router.post("/", dependencies=[Depends(check_hierarchical_permissions("user:manage"))])
+@router.post("/", dependencies=[Depends(require_permission("user:create"))])
 ```
-
-**Important Permission Examples**:
 ```python
-# To manage an entity and its descendants, assign BOTH permissions:
+# To update an entity and its descendants, assign BOTH permissions:
 role.permissions = [
-    "entity:manage",      # Manage the entity itself
-    "entity:manage_tree"  # Manage all descendants
+    "entity:update",      # Update the entity itself
+    "entity:update_tree"  # Update all descendants
 ]
 
 # Tree permissions alone DO NOT grant access to the assigned entity:
 role.permissions = [
-    "entity:manage_tree"  # ❌ Cannot manage the entity where this is assigned
+    "entity:update_tree"  # ❌ Cannot update the entity where this is assigned
                          # ✅ Can manage all child entities below
 ]
 ```

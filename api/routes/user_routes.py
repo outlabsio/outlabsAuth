@@ -25,7 +25,7 @@ from api.schemas.user_schema import (
 from api.services.user_service import UserService
 from api.dependencies import (
     require_user_read,
-    require_user_manage,
+    require_permission,
     require_self_or_permission,
     get_current_user
 )
@@ -79,7 +79,7 @@ async def search_users(
     )
 
 
-@router.post("/", response_model=UserResponse, dependencies=[Depends(require_user_manage)])
+@router.post("/", response_model=UserResponse, dependencies=[Depends(require_permission("user:create"))])
 async def create_user(
     user_data: UserCreateRequest,
     current_user: UserModel = Depends(get_current_user)
@@ -87,7 +87,7 @@ async def create_user(
     """
     Create a new user with entity assignments
     
-    Requires: user:manage permission
+    Requires: user:create permission
     """
     profile_data = {
         "first_name": user_data.first_name,
@@ -137,12 +137,12 @@ async def get_user(
 async def update_user(
     user_id: str,
     user_data: UserUpdateRequest,
-    current_user: UserModel = Depends(require_self_or_permission("user:manage"))
+    current_user: UserModel = Depends(require_self_or_permission("user:update"))
 ):
     """
     Update user profile and entity assignments
     
-    Requires: user:manage permission or self
+    Requires: user:update permission or self
     """
     # Update profile if provided
     if any([user_data.email, user_data.first_name, user_data.last_name, user_data.phone, user_data.is_active is not None]):
@@ -194,7 +194,7 @@ async def update_user(
     return await _user_to_response(user)
 
 
-@router.delete("/{user_id}", dependencies=[Depends(require_user_manage)])
+@router.delete("/{user_id}", dependencies=[Depends(require_permission("user:delete"))])
 async def delete_user(
     user_id: str,
     hard_delete: bool = Query(False, description="Permanently delete user"),
@@ -203,7 +203,7 @@ async def delete_user(
     """
     Delete or deactivate user
     
-    Requires: user:manage permission
+    Requires: user:delete permission
     """
     await UserService.delete_user(
         user_id=user_id,
@@ -215,7 +215,7 @@ async def delete_user(
     return {"message": f"User {action} successfully"}
 
 
-@router.post("/{user_id}/status", response_model=UserResponse, dependencies=[Depends(require_user_manage)])
+@router.post("/{user_id}/status", response_model=UserResponse, dependencies=[Depends(require_permission("user:update"))])
 async def update_user_status(
     user_id: str,
     status_update: UserStatusUpdate,
@@ -224,7 +224,7 @@ async def update_user_status(
     """
     Update user account status
     
-    Requires: user:manage permission
+    Requires: user:update permission
     """
     user = await UserService.update_user_status(
         user_id=user_id,
@@ -235,7 +235,7 @@ async def update_user_status(
     return await _user_to_response(user)
 
 
-@router.post("/invite", response_model=UserInviteResponse, dependencies=[Depends(require_user_manage)])
+@router.post("/invite", response_model=UserInviteResponse, dependencies=[Depends(require_permission("user:invite"))])
 async def invite_user(
     invite_request: UserInviteRequest,
     current_user: UserModel = Depends(get_current_user)
@@ -243,7 +243,7 @@ async def invite_user(
     """
     Invite a user to an entity
     
-    Requires: user:manage permission
+    Requires: user:invite permission
     """
     user = await UserService.invite_user(
         email=invite_request.email,
@@ -270,7 +270,7 @@ async def invite_user(
     )
 
 
-@router.post("/{user_id}/reset-password", response_model=UserPasswordResetResponse, dependencies=[Depends(require_user_manage)])
+@router.post("/{user_id}/reset-password", response_model=UserPasswordResetResponse, dependencies=[Depends(require_permission("user:update"))])
 async def reset_user_password(
     user_id: str,
     reset_request: UserPasswordResetRequest,
@@ -279,7 +279,7 @@ async def reset_user_password(
     """
     Reset user password (admin function)
     
-    Requires: user:manage permission
+    Requires: user:update permission
     """
     temp_password = await UserService.reset_user_password(
         user_id=user_id,
@@ -357,7 +357,7 @@ async def get_user_stats():
     )
 
 
-@router.post("/bulk-action", response_model=UserBulkActionResponse, dependencies=[Depends(require_user_manage)])
+@router.post("/bulk-action", response_model=UserBulkActionResponse)
 async def bulk_user_action(
     bulk_request: UserBulkActionRequest,
     current_user: UserModel = Depends(get_current_user)
@@ -365,8 +365,12 @@ async def bulk_user_action(
     """
     Perform bulk action on multiple users
     
-    Requires: user:manage permission
+    Requires: user:update permission for status changes
     """
+    # Check permission first
+    from api.dependencies import PermissionChecker
+    await PermissionChecker.require_user_permission(current_user, "user:update")
+    
     successful = []
     failed = []
     

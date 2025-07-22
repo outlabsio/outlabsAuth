@@ -23,42 +23,39 @@ class PermissionManagementService:
     # System permissions that cannot be modified or deleted
     SYSTEM_PERMISSIONS = {
         # System level
-        "system:manage_all", "system:read_all",
+        "system:read_all",
         
         # Platform level
-        "platform:manage", "platform:manage_platform", "platform:read_platform",
+        "platform:read_platform",
         
         # Entity management - with hierarchical scoping
-        "entity:manage_all", "entity:read_all",
+        "entity:read_all",
         "entity:read", "entity:read_tree",
         "entity:create", "entity:create_tree",
         "entity:update", "entity:update_tree", 
         "entity:delete", "entity:delete_tree",
         
         # User management - with hierarchical scoping
-        "user:manage", "user:manage_tree", "user:manage_all",
-        "user:manage_client", "user:read", "user:read_tree", "user:read_all",
+        "user:read", "user:read_tree", "user:read_all",
         "user:create", "user:create_tree", "user:update", "user:update_tree",
         "user:delete", "user:delete_tree", "user:invite", "user:invite_tree",
         
         # Role management - with hierarchical scoping
-        "role:manage", "role:manage_tree", "role:manage_all",
         "role:read", "role:read_tree", "role:read_all",
         "role:create", "role:create_tree", "role:update", "role:update_tree",
-        "role:delete", "role:delete_tree", "role:assign", "role:assign_tree",
+        "role:delete", "role:delete_tree",
         
         # Member management - with hierarchical scoping
-        "member:manage", "member:manage_tree",
         "member:read", "member:read_tree",
-        "member:add", "member:add_tree",
+        "member:create", "member:create_tree",
         "member:update", "member:update_tree",
-        "member:remove", "member:remove_tree",
+        "member:delete", "member:delete_tree",
         
         # Permission management
-        "permission:manage", "permission:read", "permission:create", "permission:update", "permission:delete",
+        "permission:read", "permission:create", "permission:update", "permission:delete",
         
         # Wildcard permissions
-        "*:manage_all", "*:read_all", "*"
+        "*:read_all", "*"
     }
     
     @staticmethod
@@ -463,7 +460,7 @@ class PermissionManagementService:
         # Add wildcard patterns
         available_names.add("*")
         available_names.update([f"{r}:*" for r in ["user", "entity", "role", "member", "permission"]])
-        available_names.update([f"*:{a}" for a in ["read", "create", "update", "delete", "manage"]])
+        available_names.update([f"*:{a}" for a in ["read", "create", "update", "delete"]])
         
         # Validate each permission
         validated = []

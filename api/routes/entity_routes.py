@@ -25,7 +25,7 @@ from api.dependencies import (
     require_entity_update,
     require_entity_delete,
     require_member_read,
-    require_member_manage,
+    require_entity_access,
     require_self_or_permission,
     get_current_user,
     require_entity_create_with_parent
@@ -360,6 +360,15 @@ async def search_entities(
                 if entity.id in visible_entity_ids:
                     filtered_entities.append(entity)
             
+            # If we need to include all visible entities (not just from search results)
+            # we should query them separately
+            if not search_params.query and not filtered_entities:
+                # Get all visible entities for the user
+                visible_entities = await EntityModel.find(
+                    {"_id": {"$in": list(visible_entity_ids)}}
+                ).to_list()
+                filtered_entities = visible_entities
+            
             entities = filtered_entities
             # Update total count after filtering
             total = len(entities)
@@ -526,12 +535,12 @@ async def list_entity_roles(
 async def add_entity_member(
     entity_id: str,
     member_data: EntityMemberAdd,
-    current_user: UserModel = Depends(require_member_manage)
+    current_user: UserModel = Depends(require_entity_access("member:create"))
 ):
     """
     Add a member to an entity
     
-    Requires: member:manage permission in entity
+    Requires: member:create permission in entity
     """
     
     membership = await EntityMembershipService.add_member(entity_id, member_data, current_user)
@@ -613,12 +622,12 @@ async def update_entity_member(
     entity_id: str,
     user_id: str,
     update_data: EntityMemberUpdate,
-    current_user: UserModel = Depends(require_member_manage)
+    current_user: UserModel = Depends(require_entity_access("member:update"))
 ):
     """
     Update a member's role or status in an entity
     
-    Requires: member:manage permission in entity
+    Requires: member:update permission in entity
     """
     
     membership = await EntityMembershipService.update_member(
@@ -673,12 +682,12 @@ async def remove_entity_member(
     entity_id: str,
     user_id: str,
     hard_delete: bool = Query(False, description="Permanently delete membership"),
-    current_user: UserModel = Depends(require_member_manage)
+    current_user: UserModel = Depends(require_entity_access("member:delete"))
 ):
     """
     Remove a member from an entity
     
-    Requires: member:manage permission in entity
+    Requires: member:delete permission in entity
     """
     
     success = await EntityMembershipService.remove_member(

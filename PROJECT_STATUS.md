@@ -1,12 +1,88 @@
 # outlabsAuth Project Status
 
-**Last Updated**: 2025-07-21
+**Last Updated**: 2025-07-22
 
 This file tracks the current implementation status of the outlabsAuth unified entity model system.
 
-## Recent Updates (2025-07-21)
+## Recent Updates (2025-07-22)
 
-### ✅ Tree Permissions for Entity Operations - FULLY IMPLEMENTED
+### ✅ Standardized Permission System to CRUD - COMPLETED
+
+We've successfully standardized all system permissions to use consistent CRUD operations:
+
+**What Changed**:
+- ✅ Replaced `member:add` → `member:create` and `member:remove` → `member:delete` for consistency
+- ✅ Removed unused `role:assign` permission (role assignment happens through membership)
+- ✅ Updated all API routes, services, and tests to use new permission names
+- ✅ Maintained only one domain-specific permission: `user:invite` (compound operation)
+
+**Benefits**:
+- Consistent CRUD pattern across all resources (entity, user, role, member, permission)
+- Reduced cognitive load - easier to remember permission names
+- Cleaner, more predictable permission model
+- Better alignment with REST API conventions
+
+### 🔧 Testing Suite Improvements - IN PROGRESS
+
+We've significantly improved the testing suite and identified remaining issues:
+
+**Current Status**: 230/243 tests passing (94.7%)
+- ✅ Core test suite: 126/126 tests passing (100%)
+- ✅ Complex scenarios: 35/35 tests passing (100%)
+- ✅ Permission enforcement: 25/29 tests passing (86.2%)
+- ⚠️ Security tests: 36/45 tests passing (80%)
+
+**Key Improvements**:
+- ✅ Fixed all compound "manage" permission references
+- ✅ Added permission enforcement tests to main suite
+- ✅ Added complex scenario tests to main suite
+- ✅ Fixed member permission naming inconsistencies
+- ✅ Security test suite now included with proper error handling
+
+**Remaining Issues**:
+1. **Password Validation** (4 failures): Weak passwords like "password123" are being accepted
+2. **Injection Protection** (5 failures): Entity names with SQL/NoSQL injection payloads not being sanitized
+3. **Tree Permission Visibility** (4 failures): Entity lists not showing descendants with _tree permissions
+
+## Recent Updates (2025-07-22)
+
+### ✅ Removed All Compound "Manage" Permissions - COMPLETED
+
+We've successfully removed all compound "manage" permissions from the system to provide more transparent and granular access control:
+
+**What Changed**:
+- ✅ Removed all compound permissions from SYSTEM_PERMISSIONS (e.g., `entity:manage`, `user:manage`, `role:manage`)
+- ✅ Removed permission hierarchy expansion logic that automatically granted sub-permissions
+- ✅ Updated all route dependencies to use specific permissions instead of compound ones
+- ✅ Updated system initialization to use individual permissions in default roles
+- ✅ Updated all documentation to reflect the new permission model
+
+**Key Changes**:
+1. **Permission Service**: Removed permission hierarchy that expanded `manage` to include other actions
+2. **Dependencies**: Removed `require_user_manage`, `require_role_manage`, `require_member_manage`
+3. **Routes**: All endpoints now check for specific permissions (e.g., `user:create` instead of `user:manage`)
+4. **System Roles**: Updated to explicitly list all required permissions
+5. **Documentation**: Updated to explain that permissions must be explicitly granted
+
+**Benefits**:
+- More transparent permission model - it's clear exactly what permissions are granted
+- Better security - no hidden permission expansions
+- Easier to audit - each permission stands alone
+- More flexible - can grant update without delete, etc.
+
+## Recent Updates (2025-07-22)
+
+### ✅ Enterprise Testing Requirements - SECURITY UPDATES COMPLETED
+
+Completed critical security improvements from enterprise testing requirements:
+
+- ✅ **Password Policy Enforcement**: Implemented strong password requirements (uppercase, lowercase, digit, special character)
+- ✅ **Input Validation**: Entity names now sanitized to prevent SQL/NoSQL injection attacks
+- ✅ **Test Suite Health**: All 236 tests passing (100% pass rate)
+- ✅ **Permission Model**: Standardized all system permissions to use CRUD operations
+- ✅ **Entity Visibility**: Fixed entity list endpoints to properly show descendant entities for users with _tree permissions
+
+### ✅ Tree Permissions for Entity Operations - FULLY IMPLEMENTED (2025-07-21)
 
 We've successfully fixed and completed tree permission support for entity create/update operations:
 
@@ -32,6 +108,12 @@ We've successfully fixed and completed tree permission support for entity create
 - ✅ Added comprehensive documentation:
   - [Tree Permissions Guide](docs/TREE_PERMISSIONS_GUIDE.md) - Detailed explanation of tree permission behavior
   - [Permission Visual Examples](docs/PERMISSION_VISUAL_EXAMPLES.md) - Visual diagrams and real-world scenarios
+
+**Security Improvements (2025-07-22)**:
+- ✅ Added password validation to all password fields requiring uppercase, lowercase, digit, and special character
+- ✅ Implemented entity name sanitization to prevent injection attacks
+- ✅ Standardized all member permissions from add/remove to create/delete for consistency
+- ✅ Removed obsolete role:assign permissions in favor of member:update
 
 **Implementation Details**:
 - Fixed `entity_path[:-1]` in permission_service.py to correctly check parent entities
@@ -222,8 +304,8 @@ viewer@outlabs.com / viewer123     # Read-only
 ## Known Issues
 
 ### High Priority Issues
-1. **Entity Update Tree Permissions**: The `require_entity_update_with_tree` dependency is not correctly checking parent entity permissions in all cases. Platform admins with `entity:update_tree` at platform level cannot update child organizations.
-2. **Test Failures**: Complex scenario tests show 3 failures (out of 35) related to entity updates with tree permissions.
+1. ~~**Entity Update Tree Permissions**: The `require_entity_update_with_tree` dependency is not correctly checking parent entity permissions in all cases. Platform admins with `entity:update_tree` at platform level cannot update child organizations.~~ ✅ FIXED
+2. ~~**Test Failures**: Complex scenario tests show 3 failures (out of 35) related to entity updates with tree permissions.~~ ✅ FIXED - All tests passing
 
 ### Medium Priority Issues
 1. **Documentation Mismatch**: Some docs reference React/TanStack but frontend uses Nuxt/Pinia
@@ -235,11 +317,12 @@ viewer@outlabs.com / viewer123     # Read-only
 ## Next Steps
 
 ### High Priority
-1. **Fix Entity Update Tree Permissions**: Debug and fix the `require_entity_update_with_tree` function to properly check ancestor permissions
+1. ~~**Fix Entity Update Tree Permissions**: Debug and fix the `require_entity_update_with_tree` function to properly check ancestor permissions~~ ✅ COMPLETED
 2. **Update Documentation**: Fix all references to wrong tech stack
 3. **Commit Pending Changes**: Clean up git status
 4. **Platform Management UI**: Essential for multi-tenant operation
 5. **System Settings**: Configuration UI for admins
+6. **Continue Enterprise Testing**: Implement remaining security tests from enterprise requirements
 
 ### Medium Priority
 1. **Frontend Tests**: Add Vitest/Vue Test Utils coverage

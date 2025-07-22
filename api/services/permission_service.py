@@ -394,58 +394,9 @@ class PermissionService:
         # Policy evaluation engine for ABAC
         self.policy_engine = PolicyEvaluationEngine()
         
-        # Permission hierarchy definitions
-        self.permission_hierarchy = {
-            # System level (highest)
-            "system": {
-                "manage_all": ["read_all", "create_all", "update_all", "delete_all"],
-                "read_all": [],
-                "create_all": [],
-                "update_all": [],
-                "delete_all": []
-            },
-            # Platform level
-            "platform": {
-                "manage_platform": ["read_platform", "create_platform", "update_platform", "delete_platform"],
-                "read_platform": [],
-                "create_platform": [],
-                "update_platform": [],
-                "delete_platform": []
-            },
-            # Entity level
-            "entity": {
-                "manage": ["read", "create", "update", "delete"],
-                "read": [],
-                "create": [],
-                "update": [],
-                "delete": []
-            },
-            # User level
-            "user": {
-                "manage": ["read", "create", "update", "delete"],
-                "read": [],
-                "create": [],
-                "update": [],
-                "delete": []
-            },
-            # Role level
-            "role": {
-                "manage": ["read", "create", "update", "delete", "assign"],
-                "read": [],
-                "create": [],
-                "update": [],
-                "delete": [],
-                "assign": []
-            },
-            # Member level
-            "member": {
-                "manage": ["read", "add", "update", "remove"],
-                "read": [],
-                "add": [],
-                "update": [],
-                "remove": []
-            }
-        }
+        # Permission hierarchy definitions - removed all compound "manage" permissions
+        # Now each permission stands on its own without automatic expansion
+        self.permission_hierarchy = {}
     
     async def resolve_user_permissions(
         self,
@@ -488,7 +439,7 @@ class PermissionService:
         
         # System-level permissions for system users
         if user.is_system_user:
-            permissions["system"] = ["*:manage_all"]
+            permissions["system"] = ["*"]
         
         # Get entity context
         entity = None
@@ -569,7 +520,7 @@ class PermissionService:
         
         # Check each source for exact permission
         for source, perms in user_permissions.items():
-            if permission in perms or "*:manage_all" in perms:
+            if permission in perms or "*" in perms:
                 return True, source
         
         # Check for _all permissions (platform-wide)
@@ -587,7 +538,6 @@ class PermissionService:
             
             # Check each parent for _tree permission
             tree_permission = f"{resource}:{action}_tree"
-            manage_tree_permission = f"{resource}:manage_tree"
             
             
             # entity_path[:-1] gets all entities except the last one (the target entity)
@@ -600,8 +550,6 @@ class PermissionService:
                 
                 for source, perms in parent_permissions.items():
                     if tree_permission in perms:
-                        return True, f"{source}_tree"
-                    if manage_tree_permission in perms:
                         return True, f"{source}_tree"
         
         # Check for wildcard permissions
@@ -929,31 +877,17 @@ class PermissionService:
         """
         Expand permissions based on hierarchy
         
+        Since we removed compound "manage" permissions, this now just returns
+        the permissions as-is without any expansion.
+        
         Args:
             permissions: List of permissions
         
         Returns:
-            Expanded list of permissions
+            Same list of permissions (no expansion)
         """
-        expanded = set(permissions)
-        
-        for perm in permissions:
-            if ":" not in perm:
-                continue
-            
-            resource, action = perm.split(":", 1)
-            
-            # Check if resource exists in hierarchy
-            if resource in self.permission_hierarchy:
-                resource_perms = self.permission_hierarchy[resource]
-                
-                # Check if action exists and has children
-                if action in resource_perms:
-                    child_actions = resource_perms[action]
-                    for child_action in child_actions:
-                        expanded.add(f"{resource}:{child_action}")
-        
-        return list(expanded)
+        # No longer expanding permissions since we removed compound permissions
+        return permissions
     
     def _generate_cache_key(
         self,

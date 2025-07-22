@@ -120,13 +120,21 @@ class SystemService:
             display_name="System Administrator",
             description="Full system administration access",
             permissions=[
-                "*:manage_all",  # All permissions
-                "system:manage_all",
-                "platform:manage_all",
-                "entity:manage_all",
-                "user:manage_all",
-                "role:manage_all",
-                "permission:manage_all"
+                "*",  # All permissions
+                "entity:create_all",
+                "entity:read_all",
+                "entity:update_all",
+                "entity:delete_all",
+                "user:create_all",
+                "user:read_all",
+                "user:update_all",
+                "user:delete_all",
+                "user:invite_all",
+                "role:create_all",
+                "role:read_all",
+                "role:update_all",
+                "role:delete_all",
+                "role:delete_all"
             ],
             entity=root_entity,  # Link to root entity
             assignable_at_types=[],  # Can be assigned at any entity
@@ -140,10 +148,6 @@ class SystemService:
             display_name="Platform Administrator",
             description="Platform-level administration access",
             permissions=[
-                "platform:manage_platform",
-                "entity:manage_platform",
-                "user:manage_platform",
-                "role:manage_platform",
                 "entity:read_all",
                 "user:read_all",
                 "role:read_all"
@@ -165,10 +169,21 @@ class SystemService:
                 "entity:update",          # Update org itself
                 "entity:update_tree",     # Update all descendants
                 "entity:delete_tree",     # Delete org and descendants
-                "user:manage_tree",       # Manage users in entire tree
-                "role:manage",            # Manage roles at org level
+                "user:create_tree",       # Create users in entire tree
+                "user:read_tree",         # Read users in entire tree
+                "user:update_tree",       # Update users in entire tree
+                "user:delete_tree",       # Delete users in entire tree
+                "user:invite_tree",       # Invite users in entire tree
+                "role:create",            # Create roles at org level
+                "role:read",              # Read roles at org level
+                "role:update",            # Update roles at org level
+                "role:delete",            # Delete roles at org level
+                "role:update",            # Update roles at org level
                 "role:read_tree",         # Read roles in tree
-                "member:manage_tree",     # Manage members in tree
+                "member:create_tree",     # Create members in tree
+                "member:read_tree",       # Read members in tree
+                "member:update_tree",     # Update members in tree
+                "member:delete_tree",     # Delete members in tree
                 "user:read_tree",         # Read all users in tree
             ],
             entity=root_entity,
@@ -250,7 +265,10 @@ class SystemService:
             permissions=[
                 "entity:read",
                 "user:read",
-                "member:manage",
+                "member:create",
+                "member:read",
+                "member:update",
+                "member:delete",
                 "user:invite"
             ],
             entity=root_entity,
@@ -347,14 +365,6 @@ class SystemService:
         custom_permissions = [
             # Organization-level permissions
             {
-                "name": "organization:manage_all",
-                "display_name": "Manage All Organizations",
-                "description": "Full control over all organizations in the platform",
-                "resource": "organization",
-                "action": "manage_all",
-                "tags": ["platform", "organization"]
-            },
-            {
                 "name": "organization:create",
                 "display_name": "Create Organizations",
                 "description": "Create new organizations",
@@ -423,11 +433,19 @@ class SystemService:
                 "tags": ["team", "branch"]
             },
             {
-                "name": "team:manage",
-                "display_name": "Manage Teams",
-                "description": "Manage team settings and members",
+                "name": "team:update",
+                "display_name": "Update Teams",
+                "description": "Update team settings",
                 "resource": "team",
-                "action": "manage",
+                "action": "update",
+                "tags": ["team", "branch"]
+            },
+            {
+                "name": "team:delete",
+                "display_name": "Delete Teams",
+                "description": "Delete teams",
+                "resource": "team",
+                "action": "delete",
                 "tags": ["team", "branch"]
             },
             {
@@ -449,11 +467,19 @@ class SystemService:
                 "tags": ["team", "hierarchical"]
             },
             {
-                "name": "team:manage_tree",
-                "display_name": "Manage Team Tree",
-                "description": "Manage team and all sub-teams",
+                "name": "team:update_tree",
+                "display_name": "Update Team Tree",
+                "description": "Update team and all sub-teams",
                 "resource": "team",
-                "action": "manage_tree",
+                "action": "update_tree",
+                "tags": ["team", "hierarchical"]
+            },
+            {
+                "name": "team:delete_tree",
+                "display_name": "Delete Team Tree",
+                "description": "Delete team and all sub-teams",
+                "resource": "team",
+                "action": "delete_tree",
                 "tags": ["team", "hierarchical"]
             },
             
@@ -467,11 +493,19 @@ class SystemService:
                 "tags": ["project"]
             },
             {
-                "name": "project:manage",
-                "display_name": "Manage Projects",
-                "description": "Full project management",
+                "name": "project:update",
+                "display_name": "Update Projects",
+                "description": "Update project settings",
                 "resource": "project",
-                "action": "manage",
+                "action": "update",
+                "tags": ["project"]
+            },
+            {
+                "name": "project:delete",
+                "display_name": "Delete Projects",
+                "description": "Delete projects",
+                "resource": "project",
+                "action": "delete",
                 "tags": ["project"]
             },
             {
@@ -521,14 +555,6 @@ class SystemService:
             
             # API/Integration permissions
             {
-                "name": "api:manage",
-                "display_name": "Manage API Access",
-                "description": "Manage API keys and integrations",
-                "resource": "api",
-                "action": "manage",
-                "tags": ["api", "integration"]
-            },
-            {
                 "name": "api:create",
                 "display_name": "Create API Keys",
                 "description": "Create new API keys",
@@ -539,11 +565,11 @@ class SystemService:
             
             # Settings/Configuration permissions
             {
-                "name": "settings:manage",
-                "display_name": "Manage Settings",
-                "description": "Manage entity settings and configuration",
+                "name": "settings:update",
+                "display_name": "Update Settings",
+                "description": "Update entity settings and configuration",
                 "resource": "settings",
-                "action": "manage",
+                "action": "update",
                 "tags": ["settings", "configuration"]
             },
             {
