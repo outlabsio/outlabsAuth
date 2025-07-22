@@ -119,6 +119,21 @@ class UserCreateRequest(BaseModel):
     entity_assignments: List[UserEntityAssignment] = Field(default_factory=list)
     is_active: bool = Field(default=True)
     send_welcome_email: bool = Field(default=True)
+    
+    @field_validator('password')
+    def validate_password_strength(cls, v):
+        """Ensure password meets minimum requirements"""
+        if v is None:  # Allow None for password generation
+            return v
+        if not any(c.isupper() for c in v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        if not any(c.islower() for c in v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        if not any(c.isdigit() for c in v):
+            raise ValueError('Password must contain at least one digit')
+        if not any(c in '!@#$%^&*()_+-=[]{}|;:,.<>?' for c in v):
+            raise ValueError('Password must contain at least one special character')
+        return v
 
 
 class UserUpdateRequest(BaseModel):

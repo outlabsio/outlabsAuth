@@ -236,7 +236,12 @@ function handleEntityDeleted() {
 
       <!-- Pagination -->
       <div v-if="entitiesStore.pagination.total > entitiesStore.pagination.pageSize" class="mt-6 flex justify-center">
-        <UPagination :model-value="entitiesStore.pagination.page" @update:model-value="entitiesStore.setPage" :page-count="entitiesStore.pagination.pageSize" :total="entitiesStore.pagination.total" />
+        <UPagination 
+          :page="entitiesStore.pagination.page" 
+          :total="entitiesStore.pagination.total" 
+          :items-per-page="entitiesStore.pagination.pageSize" 
+          @update:page="entitiesStore.setPage" 
+        />
       </div>
     </div>
 

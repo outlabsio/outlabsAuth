@@ -145,6 +145,23 @@ export interface UserMembershipListResponse {
   total: number;
 }
 
+export interface EntityMember {
+  id: string;
+  user_id: string;
+  user_email: string;
+  user_name: string;
+  entity_id: string;
+  entity_name: string;
+  role_id: string;
+  role_name: string;
+  permissions: string[];
+  status: string;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  created_at: string;
+  updated_at?: string | null;
+}
+
 export interface UserBulkActionRequest {
   user_ids: string[];
   action: "activate" | "deactivate" | "lock";

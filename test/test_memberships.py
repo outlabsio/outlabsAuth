@@ -451,14 +451,14 @@ class MembershipTest(APITest):
         admin_role = self.factory.create_role(
             org['id'],
             "org_admin",
-            permissions=["entity:create", "entity:read", "entity:update", "entity:delete", "user:manage", "role:manage"]
+            permissions=["entity:create", "entity:read", "entity:update", "entity:delete", "user:create", "user:read", "user:update", "user:delete", "role:create", "role:read", "role:update", "role:delete"]
         )
         
         # Create single admin user
         admin_data = self.factory.create_user_with_role(
             org['id'],
             "sole_admin",
-            permissions=["entity:create", "entity:read", "entity:update", "entity:delete", "user:manage", "role:manage"]
+            permissions=["entity:create", "entity:read", "entity:update", "entity:delete", "user:create", "user:read", "user:update", "user:delete", "role:create", "role:read", "role:update", "role:delete"]
         )
         
         headers = get_system_admin_headers(self.auth)

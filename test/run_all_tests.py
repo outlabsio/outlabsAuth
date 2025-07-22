@@ -15,6 +15,9 @@ from test_entity_hierarchy import EntityHierarchyTest
 from test_entity_access import EntityAccessTest
 from test_roles_permissions import RolePermissionTest
 from test_memberships import MembershipTest
+from test_permission_enforcement import PermissionEnforcementTest
+from test_complex_scenarios import ComplexScenarioTest
+from test_security import SecurityTest
 
 
 def main():
@@ -39,8 +42,9 @@ def main():
         'entity_access': EntityAccessTest,       # Access control validation
         'role_permissions': RolePermissionTest,  # Role and permission management
         'memberships': MembershipTest,           # User-entity membership operations
-        # 'permission_enforcement': PermissionEnforcementTest,
-        # 'complex_scenarios': ComplexScenarioTest,
+        'permission_enforcement': PermissionEnforcementTest,  # Permission checks on endpoints
+        'complex_scenarios': ComplexScenarioTest,  # Real-world multi-entity scenarios
+        'security': SecurityTest,                # Security tests
     }
     
     if args.list:

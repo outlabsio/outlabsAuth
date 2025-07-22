@@ -169,10 +169,10 @@ watch(() => usersStore.filters, () => {
         <!-- Pagination -->
         <div v-if="usersStore.totalPages > 1" class="mt-6 flex justify-center">
           <UPagination 
-            :model-value="usersStore.currentPage" 
-            @update:model-value="usersStore.setPage" 
-            :page-count="usersStore.pageSize" 
+            :page="usersStore.currentPage" 
             :total="usersStore.totalUsers" 
+            :items-per-page="usersStore.pageSize"
+            @update:page="usersStore.setPage" 
           />
         </div>
     </div>

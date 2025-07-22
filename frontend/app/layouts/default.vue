@@ -5,6 +5,7 @@ const route = useRoute();
 const open = ref(false);
 const userStore = useUserStore();
 const debugStore = useDebugStore();
+const authStore = useAuthStore();
 
 // Initialize debug state
 onMounted(() => {
@@ -55,12 +56,12 @@ const links = computed(() => {
     },
   ];
 
-  // Add platform management for superusers
-  if (userStore.isAdmin) {
+  // Add platform management for system users
+  if (userStore.isSystemUser) {
     mainLinks.push({
-      label: "Platforms",
+      label: "Platform",
       icon: "i-lucide-server",
-      to: "/platforms",
+      to: "/platform",
       onSelect: () => {
         open.value = false;
       },

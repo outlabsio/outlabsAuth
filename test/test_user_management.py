@@ -143,34 +143,32 @@ class UserManagementTest(APITest):
         # Verify update
         data = response.json()
         
-        if 'profile' in data and data['profile']:
+        # The API returns a UserResponse with profile field
+        self.assert_true(
+            'profile' in data,
+            "Response has profile",
+            "Profile field present in response"
+        )
+        
+        if data.get('profile'):
             self.assert_equal(
                 data['profile'].get('first_name'),
                 "Updated",
                 "Profile first name updated",
                 "Profile updated successfully"
             )
-        else:
-            # The API might not return the updated profile in the response
-            # Let's fetch the user to verify the update
-            verify_response = self.make_request(
-                'GET',
-                f'/v1/users/{user_data["id"]}',
-                headers=user_headers
+            self.assert_equal(
+                data['profile'].get('last_name'),
+                "Name",
+                "Profile last name updated",
+                "Profile last name updated successfully"
             )
-            if verify_response.status_code == 200:
-                verify_data = verify_response.json()
-                if 'profile' in verify_data and verify_data['profile']:
-                    self.assert_equal(
-                        verify_data['profile'].get('first_name'),
-                        "Updated",
-                        "Profile first name updated",
-                        "Profile verified after update"
-                    )
-                else:
-                    self.pass_test("Profile updated", "Profile update successful (structure may differ)")
-            else:
-                self.pass_test("Profile updated", "Profile update successful (verification skipped)")
+            self.assert_equal(
+                data['profile'].get('phone'),
+                "+1234567890",
+                "Profile phone updated",
+                "Profile phone updated successfully"
+            )
     
     def test_admin_update_user(self):
         """Test admin updating user profile"""

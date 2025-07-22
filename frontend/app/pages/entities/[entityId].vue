@@ -215,18 +215,12 @@
 
         <!-- Members Tab -->
         <template #members>
-          <div class="space-y-4 p-4">
-            <div class="flex justify-between items-center">
-              <h3 class="text-lg font-semibold">Members</h3>
-              <UButton icon="i-lucide-user-plus" label="Add Member" @click="openMemberManagement" />
-            </div>
-
-            <!-- Member management would go here -->
-            <div class="text-center py-12">
-              <UIcon name="i-lucide-users" class="h-12 w-12 mx-auto text-muted-foreground mb-3" />
-              <h3 class="font-medium mb-1">Member management</h3>
-              <p class="text-muted-foreground">Member management functionality coming soon.</p>
-            </div>
+          <div class="p-4">
+            <MemberManagement 
+              v-if="entity"
+              :entity-id="entity.id" 
+              :entity-name="entity.display_name || entity.name"
+            />
           </div>
         </template>
 
@@ -468,10 +462,6 @@ function openCreateDrawer() {
   drawerOpen.value = true;
 }
 
-function openMemberManagement() {
-  // Placeholder for member management
-  console.log("Member management coming soon");
-}
 
 function navigateToEntity(entityId: string) {
   router.push(`/entities/${entityId}`);

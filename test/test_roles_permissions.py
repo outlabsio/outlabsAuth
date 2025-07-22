@@ -78,9 +78,13 @@ class RolePermissionTest(APITest):
             'entity:update',
             'entity:delete',
             'user:read',
-            'user:manage',
+            'user:create',
+            'user:update',
+            'user:delete',
             'role:read',
-            'role:manage'
+            'role:create',
+            'role:update',
+            'role:delete'
         ]
         
         for perm in key_permissions:
@@ -163,7 +167,8 @@ class RolePermissionTest(APITest):
                     "entity:update",
                     "user:read",
                     "user:update",
-                    "user:manage"  # Added permission
+                    "user:create",  # Added permission
+                    "user:delete"   # Added permission
                 ]
             }
         )
@@ -173,16 +178,16 @@ class RolePermissionTest(APITest):
         updated_role = response.json()
         self.assert_equal(
             len(updated_role.get('permissions', [])),
-            5,
+            6,
             "Updated permissions count",
-            "Role now has 5 permissions"
+            "Role now has 6 permissions"
         )
         
         self.assert_contains(
             updated_role.get('permissions', []),
-            'user:manage',
+            'user:create',
             "New permission added",
-            "user:manage permission added successfully"
+            "user:create permission added successfully"
         )
     
     def test_role_assignment_constraints(self):
@@ -293,11 +298,11 @@ class RolePermissionTest(APITest):
             entity_type="team"
         )
         
-        # Create user with user:manage in org1
+        # Create user with user update permissions in org1
         org_admin_data = self.factory.create_user_with_role(
             org1['id'],
             "org_admin",
-            permissions=["user:manage"]
+            permissions=["user:read", "user:update"]
         )
         
         org_admin_headers = self.auth.get_headers(
@@ -324,7 +329,7 @@ class RolePermissionTest(APITest):
         if response.status_code == 200:
             self.pass_test(
                 "Entity scope permissions",
-                "user:manage works within entity context"
+                "user:update works within entity context"
             )
         else:
             self.pass_test(

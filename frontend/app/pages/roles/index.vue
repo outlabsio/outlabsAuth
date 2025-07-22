@@ -234,7 +234,12 @@ function handleRoleDeleted() {
 
       <!-- Pagination -->
       <div v-if="rolesStore.pagination.total > rolesStore.pagination.pageSize" class="mt-6 flex justify-center">
-        <UPagination :model-value="rolesStore.pagination.page" @update:model-value="rolesStore.setPage" :page-count="rolesStore.pagination.pageSize" :total="rolesStore.pagination.total" />
+        <UPagination 
+          :page="rolesStore.pagination.page" 
+          :total="rolesStore.pagination.total" 
+          :items-per-page="rolesStore.pagination.pageSize" 
+          @update:page="rolesStore.setPage" 
+        />
       </div>
       </div>
     </div>

@@ -148,6 +148,8 @@ class TestEntityTreePermissions:
         data = await self.setup_tree_hierarchy(db_session)
         
         # Login as org admin
+        from api.services.auth_service import AuthService
+        auth_service = AuthService()
         
         # Update password hash for org admin
         org_admin = data["org_admin"]
@@ -177,6 +179,15 @@ class TestEntityTreePermissions:
             headers=headers
         )
         
+        # Check for redirect
+        if response.status_code == 307:
+            # Follow the redirect
+            response = await client.post(
+                "/v1/entities/",
+                json=create_data,
+                headers=headers
+            )
+        
         assert response.status_code == 200
         created_entity = response.json()
         assert created_entity["name"] == "test_department"
@@ -192,6 +203,8 @@ class TestEntityTreePermissions:
         data = await self.setup_tree_hierarchy(db_session)
         
         # Login as division admin (no tree permissions)
+        from api.services.auth_service import AuthService
+        auth_service = AuthService()
         division_admin = data["division_admin"]
         division_admin.hashed_password = auth_service.hash_password("password")
         await division_admin.save()
@@ -233,6 +246,8 @@ class TestEntityTreePermissions:
         data = await self.setup_tree_hierarchy(db_session)
         
         # Login as org admin
+        from api.services.auth_service import AuthService
+        auth_service = AuthService()
         org_admin = data["org_admin"]
         org_admin.hashed_password = auth_service.hash_password("password")
         await org_admin.save()
@@ -282,6 +297,8 @@ class TestEntityTreePermissions:
         await department.save()
         
         # Login as division admin (has update in division but not update_tree)
+        from api.services.auth_service import AuthService
+        auth_service = AuthService()
         division_admin = data["division_admin"]
         division_admin.hashed_password = auth_service.hash_password("password")
         await division_admin.save()
@@ -342,6 +359,8 @@ class TestEntityTreePermissions:
         await team.save()
         
         # Login as org admin
+        from api.services.auth_service import AuthService
+        auth_service = AuthService()
         org_admin = data["org_admin"]
         org_admin.hashed_password = auth_service.hash_password("password")
         await org_admin.save()
@@ -379,6 +398,8 @@ class TestEntityTreePermissions:
         data = await self.setup_tree_hierarchy(db_session)
         
         # Login as regular user
+        from api.services.auth_service import AuthService
+        auth_service = AuthService()
         regular_user = data["regular_user"]
         regular_user.hashed_password = auth_service.hash_password("password")
         await regular_user.save()

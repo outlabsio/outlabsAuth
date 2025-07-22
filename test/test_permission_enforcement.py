@@ -65,7 +65,7 @@ class PermissionEnforcementTest(APITest):
         manager_data = self.factory.create_user_with_role(
             org['id'],
             "manager",
-            permissions=["user:manage"]
+            permissions=["user:create", "user:read", "user:update", "user:delete"]
         )
         
         no_perm_data = self.factory.create_user_with_role(
@@ -110,7 +110,7 @@ class PermissionEnforcementTest(APITest):
             "No permission user denied"
         )
         
-        # Test POST /users (requires user:manage)
+        # Test POST /users (requires user:create)
         response = self.make_request(
             'POST',
             '/v1/users',
@@ -231,7 +231,7 @@ class PermissionEnforcementTest(APITest):
             "Updater can update entity"
         )
         
-        # Test DELETE /entities/{id} (requires entity:manage)
+        # Test DELETE /entities/{id} (requires entity:delete)
         response = self.make_request(
             'DELETE',
             f'/v1/entities/{org["id"]}',
@@ -286,7 +286,7 @@ class PermissionEnforcementTest(APITest):
         manager_data = self.factory.create_user_with_role(
             org['id'],
             "role_manager",
-            permissions=["role:manage"]
+            permissions=["role:create", "role:read", "role:update", "role:delete"]
         )
         
         # Test GET /roles (authenticated users can list)
@@ -307,7 +307,7 @@ class PermissionEnforcementTest(APITest):
             "Authenticated user can list roles"
         )
         
-        # Test POST /roles (requires role:manage)
+        # Test POST /roles (requires role:create)
         response = self.make_request(
             'POST',
             '/v1/roles',
@@ -432,7 +432,7 @@ class PermissionEnforcementTest(APITest):
         org1_manager = self.factory.create_user_with_role(
             org1['id'],
             "org1_manager",
-            permissions=["entity:create", "entity:read_tree", "entity:update_tree", "entity:delete_tree", "user:manage_tree"]
+            permissions=["entity:create", "entity:read_tree", "entity:update_tree", "entity:delete_tree", "user:create_tree", "user:read_tree", "user:update_tree", "user:delete_tree"]
         )
         
         # Create entity in org2

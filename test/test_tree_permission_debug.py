@@ -8,7 +8,7 @@ from test_data_factory import TestDataFactory
 
 
 class TreePermissionDebugTest(APITest):
-    """Debug why tree permissions aren't working for member:manage"""
+    """Debug why tree permissions aren't working for member operations"""
     
     def __init__(self, auth_manager):
         super().__init__("Tree Permission Debug Test", auth_manager)

@@ -89,9 +89,12 @@ class ComplexScenarioTest(APITest):
             permissions=[
                 "entity:read_tree",
                 "user:read_tree",
-                "user:manage_tree",
+                "user:create_tree",
+                "user:update_tree",
+                "user:delete_tree",
                 "member:read_tree",
-                "member:manage_tree"
+                "member:create_tree",
+                "member:delete_tree"
             ]
         )
         
@@ -313,11 +316,16 @@ class ComplexScenarioTest(APITest):
                 "entity:update_tree",
                 "entity:delete_tree",
                 "user:read_tree",
-                "user:manage_tree",
+                "user:create_tree",
+                "user:update_tree",
+                "user:delete_tree",
                 "role:read_tree",
-                "role:manage_tree",
+                "role:create_tree",
+                "role:update_tree",
+                "role:delete_tree",
                 "member:read_tree",
-                "member:manage_tree"
+                "member:create_tree",
+                "member:delete_tree"
             ]
         )
         
@@ -448,8 +456,11 @@ class ComplexScenarioTest(APITest):
                 "entity:update",    # Can update dept2 itself
                 "entity:read_tree",
                 "entity:update_tree",
-                "user:manage_tree",
-                "member:manage_tree"
+                "user:create_tree",
+                "user:update_tree",
+                "user:delete_tree",
+                "member:create_tree",
+                "member:delete_tree"
             ]
         )
         

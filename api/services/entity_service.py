@@ -613,8 +613,10 @@ class EntityService:
                     # Check if user has any _tree permissions in this entity
                     tree_permissions = [
                         "entity:read_tree", "entity:update_tree", "entity:delete_tree",
-                        "entity:manage_tree", "user:read_tree", "user:manage_tree",
-                        "role:read_tree", "member:read_tree"
+                        "entity:create_tree", "user:read_tree", "user:create_tree",
+                        "user:update_tree", "user:delete_tree", "role:read_tree",
+                        "role:create_tree", "role:update_tree", "role:delete_tree",
+                        "member:read_tree", "member:create_tree", "member:delete_tree"
                     ]
                     
                     for perm in tree_permissions:

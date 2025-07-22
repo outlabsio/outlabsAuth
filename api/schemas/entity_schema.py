@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List, Literal
 from pydantic import BaseModel, Field, field_validator
 from beanie import PydanticObjectId
+import re
 
 
 class EntityCreate(BaseModel):
@@ -18,6 +19,30 @@ class EntityCreate(BaseModel):
     platform_id: Optional[str] = None
     status: Literal["active", "inactive", "archived"] = "active"
     config: Optional[Dict[str, Any]] = None
+    
+    @field_validator('name')
+    def sanitize_name(cls, v):
+        """Sanitize entity name to prevent injection attacks"""
+        # Remove any SQL/NoSQL injection patterns
+        # Allow alphanumeric, spaces, hyphens, underscores, and dots
+        sanitized = re.sub(r'[^a-zA-Z0-9\s\-_\.]', '', v)
+        # Remove multiple spaces
+        sanitized = re.sub(r'\s+', ' ', sanitized).strip()
+        if not sanitized:
+            raise ValueError('Name contains only invalid characters')
+        # Prevent common injection patterns
+        injection_patterns = [
+            r"^.*[';].*$",  # SQL injection
+            r"^.*--.*$",    # SQL comment
+            r"^.*\/\*.*$",  # SQL comment
+            r"^.*\$\{.*$",  # Template injection
+            r"^.*\{\$.*$",  # MongoDB injection
+        ]
+        for pattern in injection_patterns:
+            if re.match(pattern, v, re.IGNORECASE):
+                # Return sanitized version instead of original
+                return sanitized
+        return v
     
     @field_validator('entity_type')
     def validate_entity_type(cls, v, info):
@@ -45,6 +70,32 @@ class EntityUpdate(BaseModel):
     config: Optional[Dict[str, Any]] = None
     valid_from: Optional[datetime] = None
     valid_until: Optional[datetime] = None
+    
+    @field_validator('name')
+    def sanitize_name(cls, v):
+        """Sanitize entity name to prevent injection attacks"""
+        if v is None:
+            return v
+        # Remove any SQL/NoSQL injection patterns
+        # Allow alphanumeric, spaces, hyphens, underscores, and dots
+        sanitized = re.sub(r'[^a-zA-Z0-9\s\-_\.]', '', v)
+        # Remove multiple spaces
+        sanitized = re.sub(r'\s+', ' ', sanitized).strip()
+        if not sanitized:
+            raise ValueError('Name contains only invalid characters')
+        # Prevent common injection patterns
+        injection_patterns = [
+            r"^.*[';].*$",  # SQL injection
+            r"^.*--.*$",    # SQL comment
+            r"^.*\/\*.*$",  # SQL comment
+            r"^.*\$\{.*$",  # Template injection
+            r"^.*\{\$.*$",  # MongoDB injection
+        ]
+        for pattern in injection_patterns:
+            if re.match(pattern, v, re.IGNORECASE):
+                # Return sanitized version instead of original
+                return sanitized
+        return v
     
     @field_validator('valid_until')
     def validate_validity_period(cls, v, info):
