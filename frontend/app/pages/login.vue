@@ -94,8 +94,7 @@ onMounted(() => {
         <div class="flex justify-center mb-6">
           <UIcon name="i-lucide-shield-check" class="h-12 w-12 text-primary" />
         </div>
-        <h2 class="text-3xl font-bold tracking-tight">Sign in to OutlabsAuth</h2>
-        <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">Enter your credentials to access the admin dashboard</p>
+        <h2 class="text-3xl font-bold tracking-tight">OutlabsAuth</h2>
       </div>
 
       <!-- Login Form Card -->
@@ -105,7 +104,7 @@ onMounted(() => {
           <UAlert v-if="errorMessage" color="error" variant="subtle" icon="i-lucide-alert-circle" :title="errorMessage" :close-button="{ icon: 'i-lucide-x' }" @close="errorMessage = ''" />
 
           <!-- Username Field -->
-          <UFormField label="Username" :error="errors.username" required>
+          <UFormField :error="errors.username">
             <UInput
               v-model="formData.username"
               @blur="
@@ -114,7 +113,7 @@ onMounted(() => {
                   else errors.username = '';
                 }
               "
-              placeholder="Enter your username"
+              placeholder="Username"
               size="lg"
               :disabled="isLoading"
               autofocus
@@ -122,7 +121,7 @@ onMounted(() => {
           </UFormField>
 
           <!-- Password Field -->
-          <UFormField label="Password" :error="errors.password" required>
+          <UFormField :error="errors.password">
             <template #hint>
               <NuxtLink to="/recovery" class="text-sm text-primary hover:underline"> Forgot password? </NuxtLink>
             </template>
@@ -135,7 +134,7 @@ onMounted(() => {
                 }
               "
               type="password"
-              placeholder="Enter your password"
+              placeholder="Password"
               size="lg"
               :disabled="isLoading"
             />

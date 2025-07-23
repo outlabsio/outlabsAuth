@@ -96,7 +96,7 @@ onMounted(async () => {
         <div class="flex justify-center mb-6">
           <UIcon name="i-lucide-shield-check" class="h-12 w-12 text-primary" />
         </div>
-        <h2 class="text-3xl font-bold tracking-tight">Welcome to OutlabsAuth</h2>
+        <h2 class="text-3xl font-bold tracking-tight">OutlabsAuth</h2>
         <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
           Let's set up your system by creating the first administrator account
         </p>
@@ -104,66 +104,64 @@ onMounted(async () => {
 
       <!-- Setup Form Card -->
       <UCard>
-        <template #header>
-          <h3 class="text-lg font-semibold">System Initialization</h3>
-          <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
-            This account will have full system administrator privileges
-          </p>
-        </template>
-
         <UForm :schema="schema" :state="state" @submit="onSubmit" class="space-y-6">
           <!-- Email Field -->
-          <UFormField name="email" label="Email Address" required>
+          <UFormField name="email">
             <UInput
               v-model="state.email"
               type="email"
-              placeholder="admin@example.com"
+              placeholder="Email address"
               size="lg"
               :disabled="isLoading"
               autofocus
+              class="w-full"
             />
           </UFormField>
 
           <!-- First Name and Last Name in a grid -->
           <div class="grid grid-cols-2 gap-4">
-            <UFormField name="firstName" label="First Name" required>
+            <UFormField name="firstName">
               <UInput
                 v-model="state.firstName"
-                placeholder="System"
+                placeholder="First name"
                 size="lg"
                 :disabled="isLoading"
+                class="w-full"
               />
             </UFormField>
 
-            <UFormField name="lastName" label="Last Name" required>
+            <UFormField name="lastName">
               <UInput
                 v-model="state.lastName"
-                placeholder="Administrator"
+                placeholder="Last name"
                 size="lg"
                 :disabled="isLoading"
+                class="w-full"
               />
             </UFormField>
           </div>
 
           <!-- Password Field -->
-          <UFormField name="password" label="Password" required>
+          <UFormField name="password">
             <UInput
               v-model="state.password"
               type="password"
-              placeholder="Enter a strong password"
+              placeholder="Password"
               size="lg"
               :disabled="isLoading"
+              class="w-full"
             />
           </UFormField>
 
           <!-- Confirm Password Field -->
-          <UFormField name="confirmPassword" label="Confirm Password" required>
+          <UFormField name="confirmPassword">
             <UInput
               v-model="state.confirmPassword"
               type="password"
-              placeholder="Confirm your password"
+              placeholder="Confirm password"
               size="lg"
               :disabled="isLoading"
+              class="w-full"
             />
           </UFormField>
 
@@ -175,19 +173,10 @@ onMounted(async () => {
             :loading="isLoading" 
             :disabled="isLoading"
           >
-            {{ isLoading ? "Initializing System..." : "Initialize System" }}
+            {{ isLoading ? "Setting up..." : "Complete Setup" }}
           </UButton>
         </UForm>
       </UCard>
-
-      <!-- Security Note -->
-      <UAlert
-        icon="i-lucide-info"
-        color="blue"
-        variant="subtle"
-        title="Security Note"
-        description="Make sure to use a strong password. This account will have full access to the entire system."
-      />
     </div>
   </div>
 </template>
