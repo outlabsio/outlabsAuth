@@ -213,8 +213,6 @@ Each permission also has `_tree` and `_all` variants for hierarchical and platfo
 
 #### Custom Permissions
 Created during system initialization for common use cases:
-- **Organization**: `organization:manage_all`, `organization:create`, etc.
-- **Team/Branch**: `team:create`, `team:manage`, `team:read`
 - **Analytics**: `analytics:view`, `analytics:export`
 - **Audit**: `audit:view`, `audit:export`
 - **API**: `api:manage`, `api:create`

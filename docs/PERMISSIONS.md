@@ -82,22 +82,6 @@ Custom permissions are created during system initialization and can be extended 
 
 #### Default Custom Permissions
 
-**Organization Management:**
-```
-organization:manage_all - Full control over all organizations
-organization:create - Create new organizations
-organization:read - View organization details
-organization:update - Update organization settings
-organization:delete - Remove organizations
-```
-
-**Team/Branch Management:**
-```
-team:create - Create new teams or branches
-team:manage - Manage team settings and members
-team:read - View team information
-```
-
 **Project Permissions (Future):**
 ```
 project:create - Create new projects
