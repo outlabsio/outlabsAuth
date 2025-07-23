@@ -262,16 +262,32 @@ Each permission also has `_tree` and `_all` variants for hierarchical and platfo
 
 📚 **For detailed permission documentation, see [docs/PERMISSIONS.md](docs/PERMISSIONS.md)**
 
+### Entity System & Platform Flexibility
+
+**Key Design Principle**: In OutlabsAuth, there's no separate "Platform" model. Any entity without a parent is automatically a platform. This provides incredible flexibility:
+
+- **Top-level entities** (no parent) = Platforms
+- Use **any entity_type** for your platform: "workspace", "company", "account", "tenant", etc.
+- Complete **data isolation** between platforms
+- Each platform can have its own **organizational structure**
+
+Examples:
+- SaaS app: Create a "workspace" entity (no parent) for each customer
+- Enterprise: Create a "company" entity (no parent) as your platform
+- Multi-brand: Create separate top-level entities for each brand
+
 ### Entity Hierarchy
 
+Once you have your top-level entity (platform), build any structure:
+
 ```
-Platform (Root)
+Workspace (Top-level entity = Platform)
 ├── Organization
-│   ├── Branch
+│   ├── Division
 │   │   ├── Team
 │   │   └── Access Group
-│   └── Branch
-└── Organization
+│   └── Region
+└── Department
 ```
 
 Each entity can have:

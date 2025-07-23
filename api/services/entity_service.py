@@ -62,12 +62,6 @@ class EntityService:
             if not entity_data.platform_id:
                 entity_data.platform_id = parent_entity.platform_id
         
-        # Prevent creating platforms with parents
-        if entity_data.entity_type.lower() == 'platform' and parent_entity:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Platforms cannot have parent entities. They must be created at the root level."
-            )
         
         # Check for duplicate names within same parent
         existing = await EntityModel.find_one(

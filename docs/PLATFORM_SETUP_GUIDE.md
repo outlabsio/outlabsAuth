@@ -25,17 +25,25 @@ Before setting up a new platform, ensure you have:
 
 ## Phase 1: Platform Creation
 
+### Understanding Platforms
+
+In OutlabsAuth, a "platform" is simply **any entity without a parent**. This flexible design means:
+- You can use any `entity_type` that fits your business (not just "platform")
+- The top-level entity automatically becomes your isolated platform
+- All child entities inherit the platform_id from this root entity
+
 ### Step 1: Create the Platform Entity
 
 Using the OutlabsAuth Admin UI or API:
 
 ```python
-# API Example
+# API Example - Choose an entity_type that fits your business model
 platform_data = {
     "name": "your_platform_name",  # lowercase, no spaces
     "display_name": "Your Platform Name",
-    "entity_type": "platform",
+    "entity_type": "workspace",  # Can be: "platform", "workspace", "company", "account", etc.
     "entity_class": "STRUCTURAL",
+    "parent_entity": None,  # No parent = this becomes a platform
     "metadata": {
         "description": "Lead generation platform for real estate",
         "contact_email": "admin@yourplatform.com",
@@ -45,7 +53,7 @@ platform_data = {
     }
 }
 
-# Create platform
+# Create platform (top-level entity)
 response = await outlabs_auth.post("/v1/entities/", platform_data)
 platform = response.json()
 platform_id = platform["id"]

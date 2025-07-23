@@ -60,15 +60,7 @@ RoleService        # Role assignment, management
 #### Core Models
 
 ```python
-# Platform - Root of everything
-PlatformModel:
-  - id: str
-  - name: str
-  - slug: str
-  - entity_config: EntityConfig
-  - settings: dict
-
-# Entity - Unified model for orgs and groups
+# Entity - The unified model for all organizational structures
 EntityModel:
   - id: str
   - name: str  # System identifier (lowercase, no spaces)
@@ -147,10 +139,54 @@ outlabsAuth -> outlabsAuth: Apply inheritance rules
 outlabsAuth -> Platform App: Return ["lead:read", "lead:create", ...]
 ```
 
+## Platform and Entity System
+
+### Key Concept: Platforms are Top-Level Entities
+
+In OutlabsAuth, **there is no separate "Platform" model**. Instead, any entity without a parent is effectively a platform. This elegant design provides maximum flexibility:
+
+- **Top-level entities** (entities with `parent_entity = null`) are your platforms
+- These can have **any entity_type**: "platform", "workspace", "company", "account", "tenant", or whatever fits your business model
+- The **platform_id** of a top-level entity is its own ID
+- All child entities inherit their **platform_id** from their parent chain
+
+This design means you can:
+- Name your top-level entities based on your business terminology
+- Create multiple isolated platforms in the same system
+- Have different organizational structures under each platform
+- Maintain complete data isolation between platforms
+
+Example top-level entities (all are platforms):
+```python
+# A SaaS company might use "workspace"
+{
+  "name": "acme_workspace",
+  "entity_type": "workspace",
+  "parent_entity": null,  # This makes it a platform
+  "platform_id": "self"   # Will be set to its own ID
+}
+
+# An enterprise might use "company"
+{
+  "name": "megacorp",
+  "entity_type": "company",
+  "parent_entity": null,  # This makes it a platform
+  "platform_id": "self"   # Will be set to its own ID
+}
+
+# A government agency might use "agency"
+{
+  "name": "dept_of_example",
+  "entity_type": "agency",
+  "parent_entity": null,  # This makes it a platform
+  "platform_id": "self"   # Will be set to its own ID
+}
+```
+
 ## Entity Hierarchy System
 
 ### Flexible Entity Types
-Platforms can use any entity type names that match their business model:
+Once you have your top-level entity (platform), you can build any organizational structure beneath it:
 
 **Traditional Corporate Structure:**
 ```
