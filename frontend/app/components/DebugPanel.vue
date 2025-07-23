@@ -229,9 +229,17 @@ onUnmounted(() => {
   document.removeEventListener('mouseup', stopDrag);
 });
 
-// Toggle store expansion
+// Toggle store expansion - accordion style (only one open at a time)
 const toggleStoreExpanded = (storeName: string) => {
-  expandedStores.value[storeName] = !expandedStores.value[storeName];
+  const wasExpanded = expandedStores.value[storeName];
+  
+  // Close all stores
+  Object.keys(expandedStores.value).forEach(key => {
+    expandedStores.value[key] = false;
+  });
+  
+  // Toggle the clicked store
+  expandedStores.value[storeName] = !wasExpanded;
 };
 
 // Copy to clipboard
