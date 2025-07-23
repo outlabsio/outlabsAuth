@@ -1,19 +1,10 @@
 <template>
   <div class="space-y-6">
-    <!-- Header -->
-    <div>
-      <UBreadcrumb :items="breadcrumbItems" class="mb-4" />
-      <div class="flex items-center justify-between">
-        <div>
-          <h1 class="text-2xl font-bold">Entity Types</h1>
-          <p class="text-muted-foreground mt-1">
-            Manage entity type definitions and their hierarchy rules
-          </p>
-        </div>
-        <UButton icon="i-lucide-plus" @click="showCreateModal = true">
-          Create Entity Type
-        </UButton>
-      </div>
+    <!-- Action Button -->
+    <div class="flex justify-end">
+      <UButton icon="i-lucide-plus" @click="showCreateModal = true">
+        Create Entity Type
+      </UButton>
     </div>
 
     <!-- Info Alert -->
@@ -225,6 +216,9 @@
 
 <script setup lang="ts">
 import { z } from 'zod'
+import type { NavigationMenuItem } from '@nuxt/ui'
+
+// Page meta handled by parent settings.vue
 
 // Types
 interface EntityType {
@@ -242,7 +236,12 @@ interface EntityType {
 const authStore = useAuthStore()
 const contextStore = useContextStore()
 const router = useRouter()
+const route = useRoute()
 const toast = useToast()
+
+// Navigation handled by parent settings.vue page
+
+// Navigation handled by parent settings.vue page
 
 // State
 const entityTypes = ref<EntityType[]>([])
@@ -253,11 +252,6 @@ const showDeleteConfirm = ref(false)
 const typeToDelete = ref<EntityType | null>(null)
 const isSubmitting = ref(false)
 
-// Breadcrumb
-const breadcrumbItems = [
-  { label: 'Platform', to: '/platform' },
-  { label: 'Entity Types' }
-]
 
 // Entity class options
 const entityClassOptions = [
@@ -459,28 +453,10 @@ const getActions = (type: EntityType) => [
   }]
 ]
 
-// Check permissions
-const canAccessEntityTypes = computed(() => {
-  return authStore.currentUser?.is_system_user || false
-})
-
-// Redirect if not authorized
+// Initialize data on mount
 onMounted(() => {
-  if (!canAccessEntityTypes.value) {
-    router.push('/')
-  } else {
-    fetchEntityTypes()
-  }
+  fetchEntityTypes()
 })
 
-// SEO
-useHead({
-  title: 'Entity Types',
-  meta: [
-    {
-      name: 'description',
-      content: 'Manage entity type definitions and their hierarchy rules'
-    }
-  ]
-})
+// SEO handled by parent settings.vue page
 </script>

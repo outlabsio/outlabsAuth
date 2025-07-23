@@ -56,12 +56,12 @@ const links = computed(() => {
     },
   ];
 
-  // Add platform management for system users
-  if (userStore.isSystemUser) {
+  // Add settings for system admins
+  if (userStore.isAdmin) {
     mainLinks.push({
-      label: "Platform",
-      icon: "i-lucide-server",
-      to: "/platform",
+      label: "Settings",
+      icon: "i-lucide-settings",
+      to: "/settings",
       onSelect: () => {
         open.value = false;
       },

@@ -1,13 +1,5 @@
 <template>
   <div class="space-y-6">
-    <!-- Header -->
-    <div>
-      <UBreadcrumb :items="breadcrumbItems" class="mb-4" />
-      <h1 class="text-2xl font-bold">Platform Settings</h1>
-      <p class="text-muted-foreground mt-1">
-        Configure platform-wide settings and preferences
-      </p>
-    </div>
 
     <!-- Settings Tabs -->
     <UTabs v-model="activeTab" :items="tabItems" class="w-full">
@@ -171,23 +163,24 @@
 
 <script setup lang="ts">
 import { z } from 'zod'
+import type { NavigationMenuItem } from '@nuxt/ui'
+
+// Page meta handled by parent settings.vue
 
 // Stores
 const authStore = useAuthStore()
 const contextStore = useContextStore()
 const router = useRouter()
+const route = useRoute()
 const toast = useToast()
+
+// Navigation handled by parent settings.vue page
 
 // State
 const activeTab = ref('general')
 const isSaving = ref(false)
 const isTesting = ref(false)
 
-// Breadcrumb
-const breadcrumbItems = [
-  { label: 'Platform', to: '/platform' },
-  { label: 'Settings' }
-]
 
 // Tab configuration
 const tabItems = [
@@ -392,26 +385,7 @@ const testEmailSettings = async () => {
   }
 }
 
-// Check permissions
-const canAccessPlatformSettings = computed(() => {
-  return authStore.currentUser?.is_system_user || false
-})
+// No initialization needed on mount
 
-// Redirect if not authorized
-onMounted(() => {
-  if (!canAccessPlatformSettings.value) {
-    router.push('/')
-  }
-})
-
-// SEO
-useHead({
-  title: 'Platform Settings',
-  meta: [
-    {
-      name: 'description',
-      content: 'Configure platform-wide settings and preferences'
-    }
-  ]
-})
+// SEO handled by parent settings.vue page
 </script>

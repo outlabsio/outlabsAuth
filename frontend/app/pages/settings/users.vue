@@ -1,19 +1,10 @@
 <template>
   <div class="space-y-6">
-    <!-- Header -->
-    <div>
-      <UBreadcrumb :items="breadcrumbItems" class="mb-4" />
-      <div class="flex items-center justify-between">
-        <div>
-          <h1 class="text-2xl font-bold">Platform Users</h1>
-          <p class="text-muted-foreground mt-1">
-            Manage all users across the platform
-          </p>
-        </div>
-        <UButton icon="i-lucide-user-plus" @click="showCreateModal = true">
-          Create User
-        </UButton>
-      </div>
+    <!-- Action Button -->
+    <div class="flex justify-end">
+      <UButton icon="i-lucide-user-plus" @click="showCreateModal = true">
+        Create User
+      </UButton>
     </div>
 
     <!-- Filters -->
@@ -295,12 +286,18 @@
 
 <script setup lang="ts">
 import type { User } from '~/types/auth.types'
+import type { NavigationMenuItem } from '@nuxt/ui'
+
+// Page meta handled by parent settings.vue
 
 // Stores
 const authStore = useAuthStore()
 const contextStore = useContextStore()
 const router = useRouter()
+const route = useRoute()
 const toast = useToast()
+
+// Navigation handled by parent settings.vue page
 
 // State
 const users = ref<User[]>([])
@@ -322,11 +319,6 @@ const filters = reactive({
   status: 'all'
 })
 
-// Breadcrumb
-const breadcrumbItems = [
-  { label: 'Platform', to: '/platform' },
-  { label: 'Users' }
-]
 
 // Table columns
 const columns = [
@@ -494,28 +486,10 @@ const getActions = (user: User) => [
   }]
 ]
 
-// Check permissions
-const canAccessPlatformUsers = computed(() => {
-  return authStore.currentUser?.is_system_user || false
-})
-
-// Redirect if not authorized
+// Initialize data on mount
 onMounted(() => {
-  if (!canAccessPlatformUsers.value) {
-    router.push('/')
-  } else {
-    fetchUsers()
-  }
+  fetchUsers()
 })
 
-// SEO
-useHead({
-  title: 'Platform Users',
-  meta: [
-    {
-      name: 'description',
-      content: 'Manage all users across the platform'
-    }
-  ]
-})
+// SEO handled by parent settings.vue page
 </script>
