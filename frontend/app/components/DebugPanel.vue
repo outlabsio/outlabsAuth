@@ -10,7 +10,7 @@ const config = useRuntimeConfig();
 
 // Panel position and size
 const panelPosition = ref({ x: 20, y: 80 });
-const isCollapsed = ref(false);
+const isFullscreen = ref(false);
 const isDragging = ref(false);
 const dragOffset = ref({ x: 0, y: 0 });
 
@@ -34,41 +34,85 @@ const contextInfo = computed(() => ({
   currentUser: userStore.user
 }));
 
-// Store states for debugging
-const authStoreState = computed(() => ({
-  isAuthenticated: authStore.isAuthenticated,
-  accessToken: authStore.accessToken ? 'Present' : 'None',
-  refreshToken: authStore.refreshToken ? 'Present' : 'None'
-}));
-
-const userStoreState = computed(() => ({
-  id: userStore.id,
-  email: userStore.email,
-  isAdmin: userStore.isAdmin,
-  isPlatformAdmin: userStore.isPlatformAdmin,
-  isSystemUser: userStore.isSystemUser
-}));
-
-// Store states
-const storeStates = computed(() => ({
-  auth: authStoreState.value,
-  user: userStoreState.value,
-  permissions: {
-    total: permissionsStore.permissions.length,
-    filtered: permissionsStore.filteredPermissions.length,
-    displayCounts: permissionsStore.displayCounts,
-    filters: permissionsStore.filters,
-    currentContext: permissionsStore.currentContext
-  },
-  roles: {
-    total: rolesStore.roles?.length || 0,
-    filtered: rolesStore.filteredRoles?.length || 0
-  },
-  entities: {
-    total: entitiesStore.entities?.length || 0,
-    currentPath: entitiesStore.currentPath
+// Dynamic store state extraction
+const getStoreState = (store: any) => {
+  const state: any = {};
+  
+  // Get the actual state object
+  const storeState = store.$state;
+  
+  // Also include computed getters
+  const descriptors = Object.getOwnPropertyDescriptors(store);
+  
+  // Add state properties
+  for (const [key, value] of Object.entries(storeState)) {
+    // Handle sensitive data
+    if (key === 'accessToken' || key === 'refreshToken') {
+      state[key] = value ? '***PRESENT***' : null;
+    } else if (key === 'password' || key === 'secret') {
+      state[key] = '***HIDDEN***';
+    } else {
+      state[key] = value;
+    }
   }
-}));
+  
+  // Add getters (computed properties)
+  for (const [key, descriptor] of Object.entries(descriptors)) {
+    if (descriptor.get && !key.startsWith('$') && !key.startsWith('_')) {
+      try {
+        const value = store[key];
+        // Only add if it's not already in state and is a simple value
+        if (!(key in state) && 
+            (typeof value === 'string' || 
+             typeof value === 'number' || 
+             typeof value === 'boolean' || 
+             value === null || 
+             value === undefined ||
+             Array.isArray(value))) {
+          state[`[getter] ${key}`] = value;
+        }
+      } catch (e) {
+        // Ignore errors from getters
+      }
+    }
+  }
+  
+  return state;
+};
+
+// Store states - dynamically get all Pinia stores
+const storeStates = computed(() => {
+  const stores: Record<string, any> = {};
+  
+  // Get all active Pinia stores
+  const pinia = useNuxtApp().$pinia;
+  
+  // Map of store IDs to friendly names
+  const storeNames: Record<string, string> = {
+    auth: 'auth',
+    user: 'user',
+    permissions: 'permissions',
+    roles: 'roles',
+    entities: 'entities',
+    context: 'context',
+    ui: 'ui',
+    debug: 'debug'
+  };
+  
+  // Get each store's state
+  for (const [storeId, storeName] of Object.entries(storeNames)) {
+    try {
+      const store = pinia._s.get(storeId);
+      if (store) {
+        stores[storeName] = getStoreState(store);
+      }
+    } catch (e) {
+      console.error(`Failed to get store ${storeId}:`, e);
+    }
+  }
+  
+  return stores;
+});
 
 // Permission details
 const permissionDetails = computed(() => {
@@ -88,6 +132,7 @@ const permissionDetails = computed(() => {
 
 // Handle dragging
 const startDrag = (e: MouseEvent) => {
+  if (isFullscreen.value) return; // Prevent dragging in fullscreen
   isDragging.value = true;
   dragOffset.value = {
     x: e.clientX - panelPosition.value.x,
@@ -130,57 +175,91 @@ const copyToClipboard = (text: string) => {
   });
 };
 
-// Format JSON
-const formatJson = (obj: any) => JSON.stringify(obj, null, 2);
+// Format JSON with better handling of complex objects
+const formatJson = (obj: any) => {
+  // Custom replacer to handle special cases
+  const replacer = (key: string, value: any) => {
+    // Handle functions
+    if (typeof value === 'function') {
+      return '[Function]';
+    }
+    // Handle undefined
+    if (value === undefined) {
+      return '[undefined]';
+    }
+    // Handle circular references
+    if (value instanceof Error) {
+      return {
+        name: value.name,
+        message: value.message,
+        stack: value.stack
+      };
+    }
+    return value;
+  };
+  
+  try {
+    return JSON.stringify(obj, replacer, 2);
+  } catch (error) {
+    return `Error formatting: ${error.message}`;
+  }
+};
 </script>
 
 <template>
   <Teleport to="body">
     <div
       v-if="debugStore.enabled && debugStore.panelOpen"
-      class="fixed z-50 bg-background/95 backdrop-blur-sm rounded-lg shadow-2xl"
-      :style="{
+      :class="[
+        'fixed z-50 bg-background/95 backdrop-blur-sm shadow-2xl',
+        isFullscreen ? 'inset-0' : 'rounded-lg'
+      ]"
+      :style="isFullscreen ? {} : {
         left: `${panelPosition.x}px`,
         top: `${panelPosition.y}px`,
-        width: isCollapsed ? '48px' : '480px',
+        width: '480px',
         maxHeight: '80vh'
       }"
     >
       <!-- Header -->
       <div 
-        class="flex items-center justify-between p-3 cursor-move bg-muted/20 border-b border-muted/20"
-        @mousedown="startDrag"
+        class="flex items-center justify-between p-3 bg-muted/20 border-b border-muted/20"
+        :class="{ 'cursor-move': !isFullscreen }"
+        @mousedown="!isFullscreen && startDrag($event)"
       >
         <div class="flex items-center gap-2">
           <UIcon name="i-lucide-bug" class="text-primary" />
-          <span v-if="!isCollapsed" class="font-semibold">Debug Panel</span>
+          <span class="font-semibold">Debug Panel</span>
         </div>
         <div class="flex items-center gap-1">
           <UButton
-            v-if="!isCollapsed"
-            icon="i-lucide-minimize-2"
+            v-if="!isFullscreen"
+            icon="i-lucide-maximize"
             variant="ghost"
             size="xs"
-            @click.stop="isCollapsed = true"
+            title="Fullscreen"
+            @click.stop="isFullscreen = true"
           />
           <UButton
             v-else
-            icon="i-lucide-maximize-2"
+            icon="i-lucide-minimize"
             variant="ghost"
             size="xs"
-            @click.stop="isCollapsed = false"
+            title="Exit fullscreen"
+            @click.stop="isFullscreen = false"
           />
           <UButton
             icon="i-lucide-x"
             variant="ghost"
             size="xs"
+            title="Close"
             @click.stop="debugStore.togglePanel()"
           />
         </div>
       </div>
 
       <!-- Content -->
-      <div v-if="!isCollapsed" class="overflow-hidden">
+      <div class="overflow-hidden" :class="{ 'h-[calc(100vh-60px)]': isFullscreen }">
         <UTabs 
           v-model="selectedTab"
           :items="tabItems"
@@ -202,7 +281,7 @@ const formatJson = (obj: any) => JSON.stringify(obj, null, 2);
         >
           <!-- Context Tab -->
           <template #context>
-            <div class="p-4 space-y-4 max-h-[50vh] overflow-y-auto">
+            <div class="p-4 space-y-4 overflow-y-auto" :class="isFullscreen ? 'max-h-[calc(100vh-140px)]' : 'max-h-[50vh]'">
               <div>
                 <h3 class="text-sm font-semibold mb-2 flex items-center gap-2">
                   <UIcon name="i-lucide-layers" />
@@ -271,11 +350,27 @@ const formatJson = (obj: any) => JSON.stringify(obj, null, 2);
 
           <!-- Stores Tab -->
           <template #stores>
-            <div class="p-4 space-y-4 max-h-[50vh] overflow-y-auto">
+            <div class="p-4 space-y-4 overflow-y-auto" :class="isFullscreen ? 'max-h-[calc(100vh-140px)]' : 'max-h-[50vh]'">
+              <div class="mb-2 text-xs text-muted">
+                <UIcon name="i-lucide-info" class="inline mr-1" />
+                Showing actual Pinia store state. Properties marked with [getter] are computed values.
+              </div>
               <div v-for="(storeData, storeName) in storeStates" :key="storeName">
-                <h3 class="text-sm font-semibold mb-2 capitalize">{{ storeName }} Store</h3>
+                <h3 class="text-sm font-semibold mb-2 capitalize flex items-center gap-2">
+                  <UIcon name="i-lucide-database" class="h-4 w-4" />
+                  {{ storeName }} Store
+                </h3>
                 <UCard :ui="{ body: { padding: 'p-3' } }">
-                  <pre class="text-xs overflow-x-auto">{{ formatJson(storeData) }}</pre>
+                  <div class="relative">
+                    <pre class="text-xs overflow-x-auto whitespace-pre-wrap">{{ formatJson(storeData) }}</pre>
+                    <UButton
+                      icon="i-lucide-copy"
+                      variant="ghost"
+                      size="xs"
+                      class="absolute top-0 right-0"
+                      @click="copyToClipboard(JSON.stringify(storeData, null, 2))"
+                    />
+                  </div>
                 </UCard>
               </div>
             </div>
@@ -283,7 +378,7 @@ const formatJson = (obj: any) => JSON.stringify(obj, null, 2);
 
           <!-- Permissions Tab -->
           <template #permissions>
-            <div class="p-4 space-y-4 max-h-[50vh] overflow-y-auto">
+            <div class="p-4 space-y-4 overflow-y-auto" :class="isFullscreen ? 'max-h-[calc(100vh-140px)]' : 'max-h-[50vh]'">
               <div>
                 <h3 class="text-sm font-semibold mb-2">Permission Summary</h3>
                 <UCard :ui="{ body: { padding: 'p-3' } }" class="text-sm space-y-2">
@@ -325,7 +420,7 @@ const formatJson = (obj: any) => JSON.stringify(obj, null, 2);
 
           <!-- API Tab -->
           <template #api>
-            <div class="p-4 space-y-4 max-h-[50vh] overflow-y-auto">
+            <div class="p-4 space-y-4 overflow-y-auto" :class="isFullscreen ? 'max-h-[calc(100vh-140px)]' : 'max-h-[50vh]'">
               <div>
                 <h3 class="text-sm font-semibold mb-2">API Configuration</h3>
                 <UCard :ui="{ body: { padding: 'p-3' } }" class="text-sm space-y-2">

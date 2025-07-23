@@ -18,8 +18,10 @@ from api.schemas.auth_schema import (
     ChangePasswordRequest,
     RegisterRequest
 )
+from api.schemas.user_schema import UserResponse
 from api.services.auth_service import AuthService
 from api.services.email_service import email_service
+from api.services.user_service import UserService
 from api.models import UserModel
 from api.utils.jwt_utils import decode_token
 from api.config import settings
@@ -419,26 +421,20 @@ async def logout_all_devices(current_user: UserModel = Depends(get_current_user)
     return {"message": f"Logged out from {count} device(s)"}
 
 
-@router.get("/me", response_model=UserInfoResponse)
+@router.get("/me", response_model=UserResponse)
 async def get_current_user_info(current_user: UserModel = Depends(get_current_user)):
     """
-    Get current user information
+    Get current user information with entity memberships and roles
     
     Args:
         current_user: Authenticated user
     
     Returns:
-        User information
+        Full user information including entities and permissions
     """
-    return UserInfoResponse(
-        id=str(current_user.id),
-        email=current_user.email,
-        profile=current_user.profile.model_dump() if current_user.profile else {},
-        is_active=current_user.is_active,
-        email_verified=current_user.email_verified,
-        created_at=current_user.created_at,
-        last_login=current_user.last_login
-    )
+    # Enrich user with entity memberships
+    user_data = await UserService.enrich_user_with_entities(current_user)
+    return UserResponse(**user_data)
 
 
 @router.post("/password/reset")

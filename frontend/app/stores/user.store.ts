@@ -36,8 +36,26 @@ export const useUserStore = defineStore("user", {
     },
     
     // Role checks
-    isAdmin: (state) => state.user?.is_superuser === true,
-    isPlatformAdmin: (state) => state.user?.is_platform_admin === true,
+    isAdmin: (state) => {
+      // Check if user has system_admin role or wildcard permission
+      if (!state.user?.entities) return false;
+      
+      return state.user.entities.some(entity => 
+        entity.roles?.some(role => 
+          role.name === 'system_admin' || role.permissions?.includes('*')
+        )
+      );
+    },
+    isPlatformAdmin: (state) => {
+      // Check if user has platform_admin role
+      if (!state.user?.entities) return false;
+      
+      return state.user.entities.some(entity => 
+        entity.roles?.some(role => 
+          role.name === 'platform_admin' || role.name === 'platform_administrator'
+        )
+      );
+    },
     isSystemUser: (state) => state.user?.is_system_user === true,
     isVerified: (state) => state.user?.email_verified === true,
     
@@ -47,12 +65,18 @@ export const useUserStore = defineStore("user", {
     
     // Permission checks
     hasPermission: (state) => (permission: string) => {
+      // Check for wildcard permission
+      if (state.permissions.includes('*')) {
+        return true;
+      }
       return state.permissions.includes(permission)
     },
   },
 
   actions: {
     setUser(userData: Partial<User>) {
+      console.log('[UserStore] Setting user with data:', userData);
+      
       // Merge with defaults to handle missing fields from API
       this.user = {
         id: userData.id || '',
@@ -60,8 +84,6 @@ export const useUserStore = defineStore("user", {
         profile: userData.profile || { first_name: '', last_name: '' },
         is_active: userData.is_active ?? true,
         is_system_user: userData.is_system_user ?? false,
-        is_platform_admin: userData.is_platform_admin ?? false,
-        is_superuser: userData.is_superuser ?? false,
         email_verified: userData.email_verified ?? false,
         created_at: userData.created_at || new Date().toISOString(),
         updated_at: userData.updated_at || new Date().toISOString(),
@@ -69,20 +91,50 @@ export const useUserStore = defineStore("user", {
         ...userData
       } as User;
       
+      console.log('[UserStore] User entities:', this.user.entities);
+      
       // Extract permissions from all roles across all entities
       this.permissions = this.extractPermissions(this.user);
+      console.log('[UserStore] Extracted permissions:', this.permissions);
     },
 
     // Extract all permissions from user's roles
     extractPermissions(user: User): string[] {
       const permissions = new Set<string>();
       
+      console.log('[UserStore] Extracting permissions from entities:', user.entities);
+      
       // Add permissions from entity memberships
       user.entities?.forEach(membership => {
+        console.log('[UserStore] Processing membership:', membership);
         membership.roles?.forEach(role => {
-          // Note: We'd need to fetch role details to get actual permissions
-          // For now, we'll just store role names
-          permissions.add(`role:${role.name}`);
+          console.log('[UserStore] Processing role:', role);
+          // Add all permissions from this role
+          role.permissions?.forEach(permission => {
+            permissions.add(permission);
+          });
+          
+          // Check for wildcard permission
+          if (role.permissions?.includes('*')) {
+            console.log('[UserStore] Found wildcard permission!');
+            // If user has wildcard permission, they have all permissions
+            // Add common permissions that might be checked
+            const allPermissions = [
+              'member:create', 'member:read', 'member:update', 'member:delete',
+              'member:create_tree', 'member:read_tree', 'member:update_tree', 'member:delete_tree',
+              'member:create_all', 'member:read_all', 'member:update_all', 'member:delete_all',
+              'entity:create', 'entity:read', 'entity:update', 'entity:delete',
+              'entity:create_tree', 'entity:read_tree', 'entity:update_tree', 'entity:delete_tree',
+              'entity:create_all', 'entity:read_all', 'entity:update_all', 'entity:delete_all',
+              'user:create', 'user:read', 'user:update', 'user:delete',
+              'user:create_all', 'user:read_all', 'user:update_all', 'user:delete_all',
+              'role:create', 'role:read', 'role:update', 'role:delete',
+              'role:create_all', 'role:read_all', 'role:update_all', 'role:delete_all',
+              'permission:create', 'permission:read', 'permission:update', 'permission:delete',
+              'permission:create_all', 'permission:read_all', 'permission:update_all', 'permission:delete_all'
+            ];
+            allPermissions.forEach(p => permissions.add(p));
+          }
         });
       });
       

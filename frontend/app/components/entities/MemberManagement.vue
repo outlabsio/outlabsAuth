@@ -134,6 +134,7 @@ const props = defineProps<{
 
 // Stores
 const authStore = useAuthStore()
+const userStore = useUserStore()
 const contextStore = useContextStore()
 const toast = useToast()
 
@@ -154,12 +155,18 @@ const selectedMember = ref<EntityMember | null>(null)
 // Permission checks
 const canAddMembers = computed(() => {
   // Check if user has member:create permission in this entity
-  return authStore.hasPermission('member:create')
+  const hasPerm = userStore.hasPermission('member:create') || userStore.hasPermission('member:create_tree') || userStore.hasPermission('member:create_all')
+  console.log('MemberManagement - canAddMembers:', hasPerm)
+  console.log('User permissions:', userStore.permissions)
+  console.log('User entities:', userStore.entities)
+  return hasPerm
 })
 
 const canManageMembers = computed(() => {
   // Check if user has member:update or member:delete permissions
-  return authStore.hasPermission('member:update') || authStore.hasPermission('member:delete')
+  return userStore.hasPermission('member:update') || userStore.hasPermission('member:delete') || 
+         userStore.hasPermission('member:update_tree') || userStore.hasPermission('member:delete_tree') ||
+         userStore.hasPermission('member:update_all') || userStore.hasPermission('member:delete_all')
 })
 
 // Fetch members
@@ -198,7 +205,7 @@ const fetchMembers = async () => {
 const getMemberActions = (member: EntityMember) => {
   const actions = []
 
-  if (authStore.hasPermission('member:update')) {
+  if (userStore.hasPermission('member:update') || userStore.hasPermission('member:update_tree') || userStore.hasPermission('member:update_all')) {
     actions.push([
       {
         label: 'Change Role',
@@ -213,7 +220,7 @@ const getMemberActions = (member: EntityMember) => {
     ])
   }
 
-  if (authStore.hasPermission('member:delete')) {
+  if (userStore.hasPermission('member:delete') || userStore.hasPermission('member:delete_tree') || userStore.hasPermission('member:delete_all')) {
     actions.push([
       {
         label: 'Remove Member',
@@ -294,6 +301,10 @@ const formatDate = (dateString: string) => {
 
 // Fetch members on mount
 onMounted(() => {
+  console.log('[MemberManagement] Component mounted')
+  console.log('[MemberManagement] User from store:', userStore.user)
+  console.log('[MemberManagement] User permissions:', userStore.permissions)
+  console.log('[MemberManagement] canAddMembers:', canAddMembers.value)
   fetchMembers()
 })
 </script>
