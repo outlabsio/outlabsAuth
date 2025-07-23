@@ -204,19 +204,11 @@ All system permissions follow a consistent CRUD pattern for predictability:
 - `permission:create`, `permission:read`, `permission:update`, `permission:delete` - Permission operations
 
 **Special Permissions**:
-- `system:read_all` - Full system read access
-- `platform:read_platform` - Platform administration
 - `user:invite` - Compound operation to create user + assign to entity
-- `*` - Wildcard permission (system users only)
+- `*` - Wildcard permission (grants all permissions - system admin only)
+- `*:read_all` - Read-only wildcard (grants all read permissions)
 
 Each permission also has `_tree` and `_all` variants for hierarchical and platform-wide access.
-
-#### Custom Permissions
-Created during system initialization for common use cases:
-- **Analytics**: `analytics:view`, `analytics:export`
-- **Audit**: `audit:view`, `audit:export`
-- **API**: `api:manage`, `api:create`
-- **Settings**: `settings:manage`, `settings:view`
 
 #### Permission Examples
 
@@ -309,15 +301,10 @@ When you first start the system, it needs to be initialized. Visit http://localh
    - Viewer (read-only)
 
 3. **Permission Initialization**
-   - 41 system permissions (hardcoded, immutable)
-   - 19 custom permissions for common use cases:
-     - Organization management (5 permissions)
-     - Team/Branch operations (3 permissions)
-     - Project management (3 permissions)
-     - Analytics & reporting (2 permissions)
-     - Audit & compliance (2 permissions)
-     - API management (2 permissions)
-     - Settings management (2 permissions)
+   - System permissions only (hardcoded, immutable)
+   - All resources use standard CRUD permissions
+   - Entity, User, Role, Member, and Permission operations
+   - Wildcard permissions for system administrators
 
 4. **Administrator Account**
    - Creates the first superuser account

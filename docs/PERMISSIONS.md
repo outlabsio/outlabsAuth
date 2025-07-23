@@ -10,9 +10,9 @@ OutLabs Auth uses a sophisticated hierarchical permission system that combines R
 
 System permissions are hardcoded and always available. They cannot be modified or deleted.
 
-#### Core System Permissions
-- `system:read_all` - Read all system configuration
-- `platform:read_platform` - Read platform data
+While system permissions primarily follow CRUD patterns for consistency, some non-CRUD actions are included where they represent specific operations:
+- `user:invite` - Combined operation to create user and assign to entity
+- Additional actions may be added as needed for system operations
 
 #### Resource-Based Permissions
 Each core resource has a standard set of permissions:
@@ -78,40 +78,24 @@ Each core resource has a standard set of permissions:
 
 ### 2. Custom Permissions
 
-Custom permissions are created during system initialization and can be extended based on your needs.
+Custom permissions can be created by platforms based on their specific needs. The system no longer creates any default custom permissions during initialization.
 
-#### Default Custom Permissions
+Custom permissions follow the `resource:action` format and can represent any operation your platform needs:
+- Standard CRUD: `resource:create`, `resource:read`, `resource:update`, `resource:delete`
+- Domain-specific actions: `invoice:approve`, `document:sign`, `report:generate`
+- Workflow operations: `order:fulfill`, `ticket:escalate`, `lead:assign`
+- Any other business logic: `commission:calculate`, `notification:send`, etc.
 
-**Project Permissions (Future):**
-```
-project:create - Create new projects
-project:manage - Full project management
-project:read - View project details
-```
+For hierarchical access, add the appropriate suffix:
+- `resource:action_tree` - Perform action on descendants
+- `resource:action_all` - Perform action platform-wide
 
-**Analytics & Reporting:**
-```
-analytics:view - Access analytics and reports
-analytics:export - Export analytics data
-```
-
-**Audit & Compliance:**
-```
-audit:view - Access audit logs
-audit:export - Export audit data
-```
-
-**API & Integration:**
-```
-api:manage - Manage API keys and integrations
-api:create - Create new API keys
-```
-
-**Settings:**
-```
-settings:manage - Manage entity settings
-settings:view - View entity settings
-```
+Examples of valid custom permissions:
+- `invoice:approve` - Approve invoices
+- `document:sign_tree` - Sign documents in entity and descendants
+- `report:export_all` - Export reports across entire platform
+- `analytics:view` - View analytics dashboards
+- `settings:configure` - Configure entity settings
 
 ## Permission Scoping
 

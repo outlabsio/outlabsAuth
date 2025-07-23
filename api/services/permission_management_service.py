@@ -22,12 +22,6 @@ class PermissionManagementService:
     
     # System permissions that cannot be modified or deleted
     SYSTEM_PERMISSIONS = {
-        # System level
-        "system:read_all",
-        
-        # Platform level
-        "platform:read_platform",
-        
         # Entity management - with hierarchical scoping
         "entity:read_all",
         "entity:read", "entity:read_tree",

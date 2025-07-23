@@ -50,7 +50,11 @@ class UserModel(BaseDocument):
     def is_locked(self) -> bool:
         """Check if account is locked"""
         if self.locked_until:
-            return datetime.now(timezone.utc) < self.locked_until
+            # Ensure locked_until is timezone-aware
+            locked_until = self.locked_until
+            if locked_until.tzinfo is None:
+                locked_until = locked_until.replace(tzinfo=timezone.utc)
+            return datetime.now(timezone.utc) < locked_until
         return False
     
     def can_authenticate(self) -> bool:

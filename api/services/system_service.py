@@ -120,21 +120,7 @@ class SystemService:
             display_name="System Administrator",
             description="Full system administration access",
             permissions=[
-                "*",  # All permissions
-                "entity:create_all",
-                "entity:read_all",
-                "entity:update_all",
-                "entity:delete_all",
-                "user:create_all",
-                "user:read_all",
-                "user:update_all",
-                "user:delete_all",
-                "user:invite_all",
-                "role:create_all",
-                "role:read_all",
-                "role:update_all",
-                "role:delete_all",
-                "role:delete_all"
+                "*"  # All permissions - wildcard grants everything
             ],
             entity=root_entity,  # Link to root entity
             assignable_at_types=[],  # Can be assigned at any entity
@@ -178,13 +164,11 @@ class SystemService:
                 "role:read",              # Read roles at org level
                 "role:update",            # Update roles at org level
                 "role:delete",            # Delete roles at org level
-                "role:update",            # Update roles at org level
                 "role:read_tree",         # Read roles in tree
                 "member:create_tree",     # Create members in tree
                 "member:read_tree",       # Read members in tree
                 "member:update_tree",     # Update members in tree
                 "member:delete_tree",     # Delete members in tree
-                "user:read_tree",         # Read all users in tree
             ],
             entity=root_entity,
             assignable_at_types=[],
@@ -194,9 +178,9 @@ class SystemService:
         
         logger.info("Created system roles")
         
-        # Step 2.5: Create common custom permissions
-        await SystemService._create_custom_permissions(root_entity)
-        logger.info("Created custom permissions")
+        # Step 2.5: Custom permissions removed - using only CRUD permissions
+        # All resources now use standard entity/user/role/member CRUD permissions
+        logger.info("Skipped custom permissions - using standard CRUD permissions only")
         
         # Step 3: Create the superuser
         # Hash the password first
@@ -353,139 +337,6 @@ class SystemService:
             "message": "System has been reset. Please reinitialize."
         }
     
-    @staticmethod
-    async def _create_custom_permissions(root_entity: EntityModel):
-        """
-        Create common custom permissions during system initialization
-        
-        Args:
-            root_entity: The root platform entity
-        """
-        # Define common custom permissions that extend beyond system permissions
-        custom_permissions = [
-            
-            # Project/Resource permissions (for future use)
-            {
-                "name": "project:create",
-                "display_name": "Create Projects",
-                "description": "Create new projects",
-                "resource": "project",
-                "action": "create",
-                "tags": ["project"]
-            },
-            {
-                "name": "project:update",
-                "display_name": "Update Projects",
-                "description": "Update project settings",
-                "resource": "project",
-                "action": "update",
-                "tags": ["project"]
-            },
-            {
-                "name": "project:delete",
-                "display_name": "Delete Projects",
-                "description": "Delete projects",
-                "resource": "project",
-                "action": "delete",
-                "tags": ["project"]
-            },
-            {
-                "name": "project:read",
-                "display_name": "View Projects",
-                "description": "View project details",
-                "resource": "project",
-                "action": "read",
-                "tags": ["project"]
-            },
-            
-            # Analytics/Reporting permissions
-            {
-                "name": "analytics:view",
-                "display_name": "View Analytics",
-                "description": "Access analytics and reports",
-                "resource": "analytics",
-                "action": "view",
-                "tags": ["analytics", "reporting"]
-            },
-            {
-                "name": "analytics:export",
-                "display_name": "Export Analytics",
-                "description": "Export analytics data",
-                "resource": "analytics",
-                "action": "export",
-                "tags": ["analytics", "reporting"]
-            },
-            
-            # Audit/Compliance permissions
-            {
-                "name": "audit:view",
-                "display_name": "View Audit Logs",
-                "description": "Access audit logs and compliance data",
-                "resource": "audit",
-                "action": "view",
-                "tags": ["audit", "compliance"]
-            },
-            {
-                "name": "audit:export",
-                "display_name": "Export Audit Data",
-                "description": "Export audit logs",
-                "resource": "audit",
-                "action": "export",
-                "tags": ["audit", "compliance"]
-            },
-            
-            # API/Integration permissions
-            {
-                "name": "api:create",
-                "display_name": "Create API Keys",
-                "description": "Create new API keys",
-                "resource": "api",
-                "action": "create",
-                "tags": ["api"]
-            },
-            
-            # Settings/Configuration permissions
-            {
-                "name": "settings:update",
-                "display_name": "Update Settings",
-                "description": "Update entity settings and configuration",
-                "resource": "settings",
-                "action": "update",
-                "tags": ["settings", "configuration"]
-            },
-            {
-                "name": "settings:view",
-                "display_name": "View Settings",
-                "description": "View entity settings",
-                "resource": "settings",
-                "action": "view",
-                "tags": ["settings"]
-            }
-        ]
-        
-        # Create each custom permission
-        for perm_data in custom_permissions:
-            try:
-                permission = PermissionModel(
-                    name=perm_data["name"],
-                    display_name=perm_data["display_name"],
-                    description=perm_data["description"],
-                    resource=perm_data["resource"],
-                    action=perm_data["action"],
-                    entity_id=None,  # Global permissions
-                    created_by=None,  # System-created
-                    tags=perm_data.get("tags", []),
-                    is_system=False,  # Custom permissions, not system
-                    is_active=True,
-                    metadata={
-                        "created_during_init": True,
-                        "is_common": True
-                    }
-                )
-                await permission.save()
-                logger.debug(f"Created custom permission: {permission.name}")
-            except Exception as e:
-                logger.warning(f"Failed to create permission {perm_data['name']}: {str(e)}")
 
 
 # Global instance
