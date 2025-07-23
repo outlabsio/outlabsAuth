@@ -2,13 +2,32 @@ export default defineNuxtRouteMiddleware(async (to) => {
   const authStore = useAuthStore();
   const userStore = useUserStore();
 
-  const publicRoutes = ["/login", "/signup", "/verify", "/recovery", "/refresh"];
+  const publicRoutes = ["/login", "/signup", "/verify", "/recovery", "/refresh", "/setup"];
 
   const isPublicRoute = publicRoutes.some((route) => {
     return to.path.startsWith(route) || to.path.match(/^\/[a-z]{2}\/recovery\//);
   });
 
   console.log(`🛣️ Navigating to: ${to.path} (Public: ${isPublicRoute})`);
+
+  // Check system initialization status first
+  try {
+    const systemStatus = await authStore.checkSystemStatus();
+    
+    // If system requires setup and we're not on the setup page, redirect to setup
+    if (systemStatus.requires_setup && to.path !== "/setup") {
+      console.log("🔧 System requires setup, redirecting to /setup");
+      return navigateTo("/setup");
+    }
+    
+    // If system is initialized and we're on the setup page, redirect to login
+    if (!systemStatus.requires_setup && to.path === "/setup") {
+      console.log("✅ System already initialized, redirecting to /login");
+      return navigateTo("/login");
+    }
+  } catch (error) {
+    console.error("Failed to check system status:", error);
+  }
 
   // Initialize auth state only on first load or refresh
   if (!isPublicRoute && !authStore.accessToken) {

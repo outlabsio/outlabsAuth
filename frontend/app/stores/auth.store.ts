@@ -6,12 +6,22 @@ interface AuthTokens {
   token_type: string;
 }
 
+interface SystemStatus {
+  initialized: boolean;
+  user_count: number;
+  has_system_admin_role: boolean;
+  has_root_entity: boolean;
+  version: string;
+  requires_setup: boolean;
+}
+
 export const useAuthStore = defineStore("auth", () => {
   const state = reactive({
     accessToken: null as string | null,
     refreshToken: null as string | null,
     user: null as User | null,
     isAuthenticated: false,
+    systemStatus: null as SystemStatus | null,
   });
 
   const config = useRuntimeConfig();
@@ -312,12 +322,54 @@ export const useAuthStore = defineStore("auth", () => {
     }
   };
 
+  const checkSystemStatus = async (): Promise<SystemStatus> => {
+    try {
+      const response = await $fetch<SystemStatus>("/v1/system/status", {
+        baseURL: config.public.apiBaseUrl,
+      });
+      state.systemStatus = response;
+      return response;
+    } catch (error: any) {
+      console.error("System status check error:", error);
+      throw error;
+    }
+  };
+
+  const initializeSystem = async (
+    email: string,
+    password: string,
+    firstName: string = "System",
+    lastName: string = "Administrator"
+  ) => {
+    try {
+      const response = await $fetch("/v1/system/initialize", {
+        baseURL: config.public.apiBaseUrl,
+        method: "POST",
+        body: {
+          email,
+          password,
+          first_name: firstName,
+          last_name: lastName,
+        },
+      });
+
+      // After initialization, update system status
+      await checkSystemStatus();
+
+      return response;
+    } catch (error: any) {
+      console.error("System initialization error:", error);
+      throw error;
+    }
+  };
+
   return {
     // State (as computed for reactivity)
     isAuthenticated: computed(() => state.isAuthenticated),
     accessToken: computed(() => state.accessToken),
     refreshToken: computed(() => state.refreshToken),
     user: computed(() => state.user),
+    systemStatus: computed(() => state.systemStatus),
     isReady,
 
     // Actions
@@ -333,6 +385,8 @@ export const useAuthStore = defineStore("auth", () => {
     resendVerificationEmail,
     verifyUser,
     signup,
+    checkSystemStatus,
+    initializeSystem,
 
     // Debug helper
     getState: () => state,
