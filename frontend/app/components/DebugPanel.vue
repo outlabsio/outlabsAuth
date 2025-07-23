@@ -17,14 +17,14 @@ const dragOffset = ref({ x: 0, y: 0 });
 // Selected tab state
 const selectedTab = ref('context');
 
-// Store expansion state
+// Store expansion state - all start collapsed
 const expandedStores = ref<Record<string, boolean>>({
-  auth: true,
-  user: true,
+  auth: false,
+  user: false,
   permissions: false,
   roles: false,
   entities: false,
-  context: true,
+  context: false,
   ui: false,
   debug: false
 });
