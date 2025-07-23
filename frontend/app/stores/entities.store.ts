@@ -157,7 +157,7 @@ export const useEntitiesStore = defineStore("entities", () => {
       const contextStore = useContextStore();
       const headers = contextStore.getContextHeaders;
       const entity = await authStore.apiCall<Entity>(`/v1/entities/${id}`, {
-        method: "PATCH",
+        method: "PUT",
         body: data,
         headers
       });
