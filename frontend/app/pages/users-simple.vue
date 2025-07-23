@@ -115,7 +115,7 @@ watch(() => usersStore.filters, () => {
                       size="xs"
                       class="mr-2"
                     >
-                      {{ entity.name }}
+                      {{ entity.display_name || entity.name }}
                     </UBadge>
                     <span v-if="user.entities.length > 2" class="text-xs text-gray-500">
                       +{{ user.entities.length - 2 }} more

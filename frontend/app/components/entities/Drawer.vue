@@ -41,8 +41,22 @@
           <!-- Entity Details -->
           <div class="grid grid-cols-1 gap-4">
             <div>
+              <h4 class="text-sm font-medium text-gray-500 dark:text-gray-400">Entity ID</h4>
+              <div class="mt-1 flex items-center gap-2">
+                <p class="font-mono text-sm flex-1">{{ entity.id }}</p>
+                <UButton 
+                  icon="i-lucide-copy" 
+                  size="xs" 
+                  variant="ghost" 
+                  @click="copyToClipboard(entity.id)"
+                  :title="'Copy ID'"
+                />
+              </div>
+            </div>
+            
+            <div>
               <h4 class="text-sm font-medium text-gray-500 dark:text-gray-400">System Name</h4>
-              <p class="mt-1">{{ entity.name }}</p>
+              <p class="mt-1 font-mono text-sm">{{ entity.name }}</p>
             </div>
 
             <div v-if="entity.description">
@@ -189,6 +203,23 @@ const mode = computed(() => currentMode.value);
 const entity = computed(() => props.entity);
 
 // Methods
+const copyToClipboard = (text: string) => {
+  navigator.clipboard.writeText(text).then(() => {
+    toast.add({
+      title: "Copied",
+      description: "ID copied to clipboard",
+      color: "success",
+      timeout: 2000
+    });
+  }).catch(() => {
+    toast.add({
+      title: "Error",
+      description: "Failed to copy to clipboard",
+      color: "error"
+    });
+  });
+};
+
 const startEdit = () => {
   currentMode.value = "edit";
 };
@@ -221,7 +252,7 @@ const handleSubmit = async (data: Partial<Entity>) => {
         color: "success",
       });
       emit("updated", updatedEntity);
-      currentMode.value = "view";
+      open.value = false;
     }
   } catch (error: any) {
     toast.add({

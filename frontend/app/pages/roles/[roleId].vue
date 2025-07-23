@@ -153,6 +153,11 @@
                 <div v-if="role.entity_name">
                   <h4 class="text-sm font-medium text-muted-foreground">Owner Entity</h4>
                   <p class="mt-1">{{ role.entity_name }}</p>
+                  <div v-if="role.entity_id || role.entity_system_name" class="mt-1 text-xs text-muted-foreground">
+                    <span v-if="role.entity_id" class="font-mono">ID: {{ role.entity_id }}</span>
+                    <span v-if="role.entity_id && role.entity_system_name"> • </span>
+                    <span v-if="role.entity_system_name" class="font-mono">{{ role.entity_system_name }}</span>
+                  </div>
                 </div>
 
                 <div>

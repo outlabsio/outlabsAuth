@@ -187,7 +187,8 @@ class EntityMemberResponse(BaseModel):
     user_email: str
     user_name: str
     entity_id: str
-    entity_name: str
+    entity_name: str  # Display name for backward compatibility
+    entity_system_name: Optional[str] = None  # System/technical name
     role_id: str
     role_name: str
     permissions: List[str] = []

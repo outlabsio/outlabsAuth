@@ -243,7 +243,7 @@ const columns: TableColumn<User>[] = [{
           size: 'xs',
           key: entity.id 
         }, () => [
-          entity.name,
+          entity.display_name || entity.name,
           entity.roles && entity.roles.length > 0 && h('span', { class: 'ml-1 text-muted' }, 
             `(${entity.roles.map(r => r.display_name).join(', ')})`
           )

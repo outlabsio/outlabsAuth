@@ -90,7 +90,7 @@ const getMembershipStatusColor = (status: string) => {
                   :name="membership.entity.entity_class === 'STRUCTURAL' ? 'i-lucide-building' : 'i-lucide-users'" 
                   class="h-4 w-4 text-gray-500"
                 />
-                <h5 class="font-medium">{{ membership.entity.name }}</h5>
+                <h5 class="font-medium">{{ membership.entity.display_name || membership.entity.name }}</h5>
                 <UBadge size="xs" variant="subtle">
                   {{ membership.entity.entity_type }}
                 </UBadge>

@@ -26,14 +26,16 @@ router = APIRouter()
 
 
 async def _get_entity_info(role):
-    """Helper function to extract entity name and ID from a role's entity link"""
-    entity_name = None
+    """Helper function to extract entity display name, system name and ID from a role's entity link"""
+    entity_name = None  # Display name
+    entity_system_name = None  # System name
     entity_id = None
     if role.entity:
         # Handle both populated and non-populated links (per BEANIE_PATTERNS.md line 104-117)
         if hasattr(role.entity, 'id') and hasattr(role.entity, 'display_name'):
             # It's already a populated document
             entity_name = role.entity.display_name
+            entity_system_name = role.entity.name
             entity_id = str(role.entity.id)
         elif hasattr(role.entity, 'ref'):
             # It's a Link object that wasn't populated (link to non-existent document)
@@ -44,11 +46,12 @@ async def _get_entity_info(role):
             entity = await role.entity.fetch()
             if entity:
                 entity_name = entity.display_name
+                entity_system_name = entity.name
                 entity_id = str(entity.id)
         else:
             # It's just an ObjectId
             entity_id = str(role.entity)
-    return entity_name, entity_id
+    return entity_name, entity_system_name, entity_id
 
 
 @router.post("/", response_model=RoleResponse, dependencies=[Depends(require_permission("role:create"))])
@@ -73,7 +76,7 @@ async def create_role(
     )
     
     # Get entity name and ID if applicable
-    entity_name, entity_id = await _get_entity_info(role)
+    entity_name, entity_system_name, entity_id = await _get_entity_info(role)
     
     return RoleResponse(
         id=str(role.id),
@@ -83,6 +86,7 @@ async def create_role(
         permissions=role.permissions,
         entity_id=entity_id,
         entity_name=entity_name,
+        entity_system_name=entity_system_name,
         assignable_at_types=role.assignable_at_types,
         is_system_role=role.is_system_role,
         is_global=role.is_global,
@@ -101,7 +105,7 @@ async def get_role(role_id: str):
     role = await RoleService.get_role(role_id)
     
     # Get entity name and ID if applicable
-    entity_name, entity_id = await _get_entity_info(role)
+    entity_name, entity_system_name, entity_id = await _get_entity_info(role)
     
     return RoleResponse(
         id=str(role.id),
@@ -111,6 +115,7 @@ async def get_role(role_id: str):
         permissions=role.permissions,
         entity_id=entity_id,
         entity_name=entity_name,
+        entity_system_name=entity_system_name,
         assignable_at_types=role.assignable_at_types,
         is_system_role=role.is_system_role,
         is_global=role.is_global,
@@ -140,7 +145,7 @@ async def update_role(
     )
     
     # Get entity name and ID if applicable
-    entity_name, entity_id = await _get_entity_info(role)
+    entity_name, entity_system_name, entity_id = await _get_entity_info(role)
     
     return RoleResponse(
         id=str(role.id),
@@ -150,6 +155,7 @@ async def update_role(
         permissions=role.permissions,
         entity_id=entity_id,
         entity_name=entity_name,
+        entity_system_name=entity_system_name,
         assignable_at_types=role.assignable_at_types,
         is_system_role=role.is_system_role,
         is_global=role.is_global,
@@ -199,7 +205,7 @@ async def search_roles(
     items = []
     for role in roles:
         # Get entity name and ID if applicable
-        entity_name, entity_id = await _get_entity_info(role)
+        entity_name, entity_system_name, entity_id = await _get_entity_info(role)
         
         items.append(RoleResponse(
             id=str(role.id),
@@ -209,6 +215,7 @@ async def search_roles(
             permissions=role.permissions,
             entity_id=entity_id,
             entity_name=entity_name,
+            entity_system_name=entity_system_name,
             assignable_at_types=role.assignable_at_types,
             is_system_role=role.is_system_role,
             is_global=role.is_global,
@@ -253,7 +260,7 @@ async def get_assignable_roles(
     response_roles = []
     for role in roles:
         # Get entity name and ID if applicable
-        entity_name, entity_id = await _get_entity_info(role)
+        entity_name, entity_system_name, entity_id = await _get_entity_info(role)
         
         response_roles.append(RoleResponse(
             id=str(role.id),
@@ -263,6 +270,7 @@ async def get_assignable_roles(
             permissions=role.permissions,
             entity_id=entity_id,
             entity_name=entity_name,
+            entity_system_name=entity_system_name,
             assignable_at_types=role.assignable_at_types,
             is_system_role=role.is_system_role,
             is_global=role.is_global,
@@ -289,7 +297,7 @@ async def create_default_roles(
     response_roles = []
     for role in roles:
         # Get entity name
-        entity_name, entity_id = await _get_entity_info(role)
+        entity_name, entity_system_name, entity_id = await _get_entity_info(role)
         
         response_roles.append(RoleResponse(
             id=str(role.id),
@@ -299,6 +307,7 @@ async def create_default_roles(
             permissions=role.permissions,
             entity_id=entity_id,
             entity_name=entity_name,
+            entity_system_name=entity_system_name,
             assignable_at_types=role.assignable_at_types,
             is_system_role=role.is_system_role,
             is_global=role.is_global,

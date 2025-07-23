@@ -140,7 +140,7 @@ async def create_entity(
     return EntityResponse(
         id=str(entity.id),
         name=entity.name,
-        display_name=entity.name,  # Use name as display_name
+        display_name=entity.display_name,
         description=entity.description,
         entity_class=entity.entity_class.upper(),  # Convert to uppercase
         entity_type=entity.entity_type,
@@ -204,7 +204,7 @@ async def get_top_level_organizations(
             items.append(EntityResponse(
                 id=str(entity.id),
                 name=entity.name,
-                display_name=entity.name,  # Use name as display_name
+                display_name=entity.display_name,
                 description=entity.description,
                 entity_class=entity.entity_class.upper(),  # Convert to uppercase string
                 entity_type=entity.entity_type,
@@ -243,7 +243,7 @@ async def get_entity(
     return EntityResponse(
         id=str(entity.id),
         name=entity.name,
-        display_name=entity.name,  # Use name as display_name
+        display_name=entity.display_name,
         description=entity.description,
         entity_class=entity.entity_class.upper(),  # Convert to uppercase
         entity_type=entity.entity_type,
@@ -276,7 +276,7 @@ async def update_entity(
     return EntityResponse(
         id=str(entity.id),
         name=entity.name,
-        display_name=entity.name,  # Use name as display_name
+        display_name=entity.display_name,
         description=entity.description,
         entity_class=entity.entity_class.upper(),  # Convert to uppercase
         entity_type=entity.entity_type,
@@ -391,7 +391,7 @@ async def search_entities(
         items.append(EntityResponse(
             id=str(entity.id),
             name=entity.name,
-            display_name=entity.name,  # Use name as display_name
+            display_name=entity.display_name,
             description=entity.description,
             entity_class=entity.entity_class.upper(),  # Convert to uppercase
             entity_type=entity.entity_type,
@@ -454,7 +454,7 @@ async def get_entity_path(
         response_path.append(EntityResponse(
             id=str(entity.id),
             name=entity.name,
-            display_name=entity.name,  # Use name as display_name
+            display_name=entity.display_name,
             description=entity.description,
             entity_class=entity.entity_class.upper(),  # Convert to uppercase
             entity_type=entity.entity_type,
@@ -573,7 +573,8 @@ async def add_entity_member(
         user_email=user.email,
         user_name=f"{user.profile.first_name} {user.profile.last_name}" if user.profile else user.email,
         entity_id=str(entity.id),
-        entity_name=entity.name,
+        entity_name=entity.display_name,
+        entity_system_name=entity.name,
         role_id=str(first_role.id) if first_role else "",
         role_name=first_role.name if first_role else "No Role",
         permissions=first_role.permissions if first_role else [],
@@ -665,7 +666,8 @@ async def update_entity_member(
         user_email=user.email,
         user_name=f"{user.profile.first_name} {user.profile.last_name}" if user.profile else user.email,
         entity_id=str(entity.id),
-        entity_name=entity.name,
+        entity_name=entity.display_name,
+        entity_system_name=entity.name,
         role_id=str(first_role.id) if first_role else "",
         role_name=first_role.name if first_role else "No Role",
         permissions=first_role.permissions if first_role else [],

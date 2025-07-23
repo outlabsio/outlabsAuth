@@ -152,6 +152,7 @@ export interface EntityMember {
   user_name: string;
   entity_id: string;
   entity_name: string;
+  entity_system_name?: string;
   role_id: string;
   role_name: string;
   permissions: string[];
@@ -193,6 +194,7 @@ export interface Role {
   description?: string | null;
   entity_id?: string;
   entity_name?: string;
+  entity_system_name?: string;
   entity?: string | Entity;
   assignable_at_types?: string[];
   is_system_role: boolean;

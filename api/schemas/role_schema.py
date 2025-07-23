@@ -60,7 +60,8 @@ class RoleResponse(BaseModel):
     description: Optional[str] = None
     permissions: List[str]
     entity_id: Optional[str] = None
-    entity_name: Optional[str] = None
+    entity_name: Optional[str] = None  # Display name for backward compatibility
+    entity_system_name: Optional[str] = None  # System/technical name
     assignable_at_types: List[str]
     is_system_role: bool
     is_global: bool

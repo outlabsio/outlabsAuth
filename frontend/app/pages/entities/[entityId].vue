@@ -112,6 +112,20 @@
 
               <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
+                  <h4 class="text-sm font-medium text-muted-foreground">Entity ID</h4>
+                  <div class="mt-1 flex items-center gap-2">
+                    <p class="font-mono text-sm bg-elevated px-2 py-1 rounded flex-1">{{ entity.id }}</p>
+                    <UButton 
+                      icon="i-lucide-copy" 
+                      size="xs" 
+                      variant="ghost" 
+                      @click="copyToClipboard(entity.id)"
+                      :title="'Copy ID'"
+                    />
+                  </div>
+                </div>
+                
+                <div>
                   <h4 class="text-sm font-medium text-muted-foreground">System Name</h4>
                   <p class="mt-1 font-mono text-sm bg-elevated px-2 py-1 rounded">{{ entity.name }}</p>
                 </div>
@@ -262,6 +276,7 @@ const entityId = computed(() => route.params.entityId as string);
 
 // Store
 const authStore = useAuthStore();
+const toast = useToast();
 
 // State
 const activeTab = ref('overview'); // Use slot name for tab selection
@@ -440,6 +455,23 @@ const tabItems = computed(() => [
 ]);
 
 // Methods
+function copyToClipboard(text: string) {
+  navigator.clipboard.writeText(text).then(() => {
+    toast.add({
+      title: "Copied",
+      description: "ID copied to clipboard",
+      color: "success",
+      timeout: 2000
+    });
+  }).catch(() => {
+    toast.add({
+      title: "Error",
+      description: "Failed to copy to clipboard",
+      color: "error"
+    });
+  });
+}
+
 function formatDate(dateString: string) {
   return new Date(dateString).toLocaleDateString(undefined, {
     year: "numeric",
