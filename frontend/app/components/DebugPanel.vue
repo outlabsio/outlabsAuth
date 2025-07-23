@@ -274,6 +274,33 @@ const formatJson = (obj: any) => {
     return `Error formatting: ${error.message}`;
   }
 };
+
+// Simple syntax highlighting for JSON
+const highlightJson = (json: string): string => {
+  // Escape HTML
+  json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  
+  // Highlight different JSON elements
+  return json
+    // Property names (keys)
+    .replace(/"([^"]+)":/g, '<span class="text-blue-600 dark:text-blue-400">"$1"</span>:')
+    // String values
+    .replace(/: "([^"]*)"/g, ': <span class="text-green-600 dark:text-green-400">"$1"</span>')
+    // Numbers
+    .replace(/: (-?\d+\.?\d*)/g, ': <span class="text-orange-600 dark:text-orange-400">$1</span>')
+    // Booleans
+    .replace(/: (true|false)/g, ': <span class="text-purple-600 dark:text-purple-400">$1</span>')
+    // Null
+    .replace(/: (null)/g, ': <span class="text-gray-500">$1</span>')
+    // Array/Object values that are strings
+    .replace(/,\s*"([^"]*)"/g, ', <span class="text-green-600 dark:text-green-400">"$1"</span>')
+    // Special markers we added
+    .replace(/\[(Circular Reference|Max depth reached|Error reading getter|Function|undefined)\]/g, 
+      '<span class="text-amber-600 dark:text-amber-400 italic">[$1]</span>')
+    // Sensitive data markers
+    .replace(/\*\*\*(PRESENT|HIDDEN)\*\*\*/g, 
+      '<span class="text-gray-500 italic">***$1***</span>');
+};
 </script>
 
 <template>
@@ -427,18 +454,18 @@ const formatJson = (obj: any) => {
               </div>
               <div v-for="(storeData, storeName) in storeStates" :key="storeName" class="space-y-2">
                 <div class="flex items-center justify-between">
-                  <h3 class="text-sm font-semibold capitalize flex items-center gap-2">
+                  <h3 
+                    class="text-sm font-semibold capitalize flex items-center gap-2 cursor-pointer select-none flex-1 hover:bg-muted/10 rounded p-1 -m-1 transition-colors"
+                    @click="toggleStoreExpanded(storeName)"
+                  >
                     <UIcon name="i-lucide-database" class="h-4 w-4" />
                     {{ storeName }} Store
+                    <UIcon 
+                      :name="expandedStores[storeName] ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" 
+                      class="h-3 w-3 ml-auto mr-2"
+                    />
                   </h3>
                   <div class="flex gap-1">
-                    <UButton
-                      :icon="expandedStores[storeName] ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
-                      variant="ghost"
-                      size="xs"
-                      title="Toggle expand/collapse"
-                      @click="toggleStoreExpanded(storeName)"
-                    />
                     <UButton
                       icon="i-lucide-copy"
                       variant="ghost"
@@ -450,7 +477,10 @@ const formatJson = (obj: any) => {
                 </div>
                 <UCard :ui="{ body: { padding: 'p-3' } }" v-show="expandedStores[storeName]">
                   <div class="relative">
-                    <pre class="text-xs font-mono overflow-x-auto whitespace-pre-wrap text-muted-foreground">{{ formatJson(storeData) }}</pre>
+                    <pre 
+                      class="text-xs font-mono overflow-x-auto whitespace-pre-wrap"
+                      v-html="highlightJson(formatJson(storeData))"
+                    ></pre>
                   </div>
                 </UCard>
               </div>
