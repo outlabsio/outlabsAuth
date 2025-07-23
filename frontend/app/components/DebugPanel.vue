@@ -17,6 +17,18 @@ const dragOffset = ref({ x: 0, y: 0 });
 // Selected tab state
 const selectedTab = ref('context');
 
+// Store expansion state
+const expandedStores = ref<Record<string, boolean>>({
+  auth: true,
+  user: true,
+  permissions: false,
+  roles: false,
+  entities: false,
+  context: true,
+  ui: false,
+  debug: false
+});
+
 // Tabs configuration for Nuxt UI v3
 const tabItems = computed(() => [
   { label: 'Context', value: 'context', slot: 'context', icon: 'i-lucide-globe' },
@@ -34,17 +46,60 @@ const contextInfo = computed(() => ({
   currentUser: userStore.user
 }));
 
-// Dynamic store state extraction
+// Dynamic store state extraction with circular reference handling
 const getStoreState = (store: any) => {
   const state: any = {};
+  const seen = new WeakSet();
+  
+  // Helper to safely clone values and handle circular references
+  const safeClone = (obj: any, depth = 0): any => {
+    // Limit depth to prevent infinite recursion
+    if (depth > 10) return '[Max depth reached]';
+    
+    // Handle primitives
+    if (obj === null || obj === undefined) return obj;
+    if (typeof obj !== 'object') return obj;
+    
+    // Handle circular references
+    if (seen.has(obj)) return '[Circular Reference]';
+    
+    // Handle dates
+    if (obj instanceof Date) return obj.toISOString();
+    
+    // Handle arrays
+    if (Array.isArray(obj)) {
+      seen.add(obj);
+      const result = obj.map(item => safeClone(item, depth + 1));
+      seen.delete(obj);
+      return result;
+    }
+    
+    // Handle objects
+    if (typeof obj === 'object') {
+      seen.add(obj);
+      const result: any = {};
+      
+      for (const [key, value] of Object.entries(obj)) {
+        // Skip internal Vue/Pinia properties
+        if (key.startsWith('_') || key.startsWith('$')) continue;
+        
+        // Skip functions
+        if (typeof value === 'function') continue;
+        
+        result[key] = safeClone(value, depth + 1);
+      }
+      
+      seen.delete(obj);
+      return result;
+    }
+    
+    return obj;
+  };
   
   // Get the actual state object
   const storeState = store.$state;
   
-  // Also include computed getters
-  const descriptors = Object.getOwnPropertyDescriptors(store);
-  
-  // Add state properties
+  // Add state properties with safe cloning
   for (const [key, value] of Object.entries(storeState)) {
     // Handle sensitive data
     if (key === 'accessToken' || key === 'refreshToken') {
@@ -52,11 +107,12 @@ const getStoreState = (store: any) => {
     } else if (key === 'password' || key === 'secret') {
       state[key] = '***HIDDEN***';
     } else {
-      state[key] = value;
+      state[key] = safeClone(value);
     }
   }
   
-  // Add getters (computed properties)
+  // Add simple getters only
+  const descriptors = Object.getOwnPropertyDescriptors(store);
   for (const [key, descriptor] of Object.entries(descriptors)) {
     if (descriptor.get && !key.startsWith('$') && !key.startsWith('_')) {
       try {
@@ -67,12 +123,15 @@ const getStoreState = (store: any) => {
              typeof value === 'number' || 
              typeof value === 'boolean' || 
              value === null || 
-             value === undefined ||
-             Array.isArray(value))) {
+             value === undefined)) {
           state[`[getter] ${key}`] = value;
+        } else if (!(key in state) && Array.isArray(value)) {
+          // For arrays, create a shallow copy to avoid circular refs
+          state[`[getter] ${key}`] = safeClone(value);
         }
       } catch (e) {
         // Ignore errors from getters
+        state[`[getter] ${key}`] = '[Error reading getter]';
       }
     }
   }
@@ -84,31 +143,37 @@ const getStoreState = (store: any) => {
 const storeStates = computed(() => {
   const stores: Record<string, any> = {};
   
-  // Get all active Pinia stores
-  const pinia = useNuxtApp().$pinia;
-  
-  // Map of store IDs to friendly names
-  const storeNames: Record<string, string> = {
-    auth: 'auth',
-    user: 'user',
-    permissions: 'permissions',
-    roles: 'roles',
-    entities: 'entities',
-    context: 'context',
-    ui: 'ui',
-    debug: 'debug'
-  };
-  
-  // Get each store's state
-  for (const [storeId, storeName] of Object.entries(storeNames)) {
-    try {
-      const store = pinia._s.get(storeId);
-      if (store) {
-        stores[storeName] = getStoreState(store);
+  try {
+    // Get all active Pinia stores
+    const pinia = useNuxtApp().$pinia;
+    
+    // Map of store IDs to friendly names
+    const storeNames: Record<string, string> = {
+      auth: 'auth',
+      user: 'user',
+      permissions: 'permissions',
+      roles: 'roles',
+      entities: 'entities',
+      context: 'context',
+      ui: 'ui',
+      debug: 'debug'
+    };
+    
+    // Get each store's state
+    for (const [storeId, storeName] of Object.entries(storeNames)) {
+      try {
+        const store = pinia._s.get(storeId);
+        if (store) {
+          stores[storeName] = getStoreState(store);
+        }
+      } catch (e) {
+        console.error(`Failed to get store ${storeId}:`, e);
+        stores[storeName] = { error: `Failed to load store: ${e.message}` };
       }
-    } catch (e) {
-      console.error(`Failed to get store ${storeId}:`, e);
     }
+  } catch (e) {
+    console.error('Failed to access Pinia stores:', e);
+    return { error: 'Failed to load stores' };
   }
   
   return stores;
@@ -163,6 +228,11 @@ onUnmounted(() => {
   document.removeEventListener('mousemove', onDrag);
   document.removeEventListener('mouseup', stopDrag);
 });
+
+// Toggle store expansion
+const toggleStoreExpanded = (storeName: string) => {
+  expandedStores.value[storeName] = !expandedStores.value[storeName];
+};
 
 // Copy to clipboard
 const copyToClipboard = (text: string) => {
@@ -355,21 +425,32 @@ const formatJson = (obj: any) => {
                 <UIcon name="i-lucide-info" class="inline mr-1" />
                 Showing actual Pinia store state. Properties marked with [getter] are computed values.
               </div>
-              <div v-for="(storeData, storeName) in storeStates" :key="storeName">
-                <h3 class="text-sm font-semibold mb-2 capitalize flex items-center gap-2">
-                  <UIcon name="i-lucide-database" class="h-4 w-4" />
-                  {{ storeName }} Store
-                </h3>
-                <UCard :ui="{ body: { padding: 'p-3' } }">
-                  <div class="relative">
-                    <pre class="text-xs overflow-x-auto whitespace-pre-wrap">{{ formatJson(storeData) }}</pre>
+              <div v-for="(storeData, storeName) in storeStates" :key="storeName" class="space-y-2">
+                <div class="flex items-center justify-between">
+                  <h3 class="text-sm font-semibold capitalize flex items-center gap-2">
+                    <UIcon name="i-lucide-database" class="h-4 w-4" />
+                    {{ storeName }} Store
+                  </h3>
+                  <div class="flex gap-1">
+                    <UButton
+                      :icon="expandedStores[storeName] ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
+                      variant="ghost"
+                      size="xs"
+                      title="Toggle expand/collapse"
+                      @click="toggleStoreExpanded(storeName)"
+                    />
                     <UButton
                       icon="i-lucide-copy"
                       variant="ghost"
                       size="xs"
-                      class="absolute top-0 right-0"
-                      @click="copyToClipboard(JSON.stringify(storeData, null, 2))"
+                      title="Copy store data"
+                      @click="copyToClipboard(formatJson(storeData))"
                     />
+                  </div>
+                </div>
+                <UCard :ui="{ body: { padding: 'p-3' } }" v-show="expandedStores[storeName]">
+                  <div class="relative">
+                    <pre class="text-xs font-mono overflow-x-auto whitespace-pre-wrap text-muted-foreground">{{ formatJson(storeData) }}</pre>
                   </div>
                 </UCard>
               </div>
