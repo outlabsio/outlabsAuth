@@ -230,7 +230,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
       </UFormField>
     </div>
 
-    <UDivider />
+    <USeparator />
 
     <!-- Classification Section -->
     <div class="space-y-6 w-full">
@@ -312,7 +312,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
 
     <!-- Danger Zone - Only show in edit mode -->
     <div v-if="mode === 'edit' && entity" class="space-y-6 w-full">
-      <UDivider />
+      <USeparator />
 
       <div class="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-6">
         <div class="flex items-center gap-3 mb-4">

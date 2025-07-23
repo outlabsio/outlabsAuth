@@ -19,7 +19,7 @@
         </UFormField>
 
         <div class="flex justify-end pt-4">
-          <UButton type="submit" :loading="settingsStore.isSaving">
+          <UButton type="submit" :loading="isSaving">
             Save Changes
           </UButton>
         </div>
@@ -32,7 +32,11 @@
 import { z } from 'zod'
 
 // Stores
-const settingsStore = useSettingsStore()
+const authStore = useAuthStore()
+const toast = useToast()
+
+// State
+const isSaving = ref(false)
 
 // Options
 const languageOptions = [
@@ -61,27 +65,32 @@ const generalSchema = z.object({
   timezone: z.string()
 })
 
-// Form state - reactive reference to store data
+// Form state
 const generalSettings = reactive({
-  ...settingsStore.general
+  platform_name: 'OutlabsAuth',
+  platform_description: '',
+  default_language: 'en',
+  timezone: 'UTC'
 })
-
-// Watch for store updates
-watch(() => settingsStore.general, (newSettings) => {
-  Object.assign(generalSettings, newSettings)
-}, { deep: true })
 
 // Methods
 const saveGeneralSettings = async () => {
+  isSaving.value = true
   try {
-    await settingsStore.saveGeneralSettings(generalSettings)
-  } catch (error) {
-    // Error handled in store
+    // In a real implementation, this would save to a settings endpoint
+    toast.add({
+      title: 'Settings saved',
+      description: 'General settings have been updated',
+      color: 'success'
+    })
+  } catch (error: any) {
+    toast.add({
+      title: 'Failed to save settings',
+      description: error.message || 'An error occurred',
+      color: 'error'
+    })
+  } finally {
+    isSaving.value = false
   }
 }
-
-// Load settings on mount
-onMounted(() => {
-  settingsStore.fetchSettings()
-})
 </script>

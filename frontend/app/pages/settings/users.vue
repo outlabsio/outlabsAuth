@@ -2,7 +2,7 @@
   <div class="space-y-6">
     <!-- Action Button -->
     <div class="flex justify-end">
-      <UButton icon="i-lucide-user-plus" @click="showCreateModal = true">
+      <UButton icon="i-lucide-user-plus" @click="openCreateDrawer">
         Create User
       </UButton>
     </div>
@@ -111,9 +111,11 @@
 
         <!-- Actions Cell -->
         <template #actions-data="{ row }">
-          <UDropdown :items="getActions(row)">
-            <UButton variant="ghost" icon="i-lucide-more-vertical" size="sm" />
-          </UDropdown>
+          <UDropdownMenu :items="getActions(row)">
+            <template #trigger>
+              <UButton variant="ghost" icon="i-lucide-more-vertical" size="sm" />
+            </template>
+          </UDropdownMenu>
         </template>
       </UTable>
 
@@ -181,7 +183,7 @@
             </div>
           </div>
 
-          <UDivider />
+          <USeparator />
 
           <!-- Contact Info -->
           <div class="space-y-3">
@@ -198,7 +200,7 @@
             </div>
           </div>
 
-          <UDivider />
+          <USeparator />
 
           <!-- Entity Memberships -->
           <div class="space-y-3">
@@ -224,7 +226,7 @@
             <p v-else class="text-sm text-muted-foreground">No entity memberships</p>
           </div>
 
-          <UDivider />
+          <USeparator />
 
           <!-- Account Info -->
           <div class="space-y-3">
@@ -264,16 +266,17 @@
       </UCard>
     </USlideover>
 
-    <!-- Create/Edit Modal -->
-    <UserFormModal
-      v-model="showFormModal"
+    <!-- Create/Edit Drawer -->
+    <UsersDrawer
+      v-model:open="showFormDrawer"
       :mode="formMode"
       :user="formUser"
-      @saved="onUserSaved"
+      @created="onUserSaved"
+      @updated="onUserSaved"
     />
 
     <!-- Delete Confirmation -->
-    <ConfirmationModal
+    <SharedConfirmationModal
       v-model="showDeleteConfirm"
       title="Delete User"
       :description="`Are you sure you want to delete ${userToDelete?.email}? This action cannot be undone.`"
@@ -307,7 +310,7 @@ const pageSize = ref(20)
 const totalUsers = ref(0)
 const showUserDetails = ref(false)
 const selectedUser = ref<User | null>(null)
-const showFormModal = ref(false)
+const showFormDrawer = ref(false)
 const formMode = ref<'create' | 'edit'>('create')
 const formUser = ref<User | null>(null)
 const showDeleteConfirm = ref(false)
@@ -322,13 +325,13 @@ const filters = reactive({
 
 // Table columns
 const columns = [
-  { key: 'user', label: 'User' },
-  { key: 'status', label: 'Status' },
-  { key: 'entities', label: 'Entities' },
-  { key: 'roles', label: 'Roles' },
-  { key: 'type', label: 'Type' },
-  { key: 'created', label: 'Created' },
-  { key: 'actions', label: '' }
+  { id: 'user', key: 'user', label: 'User' },
+  { id: 'status', key: 'status', label: 'Status' },
+  { id: 'entities', key: 'entities', label: 'Entities' },
+  { id: 'roles', key: 'roles', label: 'Roles' },
+  { id: 'type', key: 'type', label: 'Type' },
+  { id: 'created', key: 'created', label: 'Created' },
+  { id: 'actions', key: 'actions', label: '' }
 ]
 
 // Status options
@@ -422,10 +425,16 @@ const viewUserDetails = (user: User) => {
   showUserDetails.value = true
 }
 
+const openCreateDrawer = () => {
+  formUser.value = null
+  formMode.value = 'create'
+  showFormDrawer.value = true
+}
+
 const editUser = (user: User) => {
   formUser.value = user
   formMode.value = 'edit'
-  showFormModal.value = true
+  showFormDrawer.value = true
   showUserDetails.value = false
 }
 
@@ -464,7 +473,7 @@ const deleteUser = async () => {
 
 const onUserSaved = () => {
   fetchUsers()
-  showFormModal.value = false
+  showFormDrawer.value = false
 }
 
 const getActions = (user: User) => [

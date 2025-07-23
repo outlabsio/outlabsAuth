@@ -64,14 +64,14 @@
             />
 
             <!-- Actions Dropdown -->
-            <UDropdown :items="getMemberActions(member)" v-if="canManageMembers">
+            <UDropdownMenu :items="getMemberActions(member)" v-if="canManageMembers">
               <UButton 
                 icon="i-lucide-more-vertical" 
                 variant="ghost" 
                 square
                 size="sm"
               />
-            </UDropdown>
+            </UDropdownMenu>
           </div>
         </div>
 

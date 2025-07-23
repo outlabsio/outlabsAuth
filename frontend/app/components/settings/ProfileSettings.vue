@@ -77,7 +77,7 @@
         />
       </UFormField>
 
-      <UDivider />
+      <USeparator />
 
       <!-- Save Button -->
       <div class="flex justify-end">

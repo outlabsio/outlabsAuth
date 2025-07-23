@@ -23,7 +23,7 @@
             <USwitch v-model="settings.email.security_alerts" />
           </div>
 
-          <UDivider />
+          <USeparator />
 
           <div class="flex items-center justify-between">
             <div>
@@ -35,7 +35,7 @@
             <USwitch v-model="settings.email.entity_updates" />
           </div>
 
-          <UDivider />
+          <USeparator />
 
           <div class="flex items-center justify-between">
             <div>
@@ -47,7 +47,7 @@
             <USwitch v-model="settings.email.role_changes" />
           </div>
 
-          <UDivider />
+          <USeparator />
 
           <div class="flex items-center justify-between">
             <div>
@@ -61,7 +61,7 @@
         </div>
       </div>
 
-      <UDivider />
+      <USeparator />
 
       <!-- In-App Notifications -->
       <div class="space-y-4">
@@ -79,7 +79,7 @@
           </div>
 
           <template v-if="settings.inApp.enabled">
-            <UDivider />
+            <USeparator />
 
             <div class="flex items-center justify-between">
               <div>
@@ -91,7 +91,7 @@
               <USwitch v-model="settings.inApp.desktop_notifications" />
             </div>
 
-            <UDivider />
+            <USeparator />
 
             <div class="flex items-center justify-between">
               <div>
@@ -106,7 +106,7 @@
         </div>
       </div>
 
-      <UDivider />
+      <USeparator />
 
       <!-- Notification Schedule -->
       <div class="space-y-4">
@@ -156,7 +156,7 @@
         </div>
       </div>
 
-      <UDivider />
+      <USeparator />
 
       <!-- Save Button -->
       <div class="flex justify-end pt-4">

@@ -1,6 +1,7 @@
 <template>
-  <UModal v-model="isOpen">
-    <UCard>
+  <UModal v-model:open="isOpen">
+    <template #content>
+      <UCard>
       <template #header>
         <div class="flex items-center gap-3">
           <div :class="iconWrapperClass">
@@ -36,6 +37,7 @@
         </div>
       </template>
     </UCard>
+    </template>
   </UModal>
 </template>
 

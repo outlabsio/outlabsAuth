@@ -4,22 +4,26 @@ import type { NavigationMenuItem } from '@nuxt/ui'
 const route = useRoute()
 
 const links = [[{
-  label: 'Overview',
-  icon: 'i-lucide-layout-dashboard',
+  label: 'General',
+  icon: 'i-lucide-settings',
   to: '/settings',
   exact: true
 }, {
-  label: 'Entity Types',
-  icon: 'i-lucide-folder-tree',
-  to: '/settings/entity-types'
+  label: 'Security',
+  icon: 'i-lucide-shield',
+  to: '/settings/security'
+}, {
+  label: 'Notifications',
+  icon: 'i-lucide-bell',
+  to: '/settings/notifications'
+}, {
+  label: 'Rate Limiting',
+  icon: 'i-lucide-gauge',
+  to: '/settings/rate-limiting'
 }, {
   label: 'System Users',
   icon: 'i-lucide-users-2',
   to: '/settings/users'
-}, {
-  label: 'Platform Settings',
-  icon: 'i-lucide-settings-2',
-  to: '/settings/settings'
 }]] satisfies NavigationMenuItem[][]
 
 // Breadcrumb items
@@ -29,13 +33,15 @@ const breadcrumbItems = computed(() => {
     { label: 'Settings', to: '/settings' }
   ]
   
-  // Add current page to breadcrumbs if not on overview
-  if (route.path === '/settings/entity-types') {
-    items.push({ label: 'Entity Types' })
+  // Add current page to breadcrumbs if not on general
+  if (route.path === '/settings/security') {
+    items.push({ label: 'Security' })
+  } else if (route.path === '/settings/notifications') {
+    items.push({ label: 'Notifications' })
+  } else if (route.path === '/settings/rate-limiting') {
+    items.push({ label: 'Rate Limiting' })
   } else if (route.path === '/settings/users') {
     items.push({ label: 'System Users' })
-  } else if (route.path === '/settings/settings') {
-    items.push({ label: 'Platform Settings' })
   }
   
   return items
@@ -43,18 +49,20 @@ const breadcrumbItems = computed(() => {
 
 // Page title based on current route
 const pageTitle = computed(() => {
-  if (route.path === '/settings/entity-types') return 'Entity Types'
+  if (route.path === '/settings/security') return 'Security Settings'
+  if (route.path === '/settings/notifications') return 'Notification Settings'
+  if (route.path === '/settings/rate-limiting') return 'Rate Limiting'
   if (route.path === '/settings/users') return 'System Users'
-  if (route.path === '/settings/settings') return 'Platform Settings'
-  return 'Settings Overview'
+  return 'General Settings'
 })
 
 // Page description based on current route
 const pageDescription = computed(() => {
-  if (route.path === '/settings/entity-types') return 'Manage entity type definitions and their hierarchy rules'
+  if (route.path === '/settings/security') return 'Configure password policies and session settings'
+  if (route.path === '/settings/notifications') return 'Configure notification channels and preferences'
+  if (route.path === '/settings/rate-limiting') return 'Configure API rate limiting rules'
   if (route.path === '/settings/users') return 'Manage all users across the system'
-  if (route.path === '/settings/settings') return 'Configure system options'
-  return 'System administration and configuration'
+  return 'Configure general platform settings'
 })
 </script>
 
