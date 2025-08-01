@@ -33,6 +33,7 @@ interface FormEntityAssignment {
 }
 
 const entityAssignments = ref<FormEntityAssignment[]>([])
+const isLoadingMemberships = ref(false)
 
 // Load entities and roles
 onMounted(async () => {
@@ -43,13 +44,32 @@ onMounted(async () => {
 
   // Initialize entity assignments from user data
   if (props.mode === 'edit' && props.user) {
-    entityAssignments.value = props.user.entities.map(entity => ({
-      entity_id: entity.id,
-      role_ids: entity.roles.map(r => r.id),
-      status: entity.status,
-      valid_from: null,
-      valid_until: null
-    }))
+    // Fetch ALL memberships including inactive ones
+    isLoadingMemberships.value = true
+    try {
+      const membershipData = await usersStore.fetchUserMemberships(props.user.id, true)
+      
+      // Convert membership response to entity assignments
+      entityAssignments.value = membershipData.memberships.map((membership: any) => ({
+        entity_id: membership.entity.id,
+        role_ids: membership.roles.map((r: any) => r.id),
+        status: membership.status,
+        valid_from: membership.valid_from,
+        valid_until: membership.valid_until
+      }))
+    } catch (error) {
+      console.error('Failed to fetch user memberships:', error)
+      // Fallback to user entities if fetch fails
+      entityAssignments.value = props.user.entities.map(entity => ({
+        entity_id: entity.id,
+        role_ids: entity.roles.map(r => r.id),
+        status: entity.status,
+        valid_from: null,
+        valid_until: null
+      }))
+    } finally {
+      isLoadingMemberships.value = false
+    }
   }
 })
 
@@ -252,7 +272,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
         <!-- Send Welcome Email -->
         <UFormField name="send_welcome_email" class="w-full">
           <div class="flex items-center gap-3">
-            <UCheckbox v-model="state.send_welcome_email" />
+            <USwitch v-model="state.send_welcome_email" />
             <div>
               <span class="text-sm font-medium">Send Welcome Email</span>
               <p class="text-xs text-muted-foreground">
@@ -350,8 +370,14 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
         Assign the user to entities and specify their roles. Users inherit permissions based on their roles within each entity.
       </p>
 
+      <!-- Loading State -->
+      <div v-if="isLoadingMemberships" class="text-center py-8">
+        <UIcon name="i-lucide-loader-2" class="h-6 w-6 animate-spin text-primary mb-2" />
+        <p class="text-sm text-muted-foreground">Loading memberships...</p>
+      </div>
+
       <!-- Entity Assignments List -->
-      <div v-if="entityAssignments.length > 0" class="space-y-4">
+      <div v-else-if="entityAssignments.length > 0" class="space-y-4">
         <UCard v-for="(assignment, index) in entityAssignments" :key="index" class="p-4">
           <div class="space-y-4">
             <!-- Entity Selection -->
@@ -388,7 +414,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             <!-- Membership Status -->
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-3">
-                <UCheckbox 
+                <USwitch 
                   :model-value="assignment.status === 'active'"
                   @update:model-value="assignment.status = $event ? 'active' : 'inactive'"
                 />
@@ -410,7 +436,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
       </div>
 
       <!-- Empty State -->
-      <div v-else class="text-center py-8 border-2 border-dashed border-neutral-200 dark:border-neutral-800 rounded-lg">
+      <div v-else-if="!isLoadingMemberships" class="text-center py-8 border-2 border-dashed border-neutral-200 dark:border-neutral-800 rounded-lg">
         <UIcon name="i-lucide-building" class="h-8 w-8 mb-2 text-muted-foreground" />
         <p class="text-sm text-muted-foreground">No entity memberships assigned</p>
         <p class="text-xs text-muted-foreground mt-1">

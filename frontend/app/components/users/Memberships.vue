@@ -68,9 +68,7 @@ const getMembershipStatusColor = (status: string) => {
   <div class="space-y-4">
     <!-- Options -->
     <div class="flex items-center justify-between">
-      <UCheckbox v-model="includeInactive">
-        Show inactive memberships
-      </UCheckbox>
+      <USwitch v-model="includeInactive" label="Show inactive memberships" />
     </div>
 
     <!-- Loading -->
