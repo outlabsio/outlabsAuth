@@ -295,11 +295,11 @@ viewer@outlabs.com / viewer123     # Read-only
 3. **Performance**: Redis caching and optimized queries
 4. **Better UX**: Entity type autocomplete, context switching, responsive design
 
-### 🔄 Technology Changes
-1. **Frontend**: Nuxt 3 + Vue instead of React (as incorrectly documented)
-2. **State Management**: Pinia instead of Zustand
-3. **UI Library**: Nuxt UI Pro instead of ShadCN
-4. **API Calls**: Centralized through auth store instead of TanStack Query
+### 🔄 Technology Stack
+1. **Frontend**: Nuxt 3 + Vue 3 with Composition API
+2. **State Management**: Pinia stores for all state and API calls
+3. **UI Library**: Nuxt UI Pro v3 premium components
+4. **API Calls**: Centralized through auth store with automatic token refresh
 
 ## Known Issues
 
@@ -308,7 +308,7 @@ viewer@outlabs.com / viewer123     # Read-only
 2. ~~**Test Failures**: Complex scenario tests show 3 failures (out of 35) related to entity updates with tree permissions.~~ ✅ FIXED - All tests passing
 
 ### Medium Priority Issues
-1. **Documentation Mismatch**: Some docs reference React/TanStack but frontend uses Nuxt/Pinia
+1. **Documentation Updates**: Some code examples need to be converted to Vue 3 syntax
 2. **Uncommitted Changes**: Several form components have pending changes
 3. **Package Manager**: Using npm but Bun is recommended
 4. **Missing Tests**: Frontend lacks comprehensive test coverage

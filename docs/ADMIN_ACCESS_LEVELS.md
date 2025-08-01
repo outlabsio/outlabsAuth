@@ -438,37 +438,52 @@ async function loadUsers(adminUser: User): Promise<User[]> {
 ```
 
 ### Permission-Based UI Components
-```typescript
-// Components render based on permissions
-function EntityActions({ entity, user }: Props) {
-  return (
-    <div className="actions">
-      {canEdit(user, entity) && (
-        <Button onClick={() => editEntity(entity)}>
-          Edit
-        </Button>
-      )}
-      
-      {canDelete(user, entity) && (
-        <Button onClick={() => deleteEntity(entity)} variant="danger">
-          Delete
-        </Button>
-      )}
-      
-      {canManageMembers(user, entity) && (
-        <Button onClick={() => manageMembers(entity)}>
-          Manage Members
-        </Button>
-      )}
-      
-      {canViewReports(user, entity) && (
-        <Button onClick={() => viewReports(entity)}>
-          View Reports
-        </Button>
-      )}
-    </div>
-  );
+```vue
+<!-- EntityActions.vue -->
+<script setup lang="ts">
+interface Props {
+  entity: Entity
+  user: User
 }
+
+const props = defineProps<Props>()
+
+const editEntity = (entity: Entity) => {
+  // Edit logic
+}
+
+const deleteEntity = (entity: Entity) => {
+  // Delete logic
+}
+
+const manageMembers = (entity: Entity) => {
+  // Manage members logic
+}
+
+const viewReports = (entity: Entity) => {
+  // View reports logic
+}
+</script>
+
+<template>
+  <div class="actions">
+    <UButton v-if="canEdit(user, entity)" @click="editEntity(entity)">
+      Edit
+    </UButton>
+    
+    <UButton v-if="canDelete(user, entity)" @click="deleteEntity(entity)" color="red">
+      Delete
+    </UButton>
+    
+    <UButton v-if="canManageMembers(user, entity)" @click="manageMembers(entity)">
+      Manage Members
+    </UButton>
+    
+    <UButton v-if="canViewReports(user, entity)" @click="viewReports(entity)">
+      View Reports
+    </UButton>
+  </div>
+</template>
 ```
 
 ## Permission Scoping

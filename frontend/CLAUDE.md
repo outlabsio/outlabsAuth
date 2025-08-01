@@ -149,12 +149,12 @@ export const useEntitiesStore = defineStore('entities', () => {
 - Log errors to console in development
 - Graceful degradation for failed API calls
 
-## Key Differences from React Version
-- Vue 3 Composition API instead of React hooks
-- File-based routing instead of React Router
-- Nuxt UI Pro instead of ShadCN
-- Pinia instead of Zustand
-- Auto-imports for components and composables
+## Key Frontend Features
+- Vue 3 Composition API with `<script setup>`
+- File-based routing with automatic route generation
+- Nuxt UI Pro components for premium UI elements
+- Pinia for centralized state management
+- Auto-imports for components, composables, and utilities
 
 ## Environment Variables
 ```env
