@@ -648,6 +648,14 @@ const onSubmit = async (event: FormSubmitEvent<z.infer<typeof schema>>) => {
 5. Configure platform admin access
 6. See `docs/PLATFORM_SETUP_GUIDE.md` for detailed steps
 
+### Understanding Role Assignment
+Roles can be assigned in three ways:
+1. **Global Roles** (`is_global=true`) - Assignable anywhere in the platform
+2. **Entity-Specific Roles** - Only assignable in the entity that owns them
+3. **Type-Specific Roles** (`assignable_at_types`) - Assignable at specified entity types
+
+See `docs/ROLE_ASSIGNMENT_GUIDE.md` for comprehensive role assignment documentation.
+
 ### Working with Entities
 1. Choose entity class based on purpose (STRUCTURAL vs ACCESS_GROUP)
 2. Use flexible entity types that match your business (e.g., "region", "bureau", "cost_center")

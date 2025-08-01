@@ -440,6 +440,13 @@ Once the backend is running, API documentation is available at:
 - Swagger UI: http://localhost:8030/docs
 - ReDoc: http://localhost:8030/redoc
 
+### Key Documentation Files
+- [Permissions Guide](docs/PERMISSIONS.md) - Complete permission system documentation
+- [Role Assignment Guide](docs/ROLE_ASSIGNMENT_GUIDE.md) - How roles are assigned and the three assignment criteria
+- [Tree Permissions Guide](docs/TREE_PERMISSIONS_GUIDE.md) - Understanding hierarchical permissions
+- [Platform Setup Guide](docs/PLATFORM_SETUP_GUIDE.md) - Step-by-step platform configuration
+- [API Integration Patterns](docs/API_INTEGRATION_PATTERNS.md) - Common integration patterns
+
 ## 🔧 Configuration
 
 ### Environment Variables

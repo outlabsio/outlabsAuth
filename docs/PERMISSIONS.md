@@ -206,6 +206,16 @@ results = await permission_service.check_permissions_batch(
 # Results: {"user:read": True, "user:create": False, "role:read": True}
 ```
 
+## Role Assignment
+
+Roles in OutlabsAuth can be assigned in three different ways, providing flexibility for various organizational structures:
+
+1. **Global Roles** - Can be assigned to users in any entity
+2. **Entity-Specific Roles** - Can only be assigned within the entity that owns them
+3. **Type-Specific Roles** - Can be assigned at any entity of specified types
+
+For detailed information about role assignment, see the [Role Assignment Guide](ROLE_ASSIGNMENT_GUIDE.md).
+
 ## Role Templates and Permissions
 
 When creating roles, you can use predefined templates that include common permission sets:
