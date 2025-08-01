@@ -35,17 +35,26 @@ watch(
   }
 )
 
-// Fetch fresh user data when opening in edit mode
+// Handle drawer open/close
 watch(
   () => open.value,
   async (isOpen) => {
-    if (isOpen && props.mode === 'edit' && props.user) {
-      // Fetch fresh user data to ensure we have the latest roles
-      try {
-        await usersStore.fetchUser(props.user.id)
-      } catch (error) {
-        console.error('Failed to fetch user details:', error)
+    if (isOpen) {
+      // Reset to original mode when opening
+      currentMode.value = props.mode
+      
+      // Fetch fresh user data when opening in edit mode
+      if (props.mode === 'edit' && props.user) {
+        try {
+          await usersStore.fetchUser(props.user.id)
+        } catch (error) {
+          console.error('Failed to fetch user details:', error)
+        }
       }
+    } else {
+      // Reset to original mode when closing
+      currentMode.value = props.mode
+      showDeleteConfirm.value = false
     }
   }
 )
@@ -161,6 +170,16 @@ async function handleDelete() {
   }
 }
 
+const handleCancel = () => {
+  if (mode.value === 'create') {
+    // For create mode, just close the drawer
+    open.value = false
+  } else {
+    // For edit mode, revert back to view mode
+    currentMode.value = 'view'
+  }
+}
+
 const showForm = computed(() => mode.value === 'create' || mode.value === 'edit')
 </script>
 
@@ -203,7 +222,7 @@ const showForm = computed(() => mode.value === 'create' || mode.value === 'edit'
             :user="mode === 'edit' ? (usersStore.selectedUser || user) : null"
             :mode="mode"
             @submit="handleSubmit"
-            @cancel="open = false"
+            @cancel="handleCancel"
           />
         </div>
 
@@ -287,7 +306,7 @@ const showForm = computed(() => mode.value === 'create' || mode.value === 'edit'
     <!-- Footer for Create/Edit Mode -->
     <template v-if="mode === 'create' || mode === 'edit'" #footer>
       <div class="flex flex-col sm:flex-row gap-3 w-full">
-        <UButton @click="open = false" color="neutral" variant="outline" class="justify-center flex-1"> 
+        <UButton @click="handleCancel" color="neutral" variant="outline" class="justify-center flex-1"> 
           Cancel 
         </UButton>
         <UButton @click="submitForm" :loading="isSubmitting" color="primary" class="justify-center flex-1">
