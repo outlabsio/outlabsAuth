@@ -22,7 +22,6 @@ const contextStore = useContextStore()
 const toast = useToast()
 
 // State
-const activeTab = ref('profile')
 const isDeleting = ref(false)
 const isSubmitting = ref(false)
 const showDeleteConfirm = ref(false)
@@ -197,14 +196,6 @@ const showForm = computed(() => mode.value === 'create' || mode.value === 'edit'
     <!-- Body -->
     <template #body>
       <div class="p-4">
-        <!-- Tabs for view mode -->
-        <UTabs 
-          v-if="mode === 'view' && user" 
-          v-model="activeTab" 
-          :items="tabs"
-          class="mb-6"
-        />
-
         <!-- Form Content -->
         <div v-if="showForm">
           <UsersForm
@@ -216,30 +207,35 @@ const showForm = computed(() => mode.value === 'create' || mode.value === 'edit'
           />
         </div>
 
-        <!-- View Content -->
+        <!-- View Content with Tabs -->
         <div v-else-if="mode === 'view' && user">
-          <!-- Profile Tab -->
-          <div v-if="activeTab === 'profile'">
-            <UsersProfile
-              :user="user"
-              @edit="currentMode = 'edit'"
-            />
-          </div>
+          <!-- Use UTabs with slot-based content -->
+          <UTabs :items="tabs" class="w-full">
+            <template #content="{ item }">
+              <!-- Profile Tab -->
+              <div v-if="item.key === 'profile'">
+                <UsersProfile
+                  :user="user"
+                  @edit="currentMode = 'edit'"
+                />
+              </div>
 
-          <!-- Memberships Tab -->
-          <div v-else-if="activeTab === 'memberships'">
-            <UsersMemberships :user="user" />
-          </div>
+              <!-- Memberships Tab -->
+              <div v-else-if="item.key === 'memberships'">
+                <UsersMemberships :user="user" />
+              </div>
 
-          <!-- Security Tab -->
-          <div v-else-if="activeTab === 'security'">
-            <UsersSecurity :user="user" />
-          </div>
+              <!-- Security Tab -->
+              <div v-else-if="item.key === 'security'">
+                <UsersSecurity :user="user" />
+              </div>
 
-          <!-- Activity Tab -->
-          <div v-else-if="activeTab === 'activity'">
-            <UsersActivity :user="user" />
-          </div>
+              <!-- Activity Tab -->
+              <div v-else-if="item.key === 'activity'">
+                <UsersActivity :user="user" />
+              </div>
+            </template>
+          </UTabs>
 
           <!-- Delete Section -->
           <div v-if="!user.is_system_user" class="mt-8 border-t pt-6">
