@@ -99,17 +99,10 @@ function editUser(user: User) {
 async function handleStatusChange(user: User, newStatus: "active" | "inactive" | "locked") {
   try {
     await usersStore.updateUserStatus(user.id, newStatus)
-    toast.add({
-      title: 'Success',
-      description: `User status updated to ${newStatus}`,
-      color: 'success'
-    })
+    // Toast is handled by the store
   } catch (error: any) {
-    toast.add({
-      title: 'Error',
-      description: error.message || 'Failed to update user status',
-      color: 'error'
-    })
+    // Error toast is already handled by the store
+    console.error('Failed to update user status:', error)
   }
 }
 
