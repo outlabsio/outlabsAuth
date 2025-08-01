@@ -22,10 +22,9 @@ const contextStore = useContextStore()
 const toast = useToast()
 
 // State
-const isDeleting = ref(false)
 const isSubmitting = ref(false)
-const showDeleteConfirm = ref(false)
 const formRef = ref()
+const isUpdatingStatus = ref(false)
 
 // Watch for mode changes
 watch(
@@ -54,7 +53,6 @@ watch(
     } else {
       // Reset to original mode when closing
       currentMode.value = props.mode
-      showDeleteConfirm.value = false
     }
   }
 )
@@ -144,31 +142,7 @@ const submitForm = () => {
   }
 }
 
-async function handleDelete() {
-  if (!props.user || !confirm(`Are you sure you want to deactivate ${usersStore.getUserDisplayName(props.user)}?`)) return
-  
-  isDeleting.value = true
-  try {
-    await usersStore.deleteUser(props.user.id, false)
-    toast.add({
-      title: "Success",
-      description: "User deactivated successfully",
-      color: "success"
-    })
-    emit('deleted')
-    open.value = false
-  } catch (error: any) {
-    console.error('Failed to deactivate user:', error)
-    toast.add({
-      title: "Error",
-      description: error.data?.detail || error.message || 'Failed to deactivate user',
-      color: "error"
-    })
-  } finally {
-    isDeleting.value = false
-    showDeleteConfirm.value = false
-  }
-}
+// Removed handleDelete function - now using status toggle in header
 
 const handleCancel = () => {
   if (mode.value === 'create') {
@@ -177,6 +151,29 @@ const handleCancel = () => {
   } else {
     // For edit mode, revert back to view mode
     currentMode.value = 'view'
+  }
+}
+
+const handleStatusToggle = async (newStatus: boolean) => {
+  if (!props.user) return
+  
+  isUpdatingStatus.value = true
+  try {
+    await usersStore.updateUserStatus(props.user.id, newStatus ? 'active' : 'inactive')
+    toast.add({
+      title: "Success",
+      description: `User ${newStatus ? 'activated' : 'deactivated'} successfully`,
+      color: "success"
+    })
+  } catch (error: any) {
+    console.error('Failed to update user status:', error)
+    toast.add({
+      title: "Error",
+      description: error.data?.detail || error.message || 'Failed to update user status',
+      color: "error"
+    })
+  } finally {
+    isUpdatingStatus.value = false
   }
 }
 
@@ -196,9 +193,21 @@ const showForm = computed(() => mode.value === 'create' || mode.value === 'edit'
     <!-- Header -->
     <template #header>
       <div class="flex justify-between items-center w-full">
-        <h3 class="text-xl font-bold">
-          {{ title }}
-        </h3>
+        <div class="flex items-center gap-4">
+          <h3 class="text-xl font-bold">
+            {{ title }}
+          </h3>
+          <div v-if="mode === 'view' && user && !user.is_system_user" class="flex items-center gap-2">
+            <USwitch 
+              :model-value="user.is_active"
+              @update:model-value="handleStatusToggle"
+              :loading="isUpdatingStatus"
+            />
+            <span class="text-sm text-muted-foreground">
+              {{ user.is_active ? 'Active' : 'Inactive' }}
+            </span>
+          </div>
+        </div>
         <div v-if="mode === 'view'" class="flex items-center gap-2">
           <UButton
             variant="ghost"
@@ -255,45 +264,6 @@ const showForm = computed(() => mode.value === 'create' || mode.value === 'edit'
               </div>
             </template>
           </UTabs>
-
-          <!-- Delete Section -->
-          <div v-if="!user.is_system_user" class="mt-8 border-t pt-6">
-            <div v-if="!showDeleteConfirm">
-              <UButton
-                color="red"
-                variant="soft"
-                icon="i-lucide-trash"
-                @click="showDeleteConfirm = true"
-              >
-                Deactivate User
-              </UButton>
-            </div>
-
-            <!-- Delete Confirmation -->
-            <UAlert v-else color="error" icon="i-lucide-alert-triangle">
-              <template #title>Deactivate User</template>
-              <template #description>
-                <p class="mb-4">Are you sure you want to deactivate this user? They will lose access to the system.</p>
-                <div class="flex gap-2">
-                  <UButton
-                    size="sm"
-                    color="error"
-                    :loading="isDeleting"
-                    @click="handleDelete"
-                  >
-                    Yes, Deactivate
-                  </UButton>
-                  <UButton
-                    size="sm"
-                    variant="outline"
-                    @click="showDeleteConfirm = false"
-                  >
-                    Cancel
-                  </UButton>
-                </div>
-              </template>
-            </UAlert>
-          </div>
         </div>
 
         <!-- Loading State -->
