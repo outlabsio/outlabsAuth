@@ -160,18 +160,10 @@ const handleStatusToggle = async (newStatus: boolean) => {
   isUpdatingStatus.value = true
   try {
     await usersStore.updateUserStatus(props.user.id, newStatus ? 'active' : 'inactive')
-    toast.add({
-      title: "Success",
-      description: `User ${newStatus ? 'activated' : 'deactivated'} successfully`,
-      color: "success"
-    })
+    // Toast is handled by the store
   } catch (error: any) {
     console.error('Failed to update user status:', error)
-    toast.add({
-      title: "Error",
-      description: error.data?.detail || error.message || 'Failed to update user status',
-      color: "error"
-    })
+    // Error toast is already handled by the store
   } finally {
     isUpdatingStatus.value = false
   }
