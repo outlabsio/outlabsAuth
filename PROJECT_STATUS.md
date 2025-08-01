@@ -1,8 +1,54 @@
 # outlabsAuth Project Status
 
-**Last Updated**: 2025-07-22
+**Last Updated**: 2025-08-01
 
 This file tracks the current implementation status of the outlabsAuth unified entity model system.
+
+## Critical Updates (2025-08-01)
+
+### 🚨 API-to-API Authentication Gaps - NEEDS IMPLEMENTATION
+
+We've identified critical gaps in server-to-server authentication that need to be addressed before production deployment:
+
+**Missing Components**:
+1. **API Key Authentication**: 
+   - Utility functions exist (`create_api_key`, `hash_api_key`) but no complete implementation
+   - No middleware to validate API keys in request headers
+   - No API key storage/management system
+   - No rate limiting per API key
+
+2. **Service Accounts/Platform Users**:
+   - `is_system_user` flag exists but not utilized
+   - No platform-level service accounts for API authentication
+   - No way to create/manage service accounts
+   - No platform-scoped permissions for service accounts
+
+3. **OAuth/SSO Integration**:
+   - No support for external auth providers (Google, GitHub, Microsoft)
+   - No OAuth flow implementation
+   - No user provisioning from OAuth identities
+   - No mapping of external identities to OutlabsAuth users
+
+4. **Proxy Authentication Pattern**:
+   - No documented pattern for frontend → platform API → OutlabsAuth
+   - No support for dual authentication (API key + user context)
+   - No examples of passing user context in API-to-API calls
+
+**Architectural Decisions Made**:
+1. **Proxy Pattern as Primary Integration**: Frontends should authenticate through their platform's API, not directly with OutlabsAuth
+2. **Platform-Managed OAuth**: Each platform (e.g., Property Hub) handles its own OAuth providers and provisions users via API
+3. **Hybrid Authentication**: API calls use platform API key + optional user JWT for context
+
+**Impact**:
+- External platforms cannot securely integrate without API key authentication
+- No way for platforms to perform administrative operations via API
+- OAuth integration requires each platform to implement their own solution
+
+**Next Steps**:
+- Implement API key authentication middleware
+- Create service account management system
+- Document proxy authentication patterns
+- Create OAuth integration guidelines for platforms
 
 ## Recent Updates (2025-07-22)
 
