@@ -36,14 +36,10 @@ const entityAssignments = ref<FormEntityAssignment[]>([])
 
 // Load entities and roles
 onMounted(async () => {
-  console.log('[UserForm] Loading entities and roles...')
   await Promise.all([
     entitiesStore.fetchEntities(),
     rolesStore.fetchRoles()
   ])
-
-  console.log('[UserForm] Loaded entities:', entitiesStore.entities.length)
-  console.log('[UserForm] Loaded roles:', rolesStore.roles.length)
 
   // Initialize entity assignments from user data
   if (props.mode === 'edit' && props.user) {
@@ -111,10 +107,12 @@ const getAvailableEntitiesForAssignment = (assignmentIndex: number) => {
 
 const getRolesForEntity = (entityId: string) => {
   const entity = entitiesStore.entities.find(e => e.id === entityId)
-  if (!entity) return []
+  if (!entity) {
+    return []
+  }
 
   // Get roles that can be assigned at this entity type
-  return rolesStore.roles.filter(role => {
+  const assignableRoles = rolesStore.roles.filter(role => {
     // Global roles or roles for this entity
     if (role.is_global || role.entity_id === entityId) return true
 
@@ -123,6 +121,32 @@ const getRolesForEntity = (entityId: string) => {
 
     return false
   })
+
+  // In edit mode, also include the user's existing roles for this entity
+  // This ensures we can display roles even if they're no longer assignable
+  if (props.mode === 'edit' && props.user) {
+    const userEntity = props.user.entities.find(e => e.id === entityId)
+    if (userEntity) {
+      userEntity.roles.forEach(userRole => {
+        // Check if this role is already in the assignable list
+        const roleExists = assignableRoles.some(r => r.id === userRole.id)
+        if (!roleExists) {
+          // Add the user's existing role to the list
+          // We need to create a role object that matches the expected format
+          assignableRoles.push({
+            id: userRole.id,
+            name: userRole.name,
+            display_name: userRole.display_name,
+            permissions: userRole.permissions,
+            is_global: false,
+            entity_id: entityId
+          } as any)
+        }
+      })
+    }
+  }
+
+  return assignableRoles
 }
 
 // Methods
@@ -134,10 +158,6 @@ function addEntityAssignment() {
   })
 }
 
-// Debug entity selection
-watch(entityAssignments, (newAssignments) => {
-  console.log('[UserForm] Entity assignments changed:', JSON.stringify(newAssignments, null, 2))
-}, { deep: true })
 
 function removeEntityAssignment(index: number) {
   entityAssignments.value.splice(index, 1)
@@ -368,7 +388,10 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             <!-- Membership Status -->
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-3">
-                <UCheckbox v-model="assignment.status" true-value="active" false-value="inactive" />
+                <UCheckbox 
+                  :model-value="assignment.status === 'active'"
+                  @update:model-value="assignment.status = $event ? 'active' : 'inactive'"
+                />
                 <span class="text-sm">Active membership</span>
               </div>
 

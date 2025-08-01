@@ -789,8 +789,21 @@ class UserService:
             # Assign roles
             for role_id in assignment.get("role_ids", []):
                 role = await RoleModel.get(role_id, fetch_links=True)
-                if role and role.entity and str(role.entity.id) == str(entity.id):
-                    membership.roles.append(role)
+                if role:
+                    # Check if role can be assigned:
+                    # 1. Global role (no entity)
+                    # 2. Role belongs to this entity
+                    # 3. Role is assignable at this entity type
+                    can_assign = False
+                    if role.is_global or not role.entity:
+                        can_assign = True
+                    elif role.entity and str(role.entity.id) == str(entity.id):
+                        can_assign = True
+                    elif role.assignable_at_types and entity.entity_type in role.assignable_at_types:
+                        can_assign = True
+                    
+                    if can_assign:
+                        membership.roles.append(role)
             
             await membership.save()
         

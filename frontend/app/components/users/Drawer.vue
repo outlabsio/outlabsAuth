@@ -36,6 +36,21 @@ watch(
   }
 )
 
+// Fetch fresh user data when opening in edit mode
+watch(
+  () => open.value,
+  async (isOpen) => {
+    if (isOpen && props.mode === 'edit' && props.user) {
+      // Fetch fresh user data to ensure we have the latest roles
+      try {
+        await usersStore.fetchUser(props.user.id)
+      } catch (error) {
+        console.error('Failed to fetch user details:', error)
+      }
+    }
+  }
+)
+
 // Computed
 const mode = computed(() => currentMode.value)
 
@@ -194,7 +209,7 @@ const showForm = computed(() => mode.value === 'create' || mode.value === 'edit'
         <div v-if="showForm">
           <UsersForm
             ref="formRef"
-            :user="user"
+            :user="mode === 'edit' ? (usersStore.selectedUser || user) : null"
             :mode="mode"
             @submit="handleSubmit"
             @cancel="open = false"
