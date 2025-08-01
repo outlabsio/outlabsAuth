@@ -53,6 +53,9 @@ onMounted(() => {
   } else if (contextStore.selectedOrganization) {
     entitiesStore.setHierarchyLevel("top"); // Show direct children of the org
   }
+  
+  // Explicitly fetch entities (setHierarchyLevel already does this, but being explicit for clarity)
+  entitiesStore.fetchEntities();
 });
 
 // Get entity types for filter

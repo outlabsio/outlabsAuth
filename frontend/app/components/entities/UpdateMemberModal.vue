@@ -1,18 +1,6 @@
 <template>
-  <UModal v-model="isOpen" :ui="{ width: 'max-w-2xl' }">
-    <UCard>
-      <template #header>
-        <div class="flex items-center justify-between">
-          <h3 class="text-lg font-semibold">Update Member</h3>
-          <UButton 
-            icon="i-lucide-x" 
-            variant="ghost" 
-            square
-            size="sm"
-            @click="isOpen = false"
-          />
-        </div>
-      </template>
+  <UModal v-model:open="isOpen" title="Update Member" :close-icon="'i-lucide-x'">
+    <template #body>
 
       <div v-if="member" class="space-y-4">
         <!-- Member Info -->
@@ -43,6 +31,11 @@
               placeholder="Select a role"
               :loading="isLoadingRoles"
             />
+            <template #hint>
+              <span v-if="member && member.roles && member.roles.length > 1" class="text-xs text-muted-foreground">
+                User has {{ member.roles.length }} roles. Updating will replace all roles with the selected one.
+              </span>
+            </template>
           </UFormField>
 
           <!-- Status -->
@@ -81,25 +74,25 @@
           />
         </UForm>
       </div>
+    </template>
 
-      <template #footer>
-        <div class="flex justify-end gap-3">
-          <UButton 
-            variant="outline" 
-            @click="isOpen = false"
-          >
-            Cancel
-          </UButton>
-          <UButton 
-            type="submit"
-            :loading="isSubmitting"
-            @click="onSubmit"
-          >
-            Update Member
-          </UButton>
-        </div>
-      </template>
-    </UCard>
+    <template #footer>
+      <div class="flex justify-end gap-3">
+        <UButton 
+          variant="outline" 
+          @click="isOpen = false"
+        >
+          Cancel
+        </UButton>
+        <UButton 
+          type="submit"
+          :loading="isSubmitting"
+          @click="onSubmit"
+        >
+          Update Member
+        </UButton>
+      </div>
+    </template>
   </UModal>
 </template>
 
@@ -214,7 +207,8 @@ const onSubmit = async () => {
     // Prepare the update data - only include changed fields
     const updateData: any = {}
 
-    if (state.role_id && state.role_id !== props.member.role_id) {
+    // For now, we only support updating to a single role through the API
+    if (state.role_id) {
       updateData.role_id = state.role_id
     }
 
@@ -288,7 +282,8 @@ const formatDateForInput = (dateString: string | null | undefined) => {
 // Initialize form when member changes
 watch(() => props.member, (newMember) => {
   if (newMember) {
-    state.role_id = newMember.role_id
+    // Use the first role's ID for now (API only supports single role update)
+    state.role_id = newMember.roles && newMember.roles.length > 0 ? newMember.roles[0].id : ''
     state.status = newMember.status as 'active' | 'suspended' | 'revoked'
     state.valid_from = formatDateForInput(newMember.valid_from)
     state.valid_until = formatDateForInput(newMember.valid_until)

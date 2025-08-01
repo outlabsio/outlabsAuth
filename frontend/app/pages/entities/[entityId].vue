@@ -230,7 +230,7 @@
         <!-- Members Tab -->
         <template #members>
           <div class="p-4">
-            <MemberManagement 
+            <EntitiesMemberManagement 
               v-if="entity"
               :entity-id="entity.id" 
               :entity-name="entity.display_name || entity.name"

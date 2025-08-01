@@ -1,18 +1,6 @@
 <template>
-  <UModal v-model="isOpen" :ui="{ width: 'max-w-2xl' }">
-    <UCard>
-      <template #header>
-        <div class="flex items-center justify-between">
-          <h3 class="text-lg font-semibold">Add Member to {{ entityName }}</h3>
-          <UButton 
-            icon="i-lucide-x" 
-            variant="ghost" 
-            square
-            size="sm"
-            @click="isOpen = false"
-          />
-        </div>
-      </template>
+  <UModal v-model:open="isOpen" :title="`Add Member to ${entityName}`" :close-icon="'i-lucide-x'">
+    <template #body>
 
       <UForm 
         :schema="schema" 
@@ -80,25 +68,25 @@
           :title="validityWarning"
         />
       </UForm>
+    </template>
 
-      <template #footer>
-        <div class="flex justify-end gap-3">
-          <UButton 
-            variant="outline" 
-            @click="isOpen = false"
-          >
-            Cancel
-          </UButton>
-          <UButton 
-            type="submit"
-            :loading="isSubmitting"
-            @click="onSubmit"
-          >
-            Add Member
-          </UButton>
-        </div>
-      </template>
-    </UCard>
+    <template #footer>
+      <div class="flex justify-end gap-3">
+        <UButton 
+          variant="outline" 
+          @click="isOpen = false"
+        >
+          Cancel
+        </UButton>
+        <UButton 
+          type="submit"
+          :loading="isSubmitting"
+          @click="onSubmit"
+        >
+          Add Member
+        </UButton>
+      </div>
+    </template>
   </UModal>
 </template>
 

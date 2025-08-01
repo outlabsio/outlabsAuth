@@ -153,9 +153,11 @@ export interface EntityMember {
   entity_id: string;
   entity_name: string;
   entity_system_name?: string;
-  role_id: string;
-  role_name: string;
-  permissions: string[];
+  roles: Array<{
+    id: string;
+    name: string;
+    permissions: string[];
+  }>;
   status: string;
   valid_from?: string | null;
   valid_until?: string | null;

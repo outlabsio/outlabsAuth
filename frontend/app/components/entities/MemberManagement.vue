@@ -48,12 +48,17 @@
           </div>
 
           <div class="flex items-center gap-3">
-            <!-- Role Badge -->
-            <UBadge 
-              :label="member.role_name" 
-              variant="subtle"
-              color="primary"
-            />
+            <!-- Role Badges -->
+            <div class="flex items-center gap-1">
+              <UBadge 
+                v-for="role in member.roles" 
+                :key="role.id"
+                :label="role.name" 
+                variant="subtle"
+                color="primary"
+                size="sm"
+              />
+            </div>
 
             <!-- Status Badge -->
             <UBadge 
@@ -107,7 +112,7 @@
     </div>
 
     <!-- Add Member Modal -->
-    <AddMemberModal
+    <EntitiesAddMemberModal
       v-model:open="addMemberModalOpen"
       :entity-id="entityId"
       :entity-name="entityName"
@@ -115,7 +120,7 @@
     />
 
     <!-- Update Member Modal -->
-    <UpdateMemberModal
+    <EntitiesUpdateMemberModal
       v-model:open="updateMemberModalOpen"
       :member="selectedMember"
       :entity-id="entityId"
@@ -190,12 +195,23 @@ const fetchMembers = async () => {
       headers: contextStore.getContextHeaders
     })
 
-    members.value = response.items
-    total.value = response.total
-    totalPages.value = response.total_pages
+    console.log('[MemberManagement] Successfully fetched members:', {
+      count: response.items?.length || 0,
+      total: response.total,
+      items: response.items
+    })
+    members.value = response.items || []
+    total.value = response.total || 0
+    totalPages.value = response.total_pages || 1
   } catch (err: any) {
     error.value = err.message || 'Failed to fetch members'
-    console.error('Failed to fetch members:', err)
+    console.error('[MemberManagement] Failed to fetch members:', err)
+    console.error('[MemberManagement] Error details:', {
+      entityId: props.entityId,
+      url: `/v1/entities/${props.entityId}/members?${params}`,
+      headers: contextStore.getContextHeaders,
+      error: err.response || err
+    })
   } finally {
     isLoading.value = false
   }
