@@ -77,19 +77,10 @@ const state = reactive({
 const selectedUserId = ref('')
 
 // Other state
-const roleSearchQuery = ref('')
-const showRoleDropdown = ref(false)
 const userSearchQuery = ref('')
 const isSearchingUsers = ref(false)
 
 
-// Ref for role dropdown container
-const roleDropdownRef = ref<HTMLElement>()
-
-// Click outside handler
-onClickOutside(roleDropdownRef, () => {
-  showRoleDropdown.value = false
-})
 
 // Watch date changes and update form state
 watch(validFromDate, (newDate) => {
@@ -108,21 +99,6 @@ watch(validUntilDate, (newDate) => {
   }
 })
 
-// Computed
-const filteredAvailableRoles = computed(() => {
-  const query = roleSearchQuery.value.toLowerCase()
-  const assignedRoleIds = new Set(state.role_ids)
-  
-  return entityMembersStore.availableRoles.filter(role => {
-    // Don't show already assigned roles
-    if (assignedRoleIds.has(role.value)) return false
-    
-    // Filter by search query
-    if (!query) return true
-    return role.label.toLowerCase().includes(query) || 
-           role.description.toLowerCase().includes(query)
-  })
-})
 
 const validityWarning = computed(() => {
   if (state.valid_from && state.valid_until) {
@@ -203,25 +179,7 @@ watch(() => state.user_id, (newUserId) => {
   }
 })
 
-const addRole = (roleId: string) => {
-  if (!state.role_ids.includes(roleId)) {
-    state.role_ids.push(roleId)
-  }
-  roleSearchQuery.value = ''
-  showRoleDropdown.value = false
-}
 
-const removeRole = (roleId: string) => {
-  const index = state.role_ids.indexOf(roleId)
-  if (index > -1) {
-    state.role_ids.splice(index, 1)
-  }
-}
-
-const getRoleLabel = (roleId: string) => {
-  const role = entityMembersStore.availableRoles.find(r => r.value === roleId)
-  return role?.label || roleId
-}
 
 const clearValidFrom = () => {
   validFromDate.value = null
@@ -281,7 +239,6 @@ watch(() => props.mode, (newMode) => {
     state.valid_from = ''
     state.valid_until = ''
     userSearchQuery.value = ''
-    roleSearchQuery.value = ''
     validFromDate.value = null
     validUntilDate.value = null
     selectedUserItem.value = null
@@ -359,69 +316,23 @@ watch(() => props.mode, (newMode) => {
 
     <!-- Role Selection -->
     <UFormField name="roles" label="Roles" required>
-      <div class="space-y-3">
-        <!-- Assigned Roles -->
-        <div v-if="state.role_ids.length > 0" class="space-y-2">
-          <p v-if="mode === 'edit'" class="text-sm text-muted-foreground">Current roles:</p>
-          <div class="flex flex-wrap gap-2">
-            <UBadge 
-              v-for="roleId in state.role_ids" 
-              :key="roleId"
-              size="lg"
-              variant="subtle"
-              class="pr-1"
-            >
-              <span class="mr-1">{{ getRoleLabel(roleId) }}</span>
-              <UButton 
-                icon="i-lucide-x" 
-                variant="ghost" 
-                size="2xs"
-                :padded="false"
-                @click="removeRole(roleId)"
-              />
-            </UBadge>
+      <USelectMenu
+        v-model="state.role_ids"
+        :items="entityMembersStore.availableRoles"
+        placeholder="Search and select roles..."
+        :loading="entityMembersStore.isLoadingRoles"
+        multiple
+        searchable
+        value-key="value"
+        label-key="label"
+      >
+        <template #item="{ item }">
+          <div class="flex-1">
+            <p class="font-medium">{{ item.label }}</p>
+            <p class="text-sm text-muted-foreground">{{ item.description }}</p>
           </div>
-        </div>
-        
-        <!-- Role Search and Add -->
-        <div ref="roleDropdownRef" class="relative">
-          <UInput
-            v-model="roleSearchQuery"
-            placeholder="Search roles to add..."
-            icon="i-lucide-search"
-            :loading="entityMembersStore.isLoadingRoles"
-            @focus="showRoleDropdown = true"
-            @input="showRoleDropdown = true"
-          />
-          
-          <!-- Available Roles Dropdown -->
-          <div 
-            v-if="showRoleDropdown && filteredAvailableRoles.length > 0"
-            class="absolute z-10 w-full mt-1 bg-background border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto"
-          >
-            <div class="p-1">
-              <button
-                v-for="role in filteredAvailableRoles"
-                :key="role.value"
-                type="button"
-                class="w-full flex items-center justify-between p-2 hover:bg-muted rounded-md transition-colors text-left"
-                @click="addRole(role.value)"
-              >
-                <div class="flex-1">
-                  <p class="font-medium">{{ role.label }}</p>
-                  <p class="text-sm text-muted-foreground">{{ role.description }}</p>
-                </div>
-                <UIcon name="i-lucide-plus" class="h-4 w-4 text-muted-foreground" />
-              </button>
-            </div>
-          </div>
-        </div>
-        
-        <!-- Help text -->
-        <p v-if="state.role_ids.length === 0" class="text-sm text-muted-foreground">
-          Start typing to search and add roles
-        </p>
-      </div>
+        </template>
+      </USelectMenu>
     </UFormField>
 
 
