@@ -23,16 +23,16 @@ const permissionsStore = usePermissionsStore()
 
 // State
 const expandedTypes = ref<Set<string>>(new Set())
-const selectedTemplates = ref<Record<string, string>>({})
 
-// Fetch permissions on mount and expand customized cards
+// Fetch permissions on mount and expand first customized card
 onMounted(() => {
   permissionsStore.fetchPermissions()
   
-  // Automatically expand any entity types that already have customizations
-  Object.keys(props.entityTypePermissions).forEach(type => {
-    expandedTypes.value.add(type)
-  })
+  // Automatically expand the first entity type that has customizations (accordion behavior)
+  const customizedTypes = Object.keys(props.entityTypePermissions)
+  if (customizedTypes.length > 0) {
+    expandedTypes.value.add(customizedTypes[0])
+  }
 })
 
 // Transform props into reactive entity configs
@@ -44,61 +44,6 @@ const entityConfigs = computed<EntityTypeConfig[]>(() => {
   }))
 })
 
-// Permission templates
-const permissionTemplates = {
-  full_control: {
-    label: 'Full Control',
-    icon: 'i-lucide-shield',
-    description: 'Complete access to all resources',
-    permissions: (resource: string) => [
-      `${resource}:create`,
-      `${resource}:read`,
-      `${resource}:update`,
-      `${resource}:delete`,
-      `${resource}:create_tree`,
-      `${resource}:read_tree`,
-      `${resource}:update_tree`,
-      `${resource}:delete_tree`
-    ]
-  },
-  manager: {
-    label: 'Manager',
-    icon: 'i-lucide-briefcase',
-    description: 'Manage resources and team members',
-    permissions: (resource: string) => [
-      `${resource}:read`,
-      `${resource}:update`,
-      `${resource}:read_tree`,
-      `${resource}:update_tree`,
-      'user:read',
-      'user:create',
-      'user:update',
-      'member:create',
-      'member:update',
-      'member:delete'
-    ]
-  },
-  editor: {
-    label: 'Editor',
-    icon: 'i-lucide-pencil',
-    description: 'Create and modify content',
-    permissions: (resource: string) => [
-      `${resource}:create`,
-      `${resource}:read`,
-      `${resource}:update`,
-      'user:read'
-    ]
-  },
-  viewer: {
-    label: 'Read Only',
-    icon: 'i-lucide-eye',
-    description: 'View-only access',
-    permissions: (resource: string) => [
-      `${resource}:read`,
-      'user:read'
-    ]
-  }
-}
 
 // Get display name for entity type
 function getEntityTypeDisplay(type: string): string {
@@ -144,11 +89,12 @@ function getEntityTypeIcon(type: string): string {
   return iconMap[type] || 'i-lucide-box'
 }
 
-// Toggle entity type expansion
+// Toggle entity type expansion (accordion behavior - only one at a time)
 function toggleType(type: string) {
   if (expandedTypes.value.has(type)) {
-    expandedTypes.value.delete(type)
+    expandedTypes.value.clear()
   } else {
+    expandedTypes.value.clear()
     expandedTypes.value.add(type)
   }
 }
@@ -160,13 +106,13 @@ function toggleCustomization(type: string) {
   if (newPermissions[type]) {
     // Remove customization
     delete newPermissions[type]
-    delete selectedTemplates.value[type]
     // Also collapse the card
     expandedTypes.value.delete(type)
   } else {
     // Add customization with default permissions as starting point
     newPermissions[type] = [...props.defaultPermissions]
     // Automatically expand the card when enabling customization
+    expandedTypes.value.clear()
     expandedTypes.value.add(type)
   }
   
@@ -180,32 +126,6 @@ function updateTypePermissions(type: string, permissions: string[]) {
   emit('update:entityTypePermissions', newPermissions)
 }
 
-// Apply template to entity type
-function applyTemplate(type: string, templateKey: string) {
-  selectedTemplates.value[type] = templateKey
-  const template = permissionTemplates[templateKey as keyof typeof permissionTemplates]
-  
-  // Get unique resources from available permissions
-  const resources = new Set<string>()
-  permissionsStore.permissions.forEach(p => {
-    if (p.resource) resources.add(p.resource)
-  })
-  
-  // Generate permissions for all resources
-  const permissions: string[] = []
-  resources.forEach(resource => {
-    const resourcePerms = template.permissions(resource)
-    // Only add permissions that actually exist in the system
-    resourcePerms.forEach(perm => {
-      if (permissionsStore.permissions.find(p => p.name === perm)) {
-        permissions.push(perm)
-      }
-    })
-  })
-  
-  updateTypePermissions(type, permissions)
-}
-
 // Count permissions difference from default
 function getPermissionDiff(type: string): { added: number; removed: number } {
   const customPerms = props.entityTypePermissions[type] || []
@@ -215,34 +135,6 @@ function getPermissionDiff(type: string): { added: number; removed: number } {
   const removed = defaultPerms.filter(p => !customPerms.includes(p)).length
   
   return { added, removed }
-}
-
-// Check if permissions match a template
-function matchesTemplate(permissions: string[], templateKey: string): boolean {
-  const template = permissionTemplates[templateKey as keyof typeof permissionTemplates]
-  const resources = new Set<string>()
-  permissionsStore.permissions.forEach(p => {
-    if (p.resource) resources.add(p.resource)
-  })
-  
-  const expectedPerms = new Set<string>()
-  resources.forEach(resource => {
-    template.permissions(resource).forEach(perm => {
-      if (permissionsStore.permissions.find(p => p.name === perm)) {
-        expectedPerms.add(perm)
-      }
-    })
-  })
-  
-  const actualPerms = new Set(permissions)
-  
-  if (expectedPerms.size !== actualPerms.size) return false
-  
-  for (const perm of expectedPerms) {
-    if (!actualPerms.has(perm)) return false
-  }
-  
-  return true
 }
 </script>
 
@@ -329,34 +221,12 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
 
         <!-- Expanded Content -->
         <div v-if="config.isCustomized && expandedTypes.has(config.type)" class="border-t border-default bg-muted p-4 space-y-4">
-          <!-- Permission Templates -->
-          <div>
-            <p class="text-sm font-medium mb-2">Quick Templates</p>
-            <div class="grid grid-cols-2 gap-2">
-              <UButton
-                v-for="(template, key) in permissionTemplates"
-                :key="key"
-                variant="outline"
-                size="xs"
-                :icon="template.icon"
-                :color="selectedTemplates[config.type] === key || matchesTemplate(config.permissions, key) ? 'primary' : 'neutral'"
-                @click="applyTemplate(config.type, key)"
-              >
-                {{ template.label }}
-              </UButton>
-            </div>
-          </div>
-
-          <USeparator />
-
           <!-- Custom Permission Selector -->
           <div>
-            <p class="text-sm font-medium mb-2">Custom Permissions</p>
+            <p class="text-sm font-medium mb-2">Permissions for {{ getEntityTypeDisplay(config.type) }}</p>
             <RolesPermissionSelector
               :model-value="config.permissions"
               :entity-id="entityId"
-              :entity-type="config.type"
-              :show-suggestions="true"
               @update:model-value="(perms) => updateTypePermissions(config.type, perms)"
             />
           </div>
