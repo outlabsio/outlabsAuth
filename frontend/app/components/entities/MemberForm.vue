@@ -79,6 +79,7 @@ const showRoleDropdown = ref(false)
 const userSearchQuery = ref('')
 const isSearchingUsers = ref(false)
 
+
 // Ref for role dropdown container
 const roleDropdownRef = ref<HTMLElement>()
 
@@ -103,7 +104,6 @@ watch(validUntilDate, (newDate) => {
     state.valid_until = ''
   }
 })
-
 
 // Computed
 const filteredAvailableRoles = computed(() => {
@@ -175,8 +175,14 @@ const searchUsers = async (query: string) => {
   }
 }
 
-// Debounced search function using VueUse
-const debouncedSearchUsers = useDebounceFn(searchUsers, 300)
+// Watch for search query changes with debouncing
+const debouncedSearchUsers = useDebounceFn((query: string) => {
+  searchUsers(query)
+}, 300)
+
+watch(userSearchQuery, (query) => {
+  debouncedSearchUsers(query)
+})
 
 const addRole = (roleId: string) => {
   if (!state.role_ids.includes(roleId)) {
@@ -259,6 +265,7 @@ watch(() => props.mode, (newMode) => {
     roleSearchQuery.value = ''
     validFromDate.value = null
     validUntilDate.value = null
+    entityMembersStore.clearAvailableUsers()
   }
 }, { immediate: true })
 </script>
@@ -288,16 +295,16 @@ watch(() => props.mode, (newMode) => {
     <UFormField v-if="mode === 'create'" name="user_id" label="User" required>
       <USelectMenu
         v-model="state.user_id"
-        v-model:search="userSearchQuery"
+        v-model:search-term="userSearchQuery"
         :items="entityMembersStore.availableUsers"
         placeholder="Search users by name or email..."
         :loading="isSearchingUsers || entityMembersStore.isLoadingUsers"
         searchable
-        :search-attributes="['label', 'email']"
+        searchable-placeholder="Type at least 2 characters to search..."
         value-key="value"
-        @update:search="debouncedSearchUsers"
+        label-key="label"
       >
-        <template #option="{ item }">
+        <template #item="{ item }">
           <div class="flex items-center gap-3">
             <UAvatar 
               :label="getInitials(item.label)" 
@@ -309,13 +316,12 @@ watch(() => props.mode, (newMode) => {
             </div>
           </div>
         </template>
-        <template #selected-item="{ item }">
-          <div v-if="item" class="flex items-center gap-2">
+        <template #leading>
+          <div v-if="selectedUser" class="flex items-center gap-2">
             <UAvatar 
-              :label="getInitials(item.label)" 
+              :label="getInitials(selectedUser.label)" 
               size="2xs"
             />
-            <span class="truncate">{{ item.label }}</span>
           </div>
         </template>
         <template #empty>
