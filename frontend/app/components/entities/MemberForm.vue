@@ -73,6 +73,9 @@ const state = reactive({
   valid_until: ''
 })
 
+// Keep track of selected user separately
+const selectedUserId = ref('')
+
 // Other state
 const roleSearchQuery = ref('')
 const showRoleDropdown = ref(false)
@@ -156,8 +159,11 @@ const validityWarning = computed(() => {
   return null
 })
 
+// Keep track of the selected user object
+const selectedUserItem = ref<{ value: string; label: string; email: string } | null>(null)
+
 const selectedUser = computed(() => {
-  return entityMembersStore.availableUsers.find(u => u.value === state.user_id) || null
+  return selectedUserItem.value || entityMembersStore.availableUsers.find(u => u.value === state.user_id) || null
 })
 
 // Methods
@@ -182,6 +188,19 @@ const debouncedSearchUsers = useDebounceFn((query: string) => {
 
 watch(userSearchQuery, (query) => {
   debouncedSearchUsers(query)
+})
+
+// Watch for user selection
+watch(() => state.user_id, (newUserId) => {
+  if (newUserId) {
+    // When a user is selected, store their details
+    const user = entityMembersStore.availableUsers.find(u => u.value === newUserId)
+    if (user) {
+      selectedUserItem.value = user
+    }
+  } else {
+    selectedUserItem.value = null
+  }
 })
 
 const addRole = (roleId: string) => {
@@ -265,6 +284,7 @@ watch(() => props.mode, (newMode) => {
     roleSearchQuery.value = ''
     validFromDate.value = null
     validUntilDate.value = null
+    selectedUserItem.value = null
     entityMembersStore.clearAvailableUsers()
   }
 }, { immediate: true })
@@ -296,14 +316,18 @@ watch(() => props.mode, (newMode) => {
       <USelectMenu
         v-model="state.user_id"
         v-model:search-term="userSearchQuery"
-        :items="entityMembersStore.availableUsers"
+        :items="selectedUserItem && !entityMembersStore.availableUsers.length ? [selectedUserItem] : entityMembersStore.availableUsers"
         placeholder="Search users by name or email..."
-        :loading="isSearchingUsers || entityMembersStore.isLoadingUsers"
+        :loading="entityMembersStore.isLoadingUsers"
         searchable
         searchable-placeholder="Type at least 2 characters to search..."
         value-key="value"
         label-key="label"
         ignore-filter
+        :search-input="{ 
+          placeholder: 'Type at least 2 characters to search...',
+          loading: entityMembersStore.isLoadingUsers
+        }"
       >
         <template #item="{ item }">
           <div class="flex items-center gap-3">
