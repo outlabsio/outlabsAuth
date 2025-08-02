@@ -119,6 +119,20 @@
       @created="handleMemberAdded"
       @updated="handleMemberUpdated"
     />
+
+    <!-- Remove Member Confirmation Modal -->
+    <SharedConfirmationModal
+      v-model="confirmRemovalOpen"
+      title="Remove Member"
+      :description="memberToRemove ? `Are you sure you want to remove ${memberToRemove.user_name} from ${entityName}? This action cannot be undone.` : ''"
+      confirm-text="Remove"
+      cancel-text="Cancel"
+      confirm-color="error"
+      icon="i-lucide-user-minus"
+      :loading="isRemoving"
+      @confirm="confirmRemoveMember"
+      @cancel="cancelRemoveMember"
+    />
   </div>
 </template>
 
@@ -143,6 +157,11 @@ const isLoading = computed(() => entityMembersStore.isLoading)
 const error = computed(() => entityMembersStore.error)
 const currentPage = computed(() => entityMembersStore.currentPage)
 const totalPages = computed(() => entityMembersStore.totalPages)
+
+// Confirmation modal state
+const confirmRemovalOpen = ref(false)
+const memberToRemove = ref<EntityMember | null>(null)
+const isRemoving = ref(false)
 
 // Permission checks
 const canAddMembers = computed(() => {
@@ -182,7 +201,7 @@ const getMemberActions = (member: EntityMember) => {
         label: 'Remove Member',
         icon: 'i-lucide-user-minus',
         color: 'error' as const,
-        onSelect: () => removeMember(member)
+        onSelect: () => openRemoveConfirmation(member)
       }
     ])
   }
@@ -200,19 +219,33 @@ const openUpdateMemberDrawer = (member: EntityMember) => {
 }
 
 // Remove member
-const removeMember = async (member: EntityMember) => {
-  const confirmed = confirm(`Remove ${member.user_name} from this entity?`)
-  if (!confirmed) return
+const openRemoveConfirmation = (member: EntityMember) => {
+  memberToRemove.value = member
+  confirmRemovalOpen.value = true
+}
 
+const confirmRemoveMember = async () => {
+  if (!memberToRemove.value) return
+  
+  isRemoving.value = true
   try {
-    await entityMembersStore.removeMember(member.user_id)
+    await entityMembersStore.removeMember(memberToRemove.value.user_id)
+    confirmRemovalOpen.value = false
+    memberToRemove.value = null
   } catch (err: any) {
     toast.add({
       title: 'Failed to remove member',
       description: err.message || 'An error occurred',
       color: 'error'
     })
+  } finally {
+    isRemoving.value = false
   }
+}
+
+const cancelRemoveMember = () => {
+  confirmRemovalOpen.value = false
+  memberToRemove.value = null
 }
 
 // Handle events
