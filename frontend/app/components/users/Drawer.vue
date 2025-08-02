@@ -175,7 +175,7 @@ const showForm = computed(() => mode.value === 'create' || mode.value === 'edit'
           <h3 class="text-xl font-bold">
             {{ title }}
           </h3>
-          <div v-if="mode === 'view' && user && !user.is_system_user" class="flex items-center gap-2">
+          <div v-if="user && !user.is_system_user" class="flex items-center gap-2">
             <UBadge 
               :color="usersStore.getUserStatusColor(user)" 
               variant="subtle"
