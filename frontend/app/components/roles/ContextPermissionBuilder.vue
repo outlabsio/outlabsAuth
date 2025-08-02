@@ -97,11 +97,14 @@ const permissionTemplates = {
 
 // Get display name for entity type
 function getEntityTypeDisplay(type: string): string {
+  if (!type) return 'Unknown'
   return type.charAt(0).toUpperCase() + type.slice(1).replace(/_/g, ' ')
 }
 
 // Get icon for entity type
 function getEntityTypeIcon(type: string): string {
+  if (!type) return 'i-lucide-box'
+  
   const iconMap: Record<string, string> = {
     platform: 'i-lucide-globe',
     organization: 'i-lucide-building',
@@ -110,8 +113,29 @@ function getEntityTypeIcon(type: string): string {
     team: 'i-lucide-users',
     access_group: 'i-lucide-shield',
     project: 'i-lucide-folder',
-    department: 'i-lucide-briefcase'
+    department: 'i-lucide-briefcase',
+    // Add more common entity types
+    company: 'i-lucide-building-2',
+    office: 'i-lucide-home',
+    region: 'i-lucide-map',
+    area: 'i-lucide-map-pin',
+    group: 'i-lucide-users-2',
+    unit: 'i-lucide-square',
+    section: 'i-lucide-layout-grid',
+    committee: 'i-lucide-users-round',
+    board: 'i-lucide-presentation',
+    // Default fallback for unknown types
   }
+  
+  // Try to find a matching icon by checking if the type contains certain keywords
+  const typeL = type.toLowerCase()
+  if (typeL.includes('team')) return 'i-lucide-users'
+  if (typeL.includes('group')) return 'i-lucide-users-2'
+  if (typeL.includes('org')) return 'i-lucide-building'
+  if (typeL.includes('div')) return 'i-lucide-git-branch'
+  if (typeL.includes('dept') || typeL.includes('department')) return 'i-lucide-briefcase'
+  if (typeL.includes('project')) return 'i-lucide-folder'
+  
   return iconMap[type] || 'i-lucide-box'
 }
 
@@ -299,8 +323,14 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
           </div>
         </template>
 
-        <!-- Card Body - Expanded Content -->
-        <div v-if="config.isCustomized && expandedTypes.has(config.type)" class="space-y-4">
+        <!-- Card Body - Show placeholder when not customized -->
+        <div v-if="!config.isCustomized" class="text-center py-6 text-sm text-muted-foreground">
+          <UIcon name="i-lucide-layers" class="h-8 w-8 mx-auto mb-2 opacity-50" />
+          <p>Enable customization to set specific permissions for {{ getEntityTypeDisplay(config.type) }} level</p>
+        </div>
+
+        <!-- Card Body - Expanded Content when customized -->
+        <div v-else-if="expandedTypes.has(config.type)" class="space-y-4">
           <!-- Permission Templates -->
           <div>
             <p class="text-sm font-medium mb-2">Quick Templates</p>

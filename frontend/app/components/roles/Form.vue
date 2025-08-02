@@ -133,6 +133,44 @@ watch(() => state.display_name, (newDisplayName) => {
   }
 })
 
+// Tab configuration
+const tabs = computed(() => {
+  const baseTabs = [
+    {
+      slot: 'basic-info',
+      label: 'Basic Info',
+      icon: 'i-lucide-info',
+      description: 'Role name and description'
+    },
+    {
+      slot: 'scope',
+      label: 'Scope',
+      icon: 'i-lucide-target',
+      description: 'Where this role can be used'
+    },
+    {
+      slot: 'permissions',
+      label: 'Permissions',
+      icon: 'i-lucide-shield',
+      description: 'Default permissions'
+    }
+  ]
+  
+  // Add context tab if assignable types are selected
+  if (state.assignable_at_types && state.assignable_at_types.length > 0) {
+    const customizedCount = Object.keys(state.entity_type_permissions || {}).length
+    baseTabs.push({
+      slot: 'context',
+      label: 'Context Settings',
+      icon: 'i-lucide-layers',
+      description: 'Entity-specific permissions',
+      badge: customizedCount > 0 ? { label: String(customizedCount), color: 'primary' } : undefined
+    })
+  }
+  
+  return baseTabs
+})
+
 // Handle form submission
 async function onSubmit(event: FormSubmitEvent<Schema>) {
   isLoading.value = true
@@ -164,9 +202,11 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
 </script>
 
 <template>
-  <UForm :schema="schema" :state="state" @submit="onSubmit" class="space-y-8">
-    <!-- Basic Information Section -->
-    <div class="space-y-6 w-full">
+  <UForm :schema="schema" :state="state" @submit="onSubmit">
+    <UTabs :items="tabs" class="w-full">
+      <!-- Basic Information Tab -->
+      <template #basic-info>
+        <div class="space-y-6 w-full pt-6">
       <div class="flex items-center gap-3">
         <div class="p-2 rounded-lg bg-primary-100 dark:bg-primary-900/30">
           <UIcon name="i-lucide-user-cog" class="h-5 w-5 text-primary-600 dark:text-primary-400" />
@@ -217,12 +257,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           class="w-full" 
         />
       </UFormField>
-    </div>
+        </div>
+      </template>
 
-    <USeparator />
-
-    <!-- Scope Configuration Section -->
-    <div class="space-y-6 w-full">
+      <!-- Scope Tab -->
+      <template #scope>
+        <div class="space-y-6 w-full pt-6">
       <div class="flex items-center gap-3">
         <div class="p-2 rounded-lg bg-primary-100 dark:bg-primary-900/30">
           <UIcon name="i-lucide-target" class="h-5 w-5 text-primary-600 dark:text-primary-400" />
@@ -306,12 +346,12 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           </div>
         </UCard>
       </UFormField>
-    </div>
+        </div>
+      </template>
 
-    <USeparator />
-
-    <!-- Default Permissions Section -->
-    <div class="space-y-6 w-full">
+      <!-- Permissions Tab -->
+      <template #permissions>
+        <div class="space-y-6 w-full pt-6">
       <div class="flex items-center gap-3">
         <div class="p-2 rounded-lg bg-primary-100 dark:bg-primary-900/30">
           <UIcon name="i-lucide-shield" class="h-5 w-5 text-primary-600 dark:text-primary-400" />
@@ -333,20 +373,22 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           <span class="text-xs text-muted-foreground">These permissions apply unless overridden by context-specific settings</span>
         </template>
       </UFormField>
-    </div>
+        </div>
+      </template>
 
-    <!-- Context-Aware Permissions Section -->
-    <div v-if="state.assignable_at_types && state.assignable_at_types.length > 0" class="space-y-6 w-full">
-      <USeparator />
-      
-      <RolesContextPermissionBuilder
-        :assignable-types="state.assignable_at_types"
-        :default-permissions="state.permissions || []"
-        :entity-type-permissions="state.entity_type_permissions || {}"
-        :entity-id="state.entity_id"
-        @update:entity-type-permissions="(perms) => state.entity_type_permissions = perms"
-      />
-    </div>
+      <!-- Context Settings Tab -->
+      <template #context>
+        <div class="pt-6">
+          <RolesContextPermissionBuilder
+            :assignable-types="state.assignable_at_types"
+            :default-permissions="state.permissions || []"
+            :entity-type-permissions="state.entity_type_permissions || {}"
+            :entity-id="state.entity_id"
+            @update:entity-type-permissions="(perms) => state.entity_type_permissions = perms"
+          />
+        </div>
+      </template>
+    </UTabs>
 
     <!-- Danger Zone - Only show in edit mode -->
     <div v-if="mode === 'edit' && props.role && !props.role.is_system_role" class="space-y-6 w-full">
