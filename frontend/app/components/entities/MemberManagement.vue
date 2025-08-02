@@ -226,12 +226,12 @@ const getMemberActions = (member: EntityMember) => {
       {
         label: 'Change Role',
         icon: 'i-lucide-shield',
-        click: () => openUpdateMemberModal(member)
+        onSelect: () => openUpdateMemberModal(member)
       },
       {
         label: 'Update Validity',
         icon: 'i-lucide-calendar',
-        click: () => openUpdateMemberModal(member)
+        onSelect: () => openUpdateMemberModal(member)
       }
     ])
   }
@@ -242,7 +242,7 @@ const getMemberActions = (member: EntityMember) => {
         label: 'Remove Member',
         icon: 'i-lucide-user-minus',
         color: 'error' as const,
-        click: () => removeMember(member)
+        onSelect: () => removeMember(member)
       }
     ])
   }
@@ -256,8 +256,13 @@ const openAddMemberModal = () => {
 }
 
 const openUpdateMemberModal = (member: EntityMember) => {
+  console.log('[MemberManagement] Opening update modal for member:', member)
   selectedMember.value = member
   updateMemberModalOpen.value = true
+  console.log('[MemberManagement] Modal state:', { 
+    updateMemberModalOpen: updateMemberModalOpen.value, 
+    selectedMember: selectedMember.value 
+  })
 }
 
 // Remove member

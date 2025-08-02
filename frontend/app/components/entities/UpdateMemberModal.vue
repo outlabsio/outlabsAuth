@@ -49,19 +49,27 @@
           <!-- Validity Period -->
           <div class="grid grid-cols-2 gap-4">
             <UFormField name="valid_from" label="Valid From">
-              <UInput 
-                v-model="state.valid_from" 
-                type="datetime-local"
-                placeholder="Start date"
-              />
+              <UPopover v-model:open="validFromPopoverOpen">
+                <UButton color="neutral" variant="subtle" icon="i-lucide-calendar" class="w-full justify-start">
+                  {{ validFromDate ? df.format(validFromDate.toDate(getLocalTimeZone())) : 'Select start date' }}
+                </UButton>
+
+                <template #content>
+                  <UCalendar v-model="validFromDate" class="p-2" @update:model-value="validFromPopoverOpen = false" />
+                </template>
+              </UPopover>
             </UFormField>
 
             <UFormField name="valid_until" label="Valid Until">
-              <UInput 
-                v-model="state.valid_until" 
-                type="datetime-local"
-                placeholder="End date"
-              />
+              <UPopover v-model:open="validUntilPopoverOpen">
+                <UButton color="neutral" variant="subtle" icon="i-lucide-calendar" class="w-full justify-start">
+                  {{ validUntilDate ? df.format(validUntilDate.toDate(getLocalTimeZone())) : 'Select end date' }}
+                </UButton>
+
+                <template #content>
+                  <UCalendar v-model="validUntilDate" class="p-2" @update:model-value="validUntilPopoverOpen = false" />
+                </template>
+              </UPopover>
             </UFormField>
           </div>
 
@@ -98,6 +106,7 @@
 
 <script setup lang="ts">
 import { z } from 'zod'
+import { CalendarDate, DateFormatter, getLocalTimeZone, parseDate } from '@internationalized/date'
 import type { EntityMember, Role } from '~/types/auth.types'
 
 const props = defineProps<{
@@ -111,6 +120,11 @@ const emit = defineEmits<{
   'member-updated': []
 }>()
 
+// Date formatter
+const df = new DateFormatter('en-US', {
+  dateStyle: 'medium'
+})
+
 // Model binding
 const isOpen = computed({
   get: () => props.open,
@@ -121,6 +135,31 @@ const isOpen = computed({
 const authStore = useAuthStore()
 const contextStore = useContextStore()
 const toast = useToast()
+
+// Date state
+const validFromDate = shallowRef<CalendarDate | null>(null)
+const validUntilDate = shallowRef<CalendarDate | null>(null)
+
+// Popover state
+const validFromPopoverOpen = ref(false)
+const validUntilPopoverOpen = ref(false)
+
+// Watch date changes and update form state
+watch(validFromDate, (newDate) => {
+  if (newDate) {
+    state.valid_from = newDate.toDate(getLocalTimeZone()).toISOString()
+  } else {
+    state.valid_from = ''
+  }
+})
+
+watch(validUntilDate, (newDate) => {
+  if (newDate) {
+    state.valid_until = newDate.toDate(getLocalTimeZone()).toISOString()
+  } else {
+    state.valid_until = ''
+  }
+})
 
 // Form schema
 const schema = z.object({
@@ -271,12 +310,11 @@ const getInitials = (name: string) => {
     .slice(0, 2)
 }
 
-// Format date for input
-const formatDateForInput = (dateString: string | null | undefined) => {
-  if (!dateString) return ''
+// Convert date string to CalendarDate
+const dateStringToCalendarDate = (dateString: string | null | undefined) => {
+  if (!dateString) return null
   const date = new Date(dateString)
-  // Format as YYYY-MM-DDTHH:mm for datetime-local input
-  return date.toISOString().slice(0, 16)
+  return new CalendarDate(date.getFullYear(), date.getMonth() + 1, date.getDate())
 }
 
 // Initialize form when member changes
@@ -285,8 +323,18 @@ watch(() => props.member, (newMember) => {
     // Use the first role's ID for now (API only supports single role update)
     state.role_id = newMember.roles && newMember.roles.length > 0 ? newMember.roles[0].id : ''
     state.status = newMember.status as 'active' | 'suspended' | 'revoked'
-    state.valid_from = formatDateForInput(newMember.valid_from)
-    state.valid_until = formatDateForInput(newMember.valid_until)
+    
+    // Set dates
+    validFromDate.value = dateStringToCalendarDate(newMember.valid_from)
+    validUntilDate.value = dateStringToCalendarDate(newMember.valid_until)
+    
+    // This will trigger the watchers to update state.valid_from and state.valid_until
+  } else {
+    // Reset when no member
+    validFromDate.value = null
+    validUntilDate.value = null
+    validFromPopoverOpen.value = false
+    validUntilPopoverOpen.value = false
   }
 }, { immediate: true })
 
