@@ -61,7 +61,7 @@ async def debug_tree_permissions():
     # Find platform admin user
     memberships = await EntityMembershipModel.find(
         EntityMembershipModel.entity.id == platform.id,
-        EntityMembershipModel.status == "active"
+        EntityMembershipModel.is_active == True
     ).to_list()
     
     if not memberships:
@@ -78,7 +78,7 @@ async def debug_tree_permissions():
             # Find their memberships
             memberships = await EntityMembershipModel.find(
                 EntityMembershipModel.user.id == user.id,
-                EntityMembershipModel.status == "active"
+                EntityMembershipModel.is_active == True
             ).to_list()
             
             if not memberships:

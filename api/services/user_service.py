@@ -538,7 +538,7 @@ class UserService:
         # Build query
         query_conditions = [EntityMembershipModel.user.id == user.id]
         if not include_inactive:
-            query_conditions.append(EntityMembershipModel.status == "active")
+            query_conditions.append(EntityMembershipModel.is_active == True)
         
         memberships = await EntityMembershipModel.find(
             And(*query_conditions)

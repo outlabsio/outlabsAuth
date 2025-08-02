@@ -239,7 +239,7 @@ class EntityMembershipService:
         ]
         
         if not include_inactive:
-            query_conditions.append(EntityMembershipModel.status == "active")
+            query_conditions.append(EntityMembershipModel.is_active == True)
         
         # Get total count first
         total = await EntityMembershipModel.find(And(*query_conditions)).count()
@@ -314,7 +314,7 @@ class EntityMembershipService:
         ]
         
         if not include_inactive:
-            query_conditions.append(EntityMembershipModel.status == "active")
+            query_conditions.append(EntityMembershipModel.is_active == True)
         
         query = EntityMembershipModel.find(And(*query_conditions))
         

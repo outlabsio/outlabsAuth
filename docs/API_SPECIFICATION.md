@@ -165,7 +165,7 @@ Get current user information.
     "phone": "+1234567890",
     "avatar_url": "https://..."
   },
-  "is_active": true,
+  "status": "active",
   "created_at": "2024-01-15T10:00:00Z",
   "entities": [
     {

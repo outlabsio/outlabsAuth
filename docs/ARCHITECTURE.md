@@ -76,7 +76,7 @@ UserModel:
   - id: str
   - email: str
   - profile: UserProfile
-  - is_active: bool
+  - status: UserStatus (active, inactive, suspended, banned, terminated)
   - is_system_user: bool
 
 # EntityMembership - User's relationship to entities

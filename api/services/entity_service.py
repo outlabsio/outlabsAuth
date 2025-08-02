@@ -586,7 +586,7 @@ class EntityService:
         # Get all user memberships with entity links fetched
         memberships = await EntityMembershipModel.find(
             EntityMembershipModel.user.id == PydanticObjectId(user_id),
-            EntityMembershipModel.status == "active"
+            EntityMembershipModel.is_active == True
         ).to_list()
         
         for membership in memberships:
