@@ -257,6 +257,36 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           class="w-full" 
         />
       </UFormField>
+
+      <!-- Danger Zone - Only show in edit mode and in basic info tab -->
+      <div v-if="mode === 'edit' && props.role && !props.role.is_system_role" class="mt-8">
+        <USeparator class="mb-6" />
+
+        <div class="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-6">
+          <div class="flex items-center gap-3 mb-4">
+            <UIcon name="i-lucide-alert-triangle" class="h-5 w-5 text-red-600 dark:text-red-400" />
+            <h3 class="font-semibold text-red-600 dark:text-red-400">Danger Zone</h3>
+          </div>
+
+          <div class="space-y-4">
+            <div>
+              <h4 class="font-medium">Delete this role</h4>
+              <p class="text-sm text-muted-foreground mt-1">
+                Deleting a role will remove it from all users who have been assigned this role. This action cannot be undone.
+              </p>
+            </div>
+
+            <UButton 
+              color="error" 
+              @click="emit('delete')" 
+              class="w-full" 
+              icon="i-lucide-trash"
+            >
+              Delete Role
+            </UButton>
+          </div>
+        </div>
+      </div>
         </div>
       </template>
 
@@ -389,35 +419,5 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
         </div>
       </template>
     </UTabs>
-
-    <!-- Danger Zone - Only show in edit mode -->
-    <div v-if="mode === 'edit' && props.role && !props.role.is_system_role" class="space-y-6 w-full">
-      <USeparator />
-
-      <div class="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-6">
-        <div class="flex items-center gap-3 mb-4">
-          <UIcon name="i-lucide-alert-triangle" class="h-5 w-5 text-red-600 dark:text-red-400" />
-          <h3 class="font-semibold text-red-600 dark:text-red-400">Danger Zone</h3>
-        </div>
-
-        <div class="space-y-4">
-          <div>
-            <h4 class="font-medium">Delete this role</h4>
-            <p class="text-sm text-muted-foreground mt-1">
-              Deleting a role will remove it from all users who have been assigned this role. This action cannot be undone.
-            </p>
-          </div>
-
-          <UButton 
-            color="error" 
-            @click="emit('delete')" 
-            class="w-full" 
-            icon="i-lucide-trash"
-          >
-            Delete Role
-          </UButton>
-        </div>
-      </div>
-    </div>
   </UForm>
 </template>
