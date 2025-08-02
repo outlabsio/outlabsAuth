@@ -49,27 +49,49 @@
           <!-- Validity Period -->
           <div class="grid grid-cols-2 gap-4">
             <UFormField name="valid_from" label="Valid From">
-              <UPopover v-model:open="validFromPopoverOpen">
-                <UButton color="neutral" variant="subtle" icon="i-lucide-calendar" class="w-full justify-start">
-                  {{ validFromDate ? df.format(validFromDate.toDate(getLocalTimeZone())) : 'Select start date' }}
-                </UButton>
+              <div class="flex gap-2">
+                <UPopover v-model:open="validFromPopoverOpen" class="flex-1">
+                  <UButton color="neutral" variant="subtle" icon="i-lucide-calendar" class="w-full justify-start">
+                    {{ validFromDate ? df.format(validFromDate.toDate(getLocalTimeZone())) : 'Select start date' }}
+                  </UButton>
 
-                <template #content>
-                  <UCalendar v-model="validFromDate" class="p-2" @update:model-value="validFromPopoverOpen = false" />
-                </template>
-              </UPopover>
+                  <template #content>
+                    <UCalendar v-model="validFromDate" class="p-2" @update:model-value="validFromPopoverOpen = false" />
+                  </template>
+                </UPopover>
+                <UButton 
+                  v-if="validFromDate" 
+                  icon="i-lucide-x" 
+                  variant="ghost" 
+                  color="neutral"
+                  size="sm"
+                  square
+                  @click="clearValidFrom"
+                />
+              </div>
             </UFormField>
 
             <UFormField name="valid_until" label="Valid Until">
-              <UPopover v-model:open="validUntilPopoverOpen">
-                <UButton color="neutral" variant="subtle" icon="i-lucide-calendar" class="w-full justify-start">
-                  {{ validUntilDate ? df.format(validUntilDate.toDate(getLocalTimeZone())) : 'Select end date' }}
-                </UButton>
+              <div class="flex gap-2">
+                <UPopover v-model:open="validUntilPopoverOpen" class="flex-1">
+                  <UButton color="neutral" variant="subtle" icon="i-lucide-calendar" class="w-full justify-start">
+                    {{ validUntilDate ? df.format(validUntilDate.toDate(getLocalTimeZone())) : 'Select end date' }}
+                  </UButton>
 
-                <template #content>
-                  <UCalendar v-model="validUntilDate" class="p-2" @update:model-value="validUntilPopoverOpen = false" />
-                </template>
-              </UPopover>
+                  <template #content>
+                    <UCalendar v-model="validUntilDate" class="p-2" @update:model-value="validUntilPopoverOpen = false" />
+                  </template>
+                </UPopover>
+                <UButton 
+                  v-if="validUntilDate" 
+                  icon="i-lucide-x" 
+                  variant="ghost" 
+                  color="neutral"
+                  size="sm"
+                  square
+                  @click="clearValidUntil"
+                />
+              </div>
             </UFormField>
           </div>
 
@@ -202,8 +224,9 @@ const validityWarning = computed(() => {
   if (state.valid_from && state.valid_until) {
     const from = new Date(state.valid_from)
     const until = new Date(state.valid_until)
+    
     if (from >= until) {
-      return 'Valid until must be after valid from'
+      return 'Start date must be before end date'
     }
   }
   return null
@@ -255,12 +278,19 @@ const onSubmit = async () => {
       updateData.status = state.status
     }
 
+    // Handle date updates - explicitly set to null if cleared
     if (state.valid_from) {
       updateData.valid_from = new Date(state.valid_from).toISOString()
+    } else if (props.member?.valid_from && !state.valid_from) {
+      // User cleared the date
+      updateData.valid_from = null
     }
 
     if (state.valid_until) {
       updateData.valid_until = new Date(state.valid_until).toISOString()
+    } else if (props.member?.valid_until && !state.valid_until) {
+      // User cleared the date
+      updateData.valid_until = null
     }
 
     // Only proceed if there are changes
@@ -299,6 +329,16 @@ const onSubmit = async () => {
   } finally {
     isSubmitting.value = false
   }
+}
+
+const clearValidFrom = () => {
+  validFromDate.value = null
+  state.valid_from = ''
+}
+
+const clearValidUntil = () => {
+  validUntilDate.value = null
+  state.valid_until = ''
 }
 
 const getInitials = (name: string) => {

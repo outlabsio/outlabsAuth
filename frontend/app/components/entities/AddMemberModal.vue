@@ -44,27 +44,49 @@
         <!-- Validity Period (Optional) -->
         <div class="grid grid-cols-2 gap-4">
           <UFormField name="valid_from" label="Valid From (Optional)">
-            <UPopover v-model:open="validFromPopoverOpen">
-              <UButton color="neutral" variant="subtle" icon="i-lucide-calendar" class="w-full justify-start">
-                {{ validFromDate ? df.format(validFromDate.toDate(getLocalTimeZone())) : 'Select start date' }}
-              </UButton>
+            <div class="flex gap-2">
+              <UPopover v-model:open="validFromPopoverOpen" class="flex-1">
+                <UButton color="neutral" variant="subtle" icon="i-lucide-calendar" class="w-full justify-start">
+                  {{ validFromDate ? df.format(validFromDate.toDate(getLocalTimeZone())) : 'Select start date' }}
+                </UButton>
 
-              <template #content>
-                <UCalendar v-model="validFromDate" class="p-2" @update:model-value="validFromPopoverOpen = false" />
-              </template>
-            </UPopover>
+                <template #content>
+                  <UCalendar v-model="validFromDate" class="p-2" @update:model-value="validFromPopoverOpen = false" />
+                </template>
+              </UPopover>
+              <UButton 
+                v-if="validFromDate" 
+                icon="i-lucide-x" 
+                variant="ghost" 
+                color="neutral"
+                size="sm"
+                square
+                @click="clearValidFrom"
+              />
+            </div>
           </UFormField>
 
           <UFormField name="valid_until" label="Valid Until (Optional)">
-            <UPopover v-model:open="validUntilPopoverOpen">
-              <UButton color="neutral" variant="subtle" icon="i-lucide-calendar" class="w-full justify-start">
-                {{ validUntilDate ? df.format(validUntilDate.toDate(getLocalTimeZone())) : 'Select end date' }}
-              </UButton>
+            <div class="flex gap-2">
+              <UPopover v-model:open="validUntilPopoverOpen" class="flex-1">
+                <UButton color="neutral" variant="subtle" icon="i-lucide-calendar" class="w-full justify-start">
+                  {{ validUntilDate ? df.format(validUntilDate.toDate(getLocalTimeZone())) : 'Select end date' }}
+                </UButton>
 
-              <template #content>
-                <UCalendar v-model="validUntilDate" class="p-2" @update:model-value="validUntilPopoverOpen = false" />
-              </template>
-            </UPopover>
+                <template #content>
+                  <UCalendar v-model="validUntilDate" class="p-2" @update:model-value="validUntilPopoverOpen = false" />
+                </template>
+              </UPopover>
+              <UButton 
+                v-if="validUntilDate" 
+                icon="i-lucide-x" 
+                variant="ghost" 
+                color="neutral"
+                size="sm"
+                square
+                @click="clearValidUntil"
+              />
+            </div>
           </UFormField>
         </div>
 
@@ -189,8 +211,32 @@ const availableRoles = ref<Array<{ value: string; label: string; description: st
 
 // Computed
 const validityWarning = computed(() => {
-  if (state.valid_from && new Date(state.valid_from) < new Date()) {
-    return 'Valid from date is in the past'
+  if (state.valid_from && state.valid_until) {
+    const from = new Date(state.valid_from)
+    const until = new Date(state.valid_until)
+    const now = new Date()
+    
+    if (from >= until) {
+      return 'Start date must be before end date'
+    }
+    if (from < now) {
+      return 'Start date is in the past'
+    }
+    if (until < now) {
+      return 'End date is in the past'
+    }
+  } else if (state.valid_from) {
+    const from = new Date(state.valid_from)
+    const now = new Date()
+    if (from < now) {
+      return 'Start date is in the past'
+    }
+  } else if (state.valid_until) {
+    const until = new Date(state.valid_until)
+    const now = new Date()
+    if (until < now) {
+      return 'End date is in the past'
+    }
   }
   return null
 })
@@ -325,6 +371,16 @@ const resetForm = () => {
   validUntilDate.value = null
   validFromPopoverOpen.value = false
   validUntilPopoverOpen.value = false
+}
+
+const clearValidFrom = () => {
+  validFromDate.value = null
+  state.valid_from = ''
+}
+
+const clearValidUntil = () => {
+  validUntilDate.value = null
+  state.valid_until = ''
 }
 
 const getInitials = (name: string) => {
