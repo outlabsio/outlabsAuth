@@ -217,35 +217,6 @@ function getPermissionDiff(type: string): { added: number; removed: number } {
   return { added, removed }
 }
 
-// Check if all entity types are customized
-const allCustomized = computed(() => {
-  return props.assignableTypes.every(type => !!props.entityTypePermissions[type])
-})
-
-// Toggle all customizations
-function toggleAllCustomizations() {
-  const newPermissions = { ...props.entityTypePermissions }
-  
-  if (allCustomized.value) {
-    // Reset all customizations
-    props.assignableTypes.forEach(type => {
-      delete newPermissions[type]
-      expandedTypes.value.delete(type)
-    })
-    selectedTemplates.value = {}
-  } else {
-    // Customize all with default permissions
-    props.assignableTypes.forEach(type => {
-      if (!newPermissions[type]) {
-        newPermissions[type] = [...props.defaultPermissions]
-        expandedTypes.value.add(type)
-      }
-    })
-  }
-  
-  emit('update:entityTypePermissions', newPermissions)
-}
-
 // Check if permissions match a template
 function matchesTemplate(permissions: string[], templateKey: string): boolean {
   const template = permissionTemplates[templateKey as keyof typeof permissionTemplates]
@@ -287,19 +258,9 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
           Customize permissions based on where this role is assigned
         </p>
       </div>
-      <div class="flex items-center gap-2">
-        <UButton
-          v-if="assignableTypes.length > 1"
-          size="xs"
-          variant="soft"
-          @click="toggleAllCustomizations"
-        >
-          {{ allCustomized ? 'Reset All' : 'Customize All' }}
-        </UButton>
-        <UTooltip text="Define different permissions for each entity type where this role can be assigned">
-          <UIcon name="i-lucide-info" class="h-4 w-4 text-muted-foreground" />
-        </UTooltip>
-      </div>
+      <UTooltip text="Define different permissions for each entity type where this role can be assigned">
+        <UIcon name="i-lucide-info" class="h-4 w-4 text-muted-foreground" />
+      </UTooltip>
     </div>
 
     <!-- Default Permissions Info -->
@@ -312,23 +273,33 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
       </template>
     </UAlert>
 
-    <!-- Entity Type Cards -->
-    <div class="grid gap-4">
-      <UCard
+    <!-- Entity Type List -->
+    <div class="border rounded-lg divide-y">
+      <div
         v-for="config in entityConfigs"
         :key="config.type"
-        :class="{ 'ring-2 ring-primary': config.isCustomized }"
+        class="group"
+        :class="{ 'bg-primary-50 dark:bg-primary-900/10': config.isCustomized }"
       >
-        <!-- Card Header -->
-        <template #header>
-          <div class="flex items-center justify-between">
-            <div class="flex items-center gap-3">
-              <UIcon :name="getEntityTypeIcon(config.type)" class="h-5 w-5" />
-              <div>
-                <h6 class="font-medium capitalize">
-                  {{ getEntityTypeDisplay(config.type) }} Context
-                </h6>
-                <p v-if="config.isCustomized" class="text-xs text-muted-foreground">
+        <!-- Compact Header Row -->
+        <div 
+          class="flex items-center justify-between p-4 cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-800/50"
+          @click="config.isCustomized && toggleType(config.type)"
+        >
+          <div class="flex items-center gap-3 flex-1">
+            <UIcon :name="getEntityTypeIcon(config.type)" class="h-4 w-4 text-muted-foreground" />
+            <div class="flex-1">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium capitalize">
+                  {{ getEntityTypeDisplay(config.type) }}
+                </span>
+                <UBadge 
+                  v-if="config.isCustomized" 
+                  :label="`${config.permissions.length}`" 
+                  variant="subtle"
+                  size="xs"
+                />
+                <span v-if="config.isCustomized" class="text-xs text-muted-foreground">
                   <template v-if="getPermissionDiff(config.type).added > 0">
                     <span class="text-success">+{{ getPermissionDiff(config.type).added }}</span>
                   </template>
@@ -336,50 +307,28 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
                     <span v-if="getPermissionDiff(config.type).added > 0" class="mx-1">•</span>
                     <span class="text-error">-{{ getPermissionDiff(config.type).removed }}</span>
                   </template>
-                  <span v-if="getPermissionDiff(config.type).added === 0 && getPermissionDiff(config.type).removed === 0">
-                    Same as default
-                  </span>
-                </p>
-                <p v-else class="text-xs text-muted-foreground">
-                  Uses default permissions
-                </p>
-              </div>
-            </div>
-            
-            <div class="flex items-center gap-2">
-              <UBadge 
-                v-if="config.isCustomized" 
-                :label="`${config.permissions.length} permissions`" 
-                variant="subtle"
-                size="xs"
-              />
-              <UButton
-                v-if="config.isCustomized"
-                size="xs"
-                variant="ghost"
-                icon="i-lucide-chevron-down"
-                :class="{ 'rotate-180': expandedTypes.has(config.type) }"
-                @click="toggleType(config.type)"
-              />
-              <div class="flex items-center gap-2">
-                <span class="text-xs text-muted-foreground">Customize</span>
-                <USwitch
-                  :model-value="config.isCustomized"
-                  @update:model-value="toggleCustomization(config.type)"
-                />
+                </span>
               </div>
             </div>
           </div>
-        </template>
-
-        <!-- Card Body - Show placeholder when not customized -->
-        <div v-if="!config.isCustomized" class="text-center py-6 text-sm text-muted-foreground">
-          <UIcon name="i-lucide-layers" class="h-8 w-8 mx-auto mb-2 opacity-50" />
-          <p>Enable customization to set specific permissions for {{ getEntityTypeDisplay(config.type) }} level</p>
+          
+          <div class="flex items-center gap-3">
+            <UIcon 
+              v-if="config.isCustomized"
+              name="i-lucide-chevron-down"
+              class="h-4 w-4 text-muted-foreground transition-transform"
+              :class="{ 'rotate-180': expandedTypes.has(config.type) }"
+            />
+            <USwitch
+              :model-value="config.isCustomized"
+              @update:model-value="toggleCustomization(config.type)"
+              @click.stop
+            />
+          </div>
         </div>
 
-        <!-- Card Body - Expanded Content when customized -->
-        <div v-else-if="expandedTypes.has(config.type)" class="space-y-4">
+        <!-- Expanded Content -->
+        <div v-if="config.isCustomized && expandedTypes.has(config.type)" class="border-t bg-neutral-50 dark:bg-neutral-900/50 p-4 space-y-4">
           <!-- Permission Templates -->
           <div>
             <p class="text-sm font-medium mb-2">Quick Templates</p>
@@ -413,7 +362,7 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
           </div>
 
           <!-- Permission Preview -->
-          <div class="bg-neutral-50 dark:bg-neutral-800/50 rounded-lg p-3">
+          <div class="bg-white dark:bg-neutral-900 rounded-lg p-3">
             <p class="text-xs font-medium text-muted-foreground mb-2">
               When assigned at {{ getEntityTypeDisplay(config.type) }} level:
             </p>
@@ -425,7 +374,7 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
                 <div 
                   v-for="perm in config.permissions.slice(0, 6)" 
                   :key="perm"
-                  class="text-xs font-mono bg-white dark:bg-neutral-900 px-2 py-1 rounded"
+                  class="text-xs font-mono bg-neutral-50 dark:bg-neutral-800 px-2 py-1 rounded"
                 >
                   {{ perm }}
                 </div>
@@ -436,7 +385,7 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
             </div>
           </div>
         </div>
-      </UCard>
+      </div>
     </div>
 
     <!-- Summary -->
