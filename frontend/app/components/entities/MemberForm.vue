@@ -74,9 +74,10 @@ const state = reactive({
 })
 
 // Other state
-const userSearchQuery = ref('')
 const roleSearchQuery = ref('')
 const showRoleDropdown = ref(false)
+const userSearchQuery = ref('')
+const isSearchingUsers = ref(false)
 
 // Ref for role dropdown container
 const roleDropdownRef = ref<HTMLElement>()
@@ -155,30 +156,27 @@ const validityWarning = computed(() => {
   return null
 })
 
-const selectedUserLabel = computed(() => {
-  const user = entityMembersStore.availableUsers.find(u => u.value === state.user_id)
-  return user ? user.label : ''
+const selectedUser = computed(() => {
+  return entityMembersStore.availableUsers.find(u => u.value === state.user_id) || null
 })
 
 // Methods
-const searchUsers = async () => {
-  const query = userSearchQuery.value
+const searchUsers = async (query: string) => {
   if (!query || query.length < 2) {
+    entityMembersStore.clearAvailableUsers()
     return
   }
-  await entityMembersStore.searchUsers(query)
+  
+  isSearchingUsers.value = true
+  try {
+    await entityMembersStore.searchUsers(query)
+  } finally {
+    isSearchingUsers.value = false
+  }
 }
 
-// Debounced search function
-let searchTimeout: NodeJS.Timeout | null = null
-const debouncedSearchUsers = () => {
-  if (searchTimeout) {
-    clearTimeout(searchTimeout)
-  }
-  searchTimeout = setTimeout(() => {
-    searchUsers()
-  }, 300)
-}
+// Debounced search function using VueUse
+const debouncedSearchUsers = useDebounceFn(searchUsers, 300)
 
 const addRole = (roleId: string) => {
   if (!state.role_ids.includes(roleId)) {
@@ -288,25 +286,44 @@ watch(() => props.mode, (newMode) => {
 
     <!-- User Selection (Create Mode) -->
     <UFormField v-if="mode === 'create'" name="user_id" label="User" required>
-      <div class="space-y-2">
-        <UInput
-          v-model="userSearchQuery"
-          placeholder="Search users by name or email..."
-          icon="i-lucide-search"
-          :loading="entityMembersStore.isLoadingUsers"
-          @input="debouncedSearchUsers"
-        />
-        <USelect
-          v-model="state.user_id"
-          :items="entityMembersStore.availableUsers"
-          placeholder="Select a user from search results"
-          :disabled="entityMembersStore.availableUsers.length === 0"
-        >
-          <template #label>
-            {{ selectedUserLabel }}
-          </template>
-        </USelect>
-      </div>
+      <USelectMenu
+        v-model="state.user_id"
+        v-model:search="userSearchQuery"
+        :items="entityMembersStore.availableUsers"
+        placeholder="Search users by name or email..."
+        :loading="isSearchingUsers || entityMembersStore.isLoadingUsers"
+        searchable
+        :search-attributes="['label', 'email']"
+        value-key="value"
+        @update:search="debouncedSearchUsers"
+      >
+        <template #option="{ item }">
+          <div class="flex items-center gap-3">
+            <UAvatar 
+              :label="getInitials(item.label)" 
+              size="2xs"
+            />
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium truncate">{{ item.label }}</p>
+              <p class="text-xs text-muted-foreground truncate">{{ item.email }}</p>
+            </div>
+          </div>
+        </template>
+        <template #selected-item="{ item }">
+          <div v-if="item" class="flex items-center gap-2">
+            <UAvatar 
+              :label="getInitials(item.label)" 
+              size="2xs"
+            />
+            <span class="truncate">{{ item.label }}</span>
+          </div>
+        </template>
+        <template #empty>
+          <div class="px-3 py-2 text-sm text-muted-foreground">
+            {{ userSearchQuery.length < 2 ? 'Type at least 2 characters to search' : 'No users found' }}
+          </div>
+        </template>
+      </USelectMenu>
     </UFormField>
 
     <!-- Role Selection -->

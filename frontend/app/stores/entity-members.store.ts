@@ -107,7 +107,7 @@ export const useEntityMembersStore = defineStore("entity-members", () => {
     state.isLoadingUsers = true;
     try {
       const response = await authStore.apiCall<{ items: User[] }>(
-        `/v1/users?search=${encodeURIComponent(query)}&page_size=10`,
+        `/v1/users?search=${encodeURIComponent(query)}&page_size=20`,
         { headers: contextStore.getContextHeaders }
       );
 
@@ -295,6 +295,10 @@ export const useEntityMembersStore = defineStore("entity-members", () => {
     state.availableUsers = [];
   };
 
+  const clearAvailableUsers = () => {
+    state.availableUsers = [];
+  };
+
   // Utility functions
   const getMemberDisplayName = (member: EntityMember) => {
     return member.user_name || member.user_email || 'Unknown User';
@@ -355,6 +359,7 @@ export const useEntityMembersStore = defineStore("entity-members", () => {
     openCreateDrawer,
     openEditDrawer,
     closeDrawer,
+    clearAvailableUsers,
     setCurrentPage,
     getMemberDisplayName
   };
