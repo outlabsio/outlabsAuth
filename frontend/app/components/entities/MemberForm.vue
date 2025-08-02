@@ -79,6 +79,7 @@ const selectedUserId = ref('')
 // Other state
 const userSearchQuery = ref('')
 const isSearchingUsers = ref(false)
+const selectedRoleToAdd = ref('')
 
 
 
@@ -99,6 +100,12 @@ watch(validUntilDate, (newDate) => {
   }
 })
 
+
+// Computed for available roles (excluding already selected ones)
+const availableRolesToAdd = computed(() => {
+  const assignedRoleIds = new Set(state.role_ids)
+  return entityMembersStore.availableRoles.filter(role => !assignedRoleIds.has(role.value))
+})
 
 const validityWarning = computed(() => {
   if (state.valid_from && state.valid_until) {
@@ -143,6 +150,26 @@ const selectedUser = computed(() => {
 })
 
 // Methods
+const getRoleLabel = (roleId: string) => {
+  const role = entityMembersStore.availableRoles.find(r => r.value === roleId)
+  return role?.label || roleId
+}
+
+const removeRole = (roleId: string) => {
+  const index = state.role_ids.indexOf(roleId)
+  if (index > -1) {
+    state.role_ids.splice(index, 1)
+  }
+}
+
+// Watch for role selection
+watch(selectedRoleToAdd, (newRoleId) => {
+  if (newRoleId && !state.role_ids.includes(newRoleId)) {
+    state.role_ids.push(newRoleId)
+    // Clear the selection
+    selectedRoleToAdd.value = ''
+  }
+})
 const searchUsers = async (query: string) => {
   if (!query || query.length < 2) {
     entityMembersStore.clearAvailableUsers()
@@ -242,6 +269,7 @@ watch(() => props.mode, (newMode) => {
     validFromDate.value = null
     validUntilDate.value = null
     selectedUserItem.value = null
+    selectedRoleToAdd.value = ''
     entityMembersStore.clearAvailableUsers()
   }
 }, { immediate: true })
@@ -316,23 +344,45 @@ watch(() => props.mode, (newMode) => {
 
     <!-- Role Selection -->
     <UFormField name="roles" label="Roles" required>
-      <USelectMenu
-        v-model="state.role_ids"
-        :items="entityMembersStore.availableRoles"
-        placeholder="Search and select roles..."
-        :loading="entityMembersStore.isLoadingRoles"
-        multiple
-        searchable
-        value-key="value"
-        label-key="label"
-      >
-        <template #item="{ item }">
-          <div class="flex-1">
-            <p class="font-medium">{{ item.label }}</p>
-            <p class="text-sm text-muted-foreground">{{ item.description }}</p>
-          </div>
-        </template>
-      </USelectMenu>
+      <div class="space-y-3">
+        <!-- Assigned Roles as Tags -->
+        <div v-if="state.role_ids.length > 0" class="flex flex-wrap gap-2">
+          <UBadge 
+            v-for="roleId in state.role_ids" 
+            :key="roleId"
+            size="lg"
+            variant="subtle"
+            class="pr-1"
+          >
+            <span class="mr-1">{{ getRoleLabel(roleId) }}</span>
+            <UButton 
+              icon="i-lucide-x" 
+              variant="ghost" 
+              size="2xs"
+              :padded="false"
+              @click="removeRole(roleId)"
+            />
+          </UBadge>
+        </div>
+        
+        <!-- Role SelectMenu for Adding -->
+        <USelectMenu
+          v-model="selectedRoleToAdd"
+          :items="availableRolesToAdd"
+          placeholder="Search and add roles..."
+          :loading="entityMembersStore.isLoadingRoles"
+          searchable
+          value-key="value"
+          label-key="label"
+        >
+          <template #item="{ item }">
+            <div class="flex-1">
+              <p class="font-medium">{{ item.label }}</p>
+              <p class="text-sm text-muted-foreground">{{ item.description }}</p>
+            </div>
+          </template>
+        </USelectMenu>
+      </div>
     </UFormField>
 
 
