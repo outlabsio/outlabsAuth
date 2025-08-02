@@ -22,6 +22,13 @@ export interface Entity {
 }
 
 // User types
+export enum UserStatus {
+  ACTIVE = "active",
+  INACTIVE = "inactive",
+  SUSPENDED = "suspended",
+  BANNED = "banned",
+  TERMINATED = "terminated"
+}
 export interface UserProfile {
   first_name?: string | null;
   last_name?: string | null;
@@ -54,7 +61,7 @@ export interface User {
   id: string;
   email: string;
   profile: UserProfile;
-  is_active: boolean;
+  status: UserStatus;
   is_system_user: boolean;
   email_verified: boolean;
   last_login?: string | null;
@@ -89,7 +96,7 @@ export interface UserCreateRequest {
   last_name?: string;
   phone?: string;
   entity_assignments: UserEntityAssignment[];
-  is_active?: boolean;
+  status?: UserStatus;
   send_welcome_email?: boolean;
 }
 
@@ -98,7 +105,7 @@ export interface UserUpdateRequest {
   first_name?: string;
   last_name?: string;
   phone?: string;
-  is_active?: boolean;
+  status?: UserStatus;
   entity_assignments?: UserEntityAssignment[];
 }
 
@@ -158,16 +165,32 @@ export interface EntityMember {
     name: string;
     permissions: string[];
   }>;
-  status: string;
+  is_active: boolean;
+  status: string; // Computed field for backward compatibility
   valid_from?: string | null;
   valid_until?: string | null;
   created_at: string;
   updated_at?: string | null;
 }
 
+export interface EntityMemberCreateRequest {
+  user_id: string;
+  role_id: string;
+  is_active?: boolean;
+  valid_from?: string;
+  valid_until?: string;
+}
+
+export interface EntityMemberUpdateRequest {
+  role_id?: string;
+  is_active?: boolean;
+  valid_from?: string | null;
+  valid_until?: string | null;
+}
+
 export interface UserBulkActionRequest {
   user_ids: string[];
-  action: "activate" | "deactivate" | "lock";
+  status: UserStatus;
 }
 
 export interface UserBulkActionResponse {
@@ -182,7 +205,9 @@ export interface UserStatsResponse {
   total_users: number;
   active_users: number;
   inactive_users: number;
-  locked_users: number;
+  suspended_users: number;
+  banned_users: number;
+  terminated_users: number;
   recent_signups: number;
   recent_logins: number;
 }

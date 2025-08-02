@@ -4,6 +4,7 @@ User routes
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from api.models import UserModel
+from api.models.user_model import UserStatus
 from api.schemas.user_schema import (
     UserProfileUpdate,
     UserResponse,
@@ -43,7 +44,7 @@ async def _user_to_response(user: UserModel) -> UserResponse:
 async def search_users(
     query: Optional[str] = Query(None, description="Search in email, name"),
     entity_id: Optional[str] = Query(None, description="Filter by entity membership"),
-    status: Optional[str] = Query(None, description="Filter by status"),
+    status: Optional[UserStatus] = Query(None, description="Filter by user status"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: UserModel = Depends(get_current_user)
@@ -111,7 +112,7 @@ async def create_user(
         password=user_data.password,
         profile_data=profile_data,
         entity_assignments=entity_assignments,
-        is_active=user_data.is_active,
+        status=user_data.status,
         send_welcome_email=user_data.send_welcome_email,
         current_user=current_user
     )
@@ -145,7 +146,7 @@ async def update_user(
     Requires: user:update permission or self
     """
     # Update profile if provided
-    if any([user_data.email, user_data.first_name, user_data.last_name, user_data.phone, user_data.is_active is not None]):
+    if any([user_data.email, user_data.first_name, user_data.last_name, user_data.phone, user_data.status is not None]):
         profile_dict = {}
         if user_data.first_name is not None:
             profile_dict["first_name"] = user_data.first_name
@@ -165,9 +166,9 @@ async def update_user(
             user.email = user_data.email
             await user.save()
             
-        # Update is_active if provided
-        if user_data.is_active is not None:
-            user.is_active = user_data.is_active
+        # Update status if provided
+        if user_data.status is not None:
+            user.status = user_data.status
             await user.save()
     else:
         user = await UserService.get_user(user_id)
@@ -333,9 +334,11 @@ async def get_user_stats():
     
     # Count users by status
     total_users = await UserModel.count()
-    active_users = await UserModel.find(UserModel.is_active == True).count()
-    inactive_users = await UserModel.find(UserModel.is_active == False).count()
-    locked_users = await UserModel.find(UserModel.locked_until.ne(None)).count()
+    active_users = await UserModel.find(UserModel.status == UserStatus.ACTIVE).count()
+    inactive_users = await UserModel.find(UserModel.status == UserStatus.INACTIVE).count()
+    suspended_users = await UserModel.find(UserModel.status == UserStatus.SUSPENDED).count()
+    banned_users = await UserModel.find(UserModel.status == UserStatus.BANNED).count()
+    terminated_users = await UserModel.find(UserModel.status == UserStatus.TERMINATED).count()
     
     # Recent signups (last 30 days)
     recent_signups = await UserModel.find(
@@ -351,7 +354,9 @@ async def get_user_stats():
         total_users=total_users,
         active_users=active_users,
         inactive_users=inactive_users,
-        locked_users=locked_users,
+        suspended_users=suspended_users,
+        banned_users=banned_users,
+        terminated_users=terminated_users,
         recent_signups=recent_signups,
         recent_logins=recent_logins
     )
@@ -374,19 +379,10 @@ async def bulk_user_action(
     successful = []
     failed = []
     
-    # Map action to status
-    status_map = {
-        "activate": "active",
-        "deactivate": "inactive",
-        "lock": "locked"
-    }
-    
-    target_status = status_map[bulk_request.action]
-    
     for user_id in bulk_request.user_ids:
         try:
             # Prevent self-action if not activation
-            if user_id == str(current_user.id) and target_status != "active":
+            if user_id == str(current_user.id) and bulk_request.status != UserStatus.ACTIVE:
                 failed.append({
                     "user_id": user_id,
                     "error": "Cannot perform this action on your own account"
@@ -395,7 +391,7 @@ async def bulk_user_action(
             
             await UserService.update_user_status(
                 user_id=user_id,
-                status=target_status,
+                status=bulk_request.status,
                 current_user=current_user
             )
             successful.append(user_id)

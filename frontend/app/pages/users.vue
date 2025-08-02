@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { h, resolveComponent } from 'vue'
 import type { User } from '~/types/auth.types'
+import { UserStatus } from '~/types/auth.types'
 import type { TableColumn, TableRow } from '@nuxt/ui'
 
 // Resolve components for use in table
@@ -21,7 +22,9 @@ const statusOptions = [
   { label: "All", value: "" },
   { label: "Active", value: "active" },
   { label: "Inactive", value: "inactive" },
-  { label: "Locked", value: "locked" },
+  { label: "Suspended", value: "suspended" },
+  { label: "Banned", value: "banned" },
+  { label: "Terminated", value: "terminated" },
 ]
 
 const columnOptions = computed(() => {
@@ -96,7 +99,7 @@ function editUser(user: User) {
   usersStore.openDrawer('edit', user)
 }
 
-async function handleStatusChange(user: User, newStatus: "active" | "inactive" | "locked") {
+async function handleStatusChange(user: User, newStatus: UserStatus) {
   try {
     await usersStore.updateUserStatus(user.id, newStatus)
     // Toast is handled by the store
@@ -247,12 +250,12 @@ const columns: TableColumn<User>[] = [{
   },
   enableSorting: false
 }, {
-  accessorKey: 'is_active',
+  accessorKey: 'status',
   header: 'Status',
   cell: ({ row }) => {
     const user = row.original
     const color = usersStore.getUserStatusColor(user)
-    const status = usersStore.getUserStatus(user)
+    const status = usersStore.getUserStatusLabel(user)
     
     return h('div', { class: 'flex items-center gap-2' }, [
       h(UBadge, { color, variant: 'subtle' }, () => status),
@@ -309,26 +312,58 @@ function getRowActions(user: User) {
     disabled: true
   }])
   
-  if (user.is_active) {
-    actions.push([{
-      label: 'Deactivate',
-      icon: 'i-lucide-x-circle',
-      onSelect: () => handleStatusChange(user, 'inactive')
-    }])
-  } else {
-    actions.push([{
-      label: 'Activate',
-      icon: 'i-lucide-check-circle',
-      onSelect: () => handleStatusChange(user, 'active')
-    }])
-  }
-  
-  if (!user.locked_until || new Date(user.locked_until) < new Date()) {
-    actions.push([{
-      label: 'Lock Account',
-      icon: 'i-lucide-lock',
-      onSelect: () => handleStatusChange(user, 'locked')
-    }])
+  // Status change options based on current status
+  switch (user.status) {
+    case UserStatus.ACTIVE:
+      actions.push([
+        {
+          label: 'Deactivate',
+          icon: 'i-lucide-x-circle',
+          onSelect: () => handleStatusChange(user, UserStatus.INACTIVE)
+        },
+        {
+          label: 'Suspend',
+          icon: 'i-lucide-pause-circle',
+          onSelect: () => handleStatusChange(user, UserStatus.SUSPENDED)
+        },
+        {
+          label: 'Ban',
+          icon: 'i-lucide-ban',
+          onSelect: () => handleStatusChange(user, UserStatus.BANNED)
+        }
+      ])
+      break
+    case UserStatus.INACTIVE:
+      actions.push([{
+        label: 'Activate',
+        icon: 'i-lucide-check-circle',
+        onSelect: () => handleStatusChange(user, UserStatus.ACTIVE)
+      }])
+      break
+    case UserStatus.SUSPENDED:
+      actions.push([
+        {
+          label: 'Activate',
+          icon: 'i-lucide-check-circle',
+          onSelect: () => handleStatusChange(user, UserStatus.ACTIVE)
+        },
+        {
+          label: 'Ban',
+          icon: 'i-lucide-ban',
+          onSelect: () => handleStatusChange(user, UserStatus.BANNED)
+        }
+      ])
+      break
+    case UserStatus.BANNED:
+      actions.push([{
+        label: 'Activate',
+        icon: 'i-lucide-check-circle',
+        onSelect: () => handleStatusChange(user, UserStatus.ACTIVE)
+      }])
+      break
+    case UserStatus.TERMINATED:
+      // No status changes allowed for terminated users
+      break
   }
   
   actions.push([{

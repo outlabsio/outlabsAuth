@@ -128,11 +128,11 @@ class EntityMembershipModel(BaseDocument):
     valid_until: Optional[datetime] = None
     
     # Status
-    status: str = Field(default="active")
+    is_active: bool = Field(default=True)
     
-    def is_active(self) -> bool:
-        """Check if membership is currently active"""
-        if self.status != "active":
+    def is_currently_valid(self) -> bool:
+        """Check if membership is currently valid (active and within valid dates)"""
+        if not self.is_active:
             return False
         now = datetime.now(timezone.utc)
         if self.valid_from and now < self.valid_from:
@@ -147,5 +147,5 @@ class EntityMembershipModel(BaseDocument):
             [("user", 1), ("entity", 1)],  # Unique constraint
             [("entity", 1)],  # Fast entity member lookup
             [("user", 1)],  # Fast user membership lookup
-            [("status", 1)],
+            [("is_active", 1)],
         ]

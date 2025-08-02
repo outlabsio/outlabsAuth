@@ -130,8 +130,9 @@ class PolicyEvaluationEngine:
             "user": {
                 "id": str(user.id),
                 "email": user.email,
-                "is_active": user.is_active,
-                "is_verified": user.is_verified,
+                "status": user.status.value,
+                "can_authenticate": user.can_authenticate(),
+                "email_verified": user.email_verified,
                 "is_system_user": user.is_system_user,
                 "created_at": user.created_at.isoformat() if user.created_at else None,
             },
@@ -164,8 +165,8 @@ class PolicyEvaluationEngine:
                 "id": str(entity.id),
                 "name": entity.name,
                 "type": entity.entity_type,
-                "is_active": entity.is_active,
-                "member_count": entity.member_count,
+                "status": entity.status,
+                "member_count": getattr(entity, 'member_count', 0),
             }
             # Add entity settings/metadata
             if entity.settings:
@@ -767,7 +768,7 @@ class PermissionService:
         # Build query
         query_conditions = [
             EntityMembershipModel.user.id == PydanticObjectId(user_id),
-            EntityMembershipModel.status == "active"
+            EntityMembershipModel.is_active == True
         ]
         
         if entity_id:

@@ -60,10 +60,10 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserModel:
                 detail="User not found"
             )
         
-        if not user.is_active:
+        if not user.can_authenticate():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Inactive user"
+                detail="User account is not active"
             )
         
         return user
@@ -112,7 +112,7 @@ async def register(request: RegisterRequest):
         id=str(user.id),
         email=user.email,
         profile=user.profile.model_dump() if user.profile else {},
-        is_active=user.is_active,
+        status=user.status,
         email_verified=user.email_verified,
         created_at=user.created_at,
         last_login=user.last_login

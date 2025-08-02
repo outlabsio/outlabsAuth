@@ -154,7 +154,7 @@ export const useEntityMembersStore = defineStore("entity-members", () => {
     }
   };
 
-  const createMember = async (data: { user_id: string; role_ids: string[]; valid_from?: string; valid_until?: string }) => {
+  const createMember = async (data: { user_id: string; role_ids: string[]; is_active?: boolean; valid_from?: string; valid_until?: string }) => {
     if (!state.entityId) throw new Error('No entity selected');
 
     // For each role, create a member entry
@@ -162,6 +162,7 @@ export const useEntityMembersStore = defineStore("entity-members", () => {
       const memberData: EntityMemberCreateRequest = {
         user_id: data.user_id,
         role_id: roleId,
+        is_active: data.is_active !== false,
         valid_from: data.valid_from,
         valid_until: data.valid_until
       };
@@ -185,7 +186,7 @@ export const useEntityMembersStore = defineStore("entity-members", () => {
     await fetchMembers();
   };
 
-  const updateMember = async (userId: string, data: { role_ids?: string[]; status?: string; valid_from?: string | null; valid_until?: string | null }) => {
+  const updateMember = async (userId: string, data: { role_ids?: string[]; status?: string; is_active?: boolean; valid_from?: string | null; valid_until?: string | null }) => {
     if (!state.entityId) throw new Error('No entity selected');
 
     const member = state.members.find(m => m.user_id === userId);
@@ -207,7 +208,7 @@ export const useEntityMembersStore = defineStore("entity-members", () => {
         const memberData: EntityMemberCreateRequest = {
           user_id: userId,
           role_id: roleId,
-          status: data.status as any,
+          is_active: data.is_active !== undefined ? data.is_active : true,
           valid_from: data.valid_from || undefined,
           valid_until: data.valid_until || undefined
         };
@@ -230,7 +231,7 @@ export const useEntityMembersStore = defineStore("entity-members", () => {
       // If only status or dates changed, update normally
       const updateData: EntityMemberUpdateRequest = {};
 
-      if (data.status) updateData.status = data.status as any;
+      if (data.is_active !== undefined) updateData.is_active = data.is_active;
       if (data.valid_from !== undefined) updateData.valid_from = data.valid_from;
       if (data.valid_until !== undefined) updateData.valid_until = data.valid_until;
 

@@ -68,7 +68,7 @@ const schema = computed(() => {
 const state = reactive({
   user_id: '',
   role_ids: [] as string[],
-  status: 'active' as 'active' | 'suspended' | 'revoked',
+  is_active: true,
   valid_from: '',
   valid_until: ''
 })
@@ -103,12 +103,6 @@ watch(validUntilDate, (newDate) => {
   }
 })
 
-// Status options
-const statusOptions = [
-  { value: 'active', label: 'Active' },
-  { value: 'suspended', label: 'Suspended' },
-  { value: 'revoked', label: 'Revoked' }
-]
 
 // Computed
 const filteredAvailableRoles = computed(() => {
@@ -220,7 +214,7 @@ const onSubmit = () => {
   emit('submit', {
     user_id: state.user_id,
     role_ids: state.role_ids,
-    status: state.status,
+    is_active: state.is_active,
     valid_from: state.valid_from || null,
     valid_until: state.valid_until || null
   })
@@ -247,7 +241,7 @@ watch(() => props.member, (newMember) => {
   if (newMember && props.mode === 'edit') {
     // Set all role IDs
     state.role_ids = newMember.roles?.map(r => r.id) || []
-    state.status = newMember.status as 'active' | 'suspended' | 'revoked'
+    state.is_active = newMember.is_active
     
     // Set dates
     validFromDate.value = dateStringToCalendarDate(newMember.valid_from)
@@ -260,7 +254,7 @@ watch(() => props.mode, (newMode) => {
   if (newMode === 'create') {
     state.user_id = ''
     state.role_ids = []
-    state.status = 'active'
+    state.is_active = true
     state.valid_from = ''
     state.valid_until = ''
     userSearchQuery.value = ''
@@ -382,13 +376,6 @@ watch(() => props.mode, (newMode) => {
       </div>
     </UFormField>
 
-    <!-- Status (Edit Mode) -->
-    <UFormField v-if="mode === 'edit'" name="status" label="Status">
-      <USelect
-        v-model="state.status"
-        :items="statusOptions"
-      />
-    </UFormField>
 
     <!-- Validity Period -->
     <div class="grid grid-cols-2 gap-4">

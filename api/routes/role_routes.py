@@ -359,7 +359,7 @@ async def get_role_usage_stats(
     # Since roles is a list of Links, we need to use a different approach
     # We'll fetch all memberships and filter in Python
     all_memberships = await EntityMembershipModel.find(
-        EntityMembershipModel.status == "active"
+        EntityMembershipModel.is_active == True
     ).to_list()
     
     active_assignments = 0

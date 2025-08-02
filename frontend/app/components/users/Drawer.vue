@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { User } from '~/types/auth.types'
+import { UserStatus } from '~/types/auth.types'
 
 const props = defineProps<{
   user: User | null
@@ -24,7 +25,6 @@ const toast = useToast()
 // State
 const isSubmitting = ref(false)
 const formRef = ref()
-const isUpdatingStatus = ref(false)
 
 // Watch for mode changes
 watch(
@@ -154,20 +154,6 @@ const handleCancel = () => {
   }
 }
 
-const handleStatusToggle = async (newStatus: boolean) => {
-  if (!props.user) return
-  
-  isUpdatingStatus.value = true
-  try {
-    await usersStore.updateUserStatus(props.user.id, newStatus ? 'active' : 'inactive')
-    // Toast is handled by the store
-  } catch (error: any) {
-    console.error('Failed to update user status:', error)
-    // Error toast is already handled by the store
-  } finally {
-    isUpdatingStatus.value = false
-  }
-}
 
 const showForm = computed(() => mode.value === 'create' || mode.value === 'edit')
 </script>
@@ -190,14 +176,12 @@ const showForm = computed(() => mode.value === 'create' || mode.value === 'edit'
             {{ title }}
           </h3>
           <div v-if="mode === 'view' && user && !user.is_system_user" class="flex items-center gap-2">
-            <USwitch 
-              :model-value="user.is_active"
-              @update:model-value="handleStatusToggle"
-              :loading="isUpdatingStatus"
-            />
-            <span class="text-sm text-muted-foreground">
-              {{ user.is_active ? 'Active' : 'Inactive' }}
-            </span>
+            <UBadge 
+              :color="usersStore.getUserStatusColor(user)" 
+              variant="subtle"
+            >
+              {{ usersStore.getUserStatusLabel(user) }}
+            </UBadge>
           </div>
         </div>
         <div v-if="mode === 'view'" class="flex items-center gap-2">

@@ -3,9 +3,19 @@ User Model
 """
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
+from enum import Enum
 from beanie import Indexed
 from pydantic import EmailStr, Field
 from api.models.base_model import BaseDocument
+
+
+class UserStatus(str, Enum):
+    """User account status"""
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    SUSPENDED = "suspended"
+    BANNED = "banned"
+    TERMINATED = "terminated"
 
 
 class UserProfile(BaseDocument):
@@ -34,7 +44,7 @@ class UserModel(BaseDocument):
     profile: UserProfile = Field(default_factory=UserProfile)
     
     # Status
-    is_active: bool = Field(default=True)
+    status: UserStatus = Field(default=UserStatus.ACTIVE)
     is_system_user: bool = Field(default=False)
     email_verified: bool = Field(default=False)
     
@@ -59,11 +69,12 @@ class UserModel(BaseDocument):
     
     def can_authenticate(self) -> bool:
         """Check if user can authenticate"""
-        return self.is_active and not self.is_locked()
+        # Only active and suspended users can authenticate (suspended might have time restrictions)
+        return self.status in [UserStatus.ACTIVE, UserStatus.SUSPENDED] and not self.is_locked()
     
     class Settings:
         name = "users"
         indexes = [
             [("email", 1)],
-            [("is_active", 1)],
+            [("status", 1)],
         ]

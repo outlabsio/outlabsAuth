@@ -10,6 +10,7 @@ import type {
   UserBulkActionResponse,
   UserStatsResponse
 } from "~/types/auth.types";
+import { UserStatus } from "~/types/auth.types";
 
 interface UsersState {
   users: User[];
@@ -234,7 +235,7 @@ export const useUsersStore = defineStore("users", () => {
     }
   };
 
-  const updateUserStatus = async (userId: string, status: "active" | "inactive" | "locked") => {
+  const updateUserStatus = async (userId: string, status: UserStatus) => {
     try {
       const headers = contextStore.getContextHeaders;
       const user = await authStore.apiCall<User>(`/v1/users/${userId}/status`, {
@@ -462,19 +463,34 @@ export const useUsersStore = defineStore("users", () => {
     return parts.length > 0 ? parts.join(" ") : user.email;
   };
 
-  const getUserStatus = (user: User) => {
-    if (user.locked_until && new Date(user.locked_until) > new Date()) {
-      return "locked";
+  const getUserStatusLabel = (user: User) => {
+    switch (user.status) {
+      case UserStatus.ACTIVE:
+        return "Active";
+      case UserStatus.INACTIVE:
+        return "Inactive";
+      case UserStatus.SUSPENDED:
+        return "Suspended";
+      case UserStatus.BANNED:
+        return "Banned";
+      case UserStatus.TERMINATED:
+        return "Terminated";
+      default:
+        return user.status;
     }
-    return user.is_active ? "active" : "inactive";
   };
 
   const getUserStatusColor = (user: User) => {
-    const status = getUserStatus(user);
-    switch (status) {
-      case "active":
+    switch (user.status) {
+      case UserStatus.ACTIVE:
         return "success";
-      case "locked":
+      case UserStatus.INACTIVE:
+        return "neutral";
+      case UserStatus.SUSPENDED:
+        return "warning";
+      case UserStatus.BANNED:
+        return "error";
+      case UserStatus.TERMINATED:
         return "error";
       default:
         return "neutral";
@@ -531,7 +547,7 @@ export const useUsersStore = defineStore("users", () => {
 
     // Helpers
     getUserDisplayName,
-    getUserStatus,
+    getUserStatusLabel,
     getUserStatusColor,
     formatDate,
   };

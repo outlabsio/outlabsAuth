@@ -69,7 +69,7 @@ class EntityMembershipService:
         existing = await EntityMembershipModel.find_one(
             EntityMembershipModel.entity.id == entity.id,
             EntityMembershipModel.user.id == user.id,
-            EntityMembershipModel.status == "active"
+            EntityMembershipModel.is_active == True
         )
         
         if existing:
@@ -82,7 +82,7 @@ class EntityMembershipService:
         if entity.max_members:
             current_count = await EntityMembershipModel.find(
                 EntityMembershipModel.entity.id == entity.id,
-                EntityMembershipModel.status == "active"
+                EntityMembershipModel.is_active == True
             ).count()
             
             if current_count >= entity.max_members:
@@ -96,7 +96,7 @@ class EntityMembershipService:
             user=user,
             entity=entity,
             roles=[role],  # roles is a list
-            status="active",
+            is_active=True,
             valid_from=member_data.valid_from,
             valid_until=member_data.valid_until
         )
@@ -130,7 +130,7 @@ class EntityMembershipService:
         membership = await EntityMembershipModel.find_one(
             EntityMembershipModel.entity.id == PydanticObjectId(entity_id),
             EntityMembershipModel.user.id == PydanticObjectId(user_id),
-            EntityMembershipModel.status != "revoked"
+            EntityMembershipModel.is_active == True
         )
         
         if not membership:
@@ -189,7 +189,7 @@ class EntityMembershipService:
         membership = await EntityMembershipModel.find_one(
             EntityMembershipModel.entity.id == PydanticObjectId(entity_id),
             EntityMembershipModel.user.id == PydanticObjectId(user_id),
-            EntityMembershipModel.status == "active"
+            EntityMembershipModel.is_active == True
         )
         
         if not membership:
@@ -208,7 +208,7 @@ class EntityMembershipService:
         if hard_delete:
             await membership.delete()
         else:
-            membership.status = "revoked"
+            membership.is_active = False
             membership.updated_at = datetime.now(timezone.utc)
             await membership.save()
         
@@ -279,7 +279,8 @@ class EntityMembershipService:
                     "entity_id": str(entity.id),
                     "entity_name": entity.name,
                     "roles": role_info,  # Now it's a list of roles
-                    "status": membership.status,
+                    "is_active": membership.is_active,
+                    "status": "active" if membership.is_active else "inactive",
                     "valid_from": membership.valid_from,
                     "valid_until": membership.valid_until,
                     "created_at": membership.created_at,
@@ -365,7 +366,8 @@ class EntityMembershipService:
                     "role_id": str(primary_role.id) if primary_role else None,
                     "role_name": primary_role.display_name if primary_role and hasattr(primary_role, 'display_name') else (primary_role.name if primary_role else None),
                     "permissions": primary_role.permissions if primary_role else [],
-                    "status": membership.status,
+                    "is_active": membership.is_active,
+                    "status": "active" if membership.is_active else "inactive",
                     "valid_from": membership.valid_from,
                     "valid_until": membership.valid_until,
                     "created_at": membership.created_at
@@ -391,8 +393,8 @@ class EntityMembershipService:
             return False, "Membership not found"
         
         # Check status
-        if membership.status != "active":
-            return False, f"Membership is {membership.status}"
+        if not membership.is_active:
+            return False, "Membership is inactive"
         
         # Check time validity
         now = datetime.now(timezone.utc)
@@ -405,8 +407,8 @@ class EntityMembershipService:
         
         # Check if user is active
         user = await membership.user.fetch()
-        if not user or not user.is_active:
-            return False, "User is not active"
+        if not user or not user.can_authenticate():
+            return False, "User account is not active"
         
         # Check if entity is active
         entity = await membership.entity.fetch()
@@ -497,7 +499,7 @@ class EntityMembershipService:
         # Count other admins
         other_admins = await EntityMembershipModel.find(
             EntityMembershipModel.entity.id == PydanticObjectId(entity_id),
-            EntityMembershipModel.status == "active",
+            EntityMembershipModel.is_active == True,
             EntityMembershipModel.id != membership.id
         ).to_list()
         
@@ -558,7 +560,7 @@ class EntityMembershipService:
         membership = await EntityMembershipModel.find_one(
             EntityMembershipModel.user.id == PydanticObjectId(user_id),
             EntityMembershipModel.entity.id == PydanticObjectId(entity_id),
-            EntityMembershipModel.status == "active"
+            EntityMembershipModel.is_active == True
         )
         
         return membership
@@ -581,7 +583,7 @@ class EntityMembershipService:
         # Get all active memberships for the user
         memberships = await EntityMembershipModel.find(
             EntityMembershipModel.user.id == PydanticObjectId(user_id),
-            EntityMembershipModel.status == "active"
+            EntityMembershipModel.is_active == True
         ).to_list()
         
         accessible_entity_ids = set()

@@ -2,6 +2,7 @@
 import * as z from 'zod'
 import type { FormSubmitEvent } from '@nuxt/ui'
 import type { User, UserCreateRequest, UserUpdateRequest, UserEntityAssignment } from '~/types/auth.types'
+import { UserStatus } from '~/types/auth.types'
 
 const props = defineProps<{
   mode: 'create' | 'edit'
@@ -82,7 +83,7 @@ const schema = z.object({
   first_name: z.string().optional(),
   last_name: z.string().optional(),
   phone: z.string().optional(),
-  is_active: z.boolean().default(true),
+  status: z.nativeEnum(UserStatus).default(UserStatus.ACTIVE),
   send_welcome_email: z.boolean().default(true),
 })
 
@@ -95,9 +96,18 @@ const state = reactive<Partial<Schema>>({
   first_name: props.user?.profile.first_name || '',
   last_name: props.user?.profile.last_name || '',
   phone: props.user?.profile.phone || '',
-  is_active: props.user?.is_active ?? true,
+  status: props.user?.status || UserStatus.ACTIVE,
   send_welcome_email: true,
 })
+
+// Status options for dropdown
+const statusOptions = computed(() => [
+  { label: 'Active', value: UserStatus.ACTIVE },
+  { label: 'Inactive', value: UserStatus.INACTIVE },
+  { label: 'Suspended', value: UserStatus.SUSPENDED },
+  { label: 'Banned', value: UserStatus.BANNED },
+  { label: 'Terminated', value: UserStatus.TERMINATED },
+])
 
 // Computed property to check if there are any entities left to assign.
 // This is used to disable the "Add Membership" button.
@@ -202,14 +212,14 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
     last_name: event.data.last_name,
     phone: event.data.phone,
     entity_assignments: validAssignments,
-    is_active: event.data.is_active,
+    status: event.data.status,
     send_welcome_email: event.data.send_welcome_email,
   } : {
     email: event.data.email !== props.user?.email ? event.data.email : undefined,
     first_name: event.data.first_name,
     last_name: event.data.last_name,
     phone: event.data.phone,
-    is_active: event.data.is_active,
+    status: event.data.status,
     entity_assignments: validAssignments,
   }
 
@@ -330,17 +340,14 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
         Configuration
       </h5>
 
-      <!-- Active Status -->
-      <UFormField name="is_active" class="w-full">
-        <div class="flex items-center gap-3">
-          <USwitch v-model="state.is_active" :color="state.is_active ? 'success' : 'neutral'" />
-          <div>
-            <span class="text-sm font-medium">Active</span>
-            <p class="text-xs text-muted-foreground">
-              {{ state.is_active ? 'User can log in and access the system' : 'User is blocked from accessing the system' }}
-            </p>
-          </div>
-        </div>
+      <!-- User Status -->
+      <UFormField name="status" label="User Status" class="w-full">
+        <USelect 
+          v-model="state.status" 
+          :items="statusOptions"
+          value-key="value"
+          placeholder="Select status"
+        />
       </UFormField>
     </div>
 

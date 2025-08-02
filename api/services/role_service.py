@@ -250,7 +250,7 @@ class RoleService:
         # Check if role is in use
         # Since roles is a list of Links, we need to fetch and check manually
         all_memberships = await EntityMembershipModel.find(
-            EntityMembershipModel.status == "active"
+            EntityMembershipModel.is_active == True
         ).to_list()
         
         memberships_count = 0

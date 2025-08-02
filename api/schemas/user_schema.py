@@ -2,8 +2,9 @@
 User schemas for request/response validation
 """
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, EmailStr, Field, field_validator
+from api.models.user_model import UserStatus
 
 
 class UserEntityRole(BaseModel):
@@ -56,7 +57,7 @@ class UserResponse(BaseModel):
     id: str
     email: EmailStr
     profile: UserProfileResponse
-    is_active: bool
+    status: UserStatus
     is_system_user: bool
     email_verified: bool
     last_login: Optional[datetime] = None
@@ -82,22 +83,14 @@ class UserSearchParams(BaseModel):
     """User search parameters"""
     query: Optional[str] = Field(None, description="Search in email, first name, last name")
     entity_id: Optional[str] = Field(None, description="Filter by entity membership")
-    status: Optional[str] = Field(None, description="Filter by status (active/inactive/locked)")
+    status: Optional[UserStatus] = Field(None, description="Filter by user status")
     page: int = Field(1, ge=1)
     page_size: int = Field(20, ge=1, le=100)
 
 
 class UserStatusUpdate(BaseModel):
     """Update user status request schema"""
-    status: str = Field(..., description="New status (active/inactive/locked)")
-    
-    @field_validator('status')
-    def validate_status(cls, v):
-        """Validate status value"""
-        valid_statuses = ["active", "inactive", "locked"]
-        if v not in valid_statuses:
-            raise ValueError(f"Status must be one of: {', '.join(valid_statuses)}")
-        return v
+    status: UserStatus = Field(..., description="New user status")
 
 
 class UserEntityAssignment(BaseModel):
@@ -117,7 +110,7 @@ class UserCreateRequest(BaseModel):
     last_name: Optional[str] = Field(None, min_length=1, max_length=50)
     phone: Optional[str] = Field(None, max_length=20)
     entity_assignments: List[UserEntityAssignment] = Field(default_factory=list)
-    is_active: bool = Field(default=True)
+    status: UserStatus = Field(default=UserStatus.ACTIVE)
     send_welcome_email: bool = Field(default=True)
     
     @field_validator('password')
@@ -142,7 +135,7 @@ class UserUpdateRequest(BaseModel):
     first_name: Optional[str] = Field(None, min_length=1, max_length=50)
     last_name: Optional[str] = Field(None, min_length=1, max_length=50)
     phone: Optional[str] = Field(None, max_length=20)
-    is_active: Optional[bool] = None
+    status: Optional[UserStatus] = None
     entity_assignments: Optional[List[UserEntityAssignment]] = None
 
 
@@ -215,7 +208,9 @@ class UserStatsResponse(BaseModel):
     total_users: int
     active_users: int
     inactive_users: int
-    locked_users: int
+    suspended_users: int
+    banned_users: int
+    terminated_users: int
     recent_signups: int  # Users created in last 30 days
     recent_logins: int   # Users logged in in last 30 days
 
@@ -223,14 +218,15 @@ class UserStatsResponse(BaseModel):
 class UserBulkActionRequest(BaseModel):
     """Bulk action request schema"""
     user_ids: List[str] = Field(..., min_items=1, max_items=100)
-    action: str = Field(..., description="Action to perform (activate/deactivate/lock)")
+    status: UserStatus = Field(..., description="New status to apply to users")
     
-    @field_validator('action')
-    def validate_action(cls, v):
-        """Validate action value"""
-        valid_actions = ["activate", "deactivate", "lock"]
-        if v not in valid_actions:
-            raise ValueError(f"Action must be one of: {', '.join(valid_actions)}")
+    @field_validator('status')
+    def validate_status(cls, v):
+        """Validate status value"""
+        # Only allow certain bulk status updates
+        allowed_statuses = [UserStatus.ACTIVE, UserStatus.INACTIVE, UserStatus.SUSPENDED, UserStatus.BANNED]
+        if v not in allowed_statuses:
+            raise ValueError(f"Bulk status update must be one of: {', '.join([s.value for s in allowed_statuses])}")
         return v
 
 

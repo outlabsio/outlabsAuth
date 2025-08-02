@@ -4,6 +4,7 @@ Authentication schemas for request/response validation
 from datetime import datetime
 from typing import Optional, Dict, Any
 from pydantic import BaseModel, EmailStr, Field, field_validator
+from api.models.user_model import UserStatus
 
 
 class LoginRequest(BaseModel):
@@ -65,7 +66,7 @@ class UserInfoResponse(BaseModel):
     id: str
     email: str
     profile: Dict[str, Any]
-    is_active: bool
+    status: UserStatus
     email_verified: bool
     created_at: datetime
     last_login: Optional[datetime] = None

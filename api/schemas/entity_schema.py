@@ -167,7 +167,7 @@ class EntityMemberUpdate(BaseModel):
     role_id: Optional[str] = None
     valid_from: Optional[datetime] = None
     valid_until: Optional[datetime] = None
-    status: Optional[Literal["active", "suspended", "revoked"]] = None
+    is_active: Optional[bool] = None
     
     @field_validator('role_id')
     def validate_role_id(cls, v):
@@ -192,7 +192,8 @@ class EntityMemberResponse(BaseModel):
     role_id: str
     role_name: str
     permissions: List[str] = []
-    status: str
+    is_active: bool
+    status: str  # Computed field for backward compatibility
     valid_from: Optional[datetime] = None
     valid_until: Optional[datetime] = None
     created_at: datetime

@@ -21,6 +21,7 @@ const toast = useToast()
 // State
 const isSubmitting = ref(false)
 const formRef = ref()
+const isUpdatingStatus = ref(false)
 
 // Computed
 const title = computed(() => {
@@ -69,6 +70,23 @@ const submitForm = () => {
 const handleCancel = () => {
   open.value = false
 }
+
+const handleStatusToggle = async (newStatus: boolean) => {
+  if (!props.member) return
+  
+  isUpdatingStatus.value = true
+  try {
+    await entityMembersStore.updateMember(props.member.user_id, {
+      is_active: newStatus
+    })
+    // No need to show toast as the store handles it
+  } catch (error: any) {
+    console.error('Failed to update member status:', error)
+    // Error toast is already handled by the store
+  } finally {
+    isUpdatingStatus.value = false
+  }
+}
 </script>
 
 <template>
@@ -84,9 +102,21 @@ const handleCancel = () => {
     <!-- Header -->
     <template #header>
       <div class="flex justify-between items-center w-full">
-        <h3 class="text-xl font-bold">
-          {{ title }}
-        </h3>
+        <div class="flex items-center gap-4">
+          <h3 class="text-xl font-bold">
+            {{ title }}
+          </h3>
+          <div v-if="mode === 'edit' && member" class="flex items-center gap-2">
+            <USwitch 
+              :model-value="member.is_active"
+              @update:model-value="handleStatusToggle"
+              :loading="isUpdatingStatus"
+            />
+            <span class="text-sm text-muted-foreground">
+              {{ member.is_active ? 'Active' : 'Inactive' }}
+            </span>
+          </div>
+        </div>
       </div>
     </template>
 

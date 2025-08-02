@@ -62,8 +62,8 @@
 
             <!-- Status Badge -->
             <UBadge 
-              :label="member.status" 
-              :color="member.status === 'active' ? 'success' : 'neutral'"
+              :label="member.is_active ? 'Active' : 'Inactive'" 
+              :color="member.is_active ? 'success' : 'neutral'"
               variant="subtle"
               size="sm"
             />

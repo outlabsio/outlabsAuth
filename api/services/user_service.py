@@ -11,7 +11,7 @@ import secrets
 import string
 
 from api.models import UserModel, EntityModel, EntityMembershipModel, RoleModel
-from api.models.user_model import UserProfile
+from api.models.user_model import UserProfile, UserStatus
 from api.services.auth_service import AuthService
 from api.services.entity_service import EntityService
 from api.services.permission_service import permission_service
@@ -96,7 +96,7 @@ class UserService:
     async def search_users(
         query: Optional[str] = None,
         entity_id: Optional[str] = None,
-        status: Optional[str] = None,
+        status: Optional[UserStatus] = None,
         page: int = 1,
         page_size: int = 20,
         current_user: UserModel = None
@@ -130,12 +130,7 @@ class UserService:
         
         # Status filter
         if status:
-            if status == "active":
-                conditions.append(UserModel.is_active == True)
-            elif status == "inactive":
-                conditions.append(UserModel.is_active == False)
-            elif status == "locked":
-                conditions.append(UserModel.locked_until.ne(None))
+            conditions.append(UserModel.status == status)
         
         # Entity membership filter
         if entity_id:
@@ -169,7 +164,7 @@ class UserService:
             # Get users who are members of any entity in the hierarchy
             memberships = await EntityMembershipModel.find(
                 In(EntityMembershipModel.entity.id, entity_ids),
-                EntityMembershipModel.status == "active",
+                EntityMembershipModel.is_active == True,
                 fetch_links=True
             ).to_list()
             
@@ -201,7 +196,7 @@ class UserService:
     @staticmethod
     async def update_user_status(
         user_id: str,
-        status: str,
+        status: UserStatus,
         current_user: UserModel
     ) -> UserModel:
         """
@@ -209,7 +204,7 @@ class UserService:
         
         Args:
             user_id: User ID to update
-            status: New status (active/inactive/locked)
+            status: New status (UserStatus enum)
             current_user: User performing the update
             
         Returns:
@@ -231,28 +226,26 @@ class UserService:
                 detail="Not authorized to update user status"
             )
         
-        # Prevent self-deactivation
-        if user.id == current_user.id and status != "active":
+        # Prevent self-deactivation/suspension/banning
+        if user.id == current_user.id and status not in [UserStatus.ACTIVE]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot deactivate your own account"
+                detail="Cannot deactivate, suspend, or ban your own account"
+            )
+        
+        # Prevent changing status of terminated users
+        if user.status == UserStatus.TERMINATED:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot change status of terminated users"
             )
         
         # Update status
-        if status == "active":
-            user.is_active = True
-            user.locked_until = None
-        elif status == "inactive":
-            user.is_active = False
-            user.locked_until = None
-        elif status == "locked":
-            user.is_active = False
-            user.locked_until = datetime.now(timezone.utc).replace(year=2099)  # Lock indefinitely
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid status. Must be 'active', 'inactive', or 'locked'"
-            )
+        user.status = status
+        
+        # Clear any legacy fields
+        user.locked_until = None
+        user.failed_login_attempts = 0
         
         user.updated_at = datetime.now(timezone.utc)
         await user.save()
@@ -303,7 +296,7 @@ class UserService:
             # Check if user has any critical memberships
             memberships = await EntityMembershipModel.find(
                 EntityMembershipModel.user.id == user.id,
-                EntityMembershipModel.status == "active"
+                EntityMembershipModel.is_active == True
             ).to_list()
             
             for membership in memberships:
@@ -321,7 +314,7 @@ class UserService:
                         admin_role_ids = [r.id for r in admin_roles]
                         admin_memberships = await EntityMembershipModel.find(
                             EntityMembershipModel.entity.id == entity.id,
-                            EntityMembershipModel.status == "active",
+                            EntityMembershipModel.is_active == True,
                             In(EntityMembershipModel.roles.id, admin_role_ids)
                         ).to_list()
                         
@@ -339,8 +332,8 @@ class UserService:
             # Delete user
             await user.delete()
         else:
-            # Soft delete - just deactivate
-            user.is_active = False
+            # Soft delete - mark as terminated
+            user.status = UserStatus.TERMINATED
             user.updated_at = datetime.now(timezone.utc)
             await user.save()
         
@@ -393,7 +386,7 @@ class UserService:
             existing_membership = await EntityMembershipModel.find_one(
                 EntityMembershipModel.user.id == existing_user.id,
                 EntityMembershipModel.entity.id == PydanticObjectId(entity_id),
-                EntityMembershipModel.status == "active"
+                EntityMembershipModel.is_active == True
             )
             if existing_membership:
                 raise HTTPException(
@@ -428,7 +421,7 @@ class UserService:
                 first_name=first_name or "",
                 last_name=last_name or ""
             ),
-            is_active=True,
+            status=UserStatus.ACTIVE,
             email_verified=False,  # Will be verified on first login
             metadata={"invited_by": str(invited_by.id), "temp_password": True},
             created_at=datetime.now(timezone.utc)
@@ -574,7 +567,8 @@ class UserService:
                     "entity_class": entity.entity_class
                 },
                 "roles": roles,
-                "status": membership.status,
+                "is_active": membership.is_active,
+                "status": "active" if membership.is_active else "inactive",
                 "joined_at": membership.joined_at,
                 "valid_from": membership.valid_from,
                 "valid_until": membership.valid_until
@@ -597,7 +591,7 @@ class UserService:
         memberships = await EntityMembershipModel.find(
             And(
                 EntityMembershipModel.user.id == user.id,
-                EntityMembershipModel.status == "active"
+                EntityMembershipModel.is_active == True
             )
         ).to_list()
         
@@ -631,7 +625,8 @@ class UserService:
                 "entity_class": entity.entity_class,
                 "parent_id": parent_id,
                 "roles": roles,
-                "status": membership.status,
+                "is_active": membership.is_active,
+                "status": "active" if membership.is_active else "inactive",
                 "joined_at": membership.joined_at
             })
         
@@ -646,7 +641,7 @@ class UserService:
                 "preferences": user.profile.preferences,
                 "full_name": user.profile.full_name
             },
-            "is_active": user.is_active,
+            "status": user.status,
             "is_system_user": user.is_system_user,
             "email_verified": user.email_verified,
             "last_login": user.last_login,
@@ -662,7 +657,7 @@ class UserService:
         password: Optional[str],
         profile_data: Dict[str, Any],
         entity_assignments: List[Dict[str, Any]],
-        is_active: bool = True,
+        status: UserStatus = UserStatus.ACTIVE,
         send_welcome_email: bool = True,
         current_user: UserModel = None
     ) -> Tuple[UserModel, Optional[str]]:
@@ -701,7 +696,7 @@ class UserService:
             email=email,
             hashed_password=hashed_password,
             profile=UserProfile(**profile_data),
-            is_active=is_active,
+            status=status,
             created_at=datetime.now(timezone.utc)
         )
         await user.save()

@@ -340,7 +340,7 @@ class EntityService:
             # Get member count
             member_count = await EntityMembershipModel.find(
                 EntityMembershipModel.entity.id == entity.id,
-                EntityMembershipModel.status == "active"
+                EntityMembershipModel.is_active == True
             ).count()
             
             # Build tree node

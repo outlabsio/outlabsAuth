@@ -199,10 +199,10 @@ class AuthService:
         
         # Get the user (use ID from JWT payload instead of Link object)
         user = await UserModel.get(payload["sub"])
-        if not user or not user.is_active:
+        if not user or not user.can_authenticate():
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found or inactive"
+                detail="User not found or account not active"
             )
         
         # Create new token pair with same family ID
