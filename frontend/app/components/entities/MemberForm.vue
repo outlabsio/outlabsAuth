@@ -303,6 +303,7 @@ watch(() => props.mode, (newMode) => {
         searchable-placeholder="Type at least 2 characters to search..."
         value-key="value"
         label-key="label"
+        ignore-filter
       >
         <template #item="{ item }">
           <div class="flex items-center gap-3">
