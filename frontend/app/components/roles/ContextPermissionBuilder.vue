@@ -25,9 +25,14 @@ const permissionsStore = usePermissionsStore()
 const expandedTypes = ref<Set<string>>(new Set())
 const selectedTemplates = ref<Record<string, string>>({})
 
-// Fetch permissions on mount
+// Fetch permissions on mount and expand customized cards
 onMounted(() => {
   permissionsStore.fetchPermissions()
+  
+  // Automatically expand any entity types that already have customizations
+  Object.keys(props.entityTypePermissions).forEach(type => {
+    expandedTypes.value.add(type)
+  })
 })
 
 // Transform props into reactive entity configs
@@ -156,9 +161,12 @@ function toggleCustomization(type: string) {
     // Remove customization
     delete newPermissions[type]
     delete selectedTemplates.value[type]
+    // Also collapse the card
+    expandedTypes.value.delete(type)
   } else {
     // Add customization with default permissions as starting point
     newPermissions[type] = [...props.defaultPermissions]
+    // Automatically expand the card when enabling customization
     expandedTypes.value.add(type)
   }
   
@@ -209,6 +217,35 @@ function getPermissionDiff(type: string): { added: number; removed: number } {
   return { added, removed }
 }
 
+// Check if all entity types are customized
+const allCustomized = computed(() => {
+  return props.assignableTypes.every(type => !!props.entityTypePermissions[type])
+})
+
+// Toggle all customizations
+function toggleAllCustomizations() {
+  const newPermissions = { ...props.entityTypePermissions }
+  
+  if (allCustomized.value) {
+    // Reset all customizations
+    props.assignableTypes.forEach(type => {
+      delete newPermissions[type]
+      expandedTypes.value.delete(type)
+    })
+    selectedTemplates.value = {}
+  } else {
+    // Customize all with default permissions
+    props.assignableTypes.forEach(type => {
+      if (!newPermissions[type]) {
+        newPermissions[type] = [...props.defaultPermissions]
+        expandedTypes.value.add(type)
+      }
+    })
+  }
+  
+  emit('update:entityTypePermissions', newPermissions)
+}
+
 // Check if permissions match a template
 function matchesTemplate(permissions: string[], templateKey: string): boolean {
   const template = permissionTemplates[templateKey as keyof typeof permissionTemplates]
@@ -250,9 +287,19 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
           Customize permissions based on where this role is assigned
         </p>
       </div>
-      <UTooltip text="Define different permissions for each entity type where this role can be assigned">
-        <UIcon name="i-lucide-info" class="h-4 w-4 text-muted-foreground" />
-      </UTooltip>
+      <div class="flex items-center gap-2">
+        <UButton
+          v-if="assignableTypes.length > 1"
+          size="xs"
+          variant="soft"
+          @click="toggleAllCustomizations"
+        >
+          {{ allCustomized ? 'Reset All' : 'Customize All' }}
+        </UButton>
+        <UTooltip text="Define different permissions for each entity type where this role can be assigned">
+          <UIcon name="i-lucide-info" class="h-4 w-4 text-muted-foreground" />
+        </UTooltip>
+      </div>
     </div>
 
     <!-- Default Permissions Info -->
@@ -314,11 +361,16 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
                 :class="{ 'rotate-180': expandedTypes.has(config.type) }"
                 @click="toggleType(config.type)"
               />
-              <UToggle
-                :model-value="config.isCustomized"
-                size="sm"
-                @update:model-value="toggleCustomization(config.type)"
-              />
+              <div class="flex items-center gap-2">
+                <span v-if="!config.isCustomized" class="text-xs text-muted-foreground mr-1">
+                  Customize
+                </span>
+                <UToggle
+                  :model-value="config.isCustomized"
+                  size="sm"
+                  @update:model-value="toggleCustomization(config.type)"
+                />
+              </div>
             </div>
           </div>
         </template>
