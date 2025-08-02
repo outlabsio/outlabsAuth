@@ -158,7 +158,8 @@ class DatabaseSeeder:
         
         # Create platform
         platform = EntityModel(
-            name="OutLabs Platform",
+            name="outlabs_platform",
+            display_name="OutLabs Platform",
             slug="outlabs-platform",
             description="Main OutLabs platform",
             entity_class="structural",
@@ -178,7 +179,8 @@ class DatabaseSeeder:
         
         # Create organization
         organization = EntityModel(
-            name="ACME Corporation",
+            name="acme_corporation",
+            display_name="ACME Corporation",
             slug="acme-corp",
             description="ACME Corporation - Demo Organization",
             entity_class="structural", 
@@ -196,7 +198,8 @@ class DatabaseSeeder:
         
         # Create branch
         branch = EntityModel(
-            name="ACME Engineering Branch",
+            name="acme_engineering",
+            display_name="ACME Engineering Branch",
             slug="acme-engineering",
             description="Engineering division of ACME Corp",
             entity_class="structural",
@@ -229,14 +232,15 @@ class DatabaseSeeder:
         self.created_entities["teams"] = []
         for team_data in teams:
             team = EntityModel(
-                name=team_data["name"],
+                name=team_data["slug"].replace("-", "_"),
+                display_name=team_data["name"],
                 slug=team_data["slug"],
                 description=team_data["description"],
                 entity_class="structural",
                 entity_type="team",
                 parent_entity=branch,
                 platform_id=str(platform.id),
-                status="active",
+                is_active=True,
                 direct_permissions=[],
                 metadata={"team_type": "development"},
                 created_at=datetime.now(timezone.utc)
@@ -247,7 +251,8 @@ class DatabaseSeeder:
             
         # Create access group
         access_group = EntityModel(
-            name="Senior Developers",
+            name="senior_developers",
+            display_name="Senior Developers",
             slug="senior-devs",
             description="Access group for senior developers with elevated permissions",
             entity_class="access_group",
@@ -282,8 +287,11 @@ class DatabaseSeeder:
                 "display_name": "Platform Administrator",
                 "description": "Platform-wide administration",
                 "permissions": [
-                    "user:manage_all", "entity:manage_all", "role:manage_all",
-                    "platform:manage", "organization:manage_all"
+                    "user:create", "user:read", "user:update", "user:delete",
+                    "entity:create", "entity:read", "entity:update", "entity:delete",
+                    "entity:create_tree", "entity:update_tree", "entity:delete_tree",
+                    "role:create", "role:read", "role:update", "role:delete",
+                    "member:create", "member:read", "member:update", "member:delete"
                 ],
                 "is_global": True,
                 "assignable_at_types": ["platform", "organization"]
@@ -314,6 +322,79 @@ class DatabaseSeeder:
                 for role in roles:
                     self.created_roles[f"{entity_name}_{role.name}"] = role
                     print(f"  ✅ Created {entity_name} role: {role.display_name}")
+        
+        # Create context-aware roles to demonstrate the new feature
+        print("\n🎯 Creating context-aware roles...")
+        
+        # Regional Manager role - different permissions at different levels
+        regional_manager_role = await RoleService.create_role(
+            name="regional_manager",
+            display_name="Regional Manager",
+            description="Regional management role with context-aware permissions",
+            entity_id=str(self.created_entities["platform"].id),
+            assignable_at_types=["organization", "branch", "team"],
+            is_global=False,
+            permissions=["entity:read", "user:read"],  # Default/fallback permissions
+            entity_type_permissions={
+                "organization": [
+                    "entity:read", "entity:create", "entity:update", "entity:delete",
+                    "entity:create_tree", "entity:update_tree",
+                    "user:read", "user:create", "user:update", "user:delete",
+                    "user:read_tree", "user:create_tree", "user:update_tree",
+                    "role:read", "role:create", "role:update",
+                    "member:read", "member:create", "member:update", "member:delete"
+                ],
+                "branch": [
+                    "entity:read", "entity:update",
+                    "entity:read_tree", "entity:update_tree",
+                    "user:read", "user:create", "user:update",
+                    "user:read_tree",
+                    "role:read", 
+                    "member:read", "member:create", "member:update"
+                ],
+                "team": [
+                    "entity:read",
+                    "user:read",
+                    "member:read"
+                ]
+            },
+            created_by=self.created_users["system_admin"]
+        )
+        self.created_roles["regional_manager"] = regional_manager_role
+        print(f"  ✅ Created context-aware role: Regional Manager")
+        
+        # Tech Lead role - different permissions for own team vs consulting
+        tech_lead_role = await RoleService.create_role(
+            name="tech_lead",
+            display_name="Technical Lead",
+            description="Technical leadership role with varying permissions",
+            entity_id=str(self.created_entities["platform"].id),
+            assignable_at_types=["branch", "team", "access_group"],
+            is_global=False,
+            permissions=["entity:read", "user:read"],  # Default permissions
+            entity_type_permissions={
+                "branch": [
+                    "entity:read", "entity:update",
+                    "entity:read_tree", "entity:create_tree",
+                    "user:read", "user:create", "user:update",
+                    "role:read",
+                    "member:read", "member:create"
+                ],
+                "team": [
+                    "entity:read", "entity:update",
+                    "user:read", "user:update",
+                    "member:read", "member:create", "member:update"
+                ],
+                "access_group": [
+                    "entity:read",
+                    "user:read",
+                    "member:read"
+                ]
+            },
+            created_by=self.created_users["system_admin"]
+        )
+        self.created_roles["tech_lead"] = tech_lead_role
+        print(f"  ✅ Created context-aware role: Technical Lead")
                     
     async def create_entity_memberships(self):
         """Create entity memberships and role assignments"""
@@ -330,7 +411,7 @@ class DatabaseSeeder:
                 user=system_admin,
                 entity=platform,
                 roles=[system_role],
-                status="active",
+                is_active=True,
                 created_at=datetime.now(timezone.utc)
             )
             await membership.save()
@@ -346,7 +427,7 @@ class DatabaseSeeder:
                 user=platform_admin,
                 entity=organization,
                 roles=[platform_role],
-                status="active",
+                is_active=True,
                 created_at=datetime.now(timezone.utc)
             )
             await membership.save()
@@ -360,7 +441,7 @@ class DatabaseSeeder:
                 user=org_admin,
                 entity=organization,
                 roles=[org_admin_role],
-                status="active", 
+                is_active=True, 
                 created_at=datetime.now(timezone.utc)
             )
             await membership.save()
@@ -380,7 +461,7 @@ class DatabaseSeeder:
                     user=team_lead,
                     entity=team,
                     roles=[admin_role],
-                    status="active",
+                    is_active=True,
                     created_at=datetime.now(timezone.utc)
                 )
                 await membership.save()
@@ -402,7 +483,7 @@ class DatabaseSeeder:
                     user=regular_user,
                     entity=team,
                     roles=[member_role],
-                    status="active",
+                    is_active=True,
                     created_at=datetime.now(timezone.utc)
                 )
                 await membership.save()
@@ -414,11 +495,52 @@ class DatabaseSeeder:
                     user=viewer_user,
                     entity=team,
                     roles=[viewer_role],
-                    status="active",
+                    is_active=True,
                     created_at=datetime.now(timezone.utc)
                 )
                 await membership.save()
                 print(f"  ✅ Added {viewer_user.email} as viewer to {team.name}")
+        
+        # Add examples of context-aware role assignments
+        print("\n🎯 Creating context-aware role assignments...")
+        
+        # Assign Regional Manager role at different levels to show varying permissions
+        regional_manager_role = self.created_roles.get("regional_manager")
+        if regional_manager_role and org_admin:
+            # At organization level - full permissions
+            org_membership = EntityMembershipModel(
+                user=org_admin,
+                entity=organization,
+                roles=[regional_manager_role],
+                is_active=True,
+                created_at=datetime.now(timezone.utc)
+            )
+            await org_membership.save()
+            print(f"  ✅ Added {org_admin.email} as Regional Manager to organization (full permissions)")
+            
+            # At branch level - medium permissions
+            branch = self.created_entities["branch"]
+            branch_membership = EntityMembershipModel(
+                user=org_admin,
+                entity=branch,
+                roles=[regional_manager_role],
+                is_active=True,
+                created_at=datetime.now(timezone.utc)
+            )
+            await branch_membership.save()
+            print(f"  ✅ Added {org_admin.email} as Regional Manager to branch (medium permissions)")
+            
+            # At team level - limited permissions
+            if teams:
+                team_membership = EntityMembershipModel(
+                    user=org_admin,
+                    entity=teams[0],
+                    roles=[regional_manager_role],
+                    is_active=True,
+                    created_at=datetime.now(timezone.utc)
+                )
+                await team_membership.save()
+                print(f"  ✅ Added {org_admin.email} as Regional Manager to team (limited permissions)")
                 
     def print_summary(self):
         """Print summary of created data"""

@@ -71,6 +71,257 @@ We've implemented a comprehensive user status system replacing the simple boolea
 - Frontend displays color-coded status badges (green=active, yellow=suspended, red=banned/terminated)
 - Bulk status updates supported via API
 
+### ✅ Context-Aware Role System - FULLY IMPLEMENTED (2025-08-02)
+
+We've fully implemented a powerful context-aware role system that allows roles to have different permissions based on WHERE they are assigned in the entity hierarchy:
+
+**Backend Implementation**:
+- ✅ Added `entity_type_permissions: Optional[Dict[str, List[str]]]` field to RoleModel
+- ✅ Updated RoleCreate, RoleUpdate, and RoleResponse schemas with validation
+- ✅ Modified RoleService to handle entity_type_permissions in create and update operations
+- ✅ All role endpoints properly pass and return entity_type_permissions
+- ✅ Permission resolution automatically checks entity type and applies context-specific permissions
+- ✅ Updated seed script to use RoleService for context-aware roles (Regional Manager, Tech Lead)
+
+**Frontend Implementation**:
+- ✅ Updated Role TypeScript interface with `entity_type_permissions?: Record<string, string[]>`
+- ✅ Role store's createRole and updateRole methods handle entity_type_permissions
+- ✅ Role form component includes visual context-aware permission editor:
+  - Shows all assignable entity types
+  - Toggle to customize permissions per entity type
+  - Permission selector for each context
+  - Clear visual feedback for customized contexts
+
+**Testing & Verification**:
+- ✅ Successfully created context-aware role via API with different permissions per entity type
+- ✅ Effective permissions endpoint correctly shows permission sources and context application
+- ✅ System maintains backward compatibility - existing roles work unchanged
+
+**Documentation**:
+- ✅ Full design documentation in [Entity Type Role System Design](docs/ENTITY_TYPE_ROLE_SYSTEM_DESIGN.md)
+- ✅ Migration guide in [Context-Aware Roles Migration](docs/MIGRATION_GUIDE_CONTEXT_AWARE_ROLES.md)
+
+**How It Works**:
+```python
+# One role adapts based on assignment context
+branch_manager_role = RoleModel(
+    name="branch_manager",
+    permissions=["entity:read", "user:read"],  # Default/fallback
+    entity_type_permissions={
+        "organization": ["entity:manage_tree", "user:manage_tree", "budget:approve"],
+        "branch": ["entity:manage", "user:manage", "lead:distribute"],
+        "team": ["entity:read", "user:read", "report:view"]
+    }
+)
+```
+
+**Benefits**:
+- Eliminates role explosion (no more branch_manager_full, branch_manager_limited, etc.)
+- Matches real organizational behavior (authority changes with context)
+- Backward compatible - existing roles work unchanged
+- Supports gradual migration - add context awareness as needed
+
+**Real-World Use Cases**:
+- **Diverse Platform**: Branch Manager has full control at branch level, advisory role at team level
+- **qdarte Platform**: Campaign Manager has different permissions for clients vs influencers
+- **Referral Brokerage**: Agent role evolves from solo permissions to team management when they create a team
+
+**API Example - Creating a Context-Aware Role**:
+```bash
+curl -X POST http://localhost:8030/v1/roles/ \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "test_context_aware_role",
+    "display_name": "Test Context Aware Role",
+    "description": "A test role with context-aware permissions",
+    "permissions": ["entity:read", "user:read"],
+    "entity_type_permissions": {
+      "organization": [
+        "entity:create", "entity:read", "entity:update", "entity:delete",
+        "user:create", "user:read", "user:update", "user:delete",
+        "role:create", "role:read", "role:update", "role:delete"
+      ],
+      "branch": ["entity:read", "entity:update", "user:read", "user:update"],
+      "team": ["entity:read", "user:read"]
+    },
+    "assignable_at_types": ["organization", "branch", "team"],
+    "is_global": false
+  }'
+```
+
+### ✅ Effective Permissions Endpoint - IMPLEMENTED (2025-08-02)
+
+We've implemented a comprehensive effective permissions endpoint that shows exactly what permissions a user has on an entity and WHY they have them:
+
+**Endpoint**: `GET /v1/permissions/users/{user_id}/effective-permissions?entity_id={entity_id}`
+
+**Features**:
+- Shows all permissions a user has at an entity
+- Traces the source of each permission (role, entity, inheritance)
+- Identifies context-aware permission application
+- Shows inheritance from parent entities with tree permissions
+- Includes detailed metadata about permission sources
+
+**Response Example**:
+```json
+{
+  "user_id": "user-123",
+  "user_email": "john.doe@example.com",
+  "entity_id": "miami-office",
+  "entity_name": "Miami Branch",
+  "entity_type": "branch",
+  "effective_permissions": ["entity:read", "entity:update", "user:read"],
+  "permission_sources": [
+    {
+      "permission": "entity:read",
+      "source": "role:branch_manager",
+      "context": "direct_assignment",
+      "entity": "Miami Branch",
+      "entity_id": "miami-office",
+      "role_name": "Branch Manager",
+      "is_context_aware": true,
+      "applied_from_type": "branch"
+    },
+    {
+      "permission": "user:read",
+      "source": "inherited:role",
+      "context": "inherited_from_parent",
+      "entity": "Florida Division",
+      "entity_id": "florida-div",
+      "parent_permission": "user:read_tree",
+      "inheritance_depth": 1
+    }
+  ]
+}
+```
+
+## 🚀 Upcoming Enhancements - IN PLANNING
+
+Based on architectural review and feedback, we're planning the following enhancements to make the system more robust and easier to debug:
+
+### 2. **Optional Platform Schema** (MEDIUM PRIORITY)
+
+**What**: Optional validation rules that platforms can define for their entity structures.
+
+**Why We Need It**:
+- Prevents configuration errors (e.g., creating a team as child of another team)
+- Self-documenting - new admins can see valid entity types
+- Maintains flexibility - schema is optional, not required
+- Soft validation with warnings by default
+
+**Planned Implementation**:
+```python
+class PlatformSchema(BaseModel):
+    entity_types: Optional[List[str]] = None  # Valid types
+    valid_parentage: Optional[Dict[str, List[str]]] = None  # Nesting rules
+    enforcement_mode: str = "warn"  # "warn" or "strict"
+    
+# Example for Diverse platform
+{
+    "entity_types": ["organization", "branch", "team", "agent_team"],
+    "valid_parentage": {
+        "organization": ["platform"],
+        "branch": ["organization"],
+        "team": ["branch", "organization"],
+        "agent_team": ["platform", "organization", "branch"]
+    }
+}
+```
+
+### 3. **Granular Permission Inheritance Control** (MEDIUM PRIORITY)
+
+**What**: Add control over which permissions flow down the entity hierarchy.
+
+**Why We Need It**:
+- Some permissions should not inherit (e.g., budget approval)
+- Provides more precise control over permission flow
+- Reduces unintended permission grants
+- Makes permission model more predictable
+
+**Planned Implementation**:
+```python
+class RoleModel:
+    # Existing fields...
+    
+    # New field - if None, all permissions inherit (current behavior)
+    inheritable_permissions: Optional[List[str]] = None
+    
+# Example: Only some permissions inherit to children
+role = RoleModel(
+    name="division_head",
+    permissions=["budget:approve", "entity:manage", "user:read"],
+    inheritable_permissions=["entity:manage", "user:read"]  # budget:approve doesn't inherit
+)
+```
+
+### 4. **Enhanced Documentation** (LOW PRIORITY)
+
+**What**: Improve clarity around STRUCTURAL vs ACCESS_GROUP entities.
+
+**Why We Need It**:
+- The distinction exists but isn't well documented
+- New developers need clearer guidance
+- Reduce configuration errors
+
+**Planned Updates**:
+- Visual diagrams showing inheritance paths
+- Decision tree for choosing entity class
+- More real-world examples
+
+## 📋 Development TODO List
+
+### High Priority Tasks
+
+1. **Implement Effective Permissions Endpoint** ✅ COMPLETED
+   - [x] Create new route handler in permission_routes.py
+   - [x] Add permission source tracking to permission_service.py
+   - [x] Implement response schema with derivation details
+   - [x] Add caching for performance (uses existing cache)
+   - [x] Add API documentation
+   - [ ] Write comprehensive tests
+
+2. **Fix API-to-API Authentication** (from earlier section)
+   - [ ] Implement API key middleware
+   - [ ] Create service account management
+   - [ ] Document proxy patterns
+
+### Medium Priority Tasks
+
+3. **Implement Optional Platform Schema**
+   - [ ] Create PlatformSchema model
+   - [ ] Add schema field to platform entities
+   - [ ] Implement validation service with warn/strict modes
+   - [ ] Add schema management endpoints
+   - [ ] Create migration for existing platforms
+   - [ ] Write tests for validation logic
+
+4. **Add Permission Inheritance Control**
+   - [ ] Add inheritable_permissions field to RoleModel
+   - [ ] Update permission resolution logic
+   - [ ] Maintain backward compatibility
+   - [ ] Add tests for inheritance scenarios
+   - [ ] Update seed data with examples
+
+5. **Frontend Updates for Context-Aware Roles** ✅ COMPLETED
+   - [x] Update role creation form to support entity_type_permissions
+   - [x] Add UI for defining context-specific permissions
+   - [x] Visual indicator showing how role behaves at different entity types
+   - [x] Update role list to show context awareness
+
+### Low Priority Tasks
+
+6. **Documentation Improvements**
+   - [ ] Create visual diagrams for entity classes
+   - [ ] Add decision tree for STRUCTURAL vs ACCESS_GROUP
+   - [ ] More platform scenario examples
+   - [ ] Video tutorials for complex features
+
+7. **Testing Improvements**
+   - [ ] Add tests for context-aware role resolution
+   - [ ] Performance tests for effective permissions endpoint
+   - [ ] Integration tests for platform schema validation
+
 ## Recent Updates (2025-07-22)
 
 ### ✅ Standardized Permission System to CRUD - COMPLETED
@@ -454,6 +705,20 @@ npm run lint                       # Linting
 # Database
 mongosh mongodb://localhost:27017/outlabsAuth_test  # MongoDB shell
 redis-cli                          # Redis CLI
+```
+
+## Testing Context-Aware Roles
+
+After seeding the database, you can test the context-aware role system:
+
+1. **Regional Manager Role** - Has different permissions at organization, branch, and team levels
+2. **Tech Lead Role** - Varies permissions between branch, team, and access group contexts
+
+Check the effective permissions endpoint to see how permissions change:
+```bash
+# Get effective permissions for a user at a specific entity
+curl -X GET "http://localhost:8030/v1/permissions/users/{user_id}/effective-permissions?entity_id={entity_id}" \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ## Success Metrics

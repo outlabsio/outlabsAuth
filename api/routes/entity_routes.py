@@ -491,30 +491,9 @@ async def list_entity_roles(
         fetch_links=True
     ).to_list()
     
-    # If no entity-specific roles, return some default roles
+    # If no entity-specific roles, return empty list
     if not roles:
-        # Create default role structures
-        default_roles = [
-            {
-                "id": "default-admin",
-                "name": "Admin",
-                "description": "Full administrative access to this entity",
-                "permissions": ["*:manage"]
-            },
-            {
-                "id": "default-member",
-                "name": "Member",
-                "description": "Standard member access",
-                "permissions": ["*:read"]
-            },
-            {
-                "id": "default-viewer",
-                "name": "Viewer",
-                "description": "Read-only access",
-                "permissions": ["*:read"]
-            }
-        ]
-        return {"items": default_roles}
+        return {"items": []}
     
     # Convert to response format
     items = []

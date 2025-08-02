@@ -96,7 +96,7 @@ const schema = z.object({
 type Schema = z.output<typeof schema>
 
 // Form state
-const state = reactive<Partial<Schema>>({
+const state = reactive<Partial<Schema> & { entity_type_permissions?: Record<string, string[]> }>({
   name: props.role?.name || '',
   display_name: props.role?.display_name || '',
   description: props.role?.description || '',
@@ -104,6 +104,7 @@ const state = reactive<Partial<Schema>>({
   assignable_at_types: props.role?.assignable_at_types || [],
   is_global: props.role?.is_global || false,
   permissions: props.role?.permissions || [],
+  entity_type_permissions: props.role?.entity_type_permissions || {},
 })
 
 // Computed for global toggle
@@ -150,6 +151,11 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
       data.entity_id = event.data.entity_id
     }
     
+    // Include entity_type_permissions if any are defined
+    if (state.entity_type_permissions && Object.keys(state.entity_type_permissions).length > 0) {
+      data.entity_type_permissions = state.entity_type_permissions
+    }
+    
     emit('submit', data)
   } finally {
     isLoading.value = false
@@ -161,7 +167,17 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
   <UForm :schema="schema" :state="state" @submit="onSubmit" class="space-y-8">
     <!-- Basic Information Section -->
     <div class="space-y-6 w-full">
-      <h5 class="text-sm font-medium uppercase tracking-wider text-primary-600 dark:text-primary-400">Basic Information</h5>
+      <div class="flex items-center gap-3">
+        <div class="p-2 rounded-lg bg-primary-100 dark:bg-primary-900/30">
+          <UIcon name="i-lucide-user-cog" class="h-5 w-5 text-primary-600 dark:text-primary-400" />
+        </div>
+        <div>
+          <h5 class="text-sm font-medium uppercase tracking-wider text-primary-600 dark:text-primary-400">
+            Basic Information
+          </h5>
+          <p class="text-xs text-muted-foreground mt-0.5">Define the role name and description</p>
+        </div>
+      </div>
 
       <!-- Display Name -->
       <UFormField label="Role Name" name="display_name" required class="w-full">
@@ -207,19 +223,34 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
 
     <!-- Scope Configuration Section -->
     <div class="space-y-6 w-full">
-      <h5 class="text-sm font-medium uppercase tracking-wider text-primary-600 dark:text-primary-400">Scope Configuration</h5>
+      <div class="flex items-center gap-3">
+        <div class="p-2 rounded-lg bg-primary-100 dark:bg-primary-900/30">
+          <UIcon name="i-lucide-target" class="h-5 w-5 text-primary-600 dark:text-primary-400" />
+        </div>
+        <div>
+          <h5 class="text-sm font-medium uppercase tracking-wider text-primary-600 dark:text-primary-400">
+            Scope Configuration
+          </h5>
+          <p class="text-xs text-muted-foreground mt-0.5">Configure where this role can be used</p>
+        </div>
+      </div>
 
       <!-- Global Toggle -->
       <UFormField name="is_global" class="w-full">
-        <div class="flex items-center gap-3">
-          <USwitch v-model="isGlobal" :color="isGlobal ? 'primary' : 'neutral'" />
-          <div>
-            <span class="text-sm font-medium">Global Role</span>
-            <p class="text-xs text-muted-foreground">
-              {{ isGlobal ? 'This role can be used across all entities in the system' : 'This role is scoped to a specific entity and its children' }}
-            </p>
+        <UCard :ui="{ body: { padding: 'p-4' } }">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <UIcon :name="isGlobal ? 'i-lucide-globe' : 'i-lucide-building'" class="h-5 w-5" />
+              <div>
+                <span class="text-sm font-medium">{{ isGlobal ? 'Global Role' : 'Entity-Scoped Role' }}</span>
+                <p class="text-xs text-muted-foreground">
+                  {{ isGlobal ? 'This role can be used across all entities in the system' : 'This role is scoped to a specific entity and its children' }}
+                </p>
+              </div>
+            </div>
+            <USwitch v-model="isGlobal" :color="isGlobal ? 'primary' : 'neutral'" />
           </div>
-        </div>
+        </UCard>
       </UFormField>
 
       <!-- Entity Selection (if not global) -->
@@ -246,15 +277,18 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
 
       <!-- Assignable At Types -->
       <UFormField label="Can Be Assigned At" name="assignable_at_types" required class="w-full">
-        <div class="p-4  rounded-lg bg-neutral-50 dark:bg-neutral-800/50 space-y-3">
-          <p class="text-sm text-muted-foreground mb-3">
+        <UCard :ui="{ body: { padding: 'p-4' } }">
+          <p class="text-sm text-muted-foreground mb-4">
             Select the entity types where users can be assigned this role:
           </p>
           <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
             <label
               v-for="option in assignableTypeOptions"
               :key="option.value"
-              class="flex items-center gap-2 p-2 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+              class="flex items-center gap-2 p-3 rounded-lg border-2 transition-colors cursor-pointer"
+              :class="state.assignable_at_types?.includes(option.value) 
+                ? 'border-primary bg-primary-50 dark:bg-primary-900/20' 
+                : 'border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700'"
             >
               <UCheckbox
                 :model-value="state.assignable_at_types?.includes(option.value)"
@@ -267,18 +301,28 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
                   }
                 }"
               />
-              <span class="text-sm">{{ option.label }}</span>
+              <span class="text-sm font-medium">{{ option.label }}</span>
             </label>
           </div>
-        </div>
+        </UCard>
       </UFormField>
     </div>
 
     <USeparator />
 
-    <!-- Permissions Section -->
+    <!-- Default Permissions Section -->
     <div class="space-y-6 w-full">
-      <h5 class="text-sm font-medium uppercase tracking-wider text-primary-600 dark:text-primary-400">Permissions</h5>
+      <div class="flex items-center gap-3">
+        <div class="p-2 rounded-lg bg-primary-100 dark:bg-primary-900/30">
+          <UIcon name="i-lucide-shield" class="h-5 w-5 text-primary-600 dark:text-primary-400" />
+        </div>
+        <div>
+          <h5 class="text-sm font-medium uppercase tracking-wider text-primary-600 dark:text-primary-400">
+            Default Permissions
+          </h5>
+          <p class="text-xs text-muted-foreground mt-0.5">Base permissions granted by this role</p>
+        </div>
+      </div>
 
       <UFormField name="permissions" required class="w-full">
         <RolesPermissionSelector
@@ -286,9 +330,22 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           :entity-id="state.entity_id"
         />
         <template #description>
-          <span class="text-xs text-muted-foreground">Select the permissions to grant when this role is assigned</span>
+          <span class="text-xs text-muted-foreground">These permissions apply unless overridden by context-specific settings</span>
         </template>
       </UFormField>
+    </div>
+
+    <!-- Context-Aware Permissions Section -->
+    <div v-if="state.assignable_at_types && state.assignable_at_types.length > 0" class="space-y-6 w-full">
+      <USeparator />
+      
+      <RolesContextPermissionBuilder
+        :assignable-types="state.assignable_at_types"
+        :default-permissions="state.permissions || []"
+        :entity-type-permissions="state.entity_type_permissions || {}"
+        :entity-id="state.entity_id"
+        @update:entity-type-permissions="(perms) => state.entity_type_permissions = perms"
+      />
     </div>
 
     <!-- Danger Zone - Only show in edit mode -->

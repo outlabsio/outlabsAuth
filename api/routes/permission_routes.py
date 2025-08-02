@@ -322,3 +322,232 @@ async def check_permission(
         reason=result.reason,
         details=result.details
     )
+
+
+# Effective Permissions schemas
+class EffectivePermissionsResponse(BaseModel):
+    """Response showing effective permissions for a user at an entity"""
+    user_id: str
+    user_email: str
+    entity_id: str
+    entity_name: str
+    entity_type: str
+    effective_permissions: List[str] = Field(
+        ..., description="All permissions the user has at this entity"
+    )
+    permission_sources: List[Dict[str, Any]] = Field(
+        ..., description="Detailed breakdown of where each permission comes from"
+    )
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "user_id": "507f1f77bcf86cd799439011",
+                "user_email": "john.doe@example.com",
+                "entity_id": "507f191e810c19729de860ea",
+                "entity_name": "Miami Branch",
+                "entity_type": "branch",
+                "effective_permissions": ["entity:read", "entity:update", "user:read"],
+                "permission_sources": [
+                    {
+                        "permission": "entity:read",
+                        "source": "role:branch_manager",
+                        "context": "direct_assignment",
+                        "entity": "Miami Branch",
+                        "entity_id": "507f191e810c19729de860ea",
+                        "role_name": "Branch Manager",
+                        "is_context_aware": True,
+                        "applied_from_type": "branch"
+                    },
+                    {
+                        "permission": "user:read",
+                        "source": "role:regional_manager",
+                        "context": "inherited_from_parent",
+                        "entity": "Florida Division",
+                        "entity_id": "507f191e810c19729de860eb",
+                        "role_name": "Regional Manager",
+                        "is_context_aware": False
+                    }
+                ]
+            }
+        }
+
+
+@router.get("/users/{user_id}/effective-permissions", response_model=EffectivePermissionsResponse)
+async def get_user_effective_permissions(
+    user_id: str,
+    entity_id: Optional[str] = Query(None, description="Entity context to check permissions for"),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Get effective permissions for a user at a specific entity
+    
+    This endpoint shows:
+    1. All permissions the user has at the entity
+    2. Where each permission comes from (role, entity, inheritance)
+    3. Whether permissions are from context-aware roles
+    
+    Useful for:
+    - Debugging permission issues
+    - Understanding permission inheritance
+    - Auditing access rights
+    """
+    # Check if user can view other users' permissions
+    if str(current_user.id) != user_id:
+        # Need permission to view others' permissions
+        has_permission, _ = await permission_service.check_permission(
+            user_id=str(current_user.id),
+            permission="user:read",
+            entity_id=entity_id
+        )
+        if not has_permission:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have permission to view this user's permissions"
+            )
+    
+    # Get the target user
+    target_user = await UserModel.get(user_id)
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Get the entity if specified
+    entity = None
+    if entity_id:
+        from api.models import EntityModel
+        entity = await EntityModel.get(entity_id)
+        if not entity:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Entity not found"
+            )
+    
+    # Get all user permissions with sources
+    user_permissions = await permission_service.resolve_user_permissions(
+        user_id=user_id,
+        entity_id=entity_id,
+        use_cache=False  # Don't use cache for detailed analysis
+    )
+    
+    # Build detailed permission sources
+    permission_sources = []
+    all_permissions = set()
+    
+    # Get user memberships for context
+    from api.models import EntityMembershipModel
+    memberships = await EntityMembershipModel.find(
+        EntityMembershipModel.user.id == target_user.id,
+        EntityMembershipModel.is_active == True
+    ).to_list()
+    
+    # Process each membership to understand permission sources
+    for membership in memberships:
+        # Skip if not the entity we're interested in (if specified)
+        if entity_id and str(membership.entity.id) != entity_id:
+            continue
+            
+        # Get entity info
+        member_entity = await membership.entity.fetch()
+        if not member_entity:
+            continue
+            
+        # Process roles in this membership
+        for role_link in membership.roles:
+            role = await role_link.fetch()
+            if not role:
+                continue
+                
+            # Determine which permissions apply based on context
+            permissions_to_apply = []
+            is_context_aware = False
+            applied_from_type = None
+            
+            # Check if role has context-aware permissions
+            if role.entity_type_permissions and member_entity.entity_type in role.entity_type_permissions:
+                permissions_to_apply = role.entity_type_permissions[member_entity.entity_type]
+                is_context_aware = True
+                applied_from_type = member_entity.entity_type
+            else:
+                permissions_to_apply = role.permissions
+                
+            # Add each permission with source info
+            for perm in permissions_to_apply:
+                all_permissions.add(perm)
+                permission_sources.append({
+                    "permission": perm,
+                    "source": f"role:{role.name}",
+                    "context": "direct_assignment",
+                    "entity": member_entity.display_name,
+                    "entity_id": str(member_entity.id),
+                    "entity_type": member_entity.entity_type,
+                    "role_name": role.display_name,
+                    "role_id": str(role.id),
+                    "is_context_aware": is_context_aware,
+                    "applied_from_type": applied_from_type
+                })
+    
+    # Check for inherited permissions from parent entities
+    if entity:
+        from api.services.entity_service import EntityService
+        entity_path = await EntityService.get_entity_path(str(entity.id))
+        
+        # Check parent entities for tree permissions
+        for i, parent_entity in enumerate(entity_path[:-1]):
+            parent_permissions = await permission_service.resolve_user_permissions(
+                user_id=user_id,
+                entity_id=str(parent_entity.id),
+                use_cache=False
+            )
+            
+            # Check for tree permissions that apply to descendants
+            for source, perms in parent_permissions.items():
+                for perm in perms:
+                    if ":" in perm:
+                        resource, action = perm.split(":", 1)
+                        tree_perm = f"{resource}:{action}_tree"
+                        
+                        # If parent has tree permission, child gets base permission
+                        if tree_perm in perms:
+                            base_perm = f"{resource}:{action.replace('_tree', '')}"
+                            if base_perm not in all_permissions:
+                                all_permissions.add(base_perm)
+                                permission_sources.append({
+                                    "permission": base_perm,
+                                    "source": f"inherited:{source}",
+                                    "context": "inherited_from_parent",
+                                    "entity": parent_entity.display_name,
+                                    "entity_id": str(parent_entity.id),
+                                    "entity_type": parent_entity.entity_type,
+                                    "parent_permission": tree_perm,
+                                    "inheritance_depth": i + 1
+                                })
+    
+    # Add direct entity permissions if any
+    if entity and entity.direct_permissions:
+        for perm in entity.direct_permissions:
+            all_permissions.add(perm)
+            permission_sources.append({
+                "permission": perm,
+                "source": "entity:direct",
+                "context": "entity_direct_permission",
+                "entity": entity.display_name,
+                "entity_id": str(entity.id),
+                "entity_type": entity.entity_type
+            })
+    
+    # Sort permissions and sources for readability
+    effective_permissions = sorted(list(all_permissions))
+    permission_sources.sort(key=lambda x: (x["permission"], x["source"]))
+    
+    return EffectivePermissionsResponse(
+        user_id=user_id,
+        user_email=target_user.email,
+        entity_id=entity_id or "global",
+        entity_name=entity.display_name if entity else "Global Context",
+        entity_type=entity.entity_type if entity else "global",
+        effective_permissions=effective_permissions,
+        permission_sources=permission_sources
+    )

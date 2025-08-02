@@ -48,6 +48,7 @@ class RoleService:
         description: Optional[str],
         permissions: List[str],
         entity_id: Optional[str] = None,
+        entity_type_permissions: Optional[Dict[str, List[str]]] = None,
         assignable_at_types: Optional[List[str]] = None,
         is_system_role: bool = False,
         is_global: bool = False,
@@ -100,12 +101,21 @@ class RoleService:
         # Validate permissions
         validated_permissions = await RoleService._validate_permissions(permissions, entity_id)
         
+        # Validate entity_type_permissions if provided
+        validated_entity_type_permissions = {}
+        if entity_type_permissions:
+            for entity_type, type_permissions in entity_type_permissions.items():
+                # Validate permissions for each entity type
+                validated_type_perms = await RoleService._validate_permissions(type_permissions, entity_id)
+                validated_entity_type_permissions[entity_type] = validated_type_perms
+        
         # Create role
         role = RoleModel(
             name=name,
             display_name=display_name,
             description=description,
             permissions=validated_permissions,
+            entity_type_permissions=validated_entity_type_permissions,
             entity=entity,
             assignable_at_types=assignable_at_types or [],
             is_system_role=is_system_role,
@@ -148,6 +158,7 @@ class RoleService:
         display_name: Optional[str] = None,
         description: Optional[str] = None,
         permissions: Optional[List[str]] = None,
+        entity_type_permissions: Optional[Dict[str, List[str]]] = None,
         assignable_at_types: Optional[List[str]] = None,
         updated_by: Optional[UserModel] = None
     ) -> RoleModel:
@@ -200,6 +211,25 @@ class RoleService:
             
             validated_permissions = await RoleService._validate_permissions(permissions, entity_id)
             role.permissions = validated_permissions
+        
+        if entity_type_permissions is not None:
+            # Validate entity_type_permissions
+            validated_entity_type_permissions = {}
+            entity_id = None
+            if not role.is_global and role.entity:
+                if hasattr(role.entity, 'id'):
+                    entity_id = str(role.entity.id)
+                elif hasattr(role.entity, 'ref'):
+                    entity_id = str(role.entity.ref.id) if role.entity.ref else None
+                else:
+                    entity_id = str(role.entity)
+            
+            for entity_type, type_permissions in entity_type_permissions.items():
+                # Validate permissions for each entity type
+                validated_type_perms = await RoleService._validate_permissions(type_permissions, entity_id)
+                validated_entity_type_permissions[entity_type] = validated_type_perms
+            
+            role.entity_type_permissions = validated_entity_type_permissions
         
         if assignable_at_types is not None:
             role.assignable_at_types = assignable_at_types

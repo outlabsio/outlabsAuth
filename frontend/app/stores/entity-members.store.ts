@@ -143,12 +143,12 @@ export const useEntityMembersStore = defineStore("entity-members", () => {
       }));
     } catch (error) {
       console.error('Failed to fetch roles:', error);
-      // Fallback to some default roles if the endpoint fails
-      state.availableRoles = [
-        { value: 'default-admin', label: 'Admin', description: 'Full administrative access' },
-        { value: 'default-member', label: 'Member', description: 'Standard member access' },
-        { value: 'default-viewer', label: 'Viewer', description: 'Read-only access' }
-      ];
+      state.availableRoles = [];
+      toast.add({
+        title: 'Error',
+        description: 'Failed to load roles. Please ensure roles are configured for this entity.',
+        color: 'error'
+      });
     } finally {
       state.isLoadingRoles = false;
     }
@@ -156,16 +156,27 @@ export const useEntityMembersStore = defineStore("entity-members", () => {
 
   const createMember = async (data: { user_id: string; role_ids: string[]; is_active?: boolean; valid_from?: string; valid_until?: string }) => {
     if (!state.entityId) throw new Error('No entity selected');
+    
+    // Validate we have at least one role
+    if (!data.role_ids || data.role_ids.length === 0) {
+      throw new Error('At least one role is required');
+    }
 
     // For each role, create a member entry
     const promises = data.role_ids.map(async (roleId) => {
       const memberData: EntityMemberCreateRequest = {
         user_id: data.user_id,
         role_id: roleId,
-        is_active: data.is_active !== false,
-        valid_from: data.valid_from,
-        valid_until: data.valid_until
+        is_active: data.is_active !== false
       };
+      
+      // Only add dates if they have values
+      if (data.valid_from && data.valid_from !== null) {
+        memberData.valid_from = data.valid_from;
+      }
+      if (data.valid_until && data.valid_until !== null) {
+        memberData.valid_until = data.valid_until;
+      }
 
       return authStore.apiCall(`/v1/entities/${state.entityId}/members`, {
         method: 'POST',
@@ -277,7 +288,8 @@ export const useEntityMembersStore = defineStore("entity-members", () => {
     state.selectedMember = null;
     state.ui.drawerMode = "create";
     state.ui.drawerOpen = true;
-    // Fetch roles when opening
+    // Clear any stale role data and fetch fresh roles
+    state.availableRoles = [];
     fetchRoles();
   };
 
@@ -285,7 +297,8 @@ export const useEntityMembersStore = defineStore("entity-members", () => {
     state.selectedMember = member;
     state.ui.drawerMode = "edit";
     state.ui.drawerOpen = true;
-    // Fetch roles when opening
+    // Clear any stale role data and fetch fresh roles
+    state.availableRoles = [];
     fetchRoles();
   };
 

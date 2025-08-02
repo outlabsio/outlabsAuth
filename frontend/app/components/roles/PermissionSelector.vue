@@ -4,6 +4,8 @@ import type { Permission } from '~/types/auth.types'
 const props = defineProps<{
   modelValue: string[]
   entityId?: string | null
+  showSuggestions?: boolean
+  entityType?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -144,10 +146,97 @@ onMounted(() => {
     expandedGroups.value.add(group.resource)
   })
 })
+
+// Context-aware permission suggestions
+const suggestedPermissions = computed(() => {
+  if (!props.entityType || !props.showSuggestions) return []
+  
+  const suggestions: Record<string, string[]> = {
+    platform: [
+      'entity:create', 'entity:read', 'entity:update', 'entity:delete',
+      'entity:create_tree', 'entity:read_tree', 'entity:update_tree', 'entity:delete_tree',
+      'user:create_all', 'user:read_all', 'user:update_all',
+      'role:create', 'role:read', 'role:update', 'role:delete'
+    ],
+    organization: [
+      'entity:create', 'entity:read', 'entity:update',
+      'entity:create_tree', 'entity:read_tree', 'entity:update_tree',
+      'user:create', 'user:read', 'user:update',
+      'member:create', 'member:read', 'member:update', 'member:delete'
+    ],
+    branch: [
+      'entity:read', 'entity:update',
+      'entity:read_tree', 'entity:update_tree',
+      'user:read', 'user:update',
+      'member:create', 'member:update'
+    ],
+    team: [
+      'entity:read', 'entity:update',
+      'user:read',
+      'member:read'
+    ],
+    access_group: [
+      'entity:read',
+      'user:read',
+      'member:read', 'member:create', 'member:delete'
+    ]
+  }
+  
+  return suggestions[props.entityType] || []
+})
+
+// Get permission description with context
+function getPermissionDescription(permission: Permission): string {
+  const baseDesc = permission.description || ''
+  
+  if (!props.entityType) return baseDesc
+  
+  // Add context-specific hints
+  const contextHints: Record<string, Record<string, string>> = {
+    platform: {
+      'entity:create_tree': 'Create entities anywhere in the platform',
+      'user:create_all': 'Create users across all organizations',
+      'role:create': 'Define new roles for the platform'
+    },
+    organization: {
+      'entity:create_tree': 'Create branches, teams, and sub-entities',
+      'user:create': 'Add users to the organization',
+      'member:create': 'Assign roles to users in this organization'
+    },
+    team: {
+      'entity:read': 'View team information and members',
+      'user:read': 'View team member profiles',
+      'member:read': 'See team member roles and permissions'
+    }
+  }
+  
+  const hint = contextHints[props.entityType]?.[permission.name]
+  return hint || baseDesc
+}
 </script>
 
 <template>
   <div class="space-y-4">
+    <!-- Suggestions (if enabled) -->
+    <div v-if="showSuggestions && suggestedPermissions.length > 0" class="space-y-2">
+      <div class="flex items-center gap-2">
+        <UIcon name="i-lucide-sparkles" class="h-4 w-4 text-primary" />
+        <span class="text-sm font-medium">Suggested for {{ entityType }}</span>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <UButton
+          v-for="perm in suggestedPermissions"
+          :key="perm"
+          size="xs"
+          variant="outline"
+          :color="modelValue.includes(perm) ? 'primary' : 'neutral'"
+          @click="togglePermission(perm)"
+        >
+          <span class="font-mono text-xs">{{ perm }}</span>
+        </UButton>
+      </div>
+    </div>
+
     <!-- Search and Filter -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <UInput
@@ -239,8 +328,8 @@ onMounted(() => {
                     title="Has conditions"
                   />
                 </div>
-                <p v-if="permission.description" class="text-xs text-muted-foreground mt-0.5">
-                  {{ permission.description }}
+                <p v-if="getPermissionDescription(permission)" class="text-xs text-muted-foreground mt-0.5">
+                  {{ getPermissionDescription(permission) }}
                 </p>
               </div>
             </div>

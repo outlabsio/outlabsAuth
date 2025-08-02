@@ -227,6 +227,7 @@ export interface Role {
   is_system_role: boolean;
   is_global?: boolean;
   permissions: string[];
+  entity_type_permissions?: Record<string, string[]>;
   platform_id?: string | null;
   assignable_at_levels?: string[];
   created_at: string;

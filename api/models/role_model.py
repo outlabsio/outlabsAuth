@@ -1,7 +1,7 @@
 """
 Role Model - Context-aware roles
 """
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime
 from beanie import Link, Indexed
 from pydantic import Field
@@ -19,8 +19,16 @@ class RoleModel(BaseDocument):
     display_name: str
     description: Optional[str] = None
     
-    # Permissions this role grants
+    # Permissions this role grants (default permissions when no entity type match)
     permissions: List[str] = Field(default_factory=list)
+    
+    # Context-aware permissions: Different permissions based on entity type
+    # Example: {"region": ["entity:manage_tree", "user:manage_tree"], 
+    #          "office": ["entity:read", "user:read"]}
+    entity_type_permissions: Optional[Dict[str, List[str]]] = Field(
+        default_factory=dict,
+        description="Permissions that apply when role is assigned at specific entity types"
+    )
     
     # Scoping - which entity owns this role
     entity: Link[EntityModel]

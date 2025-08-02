@@ -12,6 +12,10 @@ class RoleCreate(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=100)
     description: Optional[str] = Field(None, max_length=500)
     permissions: List[str] = Field(..., min_items=1)
+    entity_type_permissions: Optional[Dict[str, List[str]]] = Field(
+        default_factory=dict,
+        description="Context-aware permissions per entity type"
+    )
     entity_id: Optional[str] = None
     assignable_at_types: Optional[List[str]] = Field(default_factory=list)
     is_global: bool = False
@@ -22,6 +26,20 @@ class RoleCreate(BaseModel):
         for perm in v:
             if ":" not in perm and perm not in ["*"]:
                 raise ValueError(f"Invalid permission format: {perm}")
+        return v
+    
+    @field_validator('entity_type_permissions')
+    def validate_entity_type_permissions(cls, v):
+        """Validate entity type permissions format"""
+        if v:
+            for entity_type, perms in v.items():
+                if not entity_type or not isinstance(entity_type, str):
+                    raise ValueError(f"Invalid entity type: {entity_type}")
+                if not isinstance(perms, list):
+                    raise ValueError(f"Permissions for {entity_type} must be a list")
+                for perm in perms:
+                    if ":" not in perm and perm not in ["*"]:
+                        raise ValueError(f"Invalid permission format in {entity_type}: {perm}")
         return v
     
     @field_validator('assignable_at_types')
@@ -40,6 +58,7 @@ class RoleUpdate(BaseModel):
     display_name: Optional[str] = Field(None, min_length=1, max_length=100)
     description: Optional[str] = Field(None, max_length=500)
     permissions: Optional[List[str]] = None
+    entity_type_permissions: Optional[Dict[str, List[str]]] = None
     assignable_at_types: Optional[List[str]] = None
     
     @field_validator('permissions')
@@ -50,6 +69,20 @@ class RoleUpdate(BaseModel):
                 if ":" not in perm and perm not in ["*"]:
                     raise ValueError(f"Invalid permission format: {perm}")
         return v
+    
+    @field_validator('entity_type_permissions')
+    def validate_entity_type_permissions(cls, v):
+        """Validate entity type permissions format"""
+        if v is not None:
+            for entity_type, perms in v.items():
+                if not entity_type or not isinstance(entity_type, str):
+                    raise ValueError(f"Invalid entity type: {entity_type}")
+                if not isinstance(perms, list):
+                    raise ValueError(f"Permissions for {entity_type} must be a list")
+                for perm in perms:
+                    if ":" not in perm and perm not in ["*"]:
+                        raise ValueError(f"Invalid permission format in {entity_type}: {perm}")
+        return v
 
 
 class RoleResponse(BaseModel):
@@ -59,6 +92,10 @@ class RoleResponse(BaseModel):
     display_name: str
     description: Optional[str] = None
     permissions: List[str]
+    entity_type_permissions: Optional[Dict[str, List[str]]] = Field(
+        default_factory=dict,
+        description="Context-aware permissions per entity type"
+    )
     entity_id: Optional[str] = None
     entity_name: Optional[str] = None  # Display name for backward compatibility
     entity_system_name: Optional[str] = None  # System/technical name

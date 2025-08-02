@@ -130,6 +130,7 @@ export const useRolesStore = defineStore("roles", () => {
     display_name: string;
     description?: string;
     permissions: string[];
+    entity_type_permissions?: Record<string, string[]>;
     entity_id?: string;
     assignable_at_types?: string[];
     is_global?: boolean;
@@ -164,6 +165,7 @@ export const useRolesStore = defineStore("roles", () => {
     display_name?: string;
     description?: string;
     permissions?: string[];
+    entity_type_permissions?: Record<string, string[]>;
     assignable_at_types?: string[];
   }) => {
     try {

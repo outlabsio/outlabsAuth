@@ -458,7 +458,8 @@ class PermissionService:
             # Get role permissions - now handling multiple roles per membership
             all_role_perms = []
             for role_id in membership.get("role_ids", []):
-                role_perms = await self._get_role_permissions(role_id)
+                # Pass entity_id for context-aware permissions
+                role_perms = await self._get_role_permissions(role_id, membership["entity_id"])
                 permissions["role"].extend(role_perms)
                 all_role_perms.extend(role_perms)
             
@@ -820,20 +821,35 @@ class PermissionService:
         
         return valid_memberships
     
-    async def _get_role_permissions(self, role_id: str) -> List[str]:
+    async def _get_role_permissions(self, role_id: str, entity_id: Optional[str] = None) -> List[str]:
         """
-        Get permissions for a role
+        Get permissions for a role, considering entity type context
         
         Args:
             role_id: Role ID
+            entity_id: Entity ID where role is assigned (for context-aware permissions)
         
         Returns:
-            List of permissions
+            List of permissions (context-aware if applicable)
         """
         role = await RoleModel.get(role_id)
         if not role:
             return []
         
+        # If no entity context or no entity_type_permissions, return default permissions
+        if not entity_id or not role.entity_type_permissions:
+            return role.permissions
+        
+        # Get the entity to determine its type
+        entity = await EntityModel.get(entity_id)
+        if not entity:
+            return role.permissions
+        
+        # Check if we have type-specific permissions for this entity type
+        if entity.entity_type in role.entity_type_permissions:
+            return role.entity_type_permissions[entity.entity_type]
+        
+        # Fall back to default permissions
         return role.permissions
     
     async def _get_inherited_permissions(
