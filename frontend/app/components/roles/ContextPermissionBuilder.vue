@@ -362,12 +362,9 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
                 @click="toggleType(config.type)"
               />
               <div class="flex items-center gap-2">
-                <span v-if="!config.isCustomized" class="text-xs text-muted-foreground mr-1">
-                  Customize
-                </span>
-                <UToggle
+                <span class="text-xs text-muted-foreground">Customize</span>
+                <USwitch
                   :model-value="config.isCustomized"
-                  size="sm"
                   @update:model-value="toggleCustomization(config.type)"
                 />
               </div>
