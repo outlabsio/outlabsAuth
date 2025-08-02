@@ -208,11 +208,11 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
       <template #basic-info>
         <div class="space-y-6 w-full pt-6">
       <div class="flex items-center gap-3">
-        <div class="p-2 rounded-lg bg-primary-100 dark:bg-primary-900/30">
-          <UIcon name="i-lucide-user-cog" class="h-5 w-5 text-primary-600 dark:text-primary-400" />
+        <div class="p-2 rounded-lg bg-primary/10">
+          <UIcon name="i-lucide-user-cog" class="h-5 w-5 text-primary" />
         </div>
         <div>
-          <h5 class="text-sm font-medium uppercase tracking-wider text-primary-600 dark:text-primary-400">
+          <h5 class="text-sm font-medium uppercase tracking-wider text-primary">
             Basic Information
           </h5>
           <p class="text-xs text-muted-foreground mt-0.5">Define the role name and description</p>
@@ -262,10 +262,10 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
       <div v-if="mode === 'edit' && props.role && !props.role.is_system_role" class="mt-8">
         <USeparator class="mb-6" />
 
-        <div class="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-6">
+        <div class="rounded-lg border border-error bg-error/5 p-6">
           <div class="flex items-center gap-3 mb-4">
-            <UIcon name="i-lucide-alert-triangle" class="h-5 w-5 text-red-600 dark:text-red-400" />
-            <h3 class="font-semibold text-red-600 dark:text-red-400">Danger Zone</h3>
+            <UIcon name="i-lucide-alert-triangle" class="h-5 w-5 text-error" />
+            <h3 class="font-semibold text-error">Danger Zone</h3>
           </div>
 
           <div class="space-y-4">
@@ -294,11 +294,11 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
       <template #scope>
         <div class="space-y-6 w-full pt-6">
       <div class="flex items-center gap-3">
-        <div class="p-2 rounded-lg bg-primary-100 dark:bg-primary-900/30">
-          <UIcon name="i-lucide-target" class="h-5 w-5 text-primary-600 dark:text-primary-400" />
+        <div class="p-2 rounded-lg bg-primary/10">
+          <UIcon name="i-lucide-target" class="h-5 w-5 text-primary" />
         </div>
         <div>
-          <h5 class="text-sm font-medium uppercase tracking-wider text-primary-600 dark:text-primary-400">
+          <h5 class="text-sm font-medium uppercase tracking-wider text-primary">
             Scope Configuration
           </h5>
           <p class="text-xs text-muted-foreground mt-0.5">Configure where this role can be used</p>
@@ -357,8 +357,8 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
               :key="option.value"
               class="flex items-center gap-2 p-3 rounded-lg border-2 transition-colors cursor-pointer"
               :class="state.assignable_at_types?.includes(option.value) 
-                ? 'border-primary bg-primary-50 dark:bg-primary-900/20' 
-                : 'border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700'"
+                ? 'border-primary bg-primary/5' 
+                : 'border-default hover:border-accented'"
             >
               <UCheckbox
                 :model-value="state.assignable_at_types?.includes(option.value)"
@@ -383,11 +383,11 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
       <template #permissions>
         <div class="space-y-6 w-full pt-6">
       <div class="flex items-center gap-3">
-        <div class="p-2 rounded-lg bg-primary-100 dark:bg-primary-900/30">
-          <UIcon name="i-lucide-shield" class="h-5 w-5 text-primary-600 dark:text-primary-400" />
+        <div class="p-2 rounded-lg bg-primary/10">
+          <UIcon name="i-lucide-shield" class="h-5 w-5 text-primary" />
         </div>
         <div>
-          <h5 class="text-sm font-medium uppercase tracking-wider text-primary-600 dark:text-primary-400">
+          <h5 class="text-sm font-medium uppercase tracking-wider text-primary">
             Default Permissions
           </h5>
           <p class="text-xs text-muted-foreground mt-0.5">Base permissions granted by this role</p>

@@ -251,7 +251,7 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
     <!-- Header -->
     <div class="flex items-center justify-between">
       <div>
-        <h5 class="text-sm font-medium uppercase tracking-wider text-primary-600 dark:text-primary-400">
+        <h5 class="text-sm font-medium uppercase tracking-wider text-primary">
           Context-Aware Permissions
         </h5>
         <p class="mt-1 text-sm text-muted-foreground">
@@ -259,7 +259,7 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
         </p>
       </div>
       <UTooltip text="Define different permissions for each entity type where this role can be assigned">
-        <UIcon name="i-lucide-info" class="h-4 w-4 text-muted-foreground" />
+        <UIcon name="i-lucide-info" class="h-4 w-4 text-muted" />
       </UTooltip>
     </div>
 
@@ -274,20 +274,20 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
     </UAlert>
 
     <!-- Entity Type List -->
-    <div class="border rounded-lg divide-y">
+    <div class="border border-default rounded-lg divide-y divide-default">
       <div
         v-for="config in entityConfigs"
         :key="config.type"
         class="group"
-        :class="{ 'bg-primary-50 dark:bg-primary-900/10': config.isCustomized }"
+        :class="{ 'bg-primary/5': config.isCustomized }"
       >
         <!-- Compact Header Row -->
         <div 
-          class="flex items-center justify-between p-4 cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-800/50"
+          class="flex items-center justify-between p-4 cursor-pointer hover:bg-muted"
           @click="config.isCustomized && toggleType(config.type)"
         >
           <div class="flex items-center gap-3 flex-1">
-            <UIcon :name="getEntityTypeIcon(config.type)" class="h-4 w-4 text-muted-foreground" />
+            <UIcon :name="getEntityTypeIcon(config.type)" class="h-4 w-4 text-muted" />
             <div class="flex-1">
               <div class="flex items-center gap-2">
                 <span class="text-sm font-medium capitalize">
@@ -299,7 +299,7 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
                   variant="subtle"
                   size="xs"
                 />
-                <span v-if="config.isCustomized" class="text-xs text-muted-foreground">
+                <span v-if="config.isCustomized" class="text-xs text-muted">
                   <template v-if="getPermissionDiff(config.type).added > 0">
                     <span class="text-success">+{{ getPermissionDiff(config.type).added }}</span>
                   </template>
@@ -316,7 +316,7 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
             <UIcon 
               v-if="config.isCustomized"
               name="i-lucide-chevron-down"
-              class="h-4 w-4 text-muted-foreground transition-transform"
+              class="h-4 w-4 text-muted transition-transform"
               :class="{ 'rotate-180': expandedTypes.has(config.type) }"
             />
             <USwitch
@@ -328,7 +328,7 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
         </div>
 
         <!-- Expanded Content -->
-        <div v-if="config.isCustomized && expandedTypes.has(config.type)" class="border-t bg-neutral-50 dark:bg-neutral-900/50 p-4 space-y-4">
+        <div v-if="config.isCustomized && expandedTypes.has(config.type)" class="border-t border-default bg-muted p-4 space-y-4">
           <!-- Permission Templates -->
           <div>
             <p class="text-sm font-medium mb-2">Quick Templates</p>
@@ -362,23 +362,23 @@ function matchesTemplate(permissions: string[], templateKey: string): boolean {
           </div>
 
           <!-- Permission Preview -->
-          <div class="bg-white dark:bg-neutral-900 rounded-lg p-3">
-            <p class="text-xs font-medium text-muted-foreground mb-2">
+          <div class="bg-elevated rounded-lg p-3">
+            <p class="text-xs font-medium text-muted mb-2">
               When assigned at {{ getEntityTypeDisplay(config.type) }} level:
             </p>
             <div class="space-y-1">
-              <div v-if="config.permissions.length === 0" class="text-sm text-muted-foreground italic">
+              <div v-if="config.permissions.length === 0" class="text-sm text-muted italic">
                 No permissions granted
               </div>
               <div v-else class="grid grid-cols-2 gap-1">
                 <div 
                   v-for="perm in config.permissions.slice(0, 6)" 
                   :key="perm"
-                  class="text-xs font-mono bg-neutral-50 dark:bg-neutral-800 px-2 py-1 rounded"
+                  class="text-xs font-mono bg-accented px-2 py-1 rounded"
                 >
                   {{ perm }}
                 </div>
-                <div v-if="config.permissions.length > 6" class="text-xs text-muted-foreground px-2 py-1">
+                <div v-if="config.permissions.length > 6" class="text-xs text-muted px-2 py-1">
                   +{{ config.permissions.length - 6 }} more...
                 </div>
               </div>
