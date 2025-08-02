@@ -24,18 +24,69 @@
           class="space-y-4"
         >
           <!-- Role Selection -->
-          <UFormField name="role_id" label="Role">
-            <USelect
-              v-model="state.role_id"
-              :items="availableRoles"
-              placeholder="Select a role"
-              :loading="isLoadingRoles"
-            />
-            <template #hint>
-              <span v-if="member && member.roles && member.roles.length > 1" class="text-xs text-muted-foreground">
-                User has {{ member.roles.length }} roles. Updating will replace all roles with the selected one.
-              </span>
-            </template>
+          <UFormField name="roles" label="Roles">
+            <div class="space-y-3">
+              <!-- Current Roles -->
+              <div v-if="state.role_ids.length > 0" class="space-y-2">
+                <p class="text-sm text-muted-foreground">Current roles:</p>
+                <div class="flex flex-wrap gap-2">
+                  <UBadge 
+                    v-for="roleId in state.role_ids" 
+                    :key="roleId"
+                    size="lg"
+                    variant="subtle"
+                    class="pr-1"
+                  >
+                    <span class="mr-1">{{ getRoleLabel(roleId) }}</span>
+                    <UButton 
+                      icon="i-lucide-x" 
+                      variant="ghost" 
+                      size="2xs"
+                      :padded="false"
+                      @click="removeRole(roleId)"
+                    />
+                  </UBadge>
+                </div>
+              </div>
+              
+              <!-- Role Search and Add -->
+              <div ref="roleDropdownRef" class="relative">
+                <UInput
+                  v-model="roleSearchQuery"
+                  placeholder="Search roles to add..."
+                  icon="i-lucide-search"
+                  :loading="isLoadingRoles"
+                  @focus="showRoleDropdown = true"
+                  @input="showRoleDropdown = true"
+                />
+                
+                <!-- Available Roles Dropdown -->
+                <div 
+                  v-if="showRoleDropdown && filteredAvailableRoles.length > 0"
+                  class="absolute z-10 w-full mt-1 bg-background border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto"
+                >
+                  <div class="p-1">
+                    <button
+                      v-for="role in filteredAvailableRoles"
+                      :key="role.value"
+                      class="w-full flex items-center justify-between p-2 hover:bg-muted rounded-md transition-colors text-left"
+                      @click="addRole(role.value)"
+                    >
+                      <div class="flex-1">
+                        <p class="font-medium">{{ role.label }}</p>
+                        <p class="text-sm text-muted-foreground">{{ role.description }}</p>
+                      </div>
+                      <UIcon name="i-lucide-plus" class="h-4 w-4 text-muted-foreground" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+              
+              <!-- Help text -->
+              <p v-if="state.role_ids.length === 0" class="text-sm text-muted-foreground">
+                No roles assigned. Start typing to search and add roles.
+              </p>
+            </div>
           </UFormField>
 
           <!-- Status -->
@@ -185,7 +236,7 @@ watch(validUntilDate, (newDate) => {
 
 // Form schema
 const schema = z.object({
-  role_id: z.string().optional(),
+  role_ids: z.array(z.string()).min(1, 'At least one role is required'),
   status: z.enum(['active', 'suspended', 'revoked']).optional(),
   valid_from: z.string().optional(),
   valid_until: z.string().optional()
@@ -201,7 +252,7 @@ const schema = z.object({
 
 // Form state
 const state = reactive({
-  role_id: '',
+  role_ids: [] as string[],
   status: 'active' as 'active' | 'suspended' | 'revoked',
   valid_from: '',
   valid_until: ''
@@ -210,7 +261,17 @@ const state = reactive({
 // Other state
 const isSubmitting = ref(false)
 const isLoadingRoles = ref(false)
+const roleSearchQuery = ref('')
+const showRoleDropdown = ref(false)
 const availableRoles = ref<Array<{ value: string; label: string; description: string }>>([])
+
+// Ref for role dropdown container
+const roleDropdownRef = ref<HTMLElement>()
+
+// Click outside handler
+onClickOutside(roleDropdownRef, () => {
+  showRoleDropdown.value = false
+})
 
 // Status options
 const statusOptions = [
@@ -220,6 +281,21 @@ const statusOptions = [
 ]
 
 // Computed
+const filteredAvailableRoles = computed(() => {
+  const query = roleSearchQuery.value.toLowerCase()
+  const assignedRoleIds = new Set(state.role_ids)
+  
+  return availableRoles.value.filter(role => {
+    // Don't show already assigned roles
+    if (assignedRoleIds.has(role.value)) return false
+    
+    // Filter by search query
+    if (!query) return true
+    return role.label.toLowerCase().includes(query) || 
+           role.description.toLowerCase().includes(query)
+  })
+})
+
 const validityWarning = computed(() => {
   if (state.valid_from && state.valid_until) {
     const from = new Date(state.valid_from)
@@ -233,6 +309,26 @@ const validityWarning = computed(() => {
 })
 
 // Methods
+const addRole = (roleId: string) => {
+  if (!state.role_ids.includes(roleId)) {
+    state.role_ids.push(roleId)
+  }
+  roleSearchQuery.value = ''
+  showRoleDropdown.value = false
+}
+
+const removeRole = (roleId: string) => {
+  const index = state.role_ids.indexOf(roleId)
+  if (index > -1) {
+    state.role_ids.splice(index, 1)
+  }
+}
+
+const getRoleLabel = (roleId: string) => {
+  const role = availableRoles.value.find(r => r.value === roleId)
+  return role?.label || roleId
+}
+
 const fetchRoles = async () => {
   isLoadingRoles.value = true
   try {
@@ -266,54 +362,85 @@ const onSubmit = async () => {
   isSubmitting.value = true
 
   try {
-    // Prepare the update data - only include changed fields
-    const updateData: any = {}
-
-    // For now, we only support updating to a single role through the API
-    if (state.role_id) {
-      updateData.role_id = state.role_id
-    }
-
-    if (state.status && state.status !== props.member.status) {
-      updateData.status = state.status
-    }
-
-    // Handle date updates - explicitly set to null if cleared
-    if (state.valid_from) {
-      updateData.valid_from = new Date(state.valid_from).toISOString()
-    } else if (props.member?.valid_from && !state.valid_from) {
-      // User cleared the date
-      updateData.valid_from = null
-    }
-
-    if (state.valid_until) {
-      updateData.valid_until = new Date(state.valid_until).toISOString()
-    } else if (props.member?.valid_until && !state.valid_until) {
-      // User cleared the date
-      updateData.valid_until = null
-    }
-
-    // Only proceed if there are changes
-    if (Object.keys(updateData).length === 0) {
-      toast.add({
-        title: 'No changes',
-        description: 'No changes were made to the member',
-        color: 'info'
+    // Check what has changed
+    const currentRoleIds = props.member.roles?.map(r => r.id) || []
+    const rolesChanged = !arraysEqual(currentRoleIds, state.role_ids)
+    
+    // If roles have changed, we need to handle them differently
+    if (rolesChanged) {
+      // First, remove the user from the entity completely
+      await authStore.apiCall(`/v1/entities/${props.entityId}/members/${props.member.user_id}`, {
+        method: 'DELETE',
+        headers: contextStore.getContextHeaders
       })
-      isOpen.value = false
-      return
-    }
+      
+      // Then add them back with the new roles
+      const promises = state.role_ids.map(async (roleId) => {
+        const memberData: any = {
+          user_id: props.member.user_id,
+          role_id: roleId,
+          status: state.status
+        }
 
-    // Update the member
-    await authStore.apiCall(`/v1/entities/${props.entityId}/members/${props.member.user_id}`, {
-      method: 'PUT',
-      body: updateData,
-      headers: contextStore.getContextHeaders
-    })
+        if (state.valid_from) {
+          memberData.valid_from = new Date(state.valid_from).toISOString()
+        }
+
+        if (state.valid_until) {
+          memberData.valid_until = new Date(state.valid_until).toISOString()
+        }
+
+        return authStore.apiCall(`/v1/entities/${props.entityId}/members`, {
+          method: 'POST',
+          body: memberData,
+          headers: contextStore.getContextHeaders
+        })
+      })
+
+      await Promise.all(promises)
+    } else {
+      // If only status or dates changed, update normally
+      const updateData: any = {}
+
+      if (state.status && state.status !== props.member.status) {
+        updateData.status = state.status
+      }
+
+      // Handle date updates - explicitly set to null if cleared
+      if (state.valid_from) {
+        updateData.valid_from = new Date(state.valid_from).toISOString()
+      } else if (props.member?.valid_from && !state.valid_from) {
+        updateData.valid_from = null
+      }
+
+      if (state.valid_until) {
+        updateData.valid_until = new Date(state.valid_until).toISOString()
+      } else if (props.member?.valid_until && !state.valid_until) {
+        updateData.valid_until = null
+      }
+
+      // Only proceed if there are changes
+      if (Object.keys(updateData).length === 0) {
+        toast.add({
+          title: 'No changes',
+          description: 'No changes were made to the member',
+          color: 'info'
+        })
+        isOpen.value = false
+        return
+      }
+
+      // Update the member
+      await authStore.apiCall(`/v1/entities/${props.entityId}/members/${props.member.user_id}`, {
+        method: 'PUT',
+        body: updateData,
+        headers: contextStore.getContextHeaders
+      })
+    }
 
     toast.add({
       title: 'Member updated',
-      description: 'Member details have been updated',
+      description: rolesChanged ? `User roles updated to ${state.role_ids.length} role${state.role_ids.length > 1 ? 's' : ''}` : 'Member details have been updated',
       color: 'success'
     })
 
@@ -329,6 +456,14 @@ const onSubmit = async () => {
   } finally {
     isSubmitting.value = false
   }
+}
+
+// Helper function to compare arrays
+const arraysEqual = (a: string[], b: string[]) => {
+  if (a.length !== b.length) return false
+  const sortedA = [...a].sort()
+  const sortedB = [...b].sort()
+  return sortedA.every((val, index) => val === sortedB[index])
 }
 
 const clearValidFrom = () => {
@@ -360,8 +495,8 @@ const dateStringToCalendarDate = (dateString: string | null | undefined) => {
 // Initialize form when member changes
 watch(() => props.member, (newMember) => {
   if (newMember) {
-    // Use the first role's ID for now (API only supports single role update)
-    state.role_id = newMember.roles && newMember.roles.length > 0 ? newMember.roles[0].id : ''
+    // Set all role IDs
+    state.role_ids = newMember.roles?.map(r => r.id) || []
     state.status = newMember.status as 'active' | 'suspended' | 'revoked'
     
     // Set dates
@@ -371,6 +506,9 @@ watch(() => props.member, (newMember) => {
     // This will trigger the watchers to update state.valid_from and state.valid_until
   } else {
     // Reset when no member
+    state.role_ids = []
+    roleSearchQuery.value = ''
+    showRoleDropdown.value = false
     validFromDate.value = null
     validUntilDate.value = null
     validFromPopoverOpen.value = false

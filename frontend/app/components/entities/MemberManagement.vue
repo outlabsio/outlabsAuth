@@ -11,7 +11,7 @@
       <UButton 
         icon="i-lucide-user-plus" 
         label="Add Member" 
-        @click="openAddMemberModal"
+        @click="openAddMemberDrawer"
         :disabled="!canAddMembers"
       />
     </div>
@@ -105,26 +105,19 @@
     <div v-if="totalPages > 1" class="flex justify-center mt-6">
       <UPagination 
         :page="currentPage" 
-        :total="total"
-        :items-per-page="pageSize"
-        @update:page="(page) => { currentPage = page; fetchMembers() }"
+        :total="totalPages * 20"
+        :items-per-page="20"
+        @update:page="(page) => entityMembersStore.setCurrentPage(page)"
       />
     </div>
 
-    <!-- Add Member Modal -->
-    <EntitiesAddMemberModal
-      v-model:open="addMemberModalOpen"
-      :entity-id="entityId"
-      :entity-name="entityName"
-      @member-added="handleMemberAdded"
-    />
-
-    <!-- Update Member Modal -->
-    <EntitiesUpdateMemberModal
-      v-model:open="updateMemberModalOpen"
-      :member="selectedMember"
-      :entity-id="entityId"
-      @member-updated="handleMemberUpdated"
+    <!-- Member Drawer -->
+    <EntitiesMemberDrawer
+      v-model:open="entityMembersStore.ui.drawerOpen"
+      :member="entityMembersStore.selectedMember"
+      :mode="entityMembersStore.ui.drawerMode"
+      @created="handleMemberAdded"
+      @updated="handleMemberUpdated"
     />
   </div>
 </template>
@@ -141,21 +134,15 @@ const props = defineProps<{
 const authStore = useAuthStore()
 const userStore = useUserStore()
 const contextStore = useContextStore()
+const entityMembersStore = useEntityMembersStore()
 const toast = useToast()
 
-// State
-const members = ref<EntityMember[]>([])
-const isLoading = ref(false)
-const error = ref<string | null>(null)
-const currentPage = ref(1)
-const pageSize = ref(20)
-const totalPages = ref(1)
-const total = ref(0)
-
-// Modal state
-const addMemberModalOpen = ref(false)
-const updateMemberModalOpen = ref(false)
-const selectedMember = ref<EntityMember | null>(null)
+// Computed from store
+const members = computed(() => entityMembersStore.members)
+const isLoading = computed(() => entityMembersStore.isLoading)
+const error = computed(() => entityMembersStore.error)
+const currentPage = computed(() => entityMembersStore.currentPage)
+const totalPages = computed(() => entityMembersStore.totalPages)
 
 // Permission checks
 const canAddMembers = computed(() => {
@@ -174,48 +161,6 @@ const canManageMembers = computed(() => {
          userStore.hasPermission('member:update_all') || userStore.hasPermission('member:delete_all')
 })
 
-// Fetch members
-const fetchMembers = async () => {
-  isLoading.value = true
-  error.value = null
-
-  try {
-    const params = new URLSearchParams({
-      page: currentPage.value.toString(),
-      page_size: pageSize.value.toString()
-    })
-
-    const response = await authStore.apiCall<{
-      items: EntityMember[]
-      total: number
-      page: number
-      page_size: number
-      total_pages: number
-    }>(`/v1/entities/${props.entityId}/members?${params}`, {
-      headers: contextStore.getContextHeaders
-    })
-
-    console.log('[MemberManagement] Successfully fetched members:', {
-      count: response.items?.length || 0,
-      total: response.total,
-      items: response.items
-    })
-    members.value = response.items || []
-    total.value = response.total || 0
-    totalPages.value = response.total_pages || 1
-  } catch (err: any) {
-    error.value = err.message || 'Failed to fetch members'
-    console.error('[MemberManagement] Failed to fetch members:', err)
-    console.error('[MemberManagement] Error details:', {
-      entityId: props.entityId,
-      url: `/v1/entities/${props.entityId}/members?${params}`,
-      headers: contextStore.getContextHeaders,
-      error: err.response || err
-    })
-  } finally {
-    isLoading.value = false
-  }
-}
 
 // Get member actions
 const getMemberActions = (member: EntityMember) => {
@@ -224,14 +169,9 @@ const getMemberActions = (member: EntityMember) => {
   if (userStore.hasPermission('member:update') || userStore.hasPermission('member:update_tree') || userStore.hasPermission('member:update_all')) {
     actions.push([
       {
-        label: 'Change Role',
-        icon: 'i-lucide-shield',
-        onSelect: () => openUpdateMemberModal(member)
-      },
-      {
-        label: 'Update Validity',
-        icon: 'i-lucide-calendar',
-        onSelect: () => openUpdateMemberModal(member)
+        label: 'Edit Member',
+        icon: 'i-lucide-edit',
+        onSelect: () => openUpdateMemberDrawer(member)
       }
     ])
   }
@@ -250,19 +190,13 @@ const getMemberActions = (member: EntityMember) => {
   return actions
 }
 
-// Open modals
-const openAddMemberModal = () => {
-  addMemberModalOpen.value = true
+// Open drawers
+const openAddMemberDrawer = () => {
+  entityMembersStore.openCreateDrawer()
 }
 
-const openUpdateMemberModal = (member: EntityMember) => {
-  console.log('[MemberManagement] Opening update modal for member:', member)
-  selectedMember.value = member
-  updateMemberModalOpen.value = true
-  console.log('[MemberManagement] Modal state:', { 
-    updateMemberModalOpen: updateMemberModalOpen.value, 
-    selectedMember: selectedMember.value 
-  })
+const openUpdateMemberDrawer = (member: EntityMember) => {
+  entityMembersStore.openEditDrawer(member)
 }
 
 // Remove member
@@ -271,19 +205,7 @@ const removeMember = async (member: EntityMember) => {
   if (!confirmed) return
 
   try {
-    await authStore.apiCall(`/v1/entities/${props.entityId}/members/${member.user_id}`, {
-      method: 'DELETE',
-      headers: contextStore.getContextHeaders
-    })
-
-    toast.add({
-      title: 'Member removed',
-      description: `${member.user_name} has been removed from this entity`,
-      color: 'success'
-    })
-
-    // Refresh the list
-    await fetchMembers()
+    await entityMembersStore.removeMember(member.user_id)
   } catch (err: any) {
     toast.add({
       title: 'Failed to remove member',
@@ -295,11 +217,11 @@ const removeMember = async (member: EntityMember) => {
 
 // Handle events
 const handleMemberAdded = () => {
-  fetchMembers()
+  entityMembersStore.fetchMembers()
 }
 
 const handleMemberUpdated = () => {
-  fetchMembers()
+  entityMembersStore.fetchMembers()
 }
 
 // Utilities
@@ -320,12 +242,10 @@ const formatDate = (dateString: string) => {
   })
 }
 
-// Fetch members on mount
+// Initialize store with entity info
 onMounted(() => {
-  console.log('[MemberManagement] Component mounted')
-  console.log('[MemberManagement] User from store:', userStore.user)
-  console.log('[MemberManagement] User permissions:', userStore.permissions)
-  console.log('[MemberManagement] canAddMembers:', canAddMembers.value)
-  fetchMembers()
+  entityMembersStore.setEntity(props.entityId, props.entityName)
+  entityMembersStore.fetchMembers()
 })
+
 </script>

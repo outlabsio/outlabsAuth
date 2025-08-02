@@ -32,13 +32,68 @@
         </UFormField>
 
         <!-- Role Selection -->
-        <UFormField name="role_id" label="Role" required>
-          <USelect
-            v-model="state.role_id"
-            :items="availableRoles"
-            placeholder="Select a role"
-            :loading="isLoadingRoles"
-          />
+        <UFormField name="roles" label="Roles" required>
+          <div class="space-y-3">
+            <!-- Assigned Roles -->
+            <div v-if="state.role_ids.length > 0" class="space-y-2">
+              <div class="flex flex-wrap gap-2">
+                <UBadge 
+                  v-for="roleId in state.role_ids" 
+                  :key="roleId"
+                  size="lg"
+                  variant="subtle"
+                  class="pr-1"
+                >
+                  <span class="mr-1">{{ getRoleLabel(roleId) }}</span>
+                  <UButton 
+                    icon="i-lucide-x" 
+                    variant="ghost" 
+                    size="2xs"
+                    :padded="false"
+                    @click="removeRole(roleId)"
+                  />
+                </UBadge>
+              </div>
+            </div>
+            
+            <!-- Role Search and Add -->
+            <div ref="roleDropdownRef" class="relative">
+              <UInput
+                v-model="roleSearchQuery"
+                placeholder="Search roles to add..."
+                icon="i-lucide-search"
+                :loading="isLoadingRoles"
+                @focus="showRoleDropdown = true"
+                @input="showRoleDropdown = true"
+              />
+              
+              <!-- Available Roles Dropdown -->
+              <div 
+                v-if="showRoleDropdown && filteredAvailableRoles.length > 0"
+                class="absolute z-10 w-full mt-1 bg-background border border-border rounded-lg shadow-lg max-h-60 overflow-y-auto"
+              >
+                <div class="p-1">
+                  <button
+                    v-for="role in filteredAvailableRoles"
+                    :key="role.value"
+                    class="w-full flex items-center justify-between p-2 hover:bg-muted rounded-md transition-colors text-left"
+                    @click="addRole(role.value)"
+                  >
+                    <div class="flex-1">
+                      <p class="font-medium">{{ role.label }}</p>
+                      <p class="text-sm text-muted-foreground">{{ role.description }}</p>
+                    </div>
+                    <UIcon name="i-lucide-plus" class="h-4 w-4 text-muted-foreground" />
+                  </button>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Help text -->
+            <p v-if="state.role_ids.length === 0" class="text-sm text-muted-foreground">
+              Start typing to search and add roles
+            </p>
+          </div>
         </UFormField>
 
         <!-- Validity Period (Optional) -->
@@ -180,7 +235,7 @@ watch(validUntilDate, (newDate) => {
 // Form schema
 const schema = z.object({
   user_id: z.string().min(1, 'User is required'),
-  role_id: z.string().min(1, 'Role is required'),
+  role_ids: z.array(z.string()).min(1, 'At least one role is required'),
   valid_from: z.string().optional(),
   valid_until: z.string().optional()
 }).refine((data) => {
@@ -196,7 +251,7 @@ const schema = z.object({
 // Form state
 const state = reactive({
   user_id: '',
-  role_id: '',
+  role_ids: [] as string[],
   valid_from: '',
   valid_until: ''
 })
@@ -206,10 +261,35 @@ const isSubmitting = ref(false)
 const isLoadingUsers = ref(false)
 const isLoadingRoles = ref(false)
 const userSearchQuery = ref('')
+const roleSearchQuery = ref('')
+const showRoleDropdown = ref(false)
 const availableUsers = ref<Array<{ value: string; label: string; email: string }>>([])
 const availableRoles = ref<Array<{ value: string; label: string; description: string }>>([])
 
+// Ref for role dropdown container
+const roleDropdownRef = ref<HTMLElement>()
+
+// Click outside handler
+onClickOutside(roleDropdownRef, () => {
+  showRoleDropdown.value = false
+})
+
 // Computed
+const filteredAvailableRoles = computed(() => {
+  const query = roleSearchQuery.value.toLowerCase()
+  const assignedRoleIds = new Set(state.role_ids)
+  
+  return availableRoles.value.filter(role => {
+    // Don't show already assigned roles
+    if (assignedRoleIds.has(role.value)) return false
+    
+    // Filter by search query
+    if (!query) return true
+    return role.label.toLowerCase().includes(query) || 
+           role.description.toLowerCase().includes(query)
+  })
+})
+
 const validityWarning = computed(() => {
   if (state.valid_from && state.valid_until) {
     const from = new Date(state.valid_from)
@@ -314,34 +394,58 @@ const fetchRoles = async () => {
   }
 }
 
+const addRole = (roleId: string) => {
+  if (!state.role_ids.includes(roleId)) {
+    state.role_ids.push(roleId)
+  }
+  roleSearchQuery.value = ''
+  showRoleDropdown.value = false
+}
+
+const removeRole = (roleId: string) => {
+  const index = state.role_ids.indexOf(roleId)
+  if (index > -1) {
+    state.role_ids.splice(index, 1)
+  }
+}
+
+const getRoleLabel = (roleId: string) => {
+  const role = availableRoles.value.find(r => r.value === roleId)
+  return role?.label || roleId
+}
+
 const onSubmit = async () => {
   isSubmitting.value = true
 
   try {
-    // Prepare the data
-    const memberData: any = {
-      user_id: state.user_id,
-      role_id: state.role_id
-    }
+    // For each role, create a member entry
+    const promises = state.role_ids.map(async (roleId) => {
+      const memberData: any = {
+        user_id: state.user_id,
+        role_id: roleId
+      }
 
-    if (state.valid_from) {
-      memberData.valid_from = new Date(state.valid_from).toISOString()
-    }
+      if (state.valid_from) {
+        memberData.valid_from = new Date(state.valid_from).toISOString()
+      }
 
-    if (state.valid_until) {
-      memberData.valid_until = new Date(state.valid_until).toISOString()
-    }
+      if (state.valid_until) {
+        memberData.valid_until = new Date(state.valid_until).toISOString()
+      }
 
-    // Add the member
-    await authStore.apiCall(`/v1/entities/${props.entityId}/members`, {
-      method: 'POST',
-      body: memberData,
-      headers: contextStore.getContextHeaders
+      return authStore.apiCall(`/v1/entities/${props.entityId}/members`, {
+        method: 'POST',
+        body: memberData,
+        headers: contextStore.getContextHeaders
+      })
     })
+
+    // Add all memberships
+    await Promise.all(promises)
 
     toast.add({
       title: 'Member added',
-      description: 'User has been added to this entity',
+      description: `User has been added with ${state.role_ids.length} role${state.role_ids.length > 1 ? 's' : ''}`,
       color: 'success'
     })
 
@@ -362,15 +466,17 @@ const onSubmit = async () => {
 
 const resetForm = () => {
   state.user_id = ''
-  state.role_id = ''
+  state.role_ids = []
   state.valid_from = ''
   state.valid_until = ''
   userSearchQuery.value = ''
+  roleSearchQuery.value = ''
   availableUsers.value = []
   validFromDate.value = null
   validUntilDate.value = null
   validFromPopoverOpen.value = false
   validUntilPopoverOpen.value = false
+  showRoleDropdown.value = false
 }
 
 const clearValidFrom = () => {
