@@ -16,6 +16,7 @@ const permissionsStore = usePermissionsStore()
 // State
 const searchQuery = ref('')
 const expandedGroups = ref<Set<string>>(new Set())
+const showSelectedOnly = ref(false)
 
 // Fetch permissions on mount
 onMounted(() => {
@@ -53,27 +54,42 @@ const groupedPermissions = computed(() => {
   return sortedGroups
 })
 
-// Filter permissions based on search
+// Filter permissions based on search and selection
 const filteredGroups = computed(() => {
-  if (!searchQuery.value) {
-    return groupedPermissions.value
+  let groups = groupedPermissions.value
+  
+  // First filter by selected only if toggle is on
+  if (showSelectedOnly.value) {
+    groups = groups
+      .map(group => ({
+        ...group,
+        permissions: group.permissions.filter(permission => 
+          props.modelValue.includes(permission.name)
+        )
+      }))
+      .filter(group => group.permissions.length > 0)
   }
   
-  const query = searchQuery.value.toLowerCase()
+  // Then apply search filter if there's a query
+  if (searchQuery.value) {
+    const query = searchQuery.value.toLowerCase()
+    
+    groups = groups
+      .map(group => ({
+        ...group,
+        permissions: group.permissions.filter(permission => {
+          return (
+            permission.name.toLowerCase().includes(query) ||
+            permission.display_name.toLowerCase().includes(query) ||
+            permission.resource?.toLowerCase().includes(query) ||
+            (permission.description?.toLowerCase().includes(query) ?? false)
+          )
+        })
+      }))
+      .filter(group => group.permissions.length > 0)
+  }
   
-  return groupedPermissions.value
-    .map(group => ({
-      ...group,
-      permissions: group.permissions.filter(permission => {
-        return (
-          permission.name.toLowerCase().includes(query) ||
-          permission.display_name.toLowerCase().includes(query) ||
-          permission.resource?.toLowerCase().includes(query) ||
-          (permission.description?.toLowerCase().includes(query) ?? false)
-        )
-      })
-    }))
-    .filter(group => group.permissions.length > 0)
+  return groups
 })
 
 
@@ -126,7 +142,7 @@ function togglePermission(permissionName: string) {
 
 <template>
   <div class="space-y-3">
-    <!-- Search and Selected Count -->
+    <!-- Search and Controls -->
     <div class="flex items-center justify-between gap-4">
       <UInput
         v-model="searchQuery"
@@ -135,9 +151,19 @@ function togglePermission(permissionName: string) {
         size="sm"
         class="flex-1 max-w-sm"
       />
-      <span class="text-sm text-muted">
-        <strong>{{ modelValue.length }}</strong> selected
-      </span>
+      <div class="flex items-center gap-3">
+        <label class="flex items-center gap-2" :class="modelValue.length > 0 ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed'">
+          <USwitch 
+            v-model="showSelectedOnly" 
+            size="sm" 
+            :disabled="modelValue.length === 0"
+          />
+          <span class="text-sm text-muted">Show selected only</span>
+        </label>
+        <span class="text-sm text-muted">
+          <strong>{{ modelValue.length }}</strong> selected
+        </span>
+      </div>
     </div>
 
     <!-- Permission Groups -->
@@ -228,7 +254,10 @@ function togglePermission(permissionName: string) {
       <button
         type="button"
         class="text-muted hover:text-foreground transition-colors"
-        @click="$emit('update:modelValue', [])"
+        @click="() => {
+          $emit('update:modelValue', [])
+          showSelectedOnly.value = false
+        }"
       >
         Clear all
       </button>

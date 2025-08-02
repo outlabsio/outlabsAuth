@@ -220,39 +220,15 @@ function getPermissionDiff(type: string): { added: number; removed: number } {
         </div>
 
         <!-- Expanded Content -->
-        <div v-if="config.isCustomized && expandedTypes.has(config.type)" class="border-t border-default bg-muted p-4 space-y-4">
+        <div v-if="config.isCustomized && expandedTypes.has(config.type)" class="border-t border-default bg-muted p-4">
           <!-- Custom Permission Selector -->
           <div>
-            <p class="text-sm font-medium mb-2">Permissions for {{ getEntityTypeDisplay(config.type) }}</p>
+            <p class="text-sm font-medium mb-3">Permissions for {{ getEntityTypeDisplay(config.type) }}</p>
             <RolesPermissionSelector
               :model-value="config.permissions"
               :entity-id="entityId"
               @update:model-value="(perms) => updateTypePermissions(config.type, perms)"
             />
-          </div>
-
-          <!-- Permission Preview -->
-          <div class="bg-elevated rounded-lg p-3">
-            <p class="text-xs font-medium text-muted mb-2">
-              When assigned at {{ getEntityTypeDisplay(config.type) }} level:
-            </p>
-            <div class="space-y-1">
-              <div v-if="config.permissions.length === 0" class="text-sm text-muted italic">
-                No permissions granted
-              </div>
-              <div v-else class="grid grid-cols-2 gap-1">
-                <div 
-                  v-for="perm in config.permissions.slice(0, 6)" 
-                  :key="perm"
-                  class="text-xs font-mono bg-accented px-2 py-1 rounded"
-                >
-                  {{ perm }}
-                </div>
-                <div v-if="config.permissions.length > 6" class="text-xs text-muted px-2 py-1">
-                  +{{ config.permissions.length - 6 }} more...
-                </div>
-              </div>
-            </div>
           </div>
         </div>
       </div>
