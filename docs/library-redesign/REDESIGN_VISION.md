@@ -82,21 +82,30 @@ We are transforming **OutlabsAuth** from a centralized authentication API servic
 
 ### 1. **Gradual Complexity**
 
-The library supports three preset modes, allowing projects to start simple and add complexity as needed:
+The library supports two preset modes, allowing projects to start simple or go enterprise-ready:
 
 ```python
-# Level 1: Simple RBAC
+# Simple RBAC: Flat structure
 auth = SimpleRBAC(database=db)
-# Just users, roles, and permissions
+# Just users, roles, and permissions - perfect for simple apps
 
-# Level 2: Hierarchical
-auth = HierarchicalRBAC(database=db)
-# Adds entity hierarchy and tree permissions
+# Enterprise: Full power with optional features
+auth = EnterpriseRBAC(database=db)
+# Entity hierarchy + tree permissions (always included)
+# Optional: context-aware roles, ABAC, caching, multi-tenant
 
-# Level 3: Full Featured
-auth = FullFeatured(database=db)
-# Adds context-aware roles and ABAC conditions
+# Enterprise with all features enabled
+auth = EnterpriseRBAC(
+    database=db,
+    redis_url="redis://localhost:6379",
+    enable_context_aware_roles=True,  # Opt-in
+    enable_abac=True,                 # Opt-in
+    enable_caching=True,              # Redis required
+    multi_tenant=True                 # Opt-in
+)
 ```
+
+**The Decision is Simple**: Do you have departments/teams/hierarchy? **NO** → SimpleRBAC | **YES** → EnterpriseRBAC
 
 ### 2. **Sensible Defaults**
 
@@ -143,21 +152,24 @@ async def protected_route(
 
 ### Must Have
 - ✅ Works as drop-in pip dependency
-- ✅ Three clear preset modes (Simple, Hierarchical, Full)
+- ✅ Two clear preset modes (Simple, Enterprise)
 - ✅ Maintains current entity hierarchy capabilities
 - ✅ Tree permissions work identically
 - ✅ Context-aware roles preserved
 - ✅ Comprehensive documentation
 - ✅ Example applications for each preset
 - ✅ 90%+ test coverage
-- ✅ Migration guide from centralized API
+- ✅ Security hardening and testing guides
+- ✅ Production deployment documentation
+- ✅ CLI tools for common operations
+- ✅ Health check system
+- ✅ Permission explanation debugger
 
-### Nice to Have
-- 🎯 Support for PostgreSQL (in addition to MongoDB)
-- 🎯 CLI tool for bootstrapping
-- 🎯 Admin UI components (optional package)
-- 🎯 OpenTelemetry integration
-- 🎯 Multi-tenant mode (optional)
+### Nice to Have (Future Versions)
+- 🎯 Support for PostgreSQL (v1.1 - in addition to MongoDB)
+- 🎯 Admin UI components (v1.2 - optional package)
+- 🎯 OpenTelemetry integration (v1.2)
+- 🎯 Advanced audit log analytics (v2.0)
 
 ### Out of Scope (For Now)
 - ❌ Cross-application SSO (each app is independent)
@@ -233,18 +245,18 @@ Our current system has several brilliant design elements:
 
 1. **Property Management Platform** (Diverse)
    - Needs: Hierarchical RBAC with office/team structure
-   - Preset: Hierarchical mode
-   - Custom: Real estate specific permissions
+   - Preset: **EnterpriseRBAC**
+   - Custom: Real estate specific permissions, context-aware roles, caching for performance
 
 2. **Social Media Platform** (qdarte)
    - Needs: Simple RBAC with user roles
-   - Preset: Simple mode
+   - Preset: **SimpleRBAC**
    - Custom: Content moderation permissions
 
 3. **Referral Platform**
    - Needs: Entity hierarchy for agent teams
-   - Preset: Hierarchical mode
-   - Custom: Commission and lead permissions
+   - Preset: **EnterpriseRBAC**
+   - Custom: Commission and lead permissions, ABAC for approval rules
 
 4. **Future Projects**
    - Unknown requirements
@@ -292,13 +304,15 @@ To maintain focus, we explicitly are NOT trying to:
 
 ## Timeline
 
-**Total Duration**: 7-8 weeks
+**Total Duration**: 6-7 weeks (saved 1 week by combining into EnterpriseRBAC)
 
-- **Weeks 1-2**: Core library + Simple preset
-- **Weeks 3-4**: Hierarchical preset + entity system
-- **Weeks 5-6**: Full featured preset + advanced features
-- **Week 7**: Documentation, examples, testing
-- **Week 8**: Migration guides, polish, release prep
+- **Weeks 1-2**: Core library + SimpleRBAC preset
+- **Weeks 3-5**: EnterpriseRBAC (entity system + all optional features)
+  - Week 3: Entity hierarchy + tree permissions
+  - Week 4: Context-aware roles + ABAC (both opt-in)
+  - Week 5: Caching + audit logging + transactions
+- **Week 6**: CLI tools, testing utilities, health checks
+- **Week 7**: Security hardening, performance testing, documentation, examples
 
 See [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) for detailed phase breakdown.
 
@@ -308,26 +322,40 @@ See [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) for detailed phase br
 
 This vision document is the hub. Related documents:
 
+### Core Design
 1. **[LIBRARY_ARCHITECTURE.md](LIBRARY_ARCHITECTURE.md)** - Technical architecture details
 2. **[IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)** - Week-by-week implementation plan
 3. **[API_DESIGN.md](API_DESIGN.md)** - Developer experience and code examples
-4. **[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)** - Converting from centralized API
-5. **[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)** - Why we made specific choices
-6. **[COMPARISON_MATRIX.md](COMPARISON_MATRIX.md)** - Feature comparison across modes
+4. **[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)** - Why we made specific choices
+5. **[COMPARISON_MATRIX.md](COMPARISON_MATRIX.md)** - Feature comparison: Simple vs Enterprise
+
+### Production Guides
+6. **[SECURITY.md](SECURITY.md)** - Security hardening and best practices
+7. **[TESTING_GUIDE.md](TESTING_GUIDE.md)** - Testing utilities and patterns
+8. **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** - Scaling and production deployment
+9. **[ERROR_HANDLING.md](ERROR_HANDLING.md)** - Exception hierarchy and error patterns
+
+### Reference (For External Users)
+10. **[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)** - Converting from centralized API (skip if starting fresh)
 
 ---
 
 ## Questions to Address
 
-As we implement, we need to answer:
+Questions have been addressed in implementation planning:
 
-1. **Database Migrations**: How do apps handle schema changes?
-2. **Multi-Tenancy**: Do we support it from day one or add later?
-3. **Admin UI**: Separate package or include examples?
-4. **Testing Utilities**: What helpers do we provide for testing?
-5. **Plugin System**: Should we support custom extensions?
+1. **Database Migrations**: ✅ MongoDB 4.4+ with transaction support
+2. **Multi-Tenancy**: ✅ Optional in EnterpriseRBAC via feature flag
+3. **Admin UI**: ✅ Examples only, each app builds their own
+4. **Testing Utilities**: ✅ AuthTestCase base class and fixtures provided
+5. **Plugin System**: ✅ Hook/event system for extensions
+6. **CLI Tools**: ✅ `outlabs-auth` CLI for common operations
+7. **Health Checks**: ✅ Built-in health check system
+8. **Security**: ✅ Comprehensive security guide and defaults
+9. **Error Handling**: ✅ Clear exception hierarchy
+10. **State Management**: ✅ Patterns for horizontal scaling
 
-These will be documented in [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) as we progress.
+See [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) for detailed rationale.
 
 ---
 
@@ -354,8 +382,8 @@ These will be documented in [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) as we pro
    - Mitigation: Phased approach, working software at each phase
 
 2. **Adoption**
-   - Internal teams need to migrate
-   - Mitigation: Show clear benefits, provide migration support
+   - Internal teams will adopt library for new projects
+   - Mitigation: Starting fresh - no migration needed for internal use
 
 3. **Maintenance**
    - Library needs ongoing support
@@ -382,5 +410,14 @@ This is a living document. As we learn during implementation:
 - Clarify scope based on discoveries
 - Document trade-offs made
 
-**Last Updated**: 2025-01-14
+**Last Updated**: 2025-01-14 (Revised to two presets)
 **Next Review**: After Phase 1 completion
+
+---
+
+## Revision History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.1 | 2025-01-14 | Revised to two presets (Simple, Enterprise); added new documentation; incorporated security, testing, deployment guides |
+| 1.0 | 2025-01-14 | Initial vision document |

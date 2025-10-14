@@ -21,15 +21,17 @@
 
 ## Overview
 
-OutlabsAuth is structured as a modular Python library with three preset configurations that build on each other:
+OutlabsAuth is structured as a modular Python library with two preset configurations:
 
 ```
 Simple RBAC (Core)
     ↓
-Hierarchical RBAC (+ Entity System)
-    ↓
-Full Featured (+ Advanced Features)
+Enterprise RBAC (+ Entity System + Optional Advanced Features)
 ```
+
+**Simple vs Enterprise Decision**: Do you have departments/teams/hierarchy?
+- **NO** → SimpleRBAC (flat structure, single role per user)
+- **YES** → EnterpriseRBAC (entity hierarchy + optional features via flags)
 
 Each preset is a fully functional auth system that can be used independently.
 
@@ -60,18 +62,17 @@ outlabs_auth/
 │   ├── user.py                 # UserService
 │   ├── role.py                 # RoleService
 │   ├── permission.py           # PermissionService
-│   ├── entity.py               # EntityService (hierarchical+)
-│   └── membership.py           # MembershipService (hierarchical+)
+│   ├── entity.py               # EntityService (enterprise only)
+│   └── membership.py           # MembershipService (enterprise only)
 ├── presets/
 │   ├── __init__.py
 │   ├── simple.py               # SimpleRBAC preset
-│   ├── hierarchical.py         # HierarchicalRBAC preset
-│   └── full.py                 # FullFeatured preset
+│   └── enterprise.py           # EnterpriseRBAC preset
 ├── dependencies/
 │   ├── __init__.py
 │   ├── auth.py                 # FastAPI auth dependencies
 │   ├── permissions.py          # Permission checking dependencies
-│   └── entities.py             # Entity context dependencies (hierarchical+)
+│   └── entities.py             # Entity context dependencies (enterprise only)
 ├── middleware/
 │   ├── __init__.py
 │   ├── auth.py                 # JWT middleware
@@ -87,12 +88,11 @@ outlabs_auth/
     ├── user.py                 # User schemas
     ├── role.py                 # Role schemas
     ├── permission.py           # Permission schemas
-    └── entity.py               # Entity schemas (hierarchical+)
+    └── entity.py               # Entity schemas (enterprise only)
 
 examples/                       # Example applications
 ├── simple_app/
-├── hierarchical_app/
-├── full_featured_app/
+├── enterprise_app/             # EnterpriseRBAC with various configurations
 └── migration_example/
 
 tests/                          # Comprehensive test suite
@@ -227,34 +227,41 @@ class SimpleRBAC(OutlabsAuth):
         return Depends(_check_permission)
 ```
 
-### Preset 2: HierarchicalRBAC
+### Preset 2: EnterpriseRBAC
 
-**Purpose**: Role-based access with entity hierarchy and tree permissions.
+**Purpose**: Full-featured auth system with entity hierarchy and optional advanced features.
 
-**Features**:
+**Core Features** (Always Included):
 - Everything from SimpleRBAC
 - Entity hierarchy (organizational structure)
 - Multiple roles per user (via entity memberships)
 - Tree permissions (`resource:action_tree`)
 - Entity context in permission checks
 
-**Additional Models**:
+**Optional Features** (Opt-in via flags):
+- Context-aware roles (permissions vary by entity type) - `enable_context_aware_roles=True`
+- ABAC conditions (attribute-based access control) - `enable_abac=True`
+- Permission caching (Redis) - `enable_caching=True` (requires `redis_url`)
+- Multi-tenant support - `multi_tenant=True`
+- Advanced audit logging - `enable_audit_log=True`
+
+**Models Used**:
+- All SimpleRBAC models
 - EntityModel
 - EntityMembershipModel
 
-**Additional Services**:
+**Services**:
+- All SimpleRBAC services
 - EntityService
 - MembershipService
-- PermissionService (hierarchical)
+- EnterprisePermissionService (with ABAC and caching support)
 
-**Example**:
+**Example - Basic Configuration** (entity hierarchy only):
 ```python
-from outlabs_auth import HierarchicalRBAC
+from outlabs_auth import EnterpriseRBAC
 
-auth = HierarchicalRBAC(
-    database=mongo_client,
-    entity_types=["department", "team"]  # Custom types
-)
+# Minimal configuration - just entity hierarchy
+auth = EnterpriseRBAC(database=mongo_client)
 
 # Create entity hierarchy
 org = await auth.entity_service.create_entity(
@@ -270,107 +277,27 @@ dept = await auth.entity_service.create_entity(
     parent_id=org.id
 )
 
-# Assign user to entity with role
+# Assign user to entity with multiple roles
 await auth.membership_service.add_member(
     entity_id=dept.id,
     user_id=user.id,
-    role_id=manager_role.id
+    role_ids=[manager_role.id, developer_role.id]
 )
-
-# Check permission with entity context
-@app.post("/entities/{entity_id}/members")
-async def add_member(
-    entity_id: str,
-    user = Depends(auth.require_permission_in_entity("member:create", entity_id))
-):
-    # user has member:create permission in this entity
-    pass
 ```
 
-**Implementation Highlights**:
+**Example - Full Configuration** (all optional features enabled):
 ```python
-class HierarchicalRBAC(OutlabsAuth):
-    """Hierarchical RBAC with entity system"""
+from outlabs_auth import EnterpriseRBAC
 
-    def __init__(
-        self,
-        database: Any,
-        config: Optional[HierarchicalConfig] = None,
-        entity_types: Optional[List[str]] = None
-    ):
-        super().__init__(database, config)
-
-        # Entity configuration
-        self.allowed_entity_types = entity_types or [
-            "organization", "division", "department", "team"
-        ]
-
-        # Add entity-related models
-        self.entity_model = EntityModel
-        self.membership_model = EntityMembershipModel
-
-        # Initialize all services including entity services
-        self._init_services()
-
-    def require_permission_in_entity(
-        self,
-        permission: str,
-        entity_id: str
-    ):
-        """Check permission within specific entity context"""
-        async def _check_permission(
-            user: UserModel = Depends(self.get_current_user)
-        ):
-            has_perm = await self.permission_service.check_permission(
-                user_id=user.id,
-                permission=permission,
-                entity_id=entity_id
-            )
-            if not has_perm:
-                raise HTTPException(
-                    403,
-                    f"Permission denied: {permission} in entity {entity_id}"
-                )
-            return user
-
-        return Depends(_check_permission)
-
-    def require_tree_permission(
-        self,
-        permission: str,
-        target_entity_id: str
-    ):
-        """Check tree permission (checks parent entities)"""
-        # Implementation checks if user has permission_tree in any parent
-        pass
-```
-
-### Preset 3: FullFeatured
-
-**Purpose**: Complete auth system with all advanced features.
-
-**Features**:
-- Everything from HierarchicalRBAC
-- Context-aware roles (permissions vary by entity type)
-- ABAC conditions (attribute-based access control)
-- Permission caching (Redis)
-- Advanced audit logging
-
-**Additional Features**:
-- Role permissions adapt based on entity type
-- Conditional permissions with policy engine
-- Performance optimizations
-- Enhanced logging and monitoring
-
-**Example**:
-```python
-from outlabs_auth import FullFeatured
-
-auth = FullFeatured(
+# Full configuration with all optional features
+auth = EnterpriseRBAC(
     database=mongo_client,
     redis_url="redis://localhost:6379",
-    enable_caching=True,
-    enable_abac=True
+    enable_context_aware_roles=True,  # Opt-in
+    enable_abac=True,                 # Opt-in
+    enable_caching=True,              # Opt-in (requires Redis)
+    multi_tenant=True,                # Opt-in
+    enable_audit_log=True             # Opt-in
 )
 
 # Context-aware role
@@ -454,7 +381,7 @@ class RoleModel(BaseDocument):
     # Permissions (default for all contexts)
     permissions: List[str] = Field(default_factory=list)
 
-    # Context-aware permissions (FullFeatured only)
+    # Context-aware permissions (EnterpriseRBAC only - optional feature)
     entity_type_permissions: Optional[Dict[str, List[str]]] = None
 
     # Configuration
@@ -473,14 +400,14 @@ class PermissionModel(BaseDocument):
     resource: str  # "user"
     action: str    # "create"
 
-    # ABAC conditions (FullFeatured only)
+    # ABAC conditions (EnterpriseRBAC only - optional feature)
     conditions: List[Condition] = Field(default_factory=list)
 
     # Status
     is_active: bool = True
 ```
 
-### Hierarchical Models (Hierarchical + Full)
+### Enterprise Models (EnterpriseRBAC only)
 
 #### EntityModel
 ```python
@@ -602,9 +529,9 @@ class BasicPermissionService:
         pass
 ```
 
-#### HierarchicalPermissionService (Hierarchical + Full)
+#### EnterprisePermissionService (EnterpriseRBAC)
 ```python
-class HierarchicalPermissionService(BasicPermissionService):
+class EnterprisePermissionService(BasicPermissionService):
     """Permission checking with entity hierarchy and tree permissions"""
 
     async def check_permission(
@@ -635,12 +562,6 @@ class HierarchicalPermissionService(BasicPermissionService):
         Example: entity:update_tree in parent allows updating children.
         """
         pass
-```
-
-#### FullPermissionService (Full preset)
-```python
-class FullPermissionService(HierarchicalPermissionService):
-    """Permission checking with ABAC and caching"""
 
     async def check_permission_with_context(
         self,
@@ -650,17 +571,19 @@ class FullPermissionService(HierarchicalPermissionService):
         resource_attributes: Optional[Dict[str, Any]] = None
     ) -> PolicyResult:
         """
-        Full RBAC + ReBAC + ABAC evaluation.
+        Full RBAC + ReBAC + ABAC evaluation (when ABAC enabled).
 
         Steps:
         1. Check RBAC (does user have permission in role?)
         2. Check ReBAC (is entity relationship valid?)
-        3. Check ABAC (do conditions pass?)
+        3. Check ABAC (do conditions pass?) - only if enable_abac=True
+
+        Note: Caching automatically applied when enable_caching=True
         """
         pass
 ```
 
-### EntityService (Hierarchical + Full)
+### EntityService (EnterpriseRBAC only)
 ```python
 class EntityService:
     """Entity hierarchy management"""
@@ -756,12 +679,12 @@ def require_any_permission(auth: OutlabsAuth, permissions: List[str]):
     return _check_any
 ```
 
-### Entity Context Dependencies (Hierarchical + Full)
+### Entity Context Dependencies (EnterpriseRBAC only)
 ```python
 # outlabs_auth/dependencies/entities.py
 
 def require_entity_permission(
-    auth: HierarchicalRBAC,
+    auth: EnterpriseRBAC,
     permission: str,
     entity_param: str = "entity_id"
 ):
@@ -832,31 +755,24 @@ class SimpleConfig(AuthConfig):
     # Simple mode has no additional config
     pass
 
-class HierarchicalConfig(AuthConfig):
-    """Configuration for HierarchicalRBAC"""
+class EnterpriseConfig(AuthConfig):
+    """Configuration for EnterpriseRBAC"""
 
-    # Entity settings
+    # Entity settings (always enabled)
     max_entity_depth: int = 5
     allowed_entity_types: Optional[List[str]] = None
     allow_access_groups: bool = True
 
-    # Permission settings
-    enable_tree_permissions: bool = True
+    # Optional features (opt-in)
+    enable_context_aware_roles: bool = False
+    enable_abac: bool = False
+    enable_caching: bool = False
+    enable_audit_log: bool = False
+    multi_tenant: bool = False
 
-class FullConfig(HierarchicalConfig):
-    """Configuration for FullFeatured"""
-
-    # Caching
-    enable_caching: bool = True
+    # Caching settings (only used when enable_caching=True)
     redis_url: Optional[str] = None
     cache_ttl_seconds: int = 300
-
-    # ABAC
-    enable_abac: bool = True
-
-    # Advanced features
-    enable_audit_log: bool = False
-    enable_rate_limiting: bool = False
 ```
 
 ---
@@ -883,21 +799,20 @@ tests/unit/utils/test_password.py
 ```python
 # Test preset configurations
 tests/integration/test_simple_rbac.py
-tests/integration/test_hierarchical_rbac.py
-tests/integration/test_full_featured.py
+tests/integration/test_enterprise_rbac.py
 
 # Test complex scenarios
 tests/integration/test_tree_permissions.py
 tests/integration/test_context_aware_roles.py
 tests/integration/test_abac_conditions.py
+tests/integration/test_multi_tenant.py
 ```
 
 ### Example Tests
 ```python
 # Test example applications work
 tests/examples/test_simple_app.py
-tests/examples/test_hierarchical_app.py
-tests/examples/test_full_app.py
+tests/examples/test_enterprise_app.py
 ```
 
 ### Test Fixtures
@@ -954,7 +869,7 @@ async def test_user(simple_auth):
 
 ## Performance Considerations
 
-### Caching Strategy (FullFeatured)
+### Caching Strategy (EnterpriseRBAC with caching enabled)
 ```python
 # Redis cache keys
 user_permissions:{user_id}:{entity_id}  # TTL: 5 minutes
@@ -980,12 +895,12 @@ role_permissions:{role_id}              # TTL: 15 minutes
 {"name": 1}
 {"resource": 1, "action": 1}
 
-# Entity collection (Hierarchical+)
+# Entity collection (EnterpriseRBAC only)
 {"slug": 1}  # Unique
 {"parent_entity": 1}
 {"entity_type": 1}
 
-# EntityMembership collection (Hierarchical+)
+# EntityMembership collection (EnterpriseRBAC only)
 {"user": 1, "entity": 1}  # Unique
 {"entity": 1}
 {"user": 1}
@@ -1008,5 +923,5 @@ role_permissions:{role_id}              # TTL: 15 minutes
 
 ---
 
-**Last Updated**: 2025-01-14
+**Last Updated**: 2025-01-14 (Revised to two presets)
 **Next Review**: After Phase 1 prototype

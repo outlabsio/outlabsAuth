@@ -1,6 +1,6 @@
 # OutlabsAuth Library - Design Decisions Log
 
-**Version**: 1.0
+**Version**: 1.1
 **Date**: 2025-01-14
 **Purpose**: Document key architectural decisions and trade-offs
 
@@ -134,7 +134,7 @@ auth = SimpleRBAC(database=db, multi_tenant=True)
 ## DD-003: Preset Architecture (Simple, Hierarchical, Full)
 
 **Date**: 2025-01-14
-**Status**: Accepted
+**Status**: Superseded by DD-015
 **Deciders**: Core team
 **Context**: Need gradual complexity without feature explosion
 
@@ -156,26 +156,17 @@ auth = SimpleRBAC(database=db, multi_tenant=True)
    - Pros: Maximum flexibility
    - Cons: High complexity, confusing API
 
-### Decision
+### Decision (Original)
 Three preset classes that build on each other:
 - `SimpleRBAC`: Basic RBAC
 - `HierarchicalRBAC`: + Entity hierarchy
 - `FullFeatured`: + Advanced features
 
-**Reasoning**:
-- Clear progression path
-- Easy to understand what each level provides
-- Can start simple and upgrade later
-- Code reuse through inheritance
-
-### Consequences
-- **Positive**: Clear mental model, gradual complexity
-- **Negative**: Some code duplication, need good inheritance design
-- **Neutral**: Three entry points instead of one
+**Status**: This decision was superseded by DD-015 after colleague feedback identified the "middle child problem."
 
 ### Related Decisions
 - DD-001 (Library approach)
-- DD-008 (Context-aware roles)
+- DD-015 (Two-preset architecture - SUPERSEDES THIS)
 
 ---
 
@@ -720,6 +711,426 @@ Could create separate `outlabs-auth-admin-ui` package later.
 
 ---
 
+## DD-015: Two Presets Instead of Three
+
+**Date**: 2025-01-14 (Revised)
+**Status**: Accepted (Supersedes DD-003)
+**Deciders**: Core team
+**Context**: Colleague feedback identified "middle child problem" with three presets
+
+### The Problem
+Original three-preset design (SimpleRBAC → HierarchicalRBAC → FullFeatured) had an issue:
+- Users would likely skip HierarchicalRBAC and jump from Simple → Full
+- Middle preset added unnecessary decision fatigue
+- Three options when the real question is binary: "Do you need hierarchy?"
+
+### Options Considered
+
+1. **Keep Three Presets**
+   - Pros: Already designed
+   - Cons: Middle child problem, confusing progression
+
+2. **Two Presets with Feature Flags**
+   - Pros: Simpler decision, flexible advanced features
+   - Cons: Need to redesign EnterpriseRBAC configuration
+
+3. **Four Presets (Add more)**
+   - Pros: More granular
+   - Cons: Makes problem worse
+
+### Decision
+Two presets only:
+- **SimpleRBAC**: Flat structure, single role per user
+- **EnterpriseRBAC**: Entity hierarchy (always) + optional advanced features
+
+**Key Design**:
+```python
+# Simple: For flat structures
+auth = SimpleRBAC(database=db)
+
+# Enterprise: Basic (entity hierarchy always included)
+auth = EnterpriseRBAC(database=db)
+
+# Enterprise: With optional features
+auth = EnterpriseRBAC(
+    database=db,
+    redis_url="redis://localhost:6379",
+    enable_context_aware_roles=True,  # Opt-in
+    enable_abac=True,                 # Opt-in
+    enable_caching=True,              # Opt-in
+    multi_tenant=True,                # Opt-in
+    enable_audit_log=True             # Opt-in
+)
+```
+
+**Reasoning**:
+- Binary decision: flat vs hierarchical
+- EnterpriseRBAC always includes entity hierarchy + tree permissions
+- Advanced features are opt-in via feature flags
+- Avoids middle child problem
+- Clearer mental model
+
+### Consequences
+- **Positive**: Simpler decision tree, clearer options, saved 1 week of development
+- **Negative**: Need to redesign configuration, update all documentation
+- **Neutral**: Feature flags add some complexity to EnterpriseRBAC
+
+### Timeline Impact
+- Saved 1 week by consolidating phases
+- 7-8 weeks → 6-7 weeks total
+
+### Related Decisions
+- DD-003 (Original three-preset design - SUPERSEDED)
+- DD-016 (Optional features via flags)
+- DD-017 (Entity hierarchy always enabled)
+
+---
+
+## DD-016: Optional Features via Feature Flags
+
+**Date**: 2025-01-14 (Revised)
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: EnterpriseRBAC needs flexible advanced features without complexity explosion
+
+### Options Considered
+
+1. **All Features Always Enabled**
+   - Pros: Consistent behavior
+   - Cons: Unnecessary complexity for users who don't need it
+
+2. **Separate Classes for Each Feature**
+   - Pros: Clear separation
+   - Cons: Class explosion, confusing
+
+3. **Feature Flags (Opt-In)**
+   - Pros: Pay-for-what-you-use, flexible
+   - Cons: Configuration complexity
+
+### Decision
+Optional features in EnterpriseRBAC via feature flags (opt-in):
+- `enable_context_aware_roles`: Context-aware role permissions
+- `enable_abac`: Attribute-based access control
+- `enable_caching`: Redis caching (requires Redis)
+- `multi_tenant`: Multi-tenant isolation
+- `enable_audit_log`: Comprehensive audit logging
+
+**Design Principle**: Start with basic EnterpriseRBAC (entity hierarchy), enable features as needed.
+
+**Reasoning**:
+- Users enable only what they need
+- Keeps basic EnterpriseRBAC simple
+- Advanced users get full power
+- Clear opt-in model
+
+### Consequences
+- **Positive**: Flexible, pay-for-what-you-use, gradual complexity
+- **Negative**: Need to maintain feature flag logic
+- **Neutral**: Documentation must be clear about what's core vs optional
+
+### Related Decisions
+- DD-015 (Two-preset architecture)
+- DD-017 (Entity hierarchy always enabled)
+
+---
+
+## DD-017: Entity Hierarchy Always Enabled in EnterpriseRBAC
+
+**Date**: 2025-01-14 (Revised)
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Define what's core vs optional in EnterpriseRBAC
+
+### Options Considered
+
+1. **Make Entity Hierarchy Optional**
+   - Pros: Maximum flexibility
+   - Cons: Defeats purpose of Enterprise preset
+
+2. **Entity Hierarchy Always Enabled**
+   - Pros: Clear distinction from SimpleRBAC
+   - Cons: Users can't disable it
+
+### Decision
+EnterpriseRBAC **always includes** these core features:
+- Entity hierarchy (STRUCTURAL + ACCESS_GROUP)
+- Tree permissions (`resource:action_tree`)
+- Multiple roles per user (via entity memberships)
+- Entity path traversal
+- Access groups
+
+**Reasoning**:
+- This is what defines "Enterprise"
+- If you don't need hierarchy, use SimpleRBAC
+- Clear boundary between presets
+- Simplifies decision tree
+
+### Decision Tree
+```
+Do you need organizational hierarchy?
+├─ NO  → SimpleRBAC
+└─ YES → EnterpriseRBAC (hierarchy always included)
+          ├─ Basic: Just hierarchy + tree permissions
+          └─ Advanced: + optional features via flags
+```
+
+### Consequences
+- **Positive**: Clear preset boundaries, simple decision
+- **Negative**: Can't use Enterprise without hierarchy (by design)
+- **Neutral**: Users who want hierarchy but not features still get value
+
+### Related Decisions
+- DD-015 (Two-preset architecture)
+- DD-016 (Optional features)
+
+---
+
+## DD-018: CLI Tools in v1.0
+
+**Date**: 2025-01-14 (Revised)
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Need operational tools for common admin tasks
+
+### Options Considered
+
+1. **No CLI Tools**
+   - Pros: Less to build
+   - Cons: Users write their own scripts
+
+2. **CLI Tools in v1.1**
+   - Pros: Focus on core first
+   - Cons: Users need them for production
+
+3. **CLI Tools in v1.0**
+   - Pros: Production-ready from day one
+   - Cons: Adds to scope
+
+### Decision
+Include CLI tools in v1.0 (Week 6).
+
+**Planned Commands**:
+```bash
+# User management
+outlabs-auth users list
+outlabs-auth users create --email user@example.com
+outlabs-auth users reset-password user@example.com
+
+# Role management
+outlabs-auth roles list
+outlabs-auth roles create --name admin --permissions user:*
+
+# Entity management (Enterprise only)
+outlabs-auth entities list
+outlabs-auth entities create --name engineering --type department
+
+# Health checks
+outlabs-auth health check
+outlabs-auth health migrations
+
+# Permissions debugging
+outlabs-auth permissions explain user@example.com entity:update
+```
+
+**Reasoning**:
+- Production deployments need admin tools
+- Common operations should be scriptable
+- Improves developer experience
+- Not much extra work (1-2 days)
+
+### Consequences
+- **Positive**: Production-ready from v1.0, better DX
+- **Negative**: Adds to initial scope
+- **Neutral**: Week 6 has capacity for this
+
+### Related Decisions
+- DD-019 (Health checks)
+- DD-020 (Permission explainer)
+
+---
+
+## DD-019: Health Check System
+
+**Date**: 2025-01-14 (Revised)
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Production deployments need health monitoring
+
+### Options Considered
+
+1. **No Built-in Health Checks**
+   - Pros: Less to build
+   - Cons: Users implement their own
+
+2. **Basic Health Checks**
+   - Pros: Essential monitoring
+   - Cons: Minimal scope
+
+3. **Comprehensive Health System**
+   - Pros: Production-ready
+   - Cons: More work
+
+### Decision
+Comprehensive health check system in v1.0 (Week 6).
+
+**Features**:
+```python
+# HTTP endpoint
+@app.get("/health")
+async def health():
+    return await auth.health.check_all()
+
+# Programmatic checks
+health = await auth.health.check_database()
+health = await auth.health.check_redis()  # If caching enabled
+health = await auth.health.check_migrations()
+
+# CLI commands
+outlabs-auth health check
+outlabs-auth health migrations
+```
+
+**Health Checks**:
+- Database connectivity
+- Redis connectivity (if enabled)
+- Schema migrations status
+- Index status
+- Performance metrics
+
+**Reasoning**:
+- Essential for production
+- Kubernetes/Docker health probes
+- Early problem detection
+- Low implementation cost (1 day)
+
+### Consequences
+- **Positive**: Production-ready monitoring
+- **Negative**: Small scope addition
+- **Neutral**: Fits naturally into Week 6
+
+### Related Decisions
+- DD-018 (CLI tools)
+
+---
+
+## DD-020: Permission Explainer Debugger
+
+**Date**: 2025-01-14 (Revised)
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Debugging permission issues is hard
+
+### Options Considered
+
+1. **No Debugging Tools**
+   - Pros: Less to build
+   - Cons: Hard to debug permissions
+
+2. **Basic Logging**
+   - Pros: Simple
+   - Cons: Not structured
+
+3. **Permission Explainer**
+   - Pros: Clear explanation of permission resolution
+   - Cons: More work
+
+### Decision
+Include permission explainer/debugger in v1.0 (Week 6).
+
+**Features**:
+```python
+# Programmatic
+explanation = await auth.permissions.explain(
+    user_id=user.id,
+    permission="entity:update",
+    entity_id=entity.id
+)
+
+# Returns:
+{
+    "allowed": True,
+    "source": "role:department_manager",
+    "entity": "engineering",
+    "resolution_path": [
+        "User membership in 'engineering'",
+        "Role 'department_manager' grants 'entity:update'",
+        "Permission allowed"
+    ],
+    "tree_permissions_checked": ["platform > organization > engineering"],
+    "time_ms": 23.4
+}
+
+# CLI
+outlabs-auth permissions explain user@example.com entity:update --entity engineering
+```
+
+**Reasoning**:
+- Permission debugging is common pain point
+- Improves developer experience
+- Helps understand complex hierarchies
+- Low cost (1-2 days)
+
+### Consequences
+- **Positive**: Easier debugging, better DX, great for learning
+- **Negative**: Small scope addition
+- **Neutral**: Naturally fits with permission system
+
+### Related Decisions
+- DD-018 (CLI tools)
+- DD-007 (Tree permissions)
+
+---
+
+## DD-021: Comprehensive Production Guides
+
+**Date**: 2025-01-14 (Revised)
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Library needs production deployment documentation
+
+### Options Considered
+
+1. **Basic Documentation Only**
+   - Pros: Less writing
+   - Cons: Users struggle in production
+
+2. **Comprehensive Production Guides**
+   - Pros: Production-ready from day one
+   - Cons: More documentation work
+
+### Decision
+Create comprehensive production guides in Week 7:
+- **SECURITY.md**: Security hardening, best practices, threat model
+- **TESTING_GUIDE.md**: Testing utilities, patterns, fixtures
+- **DEPLOYMENT_GUIDE.md**: Scaling, performance, production deployment
+- **ERROR_HANDLING.md**: Exception hierarchy, error patterns
+
+**Content**:
+- SECURITY.md: JWT security, rate limiting, password policies, secret management, threat model, security checklist
+- TESTING_GUIDE.md: Test fixtures, unit testing, integration testing, mocking, CI/CD patterns
+- DEPLOYMENT_GUIDE.md: Docker, Kubernetes, scaling patterns, performance tuning, monitoring, backup/restore
+- ERROR_HANDLING.md: Exception hierarchy, error codes, error handling patterns, logging
+
+**Reasoning**:
+- Users need this for production deployments
+- Security is critical for auth library
+- Testing patterns improve adoption
+- Deployment guide reduces support burden
+
+### Timeline Impact
+These fit naturally into Week 7 (Documentation + Polish).
+
+### Consequences
+- **Positive**: Production-ready documentation, reduces support burden, improves trust
+- **Negative**: More documentation to write and maintain
+- **Neutral**: Week 7 allocated for documentation
+
+### Related Decisions
+- DD-001 (Library approach)
+- DD-019 (Health checks)
+
+---
+
 ## Questions Still Open
 
 Track questions that need decisions:
@@ -746,8 +1157,10 @@ Track questions that need decisions:
 | Date | Decision | Status |
 |------|----------|--------|
 | 2025-01-14 | DD-001 through DD-014 | All Accepted |
+| 2025-01-14 | DD-015 through DD-021 | All Accepted |
+| 2025-01-14 | DD-003 | Superseded by DD-015 |
 
 ---
 
-**Last Updated**: 2025-01-14
+**Last Updated**: 2025-01-14 (Revised to two presets)
 **Next Review**: End of Phase 1 (Week 2)

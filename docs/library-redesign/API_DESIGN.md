@@ -1,6 +1,6 @@
 # OutlabsAuth Library - API Design & Developer Experience
 
-**Version**: 1.0
+**Version**: 1.1
 **Date**: 2025-01-14
 **Status**: Design Phase
 
@@ -11,11 +11,12 @@
 1. [Installation](#installation)
 2. [Quick Start](#quick-start)
 3. [SimpleRBAC Examples](#simplerbac-examples)
-4. [HierarchicalRBAC Examples](#hierarchicalrbac-examples)
-5. [FullFeatured Examples](#fullfeatured-examples)
-6. [FastAPI Integration Patterns](#fastapi-integration-patterns)
-7. [Configuration](#configuration)
-8. [Testing Your App](#testing-your-app)
+4. [EnterpriseRBAC Examples](#enterpriserbac-examples)
+   - [Basic Hierarchy](#basic-hierarchy-examples)
+   - [Optional Features](#optional-features-examples)
+5. [FastAPI Integration Patterns](#fastapi-integration-patterns)
+6. [Configuration](#configuration)
+7. [Testing Your App](#testing-your-app)
 
 ---
 
@@ -230,17 +231,19 @@ async def complete_delete_user(
 
 ---
 
-## HierarchicalRBAC Examples
+## EnterpriseRBAC Examples
 
-### Example 1: Creating Entity Hierarchy
+### Basic Hierarchy Examples
+
+These examples show EnterpriseRBAC's core features (entity hierarchy and tree permissions), which are always included.
+
+#### Example 1: Creating Entity Hierarchy
 
 ```python
-from outlabs_auth import HierarchicalRBAC
+from outlabs_auth import EnterpriseRBAC
 
-auth = HierarchicalRBAC(
-    database=db,
-    entity_types=["company", "department", "team"]  # Custom types
-)
+# Basic setup - entity hierarchy is always included
+auth = EnterpriseRBAC(database=db)
 
 # Create organization
 company = await auth.entity_service.create_entity(
@@ -398,17 +401,19 @@ async def get_entities_with_permission(
 
 ---
 
-## FullFeatured Examples
+### Optional Features Examples
 
-### Example 1: Context-Aware Roles
+These examples show EnterpriseRBAC's optional features (context-aware roles, ABAC, caching, multi-tenant, audit logging), which can be enabled via feature flags.
+
+#### Example 1: Context-Aware Roles
 
 ```python
-from outlabs_auth import FullFeatured
+from outlabs_auth import EnterpriseRBAC
 
-auth = FullFeatured(
+# Enable context-aware roles feature
+auth = EnterpriseRBAC(
     database=db,
-    redis_url="redis://localhost:6379",
-    enable_caching=True
+    enable_context_aware_roles=True  # Opt-in feature
 )
 
 # Create context-aware role
@@ -460,9 +465,17 @@ await auth.membership_service.add_member(
 # At team level: view only
 ```
 
-### Example 2: ABAC Conditions
+#### Example 2: ABAC Conditions
 
 ```python
+from outlabs_auth import EnterpriseRBAC
+
+# Enable ABAC feature
+auth = EnterpriseRBAC(
+    database=db,
+    enable_abac=True  # Opt-in feature
+)
+
 # Create permission with conditions
 invoice_approval = await auth.permission_service.create_permission(
     name="invoice:approve",
@@ -516,10 +529,13 @@ else:
     raise HTTPException(403, result.reason)
 ```
 
-### Example 3: Advanced Permission Checking
+#### Example 3: Advanced Permission Checking with ABAC
 
 ```python
 from outlabs_auth.schemas import PolicyResult
+
+# Same ABAC-enabled setup from Example 2
+# auth = EnterpriseRBAC(database=db, enable_abac=True)
 
 @app.post("/invoices/{invoice_id}/approve")
 async def approve_invoice(
@@ -558,11 +574,18 @@ async def approve_invoice(
     return approved
 ```
 
-### Example 4: Caching Performance
+#### Example 4: Caching Performance
 
 ```python
-# With caching enabled (FullFeatured)
+from outlabs_auth import EnterpriseRBAC
 import time
+
+# Enable caching feature (requires Redis)
+auth = EnterpriseRBAC(
+    database=db,
+    redis_url="redis://localhost:6379",
+    enable_caching=True  # Opt-in feature, requires Redis
+)
 
 # First call - miss cache, hits database
 start = time.time()
@@ -605,10 +628,10 @@ result = await auth.permission_service.check_permission(
 
 ```python
 # app/core/auth.py
-from outlabs_auth import HierarchicalRBAC
+from outlabs_auth import EnterpriseRBAC
 from app.core.database import get_database
 
-auth = HierarchicalRBAC(database=get_database())
+auth = EnterpriseRBAC(database=get_database())
 
 # app/api/routes/users.py
 from app.core.auth import auth
@@ -738,51 +761,47 @@ config = SimpleConfig(
 auth = SimpleRBAC(database=db, config=config)
 ```
 
-### HierarchicalRBAC Configuration
+### EnterpriseRBAC Configuration
 
 ```python
-from outlabs_auth import HierarchicalRBAC, HierarchicalConfig
+from outlabs_auth import EnterpriseRBAC, EnterpriseConfig
 
-config = HierarchicalConfig(
+# Basic configuration (entity hierarchy always enabled)
+config = EnterpriseConfig(
     # Inherit all SimpleConfig options
     secret_key="your-secret-key",
+    access_token_expire_minutes=15,
+    refresh_token_expire_days=30,
 
-    # Entity settings
+    # Entity settings (always enabled)
     max_entity_depth=5,
     allowed_entity_types=["company", "department", "team", "project"],
     allow_access_groups=True,
-
-    # Permission settings
-    enable_tree_permissions=True,
 )
 
-auth = HierarchicalRBAC(database=db, config=config)
+auth = EnterpriseRBAC(database=db, config=config)
 ```
 
-### FullFeatured Configuration
-
 ```python
-from outlabs_auth import FullFeatured, FullConfig
-
-config = FullConfig(
-    # Inherit all HierarchicalConfig options
+# Full configuration with all optional features
+config = EnterpriseConfig(
+    # Inherit all SimpleConfig options
     secret_key="your-secret-key",
     max_entity_depth=5,
 
-    # Caching
+    # Optional features (opt-in via feature flags)
+    enable_context_aware_roles=True,
+    enable_abac=True,
     enable_caching=True,
+    enable_audit_log=True,
+    multi_tenant=True,
+
+    # Caching settings (only used when enable_caching=True)
     redis_url="redis://localhost:6379",
     cache_ttl_seconds=300,  # 5 minutes
-
-    # ABAC
-    enable_abac=True,
-
-    # Advanced features
-    enable_audit_log=True,
-    enable_rate_limiting=False,
 )
 
-auth = FullFeatured(database=db, config=config)
+auth = EnterpriseRBAC(database=db, config=config)
 ```
 
 ### Environment-Based Configuration

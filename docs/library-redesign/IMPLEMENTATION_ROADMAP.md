@@ -1,15 +1,17 @@
 # OutlabsAuth Library - Implementation Roadmap
 
-**Version**: 1.0
+**Version**: 1.1
 **Date**: 2025-01-14
-**Total Duration**: 7-8 weeks
+**Total Duration**: 6-7 weeks (saved 1 week with two-preset architecture)
 **Status**: Planning Phase
 
 ---
 
 ## Overview
 
-This document breaks down the library redesign into 7 phases, each with clear deliverables and success criteria. Phases build on each other, with working software at each stage.
+This document breaks down the library redesign into 5 phases, each with clear deliverables and success criteria. Phases build on each other, with working software at each stage.
+
+**Key Change**: Consolidated into TWO presets (Simple and Enterprise) instead of three, saving 1 week by eliminating middle preset.
 
 ---
 
@@ -19,11 +21,10 @@ This document breaks down the library redesign into 7 phases, each with clear de
 |-------|----------|-------|-------------|
 | Phase 1 | Week 1 | Core foundation + SimpleRBAC | Working simple RBAC |
 | Phase 2 | Week 2 | Complete SimpleRBAC + Tests | Production-ready simple preset |
-| Phase 3 | Week 3 | Entity system basics | Entity hierarchy working |
-| Phase 4 | Week 4 | HierarchicalRBAC complete | Production-ready hierarchical preset |
-| Phase 5 | Week 5 | Advanced features | Context-aware roles + ABAC |
-| Phase 6 | Week 6 | FullFeatured complete | Production-ready full preset |
-| Phase 7 | Week 7-8 | Documentation + Examples | Ready for use |
+| Phase 3 | Week 3 | EnterpriseRBAC - Entity system | Entity hierarchy + tree permissions |
+| Phase 4 | Week 4 | EnterpriseRBAC - Optional features | Context-aware roles + ABAC + caching |
+| Phase 5 | Week 5 | EnterpriseRBAC complete + Testing | Production-ready enterprise preset |
+| Phase 6 | Week 6-7 | Documentation + Examples + Polish | Ready for production use |
 
 ---
 
@@ -157,12 +158,13 @@ This document breaks down the library redesign into 7 phases, each with clear de
 
 ---
 
-## Phase 3: Entity System Basics (Week 3)
+## Phase 3: EnterpriseRBAC - Entity System (Week 3)
 
 ### Goals
 - Add entity hierarchy support
 - Implement entity membership
 - Tree permissions foundation
+- Begin EnterpriseRBAC preset
 
 ### Tasks
 
@@ -224,72 +226,7 @@ This document breaks down the library redesign into 7 phases, each with clear de
 
 ---
 
-## Phase 4: HierarchicalRBAC Complete (Week 4)
-
-### Goals
-- Complete HierarchicalRBAC preset
-- Production-ready entity system
-- Hierarchical example app
-
-### Tasks
-
-#### Day 1-2: HierarchicalRBAC Implementation
-- [ ] Create `HierarchicalRBAC` preset class
-- [ ] Add entity-aware dependencies:
-  - `require_entity_permission(permission, entity_id)`
-  - `require_tree_permission(permission, target_entity_id)`
-  - `get_user_entities(user, entity_type)`
-- [ ] Configuration for entity types
-- [ ] Entity type validation
-
-**Deliverable**: HierarchicalRBAC preset complete
-
-#### Day 3-4: Testing
-- [ ] Unit tests for entity services
-- [ ] Unit tests for hierarchical permission service
-- [ ] Integration tests:
-  - Entity hierarchy scenarios
-  - Tree permission scenarios
-  - Complex membership scenarios
-- [ ] Performance tests for deep hierarchies
-
-**Deliverable**: Comprehensive test coverage
-
-#### Day 5-6: Example Application
-- [ ] Create `examples/hierarchical_app/`
-- [ ] FastAPI app with:
-  - Organization → Department → Team hierarchy
-  - Entity management UI (basic)
-  - Member management
-  - Tree permission demonstrations
-- [ ] README with setup instructions
-
-**Deliverable**: Working hierarchical example
-
-#### Day 7: Documentation
-- [ ] HierarchicalRBAC API reference
-- [ ] Entity system guide
-- [ ] Tree permissions explained
-- [ ] Migration from SimpleRBAC to HierarchicalRBAC
-
-**Deliverable**: Complete hierarchical documentation
-
-### Success Criteria
-- [ ] HierarchicalRBAC passes all tests
-- [ ] Example app demonstrates entity hierarchy
-- [ ] Tree permissions thoroughly tested
-- [ ] Documentation clear with examples
-- [ ] Can be used in production
-
-### Blockers & Risks
-- **Risk**: Entity management UI in example is too complex
-  - *Mitigation*: Keep it simple, focus on API demonstration
-- **Risk**: Tree permission edge cases not covered
-  - *Mitigation*: Port existing complex scenario tests
-
----
-
-## Phase 5: Advanced Features (Week 5)
+## Phase 4: EnterpriseRBAC - Optional Features (Week 4)
 
 ### Goals
 - Context-aware roles
@@ -349,87 +286,164 @@ This document breaks down the library redesign into 7 phases, each with clear de
 
 ---
 
-## Phase 6: FullFeatured Complete (Week 6)
+## Phase 5: EnterpriseRBAC Complete + Testing (Week 5)
 
 ### Goals
-- Complete FullFeatured preset
-- All advanced features integrated
-- Full-featured example app
+- Complete EnterpriseRBAC preset with all optional features
+- Comprehensive testing across all configurations
+- Performance benchmarks
+- Enterprise example app
 
 ### Tasks
 
-#### Day 1-2: FullFeatured Implementation
-- [ ] Create `FullFeatured` preset class
-- [ ] Integrate all advanced features:
-  - Context-aware roles
-  - ABAC conditions
-  - Redis caching
-- [ ] Create `FullPermissionService`:
-  - Inherits from HierarchicalPermissionService
-  - Adds ABAC evaluation
-  - Adds caching
-- [ ] Full configuration options
+#### Day 1-2: EnterpriseRBAC Implementation
+- [ ] Create `EnterpriseRBAC` preset class
+- [ ] Integrate all features:
+  - Entity hierarchy (always enabled)
+  - Context-aware roles (optional)
+  - ABAC conditions (optional)
+  - Redis caching (optional)
+  - Multi-tenant support (optional)
+  - Audit logging (optional)
+- [ ] Create `EnterprisePermissionService`:
+  - Inherits from BasicPermissionService
+  - Adds entity hierarchy + tree permissions
+  - Optionally adds ABAC evaluation
+  - Optionally adds caching
+- [ ] Full configuration options with feature flags
 
-**Deliverable**: FullFeatured preset complete
+**Deliverable**: EnterpriseRBAC preset complete
 
-#### Day 3-4: Testing
+#### Day 3-4: Comprehensive Testing
+- [ ] Unit tests for all EnterpriseRBAC features
 - [ ] Unit tests for context-aware roles
 - [ ] Unit tests for ABAC engine
 - [ ] Integration tests:
+  - Entity hierarchy scenarios
+  - Tree permission scenarios
   - Context-aware role scenarios
   - ABAC policy evaluation
   - Cache hit/miss scenarios
-- [ ] Performance tests
+  - Multi-tenant isolation (if enabled)
+- [ ] Performance tests (cached vs uncached)
+- [ ] Test all feature flag combinations
 
-**Deliverable**: Comprehensive test coverage
+**Deliverable**: Comprehensive test coverage (>90%)
 
 #### Day 5-6: Example Application
-- [ ] Create `examples/full_featured_app/`
+- [ ] Create `examples/enterprise_app/`
 - [ ] FastAPI app demonstrating:
+  - Basic configuration (entity hierarchy only)
+  - Full configuration (all optional features enabled)
+  - Organization → Department → Team hierarchy
+  - Entity management UI (basic)
   - Context-aware roles
   - ABAC conditions (e.g., invoice approval with amount limits)
   - Cached permission checks
-  - Complex entity hierarchy
-- [ ] Performance comparison (cached vs uncached)
-- [ ] README with setup
+  - Performance comparison
+- [ ] Multiple configuration examples
+- [ ] README with setup instructions
 
-**Deliverable**: Full-featured example app
+**Deliverable**: Enterprise example app
 
-#### Day 7: Documentation
-- [ ] FullFeatured API reference
+#### Day 7: Documentation & Polish
+- [ ] EnterpriseRBAC API reference
+- [ ] Configuration guide (feature flags explained)
+- [ ] Entity system guide
+- [ ] Tree permissions explained
 - [ ] Context-aware roles guide
 - [ ] ABAC conditions guide
 - [ ] Performance tuning guide
-- [ ] Complete feature comparison
+- [ ] Migration from SimpleRBAC to EnterpriseRBAC
 
-**Deliverable**: Complete documentation
+**Deliverable**: Complete EnterpriseRBAC documentation
 
 ### Success Criteria
-- [ ] FullFeatured passes all tests
-- [ ] Example app demonstrates all features
-- [ ] Documentation comprehensive
+- [ ] EnterpriseRBAC passes all tests
+- [ ] Example app demonstrates all features and configurations
+- [ ] Tree permissions thoroughly tested
+- [ ] Documentation clear with examples
 - [ ] Performance benchmarks show caching benefits
+- [ ] Feature flags work correctly (can enable/disable features)
 - [ ] Ready for production use
 
 ### Blockers & Risks
-- **Risk**: Too many features, overwhelming users
-  - *Mitigation*: Clear documentation, good defaults
+- **Risk**: Too many optional features, complex configuration
+  - *Mitigation*: Excellent defaults, clear documentation, configuration validator
+- **Risk**: Feature flag combinations create too many test scenarios
+  - *Mitigation*: Focus on common configurations, document limitations
 - **Risk**: ABAC edge cases not covered
   - *Mitigation*: Thorough testing, document limitations
 
 ---
 
-## Phase 7: Documentation & Polish (Weeks 7-8)
+## Phase 6: Documentation, Examples & Polish (Weeks 6-7)
 
 ### Goals
-- Complete documentation
+- Complete comprehensive documentation
+- CLI tools for common operations
+- Health check system
+- Permission explanation debugger
+- Security hardening guide
+- Testing and deployment guides
 - Migration guides
 - Package for distribution
 - Internal rollout preparation
 
 ### Tasks
 
-#### Week 7, Day 1-3: Documentation
+#### Week 6, Day 1-2: CLI Tools & Health Checks
+- [ ] Create `outlabs-auth` CLI:
+  - User management commands
+  - Role management commands
+  - Entity management commands (EnterpriseRBAC)
+  - Database initialization
+  - Permission listing/debugging
+  - Health check command
+- [ ] Implement health check system:
+  - Database connectivity
+  - Redis connectivity (if enabled)
+  - Permission service health
+  - Entity service health (EnterpriseRBAC)
+- [ ] Create "explain permission" debugger:
+  - Shows why user has/doesn't have permission
+  - Traces permission resolution path
+  - Shows all applicable roles and memberships
+  - Tree permission visualization
+
+**Deliverable**: CLI tools and health checks
+
+#### Week 6, Day 3-5: Comprehensive Documentation Guides
+- [ ] Create `SECURITY.md`:
+  - JWT best practices
+  - Password requirements
+  - Rate limiting setup
+  - CORS configuration
+  - SQL injection prevention (if PostgreSQL)
+  - Security audit checklist
+  - Common vulnerabilities and mitigations
+- [ ] Create `TESTING_GUIDE.md`:
+  - AuthTestCase base class
+  - Test fixtures and utilities
+  - Testing isolation patterns
+  - Performance testing scenarios
+  - Testing with different configurations
+- [ ] Create `DEPLOYMENT_GUIDE.md`:
+  - Horizontal scaling patterns
+  - State management
+  - Redis configuration
+  - Load balancing considerations
+  - Database connection pooling
+  - Monitoring and logging
+- [ ] Create `ERROR_HANDLING.md`:
+  - Exception hierarchy
+  - Error codes
+  - Retry strategies
+  - Graceful degradation patterns
+
+**Deliverable**: Comprehensive production guides
+
+#### Week 6, Day 6-7: Core Documentation
 - [ ] Complete API reference for all presets
 - [ ] Quick start guides (5-minute, 15-minute, 1-hour)
 - [ ] Conceptual guides:
@@ -443,65 +457,67 @@ This document breaks down the library redesign into 7 phases, each with clear de
 
 **Deliverable**: Comprehensive documentation site
 
-#### Week 7, Day 4-5: Migration Guides
-- [ ] Complete MIGRATION_GUIDE.md
-- [ ] Create migration scripts/tools:
-  - Database schema conversion
-  - Code migration helpers
+#### Week 7, Day 1-2: Migration Guides
+- [ ] Complete MIGRATION_GUIDE.md (mark as reference, de-emphasize since starting fresh internally)
+- [ ] Create `examples/migration_example/`:
+  - Before: centralized API
+  - After: library integration
+  - Step-by-step migration
 - [ ] Before/after code examples
-- [ ] Migration checklist
+- [ ] Migration checklist (for external users)
 
 **Deliverable**: Migration resources
 
-#### Week 7, Day 6-7: Package Distribution
+#### Week 7, Day 3-4: Package Distribution
 - [ ] Finalize `pyproject.toml`
 - [ ] Set up PyPI publishing (private initially)
 - [ ] Version tagging strategy
 - [ ] Changelog format
 - [ ] Release process documentation
+- [ ] CI/CD pipeline finalization
 
 **Deliverable**: Publishable package
 
-#### Week 8, Day 1-3: Additional Examples
-- [ ] Create `examples/migration_example/`:
-  - Before: centralized API
-  - After: library integration
-  - Step-by-step migration
+#### Week 7, Day 5-6: Additional Examples & Extensions
 - [ ] Create `examples/multi_tenant_app/` (if multi-tenant implemented)
 - [ ] Create `examples/custom_extension/` (how to extend the library)
+- [ ] Document extension points and hooks
+- [ ] Custom middleware examples
+- [ ] Custom validation examples
 
-**Deliverable**: More example applications
+**Deliverable**: Extension examples
 
-#### Week 8, Day 4-5: Internal Rollout Prep
-- [ ] Identify first internal project to migrate
-- [ ] Create migration plan for that project
-- [ ] Schedule knowledge sharing sessions
-- [ ] Create internal communication materials
-
-**Deliverable**: Rollout plan
-
-#### Week 8, Day 6-7: Final Polish
+#### Week 7, Day 7: Final Polish & Security Review
 - [ ] Code cleanup and refactoring
 - [ ] Performance optimization
-- [ ] Security review
+- [ ] Security audit (follow SECURITY.md checklist)
 - [ ] Final test run on all examples
 - [ ] Documentation proofreading
+- [ ] Dependency audit
+- [ ] Version 1.0.0 release candidate
 
-**Deliverable**: Production-ready library
+**Deliverable**: Production-ready library v1.0.0-rc1
 
 ### Success Criteria
+- [ ] CLI tools working and documented
+- [ ] Health check system operational
+- [ ] Permission explainer debugger functional
+- [ ] SECURITY.md, TESTING_GUIDE.md, DEPLOYMENT_GUIDE.md, ERROR_HANDLING.md complete
 - [ ] Documentation is clear and comprehensive
-- [ ] Migration guides work (tested on internal project)
 - [ ] Package can be installed and used
-- [ ] All examples work
-- [ ] Internal team trained and ready to adopt
+- [ ] All examples work (simple_app, enterprise_app, migration_example)
+- [ ] Test coverage >90%
+- [ ] Performance benchmarks meet targets
+- [ ] Security audit passed
 - [ ] Version 1.0.0 ready for release
 
 ### Blockers & Risks
+- **Risk**: CLI tool development takes longer than expected
+  - *Mitigation*: Start with essential commands only, expand later
 - **Risk**: Documentation takes longer than expected
-  - *Mitigation*: Start documenting during implementation
-- **Risk**: First migration reveals issues
-  - *Mitigation*: Buffer time in Week 8 for fixes
+  - *Mitigation*: Started documenting during implementation
+- **Risk**: Security issues discovered
+  - *Mitigation*: Week 7 buffer for fixes
 
 ---
 
@@ -515,25 +531,66 @@ This document breaks down the library redesign into 7 phases, each with clear de
 - Check permission
 - Access protected route
 
-### Milestone 2: HierarchicalRBAC Working (End of Week 4)
+**Deliverables**:
+- ✅ SimpleRBAC preset complete
+- ✅ Example app running
+- ✅ >90% test coverage
+- ✅ Basic documentation
+
+### Milestone 2: EnterpriseRBAC - Entity System (End of Week 3)
 **Demo**: Show entity hierarchy and tree permissions
 - Create organization → department → team
-- Assign user to team with role
+- Assign user to entity with multiple roles
 - Show tree permission access
 - Demonstrate permission inheritance
 
-### Milestone 3: FullFeatured Working (End of Week 6)
-**Demo**: Show all advanced features
-- Context-aware role (different permissions at different levels)
-- ABAC condition (approve invoice under limit)
-- Cached vs uncached performance
+**Deliverables**:
+- ✅ Entity models and services
+- ✅ Tree permissions working
+- ✅ Entity example scenarios
+- ✅ >85% test coverage for entity system
 
-### Milestone 4: Production Ready (End of Week 8)
-**Demo**: Complete package ready for internal use
+### Milestone 3: EnterpriseRBAC - Optional Features (End of Week 4)
+**Demo**: Show context-aware roles, ABAC, and caching
+- Context-aware role (different permissions at different entity types)
+- ABAC condition (approve invoice under amount limit)
+- Cached vs uncached performance comparison
+- Feature flag configuration examples
+
+**Deliverables**:
+- ✅ Context-aware roles implemented
+- ✅ ABAC engine working
+- ✅ Redis caching integrated
+- ✅ Feature flags functional
+
+### Milestone 4: EnterpriseRBAC Complete (End of Week 5)
+**Demo**: Full EnterpriseRBAC with all configurations
+- Basic configuration (entity hierarchy only)
+- Full configuration (all optional features)
+- Performance benchmarks
+- Enterprise example app
+
+**Deliverables**:
+- ✅ EnterpriseRBAC preset complete
+- ✅ Enterprise example app
+- ✅ >90% test coverage
+- ✅ Complete documentation
+
+### Milestone 5: Production Ready (End of Week 7)
+**Demo**: Complete package ready for use
 - Install from package
-- Follow quick start guide
-- Deploy example app
-- Migrate first internal project
+- Use CLI tools
+- Run health checks
+- Deploy example apps
+- Follow quick start guides
+
+**Deliverables**:
+- ✅ CLI tools functional
+- ✅ Health check system
+- ✅ Permission explainer debugger
+- ✅ SECURITY.md, TESTING_GUIDE.md, DEPLOYMENT_GUIDE.md, ERROR_HANDLING.md
+- ✅ All examples working
+- ✅ Version 1.0.0 released
 
 ---
 
@@ -596,7 +653,7 @@ Template:
 ## Resource Allocation
 
 ### Developer Time
-- **Primary Developer**: Full-time for 7-8 weeks
+- **Primary Developer**: Full-time for 6-7 weeks
 - **Code Reviews**: 2-3 hours per week
 - **Testing Support**: As needed
 
@@ -658,7 +715,7 @@ Template:
 
 ### Version 1.2 (8 weeks after v1.0)
 - Admin UI component library
-- CLI tools for management
+- Enhanced CLI tools
 - Enhanced audit logging
 - OpenTelemetry integration
 
@@ -694,9 +751,10 @@ Track changes to the roadmap:
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2025-01-14 | Revised to two-preset architecture | Consolidated HierarchicalRBAC and FullFeatured into EnterpriseRBAC with feature flags; added CLI tools, health checks, and comprehensive production guides |
 | 2025-01-14 | Initial roadmap created | Project kickoff |
 
 ---
 
-**Last Updated**: 2025-01-14
+**Last Updated**: 2025-01-14 (Revised to two presets, 6-7 weeks)
 **Next Review**: End of Week 2 (after Milestone 1)

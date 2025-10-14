@@ -1,6 +1,6 @@
 # OutlabsAuth Library - Feature Comparison Matrix
 
-**Version**: 1.0
+**Version**: 1.1
 **Date**: 2025-01-14
 **Purpose**: Help choose the right preset for your needs
 
@@ -9,63 +9,65 @@
 ## Quick Decision Tree
 
 ```
-Start here: Do you need organizational hierarchy?
+Start here: Do you need organizational hierarchy (departments/teams)?
 │
 ├─ NO ──> SimpleRBAC
 │         ✓ Users, roles, permissions
 │         ✓ Flat structure
 │         ✓ Perfect for simple apps
+│         ✓ Fast setup
 │
-└─ YES ──> Do you need permissions that change by context?
-           │
-           ├─ NO ──> HierarchicalRBAC
-           │         ✓ Entity hierarchy
-           │         ✓ Tree permissions
-           │         ✓ Multiple roles per user
-           │
-           └─ YES ──> FullFeatured
-                     ✓ Context-aware roles
-                     ✓ ABAC conditions
-                     ✓ Performance optimizations
+└─ YES ──> EnterpriseRBAC
+           ✓ Entity hierarchy (always included)
+           ✓ Tree permissions (always included)
+           ✓ Multiple roles per user (always included)
+           ✓ Optional: Context-aware roles (enable_context_aware_roles=True)
+           ✓ Optional: ABAC conditions (enable_abac=True)
+           ✓ Optional: Redis caching (enable_caching=True)
+           ✓ Optional: Multi-tenant (multi_tenant=True)
+
+           Configure only what you need via feature flags!
 ```
 
 ---
 
 ## Feature Comparison Table
 
-| Feature | SimpleRBAC | HierarchicalRBAC | FullFeatured |
-|---------|-----------|------------------|--------------|
+| Feature | SimpleRBAC | EnterpriseRBAC |
+|---------|-----------|----------------|
 | **Core Features** |
-| User management | ✅ | ✅ | ✅ |
-| Role management | ✅ | ✅ | ✅ |
-| Permission checking | ✅ | ✅ | ✅ |
-| JWT authentication | ✅ | ✅ | ✅ |
-| Password management | ✅ | ✅ | ✅ |
-| Refresh tokens | ✅ | ✅ | ✅ |
-| **Hierarchy** |
-| Entity hierarchy | ❌ | ✅ | ✅ |
-| Tree permissions | ❌ | ✅ | ✅ |
-| Multiple roles per user | ❌ | ✅ | ✅ |
-| Entity memberships | ❌ | ✅ | ✅ |
-| Access groups | ❌ | ✅ | ✅ |
-| **Advanced** |
-| Context-aware roles | ❌ | ❌ | ✅ |
-| ABAC conditions | ❌ | ❌ | ✅ |
-| Redis caching | ❌ | ❌ | ✅ |
-| Policy evaluation | ❌ | ❌ | ✅ |
+| User management | ✅ | ✅ |
+| Role management | ✅ | ✅ |
+| Permission checking | ✅ | ✅ |
+| JWT authentication | ✅ | ✅ |
+| Password management | ✅ | ✅ |
+| Refresh tokens | ✅ | ✅ |
+| **Hierarchy (Always Included)** |
+| Entity hierarchy | ❌ | ✅ |
+| Tree permissions | ❌ | ✅ |
+| Multiple roles per user | ❌ | ✅ |
+| Entity memberships | ❌ | ✅ |
+| Access groups | ❌ | ✅ |
+| **Optional Features (Feature Flags)** |
+| Context-aware roles | ❌ | ⭕ `enable_context_aware_roles=True` |
+| ABAC conditions | ❌ | ⭕ `enable_abac=True` |
+| Redis caching | ❌ | ⭕ `enable_caching=True` (requires Redis) |
+| Multi-tenant isolation | ❌ | ⭕ `multi_tenant=True` |
+| Audit logging | ❌ | ⭕ `enable_audit_log=True` |
 | **Performance** |
-| Permission check | ~10ms | ~20ms | ~2ms (cached) |
-| Setup complexity | ⭐ | ⭐⭐ | ⭐⭐⭐ |
-| Learning curve | Easy | Medium | Advanced |
+| Permission check | ~10ms | ~20ms (uncached)<br>~2ms (cached) |
+| Setup complexity | ⭐ | ⭐⭐ (basic)<br>⭐⭐⭐ (all features) |
+| Learning curve | Easy | Medium to Advanced |
 | **Use Cases** |
-| Simple web apps | ✅ ✅ ✅ | ✅ | ✅ |
-| Multi-department orgs | ❌ | ✅ ✅ ✅ | ✅ |
-| Complex permissions | ❌ | ✅ | ✅ ✅ ✅ |
-| Enterprise apps | ❌ | ✅ | ✅ ✅ ✅ |
+| Simple web apps | ✅ ✅ ✅ | ✅ |
+| Multi-department orgs | ❌ | ✅ ✅ ✅ |
+| Complex permissions | ❌ | ✅ ✅ ✅ |
+| Enterprise apps | ❌ | ✅ ✅ ✅ |
 
 Legend:
-- ✅ = Supported
+- ✅ = Included
 - ❌ = Not supported
+- ⭕ = Optional (enable via feature flag)
 - ⭐ = Complexity level (more stars = more complex)
 
 ---
@@ -120,24 +122,23 @@ has_perm = await auth.permission_service.check_permission(
 
 ---
 
-### HierarchicalRBAC
+### EnterpriseRBAC
 
 **Best For:**
-- Organizations with departments/teams
+- Organizations with departments/teams/hierarchy
 - Multi-level permission inheritance
 - Users with different roles in different contexts
 - Real estate, enterprise software, government
+- Optionally: Complex permissions, ABAC, high performance
 
-**What You Get:**
+**What You Get (Always Included):**
 ```python
-from outlabs_auth import HierarchicalRBAC
+from outlabs_auth import EnterpriseRBAC
 
-auth = HierarchicalRBAC(
-    database=db,
-    entity_types=["company", "department", "team"]
-)
+# Basic setup: Entity hierarchy + tree permissions
+auth = EnterpriseRBAC(database=db)
 
-# Entity hierarchy
+# Entity hierarchy (always included)
 company = await auth.entity_service.create_entity(
     name="acme",
     entity_class="structural",
@@ -151,14 +152,14 @@ dept = await auth.entity_service.create_entity(
     parent_id=company.id
 )
 
-# User membership with roles
+# User membership with multiple roles (always included)
 await auth.membership_service.add_member(
     entity_id=dept.id,
     user_id=user.id,
     role_ids=[manager_role.id, developer_role.id]  # Multiple roles!
 )
 
-# Tree permissions
+# Tree permissions (always included)
 role = await auth.role_service.create_role(
     name="dept_manager",
     permissions=[
@@ -170,122 +171,74 @@ role = await auth.role_service.create_role(
 )
 ```
 
-**Additional Features:**
-- Parent-child entity relationships
-- Tree permissions (`resource:action_tree`)
-- Multiple roles per user (via entity memberships)
-- Access groups (cross-cutting permissions)
-- Entity path traversal
-- Descendant queries
-
-**Limitations:**
-- No context-aware roles
-- No ABAC conditions
-- No Redis caching
-- Permission checks slightly slower than SimpleRBAC
-
-**Dependencies:**
-- All SimpleRBAC dependencies
-- (No additional dependencies)
-
-**Performance:**
-- Permission check: ~20ms (with hierarchy traversal)
-- Tree permission check: ~30ms
-- Entity creation: ~25ms
-- Member add: ~35ms
-
----
-
-### FullFeatured
-
-**Best For:**
-- Complex enterprise applications
-- Conditional access control
-- High-performance requirements
-- Advanced permission scenarios
-- Context-dependent roles
-
-**What You Get:**
+**Optional Features (Enable as Needed):**
 ```python
-from outlabs_auth import FullFeatured
-
-auth = FullFeatured(
+# Full-featured setup with all options
+auth = EnterpriseRBAC(
     database=db,
     redis_url="redis://localhost:6379",
-    enable_caching=True,
-    enable_abac=True
+    enable_context_aware_roles=True,  # Opt-in
+    enable_abac=True,                 # Opt-in
+    enable_caching=True,              # Opt-in (requires Redis)
+    multi_tenant=True,                # Opt-in
+    enable_audit_log=True             # Opt-in
 )
 
-# Context-aware roles
+# Context-aware roles (opt-in feature)
 regional_manager = await auth.role_service.create_role(
     name="regional_manager",
     permissions=["entity:read"],  # Default
 
     # Different permissions by entity type
     entity_type_permissions={
-        "region": [
-            "entity:manage_tree",
-            "user:manage_tree",
-            "budget:approve"
-        ],
+        "region": ["entity:manage_tree", "user:manage_tree"],
         "office": ["entity:read", "user:read"],
         "team": ["entity:read"]
     }
 )
 
-# ABAC permissions with conditions
+# ABAC permissions with conditions (opt-in feature)
 invoice_approval = await auth.permission_service.create_permission(
     name="invoice:approve",
     conditions=[
-        {
-            "attribute": "resource.amount",
-            "operator": "LESS_THAN_OR_EQUAL",
-            "value": 50000  # Max amount
-        },
-        {
-            "attribute": "resource.department",
-            "operator": "EQUALS",
-            "value": {"ref": "user.department"}  # Same department
-        }
+        {"attribute": "resource.amount", "operator": "<=", "value": 50000}
     ]
-)
-
-# Check with full context
-result = await auth.permission_service.check_permission_with_context(
-    user_id=user.id,
-    permission="invoice:approve",
-    entity_id=entity.id,
-    resource_attributes={
-        "amount": 35000,
-        "department": "engineering"
-    }
 )
 ```
 
-**Additional Features:**
-- Everything from HierarchicalRBAC
-- Context-aware roles (permissions vary by entity type)
-- ABAC conditions (attribute-based access control)
-- Redis caching (5-minute TTL)
-- Policy evaluation engine
-- Detailed permission tracing
-- Performance optimizations
+**Core Features (Always Included):**
+- Entity hierarchy with flexible types
+- Tree permissions (`resource:action_tree`)
+- Multiple roles per user
+- Access groups (cross-cutting permissions)
+- Entity path traversal and descendant queries
+
+**Optional Features (Feature Flags):**
+- Context-aware roles (`enable_context_aware_roles=True`)
+- ABAC conditions (`enable_abac=True`)
+- Redis caching (`enable_caching=True`, requires Redis)
+- Multi-tenant isolation (`multi_tenant=True`)
+- Audit logging (`enable_audit_log=True`)
 
 **Limitations:**
-- More complex setup
-- Requires Redis for best performance
-- Higher learning curve
-- More moving parts
+- More complex than SimpleRBAC
+- Optional features add complexity
+- Redis required for caching (optional)
+- Steeper learning curve with all features enabled
 
 **Dependencies:**
-- All HierarchicalRBAC dependencies
-- Redis (optional, but recommended)
+- MongoDB (via Beanie)
+- FastAPI
+- Python 3.10+
+- Redis (optional, only if `enable_caching=True`)
 
 **Performance:**
-- Permission check: ~2ms (cached), ~25ms (uncached)
-- ABAC evaluation: +5-10ms per condition
-- Context-aware resolution: ~3ms
-- Cache hit rate: ~95% (typical)
+- Permission check: ~20ms (uncached), ~2ms (cached)
+- Tree permission check: ~30ms (uncached), ~3ms (cached)
+- ABAC evaluation: +5-10ms per condition (if enabled)
+- Entity creation: ~25ms
+- Member add: ~35ms
+- Cache hit rate: ~95% (when caching enabled)
 
 ---
 
@@ -327,9 +280,9 @@ No organizational structure - SimpleRBAC sufficient
 
 ---
 
-### HierarchicalRBAC Use Cases
+### EnterpriseRBAC Use Cases
 
-#### 1. Real Estate Platform
+#### 1. Real Estate Platform (Basic Hierarchy)
 ```
 Diverse Platform
 ├── Organization: Diverse Leads
@@ -342,10 +295,14 @@ Diverse Platform
 
 Agents belong to offices/teams
 Managers have tree permissions over regions
-Perfect for HierarchicalRBAC
+
+EnterpriseRBAC (basic setup):
+- Entity hierarchy ✅
+- Tree permissions ✅
+- No additional features needed
 ```
 
-#### 2. Enterprise Software
+#### 2. Enterprise Software (Basic Hierarchy)
 ```
 Company
 ├── Division: Engineering
@@ -358,10 +315,14 @@ Company
     └── Department: SMB Sales
 
 Department heads manage all teams below
-HierarchicalRBAC handles this naturally
+
+EnterpriseRBAC (basic setup):
+- Entity hierarchy ✅
+- Tree permissions ✅
+- Multiple roles per user ✅
 ```
 
-#### 3. Government Agency
+#### 3. Government Agency (Basic Hierarchy)
 ```
 Agency
 ├── Bureau: Transportation
@@ -373,14 +334,13 @@ Agency
 
 Hierarchical command structure
 Tree permissions essential
-HierarchicalRBAC is ideal
+
+EnterpriseRBAC (basic setup):
+- Entity hierarchy ✅
+- Tree permissions ✅
 ```
 
----
-
-### FullFeatured Use Cases
-
-#### 1. Financial Platform
+#### 4. Financial Platform (Advanced Features)
 ```
 Need:
 - Invoice approval limits by amount
@@ -392,13 +352,14 @@ Example:
 - Office Manager: Approve up to $50K at office level
 - Team Lead: Approve up to $10K at team level
 
-FullFeatured provides:
-- Context-aware roles (permissions change by level)
-- ABAC conditions (amount limits)
-- Fast permission checks (Redis cache)
+EnterpriseRBAC with optional features:
+- Entity hierarchy ✅ (core)
+- Context-aware roles ⭕ (enable_context_aware_roles=True)
+- ABAC conditions ⭕ (enable_abac=True)
+- Redis caching ⭕ (enable_caching=True)
 ```
 
-#### 2. Healthcare System
+#### 5. Healthcare System (Advanced Features)
 ```
 Need:
 - Doctor access varies by department
@@ -406,13 +367,15 @@ Need:
 - Prescription limits by classification
 - Audit trail
 
-FullFeatured provides:
-- Context-aware roles (doctor permissions by department)
-- ABAC conditions (prescription rules)
-- Cached checks (performance critical)
+EnterpriseRBAC with optional features:
+- Entity hierarchy ✅ (core)
+- Context-aware roles ⭕ (enable_context_aware_roles=True)
+- ABAC conditions ⭕ (enable_abac=True)
+- Audit logging ⭕ (enable_audit_log=True)
+- Redis caching ⭕ (enable_caching=True)
 ```
 
-#### 3. Multi-Tenant SaaS
+#### 6. Multi-Tenant SaaS (Advanced Features)
 ```
 Need:
 - Tenant isolation
@@ -420,27 +383,27 @@ Need:
 - Conditional feature access
 - High performance
 
-FullFeatured provides:
-- Optional multi-tenant support
-- Full hierarchy per tenant
-- ABAC for feature flags
-- Redis caching for speed
+EnterpriseRBAC with optional features:
+- Entity hierarchy ✅ (core)
+- Multi-tenant isolation ⭕ (multi_tenant=True)
+- ABAC for feature flags ⭕ (enable_abac=True)
+- Redis caching ⭕ (enable_caching=True)
 ```
 
 ---
 
-## Migration Path
+## Migration Paths
 
-### From SimpleRBAC → HierarchicalRBAC
+### From SimpleRBAC → EnterpriseRBAC
 
 **When to Upgrade:**
-- You need departmental structure
+- You need departmental/organizational structure
 - Users need different roles in different contexts
-- You want tree permissions
+- You want tree permissions for hierarchical access control
 
 **Migration Steps:**
-1. Install HierarchicalRBAC
-2. Create entity hierarchy
+1. Switch from `SimpleRBAC` to `EnterpriseRBAC`
+2. Create entity hierarchy for your organization
 3. Convert user-role assignments to entity memberships
 4. Update permission checks to include entity context
 5. Add tree permissions where needed
@@ -450,49 +413,78 @@ FullFeatured provides:
 **Example:**
 ```python
 # BEFORE (SimpleRBAC)
+from outlabs_auth import SimpleRBAC
+
+auth = SimpleRBAC(database=db)
+
+# Users have one role
 await auth.user_service.assign_role(user.id, manager_role.id)
 
-# AFTER (HierarchicalRBAC)
+# AFTER (EnterpriseRBAC - basic setup)
+from outlabs_auth import EnterpriseRBAC
+
+auth = EnterpriseRBAC(database=db)
+
+# Create entity hierarchy
+department = await auth.entity_service.create_entity(
+    name="engineering",
+    entity_class="structural",
+    entity_type="department"
+)
+
+# Users can have multiple roles via entity memberships
 await auth.membership_service.add_member(
     entity_id=department.id,
     user_id=user.id,
-    role_ids=[manager_role.id]
+    role_ids=[manager_role.id, developer_role.id]
 )
 ```
 
 ---
 
-### From HierarchicalRBAC → FullFeatured
+### EnterpriseRBAC: Enabling Optional Features
 
-**When to Upgrade:**
-- You need context-aware roles
-- You need ABAC conditions
-- Performance is critical
+**When to Enable:**
+- **Context-aware roles**: Role permissions need to vary by entity type
+- **ABAC conditions**: Need attribute-based access control
+- **Redis caching**: Performance is critical (high traffic)
+- **Multi-tenant**: Need tenant isolation
+- **Audit logging**: Need comprehensive audit trails
 
 **Migration Steps:**
-1. Install FullFeatured with Redis
-2. Convert roles to context-aware (optional)
-3. Add ABAC conditions where needed
-4. Configure caching
-5. Monitor performance
+1. Add feature flags to existing `EnterpriseRBAC` configuration
+2. Set up Redis if enabling caching
+3. Update roles to use context-aware permissions (if needed)
+4. Add ABAC conditions to permissions (if needed)
+5. Test thoroughly before production deployment
 
-**Effort**: ~1-2 days
+**Effort**: ~1-2 days per feature
 
 **Example:**
 ```python
-# BEFORE (HierarchicalRBAC)
-manager_role = {
-    "permissions": ["entity:manage_tree", "user:manage_tree"]
-}
+# BEFORE (EnterpriseRBAC - basic)
+auth = EnterpriseRBAC(database=db)
 
-# AFTER (FullFeatured - context-aware)
-manager_role = {
-    "permissions": ["entity:read"],  # Default
-    "entity_type_permissions": {
+# AFTER (EnterpriseRBAC - with optional features)
+auth = EnterpriseRBAC(
+    database=db,
+    redis_url="redis://localhost:6379",
+    enable_context_aware_roles=True,  # Enable as needed
+    enable_abac=True,                 # Enable as needed
+    enable_caching=True,              # Enable as needed
+    multi_tenant=True,                # Enable as needed
+    enable_audit_log=True             # Enable as needed
+)
+
+# Context-aware role (optional feature)
+manager_role = await auth.role_service.create_role(
+    name="regional_manager",
+    permissions=["entity:read"],  # Default
+    entity_type_permissions={
         "region": ["entity:manage_tree", "user:manage_tree"],
         "office": ["entity:read", "user:read"]
     }
-}
+)
 ```
 
 ---
@@ -501,21 +493,22 @@ manager_role = {
 
 ### Permission Check Latency
 
-| Preset | First Check | Cached | Tree Check | ABAC Check |
-|--------|-------------|--------|------------|------------|
+| Preset | Basic Check | Tree Check | Cached Check | ABAC Check |
+|--------|-------------|------------|--------------|------------|
 | SimpleRBAC | ~10ms | N/A | N/A | N/A |
-| HierarchicalRBAC | ~20ms | N/A | ~30ms | N/A |
-| FullFeatured | ~25ms | ~2ms | ~35ms | ~30ms |
+| EnterpriseRBAC (basic) | ~20ms | ~30ms | ~20ms | N/A |
+| EnterpriseRBAC (cached) | ~2ms | ~3ms | ~2ms | N/A |
+| EnterpriseRBAC (ABAC) | ~20ms + 5-10ms/condition | ~30ms + 5-10ms/condition | ~2ms + 5-10ms/condition | ~5-10ms/condition |
 
 ### Throughput (requests/second)
 
 | Preset | Login | Permission Check | Entity Create |
 |--------|-------|------------------|---------------|
 | SimpleRBAC | ~200 | ~500 | N/A |
-| HierarchicalRBAC | ~200 | ~300 | ~150 |
-| FullFeatured | ~200 | ~2000 (cached) | ~150 |
+| EnterpriseRBAC (uncached) | ~200 | ~300 | ~150 |
+| EnterpriseRBAC (cached) | ~200 | ~2000 | ~150 |
 
-*Benchmarks on MacBook Pro M1, MongoDB local, Redis local*
+*Benchmarks on MacBook Pro M1, MongoDB local, Redis local (when caching enabled)*
 
 ---
 
@@ -536,73 +529,61 @@ manager_role = {
 
 **When to Choose:**
 - Small team (< 50 users)
-- Flat structure
+- Flat organizational structure
 - Simple permissions
 - Fast deployment needed
 
 ---
 
-### HierarchicalRBAC
+### EnterpriseRBAC
 
 **Pros:**
-- ⭐⭐⭐ Flexible hierarchy
-- ⭐⭐⭐ Tree permissions
-- ⭐⭐ Multiple roles per user
-- ⭐⭐ Scales well
+- ⭐⭐⭐ Flexible entity hierarchy (always included)
+- ⭐⭐⭐ Tree permissions (always included)
+- ⭐⭐ Multiple roles per user (always included)
+- ⭐⭐ Scales to any size organization
+- ⭐⭐ Optional advanced features (enable as needed)
+- ⭐⭐⭐ Best performance when caching enabled
 
 **Cons:**
 - ⭐ More complex than SimpleRBAC
-- ⭐ Slower permission checks
-- ❌ No context-aware roles
-- ❌ No ABAC
+- ⭐ Slower permission checks than SimpleRBAC (without caching)
+- ⭐ Steeper learning curve with all features enabled
+- ⭐ Requires Redis for caching (optional)
 
 **When to Choose:**
-- Medium to large org
-- Departmental structure
+- Medium to large organization
+- Departmental/hierarchical structure
 - Need tree permissions
 - Users have multiple responsibilities
+- Optionally: Complex permissions, ABAC, high performance requirements
 
----
-
-### FullFeatured
-
-**Pros:**
-- ⭐⭐⭐ Context-aware roles
-- ⭐⭐⭐ ABAC conditions
-- ⭐⭐⭐ Best performance (cached)
-- ⭐⭐ Most powerful
-
-**Cons:**
-- ⭐ Most complex
-- ⭐ Requires Redis
-- ⭐ Steeper learning curve
-- ⭐ More configuration
-
-**When to Choose:**
-- Enterprise application
-- Complex permission rules
-- Performance critical
-- Need conditional access
+**Complexity by Configuration:**
+- **Basic** (just hierarchy): ⭐⭐ Medium complexity
+- **With context-aware roles**: ⭐⭐⭐ Advanced complexity
+- **With all features**: ⭐⭐⭐⭐ Expert complexity
 
 ---
 
 ## Recommendation Matrix
 
-| Your Situation | Recommended Preset |
-|----------------|-------------------|
-| Building MVP | SimpleRBAC |
-| Simple web app | SimpleRBAC |
-| < 50 users | SimpleRBAC |
-| Flat structure | SimpleRBAC |
-| Department structure | HierarchicalRBAC |
-| Multi-location | HierarchicalRBAC |
-| Tree permissions needed | HierarchicalRBAC |
-| > 100 users | HierarchicalRBAC |
-| Complex permissions | FullFeatured |
-| Enterprise app | FullFeatured |
-| Need ABAC | FullFeatured |
-| Performance critical | FullFeatured |
-| Context-dependent roles | FullFeatured |
+| Your Situation | Recommended Preset | Optional Features |
+|----------------|-------------------|-------------------|
+| Building MVP | SimpleRBAC | N/A |
+| Simple web app | SimpleRBAC | N/A |
+| < 50 users | SimpleRBAC | N/A |
+| Flat structure | SimpleRBAC | N/A |
+| Department structure | EnterpriseRBAC | Basic setup |
+| Multi-location | EnterpriseRBAC | Basic setup |
+| Tree permissions needed | EnterpriseRBAC | Basic setup |
+| > 100 users | EnterpriseRBAC | Basic setup + caching |
+| Complex permissions | EnterpriseRBAC | + context-aware roles |
+| Enterprise app | EnterpriseRBAC | + context-aware roles + caching |
+| Need ABAC | EnterpriseRBAC | + ABAC |
+| Performance critical | EnterpriseRBAC | + caching (requires Redis) |
+| Context-dependent roles | EnterpriseRBAC | + context-aware roles |
+| Multi-tenant SaaS | EnterpriseRBAC | + multi_tenant + caching |
+| Audit requirements | EnterpriseRBAC | + audit logging |
 
 ---
 
@@ -613,17 +594,23 @@ manager_role = {
 - ✅ You want to ship quickly
 - ✅ You can upgrade later
 - ✅ Complexity is a concern
+- ✅ Flat organizational structure
 
-### Start with HierarchicalRBAC if:
+### Start with EnterpriseRBAC (basic) if:
 - ✅ You know you need hierarchy
-- ✅ You have organizational structure
+- ✅ You have organizational structure (departments/teams)
 - ✅ SimpleRBAC is definitely insufficient
+- ✅ Users need different roles in different contexts
+- ✅ You want tree permissions
 
-### Start with FullFeatured if:
-- ✅ You have complex requirements documented
-- ✅ Performance is critical
-- ✅ You need advanced features
-- ✅ Team has capacity for complexity
+### Enable Optional Features in EnterpriseRBAC when:
+- ⭕ **Context-aware roles**: Role permissions need to vary by entity type
+- ⭕ **ABAC conditions**: Complex access rules based on attributes
+- ⭕ **Redis caching**: Performance is critical (high traffic)
+- ⭕ **Multi-tenant**: Need tenant isolation
+- ⭕ **Audit logging**: Compliance or audit trail requirements
+
+**Pro Tip**: Start with basic EnterpriseRBAC (just hierarchy) and enable optional features incrementally as needed!
 
 ---
 

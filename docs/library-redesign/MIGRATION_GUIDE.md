@@ -1,14 +1,24 @@
 # Migration Guide: Centralized API → Library
 
-**Version**: 1.0
+**Version**: 1.1
 **Date**: 2025-01-14
-**Audience**: Developers migrating from the centralized OutlabsAuth API
+**Audience**: External users migrating from a centralized API approach
+**Status**: Reference Document
+
+---
+
+> **Note**: This guide is primarily for **external users** who are migrating from a centralized authentication API to the OutlabsAuth library. If you're starting fresh with OutlabsAuth, skip this document and refer to [API_DESIGN.md](API_DESIGN.md) and [COMPARISON_MATRIX.md](COMPARISON_MATRIX.md) instead.
 
 ---
 
 ## Overview
 
-This guide helps you migrate from the centralized OutlabsAuth API service to the library-based approach. The migration preserves all your data and functionality while eliminating the centralized service dependency.
+This guide helps you migrate from a centralized OutlabsAuth API service to the library-based approach. The migration preserves all your data and functionality while eliminating the centralized service dependency.
+
+**If you're starting a new project**, you don't need this guide! Simply:
+1. Choose your preset: [COMPARISON_MATRIX.md](COMPARISON_MATRIX.md)
+2. Follow the quickstart: [API_DESIGN.md](API_DESIGN.md#quick-start)
+3. Deploy: [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)
 
 ---
 
@@ -36,7 +46,8 @@ This guide helps you migrate from the centralized OutlabsAuth API service to the
 - [ ] Review current auth implementation
 - [ ] Document all custom permissions
 - [ ] Export user data and roles
-- [ ] Identify which preset to use (Simple, Hierarchical, Full)
+- [ ] Identify which preset to use (SimpleRBAC or EnterpriseRBAC)
+  - See [COMPARISON_MATRIX.md](COMPARISON_MATRIX.md) for guidance
 - [ ] Set up test environment
 - [ ] Create rollback plan
 
@@ -187,11 +198,11 @@ async def delete_user(user_id: str, token: str = Depends(oauth2_scheme)):
 
 ```python
 # app/core/auth.py
-from outlabs_auth import HierarchicalRBAC
+from outlabs_auth import EnterpriseRBAC
 from app.core.database import get_database
 
-# Initialize once
-auth = HierarchicalRBAC(database=get_database())
+# Initialize once (entity hierarchy always enabled)
+auth = EnterpriseRBAC(database=get_database())
 
 # app/main.py
 from fastapi import FastAPI, Depends
@@ -361,13 +372,17 @@ TENANT_ID=your-tenant  # Only if using multi-tenancy
 
 ```python
 # app/core/config.py
-from outlabs_auth import HierarchicalConfig
+from outlabs_auth import EnterpriseConfig
 import os
 
-config = HierarchicalConfig(
+config = EnterpriseConfig(
     secret_key=os.getenv("SECRET_KEY"),
     max_entity_depth=5,
-    enable_tree_permissions=True,
+
+    # Entity hierarchy and tree permissions are always enabled
+    # Optional features:
+    enable_context_aware_roles=False,  # Enable if needed
+    enable_abac=False,                 # Enable if needed
     enable_caching=bool(os.getenv("REDIS_URL")),
     redis_url=os.getenv("REDIS_URL"),
 )
@@ -396,12 +411,12 @@ pip install outlabs-auth
 ```python
 # test_migration.py
 import pytest
-from outlabs_auth import HierarchicalRBAC
+from outlabs_auth import EnterpriseRBAC
 
 @pytest.mark.asyncio
 async def test_user_can_still_login(test_db):
     """Verify users can login after migration"""
-    auth = HierarchicalRBAC(database=test_db)
+    auth = EnterpriseRBAC(database=test_db)
 
     # Test with existing user credentials
     tokens = await auth.auth_service.login(
@@ -415,7 +430,7 @@ async def test_user_can_still_login(test_db):
 @pytest.mark.asyncio
 async def test_permissions_preserved(test_db, existing_user_id):
     """Verify permissions still work"""
-    auth = HierarchicalRBAC(database=test_db)
+    auth = EnterpriseRBAC(database=test_db)
 
     # Check permission that user had before
     has_perm, _ = await auth.permission_service.check_permission(
@@ -428,7 +443,7 @@ async def test_permissions_preserved(test_db, existing_user_id):
 @pytest.mark.asyncio
 async def test_entity_hierarchy_intact(test_db):
     """Verify entity hierarchy preserved"""
-    auth = HierarchicalRBAC(database=test_db)
+    auth = EnterpriseRBAC(database=test_db)
 
     # Get entity that had children
     entity = await auth.entity_service.get("parent-entity-id")
