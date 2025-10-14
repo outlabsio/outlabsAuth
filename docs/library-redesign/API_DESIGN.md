@@ -1,8 +1,15 @@
 # OutlabsAuth Library - API Design & Developer Experience
 
-**Version**: 1.2
+**Version**: 1.4
 **Date**: 2025-01-14
 **Status**: Design Phase
+
+**Architecture Changes (v1.4)**:
+- **Unified AuthDeps**: Single dependency class replaces SimpleDeps, MultiSourceDeps, etc. (DD-035)
+- **JWT Service Tokens**: Zero-DB authentication for internal microservices (DD-034)
+- **Redis Counters**: API key usage tracking with 99%+ reduction in DB writes (DD-033)
+- **Temporary Locks**: API keys locked for 30 min after 10 failures (no permanent revocation) (DD-028)
+- **12-Char Prefixes**: API key prefixes increased from 8 to 12 characters (DD-028)
 
 ---
 
@@ -14,11 +21,12 @@
 4. [EnterpriseRBAC Examples](#enterpriserbac-examples)
    - [Basic Hierarchy](#basic-hierarchy-examples)
    - [Optional Features](#optional-features-examples)
-5. **[API Key Authentication](#api-key-authentication)** ← NEW
-6. **[Multi-Source Authentication](#multi-source-authentication)** ← NEW
-7. [FastAPI Integration Patterns](#fastapi-integration-patterns)
-8. [Configuration](#configuration)
-9. [Testing Your App](#testing-your-app)
+5. **[API Key Authentication](#api-key-authentication)** - Core v1.0 feature
+6. **[JWT Service Tokens](#jwt-service-tokens)** ← NEW (v1.4 - DD-034)
+7. **[Multi-Source Authentication](#multi-source-authentication)** - Updated for AuthDeps
+8. [FastAPI Integration Patterns](#fastapi-integration-patterns)
+9. [Configuration](#configuration)
+10. [Testing Your App](#testing-your-app)
 
 ---
 
@@ -929,9 +937,252 @@ curl -X GET https://api.example.com/api/users \
 
 ---
 
+## JWT Service Tokens
+
+**NEW in v1.4 (DD-034)**: JWT service tokens provide zero-database authentication for internal microservices with sub-millisecond validation times.
+
+### Why JWT Service Tokens?
+
+- **Performance**: ~0.5ms validation vs ~50-100ms for API keys (no DB lookup required)
+- **Stateless**: Pure JWT validation, no database queries
+- **Perfect for**: High-frequency internal service-to-service communication
+- **Complements API Keys**: Use API keys for external partners, JWT tokens for internal services
+
+### Example 1: Creating JWT Service Tokens
+
+```python
+from outlabs_auth import SimpleRBAC
+from datetime import timedelta
+
+auth = SimpleRBAC(database=db)
+
+# Create JWT service token (short-lived, self-contained)
+service_token = await auth.service_token_service.create_token(
+    service_name="payment_processor",
+    permissions=["invoice:read", "invoice:update", "payment:create"],
+    expires_in=timedelta(hours=24)  # Short-lived: 1-24 hours recommended
+)
+
+print(f"Service Token: {service_token}")
+# eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzZXJ2aWNlX25hbWUiOiJwYXltZW50X...
+
+# Token is a JWT containing:
+# - service_name: "payment_processor"
+# - permissions: ["invoice:read", "invoice:update", "payment:create"]
+# - iat (issued at), exp (expiration)
+# - Cryptographically signed (cannot be forged)
+```
+
+### Example 2: Service-to-Service Communication with JWT
+
+```python
+# Service A (caller) - using JWT service token
+import requests
+
+SERVICE_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+
+response = requests.post(
+    "https://service-b.example.com/api/process-payment",
+    headers={"X-Service-Token": SERVICE_TOKEN},
+    json={"invoice_id": "inv_123", "amount": 1000}
+)
+
+# Service B (receiver) - validates JWT (no DB lookup!)
+from outlabs_auth.dependencies import AuthDeps
+
+deps = AuthDeps(auth=auth)
+
+@app.post("/api/process-payment")
+async def process_payment(
+    data: dict,
+    ctx: AuthContext = deps.require_source(AuthSource.SERVICE)
+):
+    """
+    Fast internal endpoint using JWT service tokens.
+
+    Validation: ~0.5ms (pure JWT validation, no DB)
+    vs API keys: ~50-100ms (DB lookup + argon2id verification)
+    """
+
+    # Service name from JWT payload
+    service_name = ctx.metadata["service"]
+    print(f"Request from service: {service_name}")
+
+    # Permissions from JWT payload (no DB lookup!)
+    if not ctx.has_permission("payment:create"):
+        raise HTTPException(403, "Service lacks payment:create permission")
+
+    # Process payment
+    result = await payment_service.process(data)
+    return {"result": result}
+```
+
+### Example 3: API Keys vs JWT Service Tokens
+
+```python
+# Comparison of authentication methods
+
+# API Keys (external partners, slower, persistent)
+# - Use: External integrations, third-party services
+# - Storage: MongoDB (hashed with argon2id)
+# - Validation: ~50-100ms (DB lookup + hash verification)
+# - Lifespan: Long-lived (90-365 days)
+# - Rotation: Manual via API
+# - Rate Limiting: Per-key limits in Redis
+# - Security: argon2id hashing, temp locks after 10 failures
+
+api_key = await auth.api_key_service.create_api_key(
+    name="Partner API",
+    permissions=["invoice:read"],
+    environment="production",
+    expires_in_days=90
+)
+# Returns: sk_prod_abc1def2_x3y4z5...
+
+
+# JWT Service Tokens (internal services, faster, ephemeral)
+# - Use: Internal microservices, high-frequency requests
+# - Storage: None (stateless JWT)
+# - Validation: ~0.5ms (pure cryptographic verification)
+# - Lifespan: Short-lived (1-24 hours)
+# - Rotation: Automatic (create new token when needed)
+# - Rate Limiting: Higher limits (trusted internal services)
+# - Security: Cryptographic signatures, short expiration
+
+service_token = await auth.service_token_service.create_token(
+    service_name="internal_processor",
+    permissions=["invoice:read", "invoice:update"],
+    expires_in=timedelta(hours=12)
+)
+# Returns: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+### Example 4: Automatic Token Rotation
+
+```python
+# Internal service with automatic token rotation
+
+import asyncio
+from datetime import timedelta
+
+class ServiceClient:
+    """Client for internal service communication with auto-rotation"""
+
+    def __init__(self, auth, service_name: str):
+        self.auth = auth
+        self.service_name = service_name
+        self.token = None
+        self.token_expires_at = None
+
+    async def get_token(self) -> str:
+        """Get valid token, rotating if needed"""
+        if self.token and self.token_expires_at > datetime.utcnow():
+            return self.token
+
+        # Token expired or doesn't exist - create new one
+        self.token = await self.auth.service_token_service.create_token(
+            service_name=self.service_name,
+            permissions=["invoice:read", "invoice:update", "payment:create"],
+            expires_in=timedelta(hours=12)
+        )
+        self.token_expires_at = datetime.utcnow() + timedelta(hours=12)
+
+        return self.token
+
+    async def make_request(self, url: str, data: dict):
+        """Make authenticated request with auto-rotating token"""
+        token = await self.get_token()
+
+        response = await httpx.post(
+            url,
+            headers={"X-Service-Token": token},
+            json=data
+        )
+        return response
+
+# Usage
+client = ServiceClient(auth=auth, service_name="payment_processor")
+
+# Token automatically rotates every 12 hours
+await client.make_request("/api/process", {"invoice_id": "inv_123"})
+await client.make_request("/api/process", {"invoice_id": "inv_456"})
+# ... token seamlessly rotates in background
+```
+
+### Example 5: Multi-Environment Service Tokens
+
+```python
+# Different tokens for different environments
+
+# Production service token (strict permissions)
+prod_token = await auth.service_token_service.create_token(
+    service_name="prod_payment_service",
+    permissions=["invoice:read", "payment:create"],  # Read-only + create
+    environment="production",
+    expires_in=timedelta(hours=24)
+)
+
+# Staging service token (more permissive)
+staging_token = await auth.service_token_service.create_token(
+    service_name="staging_payment_service",
+    permissions=["invoice:read", "invoice:update", "payment:create", "payment:refund"],
+    environment="staging",
+    expires_in=timedelta(hours=48)
+)
+
+# Development service token (most permissive)
+dev_token = await auth.service_token_service.create_token(
+    service_name="dev_payment_service",
+    permissions=["invoice:*", "payment:*"],  # All permissions
+    environment="development",
+    expires_in=timedelta(days=7)
+)
+```
+
+### Example 6: Service Token Health Checks
+
+```python
+# Fast health check endpoint using service tokens
+
+@app.get("/health")
+async def health_check(
+    ctx: AuthContext = deps.require_source(AuthSource.SERVICE)
+):
+    """
+    Health check endpoint for internal monitoring.
+
+    Uses JWT service token validation (~0.5ms).
+    Perfect for high-frequency health checks.
+    """
+
+    service_name = ctx.metadata["service"]
+
+    return {
+        "status": "healthy",
+        "service": service_name,
+        "timestamp": datetime.utcnow().isoformat(),
+        "auth_source": "jwt_service_token"
+    }
+
+# Called by monitoring service every 5 seconds
+# Validation: ~0.5ms per request (no DB load!)
+```
+
+### Best Practices
+
+1. **Short Lifespan**: Keep tokens short-lived (1-24 hours max)
+2. **Internal Only**: Never expose service tokens to external clients
+3. **Rotate Frequently**: Create new tokens automatically before expiration
+4. **Minimal Permissions**: Grant only required permissions per service
+5. **Use API Keys for External**: Reserve JWT tokens for internal services only
+
+---
+
 ## Multi-Source Authentication
 
-Multi-source authentication allows your API to accept authentication from multiple sources with a priority chain: **Superuser > Service > API Key > User > Anonymous**.
+Multi-source authentication allows your API to accept authentication from multiple sources with a priority chain: **Superuser > JWT Service Token > API Key > User > Anonymous**.
+
+**Updated in v1.4**: Now uses unified `AuthDeps` class instead of separate `MultiSourceDeps` class.
 
 ### Example 1: Basic Multi-Source Setup
 
@@ -1636,5 +1887,8 @@ result = await auth.permission_service.check_permission(
 
 ---
 
-**Last Updated**: 2025-01-14 (Added API key authentication and multi-source authentication examples)
+**Last Updated**: 2025-01-14 (v1.4: JWT service tokens, unified AuthDeps, Redis counters, temp locks, 12-char prefixes)
 **Next Review**: After Phase 1 implementation
+**Related Documents**:
+- [DEPENDENCY_PATTERNS.md](DEPENDENCY_PATTERNS.md) - Unified AuthDeps implementation
+- [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) - DD-028, DD-033, DD-034, DD-035

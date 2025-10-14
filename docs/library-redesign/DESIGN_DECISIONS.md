@@ -1,6 +1,6 @@
 # OutlabsAuth Library - Design Decisions Log
 
-**Version**: 1.3
+**Version**: 1.4
 **Date**: 2025-01-14
 **Purpose**: Document key architectural decisions and trade-offs
 
@@ -1587,9 +1587,9 @@ headers = {"X-API-Key": raw_key}
 **Security Requirements**:
 - argon2id hashing with time_cost=2, memory_cost=102400, parallelism=8
 - Never log raw keys, only prefixes
-- Automatic rotation policies (90 days recommended)
+- Optional expiration (recommended 90 days) with manual rotation API
 - IP whitelisting strictly enforced
-- Auto-revoke after 10 failed validation attempts
+- Temporary lock after 10 failed attempts in 10 minutes (30-min cooldown)
 
 ### Consequences
 - **Positive**: Production-ready from day one, industry standard, enables integrations
@@ -1806,9 +1806,9 @@ Use argon2id for API key hashing with specific parameters.
    - Store: key_hash (argon2), key_prefix (8 chars), metadata
    - Never log raw keys (only prefixes)
 
-4. **Rotation**: Automatic policies
-   - Rotate every 90 days (configurable)
-   - Grace period for zero-downtime rotation
+4. **Rotation**: Optional expiration with manual rotation
+   - Optional expiration (recommended 90 days, configurable)
+   - Manual rotation API with grace period for zero-downtime
    - Audit all rotations
 
 5. **IP Whitelisting**: Strictly enforced
@@ -1816,10 +1816,10 @@ Use argon2id for API key hashing with specific parameters.
    - Support CIDR notation
    - Log all unauthorized access attempts
 
-6. **Auto-Revocation**:
-   - After 10 failed validation attempts
-   - On expiration
-   - On detected abuse (unusual patterns)
+6. **Temporary Locks** (not permanent revocation):
+   - 10 failed validation attempts in 10 minutes → 30-minute cooldown lock
+   - Automatic revocation only on expiration (if configured)
+   - Log all lock events for abuse detection
 
 7. **Rate Limiting**: Per-key quotas
    - Default: 60/minute, 1000/hour
@@ -1842,11 +1842,11 @@ Use argon2id for API key hashing with specific parameters.
 ```markdown
 - [ ] API keys use argon2id hashing (not SHA256)
 - [ ] Raw keys never logged or stored
-- [ ] Key rotation policy configured (≤90 days)
+- [ ] Optional expiration configured (recommended ≤90 days)
 - [ ] IP whitelisting enabled for production keys
 - [ ] Rate limiting per key configured
 - [ ] Audit logging captures all key operations
-- [ ] Automatic revocation on repeated failures
+- [ ] Temporary lock on repeated failures (10 in 10 min → 30-min cooldown)
 - [ ] Keys scoped to minimum required permissions
 ```
 
@@ -1858,6 +1858,632 @@ Use argon2id for API key hashing with specific parameters.
 ### Related Decisions
 - DD-028 (API key system)
 - DD-029 (Multi-source auth)
+
+---
+
+## DD-032: Single System with Convenience Wrappers
+
+**Date**: 2025-01-14 (Revised)
+**Status**: Accepted (Supersedes Two-Preset Implementation)
+**Deciders**: Core team
+**Context**: Avoid maintaining duplicate codebases for SimpleRBAC and EnterpriseRBAC
+
+### The Problem
+Original design planned two separate implementations:
+- Code duplication between SimpleRBAC and EnterpriseRBAC
+- Maintenance burden of two codebases
+- Complex migration path from Simple → Enterprise
+- Testing two separate implementations
+
+### Options Considered
+
+1. **Keep Two Separate Implementations**
+   - Pros: Clean separation, no shared complexity
+   - Cons: Code duplication, harder to maintain, complex migration
+
+2. **Single System with Feature Flags Only**
+   - Pros: One codebase, no duplication
+   - Cons: No clear entry points, all features visible in docs
+
+3. **Single System with Thin Convenience Wrappers** (Hybrid)
+   - Pros: One codebase, clear entry points, simple migration
+   - Cons: Slightly more abstract internal design
+
+### Decision
+Single `OutlabsAuth` core implementation with thin convenience wrappers.
+
+**Architecture**:
+```python
+# Core implementation (single codebase)
+class OutlabsAuth:
+    def __init__(
+        self,
+        database: AsyncIOMotorClient,
+        enable_entity_hierarchy: bool = False,
+        enable_context_aware_roles: bool = False,
+        enable_abac: bool = False,
+        enable_caching: bool = False,
+        multi_tenant: bool = False,
+        redis_url: Optional[str] = None,
+        **kwargs
+    ):
+        self.config = AuthConfig(
+            enable_entity_hierarchy=enable_entity_hierarchy,
+            enable_context_aware_roles=enable_context_aware_roles,
+            # ... other features
+        )
+        # Single unified implementation
+        self._init_services()
+
+# Thin convenience wrappers (5-10 LOC each)
+class SimpleRBAC(OutlabsAuth):
+    """Flat RBAC for simple applications."""
+    def __init__(self, database: AsyncIOMotorClient, **kwargs):
+        super().__init__(
+            database,
+            enable_entity_hierarchy=False,
+            enable_context_aware_roles=False,
+            enable_abac=False,
+            **kwargs
+        )
+
+class EnterpriseRBAC(OutlabsAuth):
+    """Hierarchical RBAC with optional advanced features."""
+    def __init__(
+        self,
+        database: AsyncIOMotorClient,
+        enable_context_aware_roles: bool = False,
+        enable_abac: bool = False,
+        **kwargs
+    ):
+        super().__init__(
+            database,
+            enable_entity_hierarchy=True,  # Always enabled
+            enable_context_aware_roles=enable_context_aware_roles,
+            enable_abac=enable_abac,
+            **kwargs
+        )
+```
+
+**Reasoning**:
+- Zero code duplication (single core implementation)
+- Easy maintenance (one codebase to update)
+- Simple migration path (just change class name + add config)
+- Clear entry points (SimpleRBAC vs EnterpriseRBAC)
+- All features controlled by `AuthConfig`
+- Wrappers are documentation (convey intent)
+
+### Consequences
+- **Positive**: No code duplication, easy maintenance, simple migration, single test suite
+- **Negative**: Slightly more abstract internal design
+- **Neutral**: Wrappers are thin (5-10 LOC each), no performance overhead
+
+### Implementation Details
+- All services check `auth.config.enable_*` flags
+- Entity services no-op if `enable_entity_hierarchy=False`
+- ABAC evaluator no-op if `enable_abac=False`
+- Documentation shows wrapper usage (hides core class)
+
+### Related Decisions
+- DD-015 (Two-preset architecture)
+- DD-016 (Optional features via flags)
+- DD-017 (Entity hierarchy always in Enterprise)
+
+---
+
+## DD-033: Redis Counters for API Key Metrics
+
+**Date**: 2025-01-14 (Revised)
+**Status**: Accepted
+**Deciders**: Core team, Performance review
+**Context**: Database writes on every API request create bottleneck
+
+### The Problem
+Original design wrote `usage_count` and `error_count` to MongoDB on every API key request:
+```python
+# BAD: DB write on every request
+api_key.usage_count += 1
+await api_key.save()  # Bottleneck!
+```
+
+At 1000 req/sec, this means 1000 MongoDB writes/sec just for counters.
+
+### Options Considered
+
+1. **MongoDB Writes on Every Request**
+   - Pros: Real-time counts, simple implementation
+   - Cons: Massive bottleneck, doesn't scale
+
+2. **In-Memory Counters Only**
+   - Pros: Fast, no Redis dependency
+   - Cons: Lose counts on restart, no shared state
+
+3. **Redis Counters with Periodic Sync**
+   - Pros: Fast, persistent, scales horizontally
+   - Cons: Requires Redis for API keys (but already needed for caching)
+
+### Decision
+Use Redis counters with periodic sync to MongoDB.
+
+**Architecture**:
+```python
+# Fast path (every request)
+await redis.incr(f"api_key:usage:{key_id}")
+await redis.incr(f"api_key:usage:{key_id}:hour:{hour}")
+
+# Slow path (every 5 minutes via background task)
+async def sync_api_key_metrics():
+    for key_id in active_keys:
+        usage = await redis.get(f"api_key:usage:{key_id}")
+        await api_key_model.update(key_id, usage_count=usage)
+        await redis.set(f"api_key:usage:{key_id}", 0)  # Reset counter
+```
+
+**Features**:
+- Redis INCR for O(1) counter updates
+- Hourly breakdown: `api_key:usage:{key_id}:hour:{hour}`
+- Periodic sync to MongoDB (every 5 minutes)
+- Background task handles sync automatically
+- In-memory fallback if Redis unavailable
+
+**Reasoning**:
+- Redis counters are extremely fast (100k+ ops/sec per instance)
+- Periodic sync reduces MongoDB load by 99%+
+- Hourly breakdowns enable rate limiting
+- Analytics still available in MongoDB (slightly delayed)
+- In-memory fallback for development without Redis
+
+### Consequences
+- **Positive**: Massive performance improvement, scales horizontally, enables rate limiting
+- **Negative**: Requires Redis for API keys, counts slightly delayed (up to 5 min)
+- **Neutral**: Background task overhead is minimal
+
+### Implementation
+- `RedisCounterService` handles all counter operations
+- `MongoDBSyncService` runs background sync every 5 minutes
+- Graceful degradation to in-memory if Redis unavailable
+- Metrics available via `/api/keys/{id}/metrics` endpoint
+
+### Related Decisions
+- DD-028 (API key system)
+- DD-010 (Redis caching optional)
+- DD-037 (Redis Pub/Sub cache invalidation)
+
+---
+
+## DD-034: JWT Service Tokens for Internal Microservices
+
+**Date**: 2025-01-14 (Revised)
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: API keys require database lookups; internal services need zero-overhead auth
+
+### The Problem
+API keys are great for external integrations, but:
+- Require database lookup on every request (even with Redis)
+- argon2id hashing adds latency (~50-100ms)
+- Internal microservices make thousands of requests/sec
+
+### Options Considered
+
+1. **API Keys Only**
+   - Pros: Single authentication method
+   - Cons: Database overhead for internal services, doesn't scale
+
+2. **JWT Service Tokens Only**
+   - Pros: Stateless, zero DB overhead
+   - Cons: Can't revoke individual tokens, not suitable for external use
+
+3. **Both API Keys and JWT Service Tokens**
+   - Pros: Right tool for each use case
+   - Cons: Two auth methods to maintain
+
+### Decision
+Support both API keys (external) and JWT service tokens (internal).
+
+**Use Cases**:
+- **API Keys**: External integrations, webhooks, third-party services (need revocation)
+- **JWT Service Tokens**: Internal microservices, high-volume service-to-service (need speed)
+
+**Design**:
+```python
+# Create service token (long-lived JWT)
+service_token = await auth.service_token_service.create_service_token(
+    name="analytics_service",
+    permissions=["analytics:write", "events:read"],
+    expires_in_days=365  # Long-lived
+)
+
+# Use in requests
+headers = {"Authorization": f"Bearer {service_token}"}
+
+# Validation (zero DB hits)
+ctx = await auth.get_context(request)
+# ctx.source == AuthSource.SERVICE
+# ctx.permissions == ["analytics:write", "events:read"]
+```
+
+**JWT Claims**:
+```json
+{
+  "sub": "service:analytics_service",
+  "type": "service_token",
+  "permissions": ["analytics:write", "events:read"],
+  "exp": 1735689600,
+  "iat": 1704153600
+}
+```
+
+**Reasoning**:
+- Internal services don't need per-request revocation
+- JWT validation is 1000x faster than argon2id hashing
+- Zero database hits (stateless)
+- Suitable for high-volume service-to-service communication
+- API keys still available for external use (need revocation)
+
+### Consequences
+- **Positive**: Zero overhead for internal services, scales to millions of req/sec
+- **Negative**: Can't revoke individual tokens (rotate secret to revoke all)
+- **Neutral**: Two auth methods increases API surface slightly
+
+### Security Considerations
+- Service tokens are long-lived (30-365 days)
+- Cannot revoke individual tokens (only by rotating secret)
+- Should only be used for trusted internal services
+- Include `type: service_token` claim to prevent confusion with user JWTs
+- Audit all service token creation
+
+### Related Decisions
+- DD-028 (API key system)
+- DD-029 (Multi-source authentication)
+- DD-030 (Dependency patterns)
+
+---
+
+## DD-035: Single AuthDeps Class for Dependency Injection
+
+**Date**: 2025-01-14 (Revised)
+**Status**: Accepted (Supersedes Multi-Class Pattern)
+**Deciders**: Core team
+**Context**: Simplify dependency injection patterns
+
+### The Problem
+Original design had 5 separate dependency classes:
+- `SimpleDeps`: Basic patterns
+- `MultiSourceDeps`: Multi-source auth
+- `GroupDeps`: Group-based auth
+- `EntityDeps`: Entity-scoped auth
+- `RateLimitDeps`: Rate limiting
+
+This created confusion:
+- Which class to use when?
+- How to combine multiple requirements?
+- Inconsistent patterns across codebase
+
+### Options Considered
+
+1. **Keep 5 Separate Classes**
+   - Pros: Clear separation of concerns
+   - Cons: Confusing, hard to discover, inconsistent
+
+2. **Single Monolithic Class**
+   - Pros: One place for everything
+   - Cons: Large class, many methods
+
+3. **Single Class with Clear Method Names**
+   - Pros: Easy to discover, consistent, composable
+   - Cons: Single class has many methods (acceptable)
+
+### Decision
+Single `AuthDeps` class with clear, descriptive method names.
+
+**Design**:
+```python
+class AuthDeps:
+    """Unified dependency injection for all auth patterns."""
+
+    def __init__(self, auth: OutlabsAuth):
+        self.auth = auth
+
+    # Authentication (who are you?)
+    def require_auth(self) -> Callable:
+        """Require any authenticated user/service."""
+
+    def require_user(self) -> Callable:
+        """Require authenticated user (not API key/service)."""
+
+    def require_source(self, source: AuthSource) -> Callable:
+        """Require specific auth source."""
+
+    # Authorization (what can you do?)
+    def require_permission(self, *permissions: str) -> Callable:
+        """Require one or more permissions."""
+
+    def require_all_permissions(self, *permissions: str) -> Callable:
+        """Require ALL specified permissions."""
+
+    def require_role(self, *roles: str) -> Callable:
+        """Require one or more roles."""
+
+    # Entity-based (where can you do it?)
+    def require_entity_access(self, entity_id: str) -> Callable:
+        """Require access to specific entity."""
+
+    def require_entity_permission(self, entity_id: str, permission: str) -> Callable:
+        """Require permission within specific entity."""
+
+    # Superuser
+    def require_superuser(self) -> Callable:
+        """Require superuser access."""
+
+# Usage
+deps = AuthDeps(auth)
+
+@app.get("/api/data")
+async def get_data(ctx: AuthContext = Depends(deps.require_permission("data:read"))):
+    return data
+
+@app.delete("/api/data/{id}")
+async def delete_data(
+    id: str,
+    ctx: AuthContext = Depends(deps.require_all_permissions("data:delete", "data:write"))
+):
+    await service.delete(id)
+```
+
+**Reasoning**:
+- Single class is easier to discover and learn
+- Clear method names convey intent
+- Composable via FastAPI's Depends()
+- Consistent patterns across entire codebase
+- Easy to document and test
+
+### Consequences
+- **Positive**: Simple, discoverable, consistent, easy to learn
+- **Negative**: Single class with ~10 methods (acceptable)
+- **Neutral**: Deprecates old 5-class pattern
+
+### Migration
+```python
+# OLD (5 classes)
+simple = SimpleDeps(auth)
+multi = MultiSourceDeps(auth)
+entity = EntityDeps(auth)
+
+# NEW (single class)
+deps = AuthDeps(auth)
+```
+
+### Related Decisions
+- DD-030 (Dependency patterns - UPDATED)
+- DD-029 (Multi-source auth)
+- DD-012 (FastAPI-first design)
+
+---
+
+## DD-036: Closure Table for Tree Permissions
+
+**Date**: 2025-01-14 (Revised)
+**Status**: Accepted
+**Deciders**: Core team, Performance review
+**Context**: Recursive tree queries don't scale with deep hierarchies
+
+### The Problem
+Original design used recursive queries for tree permissions:
+```python
+# BAD: N database queries for depth N
+async def get_ancestors(entity_id: str) -> List[Entity]:
+    ancestors = []
+    current = await Entity.get(entity_id)
+    while current.parent_id:
+        current = await Entity.get(current.parent_id)  # N queries!
+        ancestors.append(current)
+    return ancestors
+```
+
+At depth 10, this means 10 sequential database queries per permission check.
+
+### Options Considered
+
+1. **Keep Recursive Queries**
+   - Pros: Simple implementation, easy to understand
+   - Cons: O(N) queries for depth N, doesn't scale, latency issues
+
+2. **Materialized Path**
+   - Pros: Single query, fast reads
+   - Cons: Complex updates, path length limits, harder to query
+
+3. **Closure Table**
+   - Pros: O(1) reads, fast updates, unlimited depth, industry standard
+   - Cons: Extra table, more storage
+
+### Decision
+Use closure table pattern for tree permissions.
+
+**Schema**:
+```python
+class EntityClosureModel(BaseModel):
+    """Stores all ancestor-descendant relationships."""
+    ancestor_id: str      # Ancestor entity ID
+    descendant_id: str    # Descendant entity ID
+    depth: int           # Distance (0 = self, 1 = direct child, etc.)
+
+    class Settings:
+        indexes = [
+            ("ancestor_id", "descendant_id"),  # Unique
+            ("descendant_id", "depth"),        # Find ancestors
+            ("ancestor_id", "depth")           # Find descendants
+        ]
+```
+
+**Queries**:
+```python
+# Get all ancestors (single query)
+ancestors = await EntityClosure.find(
+    {"descendant_id": entity_id, "depth": {"$gt": 0}}
+).sort("depth").to_list()
+
+# Get all descendants (single query)
+descendants = await EntityClosure.find(
+    {"ancestor_id": entity_id, "depth": {"$gt": 0}}
+).to_list()
+
+# Check if A is ancestor of B (single query)
+is_ancestor = await EntityClosure.find_one({
+    "ancestor_id": A,
+    "descendant_id": B
+}) is not None
+```
+
+**Maintenance**:
+```python
+# On entity creation
+async def create_entity(entity: Entity):
+    await entity.save()
+
+    # Add self-reference (depth 0)
+    await EntityClosure(
+        ancestor_id=entity.id,
+        descendant_id=entity.id,
+        depth=0
+    ).save()
+
+    # Copy parent's ancestors + add direct parent
+    if entity.parent_id:
+        parent_closures = await EntityClosure.find(
+            {"descendant_id": entity.parent_id}
+        ).to_list()
+
+        for closure in parent_closures:
+            await EntityClosure(
+                ancestor_id=closure.ancestor_id,
+                descendant_id=entity.id,
+                depth=closure.depth + 1
+            ).save()
+```
+
+**Reasoning**:
+- O(1) ancestor/descendant queries (vs O(N) recursive)
+- Industry standard pattern (used by PostgreSQL ltree, Django MPTT)
+- Handles unlimited depth
+- Fast permission checking across entire hierarchy
+- Modest storage overhead (acceptable for auth system)
+
+### Consequences
+- **Positive**: Massive performance improvement, O(1) queries, unlimited depth
+- **Negative**: Extra table, more complex inserts/moves
+- **Neutral**: Storage overhead ~2x entity count (acceptable)
+
+### Performance
+- **Before**: 10 sequential queries for depth 10 (~100ms)
+- **After**: 1 indexed query for any depth (~5ms)
+- **Improvement**: 20x faster
+
+### Related Decisions
+- DD-007 (Tree permissions)
+- DD-006 (Entity hierarchy)
+
+---
+
+## DD-037: Redis Pub/Sub Cache Invalidation
+
+**Date**: 2025-01-14 (Revised)
+**Status**: Accepted
+**Deciders**: Core team, Security review
+**Context**: TTL-only cache invalidation is too slow for security changes
+
+### The Problem
+Original design used 5-minute TTL for permission caching:
+```python
+# BAD: Revoked permissions cached for up to 5 minutes
+await redis.setex(f"perms:{user_id}", 300, json.dumps(permissions))
+```
+
+Security issues:
+- Revoked user stays cached for 5 minutes
+- Removed permission still works for 5 minutes
+- No way to invalidate across multiple instances
+
+### Options Considered
+
+1. **TTL Only (No Invalidation)**
+   - Pros: Simple, no coordination
+   - Cons: Security risk (5-min delay), no immediate revocation
+
+2. **Short TTL (30 seconds)**
+   - Pros: Faster invalidation
+   - Cons: More database load, still not immediate, cache less effective
+
+3. **Redis Pub/Sub Invalidation**
+   - Pros: Immediate invalidation, works across instances, secure
+   - Cons: Requires Redis, slightly more complex
+
+### Decision
+Use Redis Pub/Sub for immediate cache invalidation across all instances.
+
+**Architecture**:
+```python
+# On permission change (any instance)
+await auth.cache.invalidate_user(user_id)
+# Publishes: {"type": "user", "id": user_id}
+
+# All instances subscribe and clear local cache
+async def handle_invalidation_event(message):
+    data = json.loads(message)
+    if data["type"] == "user":
+        await local_cache.delete(f"perms:{data['id']}")
+        await local_cache.delete(f"roles:{data['id']}")
+    elif data["type"] == "entity":
+        # Invalidate all users in entity
+        await local_cache.delete_pattern(f"perms:*:entity:{data['id']}")
+```
+
+**Invalidation Events**:
+- `user:permissions_changed` - User permissions/roles changed
+- `user:revoked` - User account disabled/deleted
+- `role:permissions_changed` - Role permissions changed
+- `entity:access_changed` - Entity membership changed
+- `api_key:revoked` - API key revoked
+
+**Features**:
+- Immediate invalidation (< 100ms across all instances)
+- Granular events (only invalidate what changed)
+- Fallback to TTL if Pub/Sub fails
+- Background subscription with auto-reconnect
+- Works with horizontal scaling
+
+**Reasoning**:
+- Security requires immediate permission revocation
+- 5-minute TTL is too slow for security changes
+- Pub/Sub enables real-time invalidation
+- Works across multiple instances (horizontal scaling)
+- Minimal overhead (publish = ~1ms)
+
+### Consequences
+- **Positive**: Immediate security changes, works across instances, better cache hit rate
+- **Negative**: Requires Redis, slightly more complex
+- **Neutral**: Graceful degradation to TTL-only if Redis unavailable
+
+### Implementation
+```python
+class AuthCacheService:
+    async def start_subscription(self):
+        """Start background Pub/Sub listener."""
+        await redis.subscribe("auth:invalidate")
+        asyncio.create_task(self._listen_for_events())
+
+    async def invalidate_user(self, user_id: str):
+        """Invalidate user cache across all instances."""
+        await redis.publish("auth:invalidate", json.dumps({
+            "type": "user",
+            "id": user_id,
+            "timestamp": time.time()
+        }))
+```
+
+### Related Decisions
+- DD-010 (Redis caching optional)
+- DD-033 (Redis counters)
 
 ---
 
@@ -1890,9 +2516,12 @@ Track questions that need decisions:
 | 2025-01-14 | DD-015 through DD-021 | All Accepted |
 | 2025-01-14 | DD-022 through DD-027 | All Accepted (Post-v1.0 Extensions) |
 | 2025-01-14 | DD-028 through DD-031 | All Accepted (Core v1.0 - API Keys & Auth Dependencies) |
+| 2025-01-14 | DD-032 through DD-037 | All Accepted (Architectural Improvements) |
 | 2025-01-14 | DD-003 | Superseded by DD-015 |
+| 2025-01-14 | DD-028, DD-031 | Updated (removed automatic rotation, added temp locks) |
+| 2025-01-14 | DD-030 | Superseded by DD-035 |
 
 ---
 
-**Last Updated**: 2025-01-14 (Added API key system, multi-source authentication, and dependency patterns)
+**Last Updated**: 2025-01-14 (Major architectural improvements: unified system, Redis patterns, closure table, single AuthDeps)
 **Next Review**: End of Phase 1 (Week 2)

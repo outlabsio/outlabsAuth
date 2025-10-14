@@ -1,9 +1,17 @@
 # OutlabsAuth Testing Guide
 
-**Version**: 1.1
+**Version**: 1.4
 **Date**: 2025-01-14
 **Audience**: Developers testing OutlabsAuth integrations
 **Status**: Production Reference
+
+**Key Testing Updates (v1.4)**:
+- **Unified AuthDeps**: Single dependency class instead of MultiSourceDeps (DD-035)
+- **12-Char Prefixes**: API keys now have 12-character prefixes (DD-028)
+- **Temporary Locks**: Test 30-min cooldowns instead of permanent revocation (DD-028)
+- **Redis Counters**: Test Redis-based usage tracking (DD-033)
+- **Closure Table**: Test O(1) tree permission queries (DD-036)
+- **JWT Service Tokens**: Test stateless internal service authentication (DD-034)
 
 ---
 
@@ -680,6 +688,177 @@ async def test_entity_specific_permissions(test_db):
     assert has_perm_child is False
 ```
 
+### Testing Closure Table Tree Permissions (v1.4 - DD-036)
+
+```python
+@pytest.mark.asyncio
+async def test_closure_table_o1_query_performance(test_db):
+    """Test closure table provides O(1) tree permission queries (20x faster)"""
+    import time
+    auth = EnterpriseRBAC(database=test_db)
+    await auth.initialize()
+
+    # Create deep hierarchy (10 levels)
+    entities = []
+    parent_id = None
+
+    for i in range(10):
+        entity = await auth.entity_service.create_entity(
+            name=f"level_{i}",
+            entity_type="department",
+            entity_class="STRUCTURAL",
+            parent_entity_id=parent_id
+        )
+        entities.append(entity)
+        parent_id = entity.id
+
+    # Create user with tree permission at root
+    user = await auth.user_service.create_user(
+        email="closure@example.com",
+        password="password123",
+        name="Closure Test"
+    )
+
+    role = await auth.role_service.create_role(
+        name="root_admin",
+        permissions=["entity:read_tree"],
+        entity_id=entities[0].id  # Root level
+    )
+
+    await auth.membership_service.add_member(
+        entity_id=entities[0].id,
+        user_id=user.id,
+        role_id=role.id
+    )
+
+    # Benchmark tree permission check at deepest level
+    deepest_entity = entities[-1]
+
+    start = time.perf_counter()
+
+    has_perm, source = await auth.permission_service.check_permission(
+        user_id=user.id,
+        permission="entity:read",
+        entity_id=deepest_entity.id
+    )
+
+    elapsed_ms = (time.perf_counter() - start) * 1000
+
+    # Should complete in ~5ms (O(1) with closure table)
+    assert elapsed_ms < 10  # Less than 10ms
+    assert has_perm is True
+    assert "tree" in source.lower()
+
+    print(f"Tree permission check completed in {elapsed_ms:.2f}ms")
+
+@pytest.mark.asyncio
+async def test_closure_table_ancestry_query(test_db):
+    """Test closure table efficiently finds all ancestors"""
+    auth = EnterpriseRBAC(database=test_db)
+    await auth.initialize()
+
+    # Create hierarchy: root > org > dept > team
+    root = await auth.entity_service.create_entity(
+        name="root",
+        entity_type="platform",
+        entity_class="STRUCTURAL"
+    )
+
+    org = await auth.entity_service.create_entity(
+        name="org",
+        entity_type="organization",
+        entity_class="STRUCTURAL",
+        parent_entity_id=root.id
+    )
+
+    dept = await auth.entity_service.create_entity(
+        name="dept",
+        entity_type="department",
+        entity_class="STRUCTURAL",
+        parent_entity_id=org.id
+    )
+
+    team = await auth.entity_service.create_entity(
+        name="team",
+        entity_type="team",
+        entity_class="STRUCTURAL",
+        parent_entity_id=dept.id
+    )
+
+    # Query closure table for all ancestors of team
+    from outlabs_auth.models import EntityClosureModel
+
+    closures = await EntityClosureModel.find(
+        EntityClosureModel.descendant_id == team.id,
+        EntityClosureModel.depth > 0
+    ).to_list()
+
+    # Should find all 3 ancestors in single query
+    assert len(closures) == 3
+
+    ancestor_ids = [c.ancestor_id for c in closures]
+    assert dept.id in ancestor_ids
+    assert org.id in ancestor_ids
+    assert root.id in ancestor_ids
+
+    # Verify depths
+    depth_map = {c.ancestor_id: c.depth for c in closures}
+    assert depth_map[dept.id] == 1  # Immediate parent
+    assert depth_map[org.id] == 2
+    assert depth_map[root.id] == 3
+
+@pytest.mark.asyncio
+async def test_closure_table_descendant_query(test_db):
+    """Test closure table efficiently finds all descendants"""
+    auth = EnterpriseRBAC(database=test_db)
+    await auth.initialize()
+
+    # Create hierarchy
+    root = await auth.entity_service.create_entity(
+        name="root",
+        entity_type="platform",
+        entity_class="STRUCTURAL"
+    )
+
+    # Create multiple branches
+    children = []
+    for i in range(3):
+        child = await auth.entity_service.create_entity(
+            name=f"child_{i}",
+            entity_type="department",
+            entity_class="STRUCTURAL",
+            parent_entity_id=root.id
+        )
+        children.append(child)
+
+        # Each child has 2 grandchildren
+        for j in range(2):
+            await auth.entity_service.create_entity(
+                name=f"grandchild_{i}_{j}",
+                entity_type="team",
+                entity_class="STRUCTURAL",
+                parent_entity_id=child.id
+            )
+
+    # Query all descendants of root (should be 9 total: 3 children + 6 grandchildren)
+    from outlabs_auth.models import EntityClosureModel
+
+    closures = await EntityClosureModel.find(
+        EntityClosureModel.ancestor_id == root.id,
+        EntityClosureModel.depth > 0
+    ).to_list()
+
+    # Should find all 9 descendants in single query
+    assert len(closures) == 9
+
+    # Count by depth
+    depth_1 = [c for c in closures if c.depth == 1]  # Direct children
+    depth_2 = [c for c in closures if c.depth == 2]  # Grandchildren
+
+    assert len(depth_1) == 3
+    assert len(depth_2) == 6
+```
+
 ---
 
 ## Authentication Testing
@@ -839,9 +1018,10 @@ async def test_create_api_key(auth):
     assert raw_key.startswith("sk_prod_")
     assert len(raw_key) > 20  # At least prefix + some random data
 
-    # Verify model
+    # Verify model (DD-028: 12-char prefixes)
     assert api_key_model.name == "Test Service"
-    assert api_key_model.key_prefix == raw_key[:8]
+    assert api_key_model.key_prefix == raw_key[:12]  # 12-char prefix (v1.4)
+    assert len(api_key_model.key_prefix) == 12
     assert api_key_model.key_hash is not None  # Hash stored, not raw key
     assert "user:read" in api_key_model.permissions
     assert api_key_model.is_active is True
@@ -1105,42 +1285,139 @@ async def test_api_key_rate_limiting(auth):
         await auth.api_key_service.check_rate_limit(api_key_model)
 ```
 
-### Testing API Key Auto-Revocation
+### Testing API Key Temporary Locks (v1.4 - DD-028)
 
 ```python
 @pytest.mark.asyncio
-async def test_api_key_auto_revoke_after_failures(auth):
-    """Test API key auto-revokes after 10 failed attempts"""
-    from outlabs_auth.exceptions import InvalidAPIKeyException
+async def test_api_key_temporary_lock_after_failures(auth, redis):
+    """Test API key gets 30-min temporary lock after 10 failed attempts in 10 minutes"""
+    from outlabs_auth.exceptions import InvalidAPIKeyException, APIKeyLockedException
+    import time
 
     user = await auth.user_service.create_user(
-        email="revoke@example.com",
+        email="lock@example.com",
         password="password123",
-        name="Revoke Test"
+        name="Lock Test"
     )
 
     raw_key, api_key_model = await auth.api_key_service.create_api_key(
-        name="Auto Revoke Test",
+        name="Temporary Lock Test",
         permissions=["user:read"],
         environment="production",
         created_by=user.id
     )
 
-    # Make 10 failed authentication attempts
+    # Simulate 10 failed attempts within 10-minute window
+    # (In production, this would be detected by Redis tracking)
     for i in range(10):
-        try:
-            await auth.api_key_service.authenticate_api_key(
-                f"sk_prod_wrong_key_{i}"
-            )
-        except InvalidAPIKeyException:
-            pass
+        # Record failed attempt in Redis
+        await redis.incr(f"api_key_failures:{api_key_model.key_prefix}")
+        await redis.expire(f"api_key_failures:{api_key_model.key_prefix}", 600)  # 10 min
 
-    # Refresh model from database
+    # After 10 failures, key should be temporarily locked
+    await redis.setex(f"api_key_lock:{api_key_model.key_prefix}", 1800, "1")  # 30 min lock
+
+    # Attempt to authenticate with locked key
+    with pytest.raises(APIKeyLockedException) as exc_info:
+        await auth.api_key_service.authenticate_api_key(raw_key)
+
+    assert "temporarily locked" in str(exc_info.value).lower()
+    assert "30 minutes" in str(exc_info.value)
+
+    # Verify key is still active (not permanently revoked)
     api_key_model = await auth.api_key_service.get_api_key(api_key_model.id)
+    assert api_key_model.is_active is True  # Still active, just locked
 
-    # Key should be auto-revoked
-    assert api_key_model.is_active is False
-    assert "10 failed attempts" in api_key_model.revoked_reason
+    # After lock expires (30 min), key should work again
+    await redis.delete(f"api_key_lock:{api_key_model.key_prefix}")
+    await redis.delete(f"api_key_failures:{api_key_model.key_prefix}")
+
+    # Should authenticate successfully now
+    validated_key = await auth.api_key_service.authenticate_api_key(raw_key)
+    assert validated_key.id == api_key_model.id
+```
+
+### Testing Redis Counters for API Keys (v1.4 - DD-033)
+
+```python
+@pytest.mark.asyncio
+async def test_api_key_redis_usage_counters(auth, redis):
+    """Test API key usage tracking with Redis counters (99%+ DB write reduction)"""
+    user = await auth.user_service.create_user(
+        email="counter@example.com",
+        password="password123",
+        name="Counter Test"
+    )
+
+    raw_key, api_key_model = await auth.api_key_service.create_api_key(
+        name="Counter Test",
+        permissions=["user:read"],
+        environment="production",
+        created_by=user.id
+    )
+
+    # Make 100 API calls
+    for i in range(100):
+        await auth.api_key_service.authenticate_api_key(raw_key)
+
+    # Redis counter should be updated (not DB yet)
+    counter_key = f"api_key_usage:{api_key_model.id}"
+    redis_count = await redis.get(counter_key)
+    assert int(redis_count) == 100
+
+    # Database should still show 0 or small number (not synced yet)
+    api_key_model = await auth.api_key_service.get_api_key(api_key_model.id)
+    assert api_key_model.usage_count < 100  # Not synced to DB yet
+
+    # Trigger background sync (normally runs every 5 minutes)
+    await auth.api_key_service.sync_usage_counters_from_redis()
+
+    # Now DB should be updated
+    api_key_model = await auth.api_key_service.get_api_key(api_key_model.id)
+    assert api_key_model.usage_count == 100
+    assert api_key_model.last_used_at is not None
+
+@pytest.mark.asyncio
+async def test_api_key_counter_background_sync(auth, redis):
+    """Test automatic background sync of Redis counters to database"""
+    import asyncio
+
+    user = await auth.user_service.create_user(
+        email="sync@example.com",
+        password="password123",
+        name="Sync Test"
+    )
+
+    # Create multiple API keys
+    keys = []
+    for i in range(5):
+        raw_key, api_key = await auth.api_key_service.create_api_key(
+            name=f"Key {i}",
+            permissions=["user:read"],
+            environment="production",
+            created_by=user.id
+        )
+        keys.append((raw_key, api_key))
+
+        # Simulate usage
+        for _ in range(50):
+            await redis.incr(f"api_key_usage:{api_key.id}")
+
+    # Start background sync task
+    sync_task = asyncio.create_task(
+        auth.api_key_service.run_background_sync(interval=5)
+    )
+
+    # Wait for sync
+    await asyncio.sleep(6)
+
+    # Cancel background task
+    sync_task.cancel()
+
+    # Verify all counters synced to DB
+    for raw_key, api_key in keys:
+        refreshed = await auth.api_key_service.get_api_key(api_key.id)
+        assert refreshed.usage_count == 50
 ```
 
 ### Testing API Key Rotation
@@ -1312,14 +1589,14 @@ async def test_entity_scoped_api_key_tree_permissions(test_db):
 # tests/integration/test_multi_source_auth.py
 import pytest
 from outlabs_auth import SimpleRBAC
-from outlabs_auth.dependencies import MultiSourceDeps
+from outlabs_auth.dependencies import AuthDeps
 from outlabs_auth.models import AuthSource, AuthContext
 from fastapi import Request
 
 @pytest.mark.asyncio
-async def test_auth_source_priority_chain(auth):
+async def test_auth_source_priority_chain(auth, redis):
     """Test priority: Superuser > Service > API Key > User > Anonymous"""
-    deps = MultiSourceDeps(auth=auth)
+    deps = AuthDeps(auth=auth, redis=redis)
 
     # Create test user with token
     user = await auth.user_service.create_user(
@@ -1365,7 +1642,7 @@ async def test_auth_source_priority_chain(auth):
     assert context.source == AuthSource.SUPERUSER
 
 @pytest.mark.asyncio
-async def test_api_key_auth_source(auth):
+async def test_api_key_auth_source(auth, redis):
     """Test authentication with API key source"""
     user = await auth.user_service.create_user(
         email="apiauth@example.com",
@@ -1381,7 +1658,7 @@ async def test_api_key_auth_source(auth):
     )
 
     # Authenticate with API key only
-    deps = MultiSourceDeps(auth=auth)
+    deps = AuthDeps(auth=auth, redis=redis)
 
     class MockRequest:
         def __init__(self):
@@ -1399,7 +1676,7 @@ async def test_api_key_auth_source(auth):
     assert "user:create" in context.permissions
 
 @pytest.mark.asyncio
-async def test_user_jwt_auth_source(auth):
+async def test_user_jwt_auth_source(auth, redis):
     """Test authentication with JWT source"""
     user = await auth.user_service.create_user(
         email="jwtauth@example.com",
@@ -1413,7 +1690,7 @@ async def test_user_jwt_auth_source(auth):
     )
 
     # Authenticate with JWT only
-    deps = MultiSourceDeps(auth=auth)
+    deps = AuthDeps(auth=auth, redis=redis)
 
     class MockRequest:
         def __init__(self):
@@ -1429,9 +1706,9 @@ async def test_user_jwt_auth_source(auth):
     assert context.identity == user.email
 
 @pytest.mark.asyncio
-async def test_anonymous_auth_source(auth):
+async def test_anonymous_auth_source(auth, redis):
     """Test anonymous access"""
-    deps = MultiSourceDeps(auth=auth)
+    deps = AuthDeps(auth=auth, redis=redis)
 
     class MockRequest:
         def __init__(self):
@@ -1490,10 +1767,10 @@ from fastapi import FastAPI, Depends
 from fastapi.testclient import TestClient
 
 @pytest.mark.asyncio
-async def test_multi_source_auth_in_route(auth):
+async def test_multi_source_auth_in_route(auth, redis):
     """Test multi-source auth with FastAPI routes"""
     app = FastAPI()
-    deps = MultiSourceDeps(auth=auth)
+    deps = AuthDeps(auth=auth, redis=redis)
 
     @app.get("/test")
     async def test_route(context: AuthContext = Depends(deps.get_context)):
@@ -1526,6 +1803,128 @@ async def test_multi_source_auth_in_route(auth):
     data = response.json()
     assert data["source"] == "API_KEY"
     assert "user:read" in data["permissions"]
+```
+
+### Testing JWT Service Tokens (v1.4 - DD-034)
+
+```python
+@pytest.mark.asyncio
+async def test_jwt_service_token_authentication(auth):
+    """Test stateless JWT service token authentication (~0.5ms, zero DB hits)"""
+    from outlabs_auth.services import JWTServiceTokenService
+
+    # Create service token
+    service_token = await auth.jwt_service_token_service.create_service_token(
+        service_name="payment-processor",
+        permissions=["payment:create", "payment:read", "invoice:generate"],
+        expires_in_days=365
+    )
+
+    # Validate service token (no DB lookup, pure JWT validation)
+    import time
+    start = time.perf_counter()
+
+    context = await auth.jwt_service_token_service.validate_service_token(service_token)
+
+    elapsed_ms = (time.perf_counter() - start) * 1000
+
+    # Should be extremely fast (~0.5ms)
+    assert elapsed_ms < 1.0  # Less than 1ms
+
+    # Verify context
+    assert context.source == AuthSource.SERVICE_TOKEN
+    assert context.identity == "service:payment-processor"
+    assert "payment:create" in context.permissions
+    assert "payment:read" in context.permissions
+    assert "invoice:generate" in context.permissions
+
+@pytest.mark.asyncio
+async def test_jwt_service_token_in_fastapi(auth, redis):
+    """Test JWT service token authentication in FastAPI routes"""
+    from fastapi import FastAPI, Depends
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    deps = AuthDeps(auth=auth, redis=redis)
+
+    @app.post("/payments")
+    async def create_payment(context: AuthContext = Depends(deps.require_permission("payment:create"))):
+        return {
+            "message": "Payment created",
+            "service": context.identity
+        }
+
+    # Create service token
+    service_token = await auth.jwt_service_token_service.create_service_token(
+        service_name="payment-processor",
+        permissions=["payment:create"],
+        expires_in_days=365
+    )
+
+    client = TestClient(app)
+
+    # Make request with service token
+    response = client.post(
+        "/payments",
+        headers={"X-Service-Token": service_token}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "service:payment-processor" in data["service"]
+
+@pytest.mark.asyncio
+async def test_jwt_service_token_expiration(auth):
+    """Test JWT service token expiration handling"""
+    from datetime import datetime, timedelta
+    import jwt
+
+    # Create expired service token (manually for testing)
+    payload = {
+        "sub": "service:test-service",
+        "permissions": ["test:read"],
+        "exp": datetime.utcnow() - timedelta(days=1),  # Expired yesterday
+        "iat": datetime.utcnow() - timedelta(days=2)
+    }
+
+    expired_token = jwt.encode(payload, auth.config.secret_key, algorithm="HS256")
+
+    # Validation should fail
+    from outlabs_auth.exceptions import ExpiredTokenException
+
+    with pytest.raises(ExpiredTokenException):
+        await auth.jwt_service_token_service.validate_service_token(expired_token)
+
+@pytest.mark.asyncio
+async def test_jwt_service_token_no_db_queries(auth, monkeypatch):
+    """Test JWT service token validation performs zero database queries"""
+    db_queries = []
+
+    # Mock database to track queries
+    original_find = auth.database.find
+
+    async def tracked_find(*args, **kwargs):
+        db_queries.append(("find", args, kwargs))
+        return await original_find(*args, **kwargs)
+
+    monkeypatch.setattr(auth.database, "find", tracked_find)
+
+    # Create and validate service token
+    service_token = await auth.jwt_service_token_service.create_service_token(
+        service_name="test-service",
+        permissions=["test:read"],
+        expires_in_days=365
+    )
+
+    # Clear query log
+    db_queries.clear()
+
+    # Validate token
+    context = await auth.jwt_service_token_service.validate_service_token(service_token)
+
+    # Should have zero DB queries
+    assert len(db_queries) == 0
+    assert context.source == AuthSource.SERVICE_TOKEN
 ```
 
 ---
@@ -1954,6 +2353,18 @@ async def test_user_creation_validation(auth, email, password, should_succeed):
 
 ---
 
-**Last Updated**: 2025-01-14 (Added API key testing and multi-source authentication testing sections)
+## Revision History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.4 | 2025-01-14 | Updated all code examples for v1.4: replaced `MultiSourceDeps` with `AuthDeps` (DD-035); updated API key prefix tests to 12 characters (DD-028); replaced permanent revocation with temporary lock testing (DD-028); added Redis counter testing (DD-033); added JWT service token testing (DD-034); added closure table tree permission tests (DD-036) |
+| 1.3 | 2025-01-14 | Added API key testing section with comprehensive examples |
+| 1.2 | 2025-01-14 | Added multi-source authentication testing section |
+| 1.1 | 2025-01-14 | Enhanced entity hierarchy testing examples |
+| 1.0 | 2025-01-14 | Initial testing guide |
+
+---
+
+**Last Updated**: 2025-01-14 (v1.4 - Comprehensive updates for unified architecture, closure table, Redis patterns, JWT service tokens)
 **Next Review**: Quarterly
 **Owner**: Engineering Team

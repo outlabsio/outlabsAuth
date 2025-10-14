@@ -1,9 +1,33 @@
 # OutlabsAuth Library - Authentication Extensions & Notifications
 
-**Version**: 1.0
+**Version**: 1.4 (Updated)
 **Date**: 2025-01-14
-**Status**: Post-v1.0 Extensions Design
+**Status**: Post-v1.0 Optional Extensions Design
 **Applies to**: Both SimpleRBAC and EnterpriseRBAC
+
+**⚠️ IMPORTANT**: This document describes **optional post-v1.0 extensions** (v1.1-v1.4). These are **NOT part of core v1.0**.
+
+**Core v1.0 Authentication Features** (Already Included):
+- Email/password authentication
+- JWT access tokens (15 min expiry)
+- Refresh tokens (30 days expiry)
+- API keys with argon2id hashing (DD-028, DD-033)
+- JWT service tokens for microservices (DD-034)
+- Multi-source authentication (JWT, API keys, service tokens, superuser)
+- Single unified `AuthDeps` class (DD-035)
+
+**This Document Covers** (Optional Extensions, Weeks 8-16):
+- **v1.1** (Week 8-9): Notification system
+- **v1.2** (Week 10-12): OAuth/social login (Google, Facebook, Apple, GitHub)
+- **v1.3** (Week 13-14): Passwordless authentication (magic links, OTP)
+- **v1.4** (Week 15-16): Advanced features (TOTP/MFA, WebAuthn research)
+
+**Related Core v1.0 Documentation**:
+- [REDESIGN_VISION.md](REDESIGN_VISION.md) - Core v1.0 features and architecture
+- [LIBRARY_ARCHITECTURE.md](LIBRARY_ARCHITECTURE.md) - Technical architecture (v1.4 updates)
+- [DEPENDENCY_PATTERNS.md](DEPENDENCY_PATTERNS.md) - Single AuthDeps class (DD-035)
+- [SECURITY.md](SECURITY.md) - API key security, JWT service tokens
+- [API_DESIGN.md](API_DESIGN.md) - Core authentication patterns and examples
 
 ---
 
@@ -1045,6 +1069,15 @@ auth.setup_oauth_routes(app, base_url="https://myapp.com")
 
 ---
 
-**Last Updated**: 2025-01-14
+## Revision History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.4 | 2025-01-14 | Updated header to clearly distinguish post-v1.0 extensions from core v1.0 features; added list of core v1.0 features already included (JWT auth, API keys, service tokens, AuthDeps); added references to core v1.0 documentation |
+| 1.0 | 2025-01-14 | Initial authentication extensions design |
+
+---
+
+**Last Updated**: 2025-01-14 (v1.4 - Clarified post-v1.0 extensions vs core v1.0 features)
 **Next Review**: After Phase 7 (v1.1) implementation
-**Status**: Design phase - ready for v1.1 implementation
+**Status**: Design phase - ready for v1.1 implementation (post-v1.0 optional extensions)

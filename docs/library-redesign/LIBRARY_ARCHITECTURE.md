@@ -1,6 +1,6 @@
 # OutlabsAuth Library - Technical Architecture
 
-**Version**: 1.3
+**Version**: 1.4
 **Date**: 2025-01-14
 **Status**: Design Phase
 
@@ -23,19 +23,23 @@
 
 ## Overview
 
-OutlabsAuth is structured as a modular Python library with two preset configurations:
+OutlabsAuth is structured as a **single unified core implementation** with thin convenience wrappers for different use cases:
 
 ```
-Simple RBAC (Core)
-    ↓
-Enterprise RBAC (+ Entity System + Optional Advanced Features)
+OutlabsAuth (Single Core Implementation)
+    ├── SimpleRBAC (thin wrapper - flat structure)
+    └── EnterpriseRBAC (thin wrapper - entity hierarchy always on)
 ```
+
+**Architecture**:
+- **Single codebase**: One `OutlabsAuth` implementation (no code duplication)
+- **Feature flags**: All capabilities controlled by configuration
+- **Thin wrappers**: SimpleRBAC and EnterpriseRBAC are 5-10 LOC convenience classes
+- **Zero migration complexity**: Switching from Simple → Enterprise is just changing the class name
 
 **Simple vs Enterprise Decision**: Do you have departments/teams/hierarchy?
-- **NO** → SimpleRBAC (flat structure, single role per user)
-- **YES** → EnterpriseRBAC (entity hierarchy + optional features via flags)
-
-Each preset is a fully functional auth system that can be used independently.
+- **NO** → `SimpleRBAC(database=db)` - disables entity hierarchy
+- **YES** → `EnterpriseRBAC(database=db)` - enables entity hierarchy + optional advanced features
 
 ---
 
@@ -107,135 +111,213 @@ tests/                          # Comprehensive test suite
 
 ## Preset Architecture
 
-### Base Class: `OutlabsAuth`
+### Core Class: `OutlabsAuth`
 
-All presets inherit from a base class that provides core functionality:
+**Single unified implementation** - all functionality in one class, controlled by feature flags:
 
 ```python
 class OutlabsAuth:
-    """Base class for all OutlabsAuth presets"""
+    """
+    Core auth implementation with all features.
+    All capabilities controlled by configuration flags.
+    """
 
     def __init__(
         self,
         database: Any,
-        config: Optional[AuthConfig] = None,
+        # Feature flags
+        enable_entity_hierarchy: bool = False,
+        enable_context_aware_roles: bool = False,
+        enable_abac: bool = False,
+        enable_caching: bool = False,
+        multi_tenant: bool = False,
+        enable_audit_log: bool = False,
+        # Optional dependencies
+        redis_url: Optional[str] = None,
+        notification_handler: Optional[NotificationHandler] = None,
+        # Customization
         user_model: Type[UserModel] = UserModel,
         role_model: Type[RoleModel] = RoleModel,
         permission_model: Type[PermissionModel] = PermissionModel,
+        entity_model: Type[EntityModel] = EntityModel,
+        **kwargs
     ):
         self.database = database
-        self.config = config or AuthConfig()
+
+        # Configuration
+        self.config = AuthConfig(
+            enable_entity_hierarchy=enable_entity_hierarchy,
+            enable_context_aware_roles=enable_context_aware_roles,
+            enable_abac=enable_abac,
+            enable_caching=enable_caching,
+            multi_tenant=multi_tenant,
+            enable_audit_log=enable_audit_log,
+            redis_url=redis_url,
+            **kwargs
+        )
 
         # Models
         self.user_model = user_model
         self.role_model = role_model
         self.permission_model = permission_model
+        self.entity_model = entity_model if enable_entity_hierarchy else None
 
-        # Services (initialized in subclasses)
-        self.auth_service: Optional[AuthService] = None
-        self.user_service: Optional[UserService] = None
-        self.role_service: Optional[RoleService] = None
-        self.permission_service: Optional[PermissionService] = None
+        # Initialize all services
+        self._init_services()
 
-    # Core dependency methods (implemented in subclasses)
+    def _init_services(self):
+        """Initialize all services based on configuration"""
+        # Core services (always available)
+        self.auth_service = AuthService(self.database, self.user_model, self.config)
+        self.user_service = UserService(self.database, self.user_model, self.config)
+        self.role_service = RoleService(self.database, self.role_model, self.config)
+        self.api_key_service = APIKeyService(self.database, self.config)
+        self.service_token_service = ServiceTokenService(self.database, self.config)
+
+        # Permission service (adapts based on features)
+        if self.config.enable_entity_hierarchy:
+            self.permission_service = EnterprisePermissionService(
+                self.database, self.permission_model, self.config
+            )
+            self.entity_service = EntityService(
+                self.database, self.entity_model, self.config
+            )
+            self.membership_service = MembershipService(
+                self.database, self.config
+            )
+        else:
+            self.permission_service = BasicPermissionService(
+                self.database, self.permission_model, self.config
+            )
+            self.entity_service = None  # Not available
+            self.membership_service = None  # Not available
+
+        # Optional services
+        if self.config.enable_caching and self.config.redis_url:
+            self.cache_service = CacheService(self.config.redis_url)
+        else:
+            self.cache_service = None
+
     async def get_current_user(self, token: str) -> UserModel:
-        raise NotImplementedError
+        """Get current authenticated user from JWT token"""
+        return await self.auth_service.get_current_user(token)
 
-    def require_permission(self, permission: str):
-        raise NotImplementedError
-
-    # Utility methods
     async def initialize(self):
-        """Initialize database collections/tables"""
-        raise NotImplementedError
+        """Initialize database collections/indexes"""
+        await init_beanie(
+            database=self.database,
+            document_models=[
+                self.user_model,
+                self.role_model,
+                self.permission_model,
+                RefreshTokenModel,
+                APIKeyModel,
+                *([self.entity_model, EntityMembershipModel, EntityClosureModel]
+                  if self.config.enable_entity_hierarchy else [])
+            ]
+        )
 ```
 
-### Preset 1: SimpleRBAC
+### Wrapper 1: SimpleRBAC
+
+**Thin convenience wrapper** (~5 LOC) - disables entity hierarchy by default:
+
+```python
+class SimpleRBAC(OutlabsAuth):
+    """
+    Flat RBAC for simple applications.
+    Thin wrapper that disables entity hierarchy.
+    """
+
+    def __init__(self, database: AsyncIOMotorClient, **kwargs):
+        super().__init__(
+            database,
+            enable_entity_hierarchy=False,  # Force flat structure
+            enable_context_aware_roles=False,
+            enable_abac=False,
+            **kwargs
+        )
+```
 
 **Purpose**: Basic role-based access control without entity hierarchy.
 
-**Features**:
+**Features** (always available):
 - User management
 - Role assignment (single role per user)
 - Flat permission system
 - JWT authentication
+- API key authentication
+- Service token authentication
+- Multi-source auth via AuthContext
 
-**Models Used**:
-- UserModel
-- RoleModel
-- PermissionModel
-- RefreshTokenModel
-
-**Services**:
-- AuthService
-- UserService
-- RoleService
-- PermissionService (basic)
-
-**Example**:
+**Example Usage**:
 ```python
 from outlabs_auth import SimpleRBAC
+from outlabs_auth.dependencies import AuthDeps
 
+app = FastAPI()
 auth = SimpleRBAC(database=mongo_client)
+deps = AuthDeps(auth)
 
 # Initialize database
 await auth.initialize()
 
 # Use in routes
 @app.get("/users/me")
-async def get_me(user = Depends(auth.get_current_user)):
-    return user
+async def get_me(ctx: AuthContext = Depends(deps.require_auth())):
+    return ctx.metadata.get("user")
 
 @app.delete("/users/{user_id}")
 async def delete_user(
     user_id: str,
-    user = Depends(auth.require_permission("user:delete"))
+    ctx: AuthContext = Depends(deps.require_permission("user:delete"))
 ):
     return await auth.user_service.delete_user(user_id)
 ```
 
-**Implementation**:
+**What's Available**:
+- `auth.auth_service` - Login, logout, refresh
+- `auth.user_service` - User CRUD
+- `auth.role_service` - Role management
+- `auth.permission_service` - Basic permission checks (no entity context)
+- `auth.api_key_service` - API key management
+- `auth.service_token_service` - JWT service tokens
+- `auth.entity_service` - ❌ Not available (raises error if accessed)
+- `auth.membership_service` - ❌ Not available (raises error if accessed)
+
+### Wrapper 2: EnterpriseRBAC
+
+**Thin convenience wrapper** (~10 LOC) - enables entity hierarchy by default:
+
 ```python
-class SimpleRBAC(OutlabsAuth):
-    """Simple role-based access control"""
+class EnterpriseRBAC(OutlabsAuth):
+    """
+    Hierarchical RBAC with entity system.
+    Thin wrapper that enables entity hierarchy + optional advanced features.
+    """
 
-    def __init__(self, database: Any, config: Optional[SimpleConfig] = None):
-        super().__init__(database, config)
-
-        # Initialize services
-        self.auth_service = AuthService(database, self.user_model)
-        self.user_service = UserService(database, self.user_model)
-        self.role_service = RoleService(database, self.role_model)
-        self.permission_service = BasicPermissionService(
-            database, self.permission_model
+    def __init__(
+        self,
+        database: AsyncIOMotorClient,
+        enable_context_aware_roles: bool = False,
+        enable_abac: bool = False,
+        **kwargs
+    ):
+        super().__init__(
+            database,
+            enable_entity_hierarchy=True,  # Force entity hierarchy ON
+            enable_context_aware_roles=enable_context_aware_roles,
+            enable_abac=enable_abac,
+            **kwargs
         )
-
-    async def get_current_user(self, token: str = Depends(oauth2_scheme)):
-        """Get current authenticated user"""
-        return await self.auth_service.get_current_user(token)
-
-    def require_permission(self, permission: str):
-        """Dependency that requires a specific permission"""
-        async def _check_permission(
-            user: UserModel = Depends(self.get_current_user)
-        ):
-            has_perm = await self.permission_service.check_permission(
-                user.id, permission
-            )
-            if not has_perm:
-                raise HTTPException(403, f"Permission denied: {permission}")
-            return user
-
-        return Depends(_check_permission)
 ```
-
-### Preset 2: EnterpriseRBAC
 
 **Purpose**: Full-featured auth system with entity hierarchy and optional advanced features.
 
 **Core Features** (Always Included):
 - Everything from SimpleRBAC
 - Entity hierarchy (organizational structure)
+- Entity closure table (O(1) ancestor/descendant queries)
 - Multiple roles per user (via entity memberships)
 - Tree permissions (`resource:action_tree`)
 - Entity context in permission checks
@@ -247,23 +329,14 @@ class SimpleRBAC(OutlabsAuth):
 - Multi-tenant support - `multi_tenant=True`
 - Advanced audit logging - `enable_audit_log=True`
 
-**Models Used**:
-- All SimpleRBAC models
-- EntityModel
-- EntityMembershipModel
-
-**Services**:
-- All SimpleRBAC services
-- EntityService
-- MembershipService
-- EnterprisePermissionService (with ABAC and caching support)
-
 **Example - Basic Configuration** (entity hierarchy only):
 ```python
 from outlabs_auth import EnterpriseRBAC
+from outlabs_auth.dependencies import AuthDeps
 
 # Minimal configuration - just entity hierarchy
 auth = EnterpriseRBAC(database=mongo_client)
+deps = AuthDeps(auth)
 
 # Create entity hierarchy
 org = await auth.entity_service.create_entity(
@@ -285,6 +358,14 @@ await auth.membership_service.add_member(
     user_id=user.id,
     role_ids=[manager_role.id, developer_role.id]
 )
+
+# Entity-scoped permission check
+@app.put("/entities/{entity_id}")
+async def update_entity(
+    entity_id: str,
+    ctx: AuthContext = Depends(deps.require_entity_permission(entity_id, "entity:update"))
+):
+    return await auth.entity_service.update(entity_id, data)
 ```
 
 **Example - Full Configuration** (all optional features enabled):
@@ -337,6 +418,17 @@ result = await auth.permission_service.check_permission_with_context(
     resource_attributes={"value": 35000}
 )
 ```
+
+**What's Available**:
+- `auth.auth_service` - Login, logout, refresh
+- `auth.user_service` - User CRUD
+- `auth.role_service` - Role management
+- `auth.permission_service` - Enterprise permission checks (with entity context + tree permissions)
+- `auth.api_key_service` - API key management
+- `auth.service_token_service` - JWT service tokens
+- `auth.entity_service` - ✅ Entity hierarchy management
+- `auth.membership_service` - ✅ Entity membership management
+- `auth.cache_service` - ✅ Available if `enable_caching=True` and `redis_url` provided
 
 ---
 
@@ -466,6 +558,54 @@ class EntityMembershipModel(BaseDocument):
 
     # Status
     is_active: bool = True
+```
+
+#### EntityClosureModel (NEW)
+```python
+class EntityClosureModel(BaseDocument):
+    """
+    Stores all ancestor-descendant relationships for O(1) queries.
+
+    Uses the closure table pattern for efficient tree permission checks.
+    """
+
+    ancestor_id: str      # Ancestor entity ID
+    descendant_id: str    # Descendant entity ID
+    depth: int           # Distance (0 = self, 1 = direct child, etc.)
+
+    class Settings:
+        name = "entity_closure"
+        indexes = [
+            [("ancestor_id", 1), ("descendant_id", 1)],  # Unique constraint
+            [("descendant_id", 1), ("depth", 1)],        # Find ancestors
+            [("ancestor_id", 1), ("depth", 1)]           # Find descendants
+        ]
+```
+
+**Closure Table Benefits**:
+- **O(1) Ancestor Queries**: Single database query to get all ancestors
+- **O(1) Descendant Queries**: Single query to get all descendants
+- **Tree Permission Performance**: 20x faster than recursive queries
+- **Unlimited Depth**: No performance degradation with deep hierarchies
+- **Simple Maintenance**: Auto-maintained on entity create/move/delete
+
+**Example Queries**:
+```python
+# Get all ancestors (single query)
+ancestors = await EntityClosure.find(
+    {"descendant_id": entity_id, "depth": {"$gt": 0}}
+).sort("depth").to_list()
+
+# Get all descendants (single query)
+descendants = await EntityClosure.find(
+    {"ancestor_id": entity_id, "depth": {"$gt": 0}}
+).to_list()
+
+# Check if A is ancestor of B (single query)
+is_ancestor = await EntityClosure.find_one({
+    "ancestor_id": A,
+    "descendant_id": B
+}) is not None
 ```
 
 ### Model Changes from Current System
@@ -1285,20 +1425,20 @@ See [SECURITY.md](SECURITY.md) for comprehensive security guidelines.
 **Key Security Requirements**:
 1. **argon2id hashing** (NOT SHA256) for all keys
 2. **Never log raw keys** - only prefixes
-3. **Automatic rotation** every 90 days
+3. **Optional expiration** with manual rotation API (recommended 90 days)
 4. **IP whitelisting** strictly enforced
-5. **Auto-revoke** after 10 failed attempts
-6. **Rate limiting** per key and per source
+5. **Temporary locks** after 10 failed attempts in 10 minutes (30-min cooldown)
+6. **Rate limiting** per key and per source via Redis counters
 7. **Audit logging** for all key operations
 
 **API Key Security Checklist**:
 - [ ] Keys use argon2id hashing
 - [ ] Raw keys never logged or stored
-- [ ] 90-day rotation policy configured
+- [ ] Optional expiration configured (recommended ≤90 days)
 - [ ] IP whitelisting enabled for production
-- [ ] Rate limiting configured per key
+- [ ] Rate limiting configured per key (Redis counters)
 - [ ] Audit logging captures all operations
-- [ ] Auto-revocation on failures enabled
+- [ ] Temporary locks on repeated failures (not permanent revocation)
 - [ ] Keys scoped to minimum permissions
 
 ### Package Structure Updates
@@ -2195,5 +2335,5 @@ role_permissions:{role_id}              # TTL: 15 minutes
 
 ---
 
-**Last Updated**: 2025-01-14 (Added authentication system: API keys, multi-source auth, dependency patterns)
+**Last Updated**: 2025-01-14 (Unified architecture: single core with wrappers, closure table, Redis patterns, JWT service tokens)
 **Next Review**: After Phase 1 prototype

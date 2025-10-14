@@ -1,9 +1,15 @@
 # OutlabsAuth Security Guide
 
-**Version**: 1.1
+**Version**: 1.4
 **Date**: 2025-01-14
 **Audience**: Developers deploying OutlabsAuth to production
 **Status**: Production Reference
+
+**Key Changes in v1.4**:
+- **12-Char Prefixes**: API key prefixes increased from 8 to 12 characters for better uniqueness (DD-028)
+- **Temporary Locks**: API keys locked temporarily after 10 failures (30-min cooldown, not permanent revocation) (DD-028)
+- **Redis Counters**: API key usage tracked via Redis INCR (99%+ reduction in DB writes) (DD-033)
+- **Cache Invalidation**: Redis Pub/Sub for <100ms permission cache invalidation across instances (DD-037)
 
 ---
 
@@ -387,18 +393,20 @@ print(f"API Key: {raw_key}")  # Show to user ONCE
 print(f"Prefix: {api_key_model.key_prefix}")  # Store in database
 ```
 
-**Key Format**:
+**Key Format** (Updated v1.4):
 ```
-sk_prod_AbCdEfGh...  (production)
-sk_stag_AbCdEfGh...  (staging)
-sk_dev_AbCdEfGh...   (development)
-sk_test_AbCdEfGh...  (test)
+sk_prod_abc1_x2y3z4...  (production)
+sk_stag_abc1_x2y3z4...  (staging)
+sk_dev_abc1_x2y3z4...   (development)
+sk_test_abc1_x2y3z4...  (test)
 ```
 
-**Format Breakdown**:
-- `sk` = Secret Key
-- `prod/stag/dev/test` = Environment
-- `_` = Separator (8 chars total prefix)
+**Format Breakdown** (12-char prefix - DD-028):
+- `sk` = Secret Key (2 chars)
+- `prod/stag/dev/test` = Environment (4 chars)
+- `_` = Separator (1 char)
+- `abc1` = Random identifier (4 chars)
+- Total prefix = **12 characters** (increased from 8)
 - Remaining = 32 bytes of cryptographically random data
 
 ### API Key Hashing (CRITICAL)
@@ -446,12 +454,12 @@ class APIKeyService:
 
 ### API Key Storage
 
-**Database Storage**:
+**Database Storage** (Updated v1.4):
 ```python
 class APIKeyModel(BaseDocument):
     name: str                          # User-friendly name
     key_hash: str                      # argon2id hash (NEVER raw key)
-    key_prefix: str                    # First 8 chars (sk_prod_)
+    key_prefix: str                    # First 12 chars (sk_prod_abc1) - DD-028
     permissions: List[str] = []        # Allowed permissions
     allowed_ips: List[str] = []        # IP whitelist
     rate_limit_per_minute: int = 60    # Rate limit
@@ -460,21 +468,30 @@ class APIKeyModel(BaseDocument):
     # Metadata
     created_by: str
     created_at: datetime
-    expires_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None  # Optional expiration (DD-028)
     last_used_at: Optional[datetime] = None
 
-    # Security tracking
-    usage_count: int = 0
-    error_count: int = 0
+    # Security tracking (DD-028 + DD-033)
+    usage_count: int = 0               # Synced from Redis every 5 minutes (DD-033)
+    last_synced_at: Optional[datetime] = None  # When usage_count was last synced
     is_active: bool = True
     revoked_at: Optional[datetime] = None
     revoked_by: Optional[str] = None
     revoked_reason: Optional[str] = None
 
+    # Temporary locks (DD-028) - no error_count field
+    # Failed attempts tracked in Redis with 30-min TTL
+    # Temporary lock = key "api_key:lock:{key_id}" exists in Redis
+
     # Entity scope (EnterpriseRBAC)
     entity_id: Optional[str] = None    # Optional entity scope
     inherit_from_tree: bool = False    # Use tree permissions
 ```
+
+**Usage Tracking** (DD-033):
+- **Fast path** (every request): `INCR` counter in Redis
+- **Slow path** (background task every 5 minutes): Sync Redis counters to MongoDB
+- **Performance**: 99%+ reduction in database writes
 
 **Best Practices**:
 - ✅ Store only hash (never raw key)
@@ -487,21 +504,21 @@ class APIKeyModel(BaseDocument):
 
 ### API Key Authentication
 
-**FastAPI Dependency**:
+**FastAPI Dependency** (Updated v1.4):
 ```python
-from outlabs_auth.dependencies import MultiSourceDeps
+from outlabs_auth.dependencies import AuthDeps  # Single unified class (DD-035)
 
-# Create multi-source auth dependencies
-deps = MultiSourceDeps(auth=auth)
+# Create auth dependencies
+deps = AuthDeps(auth=auth, redis=redis)
 
 @app.get("/api/users")
 async def list_users(
-    context = Depends(deps.get_context)
+    context = Depends(deps.require_auth())
 ):
     # Automatically supports:
     # - User JWT (Authorization: Bearer <token>)
-    # - API Key (X-API-Key: sk_prod_...)
-    # - Service Token (X-Service-Token: <token>)
+    # - API Key (X-API-Key: sk_prod_abc1_...)
+    # - JWT Service Token (X-Service-Token: <jwt>) - NEW in v1.4 (DD-034)
     # - Superuser Token (X-Superuser-Token: <token>)
 
     if context.source == AuthSource.API_KEY:
@@ -515,14 +532,34 @@ async def list_users(
     return await user_service.list_users()
 ```
 
-**Manual Authentication**:
+**Manual Authentication** (Updated v1.4):
 ```python
 from outlabs_auth.services import APIKeyService
 
-async def authenticate_api_key(api_key: str) -> APIKeyModel:
-    """Authenticate API key"""
-    # Extract prefix (first 8 chars)
-    prefix = api_key[:8]
+async def authenticate_api_key(
+    api_key: str,
+    redis: Redis
+) -> APIKeyModel:
+    """
+    Authenticate API key with temporary locks (DD-028 + DD-033).
+
+    Changes from v1.3:
+    - 12-char prefix (was 8)
+    - Temporary locks in Redis (not permanent revocation)
+    - No error_count tracking in DB
+    - Minimal DB writes (only last_used_at)
+    - Usage tracking via Redis INCR
+    """
+    # Extract prefix (first 12 chars - DD-028)
+    if not api_key or len(api_key) < 12:
+        raise InvalidAPIKeyException()
+
+    prefix = api_key[:12]
+
+    # Check temporary lock (DD-028)
+    lock_key = f"api_key:lock:{prefix}"
+    if await redis.exists(lock_key):
+        raise APIKeyLockedException("API key temporarily locked (30-min cooldown)")
 
     # Find key by prefix
     key_model = await APIKeyModel.find_one(
@@ -535,30 +572,64 @@ async def authenticate_api_key(api_key: str) -> APIKeyModel:
 
     # Verify hash (argon2id)
     if not api_key_service.verify_key(api_key, key_model.key_hash):
-        # Track failed attempt
-        key_model.error_count += 1
-        await key_model.save()
+        # Track failed attempt in Redis (DD-028)
+        fail_key = f"api_key:fails:{prefix}"
+        fail_count = await redis.incr(fail_key)
+        await redis.expire(fail_key, 600)  # 10-minute window
 
-        # Auto-revoke after 10 failures
-        if key_model.error_count >= 10:
-            key_model.is_active = False
-            key_model.revoked_at = datetime.now()
-            key_model.revoked_reason = "Auto-revoked: 10 failed attempts"
-            await key_model.save()
+        # Temporary lock after 10 failures (DD-028)
+        if fail_count >= 10:
+            await redis.setex(lock_key, 1800, "locked")  # 30-min lock
+            # Alert security team
+            await alert_security_team(
+                f"API key {prefix}*** temporarily locked after 10 failures"
+            )
 
         raise InvalidAPIKeyException()
 
-    # Check expiration
+    # Check expiration (optional - DD-028)
     if key_model.expires_at and key_model.expires_at < datetime.now():
         raise ExpiredAPIKeyException()
 
-    # Update usage tracking
-    key_model.usage_count += 1
+    # Reset failure counter on success
+    await redis.delete(f"api_key:fails:{prefix}")
+
+    # Track usage in Redis (DD-033)
+    await redis.incr(f"api_key:usage:{prefix}")
+
+    # Minimal DB write - only update last_used_at (DD-033)
     key_model.last_used_at = datetime.now()
-    key_model.error_count = 0  # Reset on success
     await key_model.save()
 
     return key_model
+```
+
+**Background Task - Sync Usage Counters** (DD-033):
+```python
+async def sync_api_key_metrics():
+    """
+    Periodically sync Redis counters to MongoDB (every 5 minutes).
+    Runs in background task - no impact on request latency.
+    """
+    while True:
+        await asyncio.sleep(300)  # 5 minutes
+
+        # Get all active API key prefixes
+        active_keys = await APIKeyModel.find(
+            APIKeyModel.is_active == True
+        ).to_list()
+
+        for key in active_keys:
+            # Get usage count from Redis
+            usage = await redis.get(f"api_key:usage:{key.key_prefix}")
+            if usage:
+                # Update MongoDB
+                key.usage_count += int(usage)
+                key.last_synced_at = datetime.now()
+                await key.save()
+
+                # Reset Redis counter
+                await redis.delete(f"api_key:usage:{key.key_prefix}")
 ```
 
 ### IP Whitelisting
@@ -662,36 +733,62 @@ async def check_rate_limit(api_key: APIKeyModel) -> bool:
     return True
 ```
 
-### Key Rotation
+### Key Rotation (Updated v1.4)
 
-**90-Day Rotation Policy**:
+**Rotation Policy** (DD-028):
+- **Optional expiration**: Keys can be long-lived or set with expiration (90 days recommended)
+- **Manual rotation**: Use rotation API when needed (no automatic rotation)
+- **Grace period**: Keep old key active during transition (24-hour overlap)
+
+**Check for Expiring Keys**:
 ```python
-# Check for expiring keys (7 days before expiration)
+# Alert when keys with expiration dates are expiring soon (7 days before)
 async def check_expiring_keys():
-    """Alert when keys are expiring soon"""
+    """Alert when keys are expiring soon (optional expiration - DD-028)"""
     expiring_soon = await APIKeyModel.find(
         APIKeyModel.is_active == True,
+        APIKeyModel.expires_at != None,  # Only keys with expiration set
         APIKeyModel.expires_at <= datetime.now() + timedelta(days=7),
         APIKeyModel.expires_at > datetime.now()
     ).to_list()
 
     for key in expiring_soon:
-        # Send notification
+        # Send notification via notification system (v1.1)
         await notification_service.send(
             event="api_key_expiring",
             recipient=key.created_by,
-            data={"key_name": key.name, "expires_at": key.expires_at}
+            data={
+                "key_name": key.name,
+                "key_prefix": key.key_prefix,
+                "expires_at": key.expires_at,
+                "days_remaining": (key.expires_at - datetime.now()).days
+            }
         )
 ```
 
-**Rotate API Key**:
+**Manual API Key Rotation** (Updated v1.4):
 ```python
-async def rotate_api_key(old_key_id: str) -> Tuple[str, APIKeyModel]:
-    """Rotate API key (create new, revoke old)"""
+async def rotate_api_key(
+    old_key_id: str,
+    new_expiration_days: int = 90  # Optional expiration (DD-028)
+) -> Tuple[str, APIKeyModel]:
+    """
+    Rotate API key manually (create new, schedule old key revocation).
+
+    Changes from v1.3:
+    - Optional expiration (can pass None for long-lived keys)
+    - 24-hour grace period for transition
+    - Cache invalidation via Redis Pub/Sub (DD-037)
+    """
     # Get old key
     old_key = await APIKeyModel.get(old_key_id)
 
     # Create new key with same permissions
+    new_expires_at = (
+        datetime.now() + timedelta(days=new_expiration_days)
+        if new_expiration_days else None
+    )
+
     raw_key, new_key = await api_key_service.create_api_key(
         name=f"{old_key.name} (rotated)",
         permissions=old_key.permissions,
@@ -699,18 +796,34 @@ async def rotate_api_key(old_key_id: str) -> Tuple[str, APIKeyModel]:
         rate_limit_per_minute=old_key.rate_limit_per_minute,
         environment=old_key.environment,
         entity_id=old_key.entity_id,
-        expires_at=datetime.now() + timedelta(days=90)
+        expires_at=new_expires_at  # Optional expiration
     )
 
-    # Revoke old key (grace period: keep active for 24 hours)
+    # Schedule old key revocation (grace period: keep active for 24 hours)
     await api_key_service.schedule_revocation(
         key_id=old_key.id,
         revoke_at=datetime.now() + timedelta(hours=24),
         reason="Rotated to new key"
     )
 
+    # Invalidate cache immediately (DD-037)
+    await redis.publish("auth:cache:invalidate", json.dumps({
+        "type": "api_key",
+        "key_id": old_key.id,
+        "action": "rotation_scheduled"
+    }))
+
     return raw_key, new_key
 ```
+
+**Rotation Best Practices**:
+- ✅ Set expiration dates for external keys (90 days recommended)
+- ✅ Use long-lived keys for internal services (no expiration)
+- ✅ Provide 24-hour grace period during rotation
+- ✅ Alert key owners 7 days before expiration
+- ✅ Use manual rotation API (no automatic rotation)
+- ❌ Don't auto-rotate without notification
+- ❌ Don't revoke old keys immediately (allow transition time)
 
 ### Security Best Practices
 
@@ -741,32 +854,53 @@ async def revoke_api_key(key_id: str, reason: str):
     )
 ```
 
-**3. Monitor Key Usage**:
+**3. Monitor Key Usage** (Updated v1.4):
 ```python
 # Alert on suspicious activity
-async def monitor_api_key_usage():
-    """Monitor for suspicious API key usage"""
-    # High error rate
-    suspicious = await APIKeyModel.find(
-        APIKeyModel.error_count > 5,
+async def monitor_api_key_usage(redis: Redis):
+    """
+    Monitor for suspicious API key usage (DD-028 + DD-033).
+
+    Changes from v1.3:
+    - Check Redis for real-time failure counts (not DB error_count)
+    - Check temporary locks for repeated failures
+    - Monitor Redis usage counters for spikes
+    """
+    # Check for keys with high failure rates (Redis tracking)
+    active_keys = await APIKeyModel.find(
         APIKeyModel.is_active == True
     ).to_list()
 
-    for key in suspicious:
-        await alert_security_team(
-            f"API key {key.key_prefix}*** has {key.error_count} errors"
-        )
+    for key in active_keys:
+        # Check failure count from Redis (DD-028)
+        fail_count = await redis.get(f"api_key:fails:{key.key_prefix}")
+        if fail_count and int(fail_count) > 5:
+            await alert_security_team(
+                f"API key {key.key_prefix}*** has {fail_count} failures in 10 minutes"
+            )
 
-    # Unusual usage patterns
-    unusual = await APIKeyModel.find(
-        APIKeyModel.usage_count > 10000,  # Spike in usage
-        APIKeyModel.last_used_at > datetime.now() - timedelta(hours=1)
-    ).to_list()
+        # Check if key is locked (DD-028)
+        lock_key = f"api_key:lock:{key.key_prefix}"
+        if await redis.exists(lock_key):
+            ttl = await redis.ttl(lock_key)
+            await alert_security_team(
+                f"API key {key.key_prefix}*** temporarily locked ({ttl}s remaining)"
+            )
 
-    for key in unusual:
-        await alert_security_team(
-            f"API key {key.key_prefix}*** has unusual usage spike"
-        )
+        # Check for usage spikes (DD-033)
+        current_usage = await redis.get(f"api_key:usage:{key.key_prefix}")
+        if current_usage and int(current_usage) > 1000:  # Spike in 5-min window
+            await alert_security_team(
+                f"API key {key.key_prefix}*** has usage spike: {current_usage} requests in 5 minutes"
+            )
+
+        # Check for unusual hourly patterns
+        hour = datetime.now().hour
+        hourly_usage = await redis.get(f"api_key:usage:{key.key_prefix}:hour:{hour}")
+        if hourly_usage and int(hourly_usage) > 10000:
+            await alert_security_team(
+                f"API key {key.key_prefix}*** has unusual hourly usage: {hourly_usage} requests"
+            )
 ```
 
 **4. Least Privilege Permissions**:
@@ -839,42 +973,50 @@ async def get_entity(
     return await entity_service.get(entity_id)
 ```
 
-### API Key Security Checklist
+### API Key Security Checklist (Updated v1.4)
 
 **Creation**:
-- [ ] Use argon2id for hashing (NOT SHA256)
+- [ ] Use argon2id for hashing (NOT SHA256) - DD-028
+- [ ] 12-character prefix for identification (not 8) - DD-028
 - [ ] Show raw key only once
-- [ ] Set expiration (90 days recommended)
-- [ ] Assign minimal permissions
+- [ ] Set expiration for external keys (90 days recommended, optional for internal) - DD-028
+- [ ] Assign minimal permissions (least privilege)
 - [ ] Configure IP whitelist if possible
 - [ ] Set reasonable rate limits
 
 **Storage**:
 - [ ] Store only hash (never raw key)
-- [ ] Store prefix for identification
-- [ ] Never log raw keys
+- [ ] Store 12-char prefix for identification - DD-028
+- [ ] Never log raw keys (only prefixes)
 - [ ] Encrypt database at rest
 - [ ] Use separate keys per environment
+- [ ] No error_count field (tracked in Redis) - DD-028
 
-**Usage**:
+**Usage** (DD-028 + DD-033):
 - [ ] Validate on every request
 - [ ] Check IP whitelist
 - [ ] Enforce rate limits
-- [ ] Track usage and errors
-- [ ] Auto-revoke after 10 failures
+- [ ] Track usage in Redis (not DB writes) - DD-033
+- [ ] Check temporary locks before validation - DD-028
+- [ ] Track failures in Redis (10-min window) - DD-028
+- [ ] Temporary lock after 10 failures (30-min cooldown) - DD-028
 
-**Rotation**:
-- [ ] Rotate keys every 90 days
-- [ ] Alert 7 days before expiration
-- [ ] Provide grace period during rotation
+**Rotation** (DD-028):
+- [ ] Optional expiration (not mandatory 90 days)
+- [ ] Use manual rotation API (no automatic rotation)
+- [ ] Alert 7 days before expiration (if set)
+- [ ] Provide 24-hour grace period during rotation
+- [ ] Invalidate cache via Redis Pub/Sub - DD-037
 - [ ] Revoke old keys after transition
 
-**Monitoring**:
-- [ ] Monitor usage patterns
-- [ ] Alert on high error rates
-- [ ] Alert on unusual usage spikes
+**Monitoring** (DD-028 + DD-033):
+- [ ] Monitor Redis failure counters (not DB error_count)
+- [ ] Alert on temporary locks
+- [ ] Monitor Redis usage counters for spikes
+- [ ] Alert on high failure rates (>5 in 10 minutes)
+- [ ] Alert on usage spikes (>1000 in 5 minutes)
 - [ ] Log all security events
-- [ ] Review logs regularly
+- [ ] Review audit logs regularly
 
 ---
 
@@ -963,14 +1105,14 @@ entity_admin_role = {
 # Enterprise preset with tree permissions
 from outlabs_auth import EnterpriseRBAC
 
-auth = EnterpriseRBAC(database=db)
+auth = EnterpriseRBAC(database=db, enable_entity_hierarchy=True)
 
 # User with tree permission at parent
 # Can access all descendant entities
 has_perm, source = await auth.permission_service.check_permission(
     user_id=user.id,
     permission="entity:update",
-    entity_id=child_entity.id  # Checks parent tree permissions
+    entity_id=child_entity.id  # Checks parent tree permissions via closure table
 )
 ```
 
@@ -978,7 +1120,129 @@ has_perm, source = await auth.permission_service.check_permission(
 - ✅ Use tree permissions for hierarchical structures
 - ✅ Test permission boundaries thoroughly
 - ✅ Document who has tree permissions
+- ✅ Use closure table for O(1) queries (DD-036)
 - ⚠️ Tree permissions are powerful - grant carefully
+
+### Cache Invalidation Security (DD-037)
+
+**Problem**: Traditional cache TTL creates security risk:
+- Permission revoked at 12:00:00
+- Cache TTL = 5 minutes
+- User retains access until 12:05:00 (up to 5 minutes of unauthorized access)
+
+**Solution**: Redis Pub/Sub for immediate invalidation (<100ms across all instances)
+
+**Implementation**:
+```python
+from redis.asyncio import Redis
+import json
+
+class CacheInvalidationService:
+    """Immediate cache invalidation via Redis Pub/Sub (DD-037)"""
+
+    def __init__(self, redis: Redis):
+        self.redis = redis
+        self.channel = "auth:cache:invalidate"
+
+    async def invalidate_user_permissions(self, user_id: str):
+        """Invalidate user permission cache immediately"""
+        await self.redis.publish(
+            self.channel,
+            json.dumps({
+                "type": "user_permissions",
+                "user_id": user_id,
+                "timestamp": datetime.now().isoformat()
+            })
+        )
+
+    async def invalidate_api_key(self, key_id: str):
+        """Invalidate API key cache immediately"""
+        await self.redis.publish(
+            self.channel,
+            json.dumps({
+                "type": "api_key",
+                "key_id": key_id,
+                "timestamp": datetime.now().isoformat()
+            })
+        )
+
+    async def invalidate_role_permissions(self, role_id: str):
+        """Invalidate role permission cache immediately"""
+        await self.redis.publish(
+            self.channel,
+            json.dumps({
+                "type": "role_permissions",
+                "role_id": role_id,
+                "timestamp": datetime.now().isoformat()
+            })
+        )
+
+    async def listen_for_invalidations(self):
+        """Background task: Listen for invalidation messages"""
+        pubsub = self.redis.pubsub()
+        await pubsub.subscribe(self.channel)
+
+        async for message in pubsub.listen():
+            if message["type"] == "message":
+                data = json.loads(message["data"])
+
+                # Invalidate local cache based on message type
+                if data["type"] == "user_permissions":
+                    await self._invalidate_local_cache(f"user_perms:{data['user_id']}")
+                elif data["type"] == "api_key":
+                    await self._invalidate_local_cache(f"api_key:{data['key_id']}")
+                elif data["type"] == "role_permissions":
+                    await self._invalidate_local_cache(f"role_perms:{data['role_id']}")
+```
+
+**Critical Security Events That Trigger Invalidation**:
+```python
+# 1. Permission revoked
+async def revoke_permission(user_id: str, permission: str):
+    # Revoke in database
+    await permission_service.revoke(user_id, permission)
+
+    # Invalidate cache immediately (DD-037)
+    await cache_invalidation.invalidate_user_permissions(user_id)
+
+# 2. Role removed
+async def remove_user_role(user_id: str, role_id: str):
+    # Remove role
+    await role_service.remove_user_role(user_id, role_id)
+
+    # Invalidate cache immediately
+    await cache_invalidation.invalidate_user_permissions(user_id)
+
+# 3. API key revoked
+async def revoke_api_key(key_id: str):
+    # Revoke key
+    key = await APIKeyModel.get(key_id)
+    key.is_active = False
+    await key.save()
+
+    # Invalidate cache immediately
+    await cache_invalidation.invalidate_api_key(key_id)
+
+# 4. Entity membership removed
+async def remove_entity_membership(user_id: str, entity_id: str):
+    # Remove membership
+    await membership_service.remove(user_id, entity_id)
+
+    # Invalidate cache immediately
+    await cache_invalidation.invalidate_user_permissions(user_id)
+```
+
+**Performance**:
+- **Without Pub/Sub**: Up to 5 minutes until cache expires (security risk)
+- **With Pub/Sub**: <100ms invalidation across all distributed instances (secure)
+
+**Best Practices**:
+- ✅ Use Redis Pub/Sub for critical security events (DD-037)
+- ✅ Invalidate immediately on permission changes
+- ✅ Use short TTL (5 min) as fallback
+- ✅ Monitor invalidation lag (<100ms expected)
+- ❌ Don't rely solely on TTL for security-critical changes
+- ❌ Don't skip invalidation for "minor" permission changes
 
 ---
 
@@ -1456,15 +1720,19 @@ config = EnterpriseConfig(
 - [ ] No passwords in logs
 - [ ] No account enumeration vulnerabilities
 
-#### API Keys
-- [ ] **argon2id hashing used (NOT SHA256)**
+#### API Keys (Updated v1.4)
+- [ ] **argon2id hashing used (NOT SHA256)** - DD-028
+- [ ] **12-char prefixes (not 8)** - DD-028
 - [ ] API keys never logged (only prefixes)
-- [ ] 90-day expiration policy enforced
+- [ ] **Optional expiration** (90 days recommended for external, long-lived for internal) - DD-028
+- [ ] **Redis counters for usage tracking** (not DB writes) - DD-033
+- [ ] **Temporary locks after 10 failures** (30-min cooldown, not permanent revocation) - DD-028
 - [ ] Rate limiting per API key configured
 - [ ] IP whitelisting configured where possible
-- [ ] Auto-revocation after failures enabled
-- [ ] Minimal permissions assigned
-- [ ] Rotation alerts configured
+- [ ] Minimal permissions assigned (least privilege)
+- [ ] Manual rotation API available
+- [ ] Expiration alerts configured (7 days before)
+- [ ] **Cache invalidation via Redis Pub/Sub** - DD-037
 
 #### Authorization
 - [ ] All endpoints have permission checks
@@ -1743,7 +2011,20 @@ For security vulnerabilities, email: security@outlabs.io
 
 ---
 
-**Last Updated**: 2025-01-14 (Added API key security section: argon2id hashing, rotation policies, rate limiting, monitoring)
+**Last Updated**: 2025-01-14 (v1.4 - Updated API key security: 12-char prefixes, temporary locks, Redis counters, cache invalidation via Pub/Sub)
+
+**Version History**:
+- **v1.4** (2025-01-14): Updated for architectural improvements (DD-028, DD-033, DD-037)
+  - 12-char API key prefixes (was 8)
+  - Temporary locks with 30-min cooldown (not permanent revocation)
+  - Redis counters for usage tracking (99%+ DB write reduction)
+  - Optional expiration with manual rotation API
+  - Cache invalidation via Redis Pub/Sub (<100ms)
+  - AuthDeps unified dependency class (DD-035)
+  - JWT service tokens for internal microservices (DD-034)
+- **v1.1** (2025-01-14): Added comprehensive API key security section
+- **v1.0** (2025-01-14): Initial security guide
+
 **Next Review**: Quarterly (Every 3 months)
 **Owner**: Security Team
 

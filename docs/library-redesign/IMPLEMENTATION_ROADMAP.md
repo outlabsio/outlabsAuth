@@ -1,9 +1,18 @@
 # OutlabsAuth Library - Implementation Roadmap
 
-**Version**: 1.3
+**Version**: 1.4
 **Date**: 2025-01-14
 **Total Duration**: 15-16 weeks (6-7 weeks core + 9 weeks extensions)
 **Status**: Planning Phase
+
+**Key Architectural Improvements (v1.4)**:
+- **Unified Architecture**: Single `OutlabsAuth` core with thin wrappers (DD-032)
+- **Closure Table**: O(1) tree permission queries (DD-036)
+- **Redis Counters**: 99%+ reduction in DB writes for API keys (DD-033)
+- **Redis Pub/Sub**: <100ms cache invalidation (DD-037)
+- **Temporary Locks**: 30-min cooldown instead of permanent revocation (DD-028)
+- **JWT Service Tokens**: Internal microservice authentication (DD-034)
+- **Single AuthDeps**: Unified dependency injection class (DD-035)
 
 ---
 
@@ -15,7 +24,7 @@ This document breaks down the library redesign into 10 phases:
 
 Each phase has clear deliverables and success criteria. Phases build on each other, with working software at each stage.
 
-**Key Change**: Consolidated into TWO presets (Simple and Enterprise) instead of three, saving 1 week by eliminating middle preset.
+**Architecture**: Single `OutlabsAuth` core with thin wrappers (5-10 LOC each) for SimpleRBAC and EnterpriseRBAC presets. All features controlled by configuration flags.
 
 **Extensions Model**: Post-v1.0 features are optional and work with both presets.
 
@@ -133,30 +142,39 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
 
 **Deliverable**: Complete user management features
 
-#### Day 2-3: API Key System (Core v1.0 Feature)
+#### Day 2-3: API Key System (Core v1.0 Feature - DD-028, DD-033, DD-034, DD-035)
 - [ ] Create `APIKeyModel`:
   - key_hash (argon2id hashed, NOT SHA256)
-  - key_prefix (first 8 chars: sk_prod_, sk_stag_, sk_dev_, sk_test_)
+  - **key_prefix (first 12 chars: sk_prod_abc1_, sk_stag_abc1_)** - DD-028
   - permissions (list of allowed permissions)
   - allowed_ips (IP whitelist)
   - rate_limit_per_minute (default 60)
   - environment (production, staging, development, test)
-  - expires_at, is_active, usage_count, error_count
+  - **expires_at (optional, not mandatory)** - DD-028
+  - is_active
+  - **usage_count (synced from Redis every 5 minutes)** - DD-033
+  - **last_synced_at (when Redis counters were last synced)** - DD-033
+  - **No error_count field** (tracked in Redis with TTL) - DD-028
 - [ ] Create `APIKeyService`:
-  - Generate API keys (8-char prefix + 32 bytes random)
+  - **Generate API keys (12-char prefix + 32 bytes random)** - DD-028
   - Hash keys with argon2id (time_cost=2, memory_cost=102400, parallelism=8)
   - Validate API keys
-  - Key rotation (create new, revoke old)
-  - Auto-revoke after 10 failed attempts
-  - Track usage and error counts
+  - **Check temporary locks in Redis** (api_key:lock:{prefix}) - DD-028
+  - **Track failures in Redis** (10 failures in 10 min → 30-min lock) - DD-028
+  - **Track usage in Redis** (INCR api_key:usage:{prefix}) - DD-033
+  - **Background task to sync Redis counters to MongoDB** (every 5 minutes) - DD-033
+  - Key rotation with optional expiration (create new, revoke old)
+  - **Manual rotation API** (no automatic rotation) - DD-028
 - [ ] Create `MultiSourceAuthService`:
   - AuthContext abstraction (universal auth for all sources)
-  - Priority chain: Superuser > Service > API Key > User > Anonymous
-  - Extract auth from headers: X-Superuser-Token, X-Service-Token, X-API-Key, Authorization
-- [ ] Create FastAPI dependencies (SimpleDeps):
-  - `authenticated()` - Any auth source
-  - `requires(*permissions)` - Permission checking
-  - `api_key_only()` - API key authentication only
+  - Priority chain: Superuser > **JWT Service Token** > API Key > User > Anonymous - DD-034
+  - Extract auth from headers: X-Superuser-Token, **X-Service-Token** (JWT), X-API-Key, Authorization
+  - **JWT Service Token validation** (stateless, ~0.5ms, zero DB hits) - DD-034
+- [ ] Create FastAPI dependencies (**AuthDeps - unified class**) - DD-035:
+  - `require_auth()` - Any auth source
+  - `require_permission(*permissions)` - Permission checking
+  - `require_source(source)` - Specific auth source (e.g., API key only, service token only)
+  - `require_entity_permission(permission, entity_id)` - Entity-scoped permissions
 - [ ] In-memory rate limiting (no Redis requirement for SimpleRBAC)
 - [ ] API key CRUD endpoints (/v1/api-keys)
 
@@ -257,18 +275,28 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
 
 **Deliverable**: Entity management working
 
-#### Day 5-6: Tree Permissions
+#### Day 5-6: Tree Permissions + Closure Table (DD-036)
+- [ ] Create `EntityClosureModel`:
+  - ancestor_id (ancestor entity ID)
+  - descendant_id (descendant entity ID)
+  - depth (distance: 0 = self, 1 = direct child, etc.)
+  - Indexes: [(ancestor_id, descendant_id)], [(descendant_id, depth)], [(ancestor_id, depth)]
+- [ ] Implement closure table maintenance:
+  - On entity creation: Create closure records for all ancestors
+  - On entity move: Recalculate affected closure records
+  - On entity deletion: Remove closure records
 - [ ] Enhance `PermissionService` for hierarchy:
   - Check permission in entity context
-  - Check tree permissions (checks parent entities)
+  - **Check tree permissions using closure table** (O(1) query, not recursive) - DD-036
   - Resolve user permissions across all memberships
 - [ ] Implement permission resolution algorithm:
   1. Check direct permission in target entity
-  2. Check _tree permission in parent entities
+  2. **Check _tree permission in ancestors (single query via closure table)** - DD-036
   3. Check _all permission anywhere
 - [ ] Add permission caching (in-memory for now)
+- [ ] **Add cache invalidation via Redis Pub/Sub** (DD-037)
 
-**Deliverable**: Tree permissions working
+**Deliverable**: Tree permissions working with O(1) queries
 
 #### Day 7: Entity-Scoped API Keys
 - [ ] Extend `APIKeyModel`:
@@ -1296,12 +1324,16 @@ Template:
 
 ## Success Metrics
 
-### Technical Metrics
+### Technical Metrics (Updated v1.4)
 - [ ] Test coverage >90% overall
 - [ ] All presets have example apps
-- [ ] Performance: Permission checks <10ms (cached), <50ms (uncached)
-- [ ] **API key validation <5ms (argon2id hashing may vary)**
+- [ ] **Performance: Permission checks <5ms (cached), <10ms (uncached with closure table)** - DD-036
+- [ ] **Tree permission queries: <5ms (O(1) via closure table, 20x improvement)** - DD-036
+- [ ] **API key validation: ~50-100ms (argon2id hashing, secure but slower)** - DD-028
+- [ ] **JWT service token validation: <0.5ms (no DB, pure cryptographic validation)** - DD-034
+- [ ] **Cache invalidation: <100ms across all distributed instances (Redis Pub/Sub)** - DD-037
 - [ ] **Rate limiting: <1ms per check (in-memory), <3ms (Redis)**
+- [ ] **API key usage tracking: 99%+ reduction in DB writes (Redis counters)** - DD-033
 - [ ] No critical bugs in issue tracker
 
 ### Adoption Metrics
@@ -1385,6 +1417,7 @@ Track changes to the roadmap:
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2025-01-14 | **v1.4 Architectural improvements** | Unified architecture with thin wrappers (DD-032), closure table for O(1) queries (DD-036), Redis counters for API keys (DD-033), Redis Pub/Sub cache invalidation (DD-037), temporary locks instead of revocation (DD-028), JWT service tokens (DD-034), single AuthDeps class (DD-035) |
 | 2025-01-14 | **Added API key system to core v1.0** | Integrated API key authentication, multi-source auth, and dependency patterns into Phases 2, 3, and 6; API keys now core feature for service-to-service authentication |
 | 2025-01-14 | Added authentication extensions (Phases 7-10) | Integrated OAuth, passwordless auth, notifications, and advanced features into main roadmap; total timeline now 15-16 weeks (6-7 weeks core + 9 weeks extensions) |
 | 2025-01-14 | Revised to two-preset architecture | Consolidated HierarchicalRBAC and FullFeatured into EnterpriseRBAC with feature flags; added CLI tools, health checks, and comprehensive production guides |
@@ -1392,5 +1425,5 @@ Track changes to the roadmap:
 
 ---
 
-**Last Updated**: 2025-01-14 (Added API key system: service authentication, multi-source auth, entity-scoped keys, CLI tools)
+**Last Updated**: 2025-01-14 (v1.4 - Architectural improvements: unified architecture, closure table, Redis patterns, JWT service tokens)
 **Next Review**: End of Week 2 (after Milestone 1)

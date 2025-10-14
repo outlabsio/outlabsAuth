@@ -1,6 +1,6 @@
 # OutlabsAuth - Authentication Dependency Patterns
 
-**Version**: 1.0
+**Version**: 1.4
 **Date**: 2025-01-14
 **Status**: Core Feature (v1.0)
 
@@ -10,10 +10,10 @@
 
 1. [Overview](#overview)
 2. [AuthContext Architecture](#authcontext-architecture)
-3. [Simple Dependency Patterns](#simple-dependency-patterns)
+3. [AuthDeps - Unified Dependency Injection](#authdeps---unified-dependency-injection)
 4. [Multi-Source Authentication](#multi-source-authentication)
 5. [API Key System](#api-key-system)
-6. [Group & Entity Permissions](#group--entity-permissions)
+6. [Usage Examples](#usage-examples)
 7. [Advanced Patterns](#advanced-patterns)
 8. [Rate Limiting](#rate-limiting)
 9. [Testing Patterns](#testing-patterns)
@@ -23,7 +23,23 @@
 
 ## Overview
 
-This document outlines how to use FastAPI's dependency injection system to create simple, composable authentication and authorization patterns that work across different authentication sources (users, API keys, service accounts, superusers).
+This document outlines how to use FastAPI's dependency injection system with the **unified `AuthDeps` class** to create simple, composable authentication and authorization patterns that work across different authentication sources (users, API keys, JWT service tokens, superusers).
+
+### Key Architecture Changes (v1.4)
+
+**Unified Dependency Injection (DD-035)**: Single `AuthDeps` class replaces 5 separate classes (`SimpleDeps`, `MultiSourceDeps`, `GroupDeps`, `EntityDeps`, `RateLimitDeps`). Clear, descriptive method names make it easy to discover and learn.
+
+**Multi-Source Authentication (DD-034)**: Support for:
+- **Users**: JWT tokens for human users
+- **API Keys**: argon2id-hashed keys for external integrations (DD-028)
+- **JWT Service Tokens**: Zero-DB stateless auth for internal microservices
+- **Superusers**: Admin override tokens
+- **Anonymous**: Public endpoints with optional auth
+
+**Performance Optimizations**:
+- **Redis Counters (DD-033)**: API key usage tracking via Redis INCR (99%+ reduction in DB writes)
+- **Closure Table (DD-036)**: O(1) tree permission checks (20x faster than recursive queries)
+- **Cache Invalidation (DD-037)**: Redis Pub/Sub for <100ms invalidation across instances
 
 ### Core Design Principles
 
@@ -31,8 +47,9 @@ This document outlines how to use FastAPI's dependency injection system to creat
 2. **Composable**: Mix and match different auth requirements
 3. **Type-Safe**: Full IDE support and type checking
 4. **Testable**: Easy to mock and test
-5. **Multi-Source**: Support users, API keys, services, and more
-6. **Secure by Default**: Industry best practices built-in
+5. **Multi-Source**: Support users, API keys, JWT service tokens, and more
+6. **Secure by Default**: argon2id hashing, temp locks, Redis counters
+7. **Discoverable**: Single class, clear method names, excellent docs
 
 ### Why Dependency Injection?
 
@@ -134,160 +151,33 @@ class AuthContext(BaseModel):
 
 ---
 
-## Simple Dependency Patterns
+## AuthDeps - Unified Dependency Injection
 
-### SimpleDeps - Basic Authentication
+### The AuthDeps Class
 
-For most use cases, the `SimpleDeps` class provides dead-simple auth protection.
+**One class to rule them all.** The `AuthDeps` class provides a unified, discoverable API for all authentication and authorization patterns.
 
 ```python
-# outlabs_auth/dependencies/simple.py
-from fastapi import Depends, HTTPException, Header
-from typing import Optional
+# outlabs_auth/dependencies/auth_deps.py
+from fastapi import Depends, HTTPException, Header, Request, Query, Path
+from typing import Optional, Callable, List
+from outlabs_auth.auth_context import AuthContext, AuthSource
 
-class SimpleDeps:
-    """Simple authentication dependencies"""
+class AuthDeps:
+    """
+    Unified dependency injection for all auth patterns.
 
-    def __init__(self, auth: OutlabsAuth):
+    Design: Single class with clear, descriptive method names.
+    See: DESIGN_DECISIONS.md DD-035
+    """
+
+    def __init__(self, auth: OutlabsAuth, redis: Optional[Redis] = None):
         self.auth = auth
+        self.redis = redis
 
-    # --- Basic Authentication ---
-
-    def authenticated(self):
-        """Just require any authentication"""
-        async def get_user(
-            authorization: Optional[str] = Header(None)
-        ):
-            if not authorization:
-                raise HTTPException(401, "Not authenticated")
-
-            token = authorization.replace("Bearer ", "")
-            user = await self.auth.get_current_user(token)
-            return user
-
-        return Depends(get_user)
-
-    # --- Permission-Based ---
-
-    def requires(self, *permissions: str):
-        """Require all listed permissions"""
-        async def check(user = Depends(self.authenticated())):
-            for permission in permissions:
-                has_perm = await self.auth.permission_service.check_permission(
-                    user.id, permission
-                )
-                if not has_perm:
-                    raise HTTPException(403, f"Missing permission: {permission}")
-            return user
-
-        return Depends(check)
-
-    def requires_any(self, *permissions: str):
-        """Require at least one permission"""
-        async def check(user = Depends(self.authenticated())):
-            for permission in permissions:
-                has_perm = await self.auth.permission_service.check_permission(
-                    user.id, permission
-                )
-                if has_perm:
-                    return user
-
-            raise HTTPException(403, f"Need one of: {permissions}")
-
-        return Depends(check)
-
-    # --- Role-Based ---
-
-    def role(self, *roles: str):
-        """Require one of the listed roles"""
-        async def check(user = Depends(self.authenticated())):
-            user_roles = await self.auth.role_service.get_user_roles(user.id)
-            role_names = [r.name for r in user_roles]
-
-            if not any(r in role_names for r in roles):
-                raise HTTPException(403, f"Need role: {' or '.join(roles)}")
-
-            return user
-
-        return Depends(check)
-
-    # --- Shortcuts ---
-
-    @property
-    def admin(self):
-        """Shortcut for admin access"""
-        return self.role("admin", "superuser")
-
-    @property
-    def user(self):
-        """Shortcut for authenticated user"""
-        return self.authenticated()
-```
-
-### Usage Examples
-
-```python
-from fastapi import FastAPI
-from outlabs_auth import SimpleRBAC
-
-app = FastAPI()
-auth = SimpleRBAC(database=db)
-
-# Create dependency factory
-require = SimpleDeps(auth)
-
-# --- Dead Simple Usage ---
-
-# Just need authentication
-@app.get("/profile")
-async def get_profile(user = require.user):
-    return user.profile
-
-# Need specific permission
-@app.delete("/users/{user_id}")
-async def delete_user(user_id: str, user = require.requires("user:delete")):
-    await user_service.delete(user_id)
-    return {"deleted": True}
-
-# Need one of several permissions
-@app.get("/reports")
-async def view_reports(user = require.requires_any("reports:read", "admin")):
-    return await report_service.get_all()
-
-# Need admin role
-@app.post("/system/reset")
-async def system_reset(user = require.admin):
-    await system.reset()
-    return {"status": "reset"}
-
-# Combine multiple requirements
-@app.post("/sensitive/action")
-async def sensitive_action(
-    user = require.requires("sensitive:write"),
-    is_admin = require.role("admin", "manager")
-):
-    # User must have permission AND be admin/manager
-    return {"performed": True}
-```
-
----
-
-## Multi-Source Authentication
-
-### MultiSourceDeps - Handle All Auth Sources
-
-The `MultiSourceDeps` class resolves authentication from multiple sources with a clear priority chain.
-
-```python
-# outlabs_auth/dependencies/multi_source.py
-from fastapi import Header, Query, Request, HTTPException
-from typing import Optional
-
-class MultiSourceDeps:
-    """Handle authentication from multiple sources"""
-
-    def __init__(self, auth: OutlabsAuth):
-        self.auth = auth
+    # ============================================================
+    # AUTHENTICATION (Who are you?)
+    # ============================================================
 
     async def get_context(
         self,
@@ -303,123 +193,61 @@ class MultiSourceDeps:
         token: Optional[str] = Query(None)
     ) -> AuthContext:
         """
-        Extract auth from any source.
+        Extract AuthContext from any source.
 
         Priority: Superuser > Service > API Key > User > Anonymous
         """
+        # [Implementation details in Multi-Source Authentication section]
+        pass
 
-        # 1. Superuser token (admin override)
-        if x_superuser_token:
-            if await self._validate_superuser_token(x_superuser_token):
-                # Check for impersonation
-                if x_impersonate_user:
-                    return await self._create_impersonation_context(
-                        x_impersonate_user, x_superuser_token
-                    )
+    def require_auth(self, allow_anonymous: bool = False) -> Callable:
+        """
+        Require any authenticated user/service.
 
-                return AuthContext(
-                    source=AuthSource.SUPERUSER,
-                    identity="superuser",
-                    is_superuser=True,
-                    metadata={"ip": request.client.host}
-                )
-
-        # 2. Service account (internal services)
-        if x_service_token:
-            service = await self.auth.service_account_service.validate_token(
-                x_service_token
-            )
-            if service:
-                return AuthContext(
-                    source=AuthSource.SERVICE,
-                    identity=service.name,
-                    permissions=service.permissions,
-                    is_service_account=True,
-                    metadata={"service": service.name}
-                )
-
-        # 3. API key (external integrations)
-        api_key_value = x_api_key or api_key
-        if api_key_value:
-            key = await self.auth.api_key_service.validate(api_key_value)
-            if key:
-                # Check IP restrictions
-                if key.allowed_ips and request.client.host not in key.allowed_ips:
-                    raise HTTPException(403, "IP not allowed for this API key")
-
-                return AuthContext(
-                    source=AuthSource.API_KEY,
-                    identity=str(key.id),
-                    permissions=key.permissions,
-                    rate_limit=key.rate_limit_per_minute,
-                    metadata={
-                        "key_name": key.name,
-                        "service": key.service_name
-                    }
-                )
-
-        # 4. User JWT token
-        token_value = None
-        if authorization and authorization.startswith("Bearer "):
-            token_value = authorization.replace("Bearer ", "")
-        elif token:
-            token_value = token
-
-        if token_value:
-            try:
-                user = await self.auth.get_current_user(token_value)
-                perms = await self.auth.permission_service.get_user_permissions(
-                    user.id
-                )
-                roles = await self.auth.role_service.get_user_roles(user.id)
-                groups = await self.auth.group_service.get_user_groups(user.id)
-
-                return AuthContext(
-                    source=AuthSource.USER,
-                    identity=str(user.id),
-                    permissions=perms,
-                    roles=[r.name for r in roles],
-                    groups=[g.name for g in groups],
-                    is_superuser=user.is_superuser,
-                    metadata={"user": user}
-                )
-            except Exception:
-                pass  # Invalid token, continue to anonymous
-
-        # 5. Anonymous
-        return AuthContext(
-            source=AuthSource.ANONYMOUS,
-            identity="anonymous"
-        )
-
-    # --- Dependency Factories ---
-
-    def authenticated(self, allow_anonymous: bool = False):
-        """Require some form of authentication"""
+        Example:
+            @app.get("/protected")
+            async def protected(ctx = deps.require_auth()):
+                return {"user": ctx.identity}
+        """
         async def check(ctx: AuthContext = Depends(self.get_context)):
             if not allow_anonymous and ctx.source == AuthSource.ANONYMOUS:
                 raise HTTPException(401, "Authentication required")
             return ctx
         return Depends(check)
 
-    def permission(self, *perms: str, allow_superuser: bool = True):
-        """Require permissions"""
+    def require_user(self) -> Callable:
+        """
+        Require authenticated user (not API key/service).
+
+        Example:
+            @app.post("/users/profile")
+            async def update_profile(ctx = deps.require_user()):
+                # Only human users, not API keys
+                return {"updated": True}
+        """
         async def check(ctx: AuthContext = Depends(self.get_context)):
-            if ctx.source == AuthSource.ANONYMOUS:
-                raise HTTPException(401, "Authentication required")
-
-            if allow_superuser and ctx.is_superuser:
-                return ctx
-
-            if not ctx.has_all_permissions(*perms):
-                missing = [p for p in perms if p not in ctx.permissions]
-                raise HTTPException(403, f"Missing permissions: {missing}")
-
+            if ctx.source != AuthSource.USER:
+                raise HTTPException(403, "User authentication required")
             return ctx
         return Depends(check)
 
-    def source(self, *allowed_sources: AuthSource):
-        """Restrict to specific auth sources"""
+    def require_source(self, *allowed_sources: AuthSource) -> Callable:
+        """
+        Require specific auth source(s).
+
+        Example:
+            # Only API keys
+            @app.post("/webhook")
+            async def webhook(ctx = deps.require_source(AuthSource.API_KEY)):
+                return {"received": True}
+
+            # Users or superusers
+            @app.post("/admin/action")
+            async def action(
+                ctx = deps.require_source(AuthSource.USER, AuthSource.SUPERUSER)
+            ):
+                return {"performed": True}
+        """
         async def check(ctx: AuthContext = Depends(self.get_context)):
             if ctx.source not in allowed_sources:
                 raise HTTPException(
@@ -429,84 +257,511 @@ class MultiSourceDeps:
             return ctx
         return Depends(check)
 
-    # --- Internal helpers ---
+    # ============================================================
+    # AUTHORIZATION (What can you do?)
+    # ============================================================
 
-    async def _validate_superuser_token(self, token: str) -> bool:
-        """Validate superuser override token"""
-        # Implementation: Check against secure superuser token
-        # Should be cryptographically secure, time-limited token
-        # Stored in environment or secure config
-        return await self.auth.superuser_service.validate_token(token)
+    def require_permission(self, *permissions: str, allow_superuser: bool = True) -> Callable:
+        """
+        Require one or more permissions (any match).
 
-    async def _create_impersonation_context(
+        Example:
+            # Need any one permission
+            @app.get("/reports")
+            async def reports(ctx = deps.require_permission("reports:read", "admin")):
+                return {"reports": [...]}
+        """
+        async def check(ctx: AuthContext = Depends(self.get_context)):
+            if ctx.source == AuthSource.ANONYMOUS:
+                raise HTTPException(401, "Authentication required")
+
+            if allow_superuser and ctx.is_superuser:
+                return ctx
+
+            if not ctx.has_any_permission(*permissions):
+                raise HTTPException(403, f"Need one of: {permissions}")
+
+            return ctx
+        return Depends(check)
+
+    def require_all_permissions(self, *permissions: str, allow_superuser: bool = True) -> Callable:
+        """
+        Require ALL specified permissions.
+
+        Example:
+            # Need both permissions
+            @app.delete("/users/{user_id}")
+            async def delete_user(
+                user_id: str,
+                ctx = deps.require_all_permissions("user:delete", "audit:write")
+            ):
+                return {"deleted": True}
+        """
+        async def check(ctx: AuthContext = Depends(self.get_context)):
+            if ctx.source == AuthSource.ANONYMOUS:
+                raise HTTPException(401, "Authentication required")
+
+            if allow_superuser and ctx.is_superuser:
+                return ctx
+
+            if not ctx.has_all_permissions(*permissions):
+                missing = [p for p in permissions if p not in ctx.permissions]
+                raise HTTPException(403, f"Missing permissions: {missing}")
+
+            return ctx
+        return Depends(check)
+
+    def require_role(self, *roles: str) -> Callable:
+        """
+        Require one or more roles (any match).
+
+        Example:
+            @app.post("/system/backup")
+            async def backup(ctx = deps.require_role("admin", "superuser")):
+                return {"backed_up": True}
+        """
+        async def check(ctx: AuthContext = Depends(self.get_context)):
+            if ctx.source == AuthSource.ANONYMOUS:
+                raise HTTPException(401, "Authentication required")
+
+            if ctx.is_superuser:
+                return ctx
+
+            if not any(r in ctx.roles for r in roles):
+                raise HTTPException(403, f"Need role: {' or '.join(roles)}")
+
+            return ctx
+        return Depends(check)
+
+    # ============================================================
+    # ENTITY-BASED (Where can you do it?)
+    # ============================================================
+
+    def require_entity_access(self, entity_param: str = "entity_id") -> Callable:
+        """
+        Require membership in the entity.
+
+        Example:
+            @app.get("/entities/{entity_id}/members")
+            async def get_members(
+                entity_id: str,
+                ctx = deps.require_entity_access()
+            ):
+                return {"members": [...]}
+        """
+        async def check(
+            entity_id: str = Path(..., alias=entity_param),
+            ctx: AuthContext = Depends(self.require_auth())
+        ):
+            if ctx.is_superuser:
+                ctx.metadata["entity_id"] = entity_id
+                return ctx
+
+            # Check if entity is configured for this preset
+            if not self.auth.config.enable_entity_hierarchy:
+                raise HTTPException(400, "Entity hierarchy not enabled")
+
+            is_member = await self.auth.membership_service.is_member(
+                ctx.identity, entity_id
+            )
+            if not is_member:
+                raise HTTPException(403, f"Not a member of entity: {entity_id}")
+
+            ctx.metadata["entity_id"] = entity_id
+            return ctx
+        return Depends(check)
+
+    def require_entity_permission(
         self,
-        user_id: str,
-        superuser_token: str
-    ) -> AuthContext:
-        """Create context for admin impersonating user"""
-        user = await self.auth.user_service.get_by_id(user_id)
-        if not user:
-            raise HTTPException(404, "User not found")
+        permission: str,
+        entity_param: str = "entity_id"
+    ) -> Callable:
+        """
+        Require permission within specific entity.
 
-        perms = await self.auth.permission_service.get_user_permissions(user.id)
+        Example:
+            @app.put("/entities/{entity_id}/settings")
+            async def update_settings(
+                entity_id: str,
+                settings: dict,
+                ctx = deps.require_entity_permission("entity:update")
+            ):
+                return {"updated": True}
+        """
+        async def check(
+            entity_id: str = Path(..., alias=entity_param),
+            ctx: AuthContext = Depends(self.require_auth())
+        ):
+            if ctx.is_superuser:
+                ctx.metadata["entity_id"] = entity_id
+                return ctx
 
-        return AuthContext(
-            source=AuthSource.IMPERSONATION,
-            identity=str(user.id),
-            permissions=perms,
-            is_impersonating=True,
-            metadata={
-                "user": user,
-                "impersonator": "superuser"
+            if not self.auth.config.enable_entity_hierarchy:
+                raise HTTPException(400, "Entity hierarchy not enabled")
+
+            has_perm = await self.auth.permission_service.check_permission(
+                ctx.identity, permission, entity_id=entity_id
+            )
+            if not has_perm:
+                raise HTTPException(
+                    403,
+                    f"Missing permission '{permission}' in entity {entity_id}"
+                )
+
+            ctx.metadata["entity_id"] = entity_id
+            return ctx
+        return Depends(check)
+
+    def require_entity_role(
+        self,
+        role: str,
+        entity_param: str = "entity_id"
+    ) -> Callable:
+        """
+        Require specific role in entity.
+
+        Example:
+            @app.post("/entities/{entity_id}/invite")
+            async def invite_member(
+                entity_id: str,
+                email: str,
+                ctx = deps.require_entity_role("admin")
+            ):
+                return {"invited": True}
+        """
+        async def check(
+            entity_id: str = Path(..., alias=entity_param),
+            ctx: AuthContext = Depends(self.require_auth())
+        ):
+            if ctx.is_superuser:
+                ctx.metadata["entity_id"] = entity_id
+                return ctx
+
+            if not self.auth.config.enable_entity_hierarchy:
+                raise HTTPException(400, "Entity hierarchy not enabled")
+
+            membership = await self.auth.membership_service.get_membership(
+                ctx.identity, entity_id
+            )
+            if not membership:
+                raise HTTPException(403, "Not a member")
+
+            role_names = [r.name for r in membership.roles]
+            if role not in role_names:
+                raise HTTPException(403, f"Need role '{role}' in entity")
+
+            ctx.metadata["entity_id"] = entity_id
+            return ctx
+        return Depends(check)
+
+    # ============================================================
+    # SPECIAL ACCESS
+    # ============================================================
+
+    def require_superuser(self) -> Callable:
+        """
+        Require superuser access.
+
+        Example:
+            @app.post("/system/dangerous")
+            async def dangerous_operation(ctx = deps.require_superuser()):
+                return {"performed": True}
+        """
+        async def check(ctx: AuthContext = Depends(self.get_context)):
+            if not ctx.is_superuser:
+                raise HTTPException(403, "Superuser access required")
+            return ctx
+        return Depends(check)
+
+    # ============================================================
+    # RATE LIMITING
+    # ============================================================
+
+    def rate_limit(
+        self,
+        default_limit: int = 60,
+        window: int = 60  # seconds
+    ) -> Callable:
+        """
+        Rate limit by auth source.
+
+        Example:
+            @app.post("/api/expensive")
+            async def expensive(ctx = deps.rate_limit(10, 60)):
+                # 10 requests per minute
+                return {"result": "..."}
+        """
+        async def check(ctx: AuthContext = Depends(self.get_context)):
+            # Different limits by source
+            limits = {
+                AuthSource.ANONYMOUS: 10,
+                AuthSource.USER: default_limit,
+                AuthSource.API_KEY: ctx.rate_limit or default_limit,
+                AuthSource.SERVICE: 1000,
+                AuthSource.SUPERUSER: float('inf')
             }
-        )
+
+            limit = limits.get(ctx.source, default_limit)
+
+            if limit != float('inf'):
+                key = f"rate_limit:{ctx.source}:{ctx.identity}"
+
+                # Try Redis first, fall back to memory
+                if self.redis:
+                    current = await self.redis.incr(key)
+                    if current == 1:
+                        await self.redis.expire(key, window)
+
+                    allowed = current <= limit
+                    remaining = max(0, limit - current)
+                else:
+                    # In-memory fallback (for development)
+                    allowed, remaining = await self._check_memory_rate_limit(
+                        key, limit, window
+                    )
+
+                if not allowed:
+                    raise HTTPException(429, "Rate limit exceeded")
+
+                ctx.rate_limit_remaining = remaining
+
+            return ctx
+        return Depends(check)
+
+    # ============================================================
+    # CONVENIENCE SHORTCUTS
+    # ============================================================
+
+    @property
+    def authenticated(self) -> Callable:
+        """Shortcut for require_auth()"""
+        return self.require_auth()
+
+    @property
+    def user(self) -> Callable:
+        """Shortcut for require_user()"""
+        return self.require_user()
+
+    @property
+    def admin(self) -> Callable:
+        """Shortcut for require_role("admin", "superuser")"""
+        return self.require_role("admin", "superuser")
+
+    @property
+    def superuser(self) -> Callable:
+        """Shortcut for require_superuser()"""
+        return self.require_superuser()
 ```
 
-### Multi-Source Usage Examples
+### Key Benefits
+
+1. **Single Import**: `from outlabs_auth import AuthDeps` - that's it
+2. **Discoverable**: IDE autocomplete shows all available methods
+3. **Clear Names**: Method names explain exactly what they do
+4. **Type-Safe**: Full type hints and validation
+5. **Consistent**: Same patterns across all auth requirements
+6. **Backward Compatible**: Old code can use thin wrapper classes (SimpleDeps, etc.)
+
+---
+
+## Multi-Source Authentication
+
+### get_context Implementation
+
+The `get_context` method in `AuthDeps` resolves authentication from multiple sources with a clear priority chain. This is the core of multi-source auth support.
 
 ```python
-# Create multi-source dependencies
-multi = MultiSourceDeps(auth)
+# outlabs_auth/dependencies/auth_deps.py (continued)
 
-# Allow both users and API keys
-@app.get("/api/data")
-async def get_data(
-    ctx: AuthContext = multi.permission("data:read")
-):
-    if ctx.source == AuthSource.API_KEY:
-        # Log API key usage
-        await log_api_usage(ctx.metadata["key_name"])
+async def get_context(
+    self,
+    request: Request,
+    # Headers
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+    x_service_token: Optional[str] = Header(None),  # JWT service token (DD-034)
+    x_superuser_token: Optional[str] = Header(None),
+    x_impersonate_user: Optional[str] = Header(None),
+    # Query params (for webhooks/callbacks)
+    api_key: Optional[str] = Query(None),
+    token: Optional[str] = Query(None)
+) -> AuthContext:
+    """
+    Extract AuthContext from any source.
 
-    return {"data": "...", "auth_source": ctx.source}
+    Priority: Superuser > Service (JWT) > API Key > User > Anonymous
 
-# API keys only (for webhooks/integrations)
-@app.post("/webhook/github")
-async def github_webhook(
-    payload: dict,
-    ctx: AuthContext = multi.source(AuthSource.API_KEY)
-):
-    # Only API keys can call webhooks
-    return {"received": True}
+    Design decisions:
+    - DD-034: JWT service tokens for internal microservices (zero DB hits)
+    - DD-028: API keys with argon2id hashing + temporary locks
+    - DD-033: Redis counters for API key usage tracking
+    """
 
-# Service accounts only (internal microservices)
-@app.post("/internal/sync")
-async def internal_sync(
-    ctx: AuthContext = multi.source(AuthSource.SERVICE)
-):
-    service_name = ctx.metadata["service"]
-    await sync_service.run(service_name)
-    return {"synced": True}
+    # 1. Superuser token (admin override)
+    if x_superuser_token:
+        if await self._validate_superuser_token(x_superuser_token):
+            # Check for impersonation
+            if x_impersonate_user:
+                return await self._create_impersonation_context(
+                    x_impersonate_user, x_superuser_token
+                )
 
-# Public endpoint with optional auth
-@app.get("/public/content")
-async def public_content(
-    ctx: AuthContext = multi.authenticated(allow_anonymous=True)
-):
-    if ctx.source != AuthSource.ANONYMOUS:
-        # Authenticated users see more
-        return {"content": "...", "premium": "..."}
-    return {"content": "..."}
+            return AuthContext(
+                source=AuthSource.SUPERUSER,
+                identity="superuser",
+                is_superuser=True,
+                metadata={"ip": request.client.host}
+            )
+
+    # 2. JWT Service Token (internal microservices) - DD-034
+    if x_service_token:
+        try:
+            # Validate JWT (no database lookup!)
+            payload = await self.auth.service_token_service.validate_jwt(
+                x_service_token
+            )
+            return AuthContext(
+                source=AuthSource.SERVICE,
+                identity=payload["service_name"],
+                permissions=payload.get("permissions", []),
+                is_service_account=True,
+                metadata={
+                    "service": payload["service_name"],
+                    "issued_at": payload.get("iat")
+                }
+            )
+        except JWTError:
+            pass  # Invalid token, continue to next source
+
+    # 3. API key (external integrations) - DD-028 + DD-033
+    api_key_value = x_api_key or api_key
+    if api_key_value:
+        # Check if temporarily locked (DD-028)
+        lock_key = f"api_key:lock:{api_key_value[:12]}"
+        if self.redis and await self.redis.exists(lock_key):
+            raise HTTPException(
+                403,
+                "API key temporarily locked due to failed attempts. Try again in 30 minutes."
+            )
+
+        key = await self.auth.api_key_service.validate(
+            api_key_value,
+            client_ip=request.client.host
+        )
+        if key:
+            # Check IP restrictions
+            if key.allowed_ips and request.client.host not in key.allowed_ips:
+                raise HTTPException(403, "IP not allowed for this API key")
+
+            # Track usage with Redis counters (DD-033)
+            if self.redis:
+                await self.redis.incr(f"api_key:usage:{key.id}")
+                await self.redis.incr(f"api_key:usage:{key.id}:hour:{datetime.utcnow().hour}")
+
+            return AuthContext(
+                source=AuthSource.API_KEY,
+                identity=str(key.id),
+                permissions=key.permissions,
+                rate_limit=key.rate_limit_per_minute,
+                metadata={
+                    "key_name": key.name,
+                    "key_prefix": key.key_prefix,
+                    "service": key.service_name
+                }
+            )
+        else:
+            # Track failed attempt (DD-028)
+            if self.redis:
+                fail_key = f"api_key:fails:{api_key_value[:12]}"
+                fails = await self.redis.incr(fail_key)
+                await self.redis.expire(fail_key, 600)  # 10 minutes
+
+                # Temporary lock after 10 failures in 10 minutes
+                if fails >= 10:
+                    await self.redis.setex(lock_key, 1800, "1")  # 30 min lock
+
+    # 4. User JWT token
+    token_value = None
+    if authorization and authorization.startswith("Bearer "):
+        token_value = authorization.replace("Bearer ", "")
+    elif token:
+        token_value = token
+
+    if token_value:
+        try:
+            user = await self.auth.get_current_user(token_value)
+            perms = await self.auth.permission_service.get_user_permissions(
+                user.id
+            )
+            roles = await self.auth.role_service.get_user_roles(user.id)
+
+            return AuthContext(
+                source=AuthSource.USER,
+                identity=str(user.id),
+                permissions=perms,
+                roles=[r.name for r in roles],
+                is_superuser=user.is_superuser,
+                metadata={"user": user}
+            )
+        except JWTError:
+            pass  # Invalid token, continue to anonymous
+
+    # 5. Anonymous
+    return AuthContext(
+        source=AuthSource.ANONYMOUS,
+        identity="anonymous"
+    )
+
+# --- Internal helpers ---
+
+async def _validate_superuser_token(self, token: str) -> bool:
+    """Validate superuser override token"""
+    # Implementation: Check against secure superuser token
+    # Should be cryptographically secure, time-limited JWT
+    # Stored in environment or secure config
+    return await self.auth.superuser_service.validate_token(token)
+
+async def _create_impersonation_context(
+    self,
+    user_id: str,
+    superuser_token: str
+) -> AuthContext:
+    """Create context for admin impersonating user"""
+    user = await self.auth.user_service.get_by_id(user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    perms = await self.auth.permission_service.get_user_permissions(user.id)
+
+    return AuthContext(
+        source=AuthSource.IMPERSONATION,
+        identity=str(user.id),
+        permissions=perms,
+        is_impersonating=True,
+        metadata={
+            "user": user,
+            "impersonator": "superuser"
+        }
+    )
 ```
+
+### Key Features
+
+1. **JWT Service Tokens (DD-034)**: Zero-DB authentication for internal microservices
+   - Stateless JWT validation (no database lookup)
+   - ~0.5ms validation time vs ~50-100ms for API keys
+   - Perfect for high-frequency internal requests
+
+2. **API Key Security (DD-028)**: Strong security with graceful failures
+   - argon2id hashing for key storage
+   - Temporary locks after 10 failed attempts (30-minute cooldown)
+   - IP whitelisting support
+   - Automatic lock recovery (no permanent revocation)
+
+3. **Redis Counters (DD-033)**: High-performance usage tracking
+   - Redis INCR for usage counts (99%+ reduction in DB writes)
+   - Hourly granularity for analytics
+   - Periodic sync to MongoDB (every 5 minutes)
 
 ---
 
@@ -530,13 +785,26 @@ class APIKeyScope(str, Enum):
     ADMIN = "admin"
 
 class APIKeyModel(Document):
-    """API keys for service-to-service authentication"""
+    """
+    API keys for service-to-service authentication.
+
+    Security (DD-028):
+    - argon2id hashing for key storage
+    - 12-character prefix for identification (increased from 8)
+    - Optional expiration (recommended 90 days) with manual rotation API
+    - Temporary locks after 10 failures (no permanent auto-revocation)
+
+    Performance (DD-033):
+    - Redis counters for usage tracking
+    - Periodic sync to MongoDB (every 5 minutes)
+    - 99%+ reduction in database writes
+    """
 
     # Identification
     name: str
     description: Optional[str] = None
     key_hash: str  # argon2id hash of the actual key
-    key_prefix: str = Field(..., min_length=8, max_length=8)  # First 8 chars (sk_prod_)
+    key_prefix: str = Field(..., min_length=12, max_length=12)  # First 12 chars (sk_prod_abc1)
 
     # Access control
     permissions: List[str] = []
@@ -560,7 +828,7 @@ class APIKeyModel(Document):
     # Lifecycle
     last_used_at: Optional[datetime] = None
     last_used_ip: Optional[str] = None
-    expires_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None  # Optional expiration (recommended 90 days)
     revoked_at: Optional[datetime] = None
     revoked_by: Optional[str] = None
     revoked_reason: Optional[str] = None
@@ -568,17 +836,18 @@ class APIKeyModel(Document):
     # Status
     is_active: bool = True
 
-    # Stats
+    # Stats (synced from Redis every 5 minutes - DD-033)
     usage_count: int = 0
-    error_count: int = 0
+    last_synced_at: Optional[datetime] = None  # NEW: When usage_count was last synced
 
     class Settings:
         name = "api_keys"
         indexes = [
-            "key_prefix",
+            "key_prefix",  # 12 characters now
             "is_active",
             "service_name",
-            "created_by"
+            "created_by",
+            "expires_at"  # For cleanup jobs
         ]
 ```
 
@@ -604,14 +873,20 @@ class APIKeyService:
     @staticmethod
     def generate_key(environment: str = "production") -> str:
         """
-        Generate a new API key.
+        Generate a new API key (DD-028).
 
-        Format: {prefix}_{random_32_bytes}
-        Example: sk_prod_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+        Format: {prefix}_{4_random_chars}_{random_32_bytes}
+        Example: sk_prod_abc1_x2y3z4... (12-char prefix: sk_prod_abc1)
+
+        The 12-character prefix includes:
+        - 7 chars: environment prefix (sk_prod)
+        - 1 char: underscore separator
+        - 4 chars: random identifier
         """
-        prefix = APIKeyService.KEY_PREFIX_MAP.get(environment, "sk_prod")
+        env_prefix = APIKeyService.KEY_PREFIX_MAP.get(environment, "sk_prod")
+        random_id = secrets.token_urlsafe(3)[:4]  # 4 random chars
         random_part = secrets.token_urlsafe(32)
-        return f"{prefix}_{random_part}"
+        return f"{env_prefix}_{random_id}_{random_part}"
 
     @staticmethod
     def hash_key(key: str) -> str:
@@ -652,7 +927,7 @@ class APIKeyService:
         api_key = APIKeyModel(
             name=name,
             key_hash=self.hash_key(raw_key),
-            key_prefix=raw_key[:8],  # Store prefix for identification
+            key_prefix=raw_key[:12],  # Store 12-char prefix for identification (DD-028)
             permissions=permissions or [],
             service_name=service_name,
             environment=environment,
@@ -678,18 +953,26 @@ class APIKeyService:
     async def validate(
         self,
         key: str,
-        required_permissions: List[str] = None
+        required_permissions: List[str] = None,
+        client_ip: Optional[str] = None
     ) -> Optional[APIKeyModel]:
         """
-        Validate API key and check permissions.
+        Validate API key and check permissions (DD-028 + DD-033).
+
+        Changes from v1.3:
+        - 12-char prefix (was 8)
+        - No error_count tracking (temporary locks handled in get_context)
+        - No auto-revocation (temporary locks instead)
+        - No usage_count writes (Redis counters handle this)
+        - Only updates last_used_at (minimal DB write)
 
         Returns None if invalid, otherwise returns the key model.
         """
-        # Extract prefix (first 8 characters)
-        if not key or len(key) < 8:
+        # Extract prefix (first 12 characters - DD-028)
+        if not key or len(key) < 12:
             return None
 
-        prefix = key[:8]
+        prefix = key[:12]
 
         # Find by prefix
         api_key = await APIKeyModel.find_one(
@@ -702,21 +985,10 @@ class APIKeyService:
 
         # Verify hash (constant time comparison via argon2)
         if not argon2.verify(key, api_key.key_hash):
-            # Log failed attempt
-            api_key.error_count += 1
-            await api_key.save()
-
-            # Auto-revoke after 10 failed attempts
-            if api_key.error_count >= 10:
-                await self.revoke(
-                    str(api_key.id),
-                    "system",
-                    "Too many failed validation attempts"
-                )
-
+            # Failed validation - caller (get_context) handles temp locks
             return None
 
-        # Check expiration
+        # Check expiration (optional)
         if api_key.expires_at and api_key.expires_at < datetime.utcnow():
             return None
 
@@ -727,9 +999,11 @@ class APIKeyService:
                 if missing:
                     return None
 
-        # Update usage stats
+        # Minimal DB write - only update last_used (DD-033)
+        # Usage count is tracked via Redis counters and synced periodically
         api_key.last_used_at = datetime.utcnow()
-        api_key.usage_count += 1
+        if client_ip:
+            api_key.last_used_ip = client_ip
         await api_key.save()
 
         return api_key
@@ -1509,9 +1783,10 @@ def test_auth(client, override_auth):
 
 ---
 
-**Last Updated**: 2025-01-14
+**Last Updated**: 2025-01-14 (Unified AuthDeps class, JWT service tokens, Redis counters, temp locks)
 **Next Review**: After Phase 2 implementation
 **Related Documents**:
+- [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) - DD-028, DD-033, DD-034, DD-035
 - [LIBRARY_ARCHITECTURE.md](LIBRARY_ARCHITECTURE.md) - Technical architecture
 - [SECURITY.md](SECURITY.md) - Security hardening
 - [TESTING_GUIDE.md](TESTING_GUIDE.md) - Testing strategies

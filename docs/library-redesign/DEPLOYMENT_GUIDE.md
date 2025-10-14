@@ -1,9 +1,15 @@
 # OutlabsAuth Deployment Guide
 
-**Version**: 1.0
+**Version**: 1.4
 **Date**: 2025-01-14
 **Audience**: DevOps engineers and system administrators
 **Status**: Production Reference
+
+**Key v1.4 Updates**:
+- **Redis Pub/Sub** (DD-037): <100ms cache invalidation across distributed instances
+- **Redis Counters** (DD-033): Background sync for API key usage tracking
+- **Closure Table** (DD-036): O(1) tree permission queries (20x faster)
+- **JWT Service Tokens** (DD-034): Zero-DB authentication for microservices
 
 ---
 
@@ -636,6 +642,278 @@ await auth.cache.clear_user_cache(user_id)
 await auth.cache.clear_permission_cache(user_id)
 ```
 
+### Redis Pub/Sub for Cache Invalidation (v1.4 - DD-037)
+
+**Why Redis Pub/Sub**: In multi-instance deployments, caches can become stale. Redis Pub/Sub provides <100ms cache invalidation across all instances.
+
+**Architecture**:
+```
+Instance 1          Instance 2          Instance 3
+    |                   |                   |
+    |------- Pub/Sub Channel: cache_invalidation -------|
+    |                   |                   |
+    v                   v                   v
+Redis Master (Pub/Sub + Cache)
+```
+
+**Configuration**:
+```python
+# Initialize with Redis Pub/Sub
+from outlabs_auth import EnterpriseRBAC
+
+auth = EnterpriseRBAC(
+    database=db,
+    redis_url="redis://redis:6379",
+    enable_caching=True,
+    enable_pubsub_invalidation=True,  # Enable Pub/Sub (v1.4)
+    cache_ttl_seconds=300
+)
+
+# Start Pub/Sub subscriber in background
+import asyncio
+
+async def start_pubsub_subscriber():
+    """Background task for listening to cache invalidation events"""
+    await auth.cache.start_pubsub_subscriber()
+
+# Run in background (e.g., in FastAPI startup event)
+@app.on_event("startup")
+async def startup():
+    asyncio.create_task(start_pubsub_subscriber())
+```
+
+**Docker Compose with Redis Pub/Sub**:
+```yaml
+# docker-compose.yml
+services:
+  app1:
+    build: .
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - ENABLE_PUBSUB_INVALIDATION=true
+    depends_on:
+      - redis
+      - mongodb
+
+  app2:
+    build: .
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - ENABLE_PUBSUB_INVALIDATION=true
+    depends_on:
+      - redis
+      - mongodb
+
+  app3:
+    build: .
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - ENABLE_PUBSUB_INVALIDATION=true
+    depends_on:
+      - redis
+      - mongodb
+
+  redis:
+    image: redis:7.0-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --notify-keyspace-events AKE
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:
+```
+
+**Kubernetes Deployment with Redis Pub/Sub**:
+```yaml
+# redis-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: outlabs-auth
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7.0-alpine
+        args:
+          - redis-server
+          - --appendonly
+          - "yes"
+          - --notify-keyspace-events
+          - AKE  # Enable keyspace events for Pub/Sub
+        ports:
+        - containerPort: 6379
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+      volumes:
+      - name: redis-data
+        persistentVolumeClaim:
+          claimName: redis-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: outlabs-auth
+spec:
+  selector:
+    app: redis
+  ports:
+  - protocol: TCP
+    port: 6379
+    targetPort: 6379
+  type: ClusterIP
+```
+
+**Testing Cache Invalidation**:
+```python
+# Test cache invalidation across instances
+import asyncio
+import redis.asyncio as aioredis
+
+async def test_cache_invalidation():
+    # Connect to Redis
+    redis_client = await aioredis.from_url("redis://redis:6379")
+
+    # Subscribe to invalidation channel
+    pubsub = redis_client.pubsub()
+    await pubsub.subscribe("cache_invalidation")
+
+    # Listen for messages
+    async for message in pubsub.listen():
+        if message["type"] == "message":
+            print(f"Cache invalidation event: {message['data']}")
+            # Handle cache invalidation
+            await handle_cache_invalidation(message["data"])
+
+# In another instance, trigger invalidation
+await auth.cache.invalidate_user_cache(user_id)
+# This publishes to "cache_invalidation" channel
+# All instances receive the event and clear their caches
+```
+
+**Monitoring Pub/Sub**:
+```bash
+# Monitor Redis Pub/Sub activity
+redis-cli
+
+# Check active channels
+PUBSUB CHANNELS
+
+# Monitor all messages (debugging)
+PSUBSCRIBE *
+
+# Check number of subscribers
+PUBSUB NUMSUB cache_invalidation
+```
+
+**Performance Impact**:
+- **Message Delivery**: <5ms within datacenter
+- **Cross-instance Propagation**: <100ms total (including processing)
+- **Overhead**: Negligible (~0.1% CPU per 1000 messages/sec)
+
+**High Availability**:
+```yaml
+# Redis Sentinel for Pub/Sub HA
+services:
+  redis-master:
+    image: redis:7.0-alpine
+    command: redis-server --appendonly yes --notify-keyspace-events AKE
+
+  redis-sentinel-1:
+    image: redis:7.0-alpine
+    command: >
+      redis-sentinel /etc/redis/sentinel.conf
+      --sentinel monitor mymaster redis-master 6379 2
+      --sentinel down-after-milliseconds mymaster 5000
+      --sentinel failover-timeout mymaster 10000
+
+  redis-sentinel-2:
+    image: redis:7.0-alpine
+    command: >
+      redis-sentinel /etc/redis/sentinel.conf
+      --sentinel monitor mymaster redis-master 6379 2
+
+  redis-sentinel-3:
+    image: redis:7.0-alpine
+    command: >
+      redis-sentinel /etc/redis/sentinel.conf
+      --sentinel monitor mymaster redis-master 6379 2
+```
+
+**Application Configuration with Sentinel**:
+```python
+from outlabs_auth import EnterpriseRBAC
+
+auth = EnterpriseRBAC(
+    database=db,
+    redis_url="redis://redis-master:6379",
+    redis_sentinel_hosts=[
+        ("redis-sentinel-1", 26379),
+        ("redis-sentinel-2", 26379),
+        ("redis-sentinel-3", 26379)
+    ],
+    redis_sentinel_master="mymaster",
+    enable_caching=True,
+    enable_pubsub_invalidation=True
+)
+```
+
+### Background Sync for API Keys (v1.4 - DD-033)
+
+**Why Background Sync**: API key usage tracking generates heavy database load. Redis counters reduce writes by 99%+.
+
+**Configuration**:
+```python
+# Enable Redis counters for API keys
+auth = EnterpriseRBAC(
+    database=db,
+    redis_url="redis://redis:6379",
+    enable_api_key_redis_counters=True,  # 99%+ DB write reduction
+    api_key_sync_interval=300  # Sync to DB every 5 minutes
+)
+
+# Start background sync task
+@app.on_event("startup")
+async def startup():
+    # Start API key counter sync
+    asyncio.create_task(auth.api_key_service.run_background_sync())
+```
+
+**How It Works**:
+```
+API Request → Redis INCR api_key_usage:{key_id} → Every 5 min → Batch update MongoDB
+100 requests/sec → 100 Redis writes (fast) → 1 DB write/5min (instead of 30,000)
+```
+
+**Monitoring Counter Sync**:
+```python
+# Custom metric for monitoring sync status
+from prometheus_client import Gauge
+
+api_key_pending_syncs = Gauge(
+    'api_key_pending_syncs',
+    'Number of API keys with pending usage syncs'
+)
+
+# Check pending syncs
+async def check_pending_syncs():
+    keys = await redis.keys("api_key_usage:*")
+    api_key_pending_syncs.set(len(keys))
+```
+
 ### Load Balancing
 
 **Nginx Configuration**:
@@ -1245,6 +1523,15 @@ MONITOR
 
 ---
 
-**Last Updated**: 2025-01-14
+## Revision History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.4 | 2025-01-14 | Added Redis Pub/Sub for cache invalidation (DD-037); added background sync for API keys (DD-033); added Redis Sentinel configuration; updated monitoring for new features |
+| 1.0 | 2025-01-14 | Initial deployment guide |
+
+---
+
+**Last Updated**: 2025-01-14 (v1.4 - Added Redis Pub/Sub and background sync sections)
 **Next Review**: Quarterly
 **Owner**: DevOps Team

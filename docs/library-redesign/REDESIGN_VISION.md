@@ -1,9 +1,16 @@
 # OutlabsAuth Library Redesign - Vision Document
 
-**Version**: 1.3
+**Version**: 1.4
 **Date**: 2025-01-14
 **Status**: Planning Phase
 **Branch**: `library-redesign`
+
+**Key Architectural Improvements (v1.4)**:
+- **Unified Architecture**: Single `OutlabsAuth` core with thin wrappers (DD-032)
+- **Closure Table**: O(1) tree permission queries, 20x performance improvement (DD-036)
+- **Redis Patterns**: Counters for API keys (DD-033), Pub/Sub for cache invalidation (DD-037)
+- **JWT Service Tokens**: ~0.5ms authentication for internal services (DD-034)
+- **Single AuthDeps**: Unified dependency injection (DD-035)
 
 ---
 
@@ -56,10 +63,13 @@ We are transforming **OutlabsAuth** from a centralized authentication API servic
    - Integrate in minutes, not hours
    - No separate service to manage
 
-2. **Performance**
+2. **Performance** (Enhanced v1.4)
    - In-process auth checks (no network calls)
    - Direct database access
-   - Cacheable at application level
+   - **Closure table for O(1) tree permission queries** (DD-036)
+   - **Redis Pub/Sub for <100ms cache invalidation** (DD-037)
+   - **Redis counters for 99%+ reduction in DB writes** (DD-033)
+   - **JWT service tokens for ~0.5ms internal auth** (DD-034)
 
 3. **Flexibility**
    - Each app configures auth to its needs
@@ -80,30 +90,33 @@ We are transforming **OutlabsAuth** from a centralized authentication API servic
 
 ## Core Principles
 
-### 1. **Gradual Complexity**
+### 1. **Gradual Complexity** (Unified Architecture - DD-032)
 
-The library supports two preset modes, allowing projects to start simple or go enterprise-ready:
+The library has a single `OutlabsAuth` core implementation with thin convenience wrappers:
 
 ```python
-# Simple RBAC: Flat structure
+# Simple RBAC: Thin wrapper (5-10 LOC)
 auth = SimpleRBAC(database=db)
-# Just users, roles, and permissions - perfect for simple apps
+# Flat structure: users, roles, permissions
 
-# Enterprise: Full power with optional features
+# Enterprise RBAC: Thin wrapper with feature flags
 auth = EnterpriseRBAC(database=db)
 # Entity hierarchy + tree permissions (always included)
 # Optional: context-aware roles, ABAC, caching, multi-tenant
 
-# Enterprise with all features enabled
-auth = EnterpriseRBAC(
+# Direct use of core (maximum flexibility)
+auth = OutlabsAuth(
     database=db,
-    redis_url="redis://localhost:6379",
+    enable_entity_hierarchy=True,
     enable_context_aware_roles=True,  # Opt-in
     enable_abac=True,                 # Opt-in
-    enable_caching=True,              # Redis required
-    multi_tenant=True                 # Opt-in
+    enable_caching=True,              # Opt-in
+    multi_tenant=True,                # Opt-in
+    redis_url="redis://localhost:6379"
 )
 ```
+
+**Architecture**: Single unified core + thin wrappers = **zero code duplication**, easy migration.
 
 **The Decision is Simple**: Do you have departments/teams/hierarchy? **NO** → SimpleRBAC | **YES** → EnterpriseRBAC
 
@@ -176,11 +189,17 @@ async def protected_route(
 
 See [AUTH_EXTENSIONS.md](AUTH_EXTENSIONS.md) for detailed extension architecture and implementation.
 
-### Nice to Have (Future Versions)
-- 🎯 Support for PostgreSQL (v1.5 - in addition to MongoDB)
-- 🎯 Admin UI components (v1.6 - optional package)
-- 🎯 OpenTelemetry integration (v1.6)
-- 🎯 Advanced audit log analytics (v2.0)
+### Core v1.0 Performance Features (Included)
+- ✅ **Closure table for tree permissions** (DD-036) - O(1) queries, 20x improvement
+- ✅ **Redis Pub/Sub cache invalidation** (DD-037) - <100ms across all instances
+- ✅ **Redis counters for API keys** (DD-033) - 99%+ reduction in DB writes
+- ✅ **JWT service tokens** (DD-034) - ~0.5ms authentication for internal services
+- ✅ **Unified AuthDeps** (DD-035) - Single dependency injection class
+
+### Nice to Have (Post-v1.4)
+- 🎯 **v1.5** (Weeks 17-20): PostgreSQL support (in addition to MongoDB)
+- 🎯 **v1.6** (Weeks 21-24): Admin UI components (optional package), OpenTelemetry integration
+- 🎯 **v2.0** (6 months): Advanced audit log analytics, plugin system, SAML/LDAP support
 
 ### Out of Scope (For Now)
 - ❌ Cross-application SSO (each app is independent)
@@ -339,15 +358,15 @@ See [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) for detailed phase br
 This vision document is the hub. Related documents:
 
 ### Core Design
-1. **[LIBRARY_ARCHITECTURE.md](LIBRARY_ARCHITECTURE.md)** - Technical architecture details
-2. **[IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)** - Week-by-week implementation plan
-3. **[API_DESIGN.md](API_DESIGN.md)** - Developer experience and code examples
-4. **[DEPENDENCY_PATTERNS.md](DEPENDENCY_PATTERNS.md)** - FastAPI dependency injection patterns
-5. **[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)** - Why we made specific choices (DD-001 to DD-031)
+1. **[LIBRARY_ARCHITECTURE.md](LIBRARY_ARCHITECTURE.md)** - Technical architecture details (updated v1.4)
+2. **[IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)** - Week-by-week implementation plan (updated v1.4)
+3. **[API_DESIGN.md](API_DESIGN.md)** - Developer experience and code examples (updated v1.4)
+4. **[DEPENDENCY_PATTERNS.md](DEPENDENCY_PATTERNS.md)** - FastAPI dependency injection patterns (updated v1.4)
+5. **[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)** - Why we made specific choices (DD-001 to **DD-037** - updated v1.4)
 6. **[COMPARISON_MATRIX.md](COMPARISON_MATRIX.md)** - Feature comparison: Simple vs Enterprise
 
 ### Production Guides
-7. **[SECURITY.md](SECURITY.md)** - Security hardening and best practices
+7. **[SECURITY.md](SECURITY.md)** - Security hardening and best practices (updated v1.4)
 8. **[TESTING_GUIDE.md](TESTING_GUIDE.md)** - Testing utilities and patterns
 9. **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** - Scaling and production deployment
 10. **[ERROR_HANDLING.md](ERROR_HANDLING.md)** - Exception hierarchy and error patterns
@@ -433,7 +452,7 @@ This is a living document. As we learn during implementation:
 - Clarify scope based on discoveries
 - Document trade-offs made
 
-**Last Updated**: 2025-01-14 (Added API key authentication system to core v1.0)
+**Last Updated**: 2025-01-14 (v1.4 - Architectural improvements: unified architecture, closure table, Redis patterns, JWT service tokens)
 **Next Review**: After Phase 1 completion
 
 ---
@@ -442,6 +461,7 @@ This is a living document. As we learn during implementation:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.4 | 2025-01-14 | Architectural improvements: unified architecture with thin wrappers (DD-032), closure table for O(1) queries (DD-036), Redis counters for API keys (DD-033), Redis Pub/Sub cache invalidation (DD-037), JWT service tokens (DD-034), single AuthDeps class (DD-035), temporary locks instead of permanent revocation (DD-028); added 6 new design decisions (DD-032 to DD-037); updated performance metrics and success criteria; clarified v1.0 features vs post-v1.0 |
 | 1.3 | 2025-01-14 | Added API key authentication system (core v1.0); multi-source authentication; DEPENDENCY_PATTERNS.md; 4 new design decisions (DD-028 to DD-031); updated success criteria |
 | 1.2 | 2025-01-14 | Added authentication extensions (v1.1-v1.4); updated timeline to 15-16 weeks; moved social login from non-goals to planned extensions |
 | 1.1 | 2025-01-14 | Revised to two presets (Simple, Enterprise); added new documentation; incorporated security, testing, deployment guides |
