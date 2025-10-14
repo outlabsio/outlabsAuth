@@ -1,6 +1,6 @@
 # OutlabsAuth Library - Feature Comparison Matrix
 
-**Version**: 1.2
+**Version**: 1.3
 **Date**: 2025-01-14
 **Purpose**: Help choose the right preset for your needs
 
@@ -42,6 +42,14 @@ Start here: Do you need organizational hierarchy (departments/teams)?
 | JWT authentication | ✅ | ✅ |
 | Password management | ✅ | ✅ |
 | Refresh tokens | ✅ | ✅ |
+| **API Key Authentication (Core v1.0)** |
+| API key authentication | ✅ | ✅ |
+| API key rate limiting | ✅ (in-memory) | ✅ (in-memory + Redis optional) |
+| API key IP whitelisting | ✅ | ✅ |
+| API key rotation | ✅ | ✅ |
+| Entity-scoped API keys | ❌ | ✅ |
+| Multi-source authentication | ✅ | ✅ |
+| AuthContext abstraction | ✅ | ✅ |
 | **Hierarchy (Always Included)** |
 | Entity hierarchy | ❌ | ✅ |
 | Tree permissions | ❌ | ✅ |
@@ -277,6 +285,26 @@ await auth.user_service.assign_role(user.id, role.id)
 has_perm = await auth.permission_service.check_permission(
     user.id, "user:delete"
 )
+
+# API keys (v1.0 core feature)
+raw_key, api_key = await auth.api_key_service.create_api_key(
+    name="Production Service",
+    permissions=["user:read", "entity:read"],
+    environment="production",  # sk_prod_ prefix
+    allowed_ips=["10.0.1.0/24"],
+    rate_limit_per_minute=60
+)
+
+# Multi-source authentication (v1.0 core feature)
+from outlabs_auth.dependencies import MultiSourceDeps
+deps = MultiSourceDeps(auth=auth)
+
+@app.get("/users")
+async def list_users(context = Depends(deps.get_context)):
+    # Accepts JWT, API key, service token, or superuser token
+    if not context.has_permission("user:read"):
+        raise HTTPException(403)
+    return await auth.user_service.list_users()
 ```
 
 **Limitations:**
@@ -344,6 +372,29 @@ role = await auth.role_service.create_role(
         "user:manage_tree"    # Manage users in all teams below
     ]
 )
+
+# Entity-scoped API keys (always included - EnterpriseRBAC only)
+raw_key, api_key = await auth.api_key_service.create_api_key(
+    name="Department Service",
+    permissions=["user:read_tree", "entity:read_tree"],
+    environment="production",
+    entity_id=dept.id,  # Scoped to department and all descendants
+    allowed_ips=["10.0.1.0/24"]
+)
+
+# Multi-source authentication (v1.0 core feature)
+from outlabs_auth.dependencies import MultiSourceDeps
+deps = MultiSourceDeps(auth=auth)
+
+@app.get("/entities/{entity_id}")
+async def get_entity(
+    entity_id: str,
+    context = Depends(deps.get_context)
+):
+    # Accepts JWT, API key, service token, or superuser token
+    # Works with entity-scoped API keys automatically
+    entity = await auth.entity_service.get_entity(entity_id, context)
+    return entity
 ```
 
 **Optional Features (Enable as Needed):**
@@ -798,5 +849,5 @@ manager_role = await auth.role_service.create_role(
 
 ---
 
-**Last Updated**: 2025-01-14 (Added authentication extensions comparison)
+**Last Updated**: 2025-01-14 (Added API key authentication features and multi-source authentication to comparison table)
 **Next Review**: After Phase 1 implementation

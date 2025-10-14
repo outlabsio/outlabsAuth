@@ -1,6 +1,6 @@
 # OutlabsAuth Library - Design Decisions Log
 
-**Version**: 1.2
+**Version**: 1.3
 **Date**: 2025-01-14
 **Purpose**: Document key architectural decisions and trade-offs
 
@@ -1523,6 +1523,344 @@ Phased delivery of extensions, each independent and optional.
 
 ---
 
+## DD-028: API Key System for Service Authentication (Core v1.0)
+
+**Date**: 2025-01-14
+**Status**: Accepted (Core Feature)
+**Deciders**: Core team
+**Context**: Need service-to-service authentication for API integrations and webhooks
+
+### Options Considered
+
+1. **No API Key Support**
+   - Pros: Simpler codebase
+   - Cons: No way to authenticate services, missing essential feature
+
+2. **JWT Service Tokens**
+   - Pros: Reuse existing JWT infrastructure
+   - Cons: Less flexible, harder to revoke, not standard for API keys
+
+3. **API Key System (Stripe-style)**
+   - Pros: Industry standard, easy to use, flexible permissions
+   - Cons: Additional models and services to maintain
+
+4. **OAuth Client Credentials**
+   - Pros: Standards-based
+   - Cons: Too complex for simple use cases, overkill
+
+### Decision
+Implement full API key system in core v1.0 (Phase 2 - SimpleRBAC).
+
+**Features**:
+- Prefixed keys (8 characters): `sk_prod_`, `sk_stag_`, `sk_dev_`, `sk_test_`
+- argon2id hashing (NOT SHA256 - security requirement)
+- Key lifecycle: create, rotate, revoke
+- Permission-based access control
+- IP whitelisting
+- Rate limiting per key
+- Usage tracking and audit logging
+- Automatic revocation on abuse detection
+
+**Design**:
+```python
+# Create API key
+raw_key, key = await auth.api_key_service.create_api_key(
+    name="production_api",
+    created_by=user_id,
+    permissions=["api:read", "api:write"],
+    environment="production",
+    rate_limit_per_minute=100,
+    allowed_ips=["10.0.0.0/8"]
+)
+
+# Use in requests
+headers = {"X-API-Key": raw_key}
+```
+
+**Reasoning**:
+- Essential for modern APIs (webhooks, integrations, service-to-service)
+- Industry standard pattern (Stripe, GitHub, Twilio all use this)
+- Simpler than OAuth for machine-to-machine
+- Critical for production deployments
+- Should be available from v1.0, not an extension
+
+**Security Requirements**:
+- argon2id hashing with time_cost=2, memory_cost=102400, parallelism=8
+- Never log raw keys, only prefixes
+- Automatic rotation policies (90 days recommended)
+- IP whitelisting strictly enforced
+- Auto-revoke after 10 failed validation attempts
+
+### Consequences
+- **Positive**: Production-ready from day one, industry standard, enables integrations
+- **Negative**: Adds ~500 LOC to core, requires argon2 dependency
+- **Neutral**: Both SimpleRBAC and EnterpriseRBAC support API keys equally
+
+### Timeline Impact
+- Add to Phase 2 (SimpleRBAC completion - Week 2)
+- ~2 days of development time
+- No delay to overall timeline
+
+### Related Decisions
+- DD-029 (Multi-source authentication)
+- DD-030 (Dependency patterns)
+- DD-031 (API key security model)
+
+---
+
+## DD-029: Multi-Source Authentication with AuthContext
+
+**Date**: 2025-01-14
+**Status**: Accepted (Core Feature)
+**Deciders**: Core team
+**Context**: APIs need flexible authentication from multiple sources
+
+### Options Considered
+
+1. **User Authentication Only**
+   - Pros: Simplest
+   - Cons: Can't handle API keys, service accounts, admin overrides
+
+2. **Separate Auth Per Source**
+   - Pros: Clear separation
+   - Cons: Code duplication, inconsistent patterns
+
+3. **Unified AuthContext**
+   - Pros: Single pattern for all sources, composable, type-safe
+   - Cons: More upfront design work
+
+### Decision
+Implement unified `AuthContext` supporting multiple authentication sources.
+
+**Auth Sources** (priority order):
+1. Superuser (admin override)
+2. Service accounts (internal services)
+3. API keys (external integrations)
+4. Users (JWT tokens)
+5. Anonymous (optional)
+
+**Design**:
+```python
+class AuthContext(BaseModel):
+    source: AuthSource  # USER, API_KEY, SERVICE, SUPERUSER, ANONYMOUS
+    identity: str
+    permissions: List[str]
+    is_superuser: bool
+    metadata: Dict[str, Any]
+    rate_limit_remaining: Optional[int]
+
+# Usage in endpoints
+@app.get("/api/data")
+async def get_data(ctx: AuthContext = Depends(multi.permission("data:read"))):
+    # Works with users, API keys, or service accounts
+    if ctx.source == AuthSource.API_KEY:
+        await log_api_usage(ctx.metadata["key_name"])
+    return data
+```
+
+**Reasoning**:
+- APIs need flexibility (webhooks use API keys, admins use JWT, services use service tokens)
+- Single pattern easier to test and maintain
+- Priority chain prevents ambiguity
+- Type-safe via Pydantic
+- Composable via FastAPI dependencies
+
+### Consequences
+- **Positive**: Flexible, type-safe, single pattern, easy to test
+- **Negative**: More complex than user-only auth
+- **Neutral**: Hidden complexity in `get_context()` method
+
+### Related Decisions
+- DD-028 (API keys)
+- DD-030 (Dependency patterns)
+- DD-012 (FastAPI-first design)
+
+---
+
+## DD-030: FastAPI Dependency Injection Patterns
+
+**Date**: 2025-01-14
+**Status**: Accepted (Core Feature)
+**Deciders**: Core team
+**Context**: Need simple, composable way to protect endpoints
+
+### Options Considered
+
+1. **Decorators**
+   - Pros: Familiar pattern from Flask
+   - Cons: Less flexible, harder to compose, not FastAPI-native
+
+2. **Middleware**
+   - Pros: Centralized auth logic
+   - Cons: Harder to test, less granular, all-or-nothing
+
+3. **Dependency Injection (FastAPI Depends)**
+   - Pros: Native FastAPI, composable, testable, type-safe
+   - Cons: Requires understanding of dependency injection
+
+### Decision
+Use FastAPI dependency injection with factory classes.
+
+**Dependency Factories**:
+- `SimpleDeps`: Basic patterns (authenticated, requires, role)
+- `MultiSourceDeps`: Multi-source auth with AuthContext
+- `GroupDeps`: Group-based authorization
+- `EntityDeps`: Entity-scoped permissions
+
+**Design**:
+```python
+# Simple usage
+require = SimpleDeps(auth)
+
+@app.delete("/users/{id}")
+async def delete_user(id: str, user = require.requires("user:delete")):
+    return await service.delete(id)
+
+# Multi-source
+multi = MultiSourceDeps(auth)
+
+@app.get("/api/data")
+async def get_data(ctx: AuthContext = multi.permission("data:read")):
+    return data
+
+# Combine requirements
+@app.post("/admin/action")
+async def admin_action(
+    user = require.requires("admin:write"),
+    is_admin = require.role("admin"),
+    ctx: AuthContext = multi.source(AuthSource.USER)
+):
+    # Must have permission + role + be a user (not API key)
+    return {"performed": True}
+```
+
+**Reasoning**:
+- FastAPI-native approach (leverages Depends())
+- Dead simple for common cases: `user = require.user`
+- Composable for complex requirements
+- Type-safe with full IDE support
+- Easy to test (override dependencies in tests)
+- Declarative (function signature declares requirements)
+
+### Consequences
+- **Positive**: Excellent DX, type-safe, testable, composable
+- **Negative**: Requires understanding dependency injection
+- **Neutral**: Slightly different from Flask decorators
+
+### Testing Benefits
+```python
+# Easy to mock
+def test_endpoint(client, mock_auth):
+    mock_auth(permissions=["data:read"])
+    response = client.get("/api/data")
+    assert response.status_code == 200
+```
+
+### Related Decisions
+- DD-029 (Multi-source auth)
+- DD-012 (FastAPI-first design)
+
+---
+
+## DD-031: API Key Security Model
+
+**Date**: 2025-01-14
+**Status**: Accepted (Core Feature)
+**Deciders**: Core team, Security review
+**Context**: API keys are sensitive credentials requiring strong security
+
+### Options Considered
+
+1. **SHA256 Hashing**
+   - Pros: Fast, widely supported
+   - Cons: Too fast = vulnerable to brute force attacks
+
+2. **bcrypt**
+   - Pros: Battle-tested, slow hashing
+   - Cons: Limited output size, older algorithm
+
+3. **argon2id**
+   - Pros: Modern, winner of Password Hashing Competition 2015, resistant to side-channel attacks
+   - Cons: Requires additional dependency
+
+### Decision
+Use argon2id for API key hashing with specific parameters.
+
+**Security Requirements**:
+
+1. **Hashing**: argon2id with recommended parameters
+   ```python
+   argon2.using(
+       time_cost=2,        # Iterations
+       memory_cost=102400, # 100 MB memory
+       parallelism=8       # Threads
+   ).hash(key)
+   ```
+
+2. **Key Format**: 8-character prefix + 32 bytes random
+   - `sk_prod_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6`
+   - Prefix identifies environment (prod, stag, dev, test)
+   - 32 bytes = 256 bits of entropy
+
+3. **Storage**: Never store raw keys
+   - Store: key_hash (argon2), key_prefix (8 chars), metadata
+   - Never log raw keys (only prefixes)
+
+4. **Rotation**: Automatic policies
+   - Rotate every 90 days (configurable)
+   - Grace period for zero-downtime rotation
+   - Audit all rotations
+
+5. **IP Whitelisting**: Strictly enforced
+   - Optional but recommended
+   - Support CIDR notation
+   - Log all unauthorized access attempts
+
+6. **Auto-Revocation**:
+   - After 10 failed validation attempts
+   - On expiration
+   - On detected abuse (unusual patterns)
+
+7. **Rate Limiting**: Per-key quotas
+   - Default: 60/minute, 1000/hour
+   - Configurable per key
+   - In-memory fallback (no Redis requirement)
+
+8. **Audit Logging**: All key operations
+   - Creation, rotation, revocation, usage
+   - Include: timestamp, actor, reason, IP
+   - Alert on suspicious patterns
+
+**Reasoning**:
+- argon2id is state-of-the-art (2015 PHC winner)
+- Resistant to GPU attacks, side-channel attacks
+- Configurable parameters for future-proofing
+- Industry best practice (OWASP recommended)
+- 8-character prefix faster to type than Stripe's 12
+
+**Security Checklist**:
+```markdown
+- [ ] API keys use argon2id hashing (not SHA256)
+- [ ] Raw keys never logged or stored
+- [ ] Key rotation policy configured (≤90 days)
+- [ ] IP whitelisting enabled for production keys
+- [ ] Rate limiting per key configured
+- [ ] Audit logging captures all key operations
+- [ ] Automatic revocation on repeated failures
+- [ ] Keys scoped to minimum required permissions
+```
+
+### Consequences
+- **Positive**: Strong security, industry best practices, future-proof
+- **Negative**: Requires passlib[argon2] dependency, slower hashing (by design)
+- **Neutral**: Security overhead acceptable for auth library
+
+### Related Decisions
+- DD-028 (API key system)
+- DD-029 (Multi-source auth)
+
+---
+
 ## Questions Still Open
 
 Track questions that need decisions:
@@ -1551,9 +1889,10 @@ Track questions that need decisions:
 | 2025-01-14 | DD-001 through DD-014 | All Accepted |
 | 2025-01-14 | DD-015 through DD-021 | All Accepted |
 | 2025-01-14 | DD-022 through DD-027 | All Accepted (Post-v1.0 Extensions) |
+| 2025-01-14 | DD-028 through DD-031 | All Accepted (Core v1.0 - API Keys & Auth Dependencies) |
 | 2025-01-14 | DD-003 | Superseded by DD-015 |
 
 ---
 
-**Last Updated**: 2025-01-14 (Added authentication extensions: OAuth, passwordless, notifications)
+**Last Updated**: 2025-01-14 (Added API key system, multi-source authentication, and dependency patterns)
 **Next Review**: End of Phase 1 (Week 2)

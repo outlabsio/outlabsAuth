@@ -1,6 +1,6 @@
 # OutlabsAuth Library - API Design & Developer Experience
 
-**Version**: 1.1
+**Version**: 1.2
 **Date**: 2025-01-14
 **Status**: Design Phase
 
@@ -14,9 +14,11 @@
 4. [EnterpriseRBAC Examples](#enterpriserbac-examples)
    - [Basic Hierarchy](#basic-hierarchy-examples)
    - [Optional Features](#optional-features-examples)
-5. [FastAPI Integration Patterns](#fastapi-integration-patterns)
-6. [Configuration](#configuration)
-7. [Testing Your App](#testing-your-app)
+5. **[API Key Authentication](#api-key-authentication)** ← NEW
+6. **[Multi-Source Authentication](#multi-source-authentication)** ← NEW
+7. [FastAPI Integration Patterns](#fastapi-integration-patterns)
+8. [Configuration](#configuration)
+9. [Testing Your App](#testing-your-app)
 
 ---
 
@@ -622,6 +624,617 @@ result = await auth.permission_service.check_permission(
 
 ---
 
+## API Key Authentication
+
+API keys enable service-to-service authentication for automated systems, CI/CD pipelines, and backend services. They are **core v1.0 features** (not optional extensions).
+
+### Example 1: Creating API Keys
+
+```python
+from outlabs_auth import SimpleRBAC
+from datetime import datetime, timedelta
+
+auth = SimpleRBAC(database=db)
+
+# Create user who will own the API key
+service_user = await auth.user_service.create_user(
+    email="service@example.com",
+    password="service-password",
+    name="Service Account"
+)
+
+# Create API key for production service
+raw_key, api_key_model = await auth.api_key_service.create_api_key(
+    name="Production Service",
+    permissions=["user:read", "entity:read"],
+    environment="production",  # sk_prod_ prefix
+    allowed_ips=["10.0.1.0/24", "192.168.1.100"],  # IP whitelist
+    rate_limit_per_minute=60,
+    expires_at=datetime.now() + timedelta(days=90),  # 90-day expiry
+    created_by=service_user.id
+)
+
+# CRITICAL: raw_key is only shown ONCE - store securely!
+print(f"API Key: {raw_key}")  # sk_prod_AbCdEfGh...
+print(f"Store this key securely - it won't be shown again!")
+
+# Key is now hashed with argon2id in database
+# Only the prefix (first 8 chars) is stored in plaintext for identification
+```
+
+### Example 2: API Keys for Different Environments
+
+```python
+# Production key (most restrictive)
+prod_key, prod_model = await auth.api_key_service.create_api_key(
+    name="Production API",
+    permissions=["user:read", "entity:read"],
+    environment="production",  # sk_prod_
+    allowed_ips=["10.0.1.0/24"],
+    rate_limit_per_minute=60,
+    created_by=user.id
+)
+
+# Staging key (more permissive)
+staging_key, staging_model = await auth.api_key_service.create_api_key(
+    name="Staging API",
+    permissions=["user:read", "user:create", "entity:read"],
+    environment="staging",  # sk_stag_
+    allowed_ips=["192.168.1.0/24"],
+    rate_limit_per_minute=120,
+    created_by=user.id
+)
+
+# Development key (most permissive)
+dev_key, dev_model = await auth.api_key_service.create_api_key(
+    name="Development API",
+    permissions=["user:read", "user:create", "user:update", "entity:read", "entity:create"],
+    environment="development",  # sk_dev_
+    allowed_ips=[],  # No IP restrictions
+    rate_limit_per_minute=300,
+    created_by=user.id
+)
+
+# Test key (for automated testing)
+test_key, test_model = await auth.api_key_service.create_api_key(
+    name="Test Suite",
+    permissions=["user:read"],
+    environment="test",  # sk_test_
+    expires_at=datetime.now() + timedelta(days=30),
+    created_by=user.id
+)
+```
+
+### Example 3: Using API Keys in Routes
+
+```python
+from fastapi import FastAPI, Header, HTTPException
+from typing import Optional
+
+app = FastAPI()
+
+@app.get("/api/users")
+async def list_users(x_api_key: Optional[str] = Header(None)):
+    """Public API endpoint authenticated with API key"""
+    if not x_api_key:
+        raise HTTPException(401, "API key required")
+
+    # Authenticate API key
+    try:
+        api_key_model = await auth.api_key_service.authenticate_api_key(x_api_key)
+    except Exception:
+        raise HTTPException(401, "Invalid API key")
+
+    # Check permission
+    if "user:read" not in api_key_model.permissions:
+        raise HTTPException(403, "API key lacks user:read permission")
+
+    # Check IP whitelist (if configured)
+    client_ip = request.client.host
+    if not await auth.api_key_service.check_ip_whitelist(api_key_model, client_ip):
+        raise HTTPException(403, "IP not whitelisted")
+
+    # Check rate limit
+    try:
+        await auth.api_key_service.check_rate_limit(api_key_model)
+    except RateLimitExceededException:
+        raise HTTPException(429, "Rate limit exceeded")
+
+    # API key is valid - return users
+    users = await auth.user_service.list_users()
+    return users
+```
+
+### Example 4: API Key Management Endpoints
+
+```python
+from outlabs_auth.schemas import CreateAPIKeyRequest, RotateAPIKeyRequest
+
+# Create API key endpoint
+@app.post("/api-keys")
+async def create_api_key(
+    data: CreateAPIKeyRequest,
+    user=Depends(auth.require_permission("api_key:create"))
+):
+    """Create new API key (returns raw key once)"""
+    raw_key, api_key_model = await auth.api_key_service.create_api_key(
+        name=data.name,
+        permissions=data.permissions,
+        environment=data.environment,
+        allowed_ips=data.allowed_ips,
+        rate_limit_per_minute=data.rate_limit_per_minute,
+        expires_at=data.expires_at,
+        created_by=user.id
+    )
+
+    return {
+        "raw_key": raw_key,  # ONLY returned once!
+        "key_prefix": api_key_model.key_prefix,
+        "message": "Store this key securely - it won't be shown again"
+    }
+
+# List API keys endpoint
+@app.get("/api-keys")
+async def list_api_keys(user=Depends(auth.require_permission("api_key:read"))):
+    """List all API keys (without raw keys)"""
+    keys = await auth.api_key_service.list_api_keys()
+    return {
+        "keys": [
+            {
+                "id": str(key.id),
+                "name": key.name,
+                "key_prefix": key.key_prefix,  # First 8 chars only
+                "environment": key.environment,
+                "is_active": key.is_active,
+                "usage_count": key.usage_count,
+                "created_at": key.created_at,
+                "expires_at": key.expires_at
+            }
+            for key in keys
+        ]
+    }
+
+# Rotate API key endpoint
+@app.post("/api-keys/{key_id}/rotate")
+async def rotate_api_key(
+    key_id: str,
+    user=Depends(auth.require_permission("api_key:rotate"))
+):
+    """Rotate API key (creates new, schedules old for revocation)"""
+    new_raw_key, new_api_key = await auth.api_key_service.rotate_api_key(key_id)
+
+    return {
+        "raw_key": new_raw_key,  # ONLY returned once!
+        "key_prefix": new_api_key.key_prefix,
+        "message": "Old key will be revoked in 24 hours. Update your services with the new key.",
+        "grace_period_hours": 24
+    }
+
+# Revoke API key endpoint
+@app.delete("/api-keys/{key_id}")
+async def revoke_api_key(
+    key_id: str,
+    user=Depends(auth.require_permission("api_key:revoke"))
+):
+    """Immediately revoke API key"""
+    await auth.api_key_service.revoke_api_key(
+        key_id=key_id,
+        reason="Revoked by administrator"
+    )
+    return {"message": "API key revoked"}
+```
+
+### Example 5: Entity-Scoped API Keys (EnterpriseRBAC)
+
+```python
+from outlabs_auth import EnterpriseRBAC
+
+auth = EnterpriseRBAC(database=db)
+
+# Create hierarchy
+org = await auth.entity_service.create_entity(
+    name="acme_corp",
+    entity_type="organization",
+    entity_class="STRUCTURAL"
+)
+
+dept = await auth.entity_service.create_entity(
+    name="engineering",
+    entity_type="department",
+    entity_class="STRUCTURAL",
+    parent_entity_id=org.id
+)
+
+# Create API key scoped to department
+raw_key, api_key = await auth.api_key_service.create_api_key(
+    name="Engineering Service",
+    permissions=["entity:read", "entity:update", "user:read"],
+    environment="production",
+    entity_id=dept.id,  # Scoped to engineering department
+    inherit_from_tree=True,  # Can access child entities
+    created_by=user.id
+)
+
+# This API key can only access:
+# - The engineering department (entity:read, entity:update)
+# - Any teams under engineering (via tree permissions)
+# - Users in engineering and its sub-entities
+
+# Use in routes
+@app.get("/entities/{entity_id}/data")
+async def get_entity_data(
+    entity_id: str,
+    x_api_key: str = Header(...)
+):
+    # Authenticate API key
+    api_key_model = await auth.api_key_service.authenticate_api_key(x_api_key)
+
+    # Check if API key has access to this entity
+    if api_key_model.entity_id:
+        # Entity-scoped key - verify access
+        has_access = await auth.permission_service.check_entity_access(
+            api_key=api_key_model,
+            target_entity_id=entity_id,
+            permission="entity:read"
+        )
+        if not has_access:
+            raise HTTPException(403, "API key does not have access to this entity")
+
+    # Return data
+    return await entity_service.get_data(entity_id)
+```
+
+### Example 6: Client-Side API Key Usage
+
+```python
+# Python client
+import requests
+
+API_KEY = "sk_prod_AbCdEfGh..."
+BASE_URL = "https://api.example.com"
+
+# Use API key in header
+response = requests.get(
+    f"{BASE_URL}/api/users",
+    headers={"X-API-Key": API_KEY}
+)
+
+if response.status_code == 200:
+    users = response.json()
+else:
+    print(f"Error: {response.status_code}")
+```
+
+```javascript
+// JavaScript client
+const API_KEY = 'sk_prod_AbCdEfGh...';
+const BASE_URL = 'https://api.example.com';
+
+// Use API key in header
+fetch(`${BASE_URL}/api/users`, {
+  headers: {
+    'X-API-Key': API_KEY
+  }
+})
+  .then(response => response.json())
+  .then(users => console.log(users))
+  .catch(error => console.error('Error:', error));
+```
+
+```bash
+# cURL
+curl -X GET https://api.example.com/api/users \
+  -H "X-API-Key: sk_prod_AbCdEfGh..."
+```
+
+---
+
+## Multi-Source Authentication
+
+Multi-source authentication allows your API to accept authentication from multiple sources with a priority chain: **Superuser > Service > API Key > User > Anonymous**.
+
+### Example 1: Basic Multi-Source Setup
+
+```python
+from outlabs_auth import SimpleRBAC
+from outlabs_auth.dependencies import MultiSourceDeps
+from outlabs_auth.models import AuthContext, AuthSource
+
+auth = SimpleRBAC(database=db)
+
+# Create multi-source dependency factory
+deps = MultiSourceDeps(auth=auth)
+
+@app.get("/api/users")
+async def list_users(context: AuthContext = Depends(deps.get_context)):
+    """
+    Accepts authentication from:
+    - User JWT (Authorization: Bearer <token>)
+    - API Key (X-API-Key: sk_prod_...)
+    - Service Token (X-Service-Token: <token>)
+    - Superuser Token (X-Superuser-Token: <token>)
+    - Anonymous (no auth - if allowed)
+    """
+
+    # Check which auth source was used
+    if context.source == AuthSource.USER:
+        print(f"Authenticated as user: {context.identity}")
+    elif context.source == AuthSource.API_KEY:
+        print(f"Authenticated with API key: {context.identity}")
+    elif context.source == AuthSource.SERVICE:
+        print(f"Authenticated as service: {context.identity}")
+    elif context.source == AuthSource.SUPERUSER:
+        print(f"Authenticated as superuser: {context.identity}")
+    elif context.source == AuthSource.ANONYMOUS:
+        print("Anonymous access")
+
+    # Check permissions (works across all auth sources)
+    if not context.has_permission("user:read"):
+        raise HTTPException(403, "Permission denied")
+
+    # Return users
+    users = await auth.user_service.list_users()
+    return users
+```
+
+### Example 2: Auth Source Priority Chain
+
+```python
+from outlabs_auth.dependencies import MultiSourceDeps
+
+deps = MultiSourceDeps(auth=auth)
+
+@app.get("/api/data")
+async def get_data(context: AuthContext = Depends(deps.get_context)):
+    """
+    Priority chain (highest to lowest):
+    1. Superuser Token (X-Superuser-Token) - Admin operations
+    2. Service Token (X-Service-Token) - Internal services
+    3. API Key (X-API-Key) - External services
+    4. User JWT (Authorization: Bearer) - End users
+    5. Anonymous (no auth) - Public access
+    """
+
+    # If multiple auth methods are provided, highest priority wins
+    # Example: If both API key and user JWT are provided, API key is used
+
+    if context.is_superuser:
+        # Superuser has all permissions
+        return await get_all_data()
+
+    elif context.source == AuthSource.SERVICE:
+        # Internal service - trusted
+        return await get_service_data()
+
+    elif context.source == AuthSource.API_KEY:
+        # External service - check permissions
+        if context.has_permission("data:read"):
+            return await get_api_data()
+        raise HTTPException(403)
+
+    elif context.source == AuthSource.USER:
+        # End user - check user-specific permissions
+        if context.has_permission("data:read"):
+            return await get_user_data(context.identity)
+        raise HTTPException(403)
+
+    else:
+        # Anonymous - very limited access
+        return await get_public_data()
+```
+
+### Example 3: Simple vs Multi-Source Dependencies
+
+```python
+from outlabs_auth.dependencies import SimpleDeps, MultiSourceDeps
+
+# SimpleDeps - Basic authentication (JWT only)
+simple_deps = SimpleDeps(auth=auth)
+
+@app.get("/simple")
+async def simple_route(user=Depends(simple_deps.authenticated())):
+    """Only accepts JWT tokens (Authorization: Bearer)"""
+    return {"user": user.email}
+
+# MultiSourceDeps - Flexible authentication
+multi_deps = MultiSourceDeps(auth=auth)
+
+@app.get("/multi")
+async def multi_route(context: AuthContext = Depends(multi_deps.get_context)):
+    """Accepts JWT, API keys, service tokens, superuser tokens"""
+    return {
+        "source": context.source.value,
+        "identity": context.identity,
+        "permissions": context.permissions
+    }
+```
+
+### Example 4: Permission Checking with Multi-Source
+
+```python
+from outlabs_auth.dependencies import MultiSourceDeps
+
+deps = MultiSourceDeps(auth=auth)
+
+# Require specific permission (any auth source)
+@app.delete("/users/{user_id}")
+async def delete_user(
+    user_id: str,
+    context: AuthContext = Depends(deps.requires("user:delete"))
+):
+    """Requires user:delete permission from any auth source"""
+    await auth.user_service.delete_user(user_id)
+    return {"message": "User deleted"}
+
+# Require multiple permissions
+@app.post("/admin/reset-database")
+async def reset_database(
+    context: AuthContext = Depends(deps.requires("admin:reset", "admin:confirm"))
+):
+    """Requires BOTH admin:reset AND admin:confirm permissions"""
+    await database.reset()
+    return {"message": "Database reset"}
+
+# Require ANY of multiple permissions
+@app.get("/reports/{report_id}")
+async def get_report(
+    report_id: str,
+    context: AuthContext = Depends(deps.requires_any("report:view", "report:export"))
+):
+    """Requires report:view OR report:export permission"""
+    return await report_service.get(report_id)
+```
+
+### Example 5: API Key + User JWT Combined
+
+```python
+@app.post("/api/user-actions")
+async def user_action(
+    action: str,
+    context: AuthContext = Depends(deps.get_context)
+):
+    """
+    Can be called by:
+    1. User with JWT token (personal action)
+    2. Service with API key on behalf of user (automated action)
+    """
+
+    if context.source == AuthSource.USER:
+        # Direct user action
+        user_id = context.identity  # User email
+        print(f"User {user_id} performed action: {action}")
+
+    elif context.source == AuthSource.API_KEY:
+        # Service action on behalf of user
+        # Service must pass user ID in request body
+        user_id = request.body.get("user_id")
+        print(f"Service performed action {action} for user {user_id}")
+
+        # Verify API key has permission to act on behalf of users
+        if not context.has_permission("user:impersonate"):
+            raise HTTPException(403, "API key cannot act on behalf of users")
+
+    else:
+        raise HTTPException(401, "Authentication required")
+
+    # Perform action
+    await perform_action(user_id, action)
+    return {"message": "Action completed"}
+```
+
+### Example 6: Rate Limiting Per Auth Source
+
+```python
+from outlabs_auth.dependencies import MultiSourceDeps
+from slowapi import Limiter
+
+limiter = Limiter(key_func=lambda: "global")
+deps = MultiSourceDeps(auth=auth)
+
+@app.get("/api/data")
+async def get_data(context: AuthContext = Depends(deps.get_context)):
+    """Different rate limits per auth source"""
+
+    # Get rate limit from context metadata
+    rate_limit = context.rate_limit_remaining
+
+    if context.source == AuthSource.API_KEY:
+        # API key has its own rate limit (configured in key)
+        if rate_limit is not None and rate_limit <= 0:
+            raise HTTPException(429, f"API key rate limit exceeded")
+
+    elif context.source == AuthSource.USER:
+        # User JWT - apply per-user rate limit
+        # Rate limit is enforced by slowapi middleware
+        pass
+
+    elif context.source == AuthSource.ANONYMOUS:
+        # Anonymous - strict rate limit
+        # Enforced by IP address
+        pass
+
+    return {"data": "..."}
+```
+
+### Example 7: Service-to-Service Communication
+
+```python
+# Service A (caller)
+import requests
+
+SERVICE_API_KEY = "sk_prod_ServiceA..."
+
+response = requests.post(
+    "https://service-b.example.com/api/process",
+    headers={"X-API-Key": SERVICE_API_KEY},
+    json={"data": "..."}
+)
+
+# Service B (receiver)
+@app.post("/api/process")
+async def process_data(
+    data: dict,
+    context: AuthContext = Depends(deps.get_context)
+):
+    """Internal service endpoint"""
+
+    # Verify caller is a trusted service
+    if context.source != AuthSource.API_KEY:
+        raise HTTPException(401, "API key required for service access")
+
+    # Verify specific service permissions
+    if not context.has_permission("service:process"):
+        raise HTTPException(403, "API key lacks service:process permission")
+
+    # Process data
+    result = await process(data)
+    return {"result": result}
+```
+
+### Example 8: AuthContext in Business Logic
+
+```python
+from outlabs_auth.models import AuthContext
+
+async def approve_invoice(invoice_id: str, context: AuthContext):
+    """Business logic that works with any auth source"""
+
+    # Get invoice
+    invoice = await invoice_service.get(invoice_id)
+
+    # Check approval permission
+    if not context.has_permission("invoice:approve"):
+        raise PermissionError("Cannot approve invoice")
+
+    # Additional ABAC checks (if enabled)
+    if invoice.amount > 50000 and not context.has_permission("invoice:approve_high_value"):
+        raise PermissionError("Invoice amount exceeds approval limit")
+
+    # Audit log - record who approved
+    await audit_log.record(
+        action="invoice_approved",
+        invoice_id=invoice_id,
+        auth_source=context.source.value,
+        identity=context.identity,
+        metadata=context.metadata
+    )
+
+    # Approve invoice
+    await invoice_service.approve(invoice_id, context.identity)
+    return invoice
+
+# Use from route
+@app.post("/invoices/{invoice_id}/approve")
+async def approve_invoice_endpoint(
+    invoice_id: str,
+    context: AuthContext = Depends(deps.get_context)
+):
+    invoice = await approve_invoice(invoice_id, context)
+    return invoice
+```
+
+---
+
 ## FastAPI Integration Patterns
 
 ### Pattern 1: Global Auth Instance
@@ -1023,5 +1636,5 @@ result = await auth.permission_service.check_permission(
 
 ---
 
-**Last Updated**: 2025-01-14
+**Last Updated**: 2025-01-14 (Added API key authentication and multi-source authentication examples)
 **Next Review**: After Phase 1 implementation

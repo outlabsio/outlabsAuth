@@ -1,6 +1,6 @@
 # OutlabsAuth Library - Technical Architecture
 
-**Version**: 1.2
+**Version**: 1.3
 **Date**: 2025-01-14
 **Status**: Design Phase
 
@@ -13,10 +13,11 @@
 3. [Preset Architecture](#preset-architecture)
 4. [Data Models](#data-models)
 5. [Service Layer](#service-layer)
-6. [Authentication Extensions (v1.1-v1.4, Optional)](#authentication-extensions-v11-v14-optional)
-7. [Dependency Injection](#dependency-injection)
-8. [Configuration System](#configuration-system)
-9. [Testing Strategy](#testing-strategy)
+6. [Authentication System (API Keys & Multi-Source Auth)](#authentication-system-api-keys--multi-source-auth)
+7. [Authentication Extensions (v1.1-v1.4, Optional)](#authentication-extensions-v11-v14-optional)
+8. [Dependency Injection](#dependency-injection)
+9. [Configuration System](#configuration-system)
+10. [Testing Strategy](#testing-strategy)
 
 ---
 
@@ -614,6 +615,713 @@ class EntityService:
     ) -> List[EntityModel]:
         """Get all descendants of entity"""
         pass
+```
+
+---
+
+## Authentication System (API Keys & Multi-Source Auth)
+
+**Status**: Core v1.0 Feature
+**Timeline**: Phase 2 (SimpleRBAC - Week 2)
+**Compatibility**: Both SimpleRBAC and EnterpriseRBAC
+
+### Overview
+
+The authentication system provides multi-source authentication supporting users (JWT), API keys (service-to-service), service accounts (internal), superusers (admin overrides), and anonymous access. All authentication sources are unified through a consistent `AuthContext` abstraction.
+
+**Auth Sources** (priority order):
+1. **Superuser** - Admin override tokens
+2. **Service accounts** - Internal service authentication
+3. **API keys** - External integrations and webhooks
+4. **Users** - JWT-based user authentication
+5. **Anonymous** - Optional public access
+
+### AuthContext Model
+
+Universal authentication context that works across all auth sources:
+
+```python
+# outlabs_auth/auth_context.py
+from enum import Enum
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel
+
+class AuthSource(str, Enum):
+    """Where the authentication came from"""
+    USER = "user"
+    API_KEY = "api_key"
+    SERVICE = "service"
+    SUPERUSER = "superuser"
+    IMPERSONATION = "impersonation"
+    ANONYMOUS = "anonymous"
+
+class AuthContext(BaseModel):
+    """Universal authentication context for all auth sources"""
+
+    # Core identity
+    source: AuthSource
+    identity: str  # user_id, api_key_id, service_name, etc.
+
+    # Permissions & access
+    permissions: List[str] = []
+    roles: List[str] = []
+    groups: List[str] = []
+    entities: Dict[str, List[str]] = {}
+
+    # Special flags
+    is_superuser: bool = False
+    is_service_account: bool = False
+    is_impersonating: bool = False
+
+    # Metadata
+    metadata: Dict[str, Any] = {}
+
+    # Rate limiting
+    rate_limit: Optional[int] = None
+    rate_limit_remaining: Optional[int] = None
+
+    # Helper methods
+    def has_permission(self, permission: str) -> bool:
+        if self.is_superuser:
+            return True
+        return permission in self.permissions
+
+    def has_all_permissions(self, *permissions: str) -> bool:
+        if self.is_superuser:
+            return True
+        return all(p in self.permissions for p in permissions)
+```
+
+### API Key Models
+
+```python
+# outlabs_auth/models/api_key.py
+from enum import Enum
+from typing import List, Optional
+from datetime import datetime
+
+class APIKeyScope(str, Enum):
+    READ = "read"
+    WRITE = "write"
+    DELETE = "delete"
+    ADMIN = "admin"
+
+class APIKeyModel(BaseDocument):
+    """API keys for service-to-service authentication"""
+
+    # Identification
+    name: str
+    description: Optional[str] = None
+    key_hash: str  # argon2id hash (NOT SHA256)
+    key_prefix: str  # First 8 chars (sk_prod_)
+
+    # Access control
+    permissions: List[str] = []
+    scopes: List[APIKeyScope] = []
+    is_superuser: bool = False
+
+    # Restrictions
+    allowed_ips: List[str] = []  # Empty = all IPs
+    allowed_origins: List[str] = []
+    allowed_endpoints: List[str] = []
+
+    # Rate limiting
+    rate_limit_per_minute: Optional[int] = 60
+    rate_limit_per_hour: Optional[int] = 1000
+
+    # Metadata
+    service_name: Optional[str] = None
+    environment: str = "production"  # production, staging, development
+    created_by: str  # User ID who created it
+
+    # Lifecycle
+    last_used_at: Optional[datetime] = None
+    last_used_ip: Optional[str] = None
+    expires_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = None
+    revoked_by: Optional[str] = None
+    revoked_reason: Optional[str] = None
+
+    # Status
+    is_active: bool = True
+
+    # Stats
+    usage_count: int = 0
+    error_count: int = 0
+```
+
+### API Key Service
+
+```python
+# outlabs_auth/services/api_key_service.py
+from passlib.hash import argon2
+import secrets
+
+class APIKeyService:
+    """Manage API key lifecycle"""
+
+    KEY_PREFIX_MAP = {
+        "production": "sk_prod",
+        "staging": "sk_stag",
+        "development": "sk_dev",
+        "test": "sk_test"
+    }
+
+    @staticmethod
+    def generate_key(environment: str = "production") -> str:
+        """Generate new API key with 8-char prefix + 32 bytes random"""
+        prefix = APIKeyService.KEY_PREFIX_MAP.get(environment, "sk_prod")
+        random_part = secrets.token_urlsafe(32)
+        return f"{prefix}_{random_part}"
+
+    @staticmethod
+    def hash_key(key: str) -> str:
+        """
+        Hash key using argon2id (NOT SHA256).
+
+        Security: argon2id with recommended parameters:
+        - time_cost=2
+        - memory_cost=102400 (100 MB)
+        - parallelism=8
+        """
+        return argon2.using(
+            time_cost=2,
+            memory_cost=102400,
+            parallelism=8
+        ).hash(key)
+
+    async def create_api_key(
+        self,
+        name: str,
+        created_by: str,
+        permissions: List[str] = None,
+        **kwargs
+    ) -> Tuple[str, APIKeyModel]:
+        """
+        Create new API key.
+
+        Returns: (raw_key, key_model)
+
+        ⚠️  The raw key is ONLY returned once - it cannot be recovered!
+        """
+        raw_key = self.generate_key(kwargs.get("environment", "production"))
+
+        api_key = APIKeyModel(
+            name=name,
+            key_hash=self.hash_key(raw_key),
+            key_prefix=raw_key[:8],
+            permissions=permissions or [],
+            created_by=created_by,
+            **kwargs
+        )
+
+        await api_key.save()
+
+        # Audit log
+        await self.audit_service.log(
+            action="api_key.created",
+            actor=created_by,
+            target=str(api_key.id),
+            metadata={"name": name}
+        )
+
+        return raw_key, api_key
+
+    async def validate(
+        self,
+        key: str,
+        required_permissions: List[str] = None
+    ) -> Optional[APIKeyModel]:
+        """Validate API key and check permissions"""
+        if not key or len(key) < 8:
+            return None
+
+        prefix = key[:8]
+        api_key = await APIKeyModel.find_one(
+            APIKeyModel.key_prefix == prefix,
+            APIKeyModel.is_active == True
+        )
+
+        if not api_key:
+            return None
+
+        # Verify hash (constant-time comparison via argon2)
+        if not argon2.verify(key, api_key.key_hash):
+            api_key.error_count += 1
+            await api_key.save()
+
+            # Auto-revoke after 10 failures
+            if api_key.error_count >= 10:
+                await self.revoke(
+                    str(api_key.id),
+                    "system",
+                    "Too many failed validation attempts"
+                )
+            return None
+
+        # Check expiration
+        if api_key.expires_at and api_key.expires_at < datetime.utcnow():
+            return None
+
+        # Check permissions
+        if required_permissions and not api_key.is_superuser:
+            missing = set(required_permissions) - set(api_key.permissions)
+            if missing:
+                return None
+
+        # Update usage stats
+        api_key.last_used_at = datetime.utcnow()
+        api_key.usage_count += 1
+        await api_key.save()
+
+        return api_key
+
+    async def rotate(
+        self,
+        old_key_id: str,
+        rotated_by: str
+    ) -> Tuple[str, APIKeyModel]:
+        """Rotate API key (revoke old, create new with same permissions)"""
+        old_key = await APIKeyModel.get(old_key_id)
+        if not old_key:
+            raise ValueError("API key not found")
+
+        # Create new with same permissions
+        new_raw_key, new_key = await self.create_api_key(
+            name=f"{old_key.name} (rotated)",
+            created_by=rotated_by,
+            permissions=old_key.permissions,
+            service_name=old_key.service_name,
+            environment=old_key.environment,
+            allowed_ips=old_key.allowed_ips
+        )
+
+        # Revoke old
+        await self.revoke(old_key_id, rotated_by, "Key rotation")
+
+        return new_raw_key, new_key
+
+    async def revoke(
+        self,
+        key_id: str,
+        revoked_by: str,
+        reason: str = "Manual revocation"
+    ) -> bool:
+        """Revoke API key"""
+        api_key = await APIKeyModel.get(key_id)
+        if not api_key:
+            return False
+
+        api_key.is_active = False
+        api_key.revoked_at = datetime.utcnow()
+        api_key.revoked_by = revoked_by
+        api_key.revoked_reason = reason
+        await api_key.save()
+
+        await self.audit_service.log(
+            action="api_key.revoked",
+            actor=revoked_by,
+            target=key_id,
+            metadata={"reason": reason}
+        )
+
+        return True
+```
+
+### Service Account Model & Service
+
+```python
+# outlabs_auth/models/service_account.py
+class ServiceAccountModel(BaseDocument):
+    """Internal service account for microservices"""
+
+    name: str  # "email_service", "notification_service", etc.
+    description: Optional[str] = None
+    token_hash: str  # argon2id hash
+
+    permissions: List[str] = []
+    is_active: bool = True
+
+    created_at: datetime
+    last_used_at: Optional[datetime] = None
+
+# outlabs_auth/services/service_account_service.py
+class ServiceAccountService:
+    """Manage service accounts for internal services"""
+
+    async def create(
+        self,
+        name: str,
+        permissions: List[str]
+    ) -> Tuple[str, ServiceAccountModel]:
+        """Create service account and return token"""
+        token = secrets.token_urlsafe(32)
+
+        service = ServiceAccountModel(
+            name=name,
+            token_hash=argon2.hash(token),
+            permissions=permissions,
+            created_at=datetime.utcnow()
+        )
+
+        await service.save()
+        return token, service
+
+    async def validate_token(self, token: str) -> Optional[ServiceAccountModel]:
+        """Validate service account token"""
+        # Similar validation logic as API keys
+        pass
+```
+
+### Multi-Source Authentication
+
+```python
+# outlabs_auth/services/multi_source_auth.py
+class MultiSourceAuthService:
+    """Resolve authentication from multiple sources"""
+
+    def __init__(self, auth: OutlabsAuth):
+        self.auth = auth
+
+    async def get_context(
+        self,
+        request: Request,
+        authorization: Optional[str] = Header(None),
+        x_api_key: Optional[str] = Header(None),
+        x_service_token: Optional[str] = Header(None),
+        x_superuser_token: Optional[str] = Header(None),
+        api_key: Optional[str] = Query(None),
+    ) -> AuthContext:
+        """
+        Extract auth context from any source.
+
+        Priority: Superuser > Service > API Key > User > Anonymous
+        """
+
+        # 1. Superuser token (admin override)
+        if x_superuser_token:
+            if await self._validate_superuser_token(x_superuser_token):
+                return AuthContext(
+                    source=AuthSource.SUPERUSER,
+                    identity="superuser",
+                    is_superuser=True,
+                    metadata={"ip": request.client.host}
+                )
+
+        # 2. Service account (internal services)
+        if x_service_token:
+            service = await self.auth.service_account_service.validate_token(
+                x_service_token
+            )
+            if service:
+                return AuthContext(
+                    source=AuthSource.SERVICE,
+                    identity=service.name,
+                    permissions=service.permissions,
+                    is_service_account=True,
+                    metadata={"service": service.name}
+                )
+
+        # 3. API key (external integrations)
+        api_key_value = x_api_key or api_key
+        if api_key_value:
+            key = await self.auth.api_key_service.validate(api_key_value)
+            if key:
+                # Check IP restrictions
+                if key.allowed_ips and request.client.host not in key.allowed_ips:
+                    raise HTTPException(403, "IP not allowed for this API key")
+
+                return AuthContext(
+                    source=AuthSource.API_KEY,
+                    identity=str(key.id),
+                    permissions=key.permissions,
+                    rate_limit=key.rate_limit_per_minute,
+                    metadata={
+                        "key_name": key.name,
+                        "service": key.service_name
+                    }
+                )
+
+        # 4. User JWT token
+        if authorization and authorization.startswith("Bearer "):
+            token = authorization.replace("Bearer ", "")
+            try:
+                user = await self.auth.get_current_user(token)
+                perms = await self.auth.permission_service.get_user_permissions(
+                    user.id
+                )
+
+                return AuthContext(
+                    source=AuthSource.USER,
+                    identity=str(user.id),
+                    permissions=perms,
+                    is_superuser=user.is_superuser,
+                    metadata={"user": user}
+                )
+            except:
+                pass
+
+        # 5. Anonymous
+        return AuthContext(
+            source=AuthSource.ANONYMOUS,
+            identity="anonymous"
+        )
+```
+
+### Dependency Patterns
+
+See [DEPENDENCY_PATTERNS.md](DEPENDENCY_PATTERNS.md) for comprehensive dependency injection patterns.
+
+```python
+# outlabs_auth/dependencies/simple.py
+class SimpleDeps:
+    """Simple authentication dependencies"""
+
+    def __init__(self, auth: OutlabsAuth):
+        self.auth = auth
+
+    def authenticated(self):
+        """Require any authentication"""
+        async def get_user(authorization: Optional[str] = Header(None)):
+            if not authorization:
+                raise HTTPException(401, "Not authenticated")
+            token = authorization.replace("Bearer ", "")
+            return await self.auth.get_current_user(token)
+        return Depends(get_user)
+
+    def requires(self, *permissions: str):
+        """Require all listed permissions"""
+        async def check(user = Depends(self.authenticated())):
+            for perm in permissions:
+                if not await self.auth.permission_service.check_permission(
+                    user.id, perm
+                ):
+                    raise HTTPException(403, f"Missing permission: {perm}")
+            return user
+        return Depends(check)
+
+    @property
+    def user(self):
+        """Shortcut for authenticated user"""
+        return self.authenticated()
+
+    @property
+    def admin(self):
+        """Shortcut for admin role"""
+        return self.role("admin", "superuser")
+
+# outlabs_auth/dependencies/multi_source.py
+class MultiSourceDeps:
+    """Handle authentication from all sources"""
+
+    def __init__(self, auth: OutlabsAuth):
+        self.auth = auth
+        self.multi_source = MultiSourceAuthService(auth)
+
+    async def get_context(self, request: Request, ...) -> AuthContext:
+        """Extract AuthContext from any source"""
+        return await self.multi_source.get_context(request, ...)
+
+    def permission(self, *perms: str):
+        """Require permissions (works with all auth sources)"""
+        async def check(ctx: AuthContext = Depends(self.get_context)):
+            if ctx.source == AuthSource.ANONYMOUS:
+                raise HTTPException(401, "Authentication required")
+            if not ctx.has_all_permissions(*perms):
+                raise HTTPException(403, f"Missing permissions: {perms}")
+            return ctx
+        return Depends(check)
+
+    def source(self, *allowed_sources: AuthSource):
+        """Restrict to specific auth sources"""
+        async def check(ctx: AuthContext = Depends(self.get_context)):
+            if ctx.source not in allowed_sources:
+                raise HTTPException(
+                    403,
+                    f"Auth source {ctx.source} not allowed"
+                )
+            return ctx
+        return Depends(check)
+```
+
+### Rate Limiting
+
+```python
+# outlabs_auth/services/rate_limiter.py
+class RateLimiter:
+    """In-memory rate limiter with optional Redis backend"""
+
+    def __init__(self, redis: Optional[Redis] = None):
+        self.redis = redis
+        self.memory_store: Dict[str, List[datetime]] = {}
+
+    async def check_rate_limit(
+        self,
+        key: str,
+        limit: int,
+        window: int = 60
+    ) -> Tuple[bool, int]:
+        """
+        Check rate limit.
+        Returns (allowed, remaining)
+        """
+        if self.redis:
+            # Use Redis for distributed rate limiting
+            current = await self.redis.incr(key)
+            if current == 1:
+                await self.redis.expire(key, window)
+            allowed = current <= limit
+            remaining = max(0, limit - current)
+        else:
+            # Fallback to in-memory
+            now = datetime.utcnow()
+            window_start = now - timedelta(seconds=window)
+
+            # Clean old entries
+            if key in self.memory_store:
+                self.memory_store[key] = [
+                    ts for ts in self.memory_store[key]
+                    if ts > window_start
+                ]
+            else:
+                self.memory_store[key] = []
+
+            current_count = len(self.memory_store[key])
+            allowed = current_count < limit
+
+            if allowed:
+                self.memory_store[key].append(now)
+
+            remaining = limit - current_count - (1 if allowed else 0)
+
+        return allowed, remaining
+
+class RateLimitDeps:
+    """Rate limiting based on auth source"""
+
+    def __init__(self, auth: OutlabsAuth, redis: Optional[Redis] = None):
+        self.auth = auth
+        self.limiter = RateLimiter(redis)
+
+    def rate_limit(self, default_limit: int = 60, window: int = 60):
+        """Apply rate limits based on auth source"""
+        async def check(ctx: AuthContext = Depends(multi.get_context)):
+            # Different limits by source
+            limits = {
+                AuthSource.ANONYMOUS: 10,
+                AuthSource.USER: default_limit,
+                AuthSource.API_KEY: ctx.rate_limit or default_limit,
+                AuthSource.SERVICE: 1000,
+                AuthSource.SUPERUSER: float('inf')
+            }
+
+            limit = limits.get(ctx.source, default_limit)
+
+            if limit != float('inf'):
+                key = f"rate_limit:{ctx.source}:{ctx.identity}"
+                allowed, remaining = await self.limiter.check_rate_limit(
+                    key, limit, window
+                )
+
+                if not allowed:
+                    raise HTTPException(429, "Rate limit exceeded")
+
+                ctx.rate_limit_remaining = remaining
+
+            return ctx
+        return Depends(check)
+```
+
+### Usage Examples
+
+```python
+from outlabs_auth import SimpleRBAC
+from outlabs_auth.dependencies import SimpleDeps, MultiSourceDeps, RateLimitDeps
+
+app = FastAPI()
+auth = SimpleRBAC(database=db)
+
+# Simple usage - users only
+require = SimpleDeps(auth)
+
+@app.delete("/users/{id}")
+async def delete_user(id: str, user = require.requires("user:delete")):
+    return await service.delete(id)
+
+# Multi-source - users, API keys, services
+multi = MultiSourceDeps(auth)
+
+@app.get("/api/data")
+async def get_data(ctx: AuthContext = multi.permission("data:read")):
+    if ctx.source == AuthSource.API_KEY:
+        await log_api_usage(ctx)
+    return data
+
+# Rate limiting
+rate_limit = RateLimitDeps(auth, redis=redis_client)
+
+@app.post("/expensive")
+async def expensive_op(ctx: AuthContext = rate_limit.rate_limit(10, 60)):
+    return {"remaining": ctx.rate_limit_remaining}
+
+# Create API key
+raw_key, key = await auth.api_key_service.create_api_key(
+    name="production_api",
+    created_by=user_id,
+    permissions=["api:read", "api:write"],
+    environment="production",
+    rate_limit_per_minute=100
+)
+
+# Use API key (external service)
+headers = {"X-API-Key": raw_key}
+response = requests.get("/api/data", headers=headers)
+```
+
+### Security Best Practices
+
+See [SECURITY.md](SECURITY.md) for comprehensive security guidelines.
+
+**Key Security Requirements**:
+1. **argon2id hashing** (NOT SHA256) for all keys
+2. **Never log raw keys** - only prefixes
+3. **Automatic rotation** every 90 days
+4. **IP whitelisting** strictly enforced
+5. **Auto-revoke** after 10 failed attempts
+6. **Rate limiting** per key and per source
+7. **Audit logging** for all key operations
+
+**API Key Security Checklist**:
+- [ ] Keys use argon2id hashing
+- [ ] Raw keys never logged or stored
+- [ ] 90-day rotation policy configured
+- [ ] IP whitelisting enabled for production
+- [ ] Rate limiting configured per key
+- [ ] Audit logging captures all operations
+- [ ] Auto-revocation on failures enabled
+- [ ] Keys scoped to minimum permissions
+
+### Package Structure Updates
+
+```python
+outlabs_auth/
+├── models/
+│   ├── api_key.py              # NEW: APIKeyModel
+│   ├── service_account.py      # NEW: ServiceAccountModel
+│   └── auth_context.py         # NEW: AuthContext, AuthSource
+├── services/
+│   ├── api_key_service.py      # NEW: API key lifecycle
+│   ├── service_account_service.py  # NEW: Service accounts
+│   ├── multi_source_auth.py    # NEW: Multi-source resolution
+│   └── rate_limiter.py         # NEW: Rate limiting
+├── dependencies/
+│   ├── simple.py               # NEW: SimpleDeps
+│   ├── multi_source.py         # NEW: MultiSourceDeps
+│   ├── groups.py               # NEW: GroupDeps (Enterprise)
+│   ├── entities.py             # NEW: EntityDeps (Enterprise)
+│   └── rate_limit.py           # NEW: RateLimitDeps
+└── routes/
+    └── api_keys.py             # NEW: API key management
 ```
 
 ---
@@ -1487,5 +2195,5 @@ role_permissions:{role_id}              # TTL: 15 minutes
 
 ---
 
-**Last Updated**: 2025-01-14 (Added authentication extensions architecture)
+**Last Updated**: 2025-01-14 (Added authentication system: API keys, multi-source auth, dependency patterns)
 **Next Review**: After Phase 1 prototype

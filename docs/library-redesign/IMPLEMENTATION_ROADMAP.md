@@ -1,6 +1,6 @@
 # OutlabsAuth Library - Implementation Roadmap
 
-**Version**: 1.2
+**Version**: 1.3
 **Date**: 2025-01-14
 **Total Duration**: 15-16 weeks (6-7 weeks core + 9 weeks extensions)
 **Status**: Planning Phase
@@ -133,13 +133,50 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
 
 **Deliverable**: Complete user management features
 
-#### Day 3-4: Testing
+#### Day 2-3: API Key System (Core v1.0 Feature)
+- [ ] Create `APIKeyModel`:
+  - key_hash (argon2id hashed, NOT SHA256)
+  - key_prefix (first 8 chars: sk_prod_, sk_stag_, sk_dev_, sk_test_)
+  - permissions (list of allowed permissions)
+  - allowed_ips (IP whitelist)
+  - rate_limit_per_minute (default 60)
+  - environment (production, staging, development, test)
+  - expires_at, is_active, usage_count, error_count
+- [ ] Create `APIKeyService`:
+  - Generate API keys (8-char prefix + 32 bytes random)
+  - Hash keys with argon2id (time_cost=2, memory_cost=102400, parallelism=8)
+  - Validate API keys
+  - Key rotation (create new, revoke old)
+  - Auto-revoke after 10 failed attempts
+  - Track usage and error counts
+- [ ] Create `MultiSourceAuthService`:
+  - AuthContext abstraction (universal auth for all sources)
+  - Priority chain: Superuser > Service > API Key > User > Anonymous
+  - Extract auth from headers: X-Superuser-Token, X-Service-Token, X-API-Key, Authorization
+- [ ] Create FastAPI dependencies (SimpleDeps):
+  - `authenticated()` - Any auth source
+  - `requires(*permissions)` - Permission checking
+  - `api_key_only()` - API key authentication only
+- [ ] In-memory rate limiting (no Redis requirement for SimpleRBAC)
+- [ ] API key CRUD endpoints (/v1/api-keys)
+
+**Deliverable**: API key system functional with SimpleRBAC
+
+#### Day 4-5: Testing
 - [ ] Unit tests for all services (>90% coverage)
 - [ ] Integration tests for SimpleRBAC flows
+- [ ] API key system tests:
+  - Key generation and validation
+  - argon2id hashing verification
+  - API key authentication flow
+  - Multi-source authentication priority chain
+  - Rate limiting tests
+  - IP whitelist enforcement
+  - Auto-revocation after failures
 - [ ] Test fixtures and utilities
 - [ ] CI/CD setup (GitHub Actions)
 
-**Deliverable**: Comprehensive test suite
+**Deliverable**: Comprehensive test suite including API keys
 
 #### Day 5-6: Example Application
 - [ ] Create `examples/simple_app/`
@@ -149,9 +186,12 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
   - Protected routes
   - Role management
   - Permission checks
+  - API key creation and management
+  - Service-to-service authentication demo
+  - Multi-source auth examples (user JWT + API key)
 - [ ] README with setup instructions
 
-**Deliverable**: Working example app
+**Deliverable**: Working example app with API keys
 
 #### Day 7: Documentation
 - [ ] API reference for SimpleRBAC
@@ -163,9 +203,11 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
 
 ### Success Criteria
 - [ ] SimpleRBAC passes all tests
-- [ ] Example app runs and demonstrates features
+- [ ] API key system functional and tested
+- [ ] Multi-source authentication working (JWT + API keys)
+- [ ] Example app runs and demonstrates features (including API keys)
 - [ ] Documentation clear and complete
-- [ ] Can be used in production for simple RBAC needs
+- [ ] Can be used in production for simple RBAC needs and service-to-service auth
 
 ### Blockers & Risks
 - **Risk**: Test coverage is time-consuming
@@ -215,7 +257,7 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
 
 **Deliverable**: Entity management working
 
-#### Day 5-7: Tree Permissions
+#### Day 5-6: Tree Permissions
 - [ ] Enhance `PermissionService` for hierarchy:
   - Check permission in entity context
   - Check tree permissions (checks parent entities)
@@ -228,12 +270,32 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
 
 **Deliverable**: Tree permissions working
 
+#### Day 7: Entity-Scoped API Keys
+- [ ] Extend `APIKeyModel`:
+  - Add optional `entity_id` field (scope API key to specific entity)
+  - Add `inherit_from_tree` flag (use tree permissions)
+- [ ] Update `APIKeyService`:
+  - Validate API key has permission in entity context
+  - Support tree permissions for API keys (key in parent entity can access descendants)
+- [ ] Update `MultiSourceAuthService`:
+  - Include entity context in AuthContext when using API keys
+  - Support entity-scoped permission checking for API keys
+- [ ] Create FastAPI dependencies (EntityDeps):
+  - `entity_context(entity_id)` - Set entity context
+  - `requires_in_entity(*permissions)` - Check permission in entity
+  - `api_key_in_entity()` - API key with entity scope
+
+**Deliverable**: Entity-scoped API keys working with tree permissions
+
 ### Success Criteria
 - [ ] Can create entity hierarchies
 - [ ] Can assign users to entities with roles
 - [ ] Tree permissions work correctly (user with entity:update_tree in parent can update children)
+- [ ] Entity-scoped API keys functional
+- [ ] API keys can use tree permissions to access descendant entities
 - [ ] Unit tests for entity operations (>85% coverage)
 - [ ] Integration tests for tree permissions
+- [ ] Integration tests for entity-scoped API keys
 
 ### Blockers & Risks
 - **Risk**: Tree permission logic complex
@@ -414,6 +476,13 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
   - User management commands
   - Role management commands
   - Entity management commands (EnterpriseRBAC)
+  - **API key management commands**:
+    - `outlabs-auth keys create` - Create new API key
+    - `outlabs-auth keys list` - List all API keys
+    - `outlabs-auth keys rotate` - Rotate API key (create new, revoke old)
+    - `outlabs-auth keys revoke` - Revoke API key
+    - `outlabs-auth keys info` - Show API key details
+    - `outlabs-auth keys test` - Test API key authentication
   - Database initialization
   - Permission listing/debugging
   - Health check command
@@ -422,13 +491,15 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
   - Redis connectivity (if enabled)
   - Permission service health
   - Entity service health (EnterpriseRBAC)
+  - **API key service health** (key validation, rate limiting)
 - [ ] Create "explain permission" debugger:
   - Shows why user has/doesn't have permission
   - Traces permission resolution path
   - Shows all applicable roles and memberships
   - Tree permission visualization
+  - **Multi-source auth debugging** (show which auth source was used)
 
-**Deliverable**: CLI tools and health checks
+**Deliverable**: CLI tools and health checks including API key management
 
 #### Week 6, Day 3-5: Comprehensive Documentation Guides
 - [ ] Create `SECURITY.md`:
@@ -516,16 +587,16 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
 **Deliverable**: Production-ready library v1.0.0-rc1
 
 ### Success Criteria
-- [ ] CLI tools working and documented
-- [ ] Health check system operational
-- [ ] Permission explainer debugger functional
+- [ ] CLI tools working and documented (including API key management)
+- [ ] Health check system operational (including API key service)
+- [ ] Permission explainer debugger functional (including multi-source auth debugging)
 - [ ] SECURITY.md, TESTING_GUIDE.md, DEPLOYMENT_GUIDE.md, ERROR_HANDLING.md complete
 - [ ] Documentation is clear and comprehensive
 - [ ] Package can be installed and used
 - [ ] All examples work (simple_app, enterprise_app, migration_example)
 - [ ] Test coverage >90%
 - [ ] Performance benchmarks meet targets
-- [ ] Security audit passed
+- [ ] Security audit passed (including API key security)
 - [ ] Version 1.0.0 ready for release
 
 ### Blockers & Risks
@@ -1005,9 +1076,14 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
 - Assign role
 - Check permission
 - Access protected route
+- **Create API key**
+- **Authenticate with API key**
+- **Multi-source auth (JWT + API key)**
 
 **Deliverables**:
 - ✅ SimpleRBAC preset complete
+- ✅ **API key system functional**
+- ✅ **Multi-source authentication working**
 - ✅ Example app running
 - ✅ >90% test coverage
 - ✅ Basic documentation
@@ -1018,10 +1094,13 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
 - Assign user to entity with multiple roles
 - Show tree permission access
 - Demonstrate permission inheritance
+- **Create entity-scoped API key**
+- **API key with tree permissions**
 
 **Deliverables**:
 - ✅ Entity models and services
 - ✅ Tree permissions working
+- ✅ **Entity-scoped API keys functional**
 - ✅ Entity example scenarios
 - ✅ >85% test coverage for entity system
 
@@ -1055,14 +1134,15 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
 **Demo**: Complete package ready for use
 - Install from package
 - Use CLI tools
+- **Manage API keys via CLI** (`outlabs-auth keys create/list/rotate/revoke`)
 - Run health checks
 - Deploy example apps
 - Follow quick start guides
 
 **Deliverables**:
-- ✅ CLI tools functional
+- ✅ CLI tools functional (including **API key management**)
 - ✅ Health check system
-- ✅ Permission explainer debugger
+- ✅ Permission explainer debugger (including **multi-source auth debugging**)
 - ✅ SECURITY.md, TESTING_GUIDE.md, DEPLOYMENT_GUIDE.md, ERROR_HANDLING.md
 - ✅ All examples working
 - ✅ Version 1.0.0 released
@@ -1220,6 +1300,8 @@ Template:
 - [ ] Test coverage >90% overall
 - [ ] All presets have example apps
 - [ ] Performance: Permission checks <10ms (cached), <50ms (uncached)
+- [ ] **API key validation <5ms (argon2id hashing may vary)**
+- [ ] **Rate limiting: <1ms per check (in-memory), <3ms (Redis)**
 - [ ] No critical bugs in issue tracker
 
 ### Adoption Metrics
@@ -1303,11 +1385,12 @@ Track changes to the roadmap:
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2025-01-14 | **Added API key system to core v1.0** | Integrated API key authentication, multi-source auth, and dependency patterns into Phases 2, 3, and 6; API keys now core feature for service-to-service authentication |
 | 2025-01-14 | Added authentication extensions (Phases 7-10) | Integrated OAuth, passwordless auth, notifications, and advanced features into main roadmap; total timeline now 15-16 weeks (6-7 weeks core + 9 weeks extensions) |
 | 2025-01-14 | Revised to two-preset architecture | Consolidated HierarchicalRBAC and FullFeatured into EnterpriseRBAC with feature flags; added CLI tools, health checks, and comprehensive production guides |
 | 2025-01-14 | Initial roadmap created | Project kickoff |
 
 ---
 
-**Last Updated**: 2025-01-14 (Added authentication extensions: 10 phases, 15-16 weeks total)
+**Last Updated**: 2025-01-14 (Added API key system: service authentication, multi-source auth, entity-scoped keys, CLI tools)
 **Next Review**: End of Week 2 (after Milestone 1)

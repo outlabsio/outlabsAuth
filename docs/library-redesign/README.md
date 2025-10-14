@@ -1,6 +1,6 @@
 # Library Redesign Documentation
 
-**Version**: 1.2 (Two Presets + Authentication Extensions)
+**Version**: 1.3 (Two Presets + API Key Authentication + Authentication Extensions)
 **Date**: 2025-01-14
 
 This directory contains all planning and design documentation for converting OutlabsAuth from a centralized API service to a FastAPI library.
@@ -43,14 +43,25 @@ This directory contains all planning and design documentation for converting Out
 5. **[COMPARISON_MATRIX.md](COMPARISON_MATRIX.md)** - Feature comparison
    - Binary decision tree (SimpleRBAC vs EnterpriseRBAC)
    - Feature comparison table with optional features
+   - API key authentication features
    - Use case examples
    - Performance benchmarks
    - Migration paths
 
-### Production Guides (NEW)
-6. **[SECURITY.md](SECURITY.md)** - Security hardening and best practices
+6. **[DEPENDENCY_PATTERNS.md](DEPENDENCY_PATTERNS.md)** - FastAPI dependency injection patterns (NEW)
+   - AuthContext: Universal authentication abstraction
+   - Multi-source authentication (JWT, API keys, service tokens, superuser)
+   - SimpleDeps, MultiSourceDeps, GroupDeps, EntityDeps patterns
+   - API Key Service architecture (argon2id hashing, rate limiting, IP whitelisting)
+   - Permission checking across all auth sources
+   - Complete FastAPI integration examples
+   - Service-to-service authentication patterns
+
+### Production Guides
+7. **[SECURITY.md](SECURITY.md)** - Security hardening and best practices
    - Threat model and attack vectors
    - JWT security and token management
+   - API key security (argon2id hashing, rotation, IP whitelisting)
    - Password security and policies
    - Network and database security
    - Secrets management
@@ -58,16 +69,17 @@ This directory contains all planning and design documentation for converting Out
    - Audit logging
    - Security checklist
 
-7. **[TESTING_GUIDE.md](TESTING_GUIDE.md)** - Testing utilities and patterns
+8. **[TESTING_GUIDE.md](TESTING_GUIDE.md)** - Testing utilities and patterns
    - Testing philosophy and structure
    - Built-in test utilities and fixtures
    - Unit and integration testing patterns
    - Permission and entity hierarchy testing
+   - API key and multi-source authentication testing
    - Mocking strategies
    - Performance testing
    - CI/CD integration
 
-8. **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** - Scaling and production deployment
+9. **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** - Scaling and production deployment
    - Docker and Kubernetes deployments
    - Scaling strategies (vertical, horizontal, auto-scaling)
    - Performance tuning
@@ -76,17 +88,17 @@ This directory contains all planning and design documentation for converting Out
    - Backup and recovery
    - Production checklist
 
-9. **[ERROR_HANDLING.md](ERROR_HANDLING.md)** - Exception hierarchy and patterns
-   - Complete exception hierarchy
-   - Error codes and standard formats
-   - Error handling patterns
-   - API error responses
-   - Logging and monitoring errors
-   - User-friendly error messages
-   - Debugging tools
+10. **[ERROR_HANDLING.md](ERROR_HANDLING.md)** - Exception hierarchy and patterns
+    - Complete exception hierarchy
+    - Error codes and standard formats
+    - Error handling patterns
+    - API error responses
+    - Logging and monitoring errors
+    - User-friendly error messages
+    - Debugging tools
 
 ### Migration & Decisions
-10. **[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)** - Reference for external users
+11. **[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)** - Reference for external users
     - **Note**: For external users migrating from centralized API
     - **Skip if starting fresh** - use API_DESIGN.md instead
     - Database migration scripts
@@ -94,14 +106,14 @@ This directory contains all planning and design documentation for converting Out
     - Testing strategy
     - Rollback plan
 
-11. **[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)** - Architectural decisions log
-    - 27 major decisions documented (DD-001 to DD-027)
+12. **[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)** - Architectural decisions log
+    - 31 major decisions documented (DD-001 to DD-031)
     - Rationale and trade-offs
     - Alternatives considered
-    - New decisions: Two-preset architecture, CLI tools, health checks, production guides, auth extensions
+    - New decisions: Two-preset architecture, CLI tools, health checks, production guides, auth extensions, API key system
 
 ### Authentication Extensions (Optional, Post-v1.0)
-12. **[AUTH_EXTENSIONS.md](AUTH_EXTENSIONS.md)** - Authentication extensions (v1.1-v1.4)
+13. **[AUTH_EXTENSIONS.md](AUTH_EXTENSIONS.md)** - Authentication extensions (v1.1-v1.4)
     - OAuth/social login (Google, Facebook, Apple, GitHub)
     - Passwordless authentication (magic links, OTP)
     - Pluggable notification system
@@ -171,17 +183,18 @@ auth = EnterpriseRBAC(
 
 ## 📊 Documentation Stats
 
-- **Total Lines**: ~15,000+ lines of comprehensive documentation
-- **Documents**: 12 comprehensive markdown files
-  - 5 core design documents
+- **Total Lines**: ~16,000+ lines of comprehensive documentation
+- **Documents**: 13 comprehensive markdown files
+  - 6 core design documents (including DEPENDENCY_PATTERNS.md)
   - 4 production guides
-  - 1 authentication extensions guide (NEW)
+  - 1 authentication extensions guide
   - 2 reference documents
 - **Timeline**: 15-16 weeks total (6-7 weeks core + 9 weeks optional extensions)
 - **Presets**: 2 (SimpleRBAC, EnterpriseRBAC) - extensions work with both
-- **Design Decisions**: 27 documented (DD-001 to DD-027)
+- **Design Decisions**: 31 documented (DD-001 to DD-031)
 - **Example Apps**: 3 planned (simple_app, enterprise_basic, enterprise_full)
 - **Auth Extensions**: 4 versions (v1.1 Notifications, v1.2 OAuth, v1.3 Passwordless, v1.4 Advanced)
+- **API Key System**: Core v1.0 feature with argon2id hashing, multi-source authentication
 
 ---
 
@@ -229,6 +242,22 @@ auth = EnterpriseRBAC(
 | 1.0 | 2025-01-14 | Initial comprehensive documentation (3 presets) |
 | 1.1 | 2025-01-14 | Revised to 2 presets + 4 production guides |
 | 1.2 | 2025-01-14 | Added authentication extensions (v1.1-v1.4) |
+| 1.3 | 2025-01-14 | Added API key system and multi-source authentication (core v1.0) |
+
+**Key Changes in v1.3**:
+- Added DEPENDENCY_PATTERNS.md (comprehensive FastAPI dependency injection guide)
+- Added API key authentication system as core v1.0 feature
+- Added multi-source authentication (JWT, API keys, service tokens, superuser)
+- Added AuthContext universal authentication abstraction
+- Added 4 new design decisions (DD-028 to DD-031) for API key system
+- Updated LIBRARY_ARCHITECTURE.md with Authentication System section
+- Updated IMPLEMENTATION_ROADMAP.md with API key integration (Phases 2, 3, 6)
+- Updated SECURITY.md with comprehensive API key security (argon2id hashing)
+- Updated TESTING_GUIDE.md with API key and multi-source authentication testing
+- Updated API_DESIGN.md with API key usage examples and patterns
+- Updated COMPARISON_MATRIX.md with API key feature comparison
+- Total documentation: ~16,000+ lines across 13 files
+- Design decisions: 31 (DD-001 to DD-031)
 
 **Key Changes in v1.2**:
 - Added AUTH_EXTENSIONS.md (comprehensive authentication extensions guide)
@@ -252,6 +281,7 @@ auth = EnterpriseRBAC(
 
 **Branch**: `library-redesign`
 **Status**: Planning Phase
-**Version**: 1.2 (Two-Preset Architecture + Authentication Extensions)
+**Version**: 1.3 (Two-Preset Architecture + API Key Authentication + Authentication Extensions)
 **Next Milestone**: Phase 1 - Core Foundation + SimpleRBAC (Week 1)
+**Core Features**: JWT auth, API keys (argon2id), multi-source auth, entity hierarchy, tree permissions
 **Optional Extensions**: v1.1 Notifications (Week 8) → v1.2 OAuth (Week 10) → v1.3 Passwordless (Week 13) → v1.4 Advanced (Week 15)

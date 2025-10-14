@@ -1,6 +1,6 @@
 # OutlabsAuth Security Guide
 
-**Version**: 1.0
+**Version**: 1.1
 **Date**: 2025-01-14
 **Audience**: Developers deploying OutlabsAuth to production
 **Status**: Production Reference
@@ -14,15 +14,16 @@
 3. [JWT Security](#jwt-security)
 4. [Password Security](#password-security)
 5. [Authentication Security](#authentication-security)
-6. [Authorization Security](#authorization-security)
-7. [Network Security](#network-security)
-8. [Database Security](#database-security)
-9. [Secrets Management](#secrets-management)
-10. [Rate Limiting & Abuse Prevention](#rate-limiting--abuse-prevention)
-11. [Audit Logging](#audit-logging)
-12. [Security Checklist](#security-checklist)
-13. [Common Vulnerabilities](#common-vulnerabilities)
-14. [Incident Response](#incident-response)
+6. **[API Key Security](#api-key-security)** ← NEW
+7. [Authorization Security](#authorization-security)
+8. [Network Security](#network-security)
+9. [Database Security](#database-security)
+10. [Secrets Management](#secrets-management)
+11. [Rate Limiting & Abuse Prevention](#rate-limiting--abuse-prevention)
+12. [Audit Logging](#audit-logging)
+13. [Security Checklist](#security-checklist)
+14. [Common Vulnerabilities](#common-vulnerabilities)
+15. [Incident Response](#incident-response)
 
 ---
 
@@ -50,10 +51,11 @@ OutlabsAuth is an authentication and authorization library designed with securit
 ### Assets We Protect
 
 1. **User Credentials**: Passwords, tokens, refresh tokens
-2. **User Data**: Personal information, profiles
-3. **Authorization Data**: Roles, permissions, entity memberships
-4. **Session Data**: Active sessions, refresh tokens
-5. **Admin Access**: Platform admin accounts
+2. **API Keys**: Service authentication keys, key hashes
+3. **User Data**: Personal information, profiles
+4. **Authorization Data**: Roles, permissions, entity memberships
+5. **Session Data**: Active sessions, refresh tokens
+6. **Admin Access**: Platform admin accounts
 
 ### Threat Actors
 
@@ -344,6 +346,535 @@ await auth.auth_service.revoke_other_sessions(
     current_token=token
 )
 ```
+
+---
+
+## API Key Security
+
+### Overview
+
+API keys provide service-to-service authentication for automated systems, CI/CD pipelines, and backend services. They are **long-lived credentials** that require strong security controls.
+
+**Key Security Principles**:
+- ✅ Use argon2id for hashing (NOT SHA256)
+- ✅ Never log raw API keys
+- ✅ Rotate keys every 90 days
+- ✅ Revoke compromised keys immediately
+- ✅ Limit permissions to minimum required
+- ✅ Use IP whitelisting when possible
+- ✅ Monitor key usage and errors
+
+### API Key Generation
+
+**Secure Key Generation**:
+```python
+from outlabs_auth.services import APIKeyService
+
+# Generate API key (Stripe-style format)
+raw_key, api_key_model = await api_key_service.create_api_key(
+    name="Production Service",
+    permissions=["user:read", "entity:read"],
+    environment="production",      # sk_prod_ prefix
+    allowed_ips=["10.0.1.0/24"],  # IP whitelist
+    rate_limit_per_minute=60,
+    expires_at=datetime.now() + timedelta(days=90),  # 90-day expiry
+    created_by=current_user.id
+)
+
+# CRITICAL: raw_key is only shown ONCE - store securely!
+# Format: sk_prod_<32-byte-random-string>
+print(f"API Key: {raw_key}")  # Show to user ONCE
+print(f"Prefix: {api_key_model.key_prefix}")  # Store in database
+```
+
+**Key Format**:
+```
+sk_prod_AbCdEfGh...  (production)
+sk_stag_AbCdEfGh...  (staging)
+sk_dev_AbCdEfGh...   (development)
+sk_test_AbCdEfGh...  (test)
+```
+
+**Format Breakdown**:
+- `sk` = Secret Key
+- `prod/stag/dev/test` = Environment
+- `_` = Separator (8 chars total prefix)
+- Remaining = 32 bytes of cryptographically random data
+
+### API Key Hashing (CRITICAL)
+
+**NEVER use SHA256 for API keys** - use argon2id:
+
+```python
+from passlib.hash import argon2
+
+class APIKeyService:
+    @staticmethod
+    def hash_key(key: str) -> str:
+        """Hash API key using argon2id (NOT SHA256)"""
+        return argon2.using(
+            time_cost=2,        # Iterations
+            memory_cost=102400, # 100 MB memory
+            parallelism=8,      # 8 parallel threads
+            salt_size=16,       # 16-byte salt
+            hash_len=32         # 32-byte hash
+        ).hash(key)
+
+    @staticmethod
+    def verify_key(key: str, key_hash: str) -> bool:
+        """Verify API key against hash"""
+        try:
+            return argon2.verify(key, key_hash)
+        except Exception:
+            return False
+```
+
+**Why argon2id?**:
+- ✅ Resistant to GPU/ASIC attacks (high memory cost)
+- ✅ Resistant to side-channel attacks
+- ✅ Adaptive (configurable work factor)
+- ✅ Winner of Password Hashing Competition (2015)
+- ✅ Recommended by OWASP
+- ❌ SHA256 is fast and easy to brute force
+
+**Security Comparison**:
+| Hash Algorithm | Time to crack 10B keys | Attack Resistance |
+|----------------|------------------------|-------------------|
+| SHA256         | Minutes (GPU)          | ❌ Low            |
+| bcrypt         | Weeks (GPU)            | ⚠️ Medium         |
+| **argon2id**   | **Years (GPU)**        | ✅ **High**       |
+
+### API Key Storage
+
+**Database Storage**:
+```python
+class APIKeyModel(BaseDocument):
+    name: str                          # User-friendly name
+    key_hash: str                      # argon2id hash (NEVER raw key)
+    key_prefix: str                    # First 8 chars (sk_prod_)
+    permissions: List[str] = []        # Allowed permissions
+    allowed_ips: List[str] = []        # IP whitelist
+    rate_limit_per_minute: int = 60    # Rate limit
+    environment: str = "production"    # Environment
+
+    # Metadata
+    created_by: str
+    created_at: datetime
+    expires_at: Optional[datetime] = None
+    last_used_at: Optional[datetime] = None
+
+    # Security tracking
+    usage_count: int = 0
+    error_count: int = 0
+    is_active: bool = True
+    revoked_at: Optional[datetime] = None
+    revoked_by: Optional[str] = None
+    revoked_reason: Optional[str] = None
+
+    # Entity scope (EnterpriseRBAC)
+    entity_id: Optional[str] = None    # Optional entity scope
+    inherit_from_tree: bool = False    # Use tree permissions
+```
+
+**Best Practices**:
+- ✅ Store only hash (never raw key)
+- ✅ Store prefix for identification
+- ✅ Track usage and errors
+- ✅ Set expiration dates (90 days recommended)
+- ✅ Support revocation
+- ❌ Never store raw keys
+- ❌ Never log raw keys
+
+### API Key Authentication
+
+**FastAPI Dependency**:
+```python
+from outlabs_auth.dependencies import MultiSourceDeps
+
+# Create multi-source auth dependencies
+deps = MultiSourceDeps(auth=auth)
+
+@app.get("/api/users")
+async def list_users(
+    context = Depends(deps.get_context)
+):
+    # Automatically supports:
+    # - User JWT (Authorization: Bearer <token>)
+    # - API Key (X-API-Key: sk_prod_...)
+    # - Service Token (X-Service-Token: <token>)
+    # - Superuser Token (X-Superuser-Token: <token>)
+
+    if context.source == AuthSource.API_KEY:
+        # API key authentication
+        print(f"API Key: {context.identity}")
+
+    # Check permissions
+    if not context.has_permission("user:read"):
+        raise HTTPException(403, "Permission denied")
+
+    return await user_service.list_users()
+```
+
+**Manual Authentication**:
+```python
+from outlabs_auth.services import APIKeyService
+
+async def authenticate_api_key(api_key: str) -> APIKeyModel:
+    """Authenticate API key"""
+    # Extract prefix (first 8 chars)
+    prefix = api_key[:8]
+
+    # Find key by prefix
+    key_model = await APIKeyModel.find_one(
+        APIKeyModel.key_prefix == prefix,
+        APIKeyModel.is_active == True
+    )
+
+    if not key_model:
+        raise InvalidAPIKeyException()
+
+    # Verify hash (argon2id)
+    if not api_key_service.verify_key(api_key, key_model.key_hash):
+        # Track failed attempt
+        key_model.error_count += 1
+        await key_model.save()
+
+        # Auto-revoke after 10 failures
+        if key_model.error_count >= 10:
+            key_model.is_active = False
+            key_model.revoked_at = datetime.now()
+            key_model.revoked_reason = "Auto-revoked: 10 failed attempts"
+            await key_model.save()
+
+        raise InvalidAPIKeyException()
+
+    # Check expiration
+    if key_model.expires_at and key_model.expires_at < datetime.now():
+        raise ExpiredAPIKeyException()
+
+    # Update usage tracking
+    key_model.usage_count += 1
+    key_model.last_used_at = datetime.now()
+    key_model.error_count = 0  # Reset on success
+    await key_model.save()
+
+    return key_model
+```
+
+### IP Whitelisting
+
+**Configure IP Restrictions**:
+```python
+# Create API key with IP whitelist
+raw_key, api_key_model = await api_key_service.create_api_key(
+    name="CI/CD Pipeline",
+    permissions=["deployment:execute"],
+    allowed_ips=[
+        "10.0.1.0/24",         # Internal network
+        "192.168.1.100",       # Specific CI server
+        "2001:db8::/32"        # IPv6 range
+    ]
+)
+```
+
+**Enforce IP Restrictions**:
+```python
+from ipaddress import ip_address, ip_network
+
+async def check_ip_whitelist(api_key: APIKeyModel, client_ip: str) -> bool:
+    """Check if client IP is whitelisted"""
+    if not api_key.allowed_ips:
+        return True  # No restrictions
+
+    client_addr = ip_address(client_ip)
+
+    for allowed in api_key.allowed_ips:
+        try:
+            # Check if IP or CIDR range
+            if "/" in allowed:
+                if client_addr in ip_network(allowed):
+                    return True
+            else:
+                if client_addr == ip_address(allowed):
+                    return True
+        except ValueError:
+            continue
+
+    return False
+
+# In authentication middleware
+if not await check_ip_whitelist(api_key, request.client.host):
+    raise IPNotAllowedException()
+```
+
+### Rate Limiting
+
+**Per-Key Rate Limiting**:
+```python
+from outlabs_auth.rate_limiting import InMemoryRateLimiter
+
+# In-memory rate limiter (no Redis required)
+rate_limiter = InMemoryRateLimiter()
+
+async def check_rate_limit(api_key: APIKeyModel) -> bool:
+    """Check rate limit for API key"""
+    key = f"api_key:{api_key.key_prefix}"
+    limit = api_key.rate_limit_per_minute or 60
+
+    allowed = await rate_limiter.check_limit(
+        key=key,
+        limit=limit,
+        window=60  # 1 minute
+    )
+
+    if not allowed:
+        raise RateLimitExceededException(
+            f"Rate limit exceeded: {limit} requests per minute"
+        )
+
+    return True
+```
+
+**Redis-Based Rate Limiting** (distributed):
+```python
+from outlabs_auth.rate_limiting import RedisRateLimiter
+
+rate_limiter = RedisRateLimiter(redis_url="redis://localhost:6379")
+
+async def check_rate_limit(api_key: APIKeyModel) -> bool:
+    """Distributed rate limiting with Redis"""
+    key = f"api_key:{api_key.key_prefix}"
+    limit = api_key.rate_limit_per_minute or 60
+
+    allowed, remaining = await rate_limiter.check_limit(
+        key=key,
+        limit=limit,
+        window=60
+    )
+
+    # Include remaining in response headers
+    response.headers["X-RateLimit-Limit"] = str(limit)
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
+
+    if not allowed:
+        raise RateLimitExceededException()
+
+    return True
+```
+
+### Key Rotation
+
+**90-Day Rotation Policy**:
+```python
+# Check for expiring keys (7 days before expiration)
+async def check_expiring_keys():
+    """Alert when keys are expiring soon"""
+    expiring_soon = await APIKeyModel.find(
+        APIKeyModel.is_active == True,
+        APIKeyModel.expires_at <= datetime.now() + timedelta(days=7),
+        APIKeyModel.expires_at > datetime.now()
+    ).to_list()
+
+    for key in expiring_soon:
+        # Send notification
+        await notification_service.send(
+            event="api_key_expiring",
+            recipient=key.created_by,
+            data={"key_name": key.name, "expires_at": key.expires_at}
+        )
+```
+
+**Rotate API Key**:
+```python
+async def rotate_api_key(old_key_id: str) -> Tuple[str, APIKeyModel]:
+    """Rotate API key (create new, revoke old)"""
+    # Get old key
+    old_key = await APIKeyModel.get(old_key_id)
+
+    # Create new key with same permissions
+    raw_key, new_key = await api_key_service.create_api_key(
+        name=f"{old_key.name} (rotated)",
+        permissions=old_key.permissions,
+        allowed_ips=old_key.allowed_ips,
+        rate_limit_per_minute=old_key.rate_limit_per_minute,
+        environment=old_key.environment,
+        entity_id=old_key.entity_id,
+        expires_at=datetime.now() + timedelta(days=90)
+    )
+
+    # Revoke old key (grace period: keep active for 24 hours)
+    await api_key_service.schedule_revocation(
+        key_id=old_key.id,
+        revoke_at=datetime.now() + timedelta(hours=24),
+        reason="Rotated to new key"
+    )
+
+    return raw_key, new_key
+```
+
+### Security Best Practices
+
+**1. Never Log Raw Keys**:
+```python
+# Bad: Logs raw key
+logger.info(f"API key created: {raw_key}")  # ❌ NEVER DO THIS
+
+# Good: Log prefix only
+logger.info(f"API key created: {api_key.key_prefix}***")  # ✅
+```
+
+**2. Revoke Compromised Keys Immediately**:
+```python
+async def revoke_api_key(key_id: str, reason: str):
+    """Immediately revoke compromised key"""
+    key = await APIKeyModel.get(key_id)
+    key.is_active = False
+    key.revoked_at = datetime.now()
+    key.revoked_reason = reason
+    await key.save()
+
+    # Notify key owner
+    await notification_service.send(
+        event="api_key_revoked",
+        recipient=key.created_by,
+        data={"key_name": key.name, "reason": reason}
+    )
+```
+
+**3. Monitor Key Usage**:
+```python
+# Alert on suspicious activity
+async def monitor_api_key_usage():
+    """Monitor for suspicious API key usage"""
+    # High error rate
+    suspicious = await APIKeyModel.find(
+        APIKeyModel.error_count > 5,
+        APIKeyModel.is_active == True
+    ).to_list()
+
+    for key in suspicious:
+        await alert_security_team(
+            f"API key {key.key_prefix}*** has {key.error_count} errors"
+        )
+
+    # Unusual usage patterns
+    unusual = await APIKeyModel.find(
+        APIKeyModel.usage_count > 10000,  # Spike in usage
+        APIKeyModel.last_used_at > datetime.now() - timedelta(hours=1)
+    ).to_list()
+
+    for key in unusual:
+        await alert_security_team(
+            f"API key {key.key_prefix}*** has unusual usage spike"
+        )
+```
+
+**4. Least Privilege Permissions**:
+```python
+# Bad: Too many permissions
+api_key = await api_key_service.create_api_key(
+    name="Service",
+    permissions=["*:*"]  # ❌ Too broad
+)
+
+# Good: Minimal permissions
+api_key = await api_key_service.create_api_key(
+    name="Read-only Service",
+    permissions=[
+        "user:read",
+        "entity:read"
+    ]  # ✅ Only what's needed
+)
+```
+
+**5. Environment-Specific Keys**:
+```python
+# Use different keys for each environment
+prod_key = await api_key_service.create_api_key(
+    name="Production Service",
+    environment="production",  # sk_prod_ prefix
+    permissions=["user:read"]
+)
+
+dev_key = await api_key_service.create_api_key(
+    name="Development Service",
+    environment="development",  # sk_dev_ prefix
+    permissions=["user:read", "user:create"]  # More permissive in dev
+)
+```
+
+### Entity-Scoped API Keys (EnterpriseRBAC)
+
+**Create Entity-Scoped Key**:
+```python
+# API key scoped to specific entity
+raw_key, api_key = await api_key_service.create_api_key(
+    name="Department Service",
+    permissions=["entity:read", "entity:update"],
+    entity_id=department.id,           # Scope to department
+    inherit_from_tree=True,            # Can access child entities
+    environment="production"
+)
+```
+
+**Use Tree Permissions**:
+```python
+# API key in parent entity can access descendants
+@app.get("/entities/{entity_id}")
+async def get_entity(
+    entity_id: str,
+    context = Depends(deps.get_context)
+):
+    # Check if API key has access to entity
+    # Tree permissions automatically checked
+    has_access = await auth.permission_service.check_permission(
+        context=context,
+        permission="entity:read",
+        entity_id=entity_id
+    )
+
+    if not has_access:
+        raise HTTPException(403)
+
+    return await entity_service.get(entity_id)
+```
+
+### API Key Security Checklist
+
+**Creation**:
+- [ ] Use argon2id for hashing (NOT SHA256)
+- [ ] Show raw key only once
+- [ ] Set expiration (90 days recommended)
+- [ ] Assign minimal permissions
+- [ ] Configure IP whitelist if possible
+- [ ] Set reasonable rate limits
+
+**Storage**:
+- [ ] Store only hash (never raw key)
+- [ ] Store prefix for identification
+- [ ] Never log raw keys
+- [ ] Encrypt database at rest
+- [ ] Use separate keys per environment
+
+**Usage**:
+- [ ] Validate on every request
+- [ ] Check IP whitelist
+- [ ] Enforce rate limits
+- [ ] Track usage and errors
+- [ ] Auto-revoke after 10 failures
+
+**Rotation**:
+- [ ] Rotate keys every 90 days
+- [ ] Alert 7 days before expiration
+- [ ] Provide grace period during rotation
+- [ ] Revoke old keys after transition
+
+**Monitoring**:
+- [ ] Monitor usage patterns
+- [ ] Alert on high error rates
+- [ ] Alert on unusual usage spikes
+- [ ] Log all security events
+- [ ] Review logs regularly
 
 ---
 
@@ -925,6 +1456,16 @@ config = EnterpriseConfig(
 - [ ] No passwords in logs
 - [ ] No account enumeration vulnerabilities
 
+#### API Keys
+- [ ] **argon2id hashing used (NOT SHA256)**
+- [ ] API keys never logged (only prefixes)
+- [ ] 90-day expiration policy enforced
+- [ ] Rate limiting per API key configured
+- [ ] IP whitelisting configured where possible
+- [ ] Auto-revocation after failures enabled
+- [ ] Minimal permissions assigned
+- [ ] Rotation alerts configured
+
 #### Authorization
 - [ ] All endpoints have permission checks
 - [ ] Least privilege principle applied
@@ -1202,7 +1743,7 @@ For security vulnerabilities, email: security@outlabs.io
 
 ---
 
-**Last Updated**: 2025-01-14
+**Last Updated**: 2025-01-14 (Added API key security section: argon2id hashing, rotation policies, rate limiting, monitoring)
 **Next Review**: Quarterly (Every 3 months)
 **Owner**: Security Team
 

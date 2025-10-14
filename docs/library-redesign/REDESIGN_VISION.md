@@ -1,6 +1,6 @@
 # OutlabsAuth Library Redesign - Vision Document
 
-**Version**: 1.2
+**Version**: 1.3
 **Date**: 2025-01-14
 **Status**: Planning Phase
 **Branch**: `library-redesign`
@@ -153,6 +153,9 @@ async def protected_route(
 ### Must Have
 - ✅ Works as drop-in pip dependency
 - ✅ Two clear preset modes (Simple, Enterprise)
+- ✅ JWT authentication with refresh tokens
+- ✅ API key authentication with argon2id hashing (core v1.0)
+- ✅ Multi-source authentication (JWT, API keys, service tokens, superuser)
 - ✅ Maintains current entity hierarchy capabilities
 - ✅ Tree permissions work identically
 - ✅ Context-aware roles preserved
@@ -339,23 +342,24 @@ This vision document is the hub. Related documents:
 1. **[LIBRARY_ARCHITECTURE.md](LIBRARY_ARCHITECTURE.md)** - Technical architecture details
 2. **[IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)** - Week-by-week implementation plan
 3. **[API_DESIGN.md](API_DESIGN.md)** - Developer experience and code examples
-4. **[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)** - Why we made specific choices (DD-001 to DD-027)
-5. **[COMPARISON_MATRIX.md](COMPARISON_MATRIX.md)** - Feature comparison: Simple vs Enterprise
+4. **[DEPENDENCY_PATTERNS.md](DEPENDENCY_PATTERNS.md)** - FastAPI dependency injection patterns
+5. **[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)** - Why we made specific choices (DD-001 to DD-031)
+6. **[COMPARISON_MATRIX.md](COMPARISON_MATRIX.md)** - Feature comparison: Simple vs Enterprise
 
 ### Production Guides
-6. **[SECURITY.md](SECURITY.md)** - Security hardening and best practices
-7. **[TESTING_GUIDE.md](TESTING_GUIDE.md)** - Testing utilities and patterns
-8. **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** - Scaling and production deployment
-9. **[ERROR_HANDLING.md](ERROR_HANDLING.md)** - Exception hierarchy and error patterns
+7. **[SECURITY.md](SECURITY.md)** - Security hardening and best practices
+8. **[TESTING_GUIDE.md](TESTING_GUIDE.md)** - Testing utilities and patterns
+9. **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** - Scaling and production deployment
+10. **[ERROR_HANDLING.md](ERROR_HANDLING.md)** - Exception hierarchy and error patterns
 
 ### Authentication Extensions (Optional, Post-v1.0)
-10. **[AUTH_EXTENSIONS.md](AUTH_EXTENSIONS.md)** - Authentication extensions (v1.1-v1.4)
+11. **[AUTH_EXTENSIONS.md](AUTH_EXTENSIONS.md)** - Authentication extensions (v1.1-v1.4)
     - OAuth/social login, passwordless auth, notifications, MFA
     - Extension architecture and integration patterns
     - Timeline: 9 weeks after core library
 
 ### Reference (For External Users)
-11. **[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)** - Converting from centralized API (skip if starting fresh)
+12. **[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)** - Converting from centralized API (skip if starting fresh)
 
 ---
 
@@ -429,7 +433,7 @@ This is a living document. As we learn during implementation:
 - Clarify scope based on discoveries
 - Document trade-offs made
 
-**Last Updated**: 2025-01-14 (Added authentication extensions)
+**Last Updated**: 2025-01-14 (Added API key authentication system to core v1.0)
 **Next Review**: After Phase 1 completion
 
 ---
@@ -438,6 +442,7 @@ This is a living document. As we learn during implementation:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.3 | 2025-01-14 | Added API key authentication system (core v1.0); multi-source authentication; DEPENDENCY_PATTERNS.md; 4 new design decisions (DD-028 to DD-031); updated success criteria |
 | 1.2 | 2025-01-14 | Added authentication extensions (v1.1-v1.4); updated timeline to 15-16 weeks; moved social login from non-goals to planned extensions |
 | 1.1 | 2025-01-14 | Revised to two presets (Simple, Enterprise); added new documentation; incorporated security, testing, deployment guides |
 | 1.0 | 2025-01-14 | Initial vision document |

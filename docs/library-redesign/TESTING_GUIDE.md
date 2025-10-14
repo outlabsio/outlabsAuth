@@ -1,6 +1,6 @@
 # OutlabsAuth Testing Guide
 
-**Version**: 1.0
+**Version**: 1.1
 **Date**: 2025-01-14
 **Audience**: Developers testing OutlabsAuth integrations
 **Status**: Production Reference
@@ -17,11 +17,13 @@
 6. [Permission Testing](#permission-testing)
 7. [Entity Hierarchy Testing](#entity-hierarchy-testing)
 8. [Authentication Testing](#authentication-testing)
-9. [Mocking & Fixtures](#mocking--fixtures)
-10. [Performance Testing](#performance-testing)
-11. [CI/CD Integration](#cicd-integration)
-12. [Test Coverage](#test-coverage)
-13. [Testing Patterns](#testing-patterns)
+9. **[API Key Testing](#api-key-testing)** ← NEW
+10. **[Multi-Source Authentication Testing](#multi-source-authentication-testing)** ← NEW
+11. [Mocking & Fixtures](#mocking--fixtures)
+12. [Performance Testing](#performance-testing)
+13. [CI/CD Integration](#cicd-integration)
+14. [Test Coverage](#test-coverage)
+15. [Testing Patterns](#testing-patterns)
 
 ---
 
@@ -802,6 +804,732 @@ async def test_logout(auth):
 
 ---
 
+## API Key Testing
+
+### Testing API Key Creation
+
+```python
+# tests/integration/test_api_keys.py
+import pytest
+from outlabs_auth import SimpleRBAC
+from outlabs_auth.services import APIKeyService
+from datetime import datetime, timedelta
+
+@pytest.mark.asyncio
+async def test_create_api_key(auth):
+    """Test creating an API key"""
+    user = await auth.user_service.create_user(
+        email="apitest@example.com",
+        password="password123",
+        name="API Test"
+    )
+
+    # Create API key
+    raw_key, api_key_model = await auth.api_key_service.create_api_key(
+        name="Test Service",
+        permissions=["user:read", "entity:read"],
+        environment="production",
+        allowed_ips=["192.168.1.100"],
+        rate_limit_per_minute=60,
+        expires_at=datetime.now() + timedelta(days=90),
+        created_by=user.id
+    )
+
+    # Verify raw key format
+    assert raw_key.startswith("sk_prod_")
+    assert len(raw_key) > 20  # At least prefix + some random data
+
+    # Verify model
+    assert api_key_model.name == "Test Service"
+    assert api_key_model.key_prefix == raw_key[:8]
+    assert api_key_model.key_hash is not None  # Hash stored, not raw key
+    assert "user:read" in api_key_model.permissions
+    assert api_key_model.is_active is True
+    assert api_key_model.environment == "production"
+
+@pytest.mark.asyncio
+async def test_api_key_environments(auth):
+    """Test API key prefixes for different environments"""
+    user = await auth.user_service.create_user(
+        email="env@example.com",
+        password="password123",
+        name="Env Test"
+    )
+
+    # Production key
+    prod_key, prod_model = await auth.api_key_service.create_api_key(
+        name="Prod Key",
+        permissions=["user:read"],
+        environment="production",
+        created_by=user.id
+    )
+    assert prod_key.startswith("sk_prod_")
+
+    # Staging key
+    stag_key, stag_model = await auth.api_key_service.create_api_key(
+        name="Staging Key",
+        permissions=["user:read"],
+        environment="staging",
+        created_by=user.id
+    )
+    assert stag_key.startswith("sk_stag_")
+
+    # Development key
+    dev_key, dev_model = await auth.api_key_service.create_api_key(
+        name="Dev Key",
+        permissions=["user:read"],
+        environment="development",
+        created_by=user.id
+    )
+    assert dev_key.startswith("sk_dev_")
+
+    # Test key
+    test_key, test_model = await auth.api_key_service.create_api_key(
+        name="Test Key",
+        permissions=["user:read"],
+        environment="test",
+        created_by=user.id
+    )
+    assert test_key.startswith("sk_test_")
+```
+
+### Testing API Key Authentication
+
+```python
+@pytest.mark.asyncio
+async def test_api_key_authentication(auth):
+    """Test authenticating with API key"""
+    user = await auth.user_service.create_user(
+        email="authkey@example.com",
+        password="password123",
+        name="Auth Key"
+    )
+
+    # Create API key
+    raw_key, api_key_model = await auth.api_key_service.create_api_key(
+        name="Auth Test",
+        permissions=["user:read"],
+        environment="production",
+        created_by=user.id
+    )
+
+    # Authenticate with API key
+    validated_key = await auth.api_key_service.authenticate_api_key(raw_key)
+
+    assert validated_key.id == api_key_model.id
+    assert validated_key.name == "Auth Test"
+    assert validated_key.is_active is True
+
+@pytest.mark.asyncio
+async def test_api_key_invalid_authentication(auth):
+    """Test authentication fails with invalid API key"""
+    from outlabs_auth.exceptions import InvalidAPIKeyException
+
+    # Attempt to authenticate with invalid key
+    with pytest.raises(InvalidAPIKeyException):
+        await auth.api_key_service.authenticate_api_key("sk_prod_invalid_key")
+
+@pytest.mark.asyncio
+async def test_api_key_expired(auth):
+    """Test expired API key fails authentication"""
+    from outlabs_auth.exceptions import ExpiredAPIKeyException
+
+    user = await auth.user_service.create_user(
+        email="expired@example.com",
+        password="password123",
+        name="Expired Test"
+    )
+
+    # Create already-expired API key
+    raw_key, api_key_model = await auth.api_key_service.create_api_key(
+        name="Expired Key",
+        permissions=["user:read"],
+        environment="production",
+        expires_at=datetime.now() - timedelta(days=1),  # Expired yesterday
+        created_by=user.id
+    )
+
+    # Authentication should fail
+    with pytest.raises(ExpiredAPIKeyException):
+        await auth.api_key_service.authenticate_api_key(raw_key)
+```
+
+### Testing API Key Hashing (argon2id)
+
+```python
+@pytest.mark.asyncio
+async def test_api_key_hash_security(auth):
+    """Test API key is hashed with argon2id, not stored as plaintext"""
+    user = await auth.user_service.create_user(
+        email="hash@example.com",
+        password="password123",
+        name="Hash Test"
+    )
+
+    # Create API key
+    raw_key, api_key_model = await auth.api_key_service.create_api_key(
+        name="Hash Test",
+        permissions=["user:read"],
+        environment="production",
+        created_by=user.id
+    )
+
+    # Verify hash is NOT the raw key
+    assert api_key_model.key_hash != raw_key
+
+    # Verify hash starts with argon2id identifier
+    assert api_key_model.key_hash.startswith("$argon2id$")
+
+    # Verify raw key can be verified against hash
+    from passlib.hash import argon2
+    assert argon2.verify(raw_key, api_key_model.key_hash)
+
+@pytest.mark.asyncio
+async def test_api_key_hash_collision(auth):
+    """Test different keys produce different hashes"""
+    user = await auth.user_service.create_user(
+        email="collision@example.com",
+        password="password123",
+        name="Collision Test"
+    )
+
+    # Create two API keys
+    raw_key1, api_key1 = await auth.api_key_service.create_api_key(
+        name="Key 1",
+        permissions=["user:read"],
+        environment="production",
+        created_by=user.id
+    )
+
+    raw_key2, api_key2 = await auth.api_key_service.create_api_key(
+        name="Key 2",
+        permissions=["user:read"],
+        environment="production",
+        created_by=user.id
+    )
+
+    # Different raw keys
+    assert raw_key1 != raw_key2
+
+    # Different hashes (due to salt)
+    assert api_key1.key_hash != api_key2.key_hash
+```
+
+### Testing API Key IP Whitelisting
+
+```python
+@pytest.mark.asyncio
+async def test_api_key_ip_whitelist(auth):
+    """Test API key IP whitelisting"""
+    user = await auth.user_service.create_user(
+        email="iptest@example.com",
+        password="password123",
+        name="IP Test"
+    )
+
+    # Create API key with IP whitelist
+    raw_key, api_key_model = await auth.api_key_service.create_api_key(
+        name="IP Restricted",
+        permissions=["user:read"],
+        environment="production",
+        allowed_ips=["192.168.1.100", "10.0.1.0/24"],
+        created_by=user.id
+    )
+
+    # Test IP validation
+    assert await auth.api_key_service.check_ip_whitelist(
+        api_key_model, "192.168.1.100"
+    ) is True  # Exact match
+
+    assert await auth.api_key_service.check_ip_whitelist(
+        api_key_model, "10.0.1.50"
+    ) is True  # CIDR range match
+
+    assert await auth.api_key_service.check_ip_whitelist(
+        api_key_model, "192.168.2.100"
+    ) is False  # Not in whitelist
+
+@pytest.mark.asyncio
+async def test_api_key_no_ip_restriction(auth):
+    """Test API key with no IP restrictions"""
+    user = await auth.user_service.create_user(
+        email="noip@example.com",
+        password="password123",
+        name="No IP Test"
+    )
+
+    # Create API key without IP restrictions
+    raw_key, api_key_model = await auth.api_key_service.create_api_key(
+        name="No IP Restriction",
+        permissions=["user:read"],
+        environment="production",
+        allowed_ips=[],  # No restrictions
+        created_by=user.id
+    )
+
+    # Any IP should be allowed
+    assert await auth.api_key_service.check_ip_whitelist(
+        api_key_model, "1.2.3.4"
+    ) is True
+```
+
+### Testing API Key Rate Limiting
+
+```python
+@pytest.mark.asyncio
+async def test_api_key_rate_limiting(auth):
+    """Test API key rate limiting"""
+    from outlabs_auth.exceptions import RateLimitExceededException
+
+    user = await auth.user_service.create_user(
+        email="rate@example.com",
+        password="password123",
+        name="Rate Test"
+    )
+
+    # Create API key with low rate limit
+    raw_key, api_key_model = await auth.api_key_service.create_api_key(
+        name="Rate Limited",
+        permissions=["user:read"],
+        environment="production",
+        rate_limit_per_minute=5,  # Only 5 requests per minute
+        created_by=user.id
+    )
+
+    # Make 5 requests (should succeed)
+    for i in range(5):
+        await auth.api_key_service.check_rate_limit(api_key_model)
+
+    # 6th request should fail
+    with pytest.raises(RateLimitExceededException):
+        await auth.api_key_service.check_rate_limit(api_key_model)
+```
+
+### Testing API Key Auto-Revocation
+
+```python
+@pytest.mark.asyncio
+async def test_api_key_auto_revoke_after_failures(auth):
+    """Test API key auto-revokes after 10 failed attempts"""
+    from outlabs_auth.exceptions import InvalidAPIKeyException
+
+    user = await auth.user_service.create_user(
+        email="revoke@example.com",
+        password="password123",
+        name="Revoke Test"
+    )
+
+    raw_key, api_key_model = await auth.api_key_service.create_api_key(
+        name="Auto Revoke Test",
+        permissions=["user:read"],
+        environment="production",
+        created_by=user.id
+    )
+
+    # Make 10 failed authentication attempts
+    for i in range(10):
+        try:
+            await auth.api_key_service.authenticate_api_key(
+                f"sk_prod_wrong_key_{i}"
+            )
+        except InvalidAPIKeyException:
+            pass
+
+    # Refresh model from database
+    api_key_model = await auth.api_key_service.get_api_key(api_key_model.id)
+
+    # Key should be auto-revoked
+    assert api_key_model.is_active is False
+    assert "10 failed attempts" in api_key_model.revoked_reason
+```
+
+### Testing API Key Rotation
+
+```python
+@pytest.mark.asyncio
+async def test_api_key_rotation(auth):
+    """Test rotating an API key"""
+    user = await auth.user_service.create_user(
+        email="rotate@example.com",
+        password="password123",
+        name="Rotate Test"
+    )
+
+    # Create original API key
+    old_raw_key, old_api_key = await auth.api_key_service.create_api_key(
+        name="Original Key",
+        permissions=["user:read", "entity:read"],
+        environment="production",
+        allowed_ips=["192.168.1.100"],
+        created_by=user.id
+    )
+
+    # Rotate the key
+    new_raw_key, new_api_key = await auth.api_key_service.rotate_api_key(
+        old_key_id=old_api_key.id
+    )
+
+    # New key should have same permissions and settings
+    assert new_api_key.permissions == old_api_key.permissions
+    assert new_api_key.allowed_ips == old_api_key.allowed_ips
+    assert new_api_key.environment == old_api_key.environment
+
+    # New key should be different
+    assert new_raw_key != old_raw_key
+    assert new_api_key.id != old_api_key.id
+
+    # Old key should be marked for revocation (but may have grace period)
+    # Check scheduled revocation
+```
+
+### Testing Entity-Scoped API Keys (EnterpriseRBAC)
+
+```python
+@pytest.mark.asyncio
+async def test_entity_scoped_api_key(test_db):
+    """Test API key scoped to specific entity"""
+    from outlabs_auth import EnterpriseRBAC
+
+    auth = EnterpriseRBAC(database=test_db)
+    await auth.initialize()
+
+    # Create hierarchy
+    org = await auth.entity_service.create_entity(
+        name="organization",
+        entity_type="organization",
+        entity_class="STRUCTURAL"
+    )
+
+    dept = await auth.entity_service.create_entity(
+        name="department",
+        entity_type="department",
+        entity_class="STRUCTURAL",
+        parent_entity_id=org.id
+    )
+
+    user = await auth.user_service.create_user(
+        email="entity_api@example.com",
+        password="password123",
+        name="Entity API Test"
+    )
+
+    # Create entity-scoped API key
+    raw_key, api_key = await auth.api_key_service.create_api_key(
+        name="Department Key",
+        permissions=["entity:read", "entity:update"],
+        environment="production",
+        entity_id=dept.id,  # Scoped to department
+        created_by=user.id
+    )
+
+    # Verify entity scope
+    assert api_key.entity_id == dept.id
+
+    # Check permission in entity context
+    context = await auth.multi_source_auth.authenticate_api_key_to_context(raw_key)
+
+    has_perm = await auth.permission_service.check_permission(
+        context=context,
+        permission="entity:read",
+        entity_id=dept.id
+    )
+
+    assert has_perm is True
+
+@pytest.mark.asyncio
+async def test_entity_scoped_api_key_tree_permissions(test_db):
+    """Test entity-scoped API key with tree permissions"""
+    from outlabs_auth import EnterpriseRBAC
+
+    auth = EnterpriseRBAC(database=test_db)
+    await auth.initialize()
+
+    # Create hierarchy: org > dept > team
+    org = await auth.entity_service.create_entity(
+        name="organization",
+        entity_type="organization",
+        entity_class="STRUCTURAL"
+    )
+
+    dept = await auth.entity_service.create_entity(
+        name="department",
+        entity_type="department",
+        entity_class="STRUCTURAL",
+        parent_entity_id=org.id
+    )
+
+    team = await auth.entity_service.create_entity(
+        name="team",
+        entity_type="team",
+        entity_class="STRUCTURAL",
+        parent_entity_id=dept.id
+    )
+
+    user = await auth.user_service.create_user(
+        email="tree_api@example.com",
+        password="password123",
+        name="Tree API Test"
+    )
+
+    # Create API key with tree permissions at department level
+    raw_key, api_key = await auth.api_key_service.create_api_key(
+        name="Dept Tree Key",
+        permissions=["entity:read_tree"],  # Tree permission
+        environment="production",
+        entity_id=dept.id,
+        inherit_from_tree=True,  # Enable tree permissions
+        created_by=user.id
+    )
+
+    # API key should have access to team (descendant)
+    context = await auth.multi_source_auth.authenticate_api_key_to_context(raw_key)
+
+    has_perm = await auth.permission_service.check_permission(
+        context=context,
+        permission="entity:read",
+        entity_id=team.id
+    )
+
+    assert has_perm is True  # Tree permission applies
+
+    # Should NOT have access to org (parent)
+    has_perm_parent = await auth.permission_service.check_permission(
+        context=context,
+        permission="entity:read",
+        entity_id=org.id
+    )
+
+    assert has_perm_parent is False
+```
+
+---
+
+## Multi-Source Authentication Testing
+
+### Testing Auth Source Priority Chain
+
+```python
+# tests/integration/test_multi_source_auth.py
+import pytest
+from outlabs_auth import SimpleRBAC
+from outlabs_auth.dependencies import MultiSourceDeps
+from outlabs_auth.models import AuthSource, AuthContext
+from fastapi import Request
+
+@pytest.mark.asyncio
+async def test_auth_source_priority_chain(auth):
+    """Test priority: Superuser > Service > API Key > User > Anonymous"""
+    deps = MultiSourceDeps(auth=auth)
+
+    # Create test user with token
+    user = await auth.user_service.create_user(
+        email="priority@example.com",
+        password="password123",
+        name="Priority Test"
+    )
+    user_tokens = await auth.auth_service.login(
+        email="priority@example.com",
+        password="password123"
+    )
+
+    # Create API key
+    api_raw_key, api_key_model = await auth.api_key_service.create_api_key(
+        name="Priority Test",
+        permissions=["user:read"],
+        environment="production",
+        created_by=user.id
+    )
+
+    # Mock request with all auth headers
+    class MockRequest:
+        def __init__(self):
+            self.headers = {
+                "x-superuser-token": "superuser_token",
+                "x-service-token": "service_token",
+                "x-api-key": api_raw_key,
+                "authorization": f"Bearer {user_tokens.access_token}"
+            }
+
+    request = MockRequest()
+
+    # Get context (should use superuser - highest priority)
+    context = await deps.get_context(
+        request=request,
+        x_superuser_token="superuser_token",
+        x_service_token="service_token",
+        x_api_key=api_raw_key,
+        authorization=f"Bearer {user_tokens.access_token}"
+    )
+
+    # Should use superuser (highest priority)
+    assert context.source == AuthSource.SUPERUSER
+
+@pytest.mark.asyncio
+async def test_api_key_auth_source(auth):
+    """Test authentication with API key source"""
+    user = await auth.user_service.create_user(
+        email="apiauth@example.com",
+        password="password123",
+        name="API Auth"
+    )
+
+    raw_key, api_key = await auth.api_key_service.create_api_key(
+        name="Source Test",
+        permissions=["user:read", "user:create"],
+        environment="production",
+        created_by=user.id
+    )
+
+    # Authenticate with API key only
+    deps = MultiSourceDeps(auth=auth)
+
+    class MockRequest:
+        def __init__(self):
+            self.headers = {"x-api-key": raw_key}
+
+    context = await deps.get_context(
+        request=MockRequest(),
+        x_api_key=raw_key
+    )
+
+    # Verify context
+    assert context.source == AuthSource.API_KEY
+    assert context.identity == api_key.key_prefix
+    assert "user:read" in context.permissions
+    assert "user:create" in context.permissions
+
+@pytest.mark.asyncio
+async def test_user_jwt_auth_source(auth):
+    """Test authentication with JWT source"""
+    user = await auth.user_service.create_user(
+        email="jwtauth@example.com",
+        password="password123",
+        name="JWT Auth"
+    )
+
+    tokens = await auth.auth_service.login(
+        email="jwtauth@example.com",
+        password="password123"
+    )
+
+    # Authenticate with JWT only
+    deps = MultiSourceDeps(auth=auth)
+
+    class MockRequest:
+        def __init__(self):
+            self.headers = {"authorization": f"Bearer {tokens.access_token}"}
+
+    context = await deps.get_context(
+        request=MockRequest(),
+        authorization=f"Bearer {tokens.access_token}"
+    )
+
+    # Verify context
+    assert context.source == AuthSource.USER
+    assert context.identity == user.email
+
+@pytest.mark.asyncio
+async def test_anonymous_auth_source(auth):
+    """Test anonymous access"""
+    deps = MultiSourceDeps(auth=auth)
+
+    class MockRequest:
+        def __init__(self):
+            self.headers = {}
+
+    # No auth headers
+    context = await deps.get_context(request=MockRequest())
+
+    # Verify anonymous context
+    assert context.source == AuthSource.ANONYMOUS
+    assert context.identity == "anonymous"
+    assert context.permissions == []
+    assert context.is_superuser is False
+```
+
+### Testing AuthContext Permissions
+
+```python
+@pytest.mark.asyncio
+async def test_auth_context_has_permission(auth):
+    """Test AuthContext.has_permission() method"""
+    # Create context with permissions
+    context = AuthContext(
+        source=AuthSource.API_KEY,
+        identity="sk_prod_test",
+        permissions=["user:read", "user:create"],
+        is_superuser=False
+    )
+
+    # Check permissions
+    assert context.has_permission("user:read") is True
+    assert context.has_permission("user:create") is True
+    assert context.has_permission("user:delete") is False
+
+@pytest.mark.asyncio
+async def test_auth_context_superuser_bypass(auth):
+    """Test superuser bypasses permission checks"""
+    # Superuser context
+    context = AuthContext(
+        source=AuthSource.SUPERUSER,
+        identity="superuser",
+        permissions=[],  # No explicit permissions
+        is_superuser=True
+    )
+
+    # Superuser has all permissions
+    assert context.has_permission("user:read") is True
+    assert context.has_permission("user:delete") is True
+    assert context.has_permission("entity:create_tree") is True
+```
+
+### Testing Multi-Source Auth in FastAPI
+
+```python
+from fastapi import FastAPI, Depends
+from fastapi.testclient import TestClient
+
+@pytest.mark.asyncio
+async def test_multi_source_auth_in_route(auth):
+    """Test multi-source auth with FastAPI routes"""
+    app = FastAPI()
+    deps = MultiSourceDeps(auth=auth)
+
+    @app.get("/test")
+    async def test_route(context: AuthContext = Depends(deps.get_context)):
+        return {
+            "source": context.source.value,
+            "identity": context.identity,
+            "permissions": context.permissions
+        }
+
+    client = TestClient(app)
+
+    # Create API key
+    user = await auth.user_service.create_user(
+        email="route@example.com",
+        password="password123",
+        name="Route Test"
+    )
+
+    raw_key, api_key = await auth.api_key_service.create_api_key(
+        name="Route Test",
+        permissions=["user:read"],
+        environment="production",
+        created_by=user.id
+    )
+
+    # Make request with API key
+    response = client.get("/test", headers={"X-API-Key": raw_key})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "API_KEY"
+    assert "user:read" in data["permissions"]
+```
+
+---
+
 ## Mocking & Fixtures
 
 ### Pytest Fixtures
@@ -1226,6 +1954,6 @@ async def test_user_creation_validation(auth, email, password, should_succeed):
 
 ---
 
-**Last Updated**: 2025-01-14
+**Last Updated**: 2025-01-14 (Added API key testing and multi-source authentication testing sections)
 **Next Review**: Quarterly
 **Owner**: Engineering Team
