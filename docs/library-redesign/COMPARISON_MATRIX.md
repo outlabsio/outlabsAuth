@@ -1,6 +1,6 @@
 # OutlabsAuth Library - Feature Comparison Matrix
 
-**Version**: 1.1
+**Version**: 1.2
 **Date**: 2025-01-14
 **Purpose**: Help choose the right preset for your needs
 
@@ -69,6 +69,181 @@ Legend:
 - ❌ = Not supported
 - ⭕ = Optional (enable via feature flag)
 - ⭐ = Complexity level (more stars = more complex)
+
+---
+
+## Authentication Extensions (v1.1-v1.4, Optional)
+
+**Status**: Post-v1.0 features
+**Timeline**: Weeks 8-16 (9 weeks after v1.0)
+**Compatibility**: Work with **both** SimpleRBAC and EnterpriseRBAC
+
+All authentication extensions are **optional** and can be adopted independently based on your needs. They do not block v1.0 delivery.
+
+### Extension Feature Comparison
+
+| Extension Feature | SimpleRBAC | EnterpriseRBAC | Available | Requires |
+|-------------------|-----------|----------------|-----------|----------|
+| **v1.1: Notification System** |
+| Notification handler abstraction | ⭕ | ⭕ | v1.1 (Week 8-9) | None |
+| WebhookHandler | ⭕ | ⭕ | v1.1 | None |
+| QueueHandler | ⭕ | ⭕ | v1.1 | Queue service (Redis, RabbitMQ, SQS) |
+| CallbackHandler | ⭕ | ⭕ | v1.1 | None |
+| CompositeHandler | ⭕ | ⭕ | v1.1 | None |
+| **v1.2: OAuth/Social Login** |
+| Google OAuth | ⭕ | ⭕ | v1.2 (Week 10-12) | v1.1 Notifications |
+| Facebook OAuth | ⭕ | ⭕ | v1.2 | v1.1 Notifications |
+| Apple Sign-In | ⭕ | ⭕ | v1.2 | v1.1 Notifications |
+| GitHub OAuth | ⭕ | ⭕ | v1.2 | v1.1 Notifications |
+| Microsoft OAuth | ⭕ | ⭕ | v1.2 | v1.1 Notifications |
+| Account linking (by verified email) | ⭕ | ⭕ | v1.2 | v1.1 Notifications |
+| Custom OAuth providers | ⭕ | ⭕ | v1.2 | v1.1 Notifications |
+| **v1.3: Passwordless Authentication** |
+| Magic links (email) | ⭕ | ⭕ | v1.3 (Week 13-14) | v1.1 Notifications |
+| Email OTP | ⭕ | ⭕ | v1.3 | v1.1 Notifications |
+| SMS OTP | ⭕ | ⭕ | v1.3 | v1.1 Notifications + SMS gateway |
+| Challenge management | ⭕ | ⭕ | v1.3 | v1.1 Notifications |
+| Rate limiting | ⭕ | ⭕ | v1.3 | v1.1 Notifications |
+| **v1.4: Advanced Features** |
+| TOTP/MFA | ⭕ | ⭕ | v1.4 (Week 15-16) | None |
+| Backup codes | ⭕ | ⭕ | v1.4 | None |
+| WhatsApp OTP | ⭕ | ⭕ | v1.4 | v1.1 Notifications + WhatsApp Business API |
+| Telegram OTP | ⭕ | ⭕ | v1.4 | v1.1 Notifications + Telegram Bot API |
+| Account recovery | ⭕ | ⭕ | v1.4 | v1.1 Notifications |
+| WebAuthn/Passkeys | 🔬 | 🔬 | v1.4 (research) | Browser support |
+
+Legend:
+- ⭕ = Optional extension (adopt as needed)
+- 🔬 = Research/prototype phase
+
+### Extension Configuration Example
+
+```python
+from outlabs_auth import SimpleRBAC  # or EnterpriseRBAC
+from outlabs_auth.extensions.notifications import WebhookHandler
+from outlabs_auth.extensions.oauth import GoogleProvider, FacebookProvider
+
+# Configure extensions
+notification_handler = WebhookHandler(
+    webhook_url="https://api.internal/notifications",
+    headers={"X-API-Key": os.getenv("API_KEY")}
+)
+
+oauth_providers = {
+    "google": GoogleProvider(
+        client_id=os.getenv("GOOGLE_CLIENT_ID"),
+        client_secret=os.getenv("GOOGLE_CLIENT_SECRET")
+    ),
+    "facebook": FacebookProvider(
+        client_id=os.getenv("FACEBOOK_CLIENT_ID"),
+        client_secret=os.getenv("FACEBOOK_CLIENT_SECRET")
+    )
+}
+
+# Enable extensions (works with both presets!)
+auth = SimpleRBAC(  # or EnterpriseRBAC
+    database=db,
+    notification_handler=notification_handler,  # v1.1
+    oauth_providers=oauth_providers,            # v1.2
+    enable_magic_links=True,                    # v1.3
+    enable_otp=True,                            # v1.3
+    enable_mfa=True                             # v1.4
+)
+```
+
+### Extension Dependencies
+
+**Dependency Chain**:
+```
+v1.0 (Core) → v1.1 (Notifications) → v1.2 (OAuth) ┐
+                                   → v1.3 (Passwordless) ┤→ v1.4 (Advanced)
+```
+
+**Key Points**:
+- v1.1 (Notifications) is **prerequisite** for v1.2 (OAuth) and v1.3 (Passwordless)
+- v1.4 (Advanced features) builds on previous extensions
+- You can skip extensions you don't need
+- All extensions work with both SimpleRBAC and EnterpriseRBAC
+
+### Extension Use Cases
+
+**Notification System (v1.1)**:
+- Send welcome emails
+- Password reset notifications
+- Alert on suspicious activity
+- Integration with existing notification infrastructure
+
+**OAuth/Social Login (v1.2)**:
+- "Login with Google" button
+- Reduce friction for users
+- Auto-link by verified email
+- Support multiple providers
+
+**Passwordless Authentication (v1.3)**:
+- Magic link login (no password needed)
+- SMS OTP for phone verification
+- Email OTP for 2FA
+- Improved UX for mobile users
+
+**Advanced Features (v1.4)**:
+- TOTP for authenticator apps (Google Authenticator, Authy)
+- WhatsApp/Telegram OTP
+- Multi-factor authentication
+- Account recovery flows
+- WebAuthn/Passkeys (future)
+
+### Extension Timeline
+
+| Version | Duration | Deliverable | Dependency |
+|---------|----------|-------------|------------|
+| v1.0 | Week 1-7 | Core library (SimpleRBAC + EnterpriseRBAC) | None |
+| v1.1 | Week 8-9 | Notification system | v1.0 |
+| v1.2 | Week 10-12 | OAuth/social login | v1.1 |
+| v1.3 | Week 13-14 | Passwordless auth | v1.1 |
+| v1.4 | Week 15-16 | Advanced features (MFA, etc.) | v1.1-v1.3 |
+
+**Total Timeline**: 15-16 weeks for complete system (6-7 weeks core + 9 weeks extensions)
+
+### When to Adopt Extensions
+
+**Start with v1.0 (Core)**:
+- ✅ Focus on delivering core functionality first
+- ✅ Get production-ready auth working
+- ✅ Extensions can be added later without migration
+
+**Add v1.1 (Notifications)** when:
+- Need to send auth-related notifications
+- Want to decouple from specific email/SMS vendors
+- Planning to add OAuth or passwordless later
+
+**Add v1.2 (OAuth)** when:
+- Want to reduce signup friction
+- Users expect social login
+- Need to support multiple identity providers
+- Want to leverage existing social accounts
+
+**Add v1.3 (Passwordless)** when:
+- Want to eliminate passwords
+- Need SMS verification
+- Mobile-first authentication
+- Improve security with magic links
+
+**Add v1.4 (Advanced)** when:
+- Need multi-factor authentication
+- Require TOTP support
+- Need additional OTP channels
+- Compliance requires MFA
+
+### Extension Pricing (Implementation Cost)
+
+| Extension | Implementation Time | External Services Cost |
+|-----------|---------------------|------------------------|
+| v1.1 Notifications | 2 weeks | Free (webhook), Varies (SMS/email provider) |
+| v1.2 OAuth | 3 weeks | Free (OAuth providers are free) |
+| v1.3 Passwordless | 2 weeks | Varies (SMS: Twilio ~$0.0075/msg) |
+| v1.4 Advanced | 2 weeks | Varies (WhatsApp Business API) |
+
+**Note**: Extensions are designed to use your existing infrastructure. No vendor lock-in.
 
 ---
 
@@ -623,5 +798,5 @@ manager_role = await auth.role_service.create_role(
 
 ---
 
-**Last Updated**: 2025-01-14
+**Last Updated**: 2025-01-14 (Added authentication extensions comparison)
 **Next Review**: After Phase 1 implementation

@@ -1,6 +1,6 @@
 # OutlabsAuth Library Redesign - Vision Document
 
-**Version**: 1.0
+**Version**: 1.2
 **Date**: 2025-01-14
 **Status**: Planning Phase
 **Branch**: `library-redesign`
@@ -165,17 +165,25 @@ async def protected_route(
 - ✅ Health check system
 - ✅ Permission explanation debugger
 
+### Planned Extensions (Post-v1.0)
+- ⭕ **v1.1** (Week 8-9): Pluggable notification system
+- ⭕ **v1.2** (Week 10-12): OAuth/social login (Google, Facebook, Apple, GitHub)
+- ⭕ **v1.3** (Week 13-14): Passwordless authentication (magic links, OTP)
+- ⭕ **v1.4** (Week 15-16): Advanced features (TOTP/MFA, WebAuthn research)
+
+See [AUTH_EXTENSIONS.md](AUTH_EXTENSIONS.md) for detailed extension architecture and implementation.
+
 ### Nice to Have (Future Versions)
-- 🎯 Support for PostgreSQL (v1.1 - in addition to MongoDB)
-- 🎯 Admin UI components (v1.2 - optional package)
-- 🎯 OpenTelemetry integration (v1.2)
+- 🎯 Support for PostgreSQL (v1.5 - in addition to MongoDB)
+- 🎯 Admin UI components (v1.6 - optional package)
+- 🎯 OpenTelemetry integration (v1.6)
 - 🎯 Advanced audit log analytics (v2.0)
 
 ### Out of Scope (For Now)
 - ❌ Cross-application SSO (each app is independent)
 - ❌ Shared user directory across apps
 - ❌ Central admin panel for all apps
-- ❌ OAuth2 provider functionality
+- ❌ OAuth2 provider functionality (we're OAuth2 clients, not providers)
 
 ---
 
@@ -291,11 +299,7 @@ To maintain focus, we explicitly are NOT trying to:
    - FastAPI first and foremost
    - Not trying to work with Flask, Django, etc.
 
-4. **Provide Social Login**
-   - OAuth2 client is out of scope (for now)
-   - Apps can add this themselves if needed
-
-5. **Build an Admin UI**
+4. **Build an Admin UI**
    - Library provides backend logic only
    - Example admin UI as separate package (maybe)
    - Each app can build their own UI
@@ -304,7 +308,9 @@ To maintain focus, we explicitly are NOT trying to:
 
 ## Timeline
 
-**Total Duration**: 6-7 weeks (saved 1 week by combining into EnterpriseRBAC)
+**Total Duration**: 15-16 weeks
+
+### Core Library (v1.0) - 6-7 weeks
 
 - **Weeks 1-2**: Core library + SimpleRBAC preset
 - **Weeks 3-5**: EnterpriseRBAC (entity system + all optional features)
@@ -314,7 +320,14 @@ To maintain focus, we explicitly are NOT trying to:
 - **Week 6**: CLI tools, testing utilities, health checks
 - **Week 7**: Security hardening, performance testing, documentation, examples
 
-See [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) for detailed phase breakdown.
+### Optional Extensions (Post-v1.0) - 9 weeks
+
+- **Weeks 8-9**: v1.1 Notification system (prerequisite for auth extensions)
+- **Weeks 10-12**: v1.2 OAuth/social login (Google, Facebook, Apple, GitHub)
+- **Weeks 13-14**: v1.3 Passwordless authentication (magic links, OTP)
+- **Weeks 15-16**: v1.4 Advanced features (TOTP/MFA, WebAuthn research)
+
+See [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) for detailed phase breakdown and [AUTH_EXTENSIONS.md](AUTH_EXTENSIONS.md) for extension architecture.
 
 ---
 
@@ -326,7 +339,7 @@ This vision document is the hub. Related documents:
 1. **[LIBRARY_ARCHITECTURE.md](LIBRARY_ARCHITECTURE.md)** - Technical architecture details
 2. **[IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)** - Week-by-week implementation plan
 3. **[API_DESIGN.md](API_DESIGN.md)** - Developer experience and code examples
-4. **[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)** - Why we made specific choices
+4. **[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)** - Why we made specific choices (DD-001 to DD-027)
 5. **[COMPARISON_MATRIX.md](COMPARISON_MATRIX.md)** - Feature comparison: Simple vs Enterprise
 
 ### Production Guides
@@ -335,8 +348,14 @@ This vision document is the hub. Related documents:
 8. **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** - Scaling and production deployment
 9. **[ERROR_HANDLING.md](ERROR_HANDLING.md)** - Exception hierarchy and error patterns
 
+### Authentication Extensions (Optional, Post-v1.0)
+10. **[AUTH_EXTENSIONS.md](AUTH_EXTENSIONS.md)** - Authentication extensions (v1.1-v1.4)
+    - OAuth/social login, passwordless auth, notifications, MFA
+    - Extension architecture and integration patterns
+    - Timeline: 9 weeks after core library
+
 ### Reference (For External Users)
-10. **[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)** - Converting from centralized API (skip if starting fresh)
+11. **[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)** - Converting from centralized API (skip if starting fresh)
 
 ---
 
@@ -410,7 +429,7 @@ This is a living document. As we learn during implementation:
 - Clarify scope based on discoveries
 - Document trade-offs made
 
-**Last Updated**: 2025-01-14 (Revised to two presets)
+**Last Updated**: 2025-01-14 (Added authentication extensions)
 **Next Review**: After Phase 1 completion
 
 ---
@@ -419,5 +438,6 @@ This is a living document. As we learn during implementation:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.2 | 2025-01-14 | Added authentication extensions (v1.1-v1.4); updated timeline to 15-16 weeks; moved social login from non-goals to planned extensions |
 | 1.1 | 2025-01-14 | Revised to two presets (Simple, Enterprise); added new documentation; incorporated security, testing, deployment guides |
 | 1.0 | 2025-01-14 | Initial vision document |

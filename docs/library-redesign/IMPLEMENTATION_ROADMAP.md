@@ -1,21 +1,29 @@
 # OutlabsAuth Library - Implementation Roadmap
 
-**Version**: 1.1
+**Version**: 1.2
 **Date**: 2025-01-14
-**Total Duration**: 6-7 weeks (saved 1 week with two-preset architecture)
+**Total Duration**: 15-16 weeks (6-7 weeks core + 9 weeks extensions)
 **Status**: Planning Phase
 
 ---
 
 ## Overview
 
-This document breaks down the library redesign into 5 phases, each with clear deliverables and success criteria. Phases build on each other, with working software at each stage.
+This document breaks down the library redesign into 10 phases:
+- **Phases 1-6**: Core library (v1.0) - SimpleRBAC and EnterpriseRBAC presets
+- **Phases 7-10**: Optional authentication extensions (v1.1-v1.4) - Notifications, OAuth, passwordless, advanced features
+
+Each phase has clear deliverables and success criteria. Phases build on each other, with working software at each stage.
 
 **Key Change**: Consolidated into TWO presets (Simple and Enterprise) instead of three, saving 1 week by eliminating middle preset.
+
+**Extensions Model**: Post-v1.0 features are optional and work with both presets.
 
 ---
 
 ## Phase Summary
+
+### Core Library (v1.0)
 
 | Phase | Duration | Focus | Deliverable |
 |-------|----------|-------|-------------|
@@ -25,6 +33,15 @@ This document breaks down the library redesign into 5 phases, each with clear de
 | Phase 4 | Week 4 | EnterpriseRBAC - Optional features | Context-aware roles + ABAC + caching |
 | Phase 5 | Week 5 | EnterpriseRBAC complete + Testing | Production-ready enterprise preset |
 | Phase 6 | Week 6-7 | Documentation + Examples + Polish | Ready for production use |
+
+### Optional Extensions (v1.1-v1.4)
+
+| Phase | Duration | Focus | Deliverable |
+|-------|----------|-------|-------------|
+| Phase 7 | Week 8-9 | Notification system (v1.1) | Pluggable notification handlers |
+| Phase 8 | Week 10-12 | OAuth/social login (v1.2) | Google, Facebook, Apple providers |
+| Phase 9 | Week 13-14 | Passwordless auth (v1.3) | Magic links + OTP (email/SMS) |
+| Phase 10 | Week 15-16 | Advanced features (v1.4) | TOTP/MFA, WebAuthn research |
 
 ---
 
@@ -521,6 +538,464 @@ This document breaks down the library redesign into 5 phases, each with clear de
 
 ---
 
+## Phase 7: Notification System (v1.1, Weeks 8-9)
+
+### Goals
+- Implement pluggable notification handler abstraction
+- Pre-built handlers for common patterns
+- Notification event system
+- Testing utilities for notifications
+- **Prerequisite for**: OAuth (v1.2) and passwordless authentication (v1.3)
+
+### Tasks
+
+#### Week 8, Day 1-3: NotificationHandler Abstraction
+- [ ] Design `NotificationHandler` abstract base class:
+  ```python
+  class NotificationHandler(ABC):
+      @abstractmethod
+      async def send(self, event: NotificationEvent) -> bool:
+          pass
+  ```
+- [ ] Create `NotificationEvent` model:
+  - type (welcome, magic_link, otp, password_reset, etc.)
+  - recipient (email or phone)
+  - data (payload specific to event type)
+  - metadata (priority, expiration, etc.)
+- [ ] Integrate notification handler into `OutlabsAuth` base class
+- [ ] Add `NoOpHandler` (default, logs events but doesn't send)
+
+**Deliverable**: Core notification abstraction working
+
+#### Week 8, Day 4-7: Pre-built Handlers
+- [ ] `WebhookHandler`:
+  - Send notification events to webhook endpoint
+  - Configurable HTTP headers and authentication
+  - Retry logic with exponential backoff
+- [ ] `QueueHandler`:
+  - Push to message queue (Redis, RabbitMQ, SQS)
+  - Support for different queue backends
+  - Message serialization
+- [ ] `CallbackHandler`:
+  - Direct function callback
+  - Async and sync callback support
+- [ ] `CompositeHandler`:
+  - Combine multiple handlers
+  - Parallel or sequential execution
+
+**Deliverable**: Pre-built handlers implemented
+
+#### Week 9, Day 1-3: Testing & Documentation
+- [ ] Unit tests for all handlers (>90% coverage)
+- [ ] Integration tests with mock services
+- [ ] Test utilities for verifying notifications sent
+- [ ] Handler configuration examples
+- [ ] Documentation:
+  - NotificationHandler guide
+  - Building custom handlers
+  - Handler selection guide
+  - Testing notifications
+
+**Deliverable**: Complete notification system documentation
+
+#### Week 9, Day 4-5: Example Implementation
+- [ ] Update `examples/simple_app/` and `examples/enterprise_app/`:
+  - Add notification handler configuration
+  - Demonstrate webhook handler
+  - Demonstrate callback handler
+- [ ] Create example email service integration
+- [ ] Example SMS gateway integration
+
+**Deliverable**: Working examples with notifications
+
+### Success Criteria
+- [ ] NotificationHandler abstraction complete
+- [ ] All pre-built handlers working and tested
+- [ ] Test utilities available for notification testing
+- [ ] Documentation clear with examples
+- [ ] Example apps demonstrate notification integration
+- [ ] Ready for OAuth and passwordless authentication
+
+### Blockers & Risks
+- **Risk**: Too many handler types, complexity explosion
+  - *Mitigation*: Start with webhook and callback, add others as needed
+- **Risk**: Queue handler requires external services
+  - *Mitigation*: Make queue backends optional, document setup
+- **Risk**: Testing notifications is complex
+  - *Mitigation*: Provide test utilities that capture sent notifications
+
+---
+
+## Phase 8: OAuth/Social Login (v1.2, Weeks 10-12)
+
+### Goals
+- Provider abstraction for OAuth 2.0
+- Google, Facebook, Apple provider implementations
+- Account linking and unlinking
+- OAuth security (PKCE, state validation)
+- **Requires**: Notification system (v1.1)
+
+### Tasks
+
+#### Week 10, Day 1-3: OAuth Provider Abstraction
+- [ ] Design `OAuthProvider` abstract base class:
+  ```python
+  class OAuthProvider(ABC):
+      @abstractmethod
+      def get_authorization_url(state, redirect_uri, scopes) -> str
+      @abstractmethod
+      async def exchange_code(code, redirect_uri) -> OAuthToken
+      @abstractmethod
+      async def get_user_info(token) -> OAuthUserInfo
+  ```
+- [ ] Create `SocialAccount` model:
+  - provider (google, facebook, apple, etc.)
+  - provider_user_id
+  - email (from provider)
+  - email_verified
+  - profile_data
+  - created_at, updated_at
+- [ ] Create `AuthenticationChallenge` model (for state validation):
+  - code, challenge_type, user_id, expires_at
+- [ ] Update `UserModel`:
+  - Make `hashed_password` optional
+  - Add `auth_methods` list (PASSWORD, GOOGLE, FACEBOOK, etc.)
+  - Add `social_accounts` relationship
+
+**Deliverable**: OAuth foundation in place
+
+#### Week 10, Day 4-7: OAuth Service
+- [ ] Create `OAuthService`:
+  - `get_authorization_url()` - Generate OAuth URL with state
+  - `authenticate_with_provider()` - Exchange code, get/create user
+  - `link_provider_to_user()` - Link social account to existing user
+  - `unlink_provider()` - Remove social account (validate at least one auth method remains)
+- [ ] Implement account linking strategy:
+  - Auto-link by verified email only
+  - Create separate account if email unverified
+  - Manual linking from user settings
+- [ ] State validation with PKCE
+- [ ] Welcome email via notification handler for new users
+
+**Deliverable**: OAuth service complete
+
+#### Week 11, Day 1-4: Provider Implementations
+- [ ] `GoogleProvider`:
+  - Google OAuth 2.0 configuration
+  - Scopes: profile, email
+  - User info endpoint
+  - Token validation
+- [ ] `FacebookProvider`:
+  - Facebook Login configuration
+  - Scopes: public_profile, email
+  - Graph API integration
+  - Token validation
+- [ ] `AppleProvider`:
+  - Sign in with Apple configuration
+  - JWT token validation (Apple uses JWT)
+  - User info extraction
+  - Handle Apple's email relay
+
+**Deliverable**: Google, Facebook, Apple providers working
+
+#### Week 11, Day 5-7: Testing
+- [ ] Unit tests for OAuthService (>90% coverage)
+- [ ] Unit tests for each provider (mocked)
+- [ ] Integration tests:
+  - Authorization URL generation
+  - Code exchange
+  - Account linking scenarios
+  - Unlinking validation
+- [ ] Security tests:
+  - State validation
+  - PKCE flow
+  - Token validation
+  - Account takeover prevention
+
+**Deliverable**: Comprehensive OAuth testing
+
+#### Week 12, Day 1-3: Documentation & Examples
+- [ ] Create `AUTH_EXTENSIONS.md` or update existing docs:
+  - OAuth configuration guide
+  - Provider setup (credentials, redirect URIs)
+  - Account linking rules
+  - Security best practices
+- [ ] Update `SECURITY.md`:
+  - OAuth security considerations
+  - State and PKCE
+  - Preventing account takeover
+- [ ] Update example apps:
+  - Add OAuth configuration
+  - "Login with Google" buttons
+  - Social account management UI
+
+**Deliverable**: OAuth documentation and examples
+
+#### Week 12, Day 4-5: Additional Providers (Optional)
+- [ ] `GitHubProvider` (if time permits)
+- [ ] `MicrosoftProvider` (if time permits)
+- [ ] Document how to add custom providers
+
+**Deliverable**: Additional providers and extension guide
+
+### Success Criteria
+- [ ] OAuth abstraction works with multiple providers
+- [ ] Google, Facebook, Apple providers functional
+- [ ] Account linking follows security best practices
+- [ ] State validation and PKCE working
+- [ ] Test coverage >90%
+- [ ] Documentation complete with examples
+- [ ] Example apps demonstrate social login
+
+### Blockers & Risks
+- **Risk**: OAuth provider APIs change
+  - *Mitigation*: Abstract provider interface, make providers pluggable
+- **Risk**: Account linking edge cases
+  - *Mitigation*: Comprehensive testing, clear documentation of rules
+- **Risk**: Apple Sign-In complexity (JWT validation)
+  - *Mitigation*: Use PyJWT library, start with Google/Facebook first
+
+---
+
+## Phase 9: Passwordless Authentication (v1.3, Weeks 13-14)
+
+### Goals
+- Magic link authentication (email)
+- OTP authentication (email and SMS)
+- Challenge management system
+- Rate limiting and abuse prevention
+- **Requires**: Notification system (v1.1)
+
+### Tasks
+
+#### Week 13, Day 1-3: Challenge Management
+- [ ] Enhance `AuthenticationChallenge` model:
+  - challenge_type (magic_link, otp)
+  - recipient (email or phone)
+  - code (magic link token or OTP)
+  - attempts (for rate limiting)
+  - expires_at (15 minutes for magic link, 5 minutes for OTP)
+- [ ] Create `ChallengeService`:
+  - Generate secure codes (magic link: 32 bytes, OTP: 6 digits)
+  - Store challenge with expiration
+  - Verify challenge (check code, expiration, attempts)
+  - Rate limiting (max 3 attempts per challenge, max 5 challenges per hour)
+  - Cleanup expired challenges
+
+**Deliverable**: Challenge management working
+
+#### Week 13, Day 4-7: Passwordless Service
+- [ ] Create `PasswordlessService`:
+  - `send_magic_link(email)`:
+    - Generate magic link token
+    - Store challenge
+    - Send via notification handler
+  - `verify_magic_link(code)`:
+    - Validate challenge
+    - Return JWT tokens
+    - Create user if doesn't exist (optional)
+  - `send_otp(recipient, channel)`:
+    - Generate 6-digit OTP
+    - Store challenge
+    - Send via notification handler (email or SMS)
+  - `verify_otp(recipient, code)`:
+    - Validate challenge and code
+    - Return JWT tokens
+    - Create user if doesn't exist (optional)
+- [ ] Integrate with notification system:
+  - magic_link event
+  - otp event (email, SMS, future: WhatsApp, Telegram)
+- [ ] Update `UserModel`:
+  - Add MAGIC_LINK and OTP to auth_methods enum
+  - Optional phone_number field (for SMS OTP)
+
+**Deliverable**: Passwordless authentication working
+
+#### Week 14, Day 1-3: Rate Limiting & Security
+- [ ] Implement rate limiting:
+  - Per-recipient limits (5 challenges per hour)
+  - Per-IP limits (10 challenges per hour)
+  - Challenge attempt limits (3 attempts before invalidation)
+  - Exponential backoff for repeated failures
+- [ ] Security measures:
+  - Secure random code generation
+  - Challenge expiration (magic link: 15 min, OTP: 5 min)
+  - One-time use (challenge invalidated after verification)
+  - Prevent enumeration attacks (same response for valid/invalid recipient)
+- [ ] Audit logging:
+  - Log all challenge requests
+  - Log verification attempts (success and failure)
+
+**Deliverable**: Security hardening complete
+
+#### Week 14, Day 4-5: Testing
+- [ ] Unit tests for ChallengeService (>90% coverage)
+- [ ] Unit tests for PasswordlessService (>90% coverage)
+- [ ] Integration tests:
+  - Magic link flow
+  - Email OTP flow
+  - SMS OTP flow (mocked)
+  - Rate limiting tests
+  - Expiration tests
+  - Abuse prevention tests
+- [ ] Security tests:
+  - Enumeration attack prevention
+  - Brute force prevention
+  - Code guessing prevention
+
+**Deliverable**: Comprehensive passwordless testing
+
+#### Week 14, Day 6-7: Documentation & Examples
+- [ ] Update `AUTH_EXTENSIONS.md`:
+  - Magic link authentication guide
+  - OTP authentication guide
+  - Channel configuration (email, SMS)
+  - Rate limiting configuration
+  - Security considerations
+- [ ] Update `SECURITY.md`:
+  - Passwordless security best practices
+  - Rate limiting and abuse prevention
+  - Challenge expiration
+- [ ] Update example apps:
+  - "Login with magic link" option
+  - "Login with OTP" option
+  - Phone number input for SMS OTP
+
+**Deliverable**: Passwordless documentation and examples
+
+### Success Criteria
+- [ ] Magic link authentication working
+- [ ] Email OTP working
+- [ ] SMS OTP working (with external service)
+- [ ] Challenge management secure and tested
+- [ ] Rate limiting prevents abuse
+- [ ] Test coverage >90%
+- [ ] Documentation complete with examples
+- [ ] Example apps demonstrate passwordless login
+
+### Blockers & Risks
+- **Risk**: SMS OTP requires external service
+  - *Mitigation*: Use notification handler abstraction, document Twilio setup
+- **Risk**: Rate limiting too strict or too lenient
+  - *Mitigation*: Make limits configurable, document recommended values
+- **Risk**: Challenge enumeration attacks
+  - *Mitigation*: Same response for valid/invalid recipients, rate limiting
+
+---
+
+## Phase 10: Advanced Features (v1.4, Weeks 15-16)
+
+### Goals
+- TOTP/MFA (Time-based One-Time Password)
+- Extended OTP channels (WhatsApp, Telegram)
+- WebAuthn research and prototype
+- Account recovery flows
+
+### Tasks
+
+#### Week 15, Day 1-3: TOTP/MFA
+- [ ] Add `MFAMethod` model:
+  - user_id
+  - method_type (TOTP, SMS, EMAIL)
+  - totp_secret (for authenticator apps)
+  - is_primary
+  - created_at, last_used_at
+- [ ] Create `MFAService`:
+  - `enable_totp(user_id)` - Generate TOTP secret, return QR code
+  - `verify_totp(user_id, code)` - Validate TOTP code
+  - `generate_backup_codes(user_id)` - Generate recovery codes
+  - `require_mfa(user_id)` - Enforce MFA for user
+- [ ] Update authentication flow:
+  - After password/social login, check if MFA required
+  - Challenge for MFA verification
+  - Issue final JWT tokens after MFA verification
+- [ ] Recovery codes for lost authenticators
+
+**Deliverable**: TOTP/MFA working
+
+#### Week 15, Day 4-5: Extended OTP Channels
+- [ ] WhatsApp OTP:
+  - Integrate with WhatsApp Business API (via notification handler)
+  - Send OTP via WhatsApp message
+- [ ] Telegram OTP:
+  - Integrate with Telegram Bot API (via notification handler)
+  - Send OTP via Telegram message
+- [ ] Update `PasswordlessService`:
+  - Support whatsapp and telegram channels
+  - Channel selection based on user preference
+
+**Deliverable**: WhatsApp and Telegram OTP working
+
+#### Week 15, Day 6-7: Account Recovery
+- [ ] Account recovery flows:
+  - Forgot password with email verification
+  - Account recovery with backup codes
+  - Account recovery with support verification
+- [ ] Update `AuthService`:
+  - `initiate_password_reset(email)` - Send reset link
+  - `reset_password(code, new_password)` - Complete reset
+  - `verify_backup_code(user_id, code)` - Bypass MFA with backup code
+
+**Deliverable**: Account recovery flows
+
+#### Week 16, Day 1-3: WebAuthn Research & Prototype
+- [ ] Research WebAuthn/FIDO2 standards
+- [ ] Evaluate Python libraries (py_webauthn)
+- [ ] Create proof-of-concept:
+  - Credential registration
+  - Authentication with passkey
+  - Biometric authentication support
+- [ ] Document findings and recommendations
+- [ ] Decide if WebAuthn should be in v1.4 or deferred to v2.0
+
+**Deliverable**: WebAuthn prototype and decision
+
+#### Week 16, Day 4-5: Testing & Documentation
+- [ ] Unit tests for MFA features (>90% coverage)
+- [ ] Integration tests for TOTP flow
+- [ ] Integration tests for extended OTP channels
+- [ ] Update `AUTH_EXTENSIONS.md`:
+  - TOTP/MFA setup guide
+  - WhatsApp and Telegram OTP configuration
+  - Account recovery guides
+  - WebAuthn findings (if implemented)
+- [ ] Update example apps:
+  - MFA enrollment UI
+  - TOTP verification UI
+  - Backup code management
+
+**Deliverable**: Advanced features documentation
+
+#### Week 16, Day 6-7: Final Polish & Release
+- [ ] Code review and refactoring
+- [ ] Performance testing for all auth flows
+- [ ] Security audit for all extensions
+- [ ] Update all documentation
+- [ ] Version tagging (v1.4.0)
+- [ ] Release notes for extensions
+
+**Deliverable**: v1.4 release
+
+### Success Criteria
+- [ ] TOTP/MFA working and tested
+- [ ] WhatsApp and Telegram OTP functional
+- [ ] Account recovery flows complete
+- [ ] WebAuthn prototype (or deferral decision)
+- [ ] Test coverage >90%
+- [ ] Documentation updated
+- [ ] All extensions working together
+- [ ] Ready for production use
+
+### Blockers & Risks
+- **Risk**: WebAuthn complexity too high for v1.4
+  - *Mitigation*: Defer to v2.0 if needed, focus on TOTP/MFA
+- **Risk**: WhatsApp/Telegram require business accounts
+  - *Mitigation*: Document setup requirements, make optional
+- **Risk**: MFA adds significant UX complexity
+  - *Mitigation*: Make MFA optional, provide good defaults
+
+---
+
 ## Milestones & Checkpoints
 
 ### Milestone 1: SimpleRBAC Working (End of Week 2)
@@ -592,6 +1067,73 @@ This document breaks down the library redesign into 5 phases, each with clear de
 - ✅ All examples working
 - ✅ Version 1.0.0 released
 
+### Milestone 6: Notification System (End of Week 9)
+**Demo**: Pluggable notification handlers
+- Configure webhook handler
+- Configure callback handler
+- Send notification events (welcome, password reset)
+- Test notification delivery
+- Demonstrate custom handler
+
+**Deliverables**:
+- ✅ NotificationHandler abstraction complete
+- ✅ WebhookHandler, QueueHandler, CallbackHandler, CompositeHandler
+- ✅ Test utilities for notifications
+- ✅ Documentation complete
+- ✅ Example apps updated with notifications
+- ✅ Version 1.1.0 released
+
+### Milestone 7: OAuth/Social Login (End of Week 12)
+**Demo**: Social login with multiple providers
+- Login with Google
+- Login with Facebook
+- Login with Apple
+- Account linking (by verified email)
+- Account management (unlink provider)
+
+**Deliverables**:
+- ✅ OAuth provider abstraction complete
+- ✅ Google, Facebook, Apple providers working
+- ✅ Account linking secure and functional
+- ✅ State validation and PKCE
+- ✅ Test coverage >90%
+- ✅ Documentation and examples complete
+- ✅ Version 1.2.0 released
+
+### Milestone 8: Passwordless Authentication (End of Week 14)
+**Demo**: Passwordless login flows
+- Login with magic link (email)
+- Login with email OTP
+- Login with SMS OTP
+- Rate limiting demonstration
+- Security measures active
+
+**Deliverables**:
+- ✅ Magic link authentication working
+- ✅ Email and SMS OTP working
+- ✅ Challenge management secure
+- ✅ Rate limiting and abuse prevention
+- ✅ Test coverage >90%
+- ✅ Documentation and examples complete
+- ✅ Version 1.3.0 released
+
+### Milestone 9: Advanced Features Complete (End of Week 16)
+**Demo**: Complete authentication system
+- TOTP/MFA enrollment and verification
+- WhatsApp/Telegram OTP
+- Account recovery flows
+- WebAuthn prototype (if implemented)
+- All auth methods working together
+
+**Deliverables**:
+- ✅ TOTP/MFA working
+- ✅ Extended OTP channels (WhatsApp, Telegram)
+- ✅ Account recovery flows
+- ✅ WebAuthn prototype or deferral decision
+- ✅ All extensions working together
+- ✅ Complete documentation
+- ✅ Version 1.4.0 released
+
 ---
 
 ## Weekly Status Updates
@@ -653,15 +1195,22 @@ Template:
 ## Resource Allocation
 
 ### Developer Time
-- **Primary Developer**: Full-time for 6-7 weeks
+- **Core Library (v1.0)**: Full-time for 6-7 weeks
+- **Extensions (v1.1-v1.4)**: Full-time for 9 weeks (optional)
+- **Total**: 15-16 weeks for complete system
 - **Code Reviews**: 2-3 hours per week
 - **Testing Support**: As needed
 
 ### Infrastructure
 - Dev MongoDB instance
-- Dev Redis instance
+- Dev Redis instance (for caching and queue handlers)
 - CI/CD pipeline (GitHub Actions)
 - Documentation hosting (GitHub Pages or similar)
+- External service accounts for testing (optional):
+  - Google/Facebook/Apple OAuth apps
+  - Twilio for SMS testing
+  - WhatsApp Business API (optional)
+  - Telegram Bot API (optional)
 
 ---
 
@@ -705,25 +1254,28 @@ Template:
 
 ---
 
-## Post-Launch Roadmap (v1.1+)
+## Post-Launch Roadmap (v1.5+)
 
-### Version 1.1 (4 weeks after v1.0)
+**Note**: v1.1-v1.4 authentication extensions are now part of the main roadmap (Phases 7-10).
+
+### Version 1.5 (Weeks 17-20, optional)
 - PostgreSQL support
 - Multi-tenant mode refinements
 - Additional ABAC operators
 - Performance optimizations
+- Admin UI component library (optional)
 
-### Version 1.2 (8 weeks after v1.0)
-- Admin UI component library
+### Version 1.6 (Weeks 21-24, optional)
 - Enhanced CLI tools
 - Enhanced audit logging
 - OpenTelemetry integration
+- Advanced analytics dashboard
 
 ### Version 2.0 (6 months after v1.0)
 - Plugin system for extensions
-- Additional database backends
-- Advanced analytics
-- Open source release
+- Additional database backends (PostgreSQL, MySQL)
+- SAML and LDAP support
+- Open source release (if approved)
 
 ---
 
@@ -751,10 +1303,11 @@ Track changes to the roadmap:
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2025-01-14 | Added authentication extensions (Phases 7-10) | Integrated OAuth, passwordless auth, notifications, and advanced features into main roadmap; total timeline now 15-16 weeks (6-7 weeks core + 9 weeks extensions) |
 | 2025-01-14 | Revised to two-preset architecture | Consolidated HierarchicalRBAC and FullFeatured into EnterpriseRBAC with feature flags; added CLI tools, health checks, and comprehensive production guides |
 | 2025-01-14 | Initial roadmap created | Project kickoff |
 
 ---
 
-**Last Updated**: 2025-01-14 (Revised to two presets, 6-7 weeks)
+**Last Updated**: 2025-01-14 (Added authentication extensions: 10 phases, 15-16 weeks total)
 **Next Review**: End of Week 2 (after Milestone 1)

@@ -1,6 +1,6 @@
 # OutlabsAuth Library - Technical Architecture
 
-**Version**: 1.0
+**Version**: 1.2
 **Date**: 2025-01-14
 **Status**: Design Phase
 
@@ -13,9 +13,10 @@
 3. [Preset Architecture](#preset-architecture)
 4. [Data Models](#data-models)
 5. [Service Layer](#service-layer)
-6. [Dependency Injection](#dependency-injection)
-7. [Configuration System](#configuration-system)
-8. [Testing Strategy](#testing-strategy)
+6. [Authentication Extensions (v1.1-v1.4, Optional)](#authentication-extensions-v11-v14-optional)
+7. [Dependency Injection](#dependency-injection)
+8. [Configuration System](#configuration-system)
+9. [Testing Strategy](#testing-strategy)
 
 ---
 
@@ -617,6 +618,569 @@ class EntityService:
 
 ---
 
+## Authentication Extensions (v1.1-v1.4, Optional)
+
+**Status**: Post-v1.0 features
+**Timeline**: Weeks 8-16 (9 weeks total)
+**Compatibility**: Work with both SimpleRBAC and EnterpriseRBAC
+
+### Overview
+
+Authentication extensions add modern auth capabilities beyond password-based authentication. All extensions are **optional** and can be adopted independently based on application needs.
+
+**Extension Phases**:
+- **v1.1 (Week 8-9)**: Notification system (prerequisite)
+- **v1.2 (Week 10-12)**: OAuth/social login
+- **v1.3 (Week 13-14)**: Passwordless authentication
+- **v1.4 (Week 15-16)**: Advanced features (MFA, WebAuthn)
+
+### Extension 1: Notification Handler Abstraction (v1.1)
+
+**Purpose**: Pluggable system for sending auth-related notifications without vendor lock-in.
+
+#### NotificationHandler Interface
+```python
+class NotificationEvent(BaseModel):
+    """Event emitted when notification needs to be sent"""
+    type: str  # "welcome", "magic_link", "otp", "password_reset", etc.
+    recipient: str  # Email or phone number
+    data: Dict[str, Any]  # Event-specific payload
+    metadata: Optional[Dict[str, Any]] = None
+
+class NotificationHandler(ABC):
+    """Abstract base class for notification handlers"""
+
+    @abstractmethod
+    async def send(self, event: NotificationEvent) -> bool:
+        """
+        Send notification event.
+        Returns True if sent successfully, False otherwise.
+        """
+        pass
+```
+
+#### Pre-built Handlers
+```python
+# Default handler (logs but doesn't send)
+class NoOpHandler(NotificationHandler):
+    async def send(self, event: NotificationEvent) -> bool:
+        logger.info(f"Notification event: {event.type} to {event.recipient}")
+        return True
+
+# Webhook handler (send to HTTP endpoint)
+class WebhookHandler(NotificationHandler):
+    def __init__(self, webhook_url: str, headers: Optional[Dict] = None):
+        self.webhook_url = webhook_url
+        self.headers = headers or {}
+
+    async def send(self, event: NotificationEvent) -> bool:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                self.webhook_url,
+                json=event.dict(),
+                headers=self.headers
+            )
+            return response.status_code == 200
+
+# Queue handler (push to message queue)
+class QueueHandler(NotificationHandler):
+    def __init__(self, queue_client: Any, queue_name: str):
+        self.queue_client = queue_client
+        self.queue_name = queue_name
+
+    async def send(self, event: NotificationEvent) -> bool:
+        await self.queue_client.send_message(
+            self.queue_name,
+            event.json()
+        )
+        return True
+
+# Callback handler (direct function call)
+class CallbackHandler(NotificationHandler):
+    def __init__(self, callback: Callable[[NotificationEvent], Awaitable[bool]]):
+        self.callback = callback
+
+    async def send(self, event: NotificationEvent) -> bool:
+        return await self.callback(event)
+
+# Composite handler (combine multiple handlers)
+class CompositeHandler(NotificationHandler):
+    def __init__(self, handlers: List[NotificationHandler], parallel: bool = True):
+        self.handlers = handlers
+        self.parallel = parallel
+
+    async def send(self, event: NotificationEvent) -> bool:
+        if self.parallel:
+            results = await asyncio.gather(
+                *[h.send(event) for h in self.handlers],
+                return_exceptions=True
+            )
+            return all(r is True for r in results if not isinstance(r, Exception))
+        else:
+            for handler in self.handlers:
+                if not await handler.send(event):
+                    return False
+            return True
+```
+
+#### Usage Example
+```python
+# Configure notification handler
+notification_handler = WebhookHandler(
+    webhook_url="https://api.internal/notifications",
+    headers={"X-API-Key": os.getenv("NOTIFICATION_API_KEY")}
+)
+
+auth = SimpleRBAC(
+    database=mongo_client,
+    notification_handler=notification_handler
+)
+
+# Notification is sent automatically
+await auth.user_service.send_welcome_email(user)
+```
+
+### Extension 2: OAuth/Social Login (v1.2)
+
+**Purpose**: Enable "Login with Google/Facebook/Apple" functionality.
+**Requires**: Notification system (v1.1) for welcome emails
+
+#### OAuth Provider Interface
+```python
+class OAuthToken(BaseModel):
+    access_token: str
+    token_type: str
+    expires_in: int
+    refresh_token: Optional[str] = None
+
+class OAuthUserInfo(BaseModel):
+    provider_user_id: str
+    email: Optional[EmailStr] = None
+    email_verified: bool = False
+    name: Optional[str] = None
+    picture: Optional[str] = None
+    profile_data: Optional[Dict[str, Any]] = None
+
+class OAuthProvider(ABC):
+    """Abstract base class for OAuth providers"""
+
+    @abstractmethod
+    def get_authorization_url(
+        self,
+        state: str,
+        redirect_uri: str,
+        scopes: Optional[List[str]] = None
+    ) -> str:
+        """Generate OAuth authorization URL"""
+        pass
+
+    @abstractmethod
+    async def exchange_code(
+        self,
+        code: str,
+        redirect_uri: str
+    ) -> OAuthToken:
+        """Exchange authorization code for tokens"""
+        pass
+
+    @abstractmethod
+    async def get_user_info(self, token: OAuthToken) -> OAuthUserInfo:
+        """Get user information from provider"""
+        pass
+```
+
+#### New Models
+```python
+class AuthMethod(str, Enum):
+    PASSWORD = "password"
+    GOOGLE = "google"
+    FACEBOOK = "facebook"
+    APPLE = "apple"
+    GITHUB = "github"
+    MICROSOFT = "microsoft"
+    MAGIC_LINK = "magic_link"
+    SMS_OTP = "sms_otp"
+    EMAIL_OTP = "email_otp"
+    TOTP = "totp"
+
+class SocialAccountModel(BaseDocument):
+    """Social account linked to user"""
+    user: Link[UserModel]
+    provider: str  # "google", "facebook", "apple", etc.
+    provider_user_id: str
+    email: Optional[EmailStr] = None
+    email_verified: bool = False
+    profile_data: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+class UserModel(BaseDocument):
+    # ... existing fields ...
+    hashed_password: Optional[str] = None  # Optional now
+    auth_methods: List[AuthMethod] = Field(default_factory=lambda: [AuthMethod.PASSWORD])
+    phone_number: Optional[str] = None  # For SMS OTP
+```
+
+#### OAuth Service
+```python
+class OAuthService:
+    """OAuth authentication service"""
+
+    async def get_authorization_url(
+        self,
+        provider: str,
+        redirect_uri: str
+    ) -> str:
+        """Generate OAuth authorization URL with state validation"""
+        pass
+
+    async def authenticate_with_provider(
+        self,
+        provider: str,
+        code: str,
+        redirect_uri: str,
+        auto_link_by_email: bool = True
+    ) -> Tuple[UserModel, TokenPair, bool]:
+        """
+        Authenticate user with OAuth provider.
+        Returns (user, tokens, is_new_user)
+
+        Rules:
+        - If social email is verified: auto-link to existing user
+        - If social email is unverified: create separate account
+        - If no existing user: create new user
+        """
+        pass
+
+    async def link_provider_to_user(
+        self,
+        user_id: str,
+        provider: str,
+        code: str,
+        redirect_uri: str
+    ) -> SocialAccountModel:
+        """Link social account to existing user"""
+        pass
+
+    async def unlink_provider(
+        self,
+        user_id: str,
+        provider: str
+    ) -> None:
+        """Unlink social account (must have alternative auth method)"""
+        pass
+```
+
+#### Usage Example
+```python
+oauth_providers = {
+    "google": GoogleProvider(
+        client_id=os.getenv("GOOGLE_CLIENT_ID"),
+        client_secret=os.getenv("GOOGLE_CLIENT_SECRET")
+    ),
+    "facebook": FacebookProvider(
+        client_id=os.getenv("FACEBOOK_CLIENT_ID"),
+        client_secret=os.getenv("FACEBOOK_CLIENT_SECRET")
+    )
+}
+
+auth = SimpleRBAC(
+    database=mongo_client,
+    notification_handler=notification_handler,
+    oauth_providers=oauth_providers
+)
+
+# Get authorization URL
+auth_url = await auth.oauth_service.get_authorization_url(
+    provider="google",
+    redirect_uri="https://myapp.com/auth/callback"
+)
+
+# Handle callback
+user, tokens, is_new = await auth.oauth_service.authenticate_with_provider(
+    provider="google",
+    code=request.query_params["code"],
+    redirect_uri="https://myapp.com/auth/callback"
+)
+```
+
+### Extension 3: Passwordless Authentication (v1.3)
+
+**Purpose**: Magic links and OTP-based authentication.
+**Requires**: Notification system (v1.1) for sending links/codes
+
+#### Challenge Management
+```python
+class ChallengeType(str, Enum):
+    MAGIC_LINK = "magic_link"
+    EMAIL_OTP = "email_otp"
+    SMS_OTP = "sms_otp"
+    WHATSAPP_OTP = "whatsapp_otp"
+    TELEGRAM_OTP = "telegram_otp"
+
+class AuthenticationChallengeModel(BaseDocument):
+    """Temporary authentication challenge"""
+    challenge_type: ChallengeType
+    recipient: str  # Email or phone
+    code: str  # Magic link token or OTP
+    user_id: Optional[str] = None
+    attempts: int = 0
+    max_attempts: int = 3
+    expires_at: datetime
+    created_at: datetime
+```
+
+#### Passwordless Service
+```python
+class PasswordlessService:
+    """Passwordless authentication service"""
+
+    # Magic Links
+    async def send_magic_link(
+        self,
+        email: EmailStr,
+        create_user_if_not_exists: bool = False
+    ) -> None:
+        """
+        Generate magic link and send via notification handler.
+        Magic link expires in 15 minutes.
+        """
+        pass
+
+    async def verify_magic_link(
+        self,
+        code: str
+    ) -> TokenPair:
+        """Verify magic link and return JWT tokens"""
+        pass
+
+    # OTP
+    async def send_otp(
+        self,
+        recipient: str,
+        channel: str = "email",  # "email", "sms", "whatsapp", "telegram"
+        create_user_if_not_exists: bool = False
+    ) -> None:
+        """
+        Generate 6-digit OTP and send via notification handler.
+        OTP expires in 5 minutes.
+        """
+        pass
+
+    async def verify_otp(
+        self,
+        recipient: str,
+        code: str
+    ) -> TokenPair:
+        """Verify OTP code and return JWT tokens"""
+        pass
+```
+
+#### Usage Example
+```python
+auth = SimpleRBAC(
+    database=mongo_client,
+    notification_handler=notification_handler
+)
+
+# Magic link
+await auth.passwordless_service.send_magic_link("user@example.com")
+tokens = await auth.passwordless_service.verify_magic_link(code)
+
+# SMS OTP
+await auth.passwordless_service.send_otp("+1234567890", channel="sms")
+tokens = await auth.passwordless_service.verify_otp("+1234567890", "123456")
+```
+
+### Extension 4: Advanced Features (v1.4)
+
+**Purpose**: MFA, TOTP, extended OTP channels, and WebAuthn research.
+
+#### TOTP/MFA
+```python
+class MFAMethodModel(BaseDocument):
+    """Multi-factor authentication method"""
+    user: Link[UserModel]
+    method_type: str  # "totp", "sms", "email"
+    totp_secret: Optional[str] = None  # For authenticator apps
+    is_primary: bool = False
+    created_at: datetime
+    last_used_at: Optional[datetime] = None
+
+class MFAService:
+    """Multi-factor authentication service"""
+
+    async def enable_totp(self, user_id: str) -> Tuple[str, str]:
+        """
+        Enable TOTP for user.
+        Returns (secret, qr_code_uri)
+        """
+        pass
+
+    async def verify_totp(self, user_id: str, code: str) -> bool:
+        """Verify TOTP code from authenticator app"""
+        pass
+
+    async def generate_backup_codes(self, user_id: str) -> List[str]:
+        """Generate recovery codes for lost authenticator"""
+        pass
+
+    async def require_mfa(self, user_id: str) -> None:
+        """Enforce MFA for user"""
+        pass
+```
+
+### Package Structure Changes (Extensions)
+
+```python
+outlabs_auth/
+├── extensions/                  # NEW: Extension modules
+│   ├── __init__.py
+│   ├── notifications/
+│   │   ├── __init__.py
+│   │   ├── base.py             # NotificationHandler ABC
+│   │   ├── webhook.py          # WebhookHandler
+│   │   ├── queue.py            # QueueHandler
+│   │   └── callback.py         # CallbackHandler
+│   ├── oauth/
+│   │   ├── __init__.py
+│   │   ├── base.py             # OAuthProvider ABC
+│   │   ├── google.py           # GoogleProvider
+│   │   ├── facebook.py         # FacebookProvider
+│   │   └── apple.py            # AppleProvider
+│   ├── passwordless/
+│   │   ├── __init__.py
+│   │   ├── service.py          # PasswordlessService
+│   │   └── challenge.py        # Challenge management
+│   └── mfa/
+│       ├── __init__.py
+│       ├── service.py          # MFAService
+│       └── totp.py             # TOTP implementation
+├── models/
+│   ├── social_account.py       # NEW
+│   ├── auth_challenge.py       # NEW
+│   └── mfa_method.py           # NEW
+└── services/
+    ├── oauth.py                # NEW
+    ├── passwordless.py         # NEW
+    └── mfa.py                  # NEW
+```
+
+### Configuration Changes
+
+```python
+class SimpleConfig(AuthConfig):
+    """Configuration with optional extensions"""
+
+    # Notification system (v1.1)
+    notification_handler: Optional[NotificationHandler] = None
+
+    # OAuth providers (v1.2)
+    oauth_providers: Optional[Dict[str, OAuthProvider]] = None
+
+    # Passwordless (v1.3)
+    enable_magic_links: bool = False
+    enable_otp: bool = False
+    magic_link_expire_minutes: int = 15
+    otp_expire_minutes: int = 5
+
+    # MFA (v1.4)
+    enable_mfa: bool = False
+    mfa_required_for_users: List[str] = Field(default_factory=list)
+```
+
+### Extension Integration Example
+
+```python
+from outlabs_auth import SimpleRBAC
+from outlabs_auth.extensions.notifications import WebhookHandler
+from outlabs_auth.extensions.oauth import GoogleProvider, FacebookProvider
+
+# Full configuration with all extensions
+notification_handler = WebhookHandler(
+    webhook_url="https://api.internal/notifications",
+    headers={"X-API-Key": os.getenv("API_KEY")}
+)
+
+oauth_providers = {
+    "google": GoogleProvider(
+        client_id=os.getenv("GOOGLE_CLIENT_ID"),
+        client_secret=os.getenv("GOOGLE_CLIENT_SECRET")
+    ),
+    "facebook": FacebookProvider(
+        client_id=os.getenv("FACEBOOK_CLIENT_ID"),
+        client_secret=os.getenv("FACEBOOK_CLIENT_SECRET")
+    )
+}
+
+auth = SimpleRBAC(
+    database=mongo_client,
+    notification_handler=notification_handler,
+    oauth_providers=oauth_providers,
+    enable_magic_links=True,
+    enable_otp=True,
+    enable_mfa=True
+)
+
+# All auth methods now available:
+# 1. Password (built-in)
+tokens = await auth.auth_service.login("user@example.com", "password")
+
+# 2. OAuth (v1.2)
+tokens = await auth.oauth_service.authenticate_with_provider("google", code, redirect_uri)
+
+# 3. Magic link (v1.3)
+await auth.passwordless_service.send_magic_link("user@example.com")
+tokens = await auth.passwordless_service.verify_magic_link(code)
+
+# 4. OTP (v1.3)
+await auth.passwordless_service.send_otp("+1234567890", channel="sms")
+tokens = await auth.passwordless_service.verify_otp("+1234567890", "123456")
+
+# 5. TOTP/MFA (v1.4)
+secret, qr_code = await auth.mfa_service.enable_totp(user.id)
+is_valid = await auth.mfa_service.verify_totp(user.id, totp_code)
+```
+
+### Key Design Principles
+
+1. **Optional**: All extensions are opt-in
+2. **Independent**: Extensions can be adopted separately
+3. **Compatible**: Work with both SimpleRBAC and EnterpriseRBAC
+4. **No Vendor Lock-in**: Use pluggable abstractions (notification handlers, OAuth providers)
+5. **Security First**: Rate limiting, expiration, state validation built-in
+6. **Documented**: Comprehensive guides in AUTH_EXTENSIONS.md and SECURITY.md
+
+### Testing Extensions
+
+```python
+# Test notification handler
+async def test_webhook_handler():
+    handler = WebhookHandler("https://webhook.site/...")
+    event = NotificationEvent(
+        type="welcome",
+        recipient="test@example.com",
+        data={"name": "Test User"}
+    )
+    assert await handler.send(event) is True
+
+# Test OAuth flow
+async def test_google_oauth(auth_with_oauth):
+    # Mock OAuth provider
+    auth_url = await auth_with_oauth.oauth_service.get_authorization_url(
+        "google", "http://localhost/callback"
+    )
+    assert "accounts.google.com" in auth_url
+
+# Test magic link
+async def test_magic_link(auth_with_notifications):
+    await auth_with_notifications.passwordless_service.send_magic_link("test@example.com")
+    # Verify notification was sent
+    # Verify challenge created in database
+```
+
+---
+
 ## Dependency Injection
 
 FastAPI dependencies for common patterns:
@@ -923,5 +1487,5 @@ role_permissions:{role_id}              # TTL: 15 minutes
 
 ---
 
-**Last Updated**: 2025-01-14 (Revised to two presets)
+**Last Updated**: 2025-01-14 (Added authentication extensions architecture)
 **Next Review**: After Phase 1 prototype

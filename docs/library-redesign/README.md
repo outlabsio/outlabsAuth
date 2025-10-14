@@ -1,6 +1,6 @@
 # Library Redesign Documentation
 
-**Version**: 1.1 (Revised to Two Presets)
+**Version**: 1.2 (Two Presets + Authentication Extensions)
 **Date**: 2025-01-14
 
 This directory contains all planning and design documentation for converting OutlabsAuth from a centralized API service to a FastAPI library.
@@ -25,11 +25,12 @@ This directory contains all planning and design documentation for converting Out
    - Service layer architecture
    - Performance considerations
 
-3. **[IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)** - 6-7 week implementation plan
-   - 6 phases (consolidated from 7)
+3. **[IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)** - 15-16 week implementation plan
+   - 10 phases total (6 core + 4 optional extensions)
    - Week-by-week tasks
    - Milestones and checkpoints
    - Success metrics
+   - Core: 6-7 weeks, Extensions: 9 weeks (optional)
 
 ### Developer Resources
 4. **[API_DESIGN.md](API_DESIGN.md)** - Developer experience and examples
@@ -94,10 +95,19 @@ This directory contains all planning and design documentation for converting Out
     - Rollback plan
 
 11. **[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)** - Architectural decisions log
-    - 21 major decisions documented (DD-001 to DD-021)
+    - 27 major decisions documented (DD-001 to DD-027)
     - Rationale and trade-offs
     - Alternatives considered
-    - New decisions: Two-preset architecture, CLI tools, health checks, production guides
+    - New decisions: Two-preset architecture, CLI tools, health checks, production guides, auth extensions
+
+### Authentication Extensions (Optional, Post-v1.0)
+12. **[AUTH_EXTENSIONS.md](AUTH_EXTENSIONS.md)** - Authentication extensions (v1.1-v1.4)
+    - OAuth/social login (Google, Facebook, Apple, GitHub)
+    - Passwordless authentication (magic links, OTP)
+    - Pluggable notification system
+    - Advanced features (TOTP/MFA, WebAuthn research)
+    - Extension architecture and integration patterns
+    - Timeline: 9 weeks after v1.0 (optional)
 
 ---
 
@@ -117,6 +127,8 @@ Do you need organizational hierarchy (departments/teams)?
 - **YES** → Use EnterpriseRBAC (enable optional features as needed)
 
 ### Timeline (UPDATED)
+
+#### Core Library (v1.0)
 - **Phase 1** (Week 1): Core foundation + SimpleRBAC
 - **Phase 2** (Week 2): Complete SimpleRBAC + Tests
 - **Phase 3** (Week 3): EnterpriseRBAC - Entity system
@@ -124,7 +136,17 @@ Do you need organizational hierarchy (departments/teams)?
 - **Phase 5** (Week 5): EnterpriseRBAC complete + Testing
 - **Phase 6** (Week 6-7): CLI tools, health checks, documentation, examples
 
-**Total Duration**: 6-7 weeks (saved 1 week by consolidating)
+**Core Duration**: 6-7 weeks (production-ready library)
+
+#### Optional Extensions (Post-v1.0)
+- **Phase 7** (Week 8-9): Notification system (v1.1) - Prerequisite for auth extensions
+- **Phase 8** (Week 10-12): OAuth/social login (v1.2) - Google, Facebook, Apple, GitHub
+- **Phase 9** (Week 13-14): Passwordless auth (v1.3) - Magic links, OTP (email/SMS)
+- **Phase 10** (Week 15-16): Advanced features (v1.4) - TOTP/MFA, WebAuthn research
+
+**Extension Duration**: 9 weeks (optional, can be adopted as needed)
+
+**Total Duration**: 15-16 weeks (6-7 weeks core + 9 weeks extensions)
 
 ### Key Changes
 - ❌ Remove: `platform_id`, multi-platform complexity, middle preset
@@ -149,15 +171,17 @@ auth = EnterpriseRBAC(
 
 ## 📊 Documentation Stats
 
-- **Total Lines**: ~12,000+ lines of comprehensive documentation
-- **Documents**: 11 comprehensive markdown files
+- **Total Lines**: ~15,000+ lines of comprehensive documentation
+- **Documents**: 12 comprehensive markdown files
   - 5 core design documents
-  - 4 production guides (NEW)
+  - 4 production guides
+  - 1 authentication extensions guide (NEW)
   - 2 reference documents
-- **Timeline**: 6-7 weeks from start to production (saved 1 week)
-- **Presets**: 2 (SimpleRBAC, EnterpriseRBAC)
-- **Design Decisions**: 21 documented (DD-001 to DD-021)
+- **Timeline**: 15-16 weeks total (6-7 weeks core + 9 weeks optional extensions)
+- **Presets**: 2 (SimpleRBAC, EnterpriseRBAC) - extensions work with both
+- **Design Decisions**: 27 documented (DD-001 to DD-027)
 - **Example Apps**: 3 planned (simple_app, enterprise_basic, enterprise_full)
+- **Auth Extensions**: 4 versions (v1.1 Notifications, v1.2 OAuth, v1.3 Passwordless, v1.4 Advanced)
 
 ---
 
@@ -189,6 +213,13 @@ auth = EnterpriseRBAC(
 2. Use permission explainer: `outlabs-auth permissions explain`
 3. Review **DEPLOYMENT_GUIDE.md** troubleshooting section
 
+### For Authentication Extensions (Optional)
+1. Review **AUTH_EXTENSIONS.md** (complete extension guide)
+2. Start with v1.1 Notification system (prerequisite for others)
+3. Choose extensions based on needs (OAuth, passwordless, MFA)
+4. Check **DESIGN_DECISIONS.md** for DD-022 to DD-027 (extension rationale)
+5. Extensions work with both SimpleRBAC and EnterpriseRBAC
+
 ---
 
 ## 📅 Version History
@@ -197,6 +228,18 @@ auth = EnterpriseRBAC(
 |---------|------|---------|
 | 1.0 | 2025-01-14 | Initial comprehensive documentation (3 presets) |
 | 1.1 | 2025-01-14 | Revised to 2 presets + 4 production guides |
+| 1.2 | 2025-01-14 | Added authentication extensions (v1.1-v1.4) |
+
+**Key Changes in v1.2**:
+- Added AUTH_EXTENSIONS.md (comprehensive authentication extensions guide)
+- Added 6 new design decisions (DD-022 to DD-027)
+- Extended implementation roadmap with Phases 7-10 (9 weeks of optional extensions)
+- Added OAuth/social login support (Google, Facebook, Apple, GitHub)
+- Added passwordless authentication (magic links, OTP)
+- Added pluggable notification system
+- Added advanced features (TOTP/MFA, WebAuthn research)
+- Timeline extended: 15-16 weeks total (6-7 weeks core + 9 weeks optional)
+- Updated all related documentation for extension integration
 
 **Key Changes in v1.1**:
 - Consolidated to 2 presets (SimpleRBAC, EnterpriseRBAC)
@@ -209,5 +252,6 @@ auth = EnterpriseRBAC(
 
 **Branch**: `library-redesign`
 **Status**: Planning Phase
-**Version**: 1.1 (Two-Preset Architecture)
+**Version**: 1.2 (Two-Preset Architecture + Authentication Extensions)
 **Next Milestone**: Phase 1 - Core Foundation + SimpleRBAC (Week 1)
+**Optional Extensions**: v1.1 Notifications (Week 8) → v1.2 OAuth (Week 10) → v1.3 Passwordless (Week 13) → v1.4 Advanced (Week 15)

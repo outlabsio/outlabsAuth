@@ -1,6 +1,6 @@
 # OutlabsAuth Library - Design Decisions Log
 
-**Version**: 1.1
+**Version**: 1.2
 **Date**: 2025-01-14
 **Purpose**: Document key architectural decisions and trade-offs
 
@@ -1131,6 +1131,398 @@ These fit naturally into Week 7 (Documentation + Polish).
 
 ---
 
+## DD-022: OAuth as Optional Extension (v1.2)
+
+**Date**: 2025-01-14 (Post-v1.0)
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Social login is valuable but not needed for v1.0
+
+### Options Considered
+
+1. **Include OAuth in v1.0**
+   - Pros: Complete solution from day one
+   - Cons: Delays v1.0 release, adds complexity, most internal apps don't need it
+
+2. **OAuth in v1.2 as Extension**
+   - Pros: Focused v1.0, flexible adoption, works with both presets
+   - Cons: Users wait for social login support
+
+3. **Never Support OAuth**
+   - Pros: Simplest
+   - Cons: Common feature request, competitive disadvantage
+
+### Decision
+Implement OAuth/social login as optional extension in v1.2 (Week 10-12).
+
+**Features**:
+- Provider abstraction (Google, Facebook, Apple, GitHub, Microsoft)
+- Account linking and unlinking
+- Auto-registration flow
+- Email verification before linking
+- State validation and PKCE security
+
+**Design**:
+```python
+oauth_providers = {
+    "google": GoogleProvider(client_id=..., client_secret=...),
+    "facebook": FacebookProvider(client_id=..., client_secret=...)
+}
+
+auth = SimpleRBAC(
+    database=db,
+    oauth_providers=oauth_providers
+)
+```
+
+**Reasoning**:
+- v1.0 focuses on core authentication (email/password)
+- OAuth is common but not universal requirement
+- Extension model allows adoption when needed
+- Works equally with SimpleRBAC and EnterpriseRBAC
+
+### Consequences
+- **Positive**: Focused v1.0, flexible adoption, no forced dependencies
+- **Negative**: Users wait 3 weeks after v1.0 for social login
+- **Neutral**: Extension architecture proves out with real feature
+
+### Related Decisions
+- DD-013 (No OAuth provider initially - updated)
+- DD-023 (Notification handler - needed for OAuth welcome emails)
+- DD-026 (Account linking strategy)
+
+---
+
+## DD-023: Notification Handler Abstraction (v1.1)
+
+**Date**: 2025-01-14 (Post-v1.0)
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Auth events need to trigger notifications, but apps have their own notification infrastructure
+
+### Options Considered
+
+1. **Built-in Email/SMS Service**
+   - Pros: Works out of the box
+   - Cons: Vendor lock-in, forces specific providers, most apps already have notification systems
+
+2. **No Notification Support**
+   - Pros: Simplest
+   - Cons: Critical auth flows need notifications (password reset, magic links)
+
+3. **Pluggable Notification Handler**
+   - Pros: No vendor lock-in, works with existing infrastructure, flexible
+   - Cons: Requires user configuration
+
+### Decision
+Implement pluggable notification system in v1.1 (Week 8-9).
+
+**Design**:
+```python
+class NotificationHandler(ABC):
+    @abstractmethod
+    async def send(self, event: NotificationEvent) -> bool:
+        pass
+
+# Pre-built handlers
+- WebhookHandler: Send to webhook endpoint
+- QueueHandler: Push to message queue
+- CallbackHandler: Direct function callback
+- CompositeHandler: Combine multiple handlers
+```
+
+**Usage**:
+```python
+notification_handler = WebhookHandler(
+    webhook_url="https://api.internal/notifications",
+    headers={"X-API-Key": ...}
+)
+
+auth = SimpleRBAC(
+    database=db,
+    notification_handler=notification_handler
+)
+```
+
+**Reasoning**:
+- Apps already have notification infrastructure (email services, SMS gateways)
+- Don't force specific vendors (SendGrid, Twilio, etc.)
+- Flexible: webhook, queue, or direct callback
+- Required before OAuth (welcome emails) and passwordless (magic links, OTP)
+
+### Consequences
+- **Positive**: No vendor lock-in, works with existing infrastructure, highly flexible
+- **Negative**: Requires configuration, no "just works" for beginners
+- **Neutral**: NoOpHandler default for testing
+
+### Related Decisions
+- DD-022 (OAuth - needs notification handler)
+- DD-024 (Passwordless - needs notification handler)
+- DD-025 (No built-in email/SMS service)
+
+---
+
+## DD-024: Passwordless Authentication (v1.3)
+
+**Date**: 2025-01-14 (Post-v1.0)
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Growing demand for passwordless authentication methods
+
+### Options Considered
+
+1. **No Passwordless Support**
+   - Pros: Simpler codebase
+   - Cons: Missing modern auth methods, competitive disadvantage
+
+2. **Magic Links Only**
+   - Pros: Simpler than OTP
+   - Cons: Incomplete (no SMS option)
+
+3. **Magic Links + OTP (Multiple Channels)**
+   - Pros: Complete solution, flexible channels
+   - Cons: More complexity, requires notification system
+
+### Decision
+Implement magic links and OTP in v1.3 (Week 13-14).
+
+**Features**:
+- Magic links (email)
+- Email OTP (6-digit codes)
+- SMS OTP
+- WhatsApp/Telegram OTP (v1.4)
+- Challenge management system
+- Rate limiting and abuse prevention
+
+**Design**:
+```python
+# Magic links
+await auth.passwordless_service.send_magic_link("user@example.com")
+tokens = await auth.passwordless_service.verify_magic_link(code)
+
+# OTP
+await auth.passwordless_service.send_otp("+1234567890", channel="sms")
+tokens = await auth.passwordless_service.verify_otp("+1234567890", code)
+```
+
+**Reasoning**:
+- Passwordless is growing trend (better UX, security)
+- Magic links are common for onboarding
+- OTP enables phone-based authentication
+- Notification system (v1.1) is prerequisite
+
+### Consequences
+- **Positive**: Modern auth methods, better UX, competitive feature
+- **Negative**: Added complexity, requires notification handler
+- **Neutral**: Optional feature, doesn't affect core
+
+### Related Decisions
+- DD-023 (Notification handler - prerequisite)
+- DD-025 (No built-in SMS - use notification handler)
+
+---
+
+## DD-025: No Built-in Email/SMS Service
+
+**Date**: 2025-01-14 (Post-v1.0)
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: How to handle email and SMS delivery for auth events
+
+### Options Considered
+
+1. **Built-in SMTP + SMS Gateway**
+   - Pros: Works out of the box
+   - Cons: Vendor lock-in, forces specific services, duplicate infrastructure
+
+2. **Require External Configuration**
+   - Pros: Works with any provider
+   - Cons: More setup, not "just works"
+
+3. **Notification Handler Abstraction**
+   - Pros: Maximum flexibility, no vendor lock-in
+   - Cons: Requires understanding of pattern
+
+### Decision
+No built-in email/SMS services. Use NotificationHandler abstraction.
+
+**Approach**:
+- Library emits NotificationEvent objects
+- User provides NotificationHandler implementation
+- Handler delivers via their existing infrastructure
+- Pre-built handlers for common patterns (webhook, queue)
+
+**Example**:
+```python
+# Library code (emits event)
+await notification_handler.send(NotificationEvent(
+    type="magic_link",
+    recipient="user@example.com",
+    data={"link": "https://...", "expires_in_minutes": 15}
+))
+
+# User code (handles event)
+class MyNotificationHandler(NotificationHandler):
+    async def send(self, event: NotificationEvent):
+        if event.type == "magic_link":
+            await my_email_service.send_magic_link(
+                event.recipient,
+                event.data["link"]
+            )
+```
+
+**Reasoning**:
+- Apps already have email/SMS infrastructure
+- SendGrid, AWS SES, Twilio, etc. - many options
+- Don't force specific vendor
+- Don't duplicate functionality
+- More flexible than built-in
+
+### Consequences
+- **Positive**: No vendor lock-in, works with any provider, no duplicate infrastructure
+- **Negative**: Not "just works" for beginners
+- **Neutral**: Pre-built handlers reduce friction
+
+### Related Decisions
+- DD-023 (Notification handler abstraction)
+- DD-024 (Passwordless - needs notifications)
+
+---
+
+## DD-026: Social Account Linking Strategy
+
+**Date**: 2025-01-14 (Post-v1.0)
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: How to handle users with multiple auth methods (email + social)
+
+### Options Considered
+
+1. **Separate Accounts**
+   - Pros: Simple, no security concerns
+   - Cons: Poor UX, duplicate users
+
+2. **Auto-Link by Email (Always)**
+   - Pros: Good UX, single user identity
+   - Cons: Security risk if email not verified
+
+3. **Auto-Link by Verified Email Only**
+   - Pros: Good UX, secure
+   - Cons: Slightly more complex
+
+### Decision
+Auto-link by verified email only.
+
+**Rules**:
+- If social account email is verified by provider: auto-link
+- If social account email is unverified: create separate account, require email verification before linking
+- Users can manually link accounts from settings
+- Unlinking requires at least one auth method remaining
+
+**Design**:
+```python
+# OAuth flow
+user, tokens, is_new = await auth.oauth_service.authenticate_with_provider(
+    "google",
+    code,
+    redirect_uri,
+    auto_link_by_email=True  # Only if verified
+)
+
+# Manual linking
+await auth.oauth_service.link_provider_to_user(
+    user_id,
+    "facebook",
+    code,
+    redirect_uri
+)
+
+# Unlinking
+await auth.oauth_service.unlink_provider(user_id, "google")
+```
+
+**Security Considerations**:
+- Email verification prevents account takeover
+- Provider must verify email (Google, Facebook do this)
+- Users can link/unlink from settings
+- Cannot unlink if no alternative auth method
+
+**Reasoning**:
+- Balance UX and security
+- Prevents account takeover via unverified social account
+- Allows single user identity across auth methods
+- Follows industry best practices (Auth0, Firebase, etc.)
+
+### Consequences
+- **Positive**: Secure account linking, good UX, prevents takeover
+- **Negative**: Complex logic, edge cases to handle
+- **Neutral**: Users expect this behavior from modern auth
+
+### Related Decisions
+- DD-022 (OAuth support)
+
+---
+
+## DD-027: Extension Roadmap
+
+**Date**: 2025-01-14 (Post-v1.0)
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Define post-v1.0 extension delivery timeline
+
+### Extension Phases
+
+**Phase 7 (v1.1)**: Notification System
+- **Timeline**: Week 8-9 (2 weeks)
+- **Deliverables**: NotificationHandler abstraction, pre-built handlers
+- **Prerequisite for**: OAuth, passwordless
+
+**Phase 8 (v1.2)**: OAuth/Social Login
+- **Timeline**: Week 10-12 (3 weeks)
+- **Deliverables**: Provider abstraction, Google/Facebook/Apple providers
+- **Requires**: Notification system (v1.1)
+
+**Phase 9 (v1.3)**: Passwordless Auth
+- **Timeline**: Week 13-14 (2 weeks)
+- **Deliverables**: Magic links, Email OTP, SMS OTP
+- **Requires**: Notification system (v1.1)
+
+**Phase 10 (v1.4)**: Advanced Features
+- **Timeline**: Week 15-16 (2 weeks)
+- **Deliverables**: TOTP/MFA, WhatsApp/Telegram OTP, WebAuthn research
+
+### Total Timeline
+- **v1.0 Core**: 6-7 weeks (SimpleRBAC + EnterpriseRBAC)
+- **Extensions**: 9 weeks (v1.1 through v1.4)
+- **Total**: 15-16 weeks
+
+### Decision
+Phased delivery of extensions, each independent and optional.
+
+**Principles**:
+- Each extension is optional
+- Extensions work with both SimpleRBAC and EnterpriseRBAC
+- Dependencies: v1.2 and v1.3 require v1.1 (notifications)
+- Can skip extensions you don't need
+
+**Reasoning**:
+- Deliver v1.0 quickly (6-7 weeks)
+- Extensions don't block v1.0
+- Users adopt extensions as needed
+- Validates extension architecture with real features
+
+### Consequences
+- **Positive**: Focused v1.0, flexible adoption, no forced features
+- **Negative**: Extended timeline for full feature set
+- **Neutral**: Extension model must work well (proven with v1.1-v1.4)
+
+### Related Decisions
+- DD-022 (OAuth - v1.2)
+- DD-023 (Notifications - v1.1)
+- DD-024 (Passwordless - v1.3)
+
+---
+
 ## Questions Still Open
 
 Track questions that need decisions:
@@ -1158,9 +1550,10 @@ Track questions that need decisions:
 |------|----------|--------|
 | 2025-01-14 | DD-001 through DD-014 | All Accepted |
 | 2025-01-14 | DD-015 through DD-021 | All Accepted |
+| 2025-01-14 | DD-022 through DD-027 | All Accepted (Post-v1.0 Extensions) |
 | 2025-01-14 | DD-003 | Superseded by DD-015 |
 
 ---
 
-**Last Updated**: 2025-01-14 (Revised to two presets)
+**Last Updated**: 2025-01-14 (Added authentication extensions: OAuth, passwordless, notifications)
 **Next Review**: End of Phase 1 (Week 2)
