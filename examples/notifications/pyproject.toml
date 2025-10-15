@@ -1,0 +1,21 @@
+[project]
+name = "outlabs-auth-notifications-example"
+version = "1.0.0"
+description = "Example showcasing OutlabsAuth notification system with multiple channels"
+requires-python = ">=3.12"
+dependencies = [
+    "outlabs-auth",
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.20.0",
+    "motor>=3.0.0",
+    # Notification channel dependencies
+    "aio-pika>=9.0.0",      # RabbitMQ
+    "aiosmtplib>=3.0.0",    # SMTP email
+    "sendgrid>=6.11.0",     # SendGrid email
+    "httpx>=0.27.0",        # Webhook & Telegram
+    "twilio>=9.0.0",        # SMS & WhatsApp
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -56,6 +56,7 @@ class OutlabsAuth:
         enable_caching: bool = False,
         multi_tenant: bool = False,
         enable_audit_log: bool = False,
+        enable_notifications: bool = False,
 
         # Password settings
         password_min_length: int = 8,
@@ -75,6 +76,7 @@ class OutlabsAuth:
         # Optional dependencies
         redis_url: Optional[str] = None,
         cache_ttl_seconds: int = 300,
+        notification_service: Optional[Any] = None,  # NotificationService instance
 
         # Model customization (advanced)
         user_model: Type[UserModel] = UserModel,
@@ -105,8 +107,10 @@ class OutlabsAuth:
             enable_caching: Redis caching for performance (optional)
             multi_tenant: Multi-tenant isolation (optional)
             enable_audit_log: Audit logging for compliance (optional)
+            enable_notifications: Enable notification system (optional)
 
             redis_url: Redis connection URL (required if enable_caching=True)
+            notification_service: NotificationService instance (optional)
             user_model: Custom user model class
             role_model: Custom role model class
             permission_model: Custom permission model class
@@ -147,10 +151,14 @@ class OutlabsAuth:
             enable_caching=enable_caching,
             multi_tenant=multi_tenant,
             enable_audit_log=enable_audit_log,
+            enable_notifications=enable_notifications,
             redis_url=redis_url,
             cache_ttl_seconds=cache_ttl_seconds,
             **kwargs
         )
+        
+        # Store notification service
+        self.notification_service = notification_service
 
         # Store models
         self.user_model = user_model
@@ -279,8 +287,8 @@ class OutlabsAuth:
         from outlabs_auth.services.permission import BasicPermissionService
 
         # Core services (always available)
-        self.auth_service = AuthService(self.database, self.config)
-        self.user_service = UserService(self.database, self.config)
+        self.auth_service = AuthService(self.database, self.config, self.notification_service)
+        self.user_service = UserService(self.database, self.config, self.notification_service)
         self.role_service = RoleService(self.database, self.config)
 
         # Permission service (adapts based on features)

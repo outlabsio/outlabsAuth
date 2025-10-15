@@ -39,6 +39,7 @@ class UserService:
         self,
         database: AsyncIOMotorDatabase,
         config: AuthConfig,
+        notification_service: Optional[Any] = None,
     ):
         """
         Initialize UserService.
@@ -46,9 +47,11 @@ class UserService:
         Args:
             database: MongoDB database instance
             config: Authentication configuration
+            notification_service: Optional notification service for events
         """
         self.database = database
         self.config = config
+        self.notifications = notification_service
 
     async def create_user(
         self,
@@ -131,6 +134,20 @@ class UserService:
         )
 
         await user.save()
+        
+        # Emit notification (fire-and-forget)
+        if self.notifications:
+            await self.notifications.emit(
+                "user.created",
+                data={
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "created_at": user.created_at.isoformat() if user.created_at else None
+                }
+            )
+        
         return user
 
     async def get_user_by_id(self, user_id: str) -> Optional[UserModel]:
@@ -270,6 +287,18 @@ class UserService:
         user.locked_until = None
 
         await user.save()
+        
+        # Emit notification
+        if self.notifications:
+            await self.notifications.emit(
+                "user.password_changed",
+                data={
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "changed_at": datetime.now(timezone.utc).isoformat()
+                }
+            )
+        
         return user
 
     async def update_user_status(
@@ -305,8 +334,23 @@ class UserService:
                 details={"user_id": user_id}
             )
 
+        old_status = user.status
         user.status = status
         await user.save()
+        
+        # Emit notification
+        if self.notifications:
+            await self.notifications.emit(
+                "user.status_changed",
+                data={
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "old_status": old_status.value,
+                    "new_status": status.value,
+                    "changed_at": datetime.now(timezone.utc).isoformat()
+                }
+            )
+        
         return user
 
     async def delete_user(self, user_id: str) -> bool:
@@ -330,8 +374,24 @@ class UserService:
         user = await UserModel.get(user_id)
         if not user:
             return False
+        
+        # Store user data before deletion for notification
+        user_email = user.email
+        user_id_str = str(user.id)
 
         await user.delete()
+        
+        # Emit notification
+        if self.notifications:
+            await self.notifications.emit(
+                "user.deleted",
+                data={
+                    "user_id": user_id_str,
+                    "email": user_email,
+                    "deleted_at": datetime.now(timezone.utc).isoformat()
+                }
+            )
+        
         return True
 
     async def list_users(

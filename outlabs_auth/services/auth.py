@@ -8,7 +8,7 @@ Handles user authentication operations:
 - Current user retrieval
 """
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 import hashlib
 
@@ -64,6 +64,7 @@ class AuthService:
         self,
         database: AsyncIOMotorDatabase,
         config: AuthConfig,
+        notification_service: Optional[Any] = None,
     ):
         """
         Initialize AuthService.
@@ -71,9 +72,11 @@ class AuthService:
         Args:
             database: MongoDB database instance
             config: Authentication configuration
+            notification_service: Optional notification service for events
         """
         self.database = database
         self.config = config
+        self.notifications = notification_service
 
     async def login(
         self,
@@ -143,13 +146,43 @@ class AuthService:
             # Increment failed login attempts
             user.failed_login_attempts += 1
 
-            # Lock account if max attempts exceeded
+            # Check if account will be locked
+            was_locked = False
             if user.failed_login_attempts >= self.config.max_login_attempts:
                 user.locked_until = datetime.now(timezone.utc) + timedelta(
                     minutes=self.config.lockout_duration_minutes
                 )
+                was_locked = True
 
             await user.save()
+            
+            # Emit notification for failed login
+            if self.notifications:
+                await self.notifications.emit(
+                    "user.login_failed",
+                    data={
+                        "user_id": str(user.id),
+                        "email": user.email,
+                        "failed_attempts": user.failed_login_attempts,
+                        "max_attempts": self.config.max_login_attempts
+                    },
+                    metadata={
+                        "ip": ip_address,
+                        "user_agent": user_agent
+                    }
+                )
+            
+            # Emit notification if account was locked
+            if was_locked and self.notifications:
+                await self.notifications.emit(
+                    "user.locked",
+                    data={
+                        "user_id": str(user.id),
+                        "email": user.email,
+                        "reason": "Too many failed login attempts",
+                        "locked_until": user.locked_until.isoformat() if user.locked_until else None
+                    }
+                )
 
             raise InvalidCredentialsError(
                 message="Invalid email or password",
@@ -164,6 +197,22 @@ class AuthService:
         user.locked_until = None
         user.last_login = datetime.now(timezone.utc)
         await user.save()
+        
+        # Emit notification (fire-and-forget)
+        if self.notifications:
+            await self.notifications.emit(
+                "user.login",
+                data={
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "timestamp": user.last_login.isoformat()
+                },
+                metadata={
+                    "ip": ip_address,
+                    "device": device_name,
+                    "user_agent": user_agent
+                }
+            )
 
         # Create JWT token pair
         access_token, refresh_token_value = create_token_pair(
@@ -225,6 +274,20 @@ class AuthService:
         token_model.revoked_at = datetime.now(timezone.utc)
         token_model.revoked_reason = "User logout"
         await token_model.save()
+        
+        # Emit notification
+        if self.notifications:
+            # Fetch user to get email for notification
+            user = await token_model.fetch_link("user")
+            if user:
+                await self.notifications.emit(
+                    "user.logout",
+                    data={
+                        "user_id": str(user.id),
+                        "email": user.email,
+                        "session_id": str(token_model.id)
+                    }
+                )
 
         return True
 
