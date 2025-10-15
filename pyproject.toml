@@ -1,65 +1,107 @@
 [project]
-name = "outlabsAuth"
-version = "0.1.0"
-description = "A standalone, generic Role-Based Access Control (RBAC) microservice."
-authors = []
+name = "outlabs-auth"
+version = "1.0.0"
+description = "FastAPI authentication and authorization library with hierarchical RBAC, tree permissions, and multi-tenant support"
+authors = [
+    {name = "Outlabs", email = "contact@outlabs.io"}
+]
+readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.12"
+keywords = ["fastapi", "authentication", "authorization", "rbac", "jwt", "permissions", "hierarchical", "multi-tenant"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Security",
+]
 dependencies = [
-    "fastapi",
+    # Core FastAPI dependencies
+    "fastapi>=0.104.0",
     "pydantic>=2.0.0",
-    "uvicorn[standard]",
+    "pydantic-settings>=2.0.0",
+
+    # Database (MongoDB via Beanie ODM)
     "beanie==1.30.0",
-    "passlib[bcrypt]",
-    "python-jose[cryptography]",
-    "python-multipart",
-    "redis",
-    "email-validator",
-    "pydantic-settings",
+    "motor>=3.3.0",
+
+    # Authentication & Security
+    "bcrypt>=4.0.0,<5.0.0",
+    "passlib>=1.7.4",
+    "python-jose[cryptography]>=3.3.0",
     "pyjwt>=2.8.0",
-    "aiosmtplib",
-    "jinja2",
+    "python-multipart>=0.0.6",
+    "email-validator>=2.0.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/outlabs/outlabsAuth"
+Documentation = "https://github.com/outlabs/outlabsAuth/tree/main/docs/library-redesign"
+Repository = "https://github.com/outlabs/outlabsAuth"
+Issues = "https://github.com/outlabs/outlabsAuth/issues"
+
 [project.optional-dependencies]
-test = [
-    "pytest",
-    "pytest-asyncio",
-    "httpx",
+# Redis caching support (optional performance enhancement)
+redis = [
+    "redis>=5.0.0",
 ]
+
+# Development tools
 dev = [
-    "pytest",
-    "pytest-asyncio",
-    "httpx",
-    "black",
-    "isort",
-    "flake8",
-    "mypy",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.5.0",
+    "uvicorn[standard]>=0.24.0",
 ]
+
+# Testing dependencies
+test = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.25.0",
+    "faker>=20.0.0",
+    "factory-boy>=3.3.0",
+]
+
+# Performance testing and benchmarking
 stress = [
-    "locust==2.17.0",
-    "httpx==0.25.2",
-    "aiohttp==3.9.1",
-    "requests==2.31.0",
-    "asyncio-throttle==1.0.2",
-    "uvloop==0.19.0",
-    "motor==3.3.2",
-    "pymongo==4.6.0",
-    "psutil==5.9.6",
-    "memory-profiler==0.61.0",
-    "py-spy==0.3.14",
-    "faker==20.1.0",
-    "factory-boy==3.3.0",
-    "gevent==23.9.1",
-    "eventlet==0.33.3",
-    "matplotlib==3.8.2",
-    "pandas==2.1.4",
-    "numpy==1.26.2",
-    "prometheus-client==0.19.0",
-    "pyjwt==2.8.0",
-    "cryptography>=41.0.0",
-    "rich==13.7.0",
-    "click==8.1.7",
-    "docker==7.0.0",
+    "locust>=2.17.0",
+    "httpx>=0.25.0",
+    "aiohttp>=3.9.0",
+    "requests>=2.31.0",
+    "asyncio-throttle>=1.0.2",
+    "uvloop>=0.19.0",
+    "psutil>=5.9.0",
+    "memory-profiler>=0.61.0",
+    "py-spy>=0.3.14",
+    "faker>=20.0.0",
+    "factory-boy>=3.3.0",
+    "matplotlib>=3.8.0",
+    "pandas>=2.1.0",
+    "prometheus-client>=0.19.0",
+    "rich>=13.7.0",
+    "click>=8.1.0",
+    "docker>=7.0.0",
+]
+
+# All optional dependencies
+all = [
+    "redis>=5.0.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.5.0",
+    "uvicorn[standard]>=0.24.0",
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.25.0",
+    "faker>=20.0.0",
+    "factory-boy>=3.3.0",
 ]
 
 [build-system]
@@ -67,15 +109,36 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["api"]
+packages = ["outlabs_auth"]
 
-[tool.uv]
-dev-dependencies = [
-    "pytest",
-    "pytest-asyncio",
-    "httpx",
-    "black",
-    "isort",
-    "flake8",
-    "mypy",
-]
+[tool.hatch.metadata]
+allow-direct-references = true
+
+# Black code formatting
+[tool.black]
+line-length = 120
+target-version = ["py312"]
+include = '\.pyi?$'
+
+# isort import sorting
+[tool.isort]
+profile = "black"
+line_length = 120
+multi_line_output = 3
+
+# Pytest configuration
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+# MyPy type checking
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
