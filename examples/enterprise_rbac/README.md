@@ -437,7 +437,7 @@ With EnterpriseRBAC and closure table:
 ## Next Steps
 
 - Check out the **Full-Featured example** for ABAC conditions and Redis caching
-- Read the [LIBRARY_ARCHITECTURE.md](../../docs/docs/library-redesign/LIBRARY_ARCHITECTURE.md) for deep dive
+- Read the [LIBRARY_ARCHITECTURE.md](../../docs/LIBRARY_ARCHITECTURE.md) for deep dive
 - See [TREE_PERMISSIONS_GUIDE.md](../../docs/TREE_PERMISSIONS_GUIDE.md) for more on tree permissions
 
 ## License

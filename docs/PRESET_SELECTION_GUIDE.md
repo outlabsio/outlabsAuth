@@ -518,8 +518,8 @@ Based on this guide, choose:
 
 ### 4. Read the Docs
 
-- [API Design](./docs/library-redesign/API_DESIGN.md)
-- [Architecture](./docs/library-redesign/LIBRARY_ARCHITECTURE.md)
+- [API Design](./API_DESIGN.md)
+- [Architecture](./LIBRARY_ARCHITECTURE.md)
 
 ---
 

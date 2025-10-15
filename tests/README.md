@@ -478,7 +478,7 @@ repos:
 
 ## Need Help?
 
-- **Documentation**: Check the main README.md and docs/library-redesign/
+- **Documentation**: Check the main README.md and docs/
 - **Issues**: Report bugs at https://github.com/outlabs/outlabsAuth/issues
 - **Examples**: See `examples/` directory for usage examples
 

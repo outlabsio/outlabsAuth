@@ -560,7 +560,7 @@ has_perm = service_token_service.check_service_permission(
 
 ## Architecture Decisions Status
 
-Key architectural decisions from [DESIGN_DECISIONS.md](docs/library-redesign/DESIGN_DECISIONS.md):
+Key architectural decisions from [DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md):
 
 - **DD-032**: Unified architecture (single core + thin wrappers) ✅ Designed
 - **DD-033**: Redis counters for API keys ✅ **Implemented** (Phase 5)

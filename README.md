@@ -276,17 +276,17 @@ result = await auth.permission_service.check_permission_with_context(
 
 ## Documentation
 
-Comprehensive documentation in `docs/library-redesign/`:
+Comprehensive documentation in `docs/`:
 
-- **[REDESIGN_VISION.md](docs/library-redesign/REDESIGN_VISION.md)** - Project vision and goals
-- **[LIBRARY_ARCHITECTURE.md](docs/library-redesign/LIBRARY_ARCHITECTURE.md)** - Technical architecture
-- **[API_DESIGN.md](docs/library-redesign/API_DESIGN.md)** - Code examples and patterns
-- **[COMPARISON_MATRIX.md](docs/library-redesign/COMPARISON_MATRIX.md)** - Feature comparison
-- **[DEPENDENCY_PATTERNS.md](docs/library-redesign/DEPENDENCY_PATTERNS.md)** - FastAPI dependencies
-- **[SECURITY.md](docs/library-redesign/SECURITY.md)** - Security hardening
-- **[TESTING_GUIDE.md](docs/library-redesign/TESTING_GUIDE.md)** - Testing strategies
-- **[DEPLOYMENT_GUIDE.md](docs/library-redesign/DEPLOYMENT_GUIDE.md)** - Production deployment
-- **[DESIGN_DECISIONS.md](docs/library-redesign/DESIGN_DECISIONS.md)** - Architectural decisions
+- **[REDESIGN_VISION.md](docs/REDESIGN_VISION.md)** - Project vision and goals
+- **[LIBRARY_ARCHITECTURE.md](docs/LIBRARY_ARCHITECTURE.md)** - Technical architecture
+- **[API_DESIGN.md](docs/API_DESIGN.md)** - Code examples and patterns
+- **[COMPARISON_MATRIX.md](docs/COMPARISON_MATRIX.md)** - Feature comparison
+- **[DEPENDENCY_PATTERNS.md](docs/DEPENDENCY_PATTERNS.md)** - FastAPI dependencies
+- **[SECURITY.md](docs/SECURITY.md)** - Security hardening
+- **[TESTING_GUIDE.md](docs/TESTING_GUIDE.md)** - Testing strategies
+- **[DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md)** - Production deployment
+- **[DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md)** - Architectural decisions
 
 ## Development Status
 
@@ -329,7 +329,7 @@ Contributions welcome! Please see CONTRIBUTING.md for guidelines.
 
 ## Support
 
-- **Documentation**: `docs/library-redesign/`
+- **Documentation**: `docs/`
 - **Issues**: [GitHub Issues](https://github.com/outlabs/outlabs-auth/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/outlabs/outlabs-auth/discussions)
 

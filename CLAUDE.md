@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**IMPORTANT**: This project is undergoing a major architectural change from a centralized API service to a FastAPI library. Always check `docs/library-redesign/` for the current vision and implementation plan.
+**IMPORTANT**: This project is undergoing a major architectural change from a centralized API service to a FastAPI library. Always check `docs/` for the current vision and implementation plan.
 
 ## Project Overview
 
@@ -26,7 +26,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Version**: 1.4 (Unified Architecture + Performance Improvements)
 
 ### Key Documentation
-All comprehensive design docs are in **`docs/library-redesign/`**:
+All comprehensive design docs are in **`docs/`**:
 1. **REDESIGN_VISION.md** - Main vision document (start here)
 2. **LIBRARY_ARCHITECTURE.md** - Technical architecture details
 3. **IMPLEMENTATION_ROADMAP.md** - 15-16 week implementation plan
@@ -120,8 +120,7 @@ pip install -e .
 
 ```
 outlabsAuth/
-├── docs/
-│   └── library-redesign/          # ✅ All design documentation
+├── docs/                           # ✅ All design documentation
 ├── _reference/                     # 📁 Archived reference code
 │   ├── models/                     # Old Beanie models from centralized API
 │   └── services/                   # Old service logic from centralized API
@@ -282,7 +281,7 @@ All 37 design decisions documented in **DESIGN_DECISIONS.md**:
 
 ## Common Pitfalls to Avoid
 
-1. **Don't reference old centralized API docs** - Use `docs/library-redesign/` only
+1. **Don't reference old centralized API docs** - Use `docs/` only
 2. **Reference code is for inspiration** - Don't copy-paste without adapting
 3. **Library is backend-only** - No admin UI in v1.0 (that's v1.6)
 4. **Each app is independent** - No multi-platform/multi-tenant by default
@@ -290,7 +289,7 @@ All 37 design decisions documented in **DESIGN_DECISIONS.md**:
 
 ## Development Workflow
 
-1. **Read the vision**: Start with `docs/library-redesign/REDESIGN_VISION.md`
+1. **Read the vision**: Start with `docs/REDESIGN_VISION.md`
 2. **Check the roadmap**: Follow phases in `IMPLEMENTATION_ROADMAP.md`
 3. **Reference models**: Look at `_reference/models/` for structure
 4. **Reference services**: Look at `_reference/services/` for logic patterns
@@ -300,11 +299,11 @@ All 37 design decisions documented in **DESIGN_DECISIONS.md**:
 
 ## Questions?
 
-- **Vision**: `docs/library-redesign/REDESIGN_VISION.md`
-- **Architecture**: `docs/library-redesign/LIBRARY_ARCHITECTURE.md`
-- **Implementation**: `docs/library-redesign/IMPLEMENTATION_ROADMAP.md`
-- **API Examples**: `docs/library-redesign/API_DESIGN.md`
-- **Decisions**: `docs/library-redesign/DESIGN_DECISIONS.md`
+- **Vision**: `docs/REDESIGN_VISION.md`
+- **Architecture**: `docs/LIBRARY_ARCHITECTURE.md`
+- **Implementation**: `docs/IMPLEMENTATION_ROADMAP.md`
+- **API Examples**: `docs/API_DESIGN.md`
+- **Decisions**: `docs/DESIGN_DECISIONS.md`
 
 ---
 

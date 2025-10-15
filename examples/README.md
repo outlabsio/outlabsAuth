@@ -370,7 +370,7 @@ curl -X POST http://localhost:8000/login \
 2. **Read the documentation**: Check each example's README
 3. **Modify the examples**: Add your own endpoints
 4. **Build your app**: Use examples as starting point
-5. **Read the guides**: Check [docs/library-redesign/](../docs/docs/library-redesign/)
+5. **Read the guides**: Check [docs/](../docs/)
 
 ---
 

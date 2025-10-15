@@ -256,7 +256,7 @@ pytest test_main.py -v
 
 - Check out the **EnterpriseRBAC example** for hierarchical permissions
 - Check out the **Full-Featured example** for ABAC conditions
-- Read the [API_DESIGN.md](../../docs/docs/library-redesign/API_DESIGN.md) documentation
+- Read the [API_DESIGN.md](../../docs/API_DESIGN.md) documentation
 
 ## License
 

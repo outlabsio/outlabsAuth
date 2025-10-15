@@ -1,7 +1,7 @@
 """
 Exception hierarchy for OutlabsAuth
 
-Based on docs/library-redesign/ERROR_HANDLING.md
+Based on docs/ERROR_HANDLING.md
 """
 from typing import Optional, Dict, Any
 
