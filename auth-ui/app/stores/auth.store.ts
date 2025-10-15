@@ -1,0 +1,385 @@
+/**
+ * Auth Store
+ * Handles JWT authentication, token refresh, and API calls
+ * Based on proven patterns from archived frontend
+ */
+
+import { defineStore } from 'pinia'
+import type { User, LoginCredentials, AuthTokens, AuthState, SystemStatus } from '~/types/auth'
+import { USE_MOCK_DATA, mockDelay, logMockCall } from '~/utils/mock'
+import { getMockUserByCredentials, mockUsers } from '~/utils/mockData'
+
+const ACCESS_TOKEN_KEY = 'outlabs_auth_access_token'
+const REFRESH_TOKEN_KEY = 'outlabs_auth_refresh_token'
+const USER_KEY = 'outlabs_auth_user'
+
+export const useAuthStore = defineStore('auth', () => {
+  const config = useRuntimeConfig()
+
+  // State
+  const state = reactive<AuthState>({
+    accessToken: null,
+    refreshToken: null,
+    user: null,
+    isAuthenticated: false,
+    isInitialized: false
+  })
+
+  // Helper to safely access localStorage
+  const safeLocalStorage = {
+    getItem: (key: string) => import.meta.client ? localStorage.getItem(key) : null,
+    setItem: (key: string, value: string) => import.meta.client && localStorage.setItem(key, value),
+    removeItem: (key: string) => import.meta.client && localStorage.removeItem(key)
+  }
+
+  // Getters
+  const isAuthenticated = computed(() => state.isAuthenticated)
+  const currentUser = computed(() => state.user)
+  const accessToken = computed(() => state.accessToken)
+
+  /**
+   * Initialize auth state from localStorage
+   * Called on app startup
+   */
+  const initialize = async (): Promise<boolean> => {
+    if (state.isInitialized) {
+      return state.isAuthenticated
+    }
+
+    // Skip initialization on server-side
+    if (import.meta.server) {
+      state.isInitialized = true
+      return false
+    }
+
+    try {
+      // Load tokens and user from localStorage
+      const storedAccessToken = safeLocalStorage.getItem(ACCESS_TOKEN_KEY)
+      const storedRefreshToken = safeLocalStorage.getItem(REFRESH_TOKEN_KEY)
+      const storedUser = safeLocalStorage.getItem(USER_KEY)
+
+      if (storedAccessToken && storedUser) {
+        state.accessToken = storedAccessToken
+        state.refreshToken = storedRefreshToken
+        state.user = JSON.parse(storedUser)
+        state.isAuthenticated = true
+
+        // Verify token is still valid by fetching current user
+        try {
+          await fetchCurrentUser()
+        } catch (error) {
+          // Token expired or invalid, try to refresh
+          if (state.refreshToken) {
+            try {
+              await refreshAccessToken()
+              await fetchCurrentUser()
+            } catch {
+              // Refresh failed, clear auth state
+              clearAuthState()
+            }
+          } else {
+            clearAuthState()
+          }
+        }
+      }
+
+      state.isInitialized = true
+      return state.isAuthenticated
+    } catch (error) {
+      console.error('Failed to initialize auth:', error)
+      state.isInitialized = true
+      return false
+    }
+  }
+
+  /**
+   * Make authenticated API call with automatic token refresh
+   * This is the main method for all API requests
+   */
+  const apiCall = async <T>(
+    endpoint: string,
+    options: RequestInit & { baseURL?: string } = {}
+  ): Promise<T> => {
+    const contextStore = useContextStore()
+    const baseURL = options.baseURL || config.public.apiBaseUrl
+
+    // Get context headers if available
+    const contextHeaders = contextStore?.getContextHeaders() || {}
+
+    const makeRequest = async (token: string | null): Promise<T> => {
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+        ...contextHeaders,
+        ...options.headers,
+        ...(token && { Authorization: `Bearer ${token}` })
+      }
+
+      const response = await fetch(`${baseURL}${endpoint}`, {
+        ...options,
+        headers,
+        credentials: 'include' // Important for httpOnly cookies
+      })
+
+      if (!response.ok) {
+        const error: any = new Error(`HTTP ${response.status}`)
+        error.status = response.status
+        error.statusText = response.statusText
+
+        try {
+          error.data = await response.json()
+        } catch {
+          error.data = { detail: response.statusText }
+        }
+
+        throw error
+      }
+
+      // Handle empty responses
+      const contentType = response.headers.get('content-type')
+      if (contentType && contentType.includes('application/json')) {
+        return await response.json()
+      }
+
+      return {} as T
+    }
+
+    try {
+      return await makeRequest(state.accessToken)
+    } catch (error: any) {
+      // If 401 and we have a refresh token, try to refresh and retry
+      if (error.status === 401 && state.refreshToken) {
+        try {
+          const newToken = await refreshAccessToken()
+          return await makeRequest(newToken)
+        } catch (refreshError) {
+          // Refresh failed, logout user
+          await logout()
+          throw error
+        }
+      }
+      throw error
+    }
+  }
+
+  /**
+   * Login with email and password
+   */
+  const login = async (credentials: LoginCredentials): Promise<void> => {
+    try {
+      // Mock mode
+      if (USE_MOCK_DATA) {
+        logMockCall('POST', '/v1/auth/login', credentials)
+        await mockDelay()
+
+        const mockUser = getMockUserByCredentials(credentials.email, credentials.password)
+        if (!mockUser || !mockUser.is_active) {
+          throw new Error('Invalid email or password')
+        }
+
+        // Generate mock tokens
+        state.accessToken = 'mock_access_token_' + Date.now()
+        state.refreshToken = 'mock_refresh_token_' + Date.now()
+        state.user = mockUser
+        state.isAuthenticated = true
+
+        safeLocalStorage.setItem(ACCESS_TOKEN_KEY, state.accessToken)
+        safeLocalStorage.setItem(REFRESH_TOKEN_KEY, state.refreshToken!)
+        safeLocalStorage.setItem(USER_KEY, JSON.stringify(mockUser))
+        return
+      }
+
+      // Real API call
+      const response = await fetch(`${config.public.apiBaseUrl}/v1/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(credentials),
+        credentials: 'include'
+      })
+
+      if (!response.ok) {
+        const error: any = await response.json()
+        throw new Error(error.detail || 'Login failed')
+      }
+
+      const data: AuthTokens = await response.json()
+
+      // Store tokens
+      state.accessToken = data.access_token
+      state.refreshToken = data.refresh_token
+      state.isAuthenticated = true
+
+      safeLocalStorage.setItem(ACCESS_TOKEN_KEY, data.access_token)
+      if (data.refresh_token) {
+        safeLocalStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token)
+      }
+
+      // Fetch current user
+      await fetchCurrentUser()
+    } catch (error) {
+      clearAuthState()
+      throw error
+    }
+  }
+
+  /**
+   * Logout user
+   */
+  const logout = async (): Promise<void> => {
+    try {
+      // Call logout endpoint if authenticated
+      if (state.refreshToken) {
+        await apiCall('/v1/auth/logout', {
+          method: 'POST',
+          body: JSON.stringify({ refresh_token: state.refreshToken })
+        })
+      }
+    } catch (error) {
+      console.error('Logout error:', error)
+    } finally {
+      clearAuthState()
+
+      // Navigate to login
+      await navigateTo('/login')
+    }
+  }
+
+  /**
+   * Refresh access token using refresh token
+   */
+  const refreshAccessToken = async (): Promise<string> => {
+    if (!state.refreshToken) {
+      throw new Error('No refresh token available')
+    }
+
+    try {
+      const response = await fetch(`${config.public.apiBaseUrl}/v1/auth/refresh`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ refresh_token: state.refreshToken }),
+        credentials: 'include'
+      })
+
+      if (!response.ok) {
+        throw new Error('Token refresh failed')
+      }
+
+      const data: AuthTokens = await response.json()
+
+      state.accessToken = data.access_token
+      if (data.refresh_token) {
+        state.refreshToken = data.refresh_token
+      }
+
+      safeLocalStorage.setItem(ACCESS_TOKEN_KEY, data.access_token)
+      if (data.refresh_token) {
+        safeLocalStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token)
+      }
+
+      return data.access_token
+    } catch (error) {
+      clearAuthState()
+      throw error
+    }
+  }
+
+  /**
+   * Fetch current user
+   */
+  const fetchCurrentUser = async (): Promise<void> => {
+    // Mock mode
+    if (USE_MOCK_DATA) {
+      logMockCall('GET', '/v1/users/me')
+      await mockDelay()
+      // User already set from login or localStorage
+      if (state.user) {
+        return
+      }
+      // Fallback to first mock user
+      const fallbackUser = mockUsers[0]
+      if (fallbackUser) {
+        state.user = fallbackUser
+        safeLocalStorage.setItem(USER_KEY, JSON.stringify(fallbackUser))
+      }
+      return
+    }
+
+    // Real API call
+    const user = await apiCall<User>('/v1/users/me')
+    if (user) {
+      state.user = user
+      safeLocalStorage.setItem(USER_KEY, JSON.stringify(user))
+    }
+  }
+
+  /**
+   * Check system initialization status
+   * Returns whether the system is initialized and ready
+   */
+  const checkSystemStatus = async (): Promise<SystemStatus> => {
+    // Mock mode - system always initialized
+    if (USE_MOCK_DATA) {
+      logMockCall('GET', '/v1/system/status')
+      await mockDelay()
+      return {
+        initialized: true,
+        requires_setup: false,
+        admin_exists: true,
+        database_connected: true
+      }
+    }
+
+    // Real API call
+    try {
+      const status = await fetch(`${config.public.apiBaseUrl}/v1/system/status`)
+      if (!status.ok) {
+        throw new Error('Failed to check system status')
+      }
+      return await status.json()
+    } catch (error) {
+      console.error('System status check failed:', error)
+      return {
+        initialized: false,
+        requires_setup: true,
+        admin_exists: false,
+        database_connected: false
+      }
+    }
+  }
+
+  /**
+   * Clear auth state and localStorage
+   */
+  const clearAuthState = (): void => {
+    state.accessToken = null
+    state.refreshToken = null
+    state.user = null
+    state.isAuthenticated = false
+
+    safeLocalStorage.removeItem(ACCESS_TOKEN_KEY)
+    safeLocalStorage.removeItem(REFRESH_TOKEN_KEY)
+    safeLocalStorage.removeItem(USER_KEY)
+  }
+
+  return {
+    // State (do not use readonly - prevents Pinia mutations)
+    state,
+
+    // Getters
+    isAuthenticated,
+    currentUser,
+    accessToken,
+
+    // Actions
+    initialize,
+    apiCall,
+    login,
+    logout,
+    refreshAccessToken,
+    fetchCurrentUser,
+    checkSystemStatus
+  }
+})
