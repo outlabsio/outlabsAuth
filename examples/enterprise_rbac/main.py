@@ -27,6 +27,10 @@ from outlabs_auth.routers import (
     get_auth_router,
     get_users_router,
     get_api_keys_router,
+    get_entities_router,
+    get_roles_router,
+    get_permissions_router,
+    get_memberships_router,
 )
 from outlabs_auth.models.user import UserModel
 from outlabs_auth.models.role import RoleModel
@@ -188,6 +192,10 @@ async def lifespan(app: FastAPI):
     app.include_router(get_auth_router(auth, prefix="/auth"))
     app.include_router(get_users_router(auth, prefix="/users"))
     app.include_router(get_api_keys_router(auth, prefix="/api-keys"))
+    app.include_router(get_entities_router(auth, prefix="/entities"))
+    app.include_router(get_roles_router(auth, prefix="/roles"))
+    app.include_router(get_permissions_router(auth, prefix="/permissions"))
+    app.include_router(get_memberships_router(auth, prefix="/memberships"))
     print("✅ Routers included")
 
     print("✅ Real Estate Leads Platform ready!")
