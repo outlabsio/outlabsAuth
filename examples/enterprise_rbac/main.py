@@ -185,9 +185,9 @@ async def lifespan(app: FastAPI):
 
     # Include standard OutlabsAuth routers with clean prefixes (no /api!)
     print("📝 Including API routers...")
-    app.include_router(get_auth_router(auth, prefix="/auth"), tags=["Authentication"])
-    app.include_router(get_users_router(auth, prefix="/users"), tags=["Users"])
-    app.include_router(get_api_keys_router(auth, prefix="/api-keys"), tags=["API Keys"])
+    app.include_router(get_auth_router(auth, prefix="/auth"))
+    app.include_router(get_users_router(auth, prefix="/users"))
+    app.include_router(get_api_keys_router(auth, prefix="/api-keys"))
     print("✅ Routers included")
 
     print("✅ Real Estate Leads Platform ready!")
