@@ -183,11 +183,11 @@ async def lifespan(app: FastAPI):
     await auth.initialize()
     print("✅ Database initialized")
 
-    # Include standard OutlabsAuth routers
+    # Include standard OutlabsAuth routers with clean prefixes (no /api!)
     print("📝 Including API routers...")
-    app.include_router(get_auth_router(auth), prefix="/api/auth", tags=["Authentication"])
-    app.include_router(get_users_router(auth), prefix="/api/users", tags=["Users"])
-    app.include_router(get_api_keys_router(auth), prefix="/api/api-keys", tags=["API Keys"])
+    app.include_router(get_auth_router(auth, prefix="/auth"), tags=["Authentication"])
+    app.include_router(get_users_router(auth, prefix="/users"), tags=["Users"])
+    app.include_router(get_api_keys_router(auth, prefix="/api-keys"), tags=["API Keys"])
     print("✅ Routers included")
 
     print("✅ Real Estate Leads Platform ready!")
@@ -234,7 +234,7 @@ def get_auth() -> EnterpriseRBAC:
 # ============================================================================
 
 @app.post(
-    "/api/leads",
+    "/leads",
     response_model=LeadResponse,
     status_code=status.HTTP_201_CREATED,
     tags=["Leads"],
@@ -297,7 +297,7 @@ async def create_lead(
 
 
 @app.get(
-    "/api/leads",
+    "/leads",
     response_model=dict,
     tags=["Leads"],
     summary="List leads"
@@ -349,7 +349,7 @@ async def list_leads(
 
 
 @app.get(
-    "/api/leads/{lead_id}",
+    "/leads/{lead_id}",
     response_model=LeadResponse,
     tags=["Leads"],
     summary="Get lead details"
@@ -379,7 +379,7 @@ async def get_lead(
 
 
 @app.put(
-    "/api/leads/{lead_id}",
+    "/leads/{lead_id}",
     response_model=LeadResponse,
     tags=["Leads"],
     summary="Update lead"
@@ -421,7 +421,7 @@ async def update_lead(
 
 
 @app.delete(
-    "/api/leads/{lead_id}",
+    "/leads/{lead_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["Leads"],
     summary="Delete lead"
@@ -446,7 +446,7 @@ async def delete_lead(
 
 
 @app.post(
-    "/api/leads/{lead_id}/assign",
+    "/leads/{lead_id}/assign",
     response_model=LeadResponse,
     tags=["Leads"],
     summary="Assign lead to agent"
@@ -490,7 +490,7 @@ async def assign_lead(
 
 
 @app.post(
-    "/api/leads/{lead_id}/notes",
+    "/leads/{lead_id}/notes",
     response_model=LeadResponse,
     tags=["Leads"],
     summary="Add note to lead"

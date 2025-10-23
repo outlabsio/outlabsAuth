@@ -21,7 +21,7 @@ from outlabs_auth.schemas.user import UserResponse
 
 def get_auth_router(
     auth: Any,
-    prefix: str = "/auth",
+    prefix: str = "",
     tags: Optional[list[str]] = None,
     requires_verification: bool = False
 ) -> APIRouter:
@@ -30,7 +30,7 @@ def get_auth_router(
 
     Args:
         auth: OutlabsAuth instance (SimpleRBAC or EnterpriseRBAC)
-        prefix: Router prefix (default: "/auth")
+        prefix: Router prefix (default: "")
         tags: OpenAPI tags (default: ["auth"])
         requires_verification: Require email verification for login (default: False)
 
@@ -51,7 +51,7 @@ def get_auth_router(
         from outlabs_auth.routers import get_auth_router
 
         auth = SimpleRBAC(database=db)
-        app.include_router(get_auth_router(auth))
+        app.include_router(get_auth_router(auth, prefix="/auth"))
         ```
     """
     router = APIRouter(prefix=prefix, tags=tags or ["auth"])

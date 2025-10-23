@@ -17,7 +17,7 @@ from outlabs_auth.schemas.api_key import (
 
 def get_api_keys_router(
     auth: Any,
-    prefix: str = "/api-keys",
+    prefix: str = "",
     tags: Optional[list[str]] = None
 ) -> APIRouter:
     """
@@ -25,7 +25,7 @@ def get_api_keys_router(
 
     Args:
         auth: OutlabsAuth instance (SimpleRBAC or EnterpriseRBAC)
-        prefix: Router prefix (default: "/api-keys")
+        prefix: Router prefix (default: "")
         tags: OpenAPI tags (default: ["api-keys"])
 
     Returns:
@@ -45,7 +45,7 @@ def get_api_keys_router(
         from outlabs_auth.routers import get_api_keys_router
 
         auth = SimpleRBAC(database=db)
-        app.include_router(get_api_keys_router(auth))
+        app.include_router(get_api_keys_router(auth, prefix="/api-keys"))
         ```
     """
     router = APIRouter(prefix=prefix, tags=tags or ["api-keys"])
