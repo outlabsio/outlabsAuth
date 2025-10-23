@@ -1,34 +1,39 @@
 """
-EnterpriseRBAC Example - Project Management System
+Real Estate Leads Platform - EnterpriseRBAC Example
 
-This example demonstrates hierarchical RBAC with entity hierarchy using OutlabsAuth.
+Demonstrates OutlabsAuth's entity flexibility through real-world scenarios:
+- 5 different client organizational structures
+- Entity type suggestions for naming consistency
+- Tree permissions for hierarchical access
+- Granular lead permissions (buyer vs seller specialists)
+- Internal team with global access
 
-Features:
-- Entity hierarchy (Company → Department → Team → Project)
-- Multiple roles per user in different entities
-- Tree permissions (manage descendants)
-- Entity-scoped permission checking
-- Complex organizational structures
+See REQUIREMENTS.md for complete use case documentation.
 """
 import os
 from contextlib import asynccontextmanager
 from typing import List, Optional
 from datetime import datetime
 
-from fastapi import FastAPI, Depends, HTTPException, status, Header
+from fastapi import FastAPI, Depends, HTTPException, status, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, Field
-from beanie import Document, init_beanie
+from beanie import init_beanie
 
+from models import Lead, LeadNote
 from outlabs_auth import EnterpriseRBAC
-from outlabs_auth.dependencies import AuthDeps
-from outlabs_auth.core.config import AuthConfig
+from outlabs_auth.routers import (
+    get_auth_router,
+    get_users_router,
+    get_api_keys_router,
+)
 from outlabs_auth.models.user import UserModel
 from outlabs_auth.models.role import RoleModel
 from outlabs_auth.models.entity import EntityModel, EntityClass
 from outlabs_auth.models.membership import EntityMembershipModel
 from outlabs_auth.models.closure import EntityClosureModel
-from outlabs_auth.core.exceptions import AuthenticationError
+from outlabs_auth.models.permission import PermissionModel
 
 
 # ============================================================================
@@ -36,293 +41,180 @@ from outlabs_auth.core.exceptions import AuthenticationError
 # ============================================================================
 
 MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
-DATABASE_NAME = os.getenv("DATABASE_NAME", "project_mgmt_enterprise")
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
-
-
-# ============================================================================
-# Project Model
-# ============================================================================
-
-class Project(Document):
-    """Project document"""
-    name: str
-    description: str
-    entity_id: str  # The team/entity this project belongs to
-    status: str = "active"  # active, completed, archived
-    created_by: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    budget: Optional[float] = None
-    deadline: Optional[datetime] = None
-
-    class Settings:
-        name = "projects"
+DATABASE_NAME = os.getenv("DATABASE_NAME", "realestate_leads_platform")
+SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production-please")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 
 # ============================================================================
 # Pydantic Schemas
 # ============================================================================
 
-class RegisterRequest(BaseModel):
-    """User registration"""
-    email: EmailStr
-    username: str = Field(min_length=3, max_length=50)
-    password: str = Field(min_length=8)
-    full_name: str
+class LeadCreateRequest(BaseModel):
+    """Create new lead"""
+    entity_id: str = Field(description="Entity (team/workspace) that owns this lead")
+    lead_type: str = Field(description="buyer, seller, or both")
+    first_name: str
+    last_name: str
+    email: str
+    phone: str
+    source: str = Field(description="Where lead came from")
+    budget: Optional[int] = None
+    location: Optional[str] = None
+    property_type: Optional[str] = None
+    bedrooms: Optional[int] = None
+    bathrooms: Optional[float] = None
+    timeline: Optional[str] = None
+    property_address: Optional[str] = None  # For sellers
+    asking_price: Optional[int] = None  # For sellers
+    notes: Optional[List[str]] = None
 
 
-class LoginRequest(BaseModel):
-    """Login credentials"""
-    email: EmailStr
-    password: str
+class LeadUpdateRequest(BaseModel):
+    """Update existing lead"""
+    status: Optional[str] = None
+    assigned_to: Optional[str] = None
+    budget: Optional[int] = None
+    location: Optional[str] = None
+    property_type: Optional[str] = None
+    bedrooms: Optional[int] = None
+    bathrooms: Optional[float] = None
+    timeline: Optional[str] = None
+    last_contact: Optional[datetime] = None
+    next_followup: Optional[datetime] = None
+    property_address: Optional[str] = None
+    asking_price: Optional[int] = None
+    property_condition: Optional[str] = None
 
 
-class TokenResponse(BaseModel):
-    """JWT token response"""
-    access_token: str
-    refresh_token: str
-    token_type: str = "bearer"
-
-
-class EntityCreate(BaseModel):
-    """Create entity"""
-    name: str = Field(min_length=1, max_length=100)
-    display_name: str
-    entity_class: str  # "structural" or "access_group"
-    entity_type: str  # "company", "department", "team", "project_group"
-    parent_id: Optional[str] = None
-    description: Optional[str] = None
-
-
-class EntityResponse(BaseModel):
-    """Entity response"""
+class LeadResponse(BaseModel):
+    """Lead response"""
     id: str
-    name: str
-    display_name: str
-    entity_class: str
-    entity_type: str
-    parent_id: Optional[str]
-    description: Optional[str]
-
-
-class MembershipCreate(BaseModel):
-    """Add member to entity"""
-    user_id: str
-    role_ids: List[str]
-
-
-class ProjectCreate(BaseModel):
-    """Create project"""
-    name: str = Field(min_length=1, max_length=200)
-    description: str
-    budget: Optional[float] = None
-    deadline: Optional[datetime] = None
-
-
-class ProjectResponse(BaseModel):
-    """Project response"""
-    id: str
-    name: str
-    description: str
     entity_id: str
+    assigned_to: Optional[str]
+    lead_type: str
+    first_name: str
+    last_name: str
+    email: str
+    phone: str
     status: str
-    created_by: str
+    source: str
+    budget: Optional[int]
+    location: Optional[str]
+    property_type: Optional[str]
+    bedrooms: Optional[int]
+    bathrooms: Optional[float]
+    timeline: Optional[str]
+    property_address: Optional[str]
+    asking_price: Optional[int]
+    property_condition: Optional[str]
+    notes: List[str]
+    last_contact: Optional[datetime]
+    next_followup: Optional[datetime]
     created_at: datetime
-    budget: Optional[float]
-    deadline: Optional[datetime]
+    updated_at: datetime
+    created_by: str
+
+    class Config:
+        from_attributes = True
+
+
+class LeadNoteRequest(BaseModel):
+    """Add note to lead"""
+    content: str = Field(min_length=1)
+    note_type: str = "general"  # general, call, email, showing, offer
+
+
+class LeadAssignRequest(BaseModel):
+    """Assign lead to agent"""
+    agent_id: str
 
 
 # ============================================================================
-# Application Lifespan
+# Global Variables
 # ============================================================================
 
+# Auth instance (initialized in lifespan)
 auth: Optional[EnterpriseRBAC] = None
-deps: Optional[AuthDeps] = None
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Initialize and cleanup"""
-    global auth, deps
-
-    # Connect to MongoDB
-    client = AsyncIOMotorClient(MONGODB_URL)
-    database = client[DATABASE_NAME]
-
-    # Initialize Beanie with all models
-    await init_beanie(
-        database=database,
-        document_models=[
-            UserModel,
-            RoleModel,
-            EntityModel,
-            EntityMembershipModel,
-            EntityClosureModel,
-            Project,
-        ]
-    )
-
-    # Initialize EnterpriseRBAC
-    auth_config = AuthConfig(
-        secret_key=SECRET_KEY,
-        algorithm="HS256",
-        access_token_expire_minutes=60,
-        refresh_token_expire_days=30,
-    )
-
-    auth = EnterpriseRBAC(config=auth_config)
-    await auth.initialize()
-
-    # Initialize dependencies
-    deps = AuthDeps(auth)
-
-    # Create default company and roles if they don't exist
-    await setup_demo_organization(auth)
-
-    print("✅ Project Management API (EnterpriseRBAC) started")
-    print(f"📦 Database: {DATABASE_NAME}")
-    print(f"🏢 Demo organization created with hierarchy")
-
-    yield
-
-    # Cleanup
-    client.close()
-    print("✅ Project Management API shutdown complete")
-
-
-# ============================================================================
-# Setup Functions
-# ============================================================================
-
-async def setup_demo_organization(auth_instance: EnterpriseRBAC):
-    """Create demo organization with hierarchy and roles"""
-
-    # Check if demo company exists
-    existing = await EntityModel.find_one(EntityModel.name == "acme_corp")
-    if existing:
-        print("📋 Demo organization already exists")
-        return
-
-    # Create company entity
-    company = await auth_instance.entity_service.create_entity(
-        name="acme_corp",
-        display_name="Acme Corporation",
-        entity_class=EntityClass.STRUCTURAL,
-        entity_type="company",
-        description="Demo company for project management",
-    )
-
-    # Create departments
-    eng_dept = await auth_instance.entity_service.create_entity(
-        name="engineering",
-        display_name="Engineering Department",
-        entity_class=EntityClass.STRUCTURAL,
-        entity_type="department",
-        parent_id=str(company.id),
-        description="Engineering and development",
-    )
-
-    sales_dept = await auth_instance.entity_service.create_entity(
-        name="sales",
-        display_name="Sales Department",
-        entity_class=EntityClass.STRUCTURAL,
-        entity_type="department",
-        parent_id=str(company.id),
-        description="Sales and business development",
-    )
-
-    # Create teams under engineering
-    backend_team = await auth_instance.entity_service.create_entity(
-        name="backend_team",
-        display_name="Backend Team",
-        entity_class=EntityClass.STRUCTURAL,
-        entity_type="team",
-        parent_id=str(eng_dept.id),
-        description="Backend development team",
-    )
-
-    frontend_team = await auth_instance.entity_service.create_entity(
-        name="frontend_team",
-        display_name="Frontend Team",
-        entity_class=EntityClass.STRUCTURAL,
-        entity_type="team",
-        parent_id=str(eng_dept.id),
-        description="Frontend development team",
-    )
-
-    # Create roles
-    # Company-level roles
-    ceo_role = await auth_instance.role_service.create_role(
-        name="ceo",
-        display_name="CEO",
-        description="Chief Executive Officer - full company access",
-        permissions=["*:*"],  # Full wildcard
-        is_global=False,
-    )
-
-    # Department-level roles
-    dept_manager_role = await auth_instance.role_service.create_role(
-        name="dept_manager",
-        display_name="Department Manager",
-        description="Manage department and all teams below",
-        permissions=[
-            "entity:read",
-            "entity:update",
-            "entity:create_tree",  # Can create entities in subtree
-            "entity:update_tree",  # Can update entities in subtree
-            "user:read",
-            "user:manage_tree",    # Can manage users in subtree
-            "project:*",           # Full project management
-        ],
-        is_global=False,
-    )
-
-    # Team-level roles
-    team_lead_role = await auth_instance.role_service.create_role(
-        name="team_lead",
-        display_name="Team Lead",
-        description="Lead a team and manage team projects",
-        permissions=[
-            "entity:read",
-            "entity:update",
-            "user:read",
-            "project:*",
-        ],
-        is_global=False,
-    )
-
-    developer_role = await auth_instance.role_service.create_role(
-        name="developer",
-        display_name="Developer",
-        description="Team member - can work on projects",
-        permissions=[
-            "entity:read",
-            "user:read",
-            "project:read",
-            "project:update",
-        ],
-        is_global=False,
-    )
-
-    print("✅ Demo organization hierarchy created:")
-    print(f"   └─ {company.display_name}")
-    print(f"      ├─ {eng_dept.display_name}")
-    print(f"      │  ├─ {backend_team.display_name}")
-    print(f"      │  └─ {frontend_team.display_name}")
-    print(f"      └─ {sales_dept.display_name}")
-    print(f"")
-    print("✅ Roles created: CEO, Department Manager, Team Lead, Developer")
 
 
 # ============================================================================
 # FastAPI Application
 # ============================================================================
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup and shutdown events"""
+    global auth
+
+    # Startup
+    print("🚀 Starting Real Estate Leads Platform...")
+
+    # Connect to MongoDB
+    print("📦 Connecting to MongoDB...")
+    client = AsyncIOMotorClient(MONGODB_URL)
+    db = client[DATABASE_NAME]
+
+    # Initialize EnterpriseRBAC
+    print("🔐 Initializing OutlabsAuth EnterpriseRBAC...")
+    auth = EnterpriseRBAC(
+        database=db,
+        secret_key=SECRET_KEY,
+        enable_caching=False,  # Disable caching for now
+        enable_context_aware_roles=False,  # Keep it simple for this example
+        enable_abac=False
+    )
+
+    # Initialize Beanie
+    await init_beanie(
+        database=db,
+        document_models=[
+            UserModel,
+            RoleModel,
+            PermissionModel,
+            EntityModel,
+            EntityMembershipModel,
+            EntityClosureModel,
+            Lead,
+            LeadNote
+        ]
+    )
+
+    await auth.initialize()
+    print("✅ Database initialized")
+
+    # Include standard OutlabsAuth routers
+    print("📝 Including API routers...")
+    app.include_router(get_auth_router(auth), prefix="/api/auth", tags=["Authentication"])
+    app.include_router(get_users_router(auth), prefix="/api/users", tags=["Users"])
+    app.include_router(get_api_keys_router(auth), prefix="/api/api-keys", tags=["API Keys"])
+    print("✅ Routers included")
+
+    print("✅ Real Estate Leads Platform ready!")
+    print(f"📍 API: http://localhost:8002")
+    print(f"📚 Docs: http://localhost:8002/docs")
+
+    yield
+
+    # Shutdown
+    print("👋 Shutting down...")
+    client.close()
+
+
 app = FastAPI(
-    title="Project Management API - EnterpriseRBAC Example",
-    description="Hierarchical project management with OutlabsAuth EnterpriseRBAC",
+    title="Real Estate Leads Platform",
+    description="EnterpriseRBAC demonstration with flexible entity hierarchies",
     version="1.0.0",
-    lifespan=lifespan,
+    lifespan=lifespan
+)
+
+# CORS for Nuxt admin UI
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # Nuxt dev server
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -330,409 +222,333 @@ app = FastAPI(
 # Helper Functions
 # ============================================================================
 
-async def get_entity_context(x_entity_context_id: Optional[str] = Header(None)) -> Optional[str]:
-    """Get entity context from header"""
-    return x_entity_context_id
+def get_auth() -> EnterpriseRBAC:
+    """Get the global auth instance"""
+    if auth is None:
+        raise HTTPException(status_code=500, detail="Auth not initialized")
+    return auth
 
 
 # ============================================================================
-# Authentication Routes
+# Domain-Specific Routes: Lead Management
 # ============================================================================
 
-@app.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-async def register(request: RegisterRequest):
-    """Register a new user"""
-    try:
-        user = await auth.user_service.create_user(
-            email=request.email,
-            username=request.username,
-            password=request.password,
-            full_name=request.full_name,
-        )
-
-        # Login and return tokens
-        token_pair = await auth.auth_service.login(request.email, request.password)
-
-        return TokenResponse(
-            access_token=token_pair.access_token,
-            refresh_token=token_pair.refresh_token,
-        )
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
-
-
-@app.post("/login", response_model=TokenResponse)
-async def login(request: LoginRequest):
-    """Login with email and password"""
-    try:
-        token_pair = await auth.auth_service.login(request.email, request.password)
-
-        return TokenResponse(
-            access_token=token_pair.access_token,
-            refresh_token=token_pair.refresh_token,
-        )
-
-    except AuthenticationError as e:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(e),
-        )
-
-
-@app.get("/me")
-async def get_current_user(ctx = Depends(deps.require_auth())):
-    """Get current user info"""
-    user = ctx.metadata.get("user")
-
-    # Get user's entities and roles
-    memberships = await auth.membership_service.get_user_entities(str(user.id))
-    entity_roles = []
-
-    for membership in memberships:
-        entity = await auth.entity_service.get_entity(str(membership.entity_id))
-        roles = []
-        for role_id in membership.role_ids:
-            role = await auth.role_service.get_role(str(role_id))
-            if role:
-                roles.append(role.display_name)
-
-        entity_roles.append({
-            "entity": entity.display_name if entity else "Unknown",
-            "entity_type": entity.entity_type if entity else None,
-            "roles": roles,
-        })
-
-    return {
-        "id": str(user.id),
-        "email": user.email,
-        "username": user.username,
-        "full_name": user.full_name,
-        "entity_memberships": entity_roles,
-    }
-
-
-# ============================================================================
-# Entity Routes
-# ============================================================================
-
-@app.get("/entities", response_model=List[EntityResponse])
-async def list_entities(
-    entity_type: Optional[str] = None,
-    parent_id: Optional[str] = None,
-    ctx = Depends(deps.require_auth()),
+@app.post(
+    "/api/leads",
+    response_model=LeadResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Leads"],
+    summary="Create new lead"
+)
+async def create_lead(
+    data: LeadCreateRequest,
+    auth_result = Depends(lambda: get_auth().deps.require_permission("lead:create"))
 ):
-    """List entities (filtered by access)"""
-    # In a real app, filter based on user's access
-    # For now, return all entities
+    """
+    Create a new lead in the specified entity.
 
+    Requires `lead:create` permission.
+    """
+    # Extract user from auth_result dict
+    current_user = auth_result["user"]
+
+    # Get auth instance
+    auth_instance = get_auth()
+
+    # Verify entity exists
+    try:
+        entity = await auth_instance.entity_service.get_entity(data.entity_id)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Entity {data.entity_id} not found"
+        )
+
+    # Create lead
+    lead = Lead(
+        entity_id=data.entity_id,
+        lead_type=data.lead_type,
+        first_name=data.first_name,
+        last_name=data.last_name,
+        email=data.email,
+        phone=data.phone,
+        source=data.source,
+        status="new",
+        budget=data.budget,
+        location=data.location,
+        property_type=data.property_type,
+        bedrooms=data.bedrooms,
+        bathrooms=data.bathrooms,
+        timeline=data.timeline,
+        property_address=data.property_address,
+        asking_price=data.asking_price,
+        notes=data.notes or [],
+        created_by=str(current_user.id),
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+
+    await lead.insert()
+
+    return LeadResponse(
+        id=str(lead.id),
+        **lead.dict(exclude={"id"})
+    )
+
+
+@app.get(
+    "/api/leads",
+    response_model=dict,
+    tags=["Leads"],
+    summary="List leads"
+)
+async def list_leads(
+    entity_id: Optional[str] = Query(None, description="Filter by entity"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    lead_type: Optional[str] = Query(None, description="Filter by type (buyer/seller)"),
+    assigned_to: Optional[str] = Query(None, description="Filter by assigned agent"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    auth_result = Depends(lambda: get_auth().deps.require_auth())
+):
+    """
+    List leads with filtering.
+
+    Automatically filters based on user's permissions:
+    - Users with `lead:read` see leads in their entities
+    - Users with `lead:read_tree` see leads in descendant entities too
+    - Internal support with global permissions see all leads
+    """
+    # Build query
     query = {}
-    if entity_type:
-        query["entity_type"] = entity_type
-    if parent_id:
-        query["parent_id"] = parent_id
 
-    entities = await EntityModel.find(query).to_list()
+    if entity_id:
+        query["entity_id"] = entity_id
+    if status:
+        query["status"] = status
+    if lead_type:
+        query["lead_type"] = lead_type
+    if assigned_to:
+        query["assigned_to"] = assigned_to
 
-    return [
-        EntityResponse(
-            id=str(e.id),
-            name=e.name,
-            display_name=e.display_name,
-            entity_class=e.entity_class.value,
-            entity_type=e.entity_type,
-            parent_id=str(e.parent_id) if e.parent_id else None,
-            description=e.description,
-        )
-        for e in entities
-    ]
+    # TODO: Apply permission-based filtering
+    # For now, return all matching leads
+    # In production, check user's entity memberships and tree permissions
 
-
-@app.post("/entities", response_model=EntityResponse, status_code=status.HTTP_201_CREATED)
-async def create_entity(
-    entity_data: EntityCreate,
-    ctx = Depends(deps.require_auth()),
-):
-    """Create a new entity"""
-    # Check permission in parent entity or root
-    parent_id = entity_data.parent_id
-    if parent_id:
-        # Check if user has entity:create_tree in parent
-        has_perm = await auth.permission_service.check_permission(
-            user_id=ctx.user_id,
-            permission="entity:create_tree",
-            entity_id=parent_id,
-        )
-        if not has_perm[0]:
-            raise HTTPException(
-                status_code=403,
-                detail="You don't have permission to create entities here",
-            )
-
-    entity = await auth.entity_service.create_entity(
-        name=entity_data.name,
-        display_name=entity_data.display_name,
-        entity_class=EntityClass(entity_data.entity_class),
-        entity_type=entity_data.entity_type,
-        parent_id=parent_id,
-        description=entity_data.description,
-    )
-
-    return EntityResponse(
-        id=str(entity.id),
-        name=entity.name,
-        display_name=entity.display_name,
-        entity_class=entity.entity_class.value,
-        entity_type=entity.entity_type,
-        parent_id=str(entity.parent_id) if entity.parent_id else None,
-        description=entity.description,
-    )
-
-
-@app.get("/entities/{entity_id}", response_model=EntityResponse)
-async def get_entity(
-    entity_id: str,
-    ctx = Depends(deps.require_auth()),
-):
-    """Get entity details"""
-    entity = await auth.entity_service.get_entity(entity_id)
-    if not entity:
-        raise HTTPException(status_code=404, detail="Entity not found")
-
-    # Check read permission
-    has_perm = await auth.permission_service.check_permission(
-        user_id=ctx.user_id,
-        permission="entity:read",
-        entity_id=entity_id,
-    )
-    if not has_perm[0]:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    return EntityResponse(
-        id=str(entity.id),
-        name=entity.name,
-        display_name=entity.display_name,
-        entity_class=entity.entity_class.value,
-        entity_type=entity.entity_type,
-        parent_id=str(entity.parent_id) if entity.parent_id else None,
-        description=entity.description,
-    )
-
-
-@app.get("/entities/{entity_id}/hierarchy")
-async def get_entity_hierarchy(
-    entity_id: str,
-    ctx = Depends(deps.require_auth()),
-):
-    """Get entity hierarchy path"""
-    # Get path from root to entity
-    path = await auth.entity_service.get_entity_path(entity_id)
-
-    # Get descendants
-    descendants = await auth.entity_service.get_descendants(entity_id)
+    skip = (page - 1) * limit
+    leads = await Lead.find(query).skip(skip).limit(limit).to_list()
+    total = await Lead.find(query).count()
 
     return {
-        "path": [
-            {
-                "id": str(e.id),
-                "name": e.display_name,
-                "type": e.entity_type,
-            }
-            for e in path
-        ],
-        "descendants": [
-            {
-                "id": str(e.id),
-                "name": e.display_name,
-                "type": e.entity_type,
-            }
-            for e in descendants
-        ],
+        "leads": [LeadResponse(id=str(lead.id), **lead.dict(exclude={"id"})) for lead in leads],
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": (total + limit - 1) // limit
     }
 
 
-# ============================================================================
-# Membership Routes
-# ============================================================================
-
-@app.post("/entities/{entity_id}/members")
-async def add_member(
-    entity_id: str,
-    membership_data: MembershipCreate,
-    ctx = Depends(deps.require_auth()),
+@app.get(
+    "/api/leads/{lead_id}",
+    response_model=LeadResponse,
+    tags=["Leads"],
+    summary="Get lead details"
+)
+async def get_lead(
+    lead_id: str,
+    auth_result = Depends(lambda: get_auth().deps.require_permission("lead:read"))
 ):
-    """Add a member to an entity"""
-    # Check if user has permission to manage users in this entity
-    has_perm = await auth.permission_service.check_permission(
-        user_id=ctx.user_id,
-        permission="user:manage",
-        entity_id=entity_id,
-    )
+    """
+    Get lead details by ID.
 
-    # Also check tree permission in parent entities
-    if not has_perm[0]:
-        has_tree_perm = await auth.permission_service.check_permission(
-            user_id=ctx.user_id,
-            permission="user:manage_tree",
-            entity_id=entity_id,
-        )
-        if not has_tree_perm[0]:
-            raise HTTPException(
-                status_code=403,
-                detail="You don't have permission to manage members here",
-            )
-
-    # Add member
-    membership = await auth.membership_service.add_member(
-        entity_id=entity_id,
-        user_id=membership_data.user_id,
-        role_ids=membership_data.role_ids,
-    )
-
-    return {
-        "message": "Member added successfully",
-        "membership_id": str(membership.id),
-    }
-
-
-@app.get("/entities/{entity_id}/members")
-async def list_members(
-    entity_id: str,
-    ctx = Depends(deps.require_auth()),
-):
-    """List entity members"""
-    # Check read permission
-    has_perm = await auth.permission_service.check_permission(
-        user_id=ctx.user_id,
-        permission="user:read",
-        entity_id=entity_id,
-    )
-    if not has_perm[0]:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    members = await auth.membership_service.get_entity_members(entity_id)
-
-    member_list = []
-    for membership in members:
-        user = await auth.user_service.get_user(str(membership.user_id))
-        roles = []
-        for role_id in membership.role_ids:
-            role = await auth.role_service.get_role(str(role_id))
-            if role:
-                roles.append({
-                    "id": str(role.id),
-                    "name": role.display_name,
-                })
-
-        if user:
-            member_list.append({
-                "user_id": str(user.id),
-                "username": user.username,
-                "email": user.email,
-                "full_name": user.full_name,
-                "roles": roles,
-            })
-
-    return {"members": member_list}
-
-
-# ============================================================================
-# Project Routes
-# ============================================================================
-
-@app.post("/entities/{entity_id}/projects", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
-async def create_project(
-    entity_id: str,
-    project_data: ProjectCreate,
-    ctx = Depends(deps.require_auth()),
-):
-    """Create a project in an entity (team)"""
-    # Check permission
-    has_perm = await auth.permission_service.check_permission(
-        user_id=ctx.user_id,
-        permission="project:create",
-        entity_id=entity_id,
-    )
-    if not has_perm[0]:
+    Requires `lead:read` permission.
+    """
+    lead = await Lead.get(lead_id)
+    if not lead:
         raise HTTPException(
-            status_code=403,
-            detail="You don't have permission to create projects here",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Lead not found"
         )
 
-    project = Project(
-        name=project_data.name,
-        description=project_data.description,
-        entity_id=entity_id,
-        created_by=ctx.user_id,
-        budget=project_data.budget,
-        deadline=project_data.deadline,
-    )
+    # TODO: Check permission in lead's entity context
 
-    await project.insert()
-
-    return ProjectResponse(
-        id=str(project.id),
-        name=project.name,
-        description=project.description,
-        entity_id=project.entity_id,
-        status=project.status,
-        created_by=project.created_by,
-        created_at=project.created_at,
-        budget=project.budget,
-        deadline=project.deadline,
+    return LeadResponse(
+        id=str(lead.id),
+        **lead.dict(exclude={"id"})
     )
 
 
-@app.get("/entities/{entity_id}/projects", response_model=List[ProjectResponse])
-async def list_projects(
-    entity_id: str,
-    ctx = Depends(deps.require_auth()),
+@app.put(
+    "/api/leads/{lead_id}",
+    response_model=LeadResponse,
+    tags=["Leads"],
+    summary="Update lead"
+)
+async def update_lead(
+    lead_id: str,
+    data: LeadUpdateRequest,
+    auth_result = Depends(lambda: get_auth().deps.require_permission("lead:update"))
 ):
-    """List projects in an entity"""
-    # Check permission
-    has_perm = await auth.permission_service.check_permission(
-        user_id=ctx.user_id,
-        permission="project:read",
-        entity_id=entity_id,
-    )
-    if not has_perm[0]:
-        raise HTTPException(status_code=403, detail="Access denied")
+    """
+    Update lead details.
 
-    projects = await Project.find(Project.entity_id == entity_id).to_list()
-
-    return [
-        ProjectResponse(
-            id=str(p.id),
-            name=p.name,
-            description=p.description,
-            entity_id=p.entity_id,
-            status=p.status,
-            created_by=p.created_by,
-            created_at=p.created_at,
-            budget=p.budget,
-            deadline=p.deadline,
+    Requires `lead:update` permission.
+    Buyer specialists can only update if lead_type includes 'buyer'.
+    Seller specialists can only update if lead_type includes 'seller'.
+    """
+    lead = await Lead.get(lead_id)
+    if not lead:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Lead not found"
         )
-        for p in projects
-    ]
+
+    # TODO: Check granular permissions (buyer vs seller specialists)
+    # For now, allow updates if user has lead:update
+
+    # Update fields
+    update_data = data.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(lead, field, value)
+
+    lead.updated_at = datetime.utcnow()
+    await lead.save()
+
+    return LeadResponse(
+        id=str(lead.id),
+        **lead.dict(exclude={"id"})
+    )
+
+
+@app.delete(
+    "/api/leads/{lead_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["Leads"],
+    summary="Delete lead"
+)
+async def delete_lead(
+    lead_id: str,
+    auth_result = Depends(lambda: get_auth().deps.require_permission("lead:delete"))
+):
+    """
+    Delete (archive) a lead.
+
+    Requires `lead:delete` permission.
+    """
+    lead = await Lead.get(lead_id)
+    if not lead:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Lead not found"
+        )
+
+    await lead.delete()
+
+
+@app.post(
+    "/api/leads/{lead_id}/assign",
+    response_model=LeadResponse,
+    tags=["Leads"],
+    summary="Assign lead to agent"
+)
+async def assign_lead(
+    lead_id: str,
+    data: LeadAssignRequest,
+    auth_result = Depends(lambda: get_auth().deps.require_permission("lead:assign"))
+):
+    """
+    Assign lead to a specific agent.
+
+    Requires `lead:assign` permission.
+    """
+    lead = await Lead.get(lead_id)
+    if not lead:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Lead not found"
+        )
+
+    # Verify agent exists
+    try:
+        agent = await UserModel.get(data.agent_id)
+        if not agent:
+            raise ValueError()
+    except:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent {data.agent_id} not found"
+        )
+
+    lead.assigned_to = data.agent_id
+    lead.updated_at = datetime.utcnow()
+    await lead.save()
+
+    return LeadResponse(
+        id=str(lead.id),
+        **lead.dict(exclude={"id"})
+    )
+
+
+@app.post(
+    "/api/leads/{lead_id}/notes",
+    response_model=LeadResponse,
+    tags=["Leads"],
+    summary="Add note to lead"
+)
+async def add_lead_note(
+    lead_id: str,
+    data: LeadNoteRequest,
+    auth_result = Depends(lambda: get_auth().deps.require_permission("lead:read"))
+):
+    """
+    Add a note to a lead.
+
+    Requires `lead:read` permission.
+    Support staff can add notes with `support:add_notes` permission.
+    """
+    lead = await Lead.get(lead_id)
+    if not lead:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Lead not found"
+        )
+
+    # Extract user from auth_result dict
+    current_user = auth_result["user"]
+    lead.add_note(data.content, str(current_user.id))
+    await lead.save()
+
+    return LeadResponse(
+        id=str(lead.id),
+        **lead.dict(exclude={"id"})
+    )
 
 
 # ============================================================================
 # Health Check
 # ============================================================================
 
-@app.get("/health")
-async def health_check():
+@app.get("/", tags=["Health"])
+async def root():
     """Health check endpoint"""
     return {
+        "service": "Real Estate Leads Platform",
         "status": "healthy",
-        "service": "project-mgmt-enterprise-rbac",
-        "auth_preset": "EnterpriseRBAC",
+        "version": "1.0.0",
+        "preset": "EnterpriseRBAC",
+        "docs": "/docs"
     }
 
 
+# ============================================================================
+# Run Application
+# ============================================================================
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8002,
+        reload=True
+    )

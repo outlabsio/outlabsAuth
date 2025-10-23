@@ -184,6 +184,11 @@ class OutlabsAuth:
         self.membership_service = None
         self.cache_service = None
 
+        # Authentication backends and dependency injection
+        # These are initialized by _init_backends() and _init_deps()
+        self._backends = []
+        self._deps = None
+
         # Track initialization state
         self._initialized = False
 
@@ -269,6 +274,12 @@ class OutlabsAuth:
         # Initialize services
         await self._init_services()
 
+        # Initialize authentication backends
+        self._init_backends()
+
+        # Initialize dependency injection
+        self._init_deps()
+
         self._initialized = True
 
     async def _init_services(self):
@@ -307,9 +318,18 @@ class OutlabsAuth:
             self.entity_service = None  # Not available in SimpleRBAC
             self.membership_service = None  # Not available in SimpleRBAC
 
-        # API Key and Service Token services (will be implemented in future phases)
-        self.api_key_service = None  # Phase 4
-        self.service_token_service = None  # Phase 4
+        # API Key service (for API key authentication)
+        from outlabs_auth.services.api_key import APIKeyService
+        redis_client = None  # TODO: Pass Redis client if caching enabled
+        self.api_key_service = APIKeyService(
+            database=self.database,
+            config=self.config,
+            redis_client=redis_client
+        )
+
+        # Service Token service (for service-to-service auth)
+        from outlabs_auth.services.service_token import ServiceTokenService
+        self.service_token_service = ServiceTokenService(config=self.config)
 
         # Optional services
         if self.config.enable_caching and self.config.redis_url:
@@ -318,6 +338,84 @@ class OutlabsAuth:
             self.cache_service = None
         else:
             self.cache_service = None
+
+    def _init_backends(self):
+        """
+        Initialize authentication backends.
+
+        Creates backends for all available authentication methods:
+        - JWT (Bearer token) - always enabled
+        - API Key - enabled if api_key_service exists
+        - Service Token - enabled if service_token_service exists
+
+        Backends combine transports (how credentials are extracted) with
+        strategies (how credentials are validated).
+        """
+        from outlabs_auth.authentication.backend import AuthBackend
+        from outlabs_auth.authentication.transport import BearerTransport, ApiKeyTransport
+        from outlabs_auth.authentication.strategy import (
+            JWTStrategy,
+            ApiKeyStrategy,
+            ServiceTokenStrategy
+        )
+
+        self._backends = []
+
+        # JWT Backend (always available)
+        jwt_strategy = JWTStrategy(
+            secret=self.config.secret_key,
+            algorithm=self.config.algorithm
+        )
+        jwt_backend = AuthBackend(
+            name="jwt",
+            transport=BearerTransport(),
+            strategy=jwt_strategy
+        )
+        self._backends.append(jwt_backend)
+
+        # API Key Backend (if service exists)
+        if self.api_key_service is not None:
+            api_key_strategy = ApiKeyStrategy()
+            api_key_backend = AuthBackend(
+                name="api_key",
+                transport=ApiKeyTransport(header_name="X-API-Key"),
+                strategy=api_key_strategy
+            )
+            self._backends.append(api_key_backend)
+
+        # Service Token Backend (if service exists)
+        if self.service_token_service is not None:
+            service_token_strategy = ServiceTokenStrategy(
+                secret=self.config.secret_key,
+                algorithm=self.config.algorithm
+            )
+            service_token_backend = AuthBackend(
+                name="service_token",
+                transport=BearerTransport(),
+                strategy=service_token_strategy
+            )
+            self._backends.append(service_token_backend)
+
+    def _init_deps(self):
+        """
+        Initialize AuthDeps for FastAPI dependency injection.
+
+        Creates the deps instance that routers use via auth.deps.require_auth(),
+        auth.deps.require_permission(), etc.
+
+        This must be called AFTER _init_services() and _init_backends().
+        """
+        from outlabs_auth.dependencies import AuthDeps
+
+        self._deps = AuthDeps(
+            backends=self._backends,
+            user_service=self.user_service,
+            api_key_service=self.api_key_service,
+            permission_service=self.permission_service,
+            role_service=self.role_service,
+            entity_service=self.entity_service,
+            membership_service=self.membership_service
+        )
 
     async def get_current_user(self, token: str) -> UserModel:
         """
@@ -339,6 +437,48 @@ class OutlabsAuth:
 
         # Will be implemented when AuthService is created in Phase 2
         return await self.auth_service.get_current_user(token)
+
+    @property
+    def backends(self) -> list:
+        """
+        Get list of configured authentication backends.
+
+        Returns:
+            List of AuthBackend instances
+
+        Raises:
+            ConfigurationError: If backends not initialized
+        """
+        if not self._backends:
+            raise ConfigurationError(
+                "Backends not initialized. Call await auth.initialize() first."
+            )
+        return self._backends
+
+    @property
+    def deps(self):
+        """
+        Get dependency injection instance for FastAPI routes.
+
+        This provides the require_auth(), require_permission(), and require_source()
+        methods used to protect routes.
+
+        Returns:
+            AuthDeps instance
+
+        Raises:
+            ConfigurationError: If deps not initialized
+
+        Example:
+            >>> @app.get("/protected")
+            >>> async def protected_route(auth_result = Depends(auth.deps.require_auth())):
+            ...     return auth_result["user"]
+        """
+        if self._deps is None:
+            raise ConfigurationError(
+                "Dependencies not initialized. Call await auth.initialize() first."
+            )
+        return self._deps
 
     @property
     def is_enterprise(self) -> bool:
