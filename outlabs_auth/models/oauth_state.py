@@ -3,11 +3,12 @@
 from datetime import datetime, timedelta
 from typing import Optional
 from beanie import Document
-from pydantic import Field
+from pydantic import Field, ConfigDict
 from bson import ObjectId
 
 
 class OAuthState(Document):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     """
     Temporary state for OAuth flow validation.
     

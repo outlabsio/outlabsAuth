@@ -1,7 +1,7 @@
 # OutlabsAuth Library - Implementation Roadmap
 
-**Version**: 1.4
-**Date**: 2025-01-14
+**Version**: 1.5
+**Date**: 2025-01-23 (Updated)
 **Total Duration**: 15-16 weeks (6-7 weeks core + 9 weeks extensions)
 **Status**: Planning Phase
 
@@ -13,6 +13,12 @@
 - **Temporary Locks**: 30-min cooldown instead of permanent revocation (DD-028)
 - **JWT Service Tokens**: Internal microservice authentication (DD-034)
 - **Single AuthDeps**: Unified dependency injection class (DD-035)
+
+**FastAPI-Users Patterns Added (v1.5 - 2025-01-23)**:
+- **Transport/Strategy Pattern**: Clean separation for auth methods (DD-038)
+- **Dynamic Dependencies**: `makefun` for perfect OpenAPI schema (DD-039)
+- **Lifecycle Hooks**: Extensible service events (DD-040)
+- **Router Factories**: Optional pre-built routers (DD-041)
 
 ---
 
@@ -84,16 +90,34 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
 
 **Deliverable**: Core models defined and tested
 
-#### Day 5-7: SimpleRBAC Implementation
+#### Day 5-6: Transport/Strategy Pattern (DD-038)
+- [ ] Create `outlabs_auth/authentication/` module
+- [ ] Implement `Transport` base class
+- [ ] Implement transports:
+  - `BearerTransport` (Authorization: Bearer {token})
+  - `ApiKeyTransport` (X-API-Key header)
+  - `HeaderTransport` (custom headers)
+- [ ] Implement `Strategy` base class
+- [ ] Implement strategies:
+  - `JWTStrategy` (validate JWT tokens)
+  - `ApiKeyStrategy` (validate API keys)
+  - `ServiceTokenStrategy` (service-to-service)
+- [ ] Create `AuthBackend` combinator class
+- [ ] Add tests for Transport/Strategy pattern
+
+**Deliverable**: Flexible authentication architecture
+
+#### Day 7: SimpleRBAC Implementation
 - [ ] Implement `OutlabsAuth` base class
 - [ ] Create `AuthService`:
   - Login/logout
   - JWT token generation
   - Token validation
   - Refresh token rotation
-- [ ] Create `UserService`:
+- [ ] Create `UserService` with lifecycle hooks (DD-040):
   - User CRUD operations
   - Password management
+  - **Hooks**: `on_after_register`, `on_after_login`, `on_after_update`, `on_before_delete`, `on_after_delete`
 - [ ] Create `RoleService` (basic):
   - Role CRUD operations
   - Assign role to user
@@ -101,7 +125,7 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
   - Check if user has permission
   - Get user's permissions
 - [ ] Implement `SimpleRBAC` preset class
-- [ ] Create FastAPI dependencies:
+- [ ] Create FastAPI dependencies (basic version):
   - `get_current_user`
   - `require_permission`
 
@@ -133,14 +157,30 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
 
 ### Tasks
 
-#### Day 1-2: Enhanced Features
+#### Day 1: Dynamic Dependencies with makefun (DD-039)
+- [ ] Add `makefun>=1.15.0` to `pyproject.toml`
+- [ ] Refactor `AuthDeps` to use dynamic signature generation
+- [ ] Implement `_get_dependency_signature()` method
+- [ ] Update `require_auth()` to generate dynamic signatures
+- [ ] Test OpenAPI schema generation (Swagger UI)
+- [ ] Verify all auth backends appear in OpenAPI spec
+- [ ] Add tests for signature generation
+
+**Deliverable**: Perfect OpenAPI schema with all auth backends visible
+
+#### Day 2: Enhanced User Features + Hooks
 - [ ] Password validation and requirements
 - [ ] Account lockout after failed attempts
 - [ ] Email verification (optional)
 - [ ] Password reset flow
 - [ ] User profile management
+- [ ] Add lifecycle hooks to `RoleService` (DD-040):
+  - `on_after_role_assigned`, `on_after_role_removed`
+- [ ] Add lifecycle hooks to `PermissionService` (DD-040):
+  - `on_after_permission_changed`
+- [ ] Create hook examples documentation
 
-**Deliverable**: Complete user management features
+**Deliverable**: Complete user management features with extensibility hooks
 
 #### Day 2-3: API Key System (Core v1.0 Feature - DD-028, DD-033, DD-034, DD-035)
 - [ ] Create `APIKeyModel`:
@@ -211,13 +251,36 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
 
 **Deliverable**: Working example app with API keys
 
+#### Day 6-7: Router Factories (DD-041)
+- [ ] Create `outlabs_auth/routers/` module
+- [ ] Implement `get_auth_router()`:
+  - `/register`, `/login`, `/refresh`, `/logout`
+  - `/forgot-password`, `/reset-password`
+  - `/verify-email`, `/request-verify`
+- [ ] Implement `get_users_router()`:
+  - `/me` (GET, PATCH)
+  - `/{user_id}` (GET, PATCH, DELETE) - admin only
+  - `/me/change-password`
+- [ ] Implement `get_api_keys_router()`:
+  - `/` (GET - list, POST - create)
+  - `/{key_id}` (GET, PATCH, DELETE)
+  - `/{key_id}/rotate` (POST)
+- [ ] Add router configuration options (prefix, tags, require_verification)
+- [ ] Create router examples (all 4 usage patterns)
+- [ ] Add router tests
+- [ ] Update example app to use routers
+
+**Deliverable**: Optional pre-built routers for fast setup
+
 #### Day 7: Documentation
 - [ ] API reference for SimpleRBAC
-- [ ] Quick start guide
+- [ ] Quick start guide (with router factories!)
 - [ ] Configuration options
-- [ ] Code examples
+- [ ] Code examples (Transport/Strategy, hooks, routers)
+- [ ] Hook customization guide
+- [ ] Router customization guide
 
-**Deliverable**: Basic documentation
+**Deliverable**: Comprehensive documentation with new patterns
 
 ### Success Criteria
 - [ ] SimpleRBAC passes all tests

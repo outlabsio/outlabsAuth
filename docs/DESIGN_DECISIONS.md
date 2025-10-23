@@ -2487,6 +2487,1341 @@ class AuthCacheService:
 
 ---
 
+## DD-038: Transport/Strategy Pattern for Authentication
+
+**Date**: 2025-01-23
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Inspired by FastAPI-Users architecture analysis. Need clean separation between how authentication credentials are delivered vs how they are validated.
+
+### The Problem
+Current approach mixes credential extraction with validation:
+```python
+# Mixed concerns - hard to extend
+async def authenticate_user(authorization: str):
+    if authorization.startswith("Bearer "):
+        token = authorization[7:]
+        return await validate_jwt(token)
+    elif authorization.startswith("ApiKey "):
+        key = authorization[7:]
+        return await validate_api_key(key)
+```
+
+Issues:
+- Hard to add new auth methods (service tokens, cookies, etc.)
+- Can't reuse JWT validation with different transports
+- OpenAPI schema generation is manual
+- Testing is complex
+
+### Options Considered
+
+1. **Keep Mixed Approach**
+   - Pros: Simple, direct
+   - Cons: Hard to extend, tight coupling, poor testability
+
+2. **Transport/Strategy Separation (FastAPI-Users Pattern)**
+   - Pros: Clean separation of concerns, extensible, testable
+   - Cons: More abstraction layers, learning curve
+
+3. **Plugin System**
+   - Pros: Ultimate flexibility
+   - Cons: Overcomplicated for our needs, harder to maintain
+
+### Decision
+Adopt Transport/Strategy pattern from FastAPI-Users.
+
+**Architecture**:
+```python
+# Transport: HOW credentials are delivered
+class Transport:
+    """Defines how to extract credentials from request."""
+    async def get_credentials(self, request: Request) -> Optional[str]:
+        raise NotImplementedError()
+
+class BearerTransport(Transport):
+    async def get_credentials(self, request: Request) -> Optional[str]:
+        auth = request.headers.get("Authorization")
+        if auth and auth.startswith("Bearer "):
+            return auth[7:]
+        return None
+
+class ApiKeyTransport(Transport):
+    async def get_credentials(self, request: Request) -> Optional[str]:
+        # Check header, query param, or custom location
+        return request.headers.get("X-API-Key")
+
+# Strategy: HOW credentials are validated
+class Strategy:
+    """Defines how to validate credentials and return user."""
+    async def authenticate(
+        self,
+        credentials: str,
+        user_manager: UserManager
+    ) -> Optional[User]:
+        raise NotImplementedError()
+
+class JWTStrategy(Strategy):
+    async def authenticate(self, token: str, user_manager) -> Optional[User]:
+        payload = decode_jwt(token)
+        return await user_manager.get(payload["sub"])
+
+class ApiKeyStrategy(Strategy):
+    async def authenticate(self, key: str, user_manager) -> Optional[User]:
+        # Find API key, check hash, return user
+        api_key = await api_key_service.verify(key)
+        return await user_manager.get(api_key.user_id)
+
+# Backend: Combines transport + strategy
+class AuthBackend:
+    def __init__(self, name: str, transport: Transport, strategy: Strategy):
+        self.name = name
+        self.transport = transport
+        self.strategy = strategy
+```
+
+**Usage**:
+```python
+# Define backends
+jwt_backend = AuthBackend(
+    name="jwt",
+    transport=BearerTransport(),
+    strategy=JWTStrategy(secret=SECRET)
+)
+
+api_key_backend = AuthBackend(
+    name="api_key",
+    transport=ApiKeyTransport(header_name="X-API-Key"),
+    strategy=ApiKeyStrategy()
+)
+
+service_token_backend = AuthBackend(
+    name="service",
+    transport=BearerTransport(),
+    strategy=ServiceTokenStrategy(secret=SERVICE_SECRET)
+)
+
+# Initialize auth with multiple backends
+auth = OutlabsAuth(
+    database=db,
+    auth_backends=[jwt_backend, api_key_backend, service_token_backend]
+)
+```
+
+**Benefits**:
+- Clean separation of concerns
+- Easy to add new transports (Cookie, Custom Header)
+- Easy to add new strategies (Redis-backed JWT, LDAP)
+- Mix-and-match (JWT via Bearer OR Cookie)
+- Better testability (test transport and strategy separately)
+- Clearer code organization
+
+**Reasoning**:
+- FastAPI-Users proves this pattern works well
+- Aligns with our multi-source auth vision (DD-029, DD-034)
+- Makes adding new auth methods trivial
+- Better matches FastAPI's dependency injection model
+- Improves testability
+
+### Consequences
+- **Positive**: Extensible, testable, clean architecture, easy to add auth methods
+- **Negative**: More abstraction layers, slightly more complex initial setup
+- **Neutral**: Need to update dependency injection (see DD-039)
+
+### Implementation Plan
+**Phase 1** (Week 1):
+- Create `Transport` base class and implementations
+- Create `Strategy` base class and implementations
+- Create `AuthBackend` combinator class
+
+**Phase 2** (Week 2):
+- Integrate with `AuthDeps` (DD-039)
+- Update user-facing API
+- Add tests
+
+### Related Decisions
+- DD-029 (Multi-source auth)
+- DD-034 (JWT service tokens)
+- DD-035 (Single AuthDeps)
+- DD-039 (Dynamic dependency injection)
+
+---
+
+## DD-039: Dynamic Dependency Injection with makefun
+
+**Date**: 2025-01-23
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Inspired by FastAPI-Users. Need multiple auth backends to appear correctly in OpenAPI schema without manual duplication.
+
+### The Problem
+With multiple auth backends, manually creating dependencies is tedious:
+```python
+# BAD: Manual dependencies for each combination
+async def get_user_jwt(
+    token: str = Depends(bearer_scheme),
+    user_manager = Depends(get_user_manager)
+):
+    return await jwt_strategy.authenticate(token, user_manager)
+
+async def get_user_api_key(
+    key: str = Depends(api_key_scheme),
+    user_manager = Depends(get_user_manager)
+):
+    return await api_key_strategy.authenticate(key, user_manager)
+
+# How to try both? Manual mess...
+```
+
+Issues:
+- OpenAPI schema only shows last `Depends()` used
+- Manual code for each backend combination
+- Hard to support dynamic backend lists
+- Users don't see all auth options in Swagger UI
+
+### Options Considered
+
+1. **Manual Dependencies**
+   - Pros: Simple, explicit
+   - Cons: Doesn't scale, poor OpenAPI support, duplicated code
+
+2. **Dynamic Dependency Generation (makefun)**
+   - Pros: Generates correct signatures, OpenAPI works, scales perfectly
+   - Cons: Requires `makefun` library, more "magic"
+
+3. **Custom OpenAPI Schema Manipulation**
+   - Pros: Full control over schema
+   - Cons: Very complex, fragile, bypasses FastAPI's system
+
+### Decision
+Use `makefun` library to dynamically generate dependency signatures.
+
+**How It Works**:
+```python
+from makefun import with_signature
+from inspect import Parameter, Signature
+
+class AuthDeps:
+    def __init__(self, backends: list[AuthBackend], get_user_manager):
+        self.backends = backends
+        self.get_user_manager = get_user_manager
+
+    def require_auth(self):
+        """Generate dependency that tries all backends."""
+        # Build dynamic signature
+        parameters = [
+            Parameter(
+                name="user_manager",
+                kind=Parameter.POSITIONAL_OR_KEYWORD,
+                default=Depends(self.get_user_manager)
+            )
+        ]
+
+        # Add parameter for each backend
+        for backend in self.backends:
+            parameters.extend([
+                Parameter(
+                    name=f"{backend.name}_credentials",
+                    kind=Parameter.POSITIONAL_OR_KEYWORD,
+                    default=Depends(backend.transport.get_credentials)
+                ),
+                Parameter(
+                    name=f"{backend.name}_strategy",
+                    kind=Parameter.POSITIONAL_OR_KEYWORD,
+                    default=Depends(lambda: backend.strategy)
+                )
+            ])
+
+        signature = Signature(parameters)
+
+        # Create dependency with dynamic signature
+        @with_signature(signature)
+        async def dependency(*args, **kwargs):
+            user_manager = kwargs["user_manager"]
+
+            # Try each backend
+            for backend in self.backends:
+                credentials = kwargs[f"{backend.name}_credentials"]
+                strategy = kwargs[f"{backend.name}_strategy"]
+
+                if credentials:
+                    user = await strategy.authenticate(credentials, user_manager)
+                    if user:
+                        return user
+
+            raise HTTPException(status_code=401, detail="Not authenticated")
+
+        return dependency
+```
+
+**OpenAPI Result**:
+```yaml
+# Swagger UI now shows ALL auth options!
+security:
+  - jwt: []       # Bearer token
+  - api_key: []   # X-API-Key header
+  - service: []   # Service token
+```
+
+**Reasoning**:
+- FastAPI-Users proves this works well at scale
+- Only way to get correct OpenAPI schema with multiple backends
+- Cleaner than manual approach
+- Better developer experience (users see all options)
+- `makefun` is well-tested library (used by pytest-mock, etc.)
+
+### Consequences
+- **Positive**: Perfect OpenAPI schema, scales to any number of backends, clean code
+- **Negative**: Adds `makefun` dependency, signature generation is "magical"
+- **Neutral**: More advanced Python technique (but well-encapsulated)
+
+### Implementation
+**Dependencies**:
+```toml
+# pyproject.toml
+dependencies = [
+    "fastapi>=0.100.0",
+    "makefun>=1.15.0",  # ← New dependency
+    # ...
+]
+```
+
+**Testing**:
+```python
+def test_dynamic_signature_generation():
+    """Verify dependency has correct signature."""
+    backends = [jwt_backend, api_key_backend]
+    deps = AuthDeps(backends, get_user_manager)
+
+    dependency = deps.require_auth()
+    sig = inspect.signature(dependency)
+
+    # Should have parameters for both backends
+    assert "jwt_credentials" in sig.parameters
+    assert "api_key_credentials" in sig.parameters
+```
+
+### Related Decisions
+- DD-038 (Transport/Strategy pattern)
+- DD-035 (Single AuthDeps)
+- DD-029 (Multi-source auth)
+
+---
+
+## DD-040: Service Lifecycle Hooks
+
+**Date**: 2025-01-23
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Inspired by FastAPI-Users. Users need to inject custom logic (emails, logging, webhooks) without modifying library code.
+
+### The Problem
+Users want to add custom logic around auth events:
+- Send welcome email after registration
+- Log security events (login, password change)
+- Trigger webhooks for integrations
+- Audit trail for compliance
+
+Current approach requires modifying library code or wrapper functions.
+
+### Options Considered
+
+1. **No Hooks (Users Wrap Functions)**
+   - Pros: Simple, no additional API
+   - Cons: Breaks library abstraction, hard to maintain, messy code
+
+2. **Event System (Pub/Sub)**
+   - Pros: Very flexible, decoupled
+   - Cons: Overcomplicated for common use cases, harder to debug
+
+3. **Lifecycle Hooks (FastAPI-Users Pattern)**
+   - Pros: Simple, explicit, easy to override, common pattern
+   - Cons: Requires subclassing services
+
+### Decision
+Add lifecycle hooks to all major services using overrideable async methods.
+
+**Architecture**:
+```python
+class UserService:
+    # === Lifecycle Hooks (Override These) ===
+
+    async def on_after_register(
+        self,
+        user: User,
+        request: Optional[Request] = None
+    ) -> None:
+        """Called after successful user registration.
+
+        Override to send welcome emails, trigger webhooks, etc.
+        """
+        pass  # Default: do nothing
+
+    async def on_after_login(
+        self,
+        user: User,
+        request: Optional[Request] = None
+    ) -> None:
+        """Called after successful login."""
+        pass
+
+    async def on_before_delete(
+        self,
+        user: User,
+        request: Optional[Request] = None
+    ) -> None:
+        """Called before user deletion. Can raise exception to prevent."""
+        pass
+
+    async def on_after_delete(
+        self,
+        user: User,
+        request: Optional[Request] = None
+    ) -> None:
+        """Called after user deletion."""
+        pass
+
+    async def on_after_update(
+        self,
+        user: User,
+        update_dict: dict[str, Any],
+        request: Optional[Request] = None
+    ) -> None:
+        """Called after user update."""
+        pass
+
+    async def on_after_request_verify(
+        self,
+        user: User,
+        token: str,
+        request: Optional[Request] = None
+    ) -> None:
+        """Called after email verification request."""
+        pass
+
+    async def on_after_verify(
+        self,
+        user: User,
+        request: Optional[Request] = None
+    ) -> None:
+        """Called after successful email verification."""
+        pass
+
+    async def on_after_forgot_password(
+        self,
+        user: User,
+        token: str,
+        request: Optional[Request] = None
+    ) -> None:
+        """Called after password reset request."""
+        pass
+
+    async def on_after_reset_password(
+        self,
+        user: User,
+        request: Optional[Request] = None
+    ) -> None:
+        """Called after successful password reset."""
+        pass
+```
+
+**Usage**:
+```python
+# Custom service with email integration
+class MyUserService(UserService):
+    async def on_after_register(self, user: User, request=None):
+        # Send welcome email
+        await email_service.send_welcome(user.email, user.first_name)
+
+        # Log event
+        logger.info(f"New user registered: {user.email}")
+
+        # Trigger webhook
+        await webhook_service.trigger("user.registered", {
+            "user_id": str(user.id),
+            "email": user.email
+        })
+
+    async def on_after_login(self, user: User, request=None):
+        # Track last login
+        await analytics.track("user_login", user.id)
+
+        # Security notification
+        if user.security_alerts_enabled:
+            await email_service.send_login_notification(user.email)
+
+    async def on_before_delete(self, user: User, request=None):
+        # Prevent deletion of admin users
+        if user.is_superuser:
+            raise ValueError("Cannot delete superuser")
+
+        # Require confirmation
+        if not request.state.deletion_confirmed:
+            raise ValueError("Deletion not confirmed")
+
+# Initialize with custom service
+auth = SimpleRBAC(
+    database=db,
+    user_service_class=MyUserService  # Use custom class
+)
+```
+
+**Hook Categories**:
+
+1. **User Lifecycle**
+   - `on_after_register` - Welcome emails, analytics
+   - `on_after_login` - Security logs, analytics
+   - `on_after_update` - Profile change notifications
+   - `on_before_delete` / `on_after_delete` - Data cleanup, confirmations
+
+2. **Permission Changes**
+   - `on_after_role_assigned` - Notify user of new permissions
+   - `on_after_role_removed` - Permission revocation alerts
+   - `on_after_permission_changed` - Audit logging
+
+3. **Security Events**
+   - `on_after_forgot_password` - Password reset emails
+   - `on_after_reset_password` - Password changed notifications
+   - `on_after_verify` - Email verification success
+   - `on_failed_login` - Brute force detection
+
+4. **API Key Events**
+   - `on_api_key_created` - Log new key creation
+   - `on_api_key_revoked` - Security notification
+   - `on_api_key_locked` - Alert user to suspicious activity
+
+**Reasoning**:
+- FastAPI-Users proves this pattern works well in production
+- Simple to understand and use
+- Doesn't require complex event system
+- Easy to test (override and verify hook was called)
+- Common pattern in frameworks (Django signals, SQLAlchemy events)
+
+### Consequences
+- **Positive**: Easy customization, no library modification needed, testable, production-proven
+- **Negative**: Requires subclassing services, hooks can't prevent operations (except `on_before_*`)
+- **Neutral**: Need good documentation showing common use cases
+
+### Implementation Plan
+**Phase 1** (Week 1-2):
+- Add hooks to `UserService`
+- Document hook usage patterns
+- Add examples (email, webhooks, logging)
+
+**Phase 2** (Week 3):
+- Add hooks to `RoleService`
+- Add hooks to `PermissionService`
+- Add hooks to `ApiKeyService`
+
+**Phase 3** (Week 4):
+- Add hooks to `EntityService` (EnterpriseRBAC only)
+- Create hook testing guide
+- Add integration examples
+
+### Related Decisions
+- DD-041 (Router factories - use hooks in default routers)
+
+---
+
+## DD-041: Router Factory Pattern
+
+**Date**: 2025-01-23
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Inspired by FastAPI-Users. Users want quick setup but also flexibility to customize routes.
+
+### The Problem
+Users have two needs:
+1. **Quick setup**: Get auth working in 5 minutes
+2. **Customization**: Customize endpoints, validation, responses
+
+Current approaches:
+- **Provide no routers**: Users write everything (slow, error-prone)
+- **Provide fixed routers**: Users can't customize without copying code
+
+### Options Considered
+
+1. **No Built-in Routers**
+   - Pros: Maximum flexibility
+   - Cons: Slow setup, users reinvent the wheel, inconsistent APIs
+
+2. **Fixed Routers (Must Use As-Is)**
+   - Pros: Fast setup
+   - Cons: Can't customize, users copy-paste to modify
+
+3. **Router Factories (FastAPI-Users Pattern)**
+   - Pros: Fast setup AND customizable, users can cherry-pick routes
+   - Cons: More API surface to maintain
+
+### Decision
+Provide optional router factories that generate FastAPI routers on-demand.
+
+**Architecture**:
+```python
+# outlabs_auth/routers/auth.py
+def get_auth_router(
+    auth: OutlabsAuth,
+    prefix: str = "/auth",
+    tags: list[str] = None
+) -> APIRouter:
+    """Generate authentication router with login/logout/refresh routes."""
+    router = APIRouter(prefix=prefix, tags=tags or ["auth"])
+
+    @router.post("/register")
+    async def register(data: RegisterRequest):
+        user = await auth.user_service.create_user(
+            email=data.email,
+            password=data.password,
+            **data.extra_fields
+        )
+        return {"user_id": str(user.id), "email": user.email}
+
+    @router.post("/login")
+    async def login(data: LoginRequest):
+        tokens = await auth.auth_service.login(
+            email=data.email,
+            password=data.password
+        )
+        return tokens
+
+    @router.post("/refresh")
+    async def refresh(data: RefreshRequest):
+        tokens = await auth.auth_service.refresh_token(data.refresh_token)
+        return tokens
+
+    @router.post("/logout")
+    async def logout(user = Depends(auth.deps.require_auth())):
+        # Invalidate token (Redis strategy)
+        return {"message": "Logged out"}
+
+    return router
+
+# outlabs_auth/routers/users.py
+def get_users_router(
+    auth: OutlabsAuth,
+    prefix: str = "/users",
+    tags: list[str] = None,
+    require_verification: bool = False
+) -> APIRouter:
+    """Generate user management router."""
+    router = APIRouter(prefix=prefix, tags=tags or ["users"])
+
+    @router.get("/me")
+    async def get_me(user = Depends(auth.deps.require_auth())):
+        return user
+
+    @router.patch("/me")
+    async def update_me(
+        data: UserUpdateRequest,
+        user = Depends(auth.deps.require_auth())
+    ):
+        updated = await auth.user_service.update_user(user.id, data.dict())
+        return updated
+
+    @router.get("/{user_id}")
+    async def get_user(
+        user_id: str,
+        current_user = Depends(auth.deps.require_permission("user:read"))
+    ):
+        user = await auth.user_service.get_user(user_id)
+        return user
+
+    return router
+
+# outlabs_auth/routers/roles.py  (EnterpriseRBAC only)
+def get_roles_router(
+    auth: EnterpriseRBAC,
+    prefix: str = "/roles",
+    tags: list[str] = None
+) -> APIRouter:
+    """Generate role management router."""
+    router = APIRouter(prefix=prefix, tags=tags or ["roles"])
+
+    @router.get("/")
+    async def list_roles(
+        entity_id: Optional[str] = None,
+        user = Depends(auth.deps.require_permission("role:read"))
+    ):
+        roles = await auth.role_service.list_roles(entity_id=entity_id)
+        return roles
+
+    @router.post("/")
+    async def create_role(
+        data: RoleCreateRequest,
+        user = Depends(auth.deps.require_permission("role:create"))
+    ):
+        role = await auth.role_service.create_role(**data.dict())
+        return role
+
+    return router
+```
+
+**Usage Options**:
+
+**Option 1: Use all default routers (fastest)**
+```python
+from outlabs_auth import SimpleRBAC
+from outlabs_auth.routers import get_auth_router, get_users_router
+
+app = FastAPI()
+auth = SimpleRBAC(database=db)
+
+# Include pre-built routers
+app.include_router(get_auth_router(auth))
+app.include_router(get_users_router(auth))
+
+# Done! You have /auth/login, /auth/register, /users/me, etc.
+```
+
+**Option 2: Customize routers**
+```python
+# Use some defaults, customize others
+app.include_router(get_auth_router(auth, prefix="/api/auth", tags=["authentication"]))
+
+# Custom user router
+router = APIRouter(prefix="/api/users")
+
+@router.get("/me")
+async def get_me(user = Depends(auth.deps.require_auth())):
+    # Custom response format
+    return {
+        "data": user,
+        "meta": {"version": "1.0"}
+    }
+
+app.include_router(router)
+```
+
+**Option 3: Cherry-pick routes**
+```python
+# Import individual route functions
+from outlabs_auth.routers.auth import create_login_route, create_register_route
+
+router = APIRouter(prefix="/auth")
+
+# Add only login (skip register)
+router.add_api_route(
+    "/login",
+    create_login_route(auth),
+    methods=["POST"]
+)
+
+# Custom register with extra validation
+@router.post("/register")
+async def custom_register(data: RegisterRequest):
+    # Custom validation
+    if not is_corporate_email(data.email):
+        raise HTTPException(400, "Corporate email required")
+
+    # Use service directly
+    user = await auth.user_service.create_user(
+        email=data.email,
+        password=data.password
+    )
+    return user
+```
+
+**Option 4: No routers (full custom)**
+```python
+# Don't use routers at all, just use services
+@app.post("/custom/signup")
+async def signup(email: str, password: str):
+    user = await auth.user_service.create_user(email, password)
+    tokens = await auth.auth_service.create_tokens(user)
+    return tokens
+```
+
+**Router Catalog**:
+
+**SimpleRBAC**:
+- `get_auth_router()` - login, register, refresh, logout, password reset
+- `get_users_router()` - CRUD operations, profile management
+- `get_api_keys_router()` - API key management
+
+**EnterpriseRBAC**:
+- All SimpleRBAC routers
+- `get_roles_router()` - Role management
+- `get_permissions_router()` - Permission management
+- `get_entities_router()` - Entity hierarchy management
+- `get_memberships_router()` - Entity membership management
+
+**Reasoning**:
+- FastAPI-Users proves this pattern is very popular
+- Gives users both speed AND flexibility
+- Library provides best practices by default
+- Users can learn by reading router code
+- Easy to mix default + custom routes
+
+### Consequences
+- **Positive**: Fast setup, flexibility, educational (users learn from code), best practices included
+- **Negative**: More API surface to maintain, need good documentation
+- **Neutral**: Optional (users can ignore if they want full control)
+
+### Implementation Plan
+**Phase 1** (Week 2):
+- Create `outlabs_auth/routers/` module
+- Implement `get_auth_router()`
+- Implement `get_users_router()`
+- Add examples to docs
+
+**Phase 2** (Week 3):
+- Implement `get_api_keys_router()`
+- Add advanced customization examples
+- Add testing guide for router-based apps
+
+**Phase 3** (Week 4 - EnterpriseRBAC):
+- Implement `get_roles_router()`
+- Implement `get_permissions_router()`
+- Implement `get_entities_router()`
+
+**Phase 4** (Week 5 - Polish):
+- Add middleware examples
+- Add rate limiting integration
+- Add CORS configuration examples
+
+### Related Decisions
+- DD-040 (Lifecycle hooks - routers trigger hooks)
+- DD-039 (Dynamic dependencies - routers use them)
+
+---
+
+## DD-042: JWT State Tokens for OAuth Flow
+
+**Date**: 2025-01-23
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: OAuth requires CSRF protection via state parameter. Original design used database-stored OAuthState model. FastAPI-Users uses JWT tokens instead.
+
+### The Problem
+OAuth CSRF protection traditionally requires:
+1. Generate random state parameter
+2. Store state in database (with user_id, redirect_url, etc.)
+3. Include state in authorization URL
+4. Validate state exists in database on callback
+5. Delete state from database
+
+This requires database writes for every OAuth flow, even though state is short-lived (10 minutes).
+
+### Options Considered
+
+1. **Database-Stored State (Original Plan)**
+   - Pros: Familiar pattern, can store complex data, queryable
+   - Cons: Database write/read/delete for every OAuth flow, cleanup job needed, doesn't scale
+
+2. **JWT State Tokens (FastAPI-Users Pattern)**
+   - Pros: Stateless (no DB!), self-expiring, tamper-proof, scales infinitely
+   - Cons: Can't revoke before expiration, limited payload size (~1KB)
+
+3. **Redis State Tokens**
+   - Pros: Fast, TTL built-in, no cleanup needed
+   - Cons: Requires Redis, still a database operation, overkill for 10-minute tokens
+
+### Decision
+Use JWT tokens for OAuth state (FastAPI-Users pattern).
+
+**Implementation**:
+```python
+# outlabs_auth/oauth/state.py
+def generate_state_token(data: dict, secret: str, lifetime_seconds: int = 600) -> str:
+    """Generate JWT state token (no database write!)"""
+    payload = {
+        **data,
+        "aud": "outlabs-auth:oauth-state",
+        "exp": datetime.utcnow() + timedelta(seconds=lifetime_seconds)
+    }
+    return jwt.encode(payload, secret, algorithm="HS256")
+
+def decode_state_token(token: str, secret: str) -> dict:
+    """Validate JWT state token (no database read!)"""
+    return jwt.decode(token, secret, audience="outlabs-auth:oauth-state")
+```
+
+**Usage**:
+```python
+# New user registration (empty state)
+state = generate_state_token({}, state_secret)
+
+# Account linking (include user_id for security)
+state = generate_state_token({"sub": user.id}, state_secret)
+
+# Callback validation
+state_data = decode_state_token(state, state_secret)
+user_id = state_data.get("sub")  # For account linking
+```
+
+### Consequences
+- **Positive**: No database writes, 100% stateless, scales infinitely, self-expiring
+- **Positive**: Eliminates OAuthState model and cleanup jobs
+- **Positive**: Works across load balancers without sticky sessions
+- **Negative**: Can't revoke tokens before expiration (10 min is acceptable)
+- **Negative**: Limited payload size (~1KB, plenty for state data)
+
+### Security Notes
+- Use separate secret from JWT auth tokens (prevents reuse attacks)
+- Include audience claim to prevent token reuse in other contexts
+- Short expiration (10 min) limits replay attack window
+- Signature validation prevents tampering
+
+### Related Decisions
+- DD-043 (OAuth Router - uses JWT state)
+- DD-044 (OAuth Associate - embeds user_id in state)
+
+---
+
+## DD-043: OAuth Router Factory Pattern
+
+**Date**: 2025-01-23
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Need simple way to add OAuth providers (Google, Facebook, etc.) to applications. FastAPI-Users has excellent router factory pattern.
+
+### The Problem
+Adding OAuth requires:
+- Authorization endpoint (redirect user to provider)
+- Callback endpoint (handle provider response)
+- State generation and validation (CSRF protection)
+- Token exchange with provider
+- User creation/lookup/update logic
+- Social account linking
+- Hook triggering
+
+This is ~200 lines of boilerplate per provider. FastAPI-Users solves this with router factories.
+
+### Options Considered
+
+1. **Manual OAuth Implementation**
+   - Pros: Maximum flexibility
+   - Cons: 200+ lines per provider, error-prone, inconsistent
+
+2. **Single OAuth Service Class**
+   - Pros: Reusable logic
+   - Cons: Still need to write routes, harder to customize
+
+3. **Router Factory (FastAPI-Users Pattern)**
+   - Pros: 2 lines to add any provider, consistent API, battle-tested
+   - Cons: Less flexibility than manual implementation
+
+### Decision
+Provide `get_oauth_router()` factory function that generates ready-to-use OAuth routes.
+
+**Architecture**:
+```python
+# outlabs_auth/routers/oauth.py
+def get_oauth_router(
+    oauth_client: BaseOAuth2,  # httpx-oauth client
+    auth: OutlabsAuth,  # SimpleRBAC or EnterpriseRBAC
+    state_secret: str,  # For JWT state tokens
+    associate_by_email: bool = False,  # Auto-link by email?
+    is_verified_by_default: bool = False,  # Trust provider email?
+) -> APIRouter:
+    """Generate OAuth router with /authorize and /callback routes."""
+
+    router = APIRouter()
+
+    @router.get("/authorize")
+    async def authorize(request: Request):
+        state = generate_state_token({}, state_secret)
+        authorization_url = await oauth_client.get_authorization_url(
+            callback_url, state, scopes
+        )
+        return {"authorization_url": authorization_url}
+
+    @router.get("/callback")
+    async def callback(access_token_state = Depends(oauth2_callback)):
+        token, state = access_token_state
+        # Validate state
+        # Get user info from provider
+        # Create/update user
+        # Link social account
+        # Trigger hooks
+        # Return auth tokens
+        return tokens
+
+    return router
+```
+
+**Usage**:
+```python
+from httpx_oauth.clients.google import GoogleOAuth2
+from outlabs_auth import SimpleRBAC
+from outlabs_auth.routers import get_oauth_router
+
+google = GoogleOAuth2(client_id="...", client_secret="...")
+auth = SimpleRBAC(database=db)
+
+# Add Google login in 2 lines!
+app.include_router(
+    get_oauth_router(google, auth, state_secret="..."),
+    prefix="/auth/google",
+    tags=["auth"]
+)
+```
+
+### Consequences
+- **Positive**: Add any OAuth provider in 2 lines of code
+- **Positive**: Consistent OAuth API across all providers
+- **Positive**: Battle-tested pattern (FastAPI-Users has 14K+ projects)
+- **Positive**: Configurable security flags (associate_by_email, is_verified_by_default)
+- **Negative**: Less flexibility than manual implementation (acceptable trade-off)
+
+### Routes Generated
+- `GET /authorize` - Start OAuth flow, returns authorization_url
+- `GET /callback` - Handle OAuth callback, returns JWT tokens
+
+### Hooks Triggered
+- `on_after_register()` - If new user created
+- `on_after_oauth_register()` - Always for new OAuth users
+- `on_after_login()` - Always after successful auth
+- `on_after_oauth_login()` - Always for OAuth login
+
+### Related Decisions
+- DD-042 (JWT State Tokens - used for CSRF protection)
+- DD-044 (OAuth Associate Router - for authenticated users)
+- DD-045 (httpx-oauth Integration - provides oauth_client)
+- DD-046 (associate_by_email Flag - security configuration)
+
+---
+
+## DD-044: OAuth Associate Router for Authenticated Users
+
+**Date**: 2025-01-23
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Users should be able to link OAuth providers to existing accounts. FastAPI-Users provides separate associate router with security checks.
+
+### The Problem
+Two OAuth scenarios:
+1. **New user registration**: User has no account, OAuth creates one
+2. **Account linking**: User has account, wants to add OAuth login
+
+The main OAuth router (DD-043) handles scenario 1. We need a separate flow for scenario 2.
+
+**Security Risk**: Without proper validation, an attacker could:
+1. Start OAuth flow for their account
+2. Trick victim into completing the callback
+3. Victim's OAuth account gets linked to attacker's account
+4. Attacker gains access to victim's OAuth identity
+
+### Options Considered
+
+1. **Same Router for Both Scenarios**
+   - Pros: Simpler API
+   - Cons: Complex logic, harder to secure, confusing state management
+
+2. **Separate Associate Router (FastAPI-Users Pattern)**
+   - Pros: Clear separation, easier to secure, explicit user_id validation
+   - Cons: Two routers to maintain
+
+3. **Mode Parameter**
+   - Pros: One router
+   - Cons: Complex conditional logic, error-prone
+
+### Decision
+Provide separate `get_oauth_associate_router()` for authenticated users.
+
+**Architecture**:
+```python
+# outlabs_auth/routers/oauth_associate.py
+def get_oauth_associate_router(
+    oauth_client: BaseOAuth2,
+    auth: OutlabsAuth,
+    state_secret: str,
+    requires_verification: bool = False,
+) -> APIRouter:
+    """Generate OAuth account linking router (requires authentication)."""
+
+    router = APIRouter()
+    get_current_user = auth.deps.require_auth(verified=requires_verification)
+
+    @router.get("/authorize")
+    async def authorize(request: Request, user = Depends(get_current_user)):
+        # SECURITY: Embed user_id in state token
+        state = generate_state_token({"sub": str(user.id)}, state_secret)
+        authorization_url = await oauth_client.get_authorization_url(
+            callback_url, state, scopes
+        )
+        return {"authorization_url": authorization_url}
+
+    @router.get("/callback")
+    async def callback(
+        user = Depends(get_current_user),
+        access_token_state = Depends(oauth2_callback)
+    ):
+        token, state = access_token_state
+        state_data = decode_state_token(state, state_secret)
+
+        # SECURITY: Validate state user_id matches authenticated user
+        if state_data.get("sub") != str(user.id):
+            raise HTTPException(400, "User mismatch (security)")
+
+        # Link OAuth account to user
+        # Trigger on_after_oauth_associate hook
+        return social_account
+
+    return router
+```
+
+**Usage**:
+```python
+from outlabs_auth.routers import get_oauth_associate_router
+
+# Authenticated users can link Google
+app.include_router(
+    get_oauth_associate_router(
+        google,
+        auth,
+        state_secret="...",
+        requires_verification=True  # Only verified users
+    ),
+    prefix="/auth/associate/google",
+    tags=["auth"]
+)
+```
+
+### Consequences
+- **Positive**: Clear separation between registration and linking
+- **Positive**: Security validation prevents account hijacking
+- **Positive**: Explicit user authentication requirement
+- **Positive**: Users can have multiple auth methods
+- **Negative**: Two routers to maintain (acceptable for security)
+
+### Security Features
+1. **Requires Authentication**: Both authorize and callback require JWT token
+2. **State Validation**: State includes user_id, validated in callback
+3. **User Mismatch Protection**: Callback fails if state user_id != authenticated user_id
+4. **Duplicate Prevention**: Checks if OAuth account already linked
+
+### Use Cases
+- User registered with email/password, wants to add Google login
+- User has Google login, wants to add GitHub login
+- User wants backup authentication methods
+- User wants to unify multiple OAuth accounts
+
+### Related Decisions
+- DD-042 (JWT State Tokens - includes user_id for security)
+- DD-043 (OAuth Router - handles new user registration)
+
+---
+
+## DD-045: httpx-oauth Library Integration
+
+**Date**: 2025-01-23
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Need OAuth client library. FastAPI-Users uses httpx-oauth. Alternative is authlib.
+
+### The Problem
+OAuth implementation requires:
+- Authorization URL generation
+- Token exchange (code → access token)
+- User info retrieval
+- Provider-specific quirks (scopes, endpoints, response formats)
+- PKCE support
+- Token refresh
+
+We could implement this ourselves or use a library.
+
+### Options Considered
+
+1. **Manual OAuth Implementation**
+   - Pros: No dependencies, full control
+   - Cons: 500+ lines per provider, bugs, maintenance burden
+
+2. **authlib**
+   - Pros: Feature-rich, supports OAuth 1.0 + 2.0, well-documented
+   - Cons: Synchronous (not FastAPI-native), larger dependency, more complex
+
+3. **httpx-oauth (FastAPI-Users Choice)**
+   - Pros: Pure async, FastAPI-native, lightweight, pre-built clients, maintained by FastAPI-Users author
+   - Cons: OAuth 2.0 only (acceptable), smaller community than authlib
+
+### Decision
+Use `httpx-oauth` library (FastAPI-Users pattern).
+
+**Installation**:
+```bash
+pip install outlabs-auth[oauth]  # Includes httpx-oauth>=0.13.0
+```
+
+**Pre-built Clients**:
+- GoogleOAuth2
+- FacebookOAuth2
+- GitHubOAuth2
+- MicrosoftGraphOAuth2
+- DiscordOAuth2
+- LinkedInOAuth2
+- SpotifyOAuth2
+- And more...
+
+**Usage**:
+```python
+from httpx_oauth.clients.google import GoogleOAuth2
+
+google = GoogleOAuth2(
+    client_id="your-id.apps.googleusercontent.com",
+    client_secret="your-secret"
+)
+
+# Get authorization URL
+auth_url = await google.get_authorization_url(
+    redirect_uri,
+    state,
+    scopes=["openid", "email", "profile"]
+)
+
+# Exchange code for tokens
+token = await google.get_access_token(code, redirect_uri)
+
+# Get user info
+account_id, email = await google.get_id_email(token["access_token"])
+```
+
+**Provider Factory**:
+```python
+# outlabs_auth/oauth/providers.py
+def get_google_client(client_id: str, client_secret: str) -> GoogleOAuth2:
+    """Get pre-configured Google OAuth client."""
+    return GoogleOAuth2(
+        client_id,
+        client_secret,
+        scopes=["openid", "email", "profile"]
+    )
+
+def get_github_client(client_id: str, client_secret: str) -> GitHubOAuth2:
+    """Get pre-configured GitHub OAuth client."""
+    return GitHubOAuth2(client_id, client_secret, scopes=["user:email"])
+```
+
+### Consequences
+- **Positive**: Battle-tested (used by 14K+ FastAPI-Users projects)
+- **Positive**: Pure async, FastAPI-native integration
+- **Positive**: Pre-built clients for all major providers
+- **Positive**: Lightweight dependency (~100KB)
+- **Positive**: Maintained by FastAPI-Users author (Frankie567)
+- **Negative**: OAuth 2.0 only (OAuth 1.0 not supported, rarely needed)
+- **Negative**: Smaller community than authlib (but FastAPI-specific is advantage)
+
+### Supported Providers (Out of the Box)
+✅ Google, Facebook, GitHub, Microsoft, Discord, LinkedIn, Spotify, Twitch, Reddit, GitLab, Bitbucket, Apple, Twitter (OAuth 2.0), Okta, Auth0
+
+### Related Decisions
+- DD-043 (OAuth Router - uses httpx-oauth clients)
+- DD-044 (OAuth Associate - uses httpx-oauth clients)
+
+---
+
+## DD-046: associate_by_email Security Flag
+
+**Date**: 2025-01-23
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: When user logs in with OAuth, should we auto-link to existing user with same email? FastAPI-Users provides configurable flag.
+
+### The Problem
+**Scenario**: User registers with email/password `user@example.com`. Later, they try to login with Google OAuth using same email.
+
+**Question**: Should we:
+1. **Reject**: "User with this email already exists" (secure default)
+2. **Auto-link**: Link Google account to existing user (convenience)
+
+**Security Risk**: If OAuth provider doesn't verify emails:
+1. Attacker creates account on provider with `victim@example.com` (unverified)
+2. Attacker authenticates with OAuth
+3. If auto-link enabled, attacker's OAuth links to victim's account
+4. Attacker gains full access to victim's account 😱
+
+### Options Considered
+
+1. **Always Reject (Most Secure)**
+   - Pros: No security risk, forces explicit account linking
+   - Cons: Poor UX (user must login with password, then link OAuth)
+
+2. **Always Auto-Link (Most Convenient)**
+   - Pros: Best UX, seamless experience
+   - Cons: Security risk with unverified email providers
+
+3. **Configurable Flag (FastAPI-Users Pattern)**
+   - Pros: Flexibility, secure default, opt-in convenience
+   - Cons: Users might enable without understanding risk
+
+### Decision
+Provide `associate_by_email` configuration flag, **default to False** (secure).
+
+**Implementation**:
+```python
+def get_oauth_router(
+    oauth_client: BaseOAuth2,
+    auth: OutlabsAuth,
+    state_secret: str,
+    associate_by_email: bool = False,  # Secure default!
+    is_verified_by_default: bool = False,
+):
+    # ...OAuth logic
+    if user_exists_with_email and not associate_by_email:
+        raise HTTPException(400, "User with this email already exists")
+```
+
+**Safe Usage** (Google verifies emails):
+```python
+google = GoogleOAuth2(client_id, client_secret)
+app.include_router(
+    get_oauth_router(
+        google,
+        auth,
+        state_secret,
+        associate_by_email=True,  # Safe: Google verifies emails ✅
+        is_verified_by_default=True  # Trust Google's verification
+    ),
+    prefix="/auth/google"
+)
+```
+
+**Unsafe Usage** (Unknown provider):
+```python
+random_oauth = SomeOAuth2(client_id, client_secret)
+app.include_router(
+    get_oauth_router(
+        random_oauth,
+        auth,
+        state_secret,
+        associate_by_email=False,  # Keep False for unknown providers ❌
+    ),
+    prefix="/auth/random"
+)
+```
+
+### Consequences
+- **Positive**: Secure by default (prevents account hijacking)
+- **Positive**: Opt-in convenience for trusted providers
+- **Positive**: Clear documentation of security implications
+- **Negative**: Users might enable without understanding (mitigated by docs)
+
+### Provider Trust Guide
+
+**✅ Safe to enable** (these providers verify emails):
+- Google (`associate_by_email=True, is_verified_by_default=True`)
+- Microsoft (`associate_by_email=True, is_verified_by_default=True`)
+- Apple (`associate_by_email=True, is_verified_by_default=True`)
+- GitHub (with `user:email` scope for verified email)
+- Facebook (`associate_by_email=True`)
+
+**❌ Keep disabled** (unless you verify email_verified claim):
+- Custom OAuth providers
+- Unknown providers
+- Development/testing providers
+
+### Security Best Practices
+1. Default to `associate_by_email=False`
+2. Only enable for major providers (Google, Microsoft, Apple)
+3. Check provider's `email_verified` claim if available
+4. Document security implications in code comments
+5. Consider requiring email verification before linking
+
+### Related Decisions
+- DD-043 (OAuth Router - uses this flag)
+- DD-042 (JWT State Tokens - CSRF protection)
+
+---
+
 ## Questions Still Open
 
 Track questions that need decisions:
@@ -2517,11 +3852,13 @@ Track questions that need decisions:
 | 2025-01-14 | DD-022 through DD-027 | All Accepted (Post-v1.0 Extensions) |
 | 2025-01-14 | DD-028 through DD-031 | All Accepted (Core v1.0 - API Keys & Auth Dependencies) |
 | 2025-01-14 | DD-032 through DD-037 | All Accepted (Architectural Improvements) |
+| 2025-01-23 | DD-038 through DD-041 | All Accepted (FastAPI-Users Patterns - Core) |
+| 2025-01-23 | DD-042 through DD-046 | All Accepted (FastAPI-Users Patterns - OAuth) |
 | 2025-01-14 | DD-003 | Superseded by DD-015 |
 | 2025-01-14 | DD-028, DD-031 | Updated (removed automatic rotation, added temp locks) |
 | 2025-01-14 | DD-030 | Superseded by DD-035 |
 
 ---
 
-**Last Updated**: 2025-01-14 (Major architectural improvements: unified system, Redis patterns, closure table, single AuthDeps)
+**Last Updated**: 2025-01-23 (Added FastAPI-Users OAuth patterns: JWT State Tokens, OAuth Router Factory, OAuth Associate Router, httpx-oauth Integration, associate_by_email Security Flag)
 **Next Review**: End of Phase 1 (Week 2)

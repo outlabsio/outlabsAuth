@@ -3,11 +3,12 @@
 from datetime import datetime
 from typing import Optional, Dict, Any
 from beanie import Document
-from pydantic import Field
+from pydantic import Field, ConfigDict
 from bson import ObjectId
 
 
 class SocialAccount(Document):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     """
     Links a user to an OAuth provider account.
     

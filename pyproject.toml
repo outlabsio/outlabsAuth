@@ -36,7 +36,10 @@ dependencies = [
     "pyjwt[crypto]>=2.8.0",  # [crypto] for Apple Sign In (ES256)
     "python-multipart>=0.0.6",
     "email-validator>=2.0.0",
-    
+
+    # Dynamic dependency injection (DD-039)
+    "makefun>=1.15.0",
+
     # OAuth/Social Login (v1.2)
     "httpx>=0.25.0",  # For OAuth provider API requests
 ]
@@ -51,6 +54,11 @@ Issues = "https://github.com/outlabs/outlabsAuth/issues"
 # Redis caching support (optional performance enhancement)
 redis = [
     "redis>=5.0.0",
+]
+
+# OAuth/Social login support (optional, v1.2)
+oauth = [
+    "httpx-oauth>=0.13.0",          # OAuth2 client library (Google, Facebook, Apple, GitHub, etc.)
 ]
 
 # Notification system support (optional)
@@ -105,6 +113,7 @@ stress = [
 # All optional dependencies
 all = [
     "redis>=5.0.0",
+    "httpx-oauth>=0.13.0",
     "aio-pika>=9.0.0",
     "aiosmtplib>=3.0.0",
     "sendgrid>=6.10.0",
