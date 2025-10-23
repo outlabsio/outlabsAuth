@@ -18,6 +18,10 @@ from outlabs_auth.models.entity import EntityModel, EntityClass
 from outlabs_auth.models.membership import EntityMembershipModel
 from outlabs_auth.models.closure import EntityClosureModel
 
+# OAuth models (v1.2)
+from outlabs_auth.models.social_account import SocialAccount
+from outlabs_auth.models.oauth_state import OAuthState
+
 __all__ = [
     # Base
     "BaseDocument",
@@ -33,4 +37,7 @@ __all__ = [
     "EntityClass",
     "EntityMembershipModel",
     "EntityClosureModel",
+    # OAuth models
+    "SocialAccount",
+    "OAuthState",
 ]

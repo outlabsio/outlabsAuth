@@ -33,9 +33,12 @@ dependencies = [
     "bcrypt>=4.0.0,<5.0.0",
     "passlib>=1.7.4",
     "python-jose[cryptography]>=3.3.0",
-    "pyjwt>=2.8.0",
+    "pyjwt[crypto]>=2.8.0",  # [crypto] for Apple Sign In (ES256)
     "python-multipart>=0.0.6",
     "email-validator>=2.0.0",
+    
+    # OAuth/Social Login (v1.2)
+    "httpx>=0.25.0",  # For OAuth provider API requests
 ]
 
 [project.urls]

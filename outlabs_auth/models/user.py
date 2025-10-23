@@ -1,7 +1,7 @@
 """
 User model for authentication and profile management
 """
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from enum import Enum
 from beanie import Indexed
@@ -40,6 +40,7 @@ class UserModel(BaseDocument):
 
     Supports:
     - Email/password authentication
+    - OAuth/social login (Google, Facebook, Apple, etc.)
     - JWT token authentication
     - API key authentication
     - Account status management
@@ -48,7 +49,11 @@ class UserModel(BaseDocument):
 
     # Authentication
     email: EmailStr = Indexed(unique=True)
-    hashed_password: str
+    hashed_password: Optional[str] = None  # Optional for OAuth-only users
+    auth_methods: List[str] = Field(
+        default_factory=lambda: ["PASSWORD"],
+        description="Authentication methods available (PASSWORD, GOOGLE, FACEBOOK, etc.)"
+    )
 
     # Profile
     profile: UserProfile = Field(default_factory=UserProfile)

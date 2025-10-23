@@ -2,6 +2,19 @@ version = 1
 requires-python = ">=3.12"
 
 [[package]]
+name = "aio-pika"
+version = "9.5.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiormq" },
+    { name = "yarl" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/42/ad/0ddde89d7a018f4304aac687e5b65c07d308644f51da3c4ae411184bb237/aio_pika-9.5.7.tar.gz", hash = "sha256:0569b59d3c7b36ca76abcb213cdc3677e2a4710a3c371dd27359039f9724f4ee", size = 47298 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/da/be/9b08e7c4d1b3b9a1184e63965d13c811366444cb42c6e809910ab17e916c/aio_pika-9.5.7-py3-none-any.whl", hash = "sha256:684316a0e92157754bb2d6927c5568fd997518b123add342e97405aa9066772b", size = 54297 },
+]
+
+[[package]]
 name = "aiohttp"
 version = "3.9.1"
 source = { registry = "https://pypi.org/simple" }
@@ -32,6 +45,31 @@ wheels = [
 ]
 
 [[package]]
+name = "aiohttp-retry"
+version = "2.9.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9d/61/ebda4d8e3d8cfa1fd3db0fb428db2dd7461d5742cea35178277ad180b033/aiohttp_retry-2.9.1.tar.gz", hash = "sha256:8eb75e904ed4ee5c2ec242fefe85bf04240f685391c4879d8f541d6028ff01f1", size = 13608 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1a/99/84ba7273339d0f3dfa57901b846489d2e5c2cd731470167757f1935fffbd/aiohttp_retry-2.9.1-py3-none-any.whl", hash = "sha256:66d2759d1921838256a05a3f80ad7e724936f083e35be5abb5e16eed6be6dc54", size = 9981 },
+]
+
+[[package]]
+name = "aiormq"
+version = "6.9.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pamqp" },
+    { name = "yarl" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8b/95/feddc2fd77f995837ee8909794101ce5c9c6e7bb399d4e60d5d16f04d74a/aiormq-6.9.0.tar.gz", hash = "sha256:1c31f2098ad2beee6e95d0ad969c836876c1e3113e8c67142eb58565fedcab4c", size = 30526 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c9/35/85c151d382c327182c160f5814416276012941afe378101bd254f946bc60/aiormq-6.9.0-py3-none-any.whl", hash = "sha256:e1d88db819d197646cabaea6d6b53497a5ba358a5b6ae8f45f61dcb446821fa6", size = 31781 },
+]
+
+[[package]]
 name = "aiosignal"
 version = "1.3.2"
 source = { registry = "https://pypi.org/simple" }
@@ -41,6 +79,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ba/b5/6d55e80f6d8a08ce22b982eafa278d823b541c925f11ee774b0b9c43473d/aiosignal-1.3.2.tar.gz", hash = "sha256:a8c255c66fafb1e499c9351d0bf32ff2d8a0321595ebac3b93713656d2436f54", size = 19424 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/6a/bc7e17a3e87a2985d3e8f4da4cd0f481060eb78fb08596c42be62c90a4d9/aiosignal-1.3.2-py2.py3-none-any.whl", hash = "sha256:45cde58e409a301715980c2b01d0c28bdde3770d8290b5eb2173759d9acb31a5", size = 7597 },
+]
+
+[[package]]
+name = "aiosmtplib"
+version = "4.0.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0f/e1/cc58e0be242f0b410707e001ed22c689435964fcaab42108887426e44fff/aiosmtplib-4.0.2.tar.gz", hash = "sha256:f0b4933e7270a8be2b588761e5b12b7334c11890ee91987c2fb057e72f566da6", size = 61052 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f1/2f/db9414bbeacee48ab0c7421a0319b361b7c15b5c3feebcd38684f5d5f849/aiosmtplib-4.0.2-py3-none-any.whl", hash = "sha256:72491f96e6de035c28d29870186782eccb2f651db9c5f8a32c9db689327f5742", size = 27048 },
 ]
 
 [[package]]
@@ -849,18 +896,17 @@ wheels = [
 
 [[package]]
 name = "httpx"
-version = "0.25.2"
+version = "0.28.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "certifi" },
     { name = "httpcore" },
     { name = "idna" },
-    { name = "sniffio" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8c/23/911d93a022979d3ea295f659fbe7edb07b3f4561a477e83b3a6d0e0c914e/httpx-0.25.2.tar.gz", hash = "sha256:8b8fcaa0c8ea7b05edd69a094e63a2094c4efcb48129fb757361bc423c0ad9e8", size = 123889 }
+sdist = { url = "https://files.pythonhosted.org/packages/b1/df/48c586a5fe32a0f01324ee087459e112ebb7224f646c0b5023f5e79e9956/httpx-0.28.1.tar.gz", hash = "sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc", size = 141406 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a2/65/6940eeb21dcb2953778a6895281c179efd9100463ff08cb6232bb6480da7/httpx-0.25.2-py3-none-any.whl", hash = "sha256:a05d3d052d9b2dfce0e3896636467f8a5342fb2b902c819428e1ac65413ca118", size = 74980 },
+    { url = "https://files.pythonhosted.org/packages/2a/39/e50c7c3a983047577ee07d2a9e53faf5a69493943ec3f6a384bdc792deb2/httpx-0.28.1-py3-none-any.whl", hash = "sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad", size = 73517 },
 ]
 
 [[package]]
@@ -1278,6 +1324,8 @@ dependencies = [
 
 [package.optional-dependencies]
 all = [
+    { name = "aio-pika" },
+    { name = "aiosmtplib" },
     { name = "black" },
     { name = "factory-boy" },
     { name = "faker" },
@@ -1287,7 +1335,10 @@ all = [
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "python-telegram-bot" },
     { name = "redis" },
+    { name = "sendgrid" },
+    { name = "twilio" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 dev = [
@@ -1296,6 +1347,14 @@ dev = [
     { name = "isort" },
     { name = "mypy" },
     { name = "uvicorn", extra = ["standard"] },
+]
+notifications = [
+    { name = "aio-pika" },
+    { name = "aiosmtplib" },
+    { name = "httpx" },
+    { name = "python-telegram-bot" },
+    { name = "sendgrid" },
+    { name = "twilio" },
 ]
 redis = [
     { name = "redis" },
@@ -1329,7 +1388,11 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aio-pika", marker = "extra == 'all'", specifier = ">=9.0.0" },
+    { name = "aio-pika", marker = "extra == 'notifications'", specifier = ">=9.0.0" },
     { name = "aiohttp", marker = "extra == 'stress'", specifier = ">=3.9.0" },
+    { name = "aiosmtplib", marker = "extra == 'all'", specifier = ">=3.0.0" },
+    { name = "aiosmtplib", marker = "extra == 'notifications'", specifier = ">=3.0.0" },
     { name = "asyncio-throttle", marker = "extra == 'stress'", specifier = ">=1.0.2" },
     { name = "bcrypt", specifier = ">=4.0.0,<5.0.0" },
     { name = "beanie", specifier = "==1.30.0" },
@@ -1348,6 +1411,7 @@ requires-dist = [
     { name = "flake8", marker = "extra == 'all'", specifier = ">=6.0.0" },
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "httpx", marker = "extra == 'all'", specifier = ">=0.25.0" },
+    { name = "httpx", marker = "extra == 'notifications'", specifier = ">=0.25.0" },
     { name = "httpx", marker = "extra == 'stress'", specifier = ">=0.25.0" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.25.0" },
     { name = "isort", marker = "extra == 'all'", specifier = ">=5.12.0" },
@@ -1372,10 +1436,16 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21.0" },
     { name = "python-jose", extras = ["cryptography"], specifier = ">=3.3.0" },
     { name = "python-multipart", specifier = ">=0.0.6" },
+    { name = "python-telegram-bot", marker = "extra == 'all'", specifier = ">=20.0" },
+    { name = "python-telegram-bot", marker = "extra == 'notifications'", specifier = ">=20.0" },
     { name = "redis", marker = "extra == 'all'", specifier = ">=5.0.0" },
     { name = "redis", marker = "extra == 'redis'", specifier = ">=5.0.0" },
     { name = "requests", marker = "extra == 'stress'", specifier = ">=2.31.0" },
     { name = "rich", marker = "extra == 'stress'", specifier = ">=13.7.0" },
+    { name = "sendgrid", marker = "extra == 'all'", specifier = ">=6.10.0" },
+    { name = "sendgrid", marker = "extra == 'notifications'", specifier = ">=6.10.0" },
+    { name = "twilio", marker = "extra == 'all'", specifier = ">=8.0.0" },
+    { name = "twilio", marker = "extra == 'notifications'", specifier = ">=8.0.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'all'", specifier = ">=0.24.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'dev'", specifier = ">=0.24.0" },
     { name = "uvloop", marker = "extra == 'stress'", specifier = ">=0.19.0" },
@@ -1388,6 +1458,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/a1/d4/1fc4078c65507b51b96ca8f8c3ba19e6a61c8253c72794544580a7b6c24d/packaging-25.0.tar.gz", hash = "sha256:d443872c98d677bf60f6a1f2f8c1cb748e8fe762d2bf9d3148b5599295b0fc4f", size = 165727 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/20/12/38679034af332785aac8774540895e234f4d07f7545804097de4b666afd8/packaging-25.0-py3-none-any.whl", hash = "sha256:29572ef2b1f17581046b3a2227d5c611fb25ec70ca1ba8554b24b0e69331a484", size = 66469 },
+]
+
+[[package]]
+name = "pamqp"
+version = "3.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/fb/62/35bbd3d3021e008606cd0a9532db7850c65741bbf69ac8a3a0d8cfeb7934/pamqp-3.3.0.tar.gz", hash = "sha256:40b8795bd4efcf2b0f8821c1de83d12ca16d5760f4507836267fd7a02b06763b", size = 30993 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ac/8d/c1e93296e109a320e508e38118cf7d1fc2a4d1c2ec64de78565b3c445eb5/pamqp-3.3.0-py2.py3-none-any.whl", hash = "sha256:c901a684794157ae39b52cbf700db8c9aae7a470f13528b9d7b4e5f7202f8eb0", size = 33848 },
 ]
 
 [[package]]
@@ -1845,6 +1924,15 @@ wheels = [
 ]
 
 [[package]]
+name = "python-http-client"
+version = "3.3.7"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/56/fa/284e52a8c6dcbe25671f02d217bf2f85660db940088faf18ae7a05e97313/python_http_client-3.3.7.tar.gz", hash = "sha256:bf841ee45262747e00dec7ee9971dfb8c7d83083f5713596488d67739170cea0", size = 9377 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/29/31/9b360138f4e4035ee9dac4fe1132b6437bd05751aaf1db2a2d83dc45db5f/python_http_client-3.3.7-py3-none-any.whl", hash = "sha256:ad371d2bbedc6ea15c26179c6222a78bc9308d272435ddf1d5c84f068f249a36", size = 8352 },
+]
+
+[[package]]
 name = "python-jose"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1870,6 +1958,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f3/87/f44d7c9f274c7ee665a29b885ec97089ec5dc034c7f3fafa03da9e39a09e/python_multipart-0.0.20.tar.gz", hash = "sha256:8dd0cab45b8e23064ae09147625994d090fa46f5b0d1e13af944c331a7fa9d13", size = 37158 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/45/58/38b5afbc1a800eeea951b9285d3912613f2603bdf897a4ab0f4bd7f405fc/python_multipart-0.0.20-py3-none-any.whl", hash = "sha256:8a62d3a8335e06589fe01f2a3e178cdcc632f3fbe0d492ad9ee0ec35aab1f104", size = 24546 },
+]
+
+[[package]]
+name = "python-telegram-bot"
+version = "22.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0b/6b/400f88e5c29a270c1c519a3ca8ad0babc650ec63dbfbd1b73babf625ed54/python_telegram_bot-22.5.tar.gz", hash = "sha256:82d4efd891d04132f308f0369f5b5929e0b96957901f58bcef43911c5f6f92f8", size = 1488269 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bc/c3/340c7520095a8c79455fcf699cbb207225e5b36490d2b9ee557c16a7b21b/python_telegram_bot-22.5-py3-none-any.whl", hash = "sha256:4b7cd365344a7dce54312cc4520d7fa898b44d1a0e5f8c74b5bd9b540d035d16", size = 730976 },
 ]
 
 [[package]]
@@ -2006,6 +2106,20 @@ wheels = [
 ]
 
 [[package]]
+name = "sendgrid"
+version = "6.12.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "python-http-client" },
+    { name = "werkzeug" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/da/fa/f718b2b953f99c1f0085811598ac7e31ccbd4229a81ec2a5290be868187a/sendgrid-6.12.5.tar.gz", hash = "sha256:ea9aae30cd55c332e266bccd11185159482edfc07c149b6cd15cf08869fabdb7", size = 50310 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bd/55/b3c3880a77082e8f7374954e0074aafafaa9bc78bdf9c8f5a92c2e7afc6a/sendgrid-6.12.5-py3-none-any.whl", hash = "sha256:96f92cc91634bf552fdb766b904bbb53968018da7ae41fdac4d1090dc0311ca8", size = 102173 },
+]
+
+[[package]]
 name = "setuptools"
 version = "80.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2043,6 +2157,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a7/a5/d6f429d43394057b67a6b5bbe6eae2f77a6bf7459d961fdb224bf206eee6/starlette-0.48.0.tar.gz", hash = "sha256:7e8cee469a8ab2352911528110ce9088fdc6a37d9876926e73da7ce4aa4c7a46", size = 2652949 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/be/72/2db2f49247d0a18b4f1bb9a5a39a0162869acf235f3a96418363947b3d46/starlette-0.48.0-py3-none-any.whl", hash = "sha256:0764ca97b097582558ecb498132ed0c7d942f233f365b86ba37770e026510659", size = 73736 },
+]
+
+[[package]]
+name = "twilio"
+version = "9.8.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "aiohttp-retry" },
+    { name = "pyjwt" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/cf/83/da77326ca7e5097e68e24367afb4cb6be50f263e90d85b8c1050891a0b90/twilio-9.8.4.tar.gz", hash = "sha256:392c8a1d2a938a041d07fc39d05cce30f88b4642d9539035399d7eabab90dd61", size = 942227 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/91/31/d4e679f297ba5e22a3bdb4ff48c359e753f944a527a43a162405753f6c41/twilio-9.8.4-py2.py3-none-any.whl", hash = "sha256:03a137e2538ed2a6448c8b21c067f97ebabe273d76701744db4b6e5e47755df2", size = 1834704 },
 ]
 
 [[package]]

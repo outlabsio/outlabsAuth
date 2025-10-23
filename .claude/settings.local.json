@@ -56,7 +56,12 @@
       "Bash(brew list:*)",
       "Bash(docker exec:*)",
       "Bash(docker inspect:*)",
-      "Bash(REDIS_PASSWORD=guest uv run python:*)"
+      "Bash(REDIS_PASSWORD=guest uv run python:*)",
+      "mcp__nuxtui__get_installation_guide",
+      "Read(//Users/outlabs/Documents/GitHub/dashboardUi4/**)",
+      "Read(//Users/outlabs/Documents/GitHub/dashboardUi4/app/**)",
+      "Read(//Users/outlabs/Documents/GitHub/**)",
+      "Bash(npx nuxi typecheck)"
     ],
     "deny": []
   }
