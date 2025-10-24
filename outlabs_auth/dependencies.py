@@ -114,12 +114,12 @@ class AuthDeps:
                     if result:
                         # Check active status
                         if active and result.get("user"):
-                            if not result["user"].is_active:
+                            if not result["user"].can_authenticate():
                                 continue  # Try next backend
 
                         # Check verified status
                         if verified and result.get("user"):
-                            if not hasattr(result["user"], "is_verified") or not result["user"].is_verified:
+                            if not result["user"].email_verified:
                                 continue  # Try next backend
 
                         # Authentication successful

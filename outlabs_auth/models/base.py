@@ -2,9 +2,10 @@
 Base document model for all Beanie ODM documents
 """
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Any
 from beanie import Document
-from pydantic import Field
+from pydantic import Field, ConfigDict
+from bson import ObjectId
 
 
 class BaseDocument(Document):
@@ -20,6 +21,13 @@ class BaseDocument(Document):
 
     # Optional tenant isolation (for multi-tenant mode)
     tenant_id: Optional[str] = None
+
+    # Pydantic v2 configuration
+    model_config = ConfigDict(
+        json_encoders={ObjectId: str},
+        populate_by_name=True,
+        arbitrary_types_allowed=True
+    )
 
     def save(self, *args, **kwargs):
         """Override save to update timestamp"""

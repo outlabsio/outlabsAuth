@@ -18,6 +18,9 @@ COPY . /app
 # Install Python dependencies using uv
 RUN cd /app && uv sync
 
+# Install outlabs-auth in editable mode for hot reload
+RUN cd /app && uv pip install -e .
+
 # Install additional dependencies for running the example
 RUN cd /app && uv pip install uvicorn[standard] redis
 

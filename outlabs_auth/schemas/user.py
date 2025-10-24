@@ -10,8 +10,10 @@ class UserResponse(BaseModel):
     email: EmailStr
     first_name: Optional[str] = None
     last_name: Optional[str] = None
-    is_active: bool = True
-    is_verified: bool = False
+    phone: Optional[str] = None
+    avatar_url: Optional[str] = None
+    status: str  # UserStatus enum value
+    email_verified: bool = False
     is_superuser: bool = False
 
     class Config:

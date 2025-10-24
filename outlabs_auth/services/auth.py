@@ -34,10 +34,11 @@ from outlabs_auth.utils.validation import validate_email
 
 class TokenPair:
     """Container for access and refresh tokens"""
-    def __init__(self, access_token: str, refresh_token: str, token_type: str = "bearer"):
+    def __init__(self, access_token: str, refresh_token: str, token_type: str = "bearer", expires_in: int = 900):
         self.access_token = access_token
         self.refresh_token = refresh_token
         self.token_type = token_type
+        self.expires_in = expires_in  # Access token expiration in seconds
 
     def to_dict(self):
         """Convert to dictionary for API responses"""
@@ -45,6 +46,7 @@ class TokenPair:
             "access_token": self.access_token,
             "refresh_token": self.refresh_token,
             "token_type": self.token_type,
+            "expires_in": self.expires_in,
         }
 
 
@@ -221,6 +223,7 @@ class AuthService:
             algorithm=self.config.algorithm,
             access_token_expire_minutes=self.config.access_token_expire_minutes,
             refresh_token_expire_days=self.config.refresh_token_expire_days,
+            audience=self.config.jwt_audience,
         )
 
         # Store refresh token in database (for revocation support)
@@ -241,6 +244,7 @@ class AuthService:
         token_pair = TokenPair(
             access_token=access_token,
             refresh_token=refresh_token_value,
+            expires_in=self.config.access_token_expire_minutes * 60,  # Convert to seconds
         )
 
         return user, token_pair
@@ -371,6 +375,7 @@ class AuthService:
             algorithm=self.config.algorithm,
             access_token_expire_minutes=self.config.access_token_expire_minutes,
             refresh_token_expire_days=self.config.refresh_token_expire_days,
+            audience=self.config.jwt_audience,
         )
 
         # Update token usage stats
@@ -382,6 +387,7 @@ class AuthService:
         return TokenPair(
             access_token=access_token,
             refresh_token=refresh_token,  # Same refresh token
+            expires_in=self.config.access_token_expire_minutes * 60,  # Convert to seconds
         )
 
     async def get_current_user(self, access_token: str) -> UserModel:

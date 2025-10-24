@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl:*)",
+      "Read(//Users/outlabs/Documents/GitHub/outlabsAuth/examples/enterprise_rbac/**)",
+      "Read(//Users/outlabs/Documents/GitHub/outlabsAuth/outlabs_auth/routers/**)",
+      "Read(//Users/outlabs/Documents/GitHub/outlabsAuth/outlabs_auth/schemas/**)",
+      "Read(//Users/outlabs/Documents/GitHub/outlabsAuth/outlabs_auth/**)",
+      "Read(//Users/outlabs/Documents/GitHub/outlabsAuth/**)",
+      "Bash(python3:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker logs:*)",
+      "Read(//private/tmp/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

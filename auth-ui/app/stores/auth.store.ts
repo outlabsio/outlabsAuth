@@ -6,8 +6,6 @@
 
 import { defineStore } from 'pinia'
 import type { User, LoginCredentials, AuthTokens, AuthState, SystemStatus } from '~/types/auth'
-import { USE_MOCK_DATA, mockDelay, logMockCall } from '~/utils/mock'
-import { getMockUserByCredentials, mockUsers } from '~/utils/mockData'
 
 const ACCESS_TOKEN_KEY = 'outlabs_auth_access_token'
 const REFRESH_TOKEN_KEY = 'outlabs_auth_refresh_token'
@@ -166,28 +164,6 @@ export const useAuthStore = defineStore('auth', () => {
    */
   const login = async (credentials: LoginCredentials): Promise<void> => {
     try {
-      // Mock mode
-      if (USE_MOCK_DATA) {
-        logMockCall('POST', '/auth/login', credentials)
-        await mockDelay()
-
-        const mockUser = getMockUserByCredentials(credentials.email, credentials.password)
-        if (!mockUser || !mockUser.is_active) {
-          throw new Error('Invalid email or password')
-        }
-
-        // Generate mock tokens
-        state.accessToken = 'mock_access_token_' + Date.now()
-        state.refreshToken = 'mock_refresh_token_' + Date.now()
-        state.user = mockUser
-        state.isAuthenticated = true
-
-        safeLocalStorage.setItem(ACCESS_TOKEN_KEY, state.accessToken)
-        safeLocalStorage.setItem(REFRESH_TOKEN_KEY, state.refreshToken!)
-        safeLocalStorage.setItem(USER_KEY, JSON.stringify(mockUser))
-        return
-      }
-
       // Real API call - OutlabsAuth format
       const response = await fetch(`${config.public.apiBaseUrl}/auth/login`, {
         method: 'POST',
@@ -228,11 +204,18 @@ export const useAuthStore = defineStore('auth', () => {
    */
   const logout = async (): Promise<void> => {
     try {
-      // Call logout endpoint if authenticated
-      if (state.refreshToken) {
-        await apiCall('/auth/logout', {
+      // Call logout endpoint if authenticated (direct fetch, not apiCall to avoid infinite loop)
+      if (state.refreshToken && state.accessToken) {
+        await fetch(`${config.public.apiBaseUrl}/auth/logout`, {
           method: 'POST',
-          body: JSON.stringify({ refresh_token: state.refreshToken })
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${state.accessToken}`
+          },
+          body: JSON.stringify({ refresh_token: state.refreshToken }),
+          credentials: 'include'
+        }).catch(() => {
+          // Ignore logout errors - we're clearing state anyway
         })
       }
     } catch (error) {
@@ -290,23 +273,6 @@ export const useAuthStore = defineStore('auth', () => {
    * Fetch current user
    */
   const fetchCurrentUser = async (): Promise<void> => {
-    // Mock mode
-    if (USE_MOCK_DATA) {
-      logMockCall('GET', '/users/me')
-      await mockDelay()
-      // User already set from login or localStorage
-      if (state.user) {
-        return
-      }
-      // Fallback to first mock user
-      const fallbackUser = mockUsers[0]
-      if (fallbackUser) {
-        state.user = fallbackUser
-        safeLocalStorage.setItem(USER_KEY, JSON.stringify(fallbackUser))
-      }
-      return
-    }
-
     // Real API call
     const user = await apiCall<User>('/users/me')
     if (user) {

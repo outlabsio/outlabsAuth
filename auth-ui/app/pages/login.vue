@@ -4,7 +4,7 @@
       <UAuthForm
         :schema="loginSchema"
         title="Welcome back!"
-        description="Sign in to your OutlabsAuth account (Mock Mode)"
+        description="Sign in to your OutlabsAuth account"
         icon="i-lucide-lock-keyhole"
         :fields="fields"
         :loading="isLoading"
@@ -12,7 +12,7 @@
       >
         <template #description>
           <p class="text-sm text-gray-600 dark:text-gray-400">
-            Just enter your email to sign in. Try: <code class="text-xs bg-neutral-100 dark:bg-neutral-800 px-1 py-0.5 rounded">admin@outlabs.com</code>
+            Sign in with your credentials. Try: <code class="text-xs bg-neutral-100 dark:bg-neutral-800 px-1 py-0.5 rounded">newuser@example.com</code>
           </p>
         </template>
 
@@ -39,18 +39,25 @@ definePageMeta({
   layout: false // Use no layout for login page
 })
 
-// Auth form fields configuration - Email only for mock mode
+// Auth form fields configuration - Email and password for real API
 const fields: AuthFormField[] = [{
   name: 'email',
   type: 'email',
   label: 'Email',
   placeholder: 'you@example.com',
   required: true
+}, {
+  name: 'password',
+  type: 'password',
+  label: 'Password',
+  placeholder: 'Enter your password',
+  required: true
 }]
 
-// Zod validation schema - Email only for mock mode
+// Zod validation schema - Email and password
 const loginSchema = z.object({
-  email: z.string().email('Invalid email address')
+  email: z.string().email('Invalid email address'),
+  password: z.string().min(1, 'Password is required')
 })
 
 type LoginSchema = z.infer<typeof loginSchema>
@@ -64,7 +71,7 @@ const authStore = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 
-// Form submission - Mock mode: any password works
+// Form submission - Real API mode: use actual credentials
 const onSubmit = async (event: FormSubmitEvent<LoginSchema>) => {
   isLoading.value = true
   errorMessage.value = ''
@@ -72,7 +79,7 @@ const onSubmit = async (event: FormSubmitEvent<LoginSchema>) => {
   try {
     await authStore.login({
       email: event.data.email,
-      password: 'mock-password' // In mock mode, any password works
+      password: event.data.password
     })
 
     // Initialize context after successful login

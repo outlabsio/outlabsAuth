@@ -116,7 +116,8 @@ def get_auth_router(
             return LoginResponse(
                 access_token=tokens.access_token,
                 refresh_token=tokens.refresh_token,
-                token_type=tokens.token_type
+                token_type=tokens.token_type,
+                expires_in=tokens.expires_in
             )
 
         except HTTPException:
@@ -140,7 +141,8 @@ def get_auth_router(
             return RefreshResponse(
                 access_token=tokens.access_token,
                 refresh_token=tokens.refresh_token,
-                token_type=tokens.token_type
+                token_type=tokens.token_type,
+                expires_in=tokens.expires_in
             )
         except Exception as e:
             raise HTTPException(

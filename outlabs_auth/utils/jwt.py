@@ -15,6 +15,7 @@ def create_access_token(
     secret_key: str,
     algorithm: str = "HS256",
     expires_delta: Optional[timedelta] = None,
+    audience: str = "outlabs-auth",
 ) -> str:
     """
     Create a JWT access token.
@@ -24,6 +25,7 @@ def create_access_token(
         secret_key: Secret key for signing
         algorithm: JWT algorithm (default: HS256)
         expires_delta: Token expiration time (default: 15 minutes)
+        audience: JWT audience claim for cross-application security (default: "outlabs-auth")
 
     Returns:
         str: Encoded JWT token
@@ -31,7 +33,8 @@ def create_access_token(
     Example:
         >>> token = create_access_token(
         ...     data={"sub": "user_id_123"},
-        ...     secret_key="my-secret-key"
+        ...     secret_key="my-secret-key",
+        ...     audience="my-app"
         ... )
         >>> # Token is valid for 15 minutes by default
     """
@@ -46,7 +49,8 @@ def create_access_token(
     to_encode.update({
         "exp": expire,
         "iat": datetime.now(timezone.utc),  # Issued at
-        "type": "access"
+        "type": "access",
+        "aud": audience  # Audience claim for cross-application security
     })
 
     encoded_jwt = jwt.encode(to_encode, secret_key, algorithm=algorithm)
@@ -58,6 +62,7 @@ def create_refresh_token(
     secret_key: str,
     algorithm: str = "HS256",
     expires_delta: Optional[timedelta] = None,
+    audience: str = "outlabs-auth",
 ) -> str:
     """
     Create a JWT refresh token.
@@ -67,6 +72,7 @@ def create_refresh_token(
         secret_key: Secret key for signing
         algorithm: JWT algorithm (default: HS256)
         expires_delta: Token expiration time (default: 30 days)
+        audience: JWT audience claim for cross-application security (default: "outlabs-auth")
 
     Returns:
         str: Encoded JWT refresh token
@@ -74,7 +80,8 @@ def create_refresh_token(
     Example:
         >>> token = create_refresh_token(
         ...     data={"sub": "user_id_123"},
-        ...     secret_key="my-secret-key"
+        ...     secret_key="my-secret-key",
+        ...     audience="my-app"
         ... )
         >>> # Token is valid for 30 days by default
     """
@@ -89,7 +96,8 @@ def create_refresh_token(
     to_encode.update({
         "exp": expire,
         "iat": datetime.now(timezone.utc),
-        "type": "refresh"
+        "type": "refresh",
+        "aud": audience  # Audience claim for cross-application security
     })
 
     encoded_jwt = jwt.encode(to_encode, secret_key, algorithm=algorithm)
@@ -235,6 +243,7 @@ def create_token_pair(
     access_token_expire_minutes: int = 15,
     refresh_token_expire_days: int = 30,
     additional_claims: Optional[Dict[str, Any]] = None,
+    audience: str = "outlabs-auth",
 ) -> tuple[str, str]:
     """
     Create both access and refresh tokens for a user.
@@ -246,6 +255,7 @@ def create_token_pair(
         access_token_expire_minutes: Access token TTL in minutes
         refresh_token_expire_days: Refresh token TTL in days
         additional_claims: Additional data to include in tokens
+        audience: JWT audience claim for cross-application security (default: "outlabs-auth")
 
     Returns:
         tuple[str, str]: (access_token, refresh_token)
@@ -253,7 +263,8 @@ def create_token_pair(
     Example:
         >>> access, refresh = create_token_pair(
         ...     user_id="user_123",
-        ...     secret_key="my-secret"
+        ...     secret_key="my-secret",
+        ...     audience="my-app"
         ... )
         >>> # access token valid for 15 min, refresh for 30 days
     """
@@ -268,6 +279,7 @@ def create_token_pair(
         secret_key=secret_key,
         algorithm=algorithm,
         expires_delta=timedelta(minutes=access_token_expire_minutes),
+        audience=audience,
     )
 
     # Create refresh token
@@ -276,6 +288,7 @@ def create_token_pair(
         secret_key=secret_key,
         algorithm=algorithm,
         expires_delta=timedelta(days=refresh_token_expire_days),
+        audience=audience,
     )
 
     return access_token, refresh_token

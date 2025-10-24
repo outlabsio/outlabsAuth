@@ -60,7 +60,6 @@ class UserModel(BaseDocument):
 
     # Status
     status: UserStatus = Field(default=UserStatus.ACTIVE)
-    is_system_user: bool = Field(default=False)
     is_superuser: bool = Field(default=False)  # For admin override
     email_verified: bool = Field(default=False)
 

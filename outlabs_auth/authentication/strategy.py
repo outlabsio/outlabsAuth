@@ -5,7 +5,7 @@ Transport/Strategy separation pattern from FastAPI-Users (DD-038).
 """
 
 from typing import Optional, Protocol, Any
-import jwt
+from jose import jwt, JWTError
 from datetime import datetime, timedelta
 
 
@@ -46,7 +46,7 @@ class JWTStrategy:
         self,
         secret: str,
         algorithm: str = "HS256",
-        audience: list[str] = None,
+        audience: Optional[str] = None,
         verify_exp: bool = True
     ):
         """
@@ -55,12 +55,12 @@ class JWTStrategy:
         Args:
             secret: Secret key for JWT validation
             algorithm: JWT algorithm (default: HS256)
-            audience: Expected JWT audience (default: ["outlabs-auth:access"])
+            audience: Expected JWT audience (default: "outlabs-auth")
             verify_exp: Whether to verify token expiration (default: True)
         """
         self.secret = secret
         self.algorithm = algorithm
-        self.audience = audience or ["outlabs-auth:access"]
+        self.audience = audience or "outlabs-auth"
         self.verify_exp = verify_exp
 
     async def authenticate(
@@ -82,6 +82,8 @@ class JWTStrategy:
         """
         try:
             # Decode and validate JWT
+            print(f"[JWT] Decoding token...")
+            print(f"[JWT] Audience: {self.audience}")
             payload = jwt.decode(
                 credentials,
                 self.secret,
@@ -89,33 +91,39 @@ class JWTStrategy:
                 audience=self.audience,
                 options={"verify_exp": self.verify_exp}
             )
+            print(f"[JWT] Token decoded successfully. User ID: {payload.get('sub')}")
 
             # Extract user ID from payload
             user_id = payload.get("sub")
             if not user_id:
+                print("[JWT] No user_id in token")
                 return None
 
             # Fetch user from database
             if user_service:
-                user = await user_service.get_user(user_id)
-                if user and user.is_active:
+                print(f"[JWT] Fetching user {user_id} from database...")
+                user = await user_service.get_user_by_id(user_id)
+                print(f"[JWT] User found: {user is not None}, Can auth: {user.can_authenticate() if user else 'N/A'}")
+                if user and user.can_authenticate():
                     return {
                         "user": user,
                         "user_id": str(user.id),
                         "source": "jwt",
                         "metadata": payload
                     }
+            else:
+                print("[JWT] No user_service provided")
 
             return None
 
         except jwt.ExpiredSignatureError:
-            # Token expired
+            print("[JWT] Token expired")
             return None
-        except jwt.InvalidTokenError:
-            # Invalid token
+        except JWTError as e:
+            print(f"[JWT] JWT Error: {e}")
             return None
-        except Exception:
-            # Any other error
+        except Exception as e:
+            print(f"[JWT] Other error: {e}")
             return None
 
 

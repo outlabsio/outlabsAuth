@@ -30,7 +30,8 @@ eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyXzEyMyIsImV4cCI6MTY0MjU5NjA
   "sub": "user_123",
   "exp": 1642596000,
   "iat": 1642594200,
-  "type": "access"
+  "type": "access",
+  "aud": "outlabs-auth"
 }
 
 // Signature (cryptographic)
@@ -55,6 +56,7 @@ OutlabsAuth uses two token types:
   "exp": 1642596000,           // Expiration (Unix timestamp)
   "iat": 1642594200,           // Issued at
   "type": "access",            // Token type
+  "aud": "outlabs-auth",       // Audience (prevents cross-app token reuse)
   "jti": "token_abc123"        // JWT ID (optional, for revocation)
 }
 ```
@@ -79,7 +81,8 @@ Authorization: Bearer eyJhbGc...
   "sub": "user_123",
   "exp": 1645188000,           // 30 days from now
   "iat": 1642594200,
-  "type": "refresh"
+  "type": "refresh",
+  "aud": "outlabs-auth"        // Audience (prevents cross-app token reuse)
 }
 ```
 
@@ -110,13 +113,17 @@ POST /auth/refresh
    access_token = jwt.encode({
        "sub": user.id,
        "exp": now + 15min,
-       "type": "access"
+       "iat": now,
+       "type": "access",
+       "aud": "outlabs-auth"
    })
 
    refresh_token = jwt.encode({
        "sub": user.id,
        "exp": now + 30days,
-       "type": "refresh"
+       "iat": now,
+       "type": "refresh",
+       "aud": "outlabs-auth"
    })
 
 3. Return both tokens
@@ -188,10 +195,11 @@ from outlabs_auth import SimpleRBAC
 
 auth = SimpleRBAC(
     database=db,
-    jwt_secret="your-super-secret-key-change-in-production",
-    jwt_algorithm="HS256",  # or "RS256" for asymmetric
-    access_token_lifetime=900,  # 15 minutes (in seconds)
-    refresh_token_lifetime=2592000,  # 30 days (in seconds)
+    secret_key="your-super-secret-key-change-in-production",
+    algorithm="HS256",  # or "RS256" for asymmetric
+    jwt_audience="your-app-name",  # Prevents cross-app token reuse
+    access_token_expire_minutes=15,  # 15 minutes
+    refresh_token_expire_days=30,  # 30 days
 )
 ```
 
@@ -232,8 +240,9 @@ JWT_SECRET=xvKp7gHN3jF9mP2qR5sT8wY1zA3bC6dE9fG2hJ5kL8m
 ```python
 auth = SimpleRBAC(
     database=db,
-    jwt_secret="shared-secret",
-    jwt_algorithm="HS256"
+    secret_key="shared-secret",
+    algorithm="HS256",
+    jwt_audience="my-app"
 )
 ```
 
@@ -281,8 +290,9 @@ public_pem = public_key.public_bytes(
 # Use in OutlabsAuth
 auth = SimpleRBAC(
     database=db,
-    jwt_secret=private_pem,  # Private key for signing
-    jwt_algorithm="RS256"
+    secret_key=private_pem,  # Private key for signing
+    algorithm="RS256",
+    jwt_audience="my-app"
 )
 ```
 
@@ -307,36 +317,36 @@ async def protected(ctx = Depends(auth.deps.require_auth())):
 2. Decode JWT
 3. Verify signature
 4. Check expiration (`exp` claim)
-5. Check token type (`type` claim)
-6. Get user from database
-7. Check user is active
+5. Check audience (`aud` claim)
+6. Check token type (`type` claim)
+7. Get user from database
+8. Check user can authenticate (active and not locked)
 
 ### Manual Validation
 
 ```python
 from jose import jwt, JWTError
-from datetime import datetime
+from datetime import datetime, timezone
 
-def validate_access_token(token: str, secret: str) -> dict:
+def validate_access_token(token: str, secret: str, audience: str = "outlabs-auth") -> dict:
     try:
-        # Decode and verify
+        # Decode and verify (automatically checks signature, expiration, audience)
         payload = jwt.decode(
             token,
             secret,
-            algorithms=["HS256"]
+            algorithms=["HS256"],
+            audience=audience,
+            options={"verify_exp": True}
         )
 
-        # Check expiration
-        exp = payload.get("exp")
-        if exp and datetime.utcnow().timestamp() > exp:
-            raise Exception("Token expired")
-
-        # Check type
+        # Check token type
         if payload.get("type") != "access":
             raise Exception("Invalid token type")
 
         return payload
 
+    except jwt.ExpiredSignatureError:
+        raise Exception("Token expired")
     except JWTError as e:
         raise Exception(f"Invalid token: {e}")
 ```
@@ -405,10 +415,10 @@ async def refresh_token(refresh_token: str):
 
         # Get user
         user_id = payload["sub"]
-        user = await auth.user_service.get_user(user_id)
+        user = await auth.user_service.get_user_by_id(user_id)
 
-        if not user or not user.is_active:
-            raise HTTPException(401, "User not found or inactive")
+        if not user or not user.can_authenticate():
+            raise HTTPException(401, "User not found or cannot authenticate")
 
         # Generate new access token
         new_access_token = jwt.encode(
@@ -463,7 +473,7 @@ async def refresh_token(refresh_token: str):
 ```python
 auth = SimpleRBAC(
     database=db,
-    access_token_lifetime=900  # 15 minutes
+    access_token_expire_minutes=15  # 15 minutes
 )
 ```
 

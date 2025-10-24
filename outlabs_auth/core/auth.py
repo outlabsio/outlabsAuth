@@ -364,7 +364,8 @@ class OutlabsAuth:
         # JWT Backend (always available)
         jwt_strategy = JWTStrategy(
             secret=self.config.secret_key,
-            algorithm=self.config.algorithm
+            algorithm=self.config.algorithm,
+            audience=self.config.jwt_audience  # Use configured audience (string, not list)
         )
         jwt_backend = AuthBackend(
             name="jwt",

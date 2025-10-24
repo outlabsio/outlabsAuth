@@ -59,7 +59,18 @@ def get_users_router(
     )
     async def get_me(auth_result = Depends(auth.deps.require_auth(verified=requires_verification))):
         """Get current user profile."""
-        return auth_result["user"]
+        user = auth_result["user"]
+        return UserResponse(
+            id=str(user.id),
+            email=user.email,
+            first_name=user.profile.first_name if user.profile else None,
+            last_name=user.profile.last_name if user.profile else None,
+            phone=user.profile.phone if user.profile else None,
+            avatar_url=user.profile.avatar_url if user.profile else None,
+            status=user.status.value,
+            email_verified=user.email_verified,
+            is_superuser=user.is_superuser
+        )
 
     @router.patch(
         "/me",

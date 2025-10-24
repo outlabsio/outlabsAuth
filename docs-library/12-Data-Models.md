@@ -93,7 +93,6 @@ class UserModel(BaseDocument):
 
     # Status
     status: UserStatus = UserStatus.ACTIVE
-    is_system_user: bool = False
     is_superuser: bool = False
     email_verified: bool = False
 

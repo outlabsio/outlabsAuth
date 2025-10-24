@@ -15,6 +15,7 @@ class AuthConfig(BaseModel):
     # JWT Settings
     secret_key: str = Field(..., description="Secret key for JWT signing")
     algorithm: str = Field(default="HS256", description="JWT algorithm")
+    jwt_audience: str = Field(default="outlabs-auth", description="JWT audience claim for cross-application security")
     access_token_expire_minutes: int = Field(default=15, description="Access token TTL in minutes")
     refresh_token_expire_days: int = Field(default=30, description="Refresh token TTL in days")
 
