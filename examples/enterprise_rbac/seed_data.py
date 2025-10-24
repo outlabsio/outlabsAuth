@@ -18,13 +18,14 @@ from beanie import init_beanie
 
 # Import models
 from models import Lead, LeadNote
+from profiles import ExtendedUserModel, AgentProfile, TeamMemberProfile
 from outlabs_auth import EnterpriseRBAC
-from outlabs_auth.models.user import UserModel
 from outlabs_auth.models.role import RoleModel
 from outlabs_auth.models.entity import EntityModel, EntityClass
 from outlabs_auth.models.membership import EntityMembershipModel
 from outlabs_auth.models.closure import EntityClosureModel
 from outlabs_auth.models.permission import PermissionModel
+from outlabs_auth.utils.password import hash_password
 
 # Configuration
 MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
@@ -56,28 +57,61 @@ async def create_role_if_not_exists(auth, name: str, permissions: list, display_
 
 
 async def create_user_if_not_exists(
-    auth, email: str, password: str, full_name: str, role_id: str, username: str = None
+    auth, email: str, password: str, full_name: str, role_id: str,
+    user_type: str = "team_member", profile_data: dict = None
 ):
-    """Create user if doesn't exist"""
+    """
+    Create user if doesn't exist, with profile.
+
+    Args:
+        auth: EnterpriseRBAC instance
+        email: User email
+        password: User password
+        full_name: Full name (will be split into first/last)
+        role_id: Role ID (unused in this function, kept for compatibility)
+        user_type: User type ('agent', 'team_member', 'admin')
+        profile_data: Optional profile data dict
+    """
     # Check if user exists
-    existing_user = await UserModel.find_one(UserModel.email == email)
+    existing_user = await ExtendedUserModel.find_one(ExtendedUserModel.email == email)
     if existing_user:
         print(f"  ✓ User '{email}' already exists")
         return existing_user
 
-    # Create new user
     # Split full_name into first/last
     name_parts = full_name.split(" ", 1)
     first_name = name_parts[0]
     last_name = name_parts[1] if len(name_parts) > 1 else ""
 
-    user = await auth.user_service.create_user(
+    # Create user with user_type
+    from outlabs_auth.models.user import UserStatus
+    user = ExtendedUserModel(
         email=email,
-        password=password,
+        hashed_password=hash_password(password),
         first_name=first_name,
-        last_name=last_name
+        last_name=last_name,
+        user_type=user_type,
+        status=UserStatus.ACTIVE,
+        email_verified=True
     )
-    print(f"  ✓ Created user '{email}' ({full_name})")
+    await user.insert()
+
+    # Create profile based on user_type
+    if user_type == "agent" and profile_data:
+        profile = AgentProfile(**profile_data)
+        await profile.save()
+        user.agent_profile = profile
+        await user.save()
+        print(f"  ✓ Created agent '{email}' ({full_name}) with profile")
+    elif user_type == "team_member" and profile_data:
+        profile = TeamMemberProfile(**profile_data)
+        await profile.save()
+        user.team_member_profile = profile
+        await user.save()
+        print(f"  ✓ Created team member '{email}' ({full_name}) with profile")
+    else:
+        print(f"  ✓ Created {user_type} '{email}' ({full_name})")
+
     return user
 
 
@@ -211,12 +245,36 @@ async def create_remax_national(auth, roles, users):
 
     agent1 = await create_user_if_not_exists(
         auth, "agent1@remax-sv.com", "Password123!", "David Kim",
-        roles["agent"].id, "david_kim"
+        roles["agent"].id, "david_kim",
+        user_type="agent",
+        profile_data={
+            "license_number": "DRE01234567",
+            "license_state": "CA",
+            "brokerage_name": "RE/MAX Silicon Valley",
+            "years_experience": 5,
+            "specialties": ["residential", "first-time buyers"],
+            "bio": "Dedicated to helping first-time buyers find their dream home",
+            "certifications": ["ABR", "PSA"],
+            "deals_closed": 47,
+            "total_sales_volume": 23500000
+        }
     )
 
     agent2 = await create_user_if_not_exists(
         auth, "agent2@remax-sv.com", "Password123!", "Jessica Martinez",
-        roles["agent"].id, "jessica_martinez"
+        roles["agent"].id, "jessica_martinez",
+        user_type="agent",
+        profile_data={
+            "license_number": "DRE01234568",
+            "license_state": "CA",
+            "brokerage_name": "RE/MAX Silicon Valley",
+            "years_experience": 3,
+            "specialties": ["residential", "luxury"],
+            "bio": "Luxury home specialist with a passion for modern architecture",
+            "certifications": ["CRS"],
+            "deals_closed": 29,
+            "total_sales_volume": 18700000
+        }
     )
 
     # Add memberships
@@ -459,7 +517,20 @@ async def create_keller_williams(auth, roles, users):
 
     luxury_agent = await create_user_if_not_exists(
         auth, "luxury@kw-paloalto.com", "Password123!", "Alexander Sterling",
-        roles["agent"].id, "alexander_sterling"
+        roles["agent"].id, "alexander_sterling",
+        user_type="agent",
+        profile_data={
+            "license_number": "DRE01987654",
+            "license_state": "CA",
+            "brokerage_name": "Keller Williams Palo Alto",
+            "years_experience": 12,
+            "specialties": ["luxury", "investment", "commercial"],
+            "bio": "Award-winning luxury real estate specialist serving Silicon Valley's elite",
+            "certifications": ["CRS", "GRI", "CLHMS"],
+            "deals_closed": 156,
+            "total_sales_volume": 187000000,
+            "languages": ["English", "Mandarin", "Spanish"]
+        }
     )
 
     ftb_agent = await create_user_if_not_exists(
@@ -705,20 +776,37 @@ async def create_internal_teams(auth, roles, users):
         parent_id=str(internal.id), display_name="Leadership Team"
     )
 
-    # Create internal users
+    # Create internal users (team_member type with profiles)
     support_rep = await create_user_if_not_exists(
         auth, "support@outlabs.com", "Password123!", "Chris Support",
-        roles["support_rep"].id, "chris_support"
+        roles["support_rep"].id, "chris_support",
+        user_type="team_member",
+        profile_data={
+            "job_title": "Support Representative",
+            "department": "support",
+            "access_level": "standard",
+            "can_view_all_leads": True,
+            "skills": ["customer service", "crm", "troubleshooting"]
+        }
     )
 
     finance_admin = await create_user_if_not_exists(
         auth, "finance@outlabs.com", "Password123!", "Angela Finance",
-        roles["finance_admin"].id, "angela_finance"
+        roles["finance_admin"].id, "angela_finance",
+        user_type="team_member",
+        profile_data={
+            "job_title": "Finance Administrator",
+            "department": "operations",
+            "access_level": "elevated",
+            "can_view_all_leads": False,
+            "skills": ["accounting", "reporting", "billing"]
+        }
     )
 
     ceo = await create_user_if_not_exists(
         auth, "ceo@outlabs.com", "Password123!", "Alex CEO",
-        roles["system_admin"].id, "alex_ceo"
+        roles["system_admin"].id, "alex_ceo",
+        user_type="admin"  # Admin has no profile
     )
 
     # Add memberships
@@ -758,21 +846,25 @@ async def seed_all():
     client = AsyncIOMotorClient(MONGODB_URL)
     db = client[DATABASE_NAME]
 
-    # Initialize EnterpriseRBAC
+    # Initialize EnterpriseRBAC with ExtendedUserModel
     print("🔐 Initializing EnterpriseRBAC...")
     auth = EnterpriseRBAC(
         database=db,
         secret_key=SECRET_KEY,
+        user_model=ExtendedUserModel,  # Use extended user model with profiles
         enable_caching=False,  # Disable caching for seeding
         enable_context_aware_roles=False,
         enable_abac=False
     )
 
-    # Initialize Beanie
+    # Initialize Beanie with all document models
     await init_beanie(
         database=db,
         document_models=[
-            UserModel, RoleModel, PermissionModel, EntityModel,
+            ExtendedUserModel,   # Extended user model with profile links
+            AgentProfile,        # Agent profiles
+            TeamMemberProfile,   # Team member profiles
+            RoleModel, PermissionModel, EntityModel,
             EntityMembershipModel, EntityClosureModel, Lead, LeadNote
         ]
     )
@@ -891,7 +983,7 @@ async def seed_all():
     print("=" * 80)
 
     total_entities = await EntityModel.find().count()
-    total_users = await UserModel.find().count()
+    total_users = await ExtendedUserModel.find().count()
     total_leads = await Lead.find().count()
     total_roles = await RoleModel.find().count()
 

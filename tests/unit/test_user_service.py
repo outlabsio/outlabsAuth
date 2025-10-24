@@ -32,8 +32,8 @@ class TestUserCreation:
 
         # Assert
         assert user.email == "newuser@example.com"
-        assert user.profile.first_name == "John"
-        assert user.profile.last_name == "Doe"
+        assert user.first_name == "John"
+        assert user.last_name == "Doe"
         assert user.status == UserStatus.ACTIVE
         assert user.is_superuser is False
         assert user.email_verified is False
@@ -156,13 +156,11 @@ class TestUserUpdate:
             user_id=str(test_user.id),
             first_name="Updated",
             last_name="Name",
-            phone_number="+1234567890",
         )
 
         # Assert
-        assert updated_user.profile.first_name == "Updated"
-        assert updated_user.profile.last_name == "Name"
-        assert updated_user.profile.phone == "+1234567890"
+        assert updated_user.first_name == "Updated"
+        assert updated_user.last_name == "Name"
 
     async def test_update_user_metadata(self, auth: SimpleRBAC, test_user: UserModel):
         """Test updating user metadata."""
@@ -173,8 +171,8 @@ class TestUserUpdate:
         )
 
         # Assert
-        assert "theme" in updated_user.profile.preferences
-        assert updated_user.profile.preferences["theme"] == "dark"
+        assert "theme" in updated_user.metadata
+        assert updated_user.metadata["theme"] == "dark"
 
     async def test_update_nonexistent_user_raises_error(self, auth: SimpleRBAC):
         """Test that updating non-existent user raises error."""

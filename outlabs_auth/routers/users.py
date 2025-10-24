@@ -63,10 +63,8 @@ def get_users_router(
         return UserResponse(
             id=str(user.id),
             email=user.email,
-            first_name=user.profile.first_name if user.profile else None,
-            last_name=user.profile.last_name if user.profile else None,
-            phone=user.profile.phone if user.profile else None,
-            avatar_url=user.profile.avatar_url if user.profile else None,
+            first_name=user.first_name,
+            last_name=user.last_name,
             status=user.status.value,
             email_verified=user.email_verified,
             is_superuser=user.is_superuser

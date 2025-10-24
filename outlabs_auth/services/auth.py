@@ -68,6 +68,7 @@ class AuthService:
         database: AsyncIOMotorDatabase,
         config: AuthConfig,
         notification_service: Optional[Any] = None,
+        activity_tracker: Optional[Any] = None,
     ):
         """
         Initialize AuthService.
@@ -76,10 +77,12 @@ class AuthService:
             database: MongoDB database instance
             config: Authentication configuration
             notification_service: Optional notification service for events
+            activity_tracker: Optional activity tracker for DAU/MAU tracking
         """
         self.database = database
         self.config = config
         self.notifications = notification_service
+        self.activity_tracker = activity_tracker
 
     async def login(
         self,
@@ -240,6 +243,13 @@ class AuthService:
                     "device": device_name,
                     "user_agent": user_agent
                 }
+            )
+
+        # Track activity (fire-and-forget)
+        if self.activity_tracker:
+            import asyncio
+            asyncio.create_task(
+                self.activity_tracker.track_activity(str(user.id))
             )
 
         # Create JWT token pair
@@ -524,6 +534,13 @@ class AuthService:
             token_model.last_used_at = datetime.now(timezone.utc)
             token_model.usage_count += 1
             await token_model.save()
+
+        # Track activity (fire-and-forget)
+        if self.activity_tracker:
+            import asyncio
+            asyncio.create_task(
+                self.activity_tracker.track_activity(str(user.id))
+            )
 
         # Return new access token with same refresh token
         return TokenPair(

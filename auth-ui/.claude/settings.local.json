@@ -13,7 +13,18 @@
       "Read(//private/tmp/**)",
       "Bash(docker exec:*)",
       "Bash(docker inspect:*)",
-      "Bash(docker ps:*)"
+      "Bash(docker ps:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv pip install:*)",
+      "Bash(python:*)",
+      "Bash(.venv/bin/python -m pytest:*)",
+      "Bash(mongo --version:*)",
+      "Bash(mongosh:*)",
+      "Bash(.venv/bin/python:*)",
+      "WebSearch",
+      "Bash(/Users/outlabs/Documents/GitHub/outlabsAuth/.venv/bin/python:*)",
+      "WebFetch(domain:beanie-odm.dev)"
     ],
     "deny": [],
     "ask": []

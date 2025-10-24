@@ -183,6 +183,7 @@ class OutlabsAuth:
         self.entity_service = None
         self.membership_service = None
         self.cache_service = None
+        self.activity_tracker = None  # Activity tracking service (requires Redis)
 
         # Redis client (initialized during _init_services if caching enabled)
         self.redis_client = None
@@ -192,8 +193,9 @@ class OutlabsAuth:
         self._backends = []
         self._deps = None
 
-        # Token cleanup scheduler
-        self._cleanup_task = None
+        # Background task schedulers
+        self._cleanup_task = None  # Token cleanup
+        self._activity_sync_task = None  # Activity tracking sync
 
         # Track initialization state
         self._initialized = False
@@ -294,6 +296,10 @@ class OutlabsAuth:
         if self.config.enable_token_cleanup and self.config.store_refresh_tokens:
             self._start_token_cleanup_scheduler()
 
+        # Start activity sync scheduler if enabled
+        if self.config.enable_activity_tracking and self.activity_tracker:
+            self._start_activity_sync_scheduler()
+
         self._initialized = True
 
     async def _init_services(self):
@@ -359,6 +365,29 @@ class OutlabsAuth:
             self.cache_service = None
         else:
             self.cache_service = None
+
+        # Activity tracking service (DD-049 - requires Redis)
+        if self.config.enable_activity_tracking:
+            # Validate Redis is available
+            if not self.redis_client:
+                raise ConfigurationError(
+                    "Activity tracking requires Redis. Either:\n"
+                    "1. Provide redis_url parameter, or\n"
+                    "2. Set enable_activity_tracking=False"
+                )
+
+            from outlabs_auth.services.activity_tracker import ActivityTracker
+            self.activity_tracker = ActivityTracker(
+                redis_client=self.redis_client,
+                enabled=True,
+                update_user_model=self.config.activity_update_user_model,
+                store_user_ids=self.config.activity_store_user_ids
+            )
+
+            # Connect activity_tracker to services that need it
+            self.auth_service.activity_tracker = self.activity_tracker
+        else:
+            self.activity_tracker = None
 
     def _init_backends(self):
         """
@@ -437,7 +466,8 @@ class OutlabsAuth:
             permission_service=self.permission_service,
             role_service=self.role_service,
             entity_service=self.entity_service,
-            membership_service=self.membership_service
+            membership_service=self.membership_service,
+            activity_tracker=self.activity_tracker  # For tracking user activity
         )
 
     async def get_current_user(self, token: str) -> UserModel:
@@ -554,6 +584,36 @@ class OutlabsAuth:
         import asyncio
         self._cleanup_task = asyncio.create_task(cleanup_loop())
 
+    def _start_activity_sync_scheduler(self):
+        """
+        Start background task for activity tracking sync.
+
+        Syncs Redis activity data to MongoDB every N seconds (configured via activity_sync_interval).
+        Only starts if enable_activity_tracking=True and activity_tracker is available.
+        """
+        import asyncio
+
+        async def activity_sync_loop():
+            """Background activity sync loop"""
+            interval_seconds = self.config.activity_sync_interval
+
+            while True:
+                try:
+                    await asyncio.sleep(interval_seconds)
+                    stats = await self.activity_tracker.sync_to_mongodb()
+                    if stats.get("daily", 0) > 0 or stats.get("monthly", 0) > 0:
+                        print(
+                            f"[ActivitySync] Synced metrics - "
+                            f"DAU: {stats['daily']}, MAU: {stats['monthly']}, QAU: {stats['quarterly']}, "
+                            f"users_updated: {stats['users_updated']}, errors: {stats['errors']}"
+                        )
+                except Exception as e:
+                    print(f"[ActivitySync] Error: {e}")
+
+        # Start background task
+        import asyncio
+        self._activity_sync_task = asyncio.create_task(activity_sync_loop())
+
     async def shutdown(self):
         """
         Cleanup resources on shutdown.
@@ -561,11 +621,18 @@ class OutlabsAuth:
         Cancels background tasks and closes connections.
         Call this in FastAPI lifespan shutdown.
         """
-        # Cancel cleanup task
+        # Cancel background tasks
         if self._cleanup_task:
             self._cleanup_task.cancel()
             try:
                 await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._activity_sync_task:
+            self._activity_sync_task.cancel()
+            try:
+                await self._activity_sync_task
             except asyncio.CancelledError:
                 pass
 

@@ -142,7 +142,7 @@ class BasicPermissionService:
         # (In Phase 3, we'll have proper role assignment)
 
         # Get user's assigned role IDs from metadata
-        role_ids = user.profile.preferences.get("role_ids", [])
+        role_ids = user.metadata.get("role_ids", [])
         if not role_ids:
             return []
 
@@ -1067,8 +1067,8 @@ class EnterprisePermissionService(BasicPermissionService):
                 "email": user.email,
                 "is_superuser": user.is_superuser,
                 "status": user.status,
-                # Add profile attributes
-                **user.profile.preferences  # User preferences as attributes
+                # Add metadata attributes for ABAC
+                **user.metadata  # User metadata as attributes
             }
 
         # Get entity/resource model

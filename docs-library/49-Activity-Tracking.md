@@ -1,7 +1,8 @@
 # DD-049: Activity Tracking System (DAU/MAU/WAU/QAU)
 
-**Status**: Draft
+**Status**: ✅ Implemented
 **Created**: 2025-01-24
+**Implemented**: 2025-01-24
 **Related**: DD-033 (Redis Counters), DD-036 (Performance Optimizations)
 
 ## Overview
@@ -449,23 +450,28 @@ async def refresh_access_token(self, refresh_token: str) -> TokenPair:
 
 ### 4. API Key Usage Tracking
 
-Track API key authentication:
+API key authentication is tracked **automatically via AuthDeps middleware** (same as JWT):
 
 ```python
-# In services/api_key.py - authenticate() method
+# API key requests flow through AuthDeps.require_auth()
+# Activity tracking happens after successful authentication
 
-async def authenticate(self, api_key_string: str) -> tuple[APIKeyModel, UserModel]:
-    # ... key verification ...
+# Flow:
+# 1. Request with API key → ApiKeyStrategy.authenticate()
+# 2. Returns authenticated user
+# 3. AuthDeps.require_auth() receives user → tracks activity
+# 4. Request continues
 
-    # Increment usage counter (existing Redis pattern)
-    await self._increment_usage_counter(str(api_key.id))
-
-    # 🔥 TRACK ACTIVITY
-    if self.activity_tracker:
-        await self.activity_tracker.track_activity(str(api_key.owner.id))
-
-    return api_key, user
+# No explicit tracking needed in API key service!
+# All authentication backends (JWT, API Key, Service Token)
+# use the same tracking point for consistency.
 ```
+
+**Why not track in API key service?**
+- **DRY principle**: Single tracking point for all auth types
+- **Consistency**: Same behavior for JWT, API Key, Service Token
+- **Maintainability**: One place to update tracking logic
+- **Non-blocking**: Fire-and-forget pattern in middleware
 
 ---
 

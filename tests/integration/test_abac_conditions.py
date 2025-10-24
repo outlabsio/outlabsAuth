@@ -304,17 +304,13 @@ async def test_policy_engine_condition_group_or(policy_engine):
 @pytest.fixture
 async def test_user(database):
     """Create a test user with department attribute"""
-    from outlabs_auth.models.user import UserProfile
-
     user = UserModel(
         email="abactest@example.com",
         hashed_password="test_hash",
         is_superuser=False,
-        profile=UserProfile(
-            preferences={
-                "department": "engineering"
-            }
-        )
+        metadata={
+            "department": "engineering"
+        }
     )
     await user.save()
     return user

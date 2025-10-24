@@ -43,25 +43,28 @@ async def create_role_if_not_exists(auth, name: str, permissions: list[str], dis
     return role
 
 
-async def create_user_if_not_exists(auth, email: str, password: str, username: str, role: RoleModel) -> UserModel:
+async def create_user_if_not_exists(auth, email: str, password: str, name: str, role: RoleModel) -> UserModel:
     """Create user if it doesn't exist"""
     existing = await UserModel.find_one(UserModel.email == email)
     if existing:
         print(f"  ✓ User '{email}' already exists")
         return existing
 
+    # Split name into first and last
+    name_parts = name.split(" ", 1)
+    first_name = name_parts[0] if name_parts else ""
+    last_name = name_parts[1] if len(name_parts) > 1 else ""
+
     user = await auth.user_service.create_user(
         email=email,
         password=password,
-        username=username,
-        profile={
-            "first_name": username.split()[0] if " " in username else username,
-            "last_name": username.split()[1] if " " in username else "User"
-        }
+        first_name=first_name,
+        last_name=last_name,
     )
 
-    # Assign role
-    await auth.role_service.assign_role(str(user.id), str(role.id))
+    # Assign role via metadata (SimpleRBAC pattern)
+    user.metadata["role_ids"] = [str(role.id)]
+    await user.save()
 
     print(f"  ✓ Created user: {email} ({role.name})")
     return user
@@ -191,7 +194,7 @@ async def create_sample_posts(users: dict) -> None:
             title=post_data["title"],
             content=post_data["content"],
             author_id=str(post_data["author"].id),
-            author_name=post_data["author"].username,
+            author_name=post_data["author"].full_name,  # Uses property that combines first + last
             published=post_data["published"],
             tags=post_data["tags"]
         )
@@ -257,7 +260,7 @@ async def create_sample_comments(posts: list, users: dict) -> None:
         comment = Comment(
             post_id=str(comment_data["post"].id),
             author_id=str(comment_data["author"].id),
-            author_name=comment_data["author"].username,
+            author_name=comment_data["author"].full_name,  # Uses property that combines first + last
             content=comment_data["content"]
         )
         await comment.insert()

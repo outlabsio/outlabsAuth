@@ -44,6 +44,7 @@ class AuthDeps:
         backends: Sequence[AuthBackend],
         user_service: Any = None,
         api_key_service: Any = None,
+        activity_tracker: Any = None,
         **services: Any
     ):
         """
@@ -53,11 +54,13 @@ class AuthDeps:
             backends: List of authentication backends
             user_service: UserService instance (for JWT, etc.)
             api_key_service: ApiKeyService instance (for API keys)
+            activity_tracker: ActivityTracker instance (for DAU/MAU tracking)
             **services: Additional services for strategies
         """
         self.backends = backends
         self.user_service = user_service
         self.api_key_service = api_key_service
+        self.activity_tracker = activity_tracker
         self.services = services
 
     def require_auth(
@@ -121,6 +124,14 @@ class AuthDeps:
                         if verified and result.get("user"):
                             if not result["user"].email_verified:
                                 continue  # Try next backend
+
+                        # Track activity (fire-and-forget, non-blocking)
+                        if self.activity_tracker and result.get("user"):
+                            import asyncio
+                            user_id = str(result["user"].id)
+                            asyncio.create_task(
+                                self.activity_tracker.track_activity(user_id)
+                            )
 
                         # Authentication successful
                         return result

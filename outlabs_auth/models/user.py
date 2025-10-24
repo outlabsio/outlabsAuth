@@ -27,21 +27,6 @@ class UserStatus(str, Enum):
     DELETED = "deleted"
 
 
-class UserProfile(BaseModel):
-    """User profile information"""
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    phone: Optional[str] = None
-    avatar_url: Optional[str] = None
-    preferences: Dict[str, Any] = Field(default_factory=dict)
-
-    @property
-    def full_name(self) -> str:
-        """Get user's full name"""
-        parts = [self.first_name, self.last_name]
-        return " ".join(p for p in parts if p) or "Unknown"
-
-
 class UserModel(BaseDocument):
     """
     User account model for authentication and authorization.
@@ -63,8 +48,15 @@ class UserModel(BaseDocument):
         description="Authentication methods available (PASSWORD, GOOGLE, FACEBOOK, etc.)"
     )
 
-    # Profile
-    profile: UserProfile = Field(default_factory=UserProfile)
+    # Basic Identity (optional - use Beanie Links for extended profiles)
+    first_name: Optional[str] = Field(
+        default=None,
+        description="User's first name (optional, commonly used for display)"
+    )
+    last_name: Optional[str] = Field(
+        default=None,
+        description="User's last name (optional, commonly used for display)"
+    )
 
     # Status
     status: UserStatus = Field(default=UserStatus.ACTIVE)
@@ -81,14 +73,34 @@ class UserModel(BaseDocument):
         description="Soft delete timestamp for DELETED status"
     )
 
-    # Security
-    last_login: Optional[datetime] = None
+    # Security & Activity Tracking
+    last_login: Optional[datetime] = Field(
+        default=None,
+        description="Last successful login timestamp (only on email/password or OAuth login)"
+    )
+    last_activity: Optional[datetime] = Field(
+        default=None,
+        description="Last authenticated action timestamp (any authenticated request, updated via background sync)"
+    )
     last_password_change: Optional[datetime] = None
     failed_login_attempts: int = Field(default=0)
     locked_until: Optional[datetime] = None
 
     # Metadata
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def full_name(self) -> str:
+        """
+        Get user's full name.
+
+        Returns first_name + last_name if available, otherwise email username.
+        """
+        if self.first_name or self.last_name:
+            parts = [p for p in [self.first_name, self.last_name] if p]
+            return " ".join(parts)
+        # Fallback to email username
+        return self.email.split("@")[0]
 
     @property
     def is_locked(self) -> bool:

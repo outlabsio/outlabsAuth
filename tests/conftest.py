@@ -10,7 +10,7 @@ from typing import AsyncGenerator
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from outlabs_auth import SimpleRBAC
-from outlabs_auth.models.user import UserModel, UserStatus, UserProfile
+from outlabs_auth.models.user import UserModel, UserStatus
 from outlabs_auth.models.role import RoleModel
 from outlabs_auth.models.permission import PermissionModel
 from outlabs_auth.core.config import AuthConfig
@@ -294,7 +294,7 @@ async def test_user_with_role(
     )
 
     # Assign role via metadata (SimpleRBAC approach)
-    user.profile.metadata["role_ids"] = [str(test_role.id)]
+    user.metadata["role_ids"] = [str(test_role.id)]
     await user.save()
 
     return user

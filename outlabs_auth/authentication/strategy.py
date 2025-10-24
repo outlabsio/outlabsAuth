@@ -146,6 +146,10 @@ class ApiKeyStrategy:
 
     Uses argon2id hashing for security (DD-028).
     Checks temporary locks and tracks failures (DD-028).
+
+    Note: Activity tracking (DD-049) happens in AuthDeps middleware
+    after successful authentication, not here. This keeps tracking
+    consistent across all authentication backends (JWT, API Key, Service Token).
     """
 
     async def authenticate(
@@ -156,6 +160,9 @@ class ApiKeyStrategy:
     ) -> Optional[dict]:
         """
         Validate API key and return user data.
+
+        Activity tracking happens automatically in AuthDeps after this
+        method returns a valid user.
 
         Args:
             credentials: API key (full key with prefix)

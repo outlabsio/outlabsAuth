@@ -199,8 +199,8 @@ class TestRoleAndPermissionFlow:
         1. Assign role to user
         2. Check user permissions
         """
-        # Step 1: Assign role (via preferences in SimpleRBAC)
-        test_user.profile.preferences["role_ids"] = [str(test_role.id)]
+        # Step 1: Assign role (via metadata in SimpleRBAC)
+        test_user.metadata["role_ids"] = [str(test_role.id)]
         await test_user.save()
 
         # Step 2: Check permissions
@@ -263,7 +263,7 @@ class TestWildcardPermissions:
             last_name="User",
         )
 
-        user.profile.preferences["role_ids"] = [str(role.id)]
+        user.metadata["role_ids"] = [str(role.id)]
         await user.save()
 
         # Step 3: Check various permissions
@@ -290,7 +290,7 @@ class TestWildcardPermissions:
             last_name="Mode",
         )
 
-        user.profile.preferences["role_ids"] = [str(role.id)]
+        user.metadata["role_ids"] = [str(role.id)]
         await user.save()
 
         # Act & Assert - Should have any permission

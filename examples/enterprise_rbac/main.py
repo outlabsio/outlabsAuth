@@ -22,6 +22,7 @@ from pydantic import BaseModel, EmailStr, Field
 from beanie import init_beanie
 
 from models import Lead, LeadNote
+from profiles import ExtendedUserModel, AgentProfile, TeamMemberProfile
 from outlabs_auth import EnterpriseRBAC
 from outlabs_auth.routers import (
     get_auth_router,
@@ -174,7 +175,7 @@ async def lifespan(app: FastAPI):
             print("   Continuing without caching...")
             redis_client = None
 
-    # Initialize EnterpriseRBAC
+    # Initialize EnterpriseRBAC with ExtendedUserModel
     print("🔐 Initializing OutlabsAuth EnterpriseRBAC...")
     auth = EnterpriseRBAC(
         database=db,
@@ -183,14 +184,17 @@ async def lifespan(app: FastAPI):
         redis_url=REDIS_URL if redis_client else None,
         enable_caching=redis_client is not None,
         enable_context_aware_roles=False,  # Keep it simple for this example
-        enable_abac=False
+        enable_abac=False,
+        user_model=ExtendedUserModel  # Use extended model with profile links
     )
 
-    # Initialize Beanie
+    # Initialize Beanie with all document models
     await init_beanie(
         database=db,
         document_models=[
-            UserModel,
+            ExtendedUserModel,   # Extended user model with profile links
+            AgentProfile,        # Agent profiles
+            TeamMemberProfile,   # Team member profiles
             RoleModel,
             PermissionModel,
             EntityModel,

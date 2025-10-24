@@ -5,13 +5,16 @@ from pydantic import BaseModel, EmailStr, Field
 
 
 class UserResponse(BaseModel):
-    """User response schema (safe to expose)."""
+    """
+    User response schema (safe to expose).
+
+    Only includes authentication and basic identity fields.
+    For extended profile data, use Beanie Links to your own profile models.
+    """
     id: str
     email: EmailStr
     first_name: Optional[str] = None
     last_name: Optional[str] = None
-    phone: Optional[str] = None
-    avatar_url: Optional[str] = None
     status: str  # UserStatus enum value
     email_verified: bool = False
     is_superuser: bool = False

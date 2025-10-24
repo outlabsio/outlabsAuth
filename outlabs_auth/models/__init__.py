@@ -8,7 +8,7 @@ Public exports for all Beanie ODM models.
 from outlabs_auth.models.base import BaseDocument
 
 # Core models (all presets)
-from outlabs_auth.models.user import UserModel, UserProfile, UserStatus
+from outlabs_auth.models.user import UserModel, UserStatus
 from outlabs_auth.models.role import RoleModel
 from outlabs_auth.models.permission import PermissionModel
 from outlabs_auth.models.token import RefreshTokenModel
@@ -27,7 +27,6 @@ __all__ = [
     "BaseDocument",
     # Core models
     "UserModel",
-    "UserProfile",
     "UserStatus",
     "RoleModel",
     "PermissionModel",

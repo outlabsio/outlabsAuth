@@ -83,11 +83,9 @@ class UserModel(BaseDocument):
     hashed_password: Optional[str]  # None for OAuth-only users
     auth_methods: List[str] = ["PASSWORD"]  # e.g., ["PASSWORD", "GOOGLE", "GITHUB"]
 
-    # Profile (flat fields for simplicity)
-    first_name: str
-    last_name: str
-    phone: Optional[str] = None
-    avatar_url: Optional[str] = None
+    # Basic Identity (optional - extend with Beanie Links for full profiles)
+    first_name: Optional[str] = None  # Optional display name
+    last_name: Optional[str] = None   # Optional display name
 
     # Status
     status: UserStatus = UserStatus.ACTIVE
@@ -96,8 +94,9 @@ class UserModel(BaseDocument):
     is_superuser: bool = False
     email_verified: bool = False
 
-    # Security
-    last_login: Optional[datetime] = None
+    # Security & Activity Tracking
+    last_login: Optional[datetime] = None          # Only on email/password or OAuth login
+    last_activity: Optional[datetime] = None       # Any authenticated action (DD-049)
     last_password_change: Optional[datetime] = None
     failed_login_attempts: int = 0
     locked_until: Optional[datetime] = None
@@ -117,6 +116,17 @@ indexes = [
 
 **Key Methods**:
 ```python
+@property
+def full_name(self) -> str:
+    """Get user's full name.
+
+    Returns first_name + last_name if available, otherwise email username.
+    """
+    if self.first_name or self.last_name:
+        parts = [p for p in [self.first_name, self.last_name] if p]
+        return " ".join(parts)
+    return self.email.split("@")[0]
+
 @property
 def is_locked(self) -> bool:
     """Check if account is locked due to failed login attempts."""
@@ -138,6 +148,33 @@ def can_authenticate(self) -> bool:
         and not self.is_locked
     )
 ```
+
+**Extending UserModel**:
+
+The UserModel is intentionally minimal, containing only authentication and basic identity fields. For business-specific profile data (phone, avatar, preferences, job title, etc.), **use Beanie Links to separate profile collections**:
+
+```python
+from beanie import Link
+from outlabs_auth.models.user import UserModel
+
+class UserProfile(Document):
+    phone: Optional[str] = None
+    avatar_url: Optional[str] = None
+    bio: str = ""
+    preferences: Dict[str, Any] = Field(default_factory=dict)
+
+    class Settings:
+        name = "user_profiles"
+
+class ExtendedUserModel(UserModel):
+    """Extend UserModel with link to separate profile collection."""
+    profile: Optional[Link[UserProfile]] = None
+
+    class Settings:
+        name = "users"  # Same collection as UserModel
+```
+
+See **`docs-library/96-Extending-UserModel.md`** for complete guide on extending with Beanie Links.
 
 **Example**:
 ```python
@@ -867,6 +904,44 @@ class OAuthState(Document):
 
 ---
 
+### 13. ActivityMetric
+
+**Historical snapshots for DAU/MAU/WAU/QAU tracking (DD-049).**
+
+```python
+class ActivityMetric(Document):
+    period_type: str            # "daily", "monthly", "quarterly"
+    period: str                 # "2025-01-24", "2025-01", "2025-Q1"
+    active_users: int           # Count of unique active users
+    unique_user_ids: Optional[List[str]] = None  # For cohort analysis (optional)
+
+    created_at: datetime
+    updated_at: datetime
+
+    class Settings:
+        name = "activity_metrics"
+        indexes = [
+            [("period_type", 1), ("period", -1)],  # Query by type + time
+            [("created_at", 1)],                   # Cleanup old records
+            [("period_type", 1), ("period", 1)],   # Unique constraint
+        ]
+```
+
+**Purpose**: Historical activity tracking for analytics and growth monitoring.
+
+**Data Flow**:
+1. Real-time tracking in **Redis Sets** (O(1) operations)
+2. Background worker syncs to MongoDB every 30-60 minutes
+3. TTL-based cleanup (default: 90 days)
+
+**Storage Modes**:
+- **Count only** (`activity_store_user_ids=False`): ~100 bytes per record
+- **With user IDs** (`activity_store_user_ids=True`): ~16 bytes per user per day
+
+**See**: `docs-library/49-Activity-Tracking.md` for complete implementation details.
+
+---
+
 ## Collection Summary
 
 | Collection | SimpleRBAC | EnterpriseRBAC | Purpose |
@@ -881,10 +956,11 @@ class OAuthState(Document):
 | **entities** | ❌ | ✅ | Entity hierarchy |
 | **entity_memberships** | ❌ | ✅ | User memberships |
 | **entity_closure** | ❌ | ✅ | Closure table |
+| **activity_metrics** | ⚠️ Optional | ⚠️ Optional | DAU/MAU tracking (DD-049) |
 
 **Total Collections**:
-- SimpleRBAC: 5-7 collections
-- EnterpriseRBAC: 8-10 collections
+- SimpleRBAC: 5-8 collections (6-8 with activity tracking)
+- EnterpriseRBAC: 8-11 collections (9-11 with activity tracking)
 
 ---
 

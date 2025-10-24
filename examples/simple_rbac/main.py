@@ -61,9 +61,9 @@ class BlogPost(Document):
 class RegisterRequest(BaseModel):
     """User registration"""
     email: EmailStr
-    username: str = Field(min_length=3, max_length=50)
     password: str = Field(min_length=8)
-    full_name: str
+    first_name: str = Field(min_length=1, max_length=50)
+    last_name: str = Field(min_length=1, max_length=50)
 
 
 class LoginRequest(BaseModel):
@@ -240,19 +240,19 @@ async def register(request: RegisterRequest):
         # Create user
         user = await auth.user_service.create_user(
             email=request.email,
-            username=request.username,
             password=request.password,
-            full_name=request.full_name,
+            first_name=request.first_name,
+            last_name=request.last_name,
         )
 
         # Assign reader role by default
         reader_role = await auth.role_service.find_by_name("reader")
         if reader_role:
-            user.role_ids = [reader_role.id]
+            user.metadata["role_ids"] = [str(reader_role.id)]
             await user.save()
 
         # Login and return tokens
-        token_pair = await auth.auth_service.login(request.email, request.password)
+        logged_in_user, token_pair = await auth.auth_service.login(request.email, request.password)
 
         return TokenResponse(
             access_token=token_pair.access_token,
@@ -270,7 +270,7 @@ async def register(request: RegisterRequest):
 async def login(request: LoginRequest):
     """Login with email and password"""
     try:
-        token_pair = await auth.auth_service.login(request.email, request.password)
+        logged_in_user, token_pair = await auth.auth_service.login(request.email, request.password)
 
         return TokenResponse(
             access_token=token_pair.access_token,
@@ -298,8 +298,9 @@ async def get_current_user(ctx = Depends(deps.require_auth())):
     return {
         "id": str(user.id),
         "email": user.email,
-        "username": user.username,
-        "full_name": user.full_name,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "full_name": user.full_name,  # Property that combines first + last
         "permissions": ctx.metadata.get("permissions", []),
     }
 
@@ -357,7 +358,7 @@ async def create_post(
         title=post_data.title,
         content=post_data.content,
         author_id=str(user.id),
-        author_name=user.full_name or user.username,
+        author_name=user.full_name,  # Uses property that combines first + last
         published=post_data.published,
         tags=post_data.tags,
     )

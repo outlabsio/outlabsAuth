@@ -64,6 +64,28 @@ class AuthConfig(BaseModel):
     api_key_rate_limit_per_minute: int = Field(default=60, description="Default rate limit per API key")
     api_key_temporary_lock_minutes: int = Field(default=30, description="Temporary lock duration after failures")
 
+    # Activity Tracking Settings (DD-049 - requires Redis)
+    enable_activity_tracking: bool = Field(
+        default=False,
+        description="Enable DAU/MAU/WAU/QAU activity tracking (requires Redis)"
+    )
+    activity_sync_interval: int = Field(
+        default=1800,
+        description="Activity sync interval in seconds (default: 30 minutes)"
+    )
+    activity_update_user_model: bool = Field(
+        default=True,
+        description="Update UserModel.last_activity field via background sync"
+    )
+    activity_store_user_ids: bool = Field(
+        default=False,
+        description="Store user IDs in ActivityMetric for cohort analysis (increases storage)"
+    )
+    activity_ttl_days: int = Field(
+        default=90,
+        description="Days to keep ActivityMetric records (default: 90 days)"
+    )
+
     class Config:
         """Pydantic configuration"""
         validate_assignment = True

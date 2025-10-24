@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from fastapi import Request, Response
 
-from outlabs_auth.models.user import UserModel, UserStatus, UserProfile
+from outlabs_auth.models.user import UserModel, UserStatus
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
     UserAlreadyExistsError,
@@ -58,10 +58,8 @@ class UserService:
         self,
         email: str,
         password: str,
-        first_name: str,
-        last_name: str,
-        phone_number: Optional[str] = None,
-        avatar_url: Optional[str] = None,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
         is_superuser: bool = False,
         tenant_id: Optional[str] = None,
@@ -72,10 +70,8 @@ class UserService:
         Args:
             email: User email (will be normalized to lowercase)
             password: Plain text password (will be hashed)
-            first_name: User's first name
-            last_name: User's last name
-            phone_number: Optional phone number
-            avatar_url: Optional avatar image URL
+            first_name: Optional first name
+            last_name: Optional last name
             metadata: Optional additional user data
             is_superuser: Whether user has superuser privileges
             tenant_id: Optional tenant ID for multi-tenant mode
@@ -108,29 +104,24 @@ class UserService:
                 details={"email": email}
             )
 
-        # Validate names
-        first_name = validate_name(first_name, "first_name")
-        last_name = validate_name(last_name, "last_name")
+        # Validate names if provided
+        if first_name:
+            first_name = validate_name(first_name, "first_name")
+        if last_name:
+            last_name = validate_name(last_name, "last_name")
 
         # Hash password (with validation)
         hashed_password = generate_password_hash(password, self.config)
-
-        # Create user profile
-        profile = UserProfile(
-            first_name=first_name,
-            last_name=last_name,
-            phone_number=phone_number,
-            avatar_url=avatar_url,
-            metadata=metadata or {},
-        )
 
         # Create user
         user = UserModel(
             email=email,
             hashed_password=hashed_password,
-            profile=profile,
+            first_name=first_name,
+            last_name=last_name,
             status=UserStatus.ACTIVE,
             is_superuser=is_superuser,
+            metadata=metadata or {},
             tenant_id=tenant_id,
         )
 
@@ -191,19 +182,15 @@ class UserService:
         user_id: str,
         first_name: Optional[str] = None,
         last_name: Optional[str] = None,
-        phone_number: Optional[str] = None,
-        avatar_url: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> UserModel:
         """
-        Update user profile.
+        Update user.
 
         Args:
             user_id: User ID
             first_name: Updated first name
             last_name: Updated last name
-            phone_number: Updated phone number
-            avatar_url: Updated avatar URL
             metadata: Updated metadata (merged with existing)
 
         Returns:
@@ -217,7 +204,7 @@ class UserService:
             ...     user_id="507f1f77bcf86cd799439011",
             ...     first_name="Jane"
             ... )
-            >>> user.profile.first_name
+            >>> user.first_name
             'Jane'
         """
         user = await UserModel.get(user_id)
@@ -227,22 +214,16 @@ class UserService:
                 details={"user_id": user_id}
             )
 
-        # Update profile fields
+        # Update basic identity fields
         if first_name is not None:
-            user.profile.first_name = validate_name(first_name, "first_name")
+            user.first_name = validate_name(first_name, "first_name")
 
         if last_name is not None:
-            user.profile.last_name = validate_name(last_name, "last_name")
-
-        if phone_number is not None:
-            user.profile.phone = phone_number  # UserProfile has 'phone' field
-
-        if avatar_url is not None:
-            user.profile.avatar_url = avatar_url
+            user.last_name = validate_name(last_name, "last_name")
 
         if metadata is not None:
-            # Merge metadata into preferences (UserProfile has 'preferences' field)
-            user.profile.preferences = {**user.profile.preferences, **metadata}
+            # Merge metadata
+            user.metadata = {**user.metadata, **metadata}
 
         await user.save()
         return user
@@ -463,8 +444,8 @@ class UserService:
         users = await UserModel.find({
             "$or": [
                 {"email": search_regex},
-                {"profile.first_name": search_regex},
-                {"profile.last_name": search_regex},
+                {"first_name": search_regex},
+                {"last_name": search_regex},
             ]
         }).limit(limit).to_list()
 

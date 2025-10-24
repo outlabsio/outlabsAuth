@@ -38,7 +38,7 @@ from outlabs_auth.core.exceptions import (
 )
 
 # Models
-from outlabs_auth.models.user import UserModel, UserStatus, UserProfile
+from outlabs_auth.models.user import UserModel, UserStatus
 from outlabs_auth.models.role import RoleModel
 from outlabs_auth.models.permission import PermissionModel, Condition
 from outlabs_auth.models.token import RefreshTokenModel
@@ -76,7 +76,6 @@ __all__ = [
     # Models
     "UserModel",
     "UserStatus",
-    "UserProfile",
     "RoleModel",
     "PermissionModel",
     "Condition",
