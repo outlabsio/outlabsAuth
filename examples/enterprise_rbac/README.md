@@ -1,445 +1,424 @@
-# EnterpriseRBAC Example - Project Management System
+# EnterpriseRBAC Example - Real Estate Leads Platform
 
-This example demonstrates hierarchical RBAC using OutlabsAuth's **EnterpriseRBAC** preset with entity hierarchy and tree permissions.
+This example demonstrates OutlabsAuth's **EnterpriseRBAC** preset with real-world complexity through a multi-tenant real estate leads platform.
 
-## Features
+## 🎯 What This Demonstrates
 
-- ✅ Entity hierarchy (Company → Department → Team)
-- ✅ Multiple roles per user in different entities
-- ✅ Tree permissions (manage descendants)
-- ✅ Entity-scoped permission checking
-- ✅ Closure table for O(1) queries
-- ✅ Complex organizational structures
+### Entity Flexibility
+- **No hardcoded entity types** - Organizations define their own structure
+- **RE/MAX** uses: `corporate → state → region → brokerage → team`
+- **Keller Williams** uses: `company → market_center → division`
+- **Solo agents** use: `workspace` only
+- **Entity type suggestions** prevent naming inconsistencies within organizations
 
-## Entity Hierarchy
+### Tree Permissions
+- Franchise executives see ALL leads across entire hierarchy
+- Regional managers see leads in their region and below
+- Brokers see only their brokerage's leads
+- Agents see only their team's leads
 
-```
-Acme Corporation (company)
-├── Engineering Department (department)
-│   ├── Backend Team (team)
-│   └── Frontend Team (team)
-└── Sales Department (department)
-```
+### 5 Real-World Scenarios
+1. **RE/MAX National** - Full 5-level franchise hierarchy
+2. **RE/MAX Regional** - 3 brokerages under one account (subset of franchise)
+3. **Keller Williams** - Independent brokerage with different terminology
+4. **Solo Agent with Team** - Minimal 2-level hierarchy
+5. **Solo Agent Only** - Flattest structure (single workspace)
 
-## Roles & Permissions
+### Internal Teams
+- Support team with read-only global access
+- Finance team for billing visibility
+- Leadership with full system access
 
-### CEO
-- `*:*` - Full system access
-- Assigned at company level
+## 📋 Features
 
-### Department Manager
-- `entity:read` - Read entity info
-- `entity:update` - Update entity info
-- `entity:create_tree` - Create entities in subtree (all departments/teams below)
-- `entity:update_tree` - Update entities in subtree
-- `user:read` - Read user info
-- `user:manage_tree` - Manage users in all descendant entities
-- `project:*` - Full project management
+- ✅ Entity hierarchy with flexible naming
+- ✅ Tree permissions (`lead:read_tree`, `lead:update_tree`)
+- ✅ Entity type suggestions API
+- ✅ Granular permissions (buyer vs seller specialists)
+- ✅ Multiple organizational structures
+- ✅ Internal teams with global access
+- ✅ Lead management (CRUD operations)
+- ✅ Lead assignment workflow
+- ✅ Status pipeline tracking
 
-### Team Lead
-- `entity:read` - Read entity info
-- `entity:update` - Update this entity
-- `user:read` - Read user info
-- `project:*` - Full project management in this team
+## 🚀 Quick Start
 
-### Developer
-- `entity:read` - Read entity info
-- `user:read` - Read user info
-- `project:read` - Read projects
-- `project:update` - Update projects
+### Option 1: Docker Compose (Recommended)
 
-## Tree Permissions Explained
-
-**Tree permissions apply to descendants only**, not the entity where assigned:
-
-```python
-# Department Manager at Engineering Department
-role.permissions = [
-    "entity:create_tree",  # Can create teams under Engineering
-    "entity:update_tree",  # Can update Backend Team, Frontend Team
-    "user:manage_tree",    # Can manage users in Backend/Frontend teams
-]
-
-# To also manage the Engineering Department itself:
-role.permissions = [
-    "entity:update",       # Update Engineering Department
-    "entity:update_tree"   # Update teams below
-]
-```
-
-## Installation
+The easiest way to run the example is with Docker Compose:
 
 ```bash
-# Install OutlabsAuth (when published)
-pip install outlabs-auth
+# Navigate to example directory
+cd examples/enterprise_rbac
 
-# Or install from local development
+# Start the API (builds automatically)
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop the API
+docker compose down
+```
+
+The API will be available at `http://localhost:8002` with auto-reload enabled.
+
+**Requirements:**
+- Docker Desktop running
+- MongoDB running locally (port 27017)
+- Redis running locally (port 6379) - optional
+
+The Docker setup connects to your existing MongoDB and Redis instances on the host machine.
+
+### Option 2: Local Development
+
+```bash
+# Navigate to example directory
+cd examples/enterprise_rbac
+
+# Install dependencies (from root)
 cd ../..
-pip install -e .
+uv sync
 
-# Install additional dependencies
-pip install fastapi uvicorn motor beanie
+# Start the API
+cd examples/enterprise_rbac
+uv run uvicorn main:app --reload --port 8002
 ```
 
-## Running the Example
+### Prerequisites (Local Development Only)
 
 ```bash
-# Make sure MongoDB is running
+# MongoDB required
 docker run -d -p 27017:27017 --name mongodb mongo:latest
 
-# Run the application
-python main.py
-
-# Or use uvicorn directly
-uvicorn main:app --reload --port 8001
+# Optional: Redis for caching
+docker run -d -p 6379:6379 --name redis redis:latest
 ```
 
-The API will be available at `http://localhost:8001`
-
-## API Documentation
-
-Once running, visit:
-- **Swagger UI**: http://localhost:8001/docs
-- **ReDoc**: http://localhost:8001/redoc
-
-## Example Usage
-
-### 1. Register and Login
+### Seed Demo Data
 
 ```bash
-# Register
-curl -X POST http://localhost:8001/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "alice@acme.com",
-    "username": "alice",
-    "password": "SecurePass123!",
-    "full_name": "Alice Johnson"
-  }'
-
-# Save the access_token from response
-TOKEN="your_access_token_here"
+# Create all 5 scenarios with demo users and leads
+python seed_data.py
 ```
 
-### 2. List Entities
+This creates:
+- **13 roles** (agent, team_lead, broker_owner, etc.)
+- **18 users** across all scenarios
+- **38+ entities** in various organizational structures
+- **11 sample leads** demonstrating different types
+
+### Explore the API
+
+Visit the interactive documentation:
+- **Swagger UI**: http://localhost:8002/docs
+- **Health Check**: http://localhost:8002/
+
+## 🔐 Demo Credentials
+
+### Scenario 1: RE/MAX National (5-level hierarchy)
+
+```
+Franchise Executive:  exec@remax.com          / password123
+Broker/Owner:         broker@remax-sv.com     / password123
+Team Lead:            downtown@remax-sv.com   / password123
+Agent:                agent1@remax-sv.com     / password123
+```
+
+**Test Tree Permissions:**
+- Login as `exec@remax.com` → Can see ALL leads across entire franchise
+- Login as `broker@remax-sv.com` → Can see only Silicon Valley brokerage leads
+- Login as `agent1@remax-sv.com` → Can see only Downtown Team leads
+
+### Scenario 2: RE/MAX Regional (3 brokerages)
+
+```
+Regional Manager:     manager@remax-eastbay.com / password123
+Oakland Agent:        agent@remax-oakland.com   / password123
+Berkeley Agent:       agent@remax-berkeley.com  / password123
+```
+
+### Scenario 3: Keller Williams (Different naming)
+
+```
+Market Center Leader: leader@kw-paloalto.com  / password123
+Luxury Agent:         luxury@kw-paloalto.com  / password123
+FTB Agent:            ftb@kw-paloalto.com     / password123
+```
+
+### Scenario 4: Solo Agent with Team
+
+```
+Solo Agent:           jane@janesrealestate.com / password123
+Assistant:            assistant@janesrealestate.com / password123
+```
+
+### Scenario 5: Solo Agent Only
+
+```
+Solo Agent:           mike@mikesproperties.com / password123
+```
+
+### Internal Teams (Global Access)
+
+```
+Support:              support@outlabs.com     / password123
+Finance:              finance@outlabs.com     / password123
+System Admin:         ceo@outlabs.com         / password123
+```
+
+## 📚 API Endpoints
+
+### Standard OutlabsAuth Routes
+
+All implementations include these standardized routes:
+
+#### Authentication
+- `POST /api/auth/register` - Register new user
+- `POST /api/auth/login` - Login with email/password
+- `POST /api/auth/refresh` - Refresh access token
+- `POST /api/auth/logout` - Logout
+- `GET /api/auth/me` - Get current user info
+
+#### Entity Management ⭐
+- `GET /api/entities` - List entities
+- `POST /api/entities` - Create entity
+- `GET /api/entities/suggestions` - **Get entity type suggestions** ⭐
+- `GET /api/entities/{entity_id}` - Get entity details
+- `GET /api/entities/{entity_id}/children` - Get child entities
+- `GET /api/entities/{entity_id}/descendants` - Get descendant tree
+- `PUT /api/entities/{entity_id}` - Update entity
+- `DELETE /api/entities/{entity_id}` - Delete entity
+
+#### User, Role, Membership, Permission Management
+- Full CRUD for users, roles, memberships
+- Permission checking endpoints
+- See Swagger UI for complete list
+
+### Domain-Specific Routes (Lead Management)
+
+- `POST /api/leads` - Create new lead
+- `GET /api/leads` - List leads (filtered by permissions)
+- `GET /api/leads/{lead_id}` - Get lead details
+- `PUT /api/leads/{lead_id}` - Update lead
+- `DELETE /api/leads/{lead_id}` - Delete lead
+- `POST /api/leads/{lead_id}/assign` - Assign lead to agent
+- `POST /api/leads/{lead_id}/notes` - Add note to lead
+
+## 🧪 Test Scenarios
+
+### 1. Test Entity Type Suggestions
 
 ```bash
-curl -X GET http://localhost:8001/entities \
-  -H "Authorization: Bearer $TOKEN"
+# Get suggestions for entities under RE/MAX California
+curl -X GET "http://localhost:8002/entities/suggestions?parent_id={remax_ca_id}" \
+  -H "Authorization: Bearer {TOKEN}"
 ```
 
-Response shows the hierarchy:
-```json
-[
-  {
-    "id": "...",
-    "name": "acme_corp",
-    "display_name": "Acme Corporation",
-    "entity_class": "structural",
-    "entity_type": "company",
-    "parent_id": null
-  },
-  {
-    "id": "...",
-    "name": "engineering",
-    "display_name": "Engineering Department",
-    "entity_class": "structural",
-    "entity_type": "department",
-    "parent_id": "..."  // Points to acme_corp
-  }
-]
-```
+**Expected**: Shows "region" as existing type with count and examples
 
-### 3. Get Entity Hierarchy
+**Why It Matters**: Prevents creating "reigon" (typo) or "area" instead of consistent "region"
+
+### 2. Test Tree Permissions
+
+**Franchise executive sees ALL leads:**
 
 ```bash
-# Get full hierarchy for Engineering Department
-curl -X GET http://localhost:8001/entities/{engineering_id}/hierarchy \
-  -H "Authorization: Bearer $TOKEN"
+# Login as exec@remax.com
+# GET /api/leads
 ```
 
-Response:
-```json
-{
-  "path": [
-    {"id": "...", "name": "Acme Corporation", "type": "company"},
-    {"id": "...", "name": "Engineering Department", "type": "department"}
-  ],
-  "descendants": [
-    {"id": "...", "name": "Backend Team", "type": "team"},
-    {"id": "...", "name": "Frontend Team", "type": "team"}
-  ]
-}
-```
+**Expected**: Sees leads from all teams in entire franchise
 
-### 4. Add Member to Entity
-
-First, you need to become a manager. In a real scenario, an admin would assign this role.
+**Agent sees only their team:**
 
 ```bash
-# As a user with user:manage permission, add a member to Backend Team
-curl -X POST http://localhost:8001/entities/{backend_team_id}/members \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "{user_id}",
-    "role_ids": ["{developer_role_id}"]
-  }'
+# Login as agent1@remax-sv.com
+# GET /api/leads
 ```
 
-### 5. Create a Project
+**Expected**: Sees only Downtown Team leads
+
+### 3. Test Entity Hierarchy Differences
+
+Compare RE/MAX vs Keller Williams entity structures via `/api/entities/{id}/children`
+
+**Key Insight**: Different organizations use different terminology, but the system handles it seamlessly
+
+### 4. Test Internal Team Global Access
 
 ```bash
-# Create a project in Backend Team
-curl -X POST http://localhost:8001/entities/{backend_team_id}/projects \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "API Redesign",
-    "description": "Redesign the REST API",
-    "budget": 50000,
-    "deadline": "2025-12-31T00:00:00Z"
-  }'
+# Login as support@outlabs.com
+# GET /api/leads
 ```
 
-### 6. List Projects
+**Expected**: Sees ALL leads from all clients (RE/MAX, Keller Williams, solo agents)
+
+## 🏗️ Architecture
+
+### Entity Structure Examples
+
+#### RE/MAX National (5 levels)
+```
+RE/MAX Corporate (STRUCTURAL)
+└── RE/MAX California (STRUCTURAL)
+    └── RE/MAX Bay Area (STRUCTURAL)
+        └── RE/MAX Silicon Valley (STRUCTURAL)
+            └── Downtown Team (ACCESS_GROUP) ← Leads stored here
+```
+
+#### Keller Williams (Different naming)
+```
+Keller Williams Realty (STRUCTURAL)
+└── Palo Alto Market Center (STRUCTURAL) ← Different term!
+    └── Luxury Division (ACCESS_GROUP) ← Different term!
+```
+
+#### Solo Agent (Flattest)
+```
+Mike's Properties (ACCESS_GROUP) ← Single entity, leads stored here
+```
+
+### Entity Classifications
+
+**STRUCTURAL** - Organizational containers:
+- Cannot have leads directly
+- Used for hierarchical organization
+- Examples: corporate, state, brokerage, market_center
+
+**ACCESS_GROUP** - Work locations:
+- Where leads are created and stored
+- Where users actually work
+- Examples: team, division, workspace
+
+### Permission Model
+
+#### Basic Lead Permissions
+- `lead:read` - Read leads in user's entities
+- `lead:create` - Create new leads
+- `lead:update` - Update leads
+- `lead:delete` - Delete leads
+- `lead:assign` - Assign leads to agents
+
+#### Tree Permissions (Hierarchical)
+- `lead:read_tree` - Read leads in entire subtree
+- `lead:update_tree` - Update leads in entire subtree
+- `lead:delete_tree` - Delete leads in entire subtree
+
+**Example**: Broker with `lead:read_tree` at brokerage level sees ALL team leads below
+
+#### Granular Permissions (Specialist Roles)
+- `lead:update_buyers` - Can only update buyer leads
+- `lead:update_sellers` - Can only update seller leads
+
+#### Internal Team Permissions (Global)
+- `support:read_leads` - Read ALL leads across ALL clients
+- `finance:read_all` - Read-only global access
+
+## 🔗 Connect Admin UI
+
+The universal Nuxt admin UI can connect to this example:
 
 ```bash
-curl -X GET http://localhost:8001/entities/{backend_team_id}/projects \
-  -H "Authorization: Bearer $TOKEN"
+# In auth-ui directory
+cd ../../auth-ui
+
+# The .env is already configured to point to port 8002
+
+# Start Nuxt dev server
+bun dev
 ```
 
-## Permission Scenarios
+Visit `http://localhost:3000` and login with any demo credentials.
 
-### Scenario 1: Department Manager
+The UI will automatically:
+- Detect EnterpriseRBAC features
+- Show entity hierarchy management
+- Display entity type suggestions
+- Adapt based on system capabilities
 
-A Department Manager at Engineering can:
-- ✅ Read Engineering Department (`entity:read`)
-- ✅ Update Engineering Department (`entity:update`)
-- ✅ Create teams under Engineering (`entity:create_tree`)
-- ✅ Update Backend Team and Frontend Team (`entity:update_tree`)
-- ✅ Manage users in Backend and Frontend teams (`user:manage_tree`)
-- ✅ Create projects in any team (`project:*`)
-- ❌ Cannot manage Sales Department (different branch)
+## 📖 Key Concepts
 
-### Scenario 2: Team Lead
+### 1. Entity Type Flexibility
 
-A Team Lead at Backend Team can:
-- ✅ Read Backend Team (`entity:read`)
-- ✅ Update Backend Team (`entity:update`)
-- ✅ View team members (`user:read`)
-- ✅ Create/update/delete projects in Backend Team (`project:*`)
-- ❌ Cannot create new teams (no `entity:create_tree`)
-- ❌ Cannot manage Frontend Team (sibling entity)
-- ❌ Cannot manage Engineering Department (parent entity)
+Entity types are **just strings** - not hardcoded. This allows each organization to use their own terminology.
 
-### Scenario 3: Developer
+**Problem**: Without guidance → inconsistent names like "brokerage", "broker", "office", "borkerage" (typo)
 
-A Developer in Backend Team can:
-- ✅ Read Backend Team info (`entity:read`)
-- ✅ View team members (`user:read`)
-- ✅ Read projects (`project:read`)
-- ✅ Update projects (`project:update`)
-- ❌ Cannot create projects (no `project:create`)
-- ❌ Cannot delete projects (no `project:delete`)
-- ❌ Cannot manage team settings or members
+**Solution**: Entity Type Suggestions API returns existing types at that level
 
-## Key Concepts Demonstrated
+### 2. Tree Permissions
 
-### 1. Entity Hierarchy with Closure Table
+Permissions with `_tree` suffix apply to entire subtree:
+- Agent: `lead:read` → Only their team
+- Broker: `lead:read_tree` → Entire brokerage tree
 
-```python
-# Create hierarchical entities
-company = await auth.entity_service.create_entity(
-    name="acme_corp",
-    entity_class=EntityClass.STRUCTURAL,
-    entity_type="company",
-)
+### 3. Multiple Organizational Models
 
-dept = await auth.entity_service.create_entity(
-    name="engineering",
-    entity_class=EntityClass.STRUCTURAL,
-    entity_type="department",
-    parent_id=str(company.id),  # Defines parent-child relationship
-)
+The same system handles:
+- Deep hierarchies (5+ levels)
+- Flat structures (1 entity)
+- Different naming conventions
+- Hybrid models
 
-# Get path (O(1) via closure table)
-path = await auth.entity_service.get_entity_path(dept.id)
+## 🛠️ Development
 
-# Get all descendants (O(1) via closure table)
-descendants = await auth.entity_service.get_descendants(company.id)
-```
-
-### 2. Multiple Roles Per User
-
-```python
-# User can have different roles in different entities
-await auth.membership_service.add_member(
-    entity_id=engineering_dept_id,
-    user_id=alice_id,
-    role_ids=[dept_manager_role_id],  # Manager in Engineering
-)
-
-await auth.membership_service.add_member(
-    entity_id=backend_team_id,
-    user_id=alice_id,
-    role_ids=[developer_role_id],  # Also a developer in Backend Team
-)
-```
-
-### 3. Tree Permissions
-
-```python
-# Check if user can create entities in a subtree
-has_perm = await auth.permission_service.check_permission(
-    user_id=user_id,
-    permission="entity:create_tree",
-    entity_id=parent_entity_id,
-)
-
-# This checks if user has "entity:create_tree" in parent_entity_id
-# OR in any ancestor of parent_entity_id
-```
-
-### 4. Entity-Scoped Permission Checks
-
-```python
-# Check permission in specific entity context
-has_perm = await auth.permission_service.check_permission(
-    user_id=user_id,
-    permission="project:create",
-    entity_id=team_id,
-)
-
-# Returns (bool, source) tuple
-# source = "direct", "tree", or "all"
-```
-
-## Advanced Usage
-
-### Create Access Groups
-
-Access groups can span across structural hierarchy:
-
-```python
-# Create a cross-functional project group
-project_alpha = await auth.entity_service.create_entity(
-    name="project_alpha",
-    entity_class=EntityClass.ACCESS_GROUP,  # Not structural
-    entity_type="project_group",
-    parent_id=str(company.id),
-)
-
-# Add members from different departments
-await auth.membership_service.add_member(
-    entity_id=project_alpha.id,
-    user_id=backend_developer.id,
-    role_ids=[developer_role.id],
-)
-
-await auth.membership_service.add_member(
-    entity_id=project_alpha.id,
-    user_id=frontend_developer.id,
-    role_ids=[developer_role.id],
-)
-```
-
-### Entity Context Header
-
-For multi-entity users, specify context in requests:
-
-```bash
-curl -X GET http://localhost:8001/entities/{entity_id}/projects \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "X-Entity-Context-Id: {backend_team_id}"
-```
-
-## Environment Variables
+### Environment Variables
 
 ```bash
 # MongoDB connection
 MONGODB_URL=mongodb://localhost:27017
 
 # Database name
-DATABASE_NAME=project_mgmt_enterprise
+DATABASE_NAME=realestate_leads_platform
 
-# JWT secret key (change in production!)
-SECRET_KEY=your-secret-key-change-in-production
+# JWT secret (CHANGE IN PRODUCTION!)
+SECRET_KEY=your-secret-key-change-in-production-please
+
+# Optional: Redis for caching
+REDIS_URL=redis://localhost:6379
 ```
 
-## Testing Scenarios
+### Adding New Scenarios
 
-### Test 1: Department Manager Creates Team
+1. Create function in `seed_data.py`
+2. Add entities with `create_entity()`
+3. Create users and memberships
+4. Create sample leads
+5. Call from `seed_all()`
 
+## 🐛 Troubleshooting
+
+### MongoDB Connection Failed
 ```bash
-# As Engineering Manager, create a new team
-curl -X POST http://localhost:8001/entities \
-  -H "Authorization: Bearer $MANAGER_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "devops_team",
-    "display_name": "DevOps Team",
-    "entity_class": "structural",
-    "entity_type": "team",
-    "parent_id": "{engineering_dept_id}",
-    "description": "DevOps and infrastructure"
-  }'
-
-# ✅ Should succeed (has entity:create_tree in Engineering)
+docker ps | grep mongodb
+docker start mongodb
 ```
 
-### Test 2: Team Lead Cannot Create Department
-
+### "Entity not found" errors
 ```bash
-# As Backend Team Lead, try to create a department
-curl -X POST http://localhost:8001/entities \
-  -H "Authorization: Bearer $TEAMLEAD_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "hr_dept",
-    "display_name": "HR Department",
-    "entity_class": "structural",
-    "entity_type": "department",
-    "parent_id": "{company_id}"
-  }'
-
-# ❌ Should fail (403 - no permission to create at company level)
+python seed_data.py  # Re-seed
 ```
 
-### Test 3: Cross-Department Access
+### Permission denied
+- Check user has correct role
+- Verify entity membership
+- Check tree permissions for child entities
 
-```bash
-# As Engineering Manager, try to access Sales Department
-curl -X GET http://localhost:8001/entities/{sales_dept_id} \
-  -H "Authorization: Bearer $ENG_MANAGER_TOKEN"
+## 📝 Next Steps
 
-# ❌ Should fail (403 - no permission in Sales branch)
-```
+1. Test all scenarios in Swagger UI
+2. Connect the admin UI
+3. Try entity suggestions
+4. Test tree permissions with different roles
+5. Explore the API
 
-## Performance
+## 📄 Related Documentation
 
-With EnterpriseRBAC and closure table:
+- **REQUIREMENTS.md** - Detailed use case analysis
+- **PROGRESS.md** - Implementation progress
+- **IMPLEMENTATION_PLAN.md** (root) - Project vision
 
-| Operation | Traditional Recursive | With Closure Table |
-|-----------|----------------------|-------------------|
-| Get entity path | 100ms (N queries) | 5ms (1 query) |
-| Get descendants | 200ms (recursive) | 10ms (1 query) |
-| Check tree permission | 50ms per ancestor | 5ms (1 query) |
+---
 
-## Production Considerations
-
-1. **Index Optimization**: Ensure proper indexes on entity relationships
-2. **Cache Entity Paths**: Cache frequently accessed paths
-3. **Bulk Operations**: Use transactions for bulk membership changes
-4. **Audit Logging**: Log entity and permission changes
-5. **Soft Deletes**: Use soft deletes for entities (enabled by default)
-
-## Next Steps
-
-- Check out the **Full-Featured example** for ABAC conditions and Redis caching
-- Read the [LIBRARY_ARCHITECTURE.md](../../docs/LIBRARY_ARCHITECTURE.md) for deep dive
-- See [TREE_PERMISSIONS_GUIDE.md](../../docs/TREE_PERMISSIONS_GUIDE.md) for more on tree permissions
-
-## License
-
-MIT License - see LICENSE file for details
+**Built with OutlabsAuth EnterpriseRBAC** 🚀

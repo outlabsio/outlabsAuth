@@ -1,0 +1,31 @@
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: examples/enterprise_rbac/Dockerfile
+    container_name: outlabsauth_api
+    ports:
+      - "8002:8002"
+    volumes:
+      # Mount the entire outlabsAuth directory for hot reload
+      - ../../outlabs_auth:/app/outlabs_auth:ro
+      - ../../examples/enterprise_rbac:/app/examples/enterprise_rbac
+    environment:
+      # MongoDB connection (connects to host's MongoDB via host.docker.internal)
+      - MONGODB_URL=mongodb://host.docker.internal:27017
+      - DATABASE_NAME=realestate_leads_platform
+
+      # JWT configuration
+      - SECRET_KEY=development-secret-key-change-in-production
+
+      # Redis connection (connects to host's Redis)
+      - REDIS_URL=redis://:guest@host.docker.internal:6379
+      - REDIS_PASSWORD=guest
+
+      # Python environment
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+    command: >
+      sh -c "cd /app/examples/enterprise_rbac &&
+             /app/.venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8002 --reload"
+    restart: unless-stopped

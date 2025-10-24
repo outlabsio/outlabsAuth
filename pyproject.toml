@@ -40,6 +40,9 @@ dependencies = [
     # Dynamic dependency injection (DD-039)
     "makefun>=1.15.0",
 
+    # Date/time utilities (for policy engine ABAC conditions)
+    "python-dateutil>=2.8.0",
+
     # OAuth/Social Login (v1.2)
     "httpx>=0.25.0",  # For OAuth provider API requests
 ]

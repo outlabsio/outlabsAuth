@@ -159,12 +159,29 @@ async def lifespan(app: FastAPI):
     client = AsyncIOMotorClient(MONGODB_URL)
     db = client[DATABASE_NAME]
 
+    # Connect to Redis (if available)
+    redis_client = None
+    if REDIS_URL:
+        try:
+            print("📮 Connecting to Redis...")
+            import redis.asyncio as redis
+            redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+            # Test connection
+            await redis_client.ping()
+            print(f"✅ Redis connected: {REDIS_URL}")
+        except Exception as e:
+            print(f"⚠️  Redis connection failed: {e}")
+            print("   Continuing without caching...")
+            redis_client = None
+
     # Initialize EnterpriseRBAC
     print("🔐 Initializing OutlabsAuth EnterpriseRBAC...")
     auth = EnterpriseRBAC(
         database=db,
         secret_key=SECRET_KEY,
-        enable_caching=False,  # Disable caching for now
+        redis_client=redis_client,
+        redis_url=REDIS_URL if redis_client else None,
+        enable_caching=redis_client is not None,
         enable_context_aware_roles=False,  # Keep it simple for this example
         enable_abac=False
     )
