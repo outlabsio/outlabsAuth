@@ -2,7 +2,7 @@
 Token models for authentication
 """
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from beanie import Link, Indexed
 from pydantic import Field
 
@@ -50,7 +50,12 @@ class RefreshTokenModel(BaseDocument):
         if self.is_revoked:
             return False
 
-        if datetime.utcnow() > self.expires_at:
+        # Ensure expires_at is timezone-aware for comparison
+        expires_at = self.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        if datetime.now(timezone.utc) > expires_at:
             return False
 
         return True

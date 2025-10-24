@@ -98,11 +98,15 @@ def create_refresh_token(
     else:
         expire = datetime.now(timezone.utc) + timedelta(days=30)
 
+    # Generate unique JWT ID for each refresh token (prevents token collisions)
+    jti = secrets.token_urlsafe(16)
+
     to_encode.update({
         "exp": expire,
         "iat": datetime.now(timezone.utc),
         "type": "refresh",
-        "aud": audience  # Audience claim for cross-application security
+        "aud": audience,  # Audience claim for cross-application security
+        "jti": jti  # JWT ID ensures each token is unique
     })
 
     encoded_jwt = jwt.encode(to_encode, secret_key, algorithm=algorithm)
@@ -114,6 +118,7 @@ def verify_token(
     secret_key: str,
     algorithm: str = "HS256",
     expected_type: Optional[str] = None,
+    audience: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Verify and decode a JWT token.
@@ -123,6 +128,7 @@ def verify_token(
         secret_key: Secret key for verification
         algorithm: JWT algorithm (default: HS256)
         expected_type: Expected token type ("access" or "refresh")
+        audience: Expected JWT audience (if None, audience is not validated)
 
     Returns:
         Dict[str, Any]: Decoded token payload
@@ -132,13 +138,19 @@ def verify_token(
         TokenInvalidError: If token is invalid or malformed
 
     Example:
-        >>> token = create_access_token({"sub": "user_123"}, "secret")
-        >>> payload = verify_token(token, "secret", expected_type="access")
+        >>> token = create_access_token({"sub": "user_123"}, "secret", audience="my-app")
+        >>> payload = verify_token(token, "secret", expected_type="access", audience="my-app")
         >>> payload["sub"]
         'user_123'
     """
     try:
-        payload = jwt.decode(token, secret_key, algorithms=[algorithm])
+        # Decode with or without audience validation
+        decode_options = {"algorithms": [algorithm]}
+        if audience:
+            decode_options["audience"] = audience
+            payload = jwt.decode(token, secret_key, **decode_options)
+        else:
+            payload = jwt.decode(token, secret_key, algorithms=[algorithm])
 
         # Check token type if specified
         if expected_type:

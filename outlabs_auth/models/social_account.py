@@ -1,6 +1,6 @@
 """Social account model for OAuth/social login integration."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from beanie import Document
 from pydantic import Field, ConfigDict
@@ -64,7 +64,7 @@ class SocialAccount(Document):
     
     # Metadata
     linked_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(timezone.utc),
         description="When this account was linked"
     )
     last_used_at: Optional[datetime] = Field(

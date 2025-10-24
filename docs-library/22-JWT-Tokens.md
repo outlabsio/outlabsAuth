@@ -82,9 +82,12 @@ Authorization: Bearer eyJhbGc...
   "exp": 1645188000,           // 30 days from now
   "iat": 1642594200,
   "type": "refresh",
-  "aud": "outlabs-auth"        // Audience (prevents cross-app token reuse)
+  "aud": "outlabs-auth",       // Audience (prevents cross-app token reuse)
+  "jti": "Xyz789Abc123..."     // JWT ID (ensures token uniqueness, prevents collisions)
 }
 ```
+
+**Note**: The `jti` (JWT ID) was added to refresh tokens to prevent collisions when multiple sessions are created simultaneously for the same user. Each refresh token is guaranteed to be unique.
 
 **Usage**:
 ```bash
@@ -124,7 +127,8 @@ POST /auth/refresh
        "exp": now + 30days,
        "iat": now,
        "type": "refresh",
-       "aud": "outlabs-auth"
+       "aud": "outlabs-auth",
+       "jti": secrets.token_urlsafe(16)  # Unique JWT ID (prevents collisions)
    })
 
 3. Return both tokens

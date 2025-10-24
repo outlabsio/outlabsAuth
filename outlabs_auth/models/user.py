@@ -11,12 +11,20 @@ from outlabs_auth.models.base import BaseDocument
 
 
 class UserStatus(str, Enum):
-    """User account status"""
+    """
+    User account status controlling authentication access.
+
+    - ACTIVE: Normal user, can authenticate
+    - SUSPENDED: Temporarily blocked, cannot authenticate
+    - BANNED: Permanently blocked, cannot authenticate
+    - DELETED: Soft-deleted account, cannot authenticate
+
+    See docs-library/48-User-Status-System.md for detailed semantics.
+    """
     ACTIVE = "active"
-    INACTIVE = "inactive"
     SUSPENDED = "suspended"
     BANNED = "banned"
-    TERMINATED = "terminated"
+    DELETED = "deleted"
 
 
 class UserProfile(BaseModel):
@@ -63,6 +71,16 @@ class UserModel(BaseDocument):
     is_superuser: bool = Field(default=False)  # For admin override
     email_verified: bool = Field(default=False)
 
+    # Status-related timestamps
+    suspended_until: Optional[datetime] = Field(
+        default=None,
+        description="Optional auto-expiry for SUSPENDED status"
+    )
+    deleted_at: Optional[datetime] = Field(
+        default=None,
+        description="Soft delete timestamp for DELETED status"
+    )
+
     # Security
     last_login: Optional[datetime] = None
     last_password_change: Optional[datetime] = None
@@ -87,12 +105,16 @@ class UserModel(BaseDocument):
         """
         Check if user can authenticate.
 
-        Returns True if:
-        - Status is ACTIVE or SUSPENDED (suspended may have time restrictions)
-        - Account is not locked
+        Returns True only if:
+        - Status is ACTIVE (not suspended/banned/deleted)
+        - Account is not locked (from failed login attempts)
+
+        Note: Email verification is checked separately if required by application.
+
+        See docs-library/48-User-Status-System.md for status semantics.
         """
         return (
-            self.status in [UserStatus.ACTIVE, UserStatus.SUSPENDED]
+            self.status == UserStatus.ACTIVE
             and not self.is_locked
         )
 

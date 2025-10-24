@@ -1,6 +1,6 @@
 """OAuth state model for CSRF protection and PKCE flow."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from beanie import Document
 from pydantic import Field, ConfigDict
@@ -59,13 +59,13 @@ class OAuthState(Document):
     
     # Expiration
     expires_at: datetime = Field(
-        default_factory=lambda: datetime.utcnow() + timedelta(minutes=10),
+        default_factory=lambda: datetime.now(timezone.utc) + timedelta(minutes=10),
         description="State expires after 10 minutes"
     )
-    
+
     # Metadata (for security auditing)
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(timezone.utc),
         description="When this state was created"
     )
     ip_address: Optional[str] = Field(
@@ -87,7 +87,7 @@ class OAuthState(Document):
     
     def is_expired(self) -> bool:
         """Check if this state has expired."""
-        return datetime.utcnow() > self.expires_at
+        return datetime.now(timezone.utc) > self.expires_at
     
     def __repr__(self) -> str:
         return (

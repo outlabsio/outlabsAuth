@@ -68,19 +68,14 @@ class BaseDocument(Document):
 
 ```python
 class UserStatus(str, Enum):
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-    SUSPENDED = "suspended"
-    BANNED = "banned"
-    TERMINATED = "terminated"
+    """User account status controlling authentication access.
 
-class UserProfile(BaseModel):
-    """Nested profile information"""
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    phone: Optional[str] = None
-    avatar_url: Optional[str] = None
-    preferences: Dict[str, Any] = Field(default_factory=dict)
+    See DD-048 (docs-library/48-User-Status-System.md) for detailed semantics.
+    """
+    ACTIVE = "active"        # Can authenticate ✅
+    SUSPENDED = "suspended"  # Temporary block (with optional expiry) ❌
+    BANNED = "banned"        # Permanent block ❌
+    DELETED = "deleted"      # Soft-deleted (with deletion timestamp) ❌
 
 class UserModel(BaseDocument):
     # Authentication
@@ -88,11 +83,16 @@ class UserModel(BaseDocument):
     hashed_password: Optional[str]  # None for OAuth-only users
     auth_methods: List[str] = ["PASSWORD"]  # e.g., ["PASSWORD", "GOOGLE", "GITHUB"]
 
-    # Profile
-    profile: UserProfile
+    # Profile (flat fields for simplicity)
+    first_name: str
+    last_name: str
+    phone: Optional[str] = None
+    avatar_url: Optional[str] = None
 
     # Status
     status: UserStatus = UserStatus.ACTIVE
+    suspended_until: Optional[datetime] = None  # Auto-expiry for SUSPENDED status
+    deleted_at: Optional[datetime] = None       # Timestamp for DELETED status
     is_superuser: bool = False
     email_verified: bool = False
 
@@ -117,26 +117,50 @@ indexes = [
 
 **Key Methods**:
 ```python
+@property
 def is_locked(self) -> bool:
-    """Check if account is locked"""
+    """Check if account is locked due to failed login attempts."""
+    if not self.locked_until:
+        return False
+    return datetime.now(timezone.utc) < self.locked_until
 
 def can_authenticate(self) -> bool:
-    """Check if user can log in"""
+    """Check if user can authenticate.
+
+    Returns True only if:
+    - status == ACTIVE (not suspended, banned, or deleted)
+    - account is not locked (locked_until expired or None)
+
+    See DD-048 for user status semantics.
+    """
+    return (
+        self.status == UserStatus.ACTIVE
+        and not self.is_locked
+    )
 ```
 
 **Example**:
 ```python
+# Create active user
 user = UserModel(
     email="john@example.com",
     hashed_password=hashed_pw,
-    profile=UserProfile(
-        first_name="John",
-        last_name="Doe"
-    ),
+    first_name="John",
+    last_name="Doe",
     status=UserStatus.ACTIVE,
     email_verified=True
 )
 await user.insert()
+
+# Suspend user temporarily (with auto-expiry)
+user.status = UserStatus.SUSPENDED
+user.suspended_until = datetime.now(timezone.utc) + timedelta(days=7)
+await user.save()
+
+# Soft delete user
+user.status = UserStatus.DELETED
+user.deleted_at = datetime.now(timezone.utc)
+await user.save()
 ```
 
 ---
@@ -257,13 +281,15 @@ indexes = [
 
 **Refresh tokens for JWT authentication.**
 
+**Note**: Refresh token JWTs now include a `jti` (JWT ID) claim to ensure uniqueness and prevent token collisions when multiple sessions are created simultaneously. This JTI is not stored in the database - only the hash of the full JWT is stored.
+
 ```python
 class RefreshTokenModel(BaseDocument):
     # User relationship
     user: Link[UserModel]
 
     # Token (hashed)
-    token_hash: str  # Unique, indexed
+    token_hash: str  # SHA256 hash of JWT (includes JTI for uniqueness)
 
     # Expiration
     expires_at: datetime
@@ -271,7 +297,7 @@ class RefreshTokenModel(BaseDocument):
     # Revocation
     is_revoked: bool = False
     revoked_at: Optional[datetime] = None
-    revoked_reason: Optional[str] = None
+    revoked_reason: Optional[str] = None  # "User logout", "Admin action", etc.
 
     # Device/Session info
     device_name: Optional[str] = None  # "iPhone 12", "Chrome on MacOS"

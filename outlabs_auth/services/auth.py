@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 import hashlib
+from beanie import PydanticObjectId
 
 from outlabs_auth.models.user import UserModel, UserStatus
 from outlabs_auth.models.token import RefreshTokenModel
@@ -136,12 +137,37 @@ class AuthService:
                 }
             )
 
-        # Check if account is active
+        # Check if account is active (provide specific error messages per status)
         if user.status != UserStatus.ACTIVE:
-            raise AccountInactiveError(
-                message=f"Account is {user.status.value}",
-                details={"status": user.status.value}
-            )
+            if user.status == UserStatus.SUSPENDED:
+                # Suspended with optional expiry date
+                suspended_msg = f" until {user.suspended_until.isoformat()}" if user.suspended_until else ""
+                raise AccountInactiveError(
+                    message=f"Account is suspended{suspended_msg}",
+                    details={
+                        "status": "suspended",
+                        "suspended_until": user.suspended_until.isoformat() if user.suspended_until else None
+                    }
+                )
+            elif user.status == UserStatus.BANNED:
+                raise AccountInactiveError(
+                    message="Account is permanently banned",
+                    details={"status": "banned"}
+                )
+            elif user.status == UserStatus.DELETED:
+                raise AccountInactiveError(
+                    message="Account has been deleted",
+                    details={
+                        "status": "deleted",
+                        "deleted_at": user.deleted_at.isoformat() if user.deleted_at else None
+                    }
+                )
+            else:
+                # Fallback for any unexpected status
+                raise AccountInactiveError(
+                    message=f"Account is {user.status.value}",
+                    details={"status": user.status.value}
+                )
 
         # Verify password
         if not user.hashed_password or not verify_password(password, user.hashed_password):
@@ -314,6 +340,10 @@ class AuthService:
         if not token_model:
             return False
 
+        # Check if already revoked
+        if token_model.is_revoked:
+            return False
+
         # Mark as revoked
         token_model.is_revoked = True
         token_model.revoked_at = datetime.now(timezone.utc)
@@ -377,7 +407,8 @@ class AuthService:
                 refresh_token,
                 self.config.secret_key,
                 self.config.algorithm,
-                expected_type="refresh"
+                expected_type="refresh",
+                audience=self.config.jwt_audience
             )
         except TokenExpiredError:
             raise
@@ -387,42 +418,96 @@ class AuthService:
                 details={"reason": "Token verification failed"}
             )
 
-        # Check if refresh token exists in database and is valid
-        token_hash = self._hash_token(refresh_token)
-        token_model = await RefreshTokenModel.find_one(
-            RefreshTokenModel.token_hash == token_hash
-        )
-
-        if not token_model:
+        # Extract user ID from payload
+        user_id = payload.get("sub")
+        if not user_id:
             raise RefreshTokenInvalidError(
-                message="Refresh token not found",
-                details={"reason": "Token not in database"}
+                message="Invalid refresh token: missing user ID",
+                details={"reason": "No user ID in token"}
             )
 
-        # Check if token is still valid
-        if not token_model.is_valid():
-            raise RefreshTokenInvalidError(
-                message="Refresh token is invalid or expired",
-                details={
-                    "is_revoked": token_model.is_revoked,
-                    "expires_at": token_model.expires_at.isoformat() if token_model.expires_at else None,
-                }
+        # Initialize token_model (will be None in stateless mode)
+        token_model = None
+
+        # If refresh token storage is enabled, check database
+        if self.config.store_refresh_tokens:
+            token_hash = self._hash_token(refresh_token)
+            token_model = await RefreshTokenModel.find_one(
+                RefreshTokenModel.token_hash == token_hash
             )
 
-        # Get user
-        user = await token_model.user.fetch()
-        if not user:
-            raise UserNotFoundError(
-                message="User not found",
-                details={"user_id": str(token_model.user.ref.id)}
-            )
+            if not token_model:
+                raise RefreshTokenInvalidError(
+                    message="Refresh token not found",
+                    details={"reason": "Token not in database"}
+                )
 
-        # Check user status
+            # Check if token is still valid
+            if not token_model.is_valid():
+                # Provide specific error message for revoked tokens
+                if token_model.is_revoked:
+                    raise RefreshTokenInvalidError(
+                        message="Refresh token has been revoked",
+                        details={
+                            "reason": "revoked",
+                            "revoked_at": token_model.revoked_at.isoformat() if token_model.revoked_at else None,
+                            "revoked_reason": token_model.revoked_reason
+                        }
+                    )
+                # Token is expired
+                raise RefreshTokenInvalidError(
+                    message="Refresh token has expired",
+                    details={
+                        "reason": "expired",
+                        "expires_at": token_model.expires_at.isoformat() if token_model.expires_at else None,
+                    }
+                )
+
+            # Get user from token model
+            user = await token_model.user.fetch()
+            if not user:
+                raise UserNotFoundError(
+                    message="User not found",
+                    details={"user_id": str(token_model.user.ref.id)}
+                )
+        else:
+            # Stateless mode - get user directly from database
+            user = await UserModel.find_one(UserModel.id == PydanticObjectId(user_id))
+            if not user:
+                raise UserNotFoundError(
+                    message="User not found",
+                    details={"user_id": user_id}
+                )
+
+        # Check user status (provide specific error messages per status)
         if user.status != UserStatus.ACTIVE:
-            raise AccountInactiveError(
-                message=f"Account is {user.status.value}",
-                details={"status": user.status.value}
-            )
+            if user.status == UserStatus.SUSPENDED:
+                suspended_msg = f" until {user.suspended_until.isoformat()}" if user.suspended_until else ""
+                raise AccountInactiveError(
+                    message=f"Account is suspended{suspended_msg}",
+                    details={
+                        "status": "suspended",
+                        "suspended_until": user.suspended_until.isoformat() if user.suspended_until else None
+                    }
+                )
+            elif user.status == UserStatus.BANNED:
+                raise AccountInactiveError(
+                    message="Account is permanently banned",
+                    details={"status": "banned"}
+                )
+            elif user.status == UserStatus.DELETED:
+                raise AccountInactiveError(
+                    message="Account has been deleted",
+                    details={
+                        "status": "deleted",
+                        "deleted_at": user.deleted_at.isoformat() if user.deleted_at else None
+                    }
+                )
+            else:
+                raise AccountInactiveError(
+                    message=f"Account is {user.status.value}",
+                    details={"status": user.status.value}
+                )
 
         # Create new access token
         access_token, _ = create_token_pair(
@@ -434,10 +519,11 @@ class AuthService:
             audience=self.config.jwt_audience,
         )
 
-        # Update token usage stats
-        token_model.last_used_at = datetime.now(timezone.utc)
-        token_model.usage_count += 1
-        await token_model.save()
+        # Update token usage stats (only if token storage enabled)
+        if self.config.store_refresh_tokens and token_model:
+            token_model.last_used_at = datetime.now(timezone.utc)
+            token_model.usage_count += 1
+            await token_model.save()
 
         # Return new access token with same refresh token
         return TokenPair(
@@ -472,7 +558,8 @@ class AuthService:
             access_token,
             self.config.secret_key,
             self.config.algorithm,
-            expected_type="access"
+            expected_type="access",
+            audience=self.config.jwt_audience
         )
 
         # Get user ID from token
@@ -491,12 +578,35 @@ class AuthService:
                 details={"user_id": user_id}
             )
 
-        # Check user status
+        # Check user status (provide specific error messages per status)
         if user.status != UserStatus.ACTIVE:
-            raise AccountInactiveError(
-                message=f"Account is {user.status.value}",
-                details={"status": user.status.value}
-            )
+            if user.status == UserStatus.SUSPENDED:
+                suspended_msg = f" until {user.suspended_until.isoformat()}" if user.suspended_until else ""
+                raise AccountInactiveError(
+                    message=f"Account is suspended{suspended_msg}",
+                    details={
+                        "status": "suspended",
+                        "suspended_until": user.suspended_until.isoformat() if user.suspended_until else None
+                    }
+                )
+            elif user.status == UserStatus.BANNED:
+                raise AccountInactiveError(
+                    message="Account is permanently banned",
+                    details={"status": "banned"}
+                )
+            elif user.status == UserStatus.DELETED:
+                raise AccountInactiveError(
+                    message="Account has been deleted",
+                    details={
+                        "status": "deleted",
+                        "deleted_at": user.deleted_at.isoformat() if user.deleted_at else None
+                    }
+                )
+            else:
+                raise AccountInactiveError(
+                    message=f"Account is {user.status.value}",
+                    details={"status": user.status.value}
+                )
 
         return user
 
