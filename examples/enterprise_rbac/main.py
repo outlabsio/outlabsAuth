@@ -152,7 +152,7 @@ async def lifespan(app: FastAPI):
     global auth
 
     # Startup
-    print("🚀 Starting Real Estate Leads Platform...")
+    print("🚀 Starting Real Estate Leads Platform v1.0.0...")
 
     # Connect to MongoDB
     print("📦 Connecting to MongoDB...")

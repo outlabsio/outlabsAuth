@@ -26,9 +26,8 @@ services:
       # Python environment
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
-    command: >
-      sh -c "cd /app/examples/enterprise_rbac &&
-             /app/.venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8002 --reload"
+    working_dir: /app/examples/enterprise_rbac
+    command: uv run uvicorn main:app --host 0.0.0.0 --port 8002 --reload --reload-dir /app/outlabs_auth --reload-dir /app/examples/enterprise_rbac
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8002/')"]
