@@ -226,19 +226,20 @@ class AuthService:
             audience=self.config.jwt_audience,
         )
 
-        # Store refresh token in database (for revocation support)
-        refresh_token_hash = self._hash_token(refresh_token_value)
-        refresh_token_model = RefreshTokenModel(
-            user=user,
-            token_hash=refresh_token_hash,
-            expires_at=datetime.now(timezone.utc) + timedelta(
-                days=self.config.refresh_token_expire_days
-            ),
-            device_name=device_name,
-            ip_address=ip_address,
-            user_agent=user_agent,
-        )
-        await refresh_token_model.save()
+        # Store refresh token in database (for revocation support) - only if enabled
+        if self.config.store_refresh_tokens:
+            refresh_token_hash = self._hash_token(refresh_token_value)
+            refresh_token_model = RefreshTokenModel(
+                user=user,
+                token_hash=refresh_token_hash,
+                expires_at=datetime.now(timezone.utc) + timedelta(
+                    days=self.config.refresh_token_expire_days
+                ),
+                device_name=device_name,
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+            await refresh_token_model.save()
 
         # Return user and tokens
         token_pair = TokenPair(
@@ -249,20 +250,60 @@ class AuthService:
 
         return user, token_pair
 
-    async def logout(self, refresh_token: str) -> bool:
+    async def logout(
+        self,
+        refresh_token: str,
+        blacklist_access_token: bool = False,
+        access_token_jti: Optional[str] = None,
+        redis_client: Optional[Any] = None
+    ) -> bool:
         """
-        Logout user by revoking refresh token.
+        Logout user by revoking refresh token with optional immediate access token blacklisting.
+
+        Hybrid pattern:
+        - Always revokes refresh token in MongoDB (required)
+        - Optionally blacklists access token in Redis (for immediate revocation)
+        - Gracefully degrades if Redis unavailable
 
         Args:
             refresh_token: Refresh token to revoke
+            blacklist_access_token: If True, blacklist access token immediately (requires Redis)
+            access_token_jti: JWT ID of access token to blacklist (required if blacklist_access_token=True)
+            redis_client: Optional Redis client for blacklisting
 
         Returns:
-            bool: True if token was revoked, False if not found
+            bool: True if refresh token was revoked, False if not found
 
         Example:
+            >>> # Standard logout (15-min security window)
             >>> await auth_service.logout(refresh_token)
             True
+
+            >>> # Immediate logout (requires Redis)
+            >>> await auth_service.logout(
+            ...     refresh_token,
+            ...     blacklist_access_token=True,
+            ...     access_token_jti="abc123...",
+            ...     redis_client=redis
+            ... )
+            True
         """
+        # Check if refresh token storage is enabled
+        if not self.config.store_refresh_tokens:
+            # Stateless JWT mode - can't revoke refresh tokens
+            # Only blacklist access token if requested
+            blacklisted = False
+            if blacklist_access_token and access_token_jti and self.config.enable_token_blacklist:
+                if redis_client and hasattr(redis_client, 'is_available') and redis_client.is_available:
+                    remaining_ttl = self.config.access_token_expire_minutes * 60
+                    blacklisted = await redis_client.set(
+                        f"blacklist:jwt:{access_token_jti}",
+                        "revoked",
+                        ttl=remaining_ttl
+                    )
+            return blacklisted  # Return True if access token was blacklisted
+
+        # Refresh token storage enabled - revoke in MongoDB
         token_hash = self._hash_token(refresh_token)
 
         # Find and revoke the refresh token
@@ -278,7 +319,21 @@ class AuthService:
         token_model.revoked_at = datetime.now(timezone.utc)
         token_model.revoked_reason = "User logout"
         await token_model.save()
-        
+
+        # Optional: Blacklist access token in Redis for immediate revocation
+        blacklisted = False
+        if blacklist_access_token and access_token_jti and self.config.enable_token_blacklist:
+            if redis_client and hasattr(redis_client, 'is_available') and redis_client.is_available:
+                # Calculate remaining TTL for access token
+                remaining_ttl = self.config.access_token_expire_minutes * 60
+
+                # Add to blacklist with TTL (auto-expires when token would anyway)
+                blacklisted = await redis_client.set(
+                    f"blacklist:jwt:{access_token_jti}",
+                    "revoked",
+                    ttl=remaining_ttl
+                )
+
         # Emit notification
         if self.notifications:
             # Fetch user to get email for notification
@@ -289,7 +344,8 @@ class AuthService:
                     data={
                         "user_id": str(user.id),
                         "email": user.email,
-                        "session_id": str(token_model.id)
+                        "session_id": str(token_model.id),
+                        "immediate_revocation": blacklisted
                     }
                 )
 

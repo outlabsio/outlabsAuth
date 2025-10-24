@@ -184,10 +184,16 @@ class OutlabsAuth:
         self.membership_service = None
         self.cache_service = None
 
+        # Redis client (initialized during _init_services if caching enabled)
+        self.redis_client = None
+
         # Authentication backends and dependency injection
         # These are initialized by _init_backends() and _init_deps()
         self._backends = []
         self._deps = None
+
+        # Token cleanup scheduler
+        self._cleanup_task = None
 
         # Track initialization state
         self._initialized = False
@@ -274,11 +280,19 @@ class OutlabsAuth:
         # Initialize services
         await self._init_services()
 
+        # Connect to Redis if available
+        if self.redis_client:
+            await self.redis_client.connect()
+
         # Initialize authentication backends
         self._init_backends()
 
         # Initialize dependency injection
         self._init_deps()
+
+        # Start token cleanup scheduler if enabled
+        if self.config.enable_token_cleanup and self.config.store_refresh_tokens:
+            self._start_token_cleanup_scheduler()
 
         self._initialized = True
 
@@ -318,13 +332,20 @@ class OutlabsAuth:
             self.entity_service = None  # Not available in SimpleRBAC
             self.membership_service = None  # Not available in SimpleRBAC
 
+        # Initialize Redis client if caching enabled
+        if self.config.enable_caching or self.config.redis_url:
+            from outlabs_auth.services.redis_client import RedisClient
+            self.redis_client = RedisClient(self.config)
+            # Redis connection happens in initialize(), not here
+        else:
+            self.redis_client = None
+
         # API Key service (for API key authentication)
         from outlabs_auth.services.api_key import APIKeyService
-        redis_client = None  # TODO: Pass Redis client if caching enabled
         self.api_key_service = APIKeyService(
             database=self.database,
             config=self.config,
-            redis_client=redis_client
+            redis_client=self.redis_client
         )
 
         # Service Token service (for service-to-service auth)
@@ -365,7 +386,8 @@ class OutlabsAuth:
         jwt_strategy = JWTStrategy(
             secret=self.config.secret_key,
             algorithm=self.config.algorithm,
-            audience=self.config.jwt_audience  # Use configured audience (string, not list)
+            audience=self.config.jwt_audience,  # Use configured audience (string, not list)
+            redis_client=self.redis_client  # Pass Redis client for blacklist checking
         )
         jwt_backend = AuthBackend(
             name="jwt",
@@ -504,3 +526,49 @@ class OutlabsAuth:
         features = [k for k, v in self.features.items() if v and k != "entity_hierarchy"]
         features_str = f" + {', '.join(features)}" if features else ""
         return f"<OutlabsAuth: {preset}{features_str}>"
+
+    def _start_token_cleanup_scheduler(self):
+        """
+        Start background task for token cleanup.
+
+        Runs cleanup_expired_refresh_tokens() every N hours (configured via token_cleanup_interval_hours).
+        Only starts if enable_token_cleanup=True and store_refresh_tokens=True.
+        """
+        import asyncio
+        from outlabs_auth.workers.token_cleanup import cleanup_expired_refresh_tokens
+
+        async def cleanup_loop():
+            """Background cleanup loop"""
+            interval_seconds = self.config.token_cleanup_interval_hours * 3600
+
+            while True:
+                try:
+                    await asyncio.sleep(interval_seconds)
+                    stats = await cleanup_expired_refresh_tokens()
+                    if stats.get("total", 0) > 0:
+                        print(f"[TokenCleanup] Removed {stats['total']} tokens ({stats['expired']} expired, {stats['revoked']} revoked)")
+                except Exception as e:
+                    print(f"[TokenCleanup] Error: {e}")
+
+        # Start background task
+        import asyncio
+        self._cleanup_task = asyncio.create_task(cleanup_loop())
+
+    async def shutdown(self):
+        """
+        Cleanup resources on shutdown.
+
+        Cancels background tasks and closes connections.
+        Call this in FastAPI lifespan shutdown.
+        """
+        # Cancel cleanup task
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+
+        # Close Redis connection
+        if self.redis_client:
+            await self.redis_client.close()

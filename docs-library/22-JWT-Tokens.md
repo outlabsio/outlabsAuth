@@ -57,7 +57,7 @@ OutlabsAuth uses two token types:
   "iat": 1642594200,           // Issued at
   "type": "access",            // Token type
   "aud": "outlabs-auth",       // Audience (prevents cross-app token reuse)
-  "jti": "token_abc123"        // JWT ID (optional, for revocation)
+  "jti": "Abc123XyZ789..."     // JWT ID (for immediate revocation/blacklisting)
 }
 ```
 
@@ -115,7 +115,8 @@ POST /auth/refresh
        "exp": now + 15min,
        "iat": now,
        "type": "access",
-       "aud": "outlabs-auth"
+       "aud": "outlabs-auth",
+       "jti": secrets.token_urlsafe(16)  # Unique JWT ID for blacklisting
    })
 
    refresh_token = jwt.encode({
@@ -764,10 +765,132 @@ token = jwt.encode({
 
 ---
 
+## Token Revocation
+
+### Overview
+
+OutlabsAuth supports **configurable token revocation strategies**:
+
+| Mode | Access Token Revocation | Refresh Token Revocation | Configuration |
+|------|------------------------|-------------------------|---------------|
+| **Standard** | 15-min window | Immediate (MongoDB) | `store_refresh_tokens=True`<br>`enable_token_blacklist=False` |
+| **High Security** | Immediate (Redis) | Immediate (MongoDB) | `store_refresh_tokens=True`<br>`enable_token_blacklist=True` |
+| **Stateless** | 15-min window | N/A (no storage) | `store_refresh_tokens=False`<br>`enable_token_blacklist=False` |
+
+### Standard Mode (Default)
+
+```python
+auth = EnterpriseRBAC(
+    database=db,
+    secret_key=secret,
+    store_refresh_tokens=True,      # Store refresh tokens in MongoDB
+    enable_token_blacklist=False    # Access tokens valid until expiration
+)
+
+# Logout behavior:
+# - Refresh token: Revoked immediately in MongoDB
+# - Access token: Valid for remaining lifetime (up to 15 min)
+```
+
+**Why this works:**
+- Access tokens are short-lived (15 min) - acceptable security window
+- Refresh tokens revoked immediately - can't get new access tokens
+- No Redis required - simpler infrastructure
+
+### High Security Mode
+
+```python
+auth = EnterpriseRBAC(
+    database=db,
+    secret_key=secret,
+    redis_url="redis://localhost:6379",
+    store_refresh_tokens=True,       # Store refresh tokens in MongoDB
+    enable_token_blacklist=True      # Blacklist access tokens in Redis
+)
+
+# Logout behavior:
+# - Refresh token: Revoked immediately in MongoDB
+# - Access token: Blacklisted immediately in Redis
+```
+
+**Use cases:**
+- Banking applications
+- Healthcare systems
+- High-security environments
+- Compliance requirements (HIPAA, PCI-DSS)
+
+### How Blacklisting Works
+
+**On Logout:**
+```python
+# 1. Access token JTI added to Redis blacklist
+await redis.set(
+    f"blacklist:jwt:{jti}",
+    "revoked",
+    ttl=remaining_token_lifetime  # Auto-expires with token
+)
+
+# 2. Refresh token revoked in MongoDB
+token.is_revoked = True
+await token.save()
+```
+
+**On Authentication:**
+```python
+# 1. Decode JWT (validate signature, expiration)
+payload = jwt.decode(token, secret)
+
+# 2. Check blacklist (if Redis available)
+jti = payload.get("jti")
+if redis.exists(f"blacklist:jwt:{jti}"):
+    raise TokenRevokedError()
+
+# 3. Continue with user lookup
+```
+
+### JTI Claim
+
+The `jti` (JWT ID) claim is a **unique identifier** for each access token:
+
+```json
+{
+  "sub": "user_123",
+  "exp": 1642596000,
+  "jti": "Abc123XyZ789..."  // ← Unique ID for this token
+}
+```
+
+**Purpose:**
+- Enables individual token blacklisting
+- Generated with `secrets.token_urlsafe(16)` (cryptographically secure)
+- Required for immediate access token revocation
+
+### Automatic Cleanup
+
+Expired and revoked tokens are automatically cleaned up:
+
+```python
+auth = EnterpriseRBAC(
+    database=db,
+    secret_key=secret,
+    enable_token_cleanup=True,           # Enable automatic cleanup
+    token_cleanup_interval_hours=24      # Run every 24 hours
+)
+
+# Cleanup removes:
+# - Expired refresh tokens (past expires_at date)
+# - Old revoked tokens (revoked > 7 days ago)
+```
+
+**Cleanup is a background task** that runs inside the FastAPI application. It respects the configured interval and only runs if `store_refresh_tokens=True`.
+
+---
+
 ## Next Steps
 
 - **[[23-API-Keys|API Keys]]** - Long-lived credentials
 - **[[24-Service-Tokens|Service Tokens]]** - Microservice authentication
+- **[[91-Auth-Router|Auth Router]]** - Logout endpoint details
 - **[[110-Security-Best-practices|Security Best Practices]]** - Complete security guide
 
 ---

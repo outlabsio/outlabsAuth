@@ -97,14 +97,67 @@ Login with email and password.
 
 ### POST /logout
 
-Logout user (invalidates tokens if Redis is enabled).
+Logout user with flexible revocation options.
 
 **Headers:**
 ```
 Authorization: Bearer <access_token>
 ```
 
+**Request Body (optional):**
+```json
+{
+  "refresh_token": "eyJ...",  // Optional: specific session to revoke
+  "immediate": false           // Optional: blacklist access token (requires Redis)
+}
+```
+
+**Behavior:**
+- Without `refresh_token`: Revokes ALL user sessions (logout from all devices)
+- With `refresh_token`: Revokes specific session
+- `immediate=false` (default): Access token valid for 15 min
+- `immediate=true`: Access token blacklisted immediately (requires Redis)
+
+**Security Levels:**
+| Level | Configuration | Access Token After Logout |
+|-------|--------------|---------------------------|
+| Low | No Redis | Valid for 15 min |
+| Medium | Redis available, `immediate=false` | Valid for 15 min (default) |
+| High | Redis available, `immediate=true` | Immediately revoked |
+
 **Response (204):** No content
+
+**Example - Standard Logout:**
+```bash
+POST /auth/logout
+Authorization: Bearer eyJ...
+Content-Type: application/json
+
+{
+  "refresh_token": "eyJ..."
+}
+```
+
+**Example - Immediate Logout (High Security):**
+```bash
+POST /auth/logout
+Authorization: Bearer eyJ...
+Content-Type: application/json
+
+{
+  "refresh_token": "eyJ...",
+  "immediate": true
+}
+```
+
+**Example - Logout from All Devices:**
+```bash
+POST /auth/logout
+Authorization: Bearer eyJ...
+Content-Type: application/json
+
+{}  # or omit body entirely
+```
 
 ---
 

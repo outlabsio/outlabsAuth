@@ -6,6 +6,7 @@ Uses python-jose for JWT operations with configurable algorithm and expiration.
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from jose import jwt, JWTError
+import secrets
 
 from outlabs_auth.core.exceptions import TokenInvalidError, TokenExpiredError
 
@@ -46,11 +47,15 @@ def create_access_token(
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=15)
 
+    # Generate unique JWT ID for blacklist support
+    jti = secrets.token_urlsafe(16)
+
     to_encode.update({
         "exp": expire,
         "iat": datetime.now(timezone.utc),  # Issued at
         "type": "access",
-        "aud": audience  # Audience claim for cross-application security
+        "aud": audience,  # Audience claim for cross-application security
+        "jti": jti  # JWT ID for token revocation/blacklisting
     })
 
     encoded_jwt = jwt.encode(to_encode, secret_key, algorithm=algorithm)

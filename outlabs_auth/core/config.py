@@ -29,6 +29,12 @@ class AuthConfig(BaseModel):
     max_login_attempts: int = Field(default=5, description="Max failed login attempts before lockout")
     lockout_duration_minutes: int = Field(default=30, description="Account lockout duration in minutes")
 
+    # Token Revocation Strategy
+    enable_token_blacklist: bool = Field(default=False, description="Enable immediate access token blacklisting (requires Redis)")
+    store_refresh_tokens: bool = Field(default=True, description="Store refresh tokens in MongoDB for revocation. Set to False for stateless-only JWT.")
+    enable_token_cleanup: bool = Field(default=True, description="Enable automatic cleanup of expired/revoked tokens")
+    token_cleanup_interval_hours: int = Field(default=24, description="Hours between token cleanup runs")
+
     # Feature Flags (Core - controlled by OutlabsAuth base class)
     enable_entity_hierarchy: bool = Field(default=False, description="Enable entity hierarchy (EnterpriseRBAC)")
     enable_context_aware_roles: bool = Field(default=False, description="Enable context-aware roles (EnterpriseRBAC optional)")

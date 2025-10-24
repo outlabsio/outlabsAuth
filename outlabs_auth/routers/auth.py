@@ -15,6 +15,7 @@ from outlabs_auth.schemas.auth import (
     RefreshResponse,
     ForgotPasswordRequest,
     ResetPasswordRequest,
+    LogoutRequest,
 )
 from outlabs_auth.schemas.user import UserResponse
 
@@ -154,20 +155,64 @@ def get_auth_router(
         "/logout",
         status_code=status.HTTP_204_NO_CONTENT,
         summary="User logout",
-        description="Logout and invalidate tokens"
+        description="Logout and revoke tokens (supports optional immediate access token revocation)"
     )
-    async def logout(auth_result = Depends(auth.deps.require_auth())):
+    async def logout(
+        data: Optional[LogoutRequest] = None,
+        auth_result = Depends(auth.deps.require_auth())
+    ):
         """
-        Logout user (invalidate tokens if using Redis strategy).
+        Logout user with flexible revocation options.
 
-        Requires authentication.
+        Hybrid pattern:
+        - Always revokes refresh token in MongoDB
+        - Optionally blacklists access token in Redis (immediate=true)
+        - Gracefully degrades if Redis unavailable
+
+        Request body (optional):
+        {
+            "refresh_token": "eyJ...",  // Optional: specific session to revoke
+            "immediate": false           // Optional: blacklist access token (requires Redis)
+        }
+
+        Behavior:
+        - Without refresh_token: Revokes ALL user sessions (logout from all devices)
+        - With refresh_token: Revokes specific session
+        - immediate=false (default): Access token valid for 15 min
+        - immediate=true: Access token blacklisted immediately (requires Redis)
+
+        Security levels:
+        - Low: No Redis → 15-min security window
+        - Medium: Redis available, immediate=false → 15-min window (default)
+        - High: Redis available, immediate=true → Immediate revocation
         """
-        # If using Redis strategy, invalidate tokens
-        try:
-            if hasattr(auth.auth_service, "invalidate_tokens"):
-                await auth.auth_service.invalidate_tokens(auth_result["user_id"])
-        except Exception:
-            pass  # Graceful degradation
+        immediate = data.immediate if data else False
+        jti = auth_result.get("jti") if immediate else None
+
+        # Get Redis client if available
+        redis_client = getattr(auth, 'redis_client', None)
+
+        if data and data.refresh_token:
+            # Single device logout (revoke specific refresh token)
+            await auth.auth_service.logout(
+                data.refresh_token,
+                blacklist_access_token=immediate,
+                access_token_jti=jti,
+                redis_client=redis_client
+            )
+        else:
+            # Logout from all devices (revoke all user's refresh tokens)
+            await auth.auth_service.revoke_all_user_tokens(auth_result["user_id"])
+
+            # If immediate revocation requested, still blacklist current access token
+            if immediate and jti and redis_client:
+                if hasattr(redis_client, 'is_available') and redis_client.is_available:
+                    remaining_ttl = auth.config.access_token_expire_minutes * 60
+                    await redis_client.set(
+                        f"blacklist:jwt:{jti}",
+                        "revoked",
+                        ttl=remaining_ttl
+                    )
 
         return None
 

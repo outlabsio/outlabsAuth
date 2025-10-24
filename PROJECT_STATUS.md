@@ -1,8 +1,8 @@
 # OutlabsAuth Project Status
 
-**Last Updated**: 2025-01-23
+**Last Updated**: 2025-01-24
 **Branch**: `library-redesign`
-**Version**: 1.4 (Unified Architecture + Performance)
+**Version**: 1.4 (Unified Architecture + Performance + Token Revocation)
 
 ---
 
@@ -38,7 +38,57 @@ The core library is **fully functional** and ready for use:
 | **Services** | ✅ Complete | All 8 services instantiated and working |
 | **Presets** | ✅ Complete | SimpleRBAC and EnterpriseRBAC both functional |
 
-#### What Just Got Fixed (2025-01-23)
+#### Recent Updates
+
+**2025-01-24: Logout Flow & Token Revocation** ✨
+
+Implemented configurable logout system with multiple security levels:
+
+1. **Added Configuration Flags**:
+   - `enable_token_blacklist` - Immediate access token revocation (Redis)
+   - `store_refresh_tokens` - MongoDB token storage (can disable for stateless)
+   - `enable_token_cleanup` - Automatic cleanup scheduler
+   - `token_cleanup_interval_hours` - Cleanup frequency
+
+2. **JWT Enhancements**:
+   - Added `jti` (JWT ID) claim to all access tokens
+   - Unique identifier for individual token blacklisting
+   - Generated with `secrets.token_urlsafe(16)`
+
+3. **Logout Endpoint Updated** (`POST /auth/logout`):
+   - Accepts `refresh_token` (optional) - revoke specific session
+   - Accepts `immediate` flag (optional) - blacklist access token
+   - Supports logout from all devices (omit refresh_token)
+   - Returns 204 No Content
+
+4. **Token Cleanup Scheduler**:
+   - Background task runs every N hours (configurable)
+   - Removes expired refresh tokens (past `expires_at`)
+   - Removes old revoked tokens (revoked > 7 days ago)
+   - Graceful shutdown with `auth.shutdown()`
+
+5. **Redis Blacklist Support**:
+   - Access tokens blacklisted in Redis with `blacklist:jwt:{jti}` key
+   - TTL set to remaining token lifetime
+   - Checked during authentication in JWTStrategy
+   - Graceful degradation if Redis unavailable
+
+6. **Security Modes**:
+   - **Standard** (default): Refresh token revoked, 15-min access token window
+   - **High Security**: Both tokens revoked immediately (requires Redis)
+   - **Stateless**: No token storage, minimal DB writes
+   - **Redis-only**: Stateless JWT + Redis blacklist
+
+**Documentation Updated**:
+- `docs-library/91-Auth-Router.md` - Logout endpoint examples
+- `docs-library/74-Auth-Service.md` - Service method signatures
+- `docs-library/22-JWT-Tokens.md` - JTI claim, revocation strategies
+
+**Testing Status**: Standard logout verified manually. Comprehensive test suite needed (see Testing Required section).
+
+---
+
+**2025-01-23: Core Initialization Complete**
 
 **Problem**: FastAPI-Users patterns (backends, strategies, transports) were added but never connected to core.
 
@@ -230,9 +280,63 @@ outlabsAuth/
 | Authentication backends | ✅ Verified | All 3 backends created |
 | Dependency injection | ✅ Verified | `auth.deps` methods exist |
 | Services instantiation | ✅ Verified | All 8 services working |
+| **Logout flow** | ✅ **Tested** | Standard logout verified (2025-01-24) |
+| **JWT with JTI claim** | ✅ **Verified** | Access tokens include unique JWT ID |
 | Unit tests | ⏸️ Pending | Need to create comprehensive suite |
 | Integration tests | ⏸️ Pending | Need to test routers end-to-end |
 | Example app | 🔧 Needs update | Enterprise example needs fixes |
+
+### Testing Required (Added 2025-01-24)
+
+**Logout & Token Revocation Features** - Need comprehensive test coverage:
+
+| Feature | Status | Priority | Description |
+|---------|--------|----------|-------------|
+| **Token cleanup scheduler** | ❌ Not tested | HIGH | Test background cleanup task runs at configured interval |
+| **Cleanup actually deletes tokens** | ❌ Not tested | HIGH | Verify expired/revoked tokens removed from MongoDB |
+| **Redis blacklist** | ❌ Not tested | HIGH | Test immediate access token revocation with `enable_token_blacklist=True` |
+| **Stateless mode** | ❌ Not tested | MEDIUM | Test `store_refresh_tokens=False` configuration |
+| **Config flag combinations** | ❌ Not tested | HIGH | Test all 4 security modes (Standard, High Security, Stateless, Redis-only) |
+| **Graceful Redis degradation** | ❌ Not tested | MEDIUM | Test behavior when Redis unavailable but `enable_token_blacklist=True` |
+| **Shutdown cleanup** | ❌ Not tested | LOW | Test `auth.shutdown()` cancels background tasks |
+| **Immediate logout** | ❌ Not tested | HIGH | Test `immediate=true` flag blacklists access token |
+| **Logout all devices** | ❌ Not tested | MEDIUM | Test logout without `refresh_token` revokes all user sessions |
+
+**Test Scenarios Needed**:
+
+1. **Standard Logout** (Default)
+   ```python
+   # Config: store_refresh_tokens=True, enable_token_blacklist=False
+   # Expected: Refresh token revoked, access token valid for 15 min
+   ```
+
+2. **High Security Logout**
+   ```python
+   # Config: store_refresh_tokens=True, enable_token_blacklist=True, redis_url set
+   # Expected: Both tokens revoked immediately
+   ```
+
+3. **Stateless Logout**
+   ```python
+   # Config: store_refresh_tokens=False, enable_token_blacklist=False
+   # Expected: No DB writes, tokens valid until expiration
+   ```
+
+4. **Scheduler Tests**
+   ```python
+   # - Create expired tokens
+   # - Create old revoked tokens (>7 days)
+   # - Wait for cleanup interval or trigger manually
+   # - Verify tokens deleted
+   ```
+
+5. **Redis Failure Tests**
+   ```python
+   # - Set enable_token_blacklist=True
+   # - Stop Redis
+   # - Test logout still works (graceful degradation)
+   # - Verify falls back to 15-min window
+   ```
 
 ---
 

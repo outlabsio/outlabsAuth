@@ -47,7 +47,8 @@ class JWTStrategy:
         secret: str,
         algorithm: str = "HS256",
         audience: Optional[str] = None,
-        verify_exp: bool = True
+        verify_exp: bool = True,
+        redis_client: Optional[Any] = None
     ):
         """
         Initialize JWT strategy.
@@ -57,11 +58,13 @@ class JWTStrategy:
             algorithm: JWT algorithm (default: HS256)
             audience: Expected JWT audience (default: "outlabs-auth")
             verify_exp: Whether to verify token expiration (default: True)
+            redis_client: Optional Redis client for blacklist checking
         """
         self.secret = secret
         self.algorithm = algorithm
         self.audience = audience or "outlabs-auth"
         self.verify_exp = verify_exp
+        self.redis_client = redis_client
 
     async def authenticate(
         self,
@@ -93,6 +96,15 @@ class JWTStrategy:
             )
             print(f"[JWT] Token decoded successfully. User ID: {payload.get('sub')}")
 
+            # Check Redis blacklist if available (for immediate logout)
+            jti = payload.get("jti")
+            if jti and self.redis_client:
+                if hasattr(self.redis_client, 'is_available') and self.redis_client.is_available:
+                    is_blacklisted = await self.redis_client.exists(f"blacklist:jwt:{jti}")
+                    if is_blacklisted:
+                        print(f"[JWT] Token {jti} is blacklisted")
+                        return None
+
             # Extract user ID from payload
             user_id = payload.get("sub")
             if not user_id:
@@ -109,7 +121,8 @@ class JWTStrategy:
                         "user": user,
                         "user_id": str(user.id),
                         "source": "jwt",
-                        "metadata": payload
+                        "metadata": payload,
+                        "jti": jti  # Include JTI for logout
                     }
             else:
                 print("[JWT] No user_service provided")

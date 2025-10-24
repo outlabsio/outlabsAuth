@@ -223,6 +223,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     print("👋 Shutting down...")
+    await auth.shutdown()
     client.close()
 
 

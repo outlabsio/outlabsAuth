@@ -226,42 +226,68 @@ user, tokens2 = await auth.auth_service.login(
 
 ### logout()
 
-Logout user by revoking refresh token.
+Logout user with configurable revocation strategy.
 
 ```python
-success = await auth.auth_service.logout(refresh_token)
-if success:
-    print("Logged out successfully")
+success = await auth.auth_service.logout(
+    refresh_token=refresh_token,
+    blacklist_access_token=False,  # Optional: immediate access token revocation
+    access_token_jti="abc123...",   # Required if blacklist_access_token=True
+    redis_client=redis              # Required if blacklist_access_token=True
+)
 ```
 
 **Parameters:**
 - `refresh_token` (str): Refresh token to revoke
+- `blacklist_access_token` (bool, optional): If True, blacklist access token in Redis. Default: False
+- `access_token_jti` (str, optional): JWT ID from access token (required if blacklist_access_token=True)
+- `redis_client` (RedisClient, optional): Redis client for blacklisting (required if blacklist_access_token=True)
 
 **Returns:** `bool` - `True` if revoked, `False` if not found
 
-**Example:**
+**Configuration:**
+- Respects `config.store_refresh_tokens` - if False, skips MongoDB revocation
+- Respects `config.enable_token_blacklist` - if False, skips Redis blacklisting
+- Gracefully degrades if Redis unavailable
+
+**Example - Standard Logout:**
 
 ```python
-from fastapi import Cookie, HTTPException
+from fastapi import Depends
 
-@app.post("/auth/logout")
-async def logout(refresh_token: str = Cookie(None)):
-    """Logout user by revoking refresh token."""
-    if not refresh_token:
-        raise HTTPException(status_code=400, detail="No refresh token provided")
+@app.post("/auth/logout", status_code=204)
+async def logout(
+    data: LogoutRequest,
+    auth_result = Depends(auth.deps.require_auth())
+):
+    """Standard logout - revoke refresh token."""
+    await auth.auth_service.logout(data.refresh_token)
+    return None
+```
 
-    success = await auth.auth_service.logout(refresh_token)
+**Example - Immediate Revocation (High Security):**
 
-    if not success:
-        raise HTTPException(status_code=400, detail="Invalid refresh token")
+```python
+@app.post("/auth/logout", status_code=204)
+async def logout(
+    data: LogoutRequest,
+    auth_result = Depends(auth.deps.require_auth())
+):
+    """High-security logout - immediate access token revocation."""
+    jti = auth_result.get("jti")
 
-    return {
-        "message": "Logged out successfully"
-    }
+    await auth.auth_service.logout(
+        refresh_token=data.refresh_token,
+        blacklist_access_token=True,
+        access_token_jti=jti,
+        redis_client=auth.redis_client
+    )
+    return None
 ```
 
 ### Logout Behavior
 
+**When `store_refresh_tokens=True` (default):**
 ```
 1. Hash the refresh token
 2. Find token in database (by hash)
@@ -273,9 +299,29 @@ async def logout(refresh_token: str = Cookie(None)):
    └─ Return True
 4. If not found:
    └─ Return False
+5. (Optional) If blacklist_access_token=True and enable_token_blacklist=True:
+   ├─ Add access token JTI to Redis blacklist
+   ├─ Set TTL to remaining token lifetime
+   └─ Access token immediately invalid
 ```
 
-**Note:** Access tokens remain valid until expiration (usually 15 minutes). For immediate logout, implement token blacklisting with Redis.
+**When `store_refresh_tokens=False` (stateless mode):**
+```
+1. Skip MongoDB revocation (no refresh tokens stored)
+2. If blacklist_access_token=True and enable_token_blacklist=True:
+   ├─ Add access token JTI to Redis blacklist
+   └─ Return True if blacklisted, False otherwise
+3. Otherwise return False
+```
+
+### Security Modes
+
+| Config | Access Token After Logout | Refresh Token After Logout | Use Case |
+|--------|---------------------------|----------------------------|----------|
+| `store_refresh_tokens=True`<br>`enable_token_blacklist=False` | Valid for 15 min | Revoked immediately | **Default** - Most applications |
+| `store_refresh_tokens=True`<br>`enable_token_blacklist=True` | Revoked immediately (if Redis) | Revoked immediately | **High Security** - Banking, healthcare |
+| `store_refresh_tokens=False`<br>`enable_token_blacklist=False` | Valid for 15 min | N/A (stateless JWT) | **Internal Tools** - Minimal DB writes |
+| `store_refresh_tokens=False`<br>`enable_token_blacklist=True` | Revoked immediately (if Redis) | N/A (stateless JWT) | **Redis-only** revocation |
 
 ---
 

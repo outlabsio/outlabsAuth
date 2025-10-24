@@ -10,7 +10,10 @@
       "Bash(python3:*)",
       "Bash(docker compose:*)",
       "Bash(docker logs:*)",
-      "Read(//private/tmp/**)"
+      "Read(//private/tmp/**)",
+      "Bash(docker exec:*)",
+      "Bash(docker inspect:*)",
+      "Bash(docker ps:*)"
     ],
     "deny": [],
     "ask": []
