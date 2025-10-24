@@ -1338,12 +1338,14 @@ dependencies = [
     { name = "makefun" },
     { name = "motor" },
     { name = "passlib" },
+    { name = "prometheus-client" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "python-dateutil" },
     { name = "python-jose", extra = ["cryptography"] },
     { name = "python-multipart" },
+    { name = "structlog" },
 ]
 
 [package.optional-dependencies]
@@ -1358,11 +1360,13 @@ all = [
     { name = "httpx-oauth" },
     { name = "isort" },
     { name = "mypy" },
+    { name = "prometheus-client" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "python-telegram-bot" },
     { name = "redis" },
     { name = "sendgrid" },
+    { name = "structlog" },
     { name = "twilio" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -1456,6 +1460,8 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.5.0" },
     { name = "pandas", marker = "extra == 'stress'", specifier = ">=2.1.0" },
     { name = "passlib", specifier = ">=1.7.4" },
+    { name = "prometheus-client", specifier = ">=0.19.0" },
+    { name = "prometheus-client", marker = "extra == 'all'", specifier = ">=0.19.0" },
     { name = "prometheus-client", marker = "extra == 'stress'", specifier = ">=0.19.0" },
     { name = "psutil", marker = "extra == 'stress'", specifier = ">=5.9.0" },
     { name = "py-spy", marker = "extra == 'stress'", specifier = ">=0.3.14" },
@@ -1477,6 +1483,8 @@ requires-dist = [
     { name = "rich", marker = "extra == 'stress'", specifier = ">=13.7.0" },
     { name = "sendgrid", marker = "extra == 'all'", specifier = ">=6.10.0" },
     { name = "sendgrid", marker = "extra == 'notifications'", specifier = ">=6.10.0" },
+    { name = "structlog", specifier = ">=23.0.0" },
+    { name = "structlog", marker = "extra == 'all'", specifier = ">=23.0.0" },
     { name = "twilio", marker = "extra == 'all'", specifier = ">=8.0.0" },
     { name = "twilio", marker = "extra == 'notifications'", specifier = ">=8.0.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'all'", specifier = ">=0.24.0" },
@@ -2195,6 +2203,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a7/a5/d6f429d43394057b67a6b5bbe6eae2f77a6bf7459d961fdb224bf206eee6/starlette-0.48.0.tar.gz", hash = "sha256:7e8cee469a8ab2352911528110ce9088fdc6a37d9876926e73da7ce4aa4c7a46", size = 2652949 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/be/72/2db2f49247d0a18b4f1bb9a5a39a0162869acf235f3a96418363947b3d46/starlette-0.48.0-py3-none-any.whl", hash = "sha256:0764ca97b097582558ecb498132ed0c7d942f233f365b86ba37770e026510659", size = 73736 },
+]
+
+[[package]]
+name = "structlog"
+version = "25.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/79/b9/6e672db4fec07349e7a8a8172c1a6ae235c58679ca29c3f86a61b5e59ff3/structlog-25.4.0.tar.gz", hash = "sha256:186cd1b0a8ae762e29417095664adf1d6a31702160a46dacb7796ea82f7409e4", size = 1369138 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a0/4a/97ee6973e3a73c74c8120d59829c3861ea52210667ec3e7a16045c62b64d/structlog-25.4.0-py3-none-any.whl", hash = "sha256:fe809ff5c27e557d14e613f45ca441aabda051d119ee5a0102aaba6ce40eed2c", size = 68720 },
 ]
 
 [[package]]

@@ -2,7 +2,7 @@
 
 **Last Updated**: 2025-01-24
 **Branch**: `library-redesign`
-**Version**: 1.4 (Unified Architecture + Performance + Token Revocation + Testing + Activity Tracking)
+**Version**: 1.5 (Core Complete + Examples Fixed + Observability Documentation Ready)
 
 ---
 
@@ -22,7 +22,7 @@
 
 ---
 
-## ✅ Current Status: **CORE LIBRARY COMPLETE**
+## ✅ Current Status: **CORE LIBRARY COMPLETE + EXAMPLES WORKING + OBSERVABILITY DESIGNED**
 
 ### Core Implementation (v1.0) - **✅ DONE**
 
@@ -132,6 +132,127 @@ Implemented comprehensive activity tracking for DAU/MAU/QAU metrics:
 
 **Status**: ✅ Complete, tested, ready for production
 
+**2025-01-24: UserModel Refactoring** ✨
+
+Flattened UserModel to remove embedded profile and align with industry patterns:
+
+1. **Removed**: Embedded `UserProfile` class with nested fields
+2. **Added**: Optional flat `first_name` and `last_name` fields at root level
+3. **Removed**: Business logic fields (`phone`, `avatar_url`, `preferences`)
+4. **Pattern**: Use Beanie Links for extended profiles (documented in 96-Extending-UserModel.md)
+5. **Property**: Added `full_name` property (combines first + last names, falls back to email)
+6. **Metadata**: Consolidated all custom data into `user.metadata` (used for role_ids, department, etc.)
+
+**Benefits**:
+- ✅ Aligns with Django AbstractUser and FastAPI Users patterns
+- ✅ Eliminates friction with Beanie Links pattern
+- ✅ Separation of concerns (auth data vs business data)
+- ✅ Simpler API (`user.first_name` instead of `user.profile.first_name`)
+
+**Updated**:
+- All services (`user_service.py`, `permission_service.py`, `auth_service.py`)
+- All schemas (`user.py` schemas)
+- All tests (55 core tests passing)
+- All documentation (`12-Data-Models.md`, `96-Extending-UserModel.md`)
+
+**2025-01-24: Examples Fixed** ✨
+
+Both example applications updated to work with flattened UserModel:
+
+1. **SimpleRBAC Example** (`examples/simple_rbac/`):
+   - Removed `username` field (doesn't exist in UserModel)
+   - Changed `full_name` to `first_name` + `last_name` in RegisterRequest
+   - Updated all endpoints to use flat fields
+   - Fixed role assignment to use `user.metadata["role_ids"]` pattern
+   - Updated seed data to split names and use `full_name` property
+
+2. **EnterpriseRBAC Example** (`examples/enterprise_rbac/`):
+   - Removed unused `username` parameter from seed script
+   - Already correctly uses Beanie Links pattern with `ExtendedUserModel`
+   - Demonstrates proper profile extension with `AgentProfile` and `TeamMemberProfile`
+   - Shows best practices for linking business data to UserModel
+
+**Testing**: ✅ Both examples verified (schema validation, user creation, full_name property)
+
+**2025-01-24: Observability Documentation Complete** 📊
+
+Comprehensive observability system fully documented (implementation pending):
+
+1. **Documentation Files Created** (2,500+ lines total):
+   - `97-Observability.md` - Main guide (600+ lines)
+     - Quick start, configuration reference, integration guides
+     - Prometheus, Grafana, ELK, CloudWatch, Datadog setup
+     - Best practices, troubleshooting, FAQ
+
+   - `98-Metrics-Reference.md` - Complete metrics catalog (700+ lines)
+     - 20+ Prometheus metrics with full specifications
+     - Counter, Histogram, and Gauge metrics
+     - Example PromQL queries and recommended alerts
+     - Organized by category (auth, authz, sessions, API keys, security, performance)
+
+   - `99-Log-Events-Reference.md` - Log events catalog (850+ lines)
+     - 25+ structured log events with complete field schemas
+     - JSON examples for each event type
+     - Search/filter patterns with jq
+     - Organized by category (auth, authz, API keys, security, performance, errors)
+
+   - `grafana-dashboards/README.md` - Dashboard guide (400+ lines)
+     - Quick setup instructions for Prometheus + Grafana
+     - Complete panel descriptions
+     - Recommended alert rules for production
+     - Customization guide and troubleshooting
+
+2. **Architecture Designed**:
+   - Unified `ObservabilityService` - single emission point for all events
+   - Logs + Metrics together - no code duplication
+   - Docker-friendly - JSON logs to stdout (no file bloat)
+   - Always-on by default - configurable per environment
+   - Async logging - zero request blocking
+   - Correlation IDs - distributed tracing ready
+
+3. **Metrics Defined** (20+ metrics):
+   - Authentication: login attempts, latency, lockouts, token refresh
+   - Authorization: permission checks, denials, tree permission depth
+   - Sessions: active count, duration
+   - API Keys: validations, usage, rate limits
+   - Security: suspicious activity, brute force detection
+   - Performance: cache hits, DB query latency
+
+4. **Log Events Defined** (25+ events):
+   - Success: `user_login_success`, `permission_check_granted`, `api_key_validated`
+   - Failures: `user_login_failed`, `permission_check_denied`, `token_refresh_failed`
+   - Security: `suspicious_activity_detected`, `session_hijack_suspected`, `account_locked`
+   - Performance: `permission_check_slow`, `slow_database_query`, `cache_invalidated`
+
+5. **Configuration Model**:
+   ```python
+   ObservabilityConfig(
+       # Logs
+       enable_logs=True,
+       logs_level="INFO",
+       logs_format="auto",  # json in prod, console in dev
+       logs_output="stdout",  # Docker-friendly
+
+       # Metrics
+       enable_metrics=True,
+       metrics_path="/metrics",
+
+       # Feature-specific
+       log_permission_checks="auto",  # all in dev, failures_only in prod
+       log_api_key_hits=False,  # Too noisy, use metrics
+
+       # Privacy
+       redact_sensitive_data=True,  # GDPR compliance
+
+       # Performance
+       async_logging=True,  # Don't block requests
+   )
+   ```
+
+**Status**: ✅ Documentation complete, ready for implementation
+
+**Next Step**: Implement observability system following documented API
+
 ---
 
 **Previous Update (Earlier in session)**
@@ -231,23 +352,58 @@ async def create_lead(
 
 ## 🚧 What's Next
 
-### Immediate Tasks
+### Current Focus: Observability Implementation
 
-1. **Fix Enterprise Example** (`examples/enterprise_rbac/`)
-   - Update to use `auth.deps` pattern
-   - Fix 5 syntax errors (missing closing parentheses)
-   - Update to use dict return values from routers
-   - Update README to match actual capabilities
+**Status**: Documentation complete (2,500+ lines), ready to implement
+
+**Implementation Plan** (3-4 days):
+
+1. **Core Infrastructure** (Day 1-2):
+   - Create `outlabs_auth/observability/` module
+   - Implement `ObservabilityConfig` with all configuration options
+   - Implement `ObservabilityService` (single emission point)
+   - Set up `structlog` for structured logging
+   - Add `prometheus-client` metrics definitions
+
+2. **Service Instrumentation** (Day 2-3):
+   - Instrument `AuthService` (login, logout, token refresh)
+   - Instrument `PermissionService` (permission checks, ABAC evaluation)
+   - Instrument `APIKeyService` (validations, rate limits)
+   - Add observability to `UserService` (user operations)
+
+3. **FastAPI Integration** (Day 3):
+   - Create observability middleware for auto-instrumentation
+   - Implement `/metrics` endpoint factory
+   - Add correlation ID support
+   - Test with example applications
+
+4. **Testing & Refinement** (Day 3-4):
+   - Unit tests for ObservabilityService
+   - Integration tests for metrics accuracy
+   - Verify all log events emit correctly
+   - Test configuration options
+   - Update documentation based on implementation learnings
+
+**Expected Deliverables**:
+- ✅ Structured logging (JSON to stdout)
+- ✅ Prometheus metrics at `/metrics`
+- ✅ 20+ metrics tracking auth operations
+- ✅ 25+ log events for debugging
+- ✅ Always-on by default, configurable
+- ✅ Zero request blocking (async logging)
+- ✅ Correlation IDs for tracing
+
+### Future Tasks (Post-Observability)
+
+1. **Testing**
+   - Expand integration test coverage
+   - Performance benchmarks
+   - Load testing with observability enabled
 
 2. **Documentation**
-   - Update `IMPLEMENTATION_ROADMAP.md`
-   - Add DD-047: Backend initialization decision
-   - Clean up old status files in root
-
-3. **Testing**
-   - Create comprehensive integration tests
-   - Test all authentication methods
-   - Test pre-built routers
+   - Review and update all docs based on implementation
+   - Create video tutorials for setup
+   - Write migration guide from v1.4 to v1.5
 
 ### Future Extensions (Post v1.0)
 
@@ -400,9 +556,10 @@ outlabsAuth/
 
 ## 🐛 Known Issues
 
-1. **Enterprise Example** - Has 5 syntax errors, needs dependency pattern update
-2. **Example README** - Claims endpoints exist that don't (entities, roles, memberships routers)
-3. **Old status files** - Multiple overlapping status files in root (cleaning up now)
+1. ~~**Enterprise Example**~~ - ✅ FIXED (2025-01-24)
+2. ~~**SimpleRBAC Example**~~ - ✅ FIXED (2025-01-24)
+3. **Grafana Dashboard JSON** - Not yet created (have README, need actual dashboard.json file)
+4. **Observability Implementation** - Documentation complete, code pending
 
 ---
 

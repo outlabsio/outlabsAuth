@@ -24,7 +24,8 @@
       "Bash(.venv/bin/python:*)",
       "WebSearch",
       "Bash(/Users/outlabs/Documents/GitHub/outlabsAuth/.venv/bin/python:*)",
-      "WebFetch(domain:beanie-odm.dev)"
+      "WebFetch(domain:beanie-odm.dev)",
+      "Bash(PORT=8003 /Users/outlabs/Documents/GitHub/outlabsAuth/.venv/bin/uvicorn:*)"
     ],
     "deny": [],
     "ask": []

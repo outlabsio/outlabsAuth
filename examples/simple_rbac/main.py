@@ -21,11 +21,13 @@ from pydantic import BaseModel, EmailStr, Field
 from beanie import Document, init_beanie
 
 from outlabs_auth import SimpleRBAC
-from outlabs_auth.dependencies import AuthDeps
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.models.user import UserModel
 from outlabs_auth.models.role import RoleModel
 from outlabs_auth.core.exceptions import AuthenticationError
+from outlabs_auth.observability import ObservabilityPresets
+from outlabs_auth.observability.router import create_metrics_router
+from outlabs_auth.observability.middleware import CorrelationIDMiddleware
 
 
 # ============================================================================
@@ -35,6 +37,7 @@ from outlabs_auth.core.exceptions import AuthenticationError
 MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
 DATABASE_NAME = os.getenv("DATABASE_NAME", "blog_simple_rbac")
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
+PORT = int(os.getenv("PORT", "8003"))  # Default to port 8003
 
 
 # ============================================================================
@@ -114,8 +117,20 @@ class BlogPostResponse(BaseModel):
 # ============================================================================
 
 auth: Optional[SimpleRBAC] = None
-deps: Optional[AuthDeps] = None
 security = HTTPBearer()
+
+
+# ============================================================================
+# Dependency Functions
+# ============================================================================
+
+async def get_current_user_from_token(token: str = Depends(security)):
+    """Extract and validate user from Bearer token"""
+    try:
+        user = await auth.get_current_user(token.credentials)
+        return user
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
 
 
 @asynccontextmanager
@@ -137,7 +152,7 @@ async def lifespan(app: FastAPI):
         ]
     )
 
-    # Initialize SimpleRBAC
+    # Initialize SimpleRBAC with observability (v1.5)
     auth_config = AuthConfig(
         secret_key=SECRET_KEY,
         algorithm="HS256",
@@ -145,11 +160,11 @@ async def lifespan(app: FastAPI):
         refresh_token_expire_days=30,
     )
 
-    auth = SimpleRBAC(config=auth_config)
-    await auth.initialize()
+    # Configure observability (use development preset for local testing)
+    observability_config = ObservabilityPresets.development()
 
-    # Initialize dependencies
-    deps = AuthDeps(auth)
+    auth = SimpleRBAC(config=auth_config, observability_config=observability_config)
+    await auth.initialize()
 
     # Create default roles if they don't exist
     await setup_default_roles(auth)
@@ -223,10 +238,23 @@ async def setup_default_roles(auth_instance: SimpleRBAC):
 
 app = FastAPI(
     title="Blog API - SimpleRBAC Example",
-    description="A simple blog API demonstrating OutlabsAuth SimpleRBAC",
-    version="1.0.0",
+    description="A simple blog API demonstrating OutlabsAuth SimpleRBAC with Observability",
+    version="1.5.0",
     lifespan=lifespan,
 )
+
+# Add observability middleware and metrics endpoint (v1.5)
+# Note: Middleware will be added after auth.initialize() in lifespan
+# so we can access auth.observability
+
+@app.on_event("startup")
+async def add_observability():
+    """Add observability middleware and routes after auth is initialized"""
+    # Add correlation ID middleware
+    app.add_middleware(CorrelationIDMiddleware, obs_service=auth.observability)
+
+    # Add metrics endpoint
+    app.include_router(create_metrics_router())
 
 
 # ============================================================================
@@ -285,14 +313,14 @@ async def login(request: LoginRequest):
 
 
 @app.post("/logout")
-async def logout(ctx = Depends(deps.require_auth())):
+async def logout(ctx = Depends(get_auth_context)):
     """Logout (revoke refresh token)"""
     # Note: In a real app, you'd need to track and revoke the refresh token
     return {"message": "Logged out successfully"}
 
 
 @app.get("/me")
-async def get_current_user(ctx = Depends(deps.require_auth())):
+async def get_current_user(ctx = Depends(get_auth_context)):
     """Get current user info"""
     user = ctx.metadata.get("user")
     return {
@@ -312,7 +340,7 @@ async def get_current_user(ctx = Depends(deps.require_auth())):
 @app.get("/posts", response_model=List[BlogPostResponse])
 async def list_posts(
     published_only: bool = True,
-    ctx = Depends(deps.optional_auth()),
+    ctx = Depends(get_optional_auth),
 ):
     """List blog posts (public can see published, authenticated can see all)"""
 
@@ -349,7 +377,7 @@ async def list_posts(
 @app.post("/posts", response_model=BlogPostResponse, status_code=status.HTTP_201_CREATED)
 async def create_post(
     post_data: BlogPostCreate,
-    ctx = Depends(deps.require_permission("post:create")),
+    ctx = Depends(require_permission("post:create")),
 ):
     """Create a new blog post (requires post:create permission)"""
     user = ctx.metadata.get("user")
@@ -379,7 +407,7 @@ async def create_post(
 @app.get("/posts/{post_id}", response_model=BlogPostResponse)
 async def get_post(
     post_id: str,
-    ctx = Depends(deps.optional_auth()),
+    ctx = Depends(get_optional_auth),
 ):
     """Get a single blog post"""
     post = await BlogPost.get(post_id)
@@ -417,7 +445,7 @@ async def get_post(
 async def update_post(
     post_id: str,
     post_data: BlogPostUpdate,
-    ctx = Depends(deps.require_auth()),
+    ctx = Depends(get_auth_context),
 ):
     """Update a blog post (own posts or with post:manage permission)"""
     post = await BlogPost.get(post_id)
@@ -477,7 +505,7 @@ async def update_post(
 @app.delete("/posts/{post_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_post(
     post_id: str,
-    ctx = Depends(deps.require_auth()),
+    ctx = Depends(get_auth_context),
 ):
     """Delete a blog post (own posts or with post:manage permission)"""
     post = await BlogPost.get(post_id)
@@ -520,7 +548,7 @@ async def delete_post(
 async def assign_role(
     user_id: str,
     role_name: str,
-    ctx = Depends(deps.require_permission("user:manage")),
+    ctx = Depends(require_permission("user:manage")),
 ):
     """Assign a role to a user (requires user:manage permission)"""
     user = await auth.user_service.get_user(user_id)
@@ -543,7 +571,7 @@ async def assign_role(
 
 
 @app.get("/admin/roles")
-async def list_roles(ctx = Depends(deps.require_permission("user:read"))):
+async def list_roles(ctx = Depends(require_permission("user:read"))):
     """List all available roles"""
     roles = await auth.role_service.list_roles()
 

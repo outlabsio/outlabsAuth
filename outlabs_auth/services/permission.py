@@ -17,6 +17,9 @@ from outlabs_auth.core.exceptions import UserNotFoundError, PermissionDeniedErro
 from outlabs_auth.utils.validation import validate_permission_name
 from outlabs_auth.services.policy_engine import PolicyEvaluationEngine
 
+# Import observability (v1.5)
+from outlabs_auth.observability import ObservabilityService
+
 
 class BasicPermissionService:
     """
@@ -34,6 +37,7 @@ class BasicPermissionService:
         self,
         database: AsyncIOMotorDatabase,
         config: AuthConfig,
+        observability: Optional[ObservabilityService] = None,
     ):
         """
         Initialize BasicPermissionService.
@@ -41,9 +45,11 @@ class BasicPermissionService:
         Args:
             database: MongoDB database instance
             config: Authentication configuration
+            observability: Optional observability service for logging/metrics
         """
         self.database = database
         self.config = config
+        self.observability = observability
 
     async def check_permission(
         self,
@@ -71,6 +77,10 @@ class BasicPermissionService:
             >>> has_perm
             True
         """
+        # Start timing for observability
+        from datetime import datetime, timezone
+        start_time = datetime.now(timezone.utc)
+
         # Get user
         user = await UserModel.get(user_id)
         if not user:
@@ -81,6 +91,16 @@ class BasicPermissionService:
 
         # Superusers have all permissions
         if user.is_superuser:
+            # Log permission check (observability)
+            if self.observability:
+                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                self.observability.log_permission_check(
+                    user_id=user_id,
+                    permission=permission,
+                    result="granted",
+                    duration_ms=duration_ms,
+                    reason="superuser",
+                )
             return True
 
         # Get all user permissions
@@ -88,6 +108,16 @@ class BasicPermissionService:
 
         # Check exact match
         if permission in user_permissions:
+            # Log permission check (observability)
+            if self.observability:
+                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                self.observability.log_permission_check(
+                    user_id=user_id,
+                    permission=permission,
+                    result="granted",
+                    duration_ms=duration_ms,
+                    reason="exact_match",
+                )
             return True
 
         # Check wildcard permissions
@@ -97,11 +127,42 @@ class BasicPermissionService:
         # Check resource wildcard (e.g., "user:*")
         resource_wildcard = f"{resource}:*"
         if resource_wildcard in user_permissions:
+            # Log permission check (observability)
+            if self.observability:
+                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                self.observability.log_permission_check(
+                    user_id=user_id,
+                    permission=permission,
+                    result="granted",
+                    duration_ms=duration_ms,
+                    reason="wildcard_match",
+                )
             return True
 
         # Check full wildcard (e.g., "*:*")
         if "*:*" in user_permissions:
+            # Log permission check (observability)
+            if self.observability:
+                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                self.observability.log_permission_check(
+                    user_id=user_id,
+                    permission=permission,
+                    result="granted",
+                    duration_ms=duration_ms,
+                    reason="full_wildcard",
+                )
             return True
+
+        # Permission denied - log (observability)
+        if self.observability:
+            duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            self.observability.log_permission_check(
+                user_id=user_id,
+                permission=permission,
+                result="denied",
+                duration_ms=duration_ms,
+                reason="no_permission",
+            )
 
         return False
 

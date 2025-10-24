@@ -32,6 +32,9 @@ from outlabs_auth.utils.jwt import (
 )
 from outlabs_auth.utils.validation import validate_email
 
+# Import observability (v1.5)
+from outlabs_auth.observability import ObservabilityService
+
 
 class TokenPair:
     """Container for access and refresh tokens"""
@@ -69,6 +72,7 @@ class AuthService:
         config: AuthConfig,
         notification_service: Optional[Any] = None,
         activity_tracker: Optional[Any] = None,
+        observability: Optional[ObservabilityService] = None,
     ):
         """
         Initialize AuthService.
@@ -78,11 +82,13 @@ class AuthService:
             config: Authentication configuration
             notification_service: Optional notification service for events
             activity_tracker: Optional activity tracker for DAU/MAU tracking
+            observability: Optional observability service for logging/metrics
         """
         self.database = database
         self.config = config
         self.notifications = notification_service
         self.activity_tracker = activity_tracker
+        self.observability = observability
 
     async def login(
         self,
@@ -119,12 +125,26 @@ class AuthService:
             >>> tokens.access_token
             'eyJ...'
         """
+        # Start timing for observability
+        start_time = datetime.now(timezone.utc)
+
         # Validate and normalize email
         email = validate_email(email)
 
         # Find user by email
         user = await UserModel.find_one(UserModel.email == email)
         if not user:
+            # Log failed login attempt (observability)
+            if self.observability:
+                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                self.observability.log_login_failed(
+                    email=email,
+                    reason="user_not_found",
+                    method="password",
+                    failed_attempts=0,
+                    ip_address=ip_address,
+                )
+
             raise InvalidCredentialsError(
                 message="Invalid email or password",
                 details={"email": email}
@@ -132,6 +152,17 @@ class AuthService:
 
         # Check if account is locked
         if user.is_locked:
+            # Log failed login attempt on locked account (observability)
+            if self.observability:
+                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                self.observability.log_login_failed(
+                    email=email,
+                    reason="account_locked",
+                    method="password",
+                    failed_attempts=user.failed_login_attempts,
+                    ip_address=ip_address,
+                )
+
             raise AccountLockedError(
                 message=f"Account is locked until {user.locked_until.isoformat() if user.locked_until else 'unknown'}",
                 details={
@@ -186,7 +217,27 @@ class AuthService:
                 was_locked = True
 
             await user.save()
-            
+
+            # Log failed login attempt (observability)
+            if self.observability:
+                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                self.observability.log_login_failed(
+                    email=user.email,
+                    reason="invalid_password",
+                    method="password",
+                    failed_attempts=user.failed_login_attempts,
+                    ip_address=ip_address,
+                )
+
+            # Log account lockout (observability)
+            if was_locked and self.observability:
+                self.observability.log_account_locked(
+                    user_id=str(user.id),
+                    email=user.email,
+                    reason="Too many failed login attempts",
+                    ip_address=ip_address,
+                )
+
             # Emit notification for failed login
             if self.notifications:
                 await self.notifications.emit(
@@ -202,7 +253,7 @@ class AuthService:
                         "user_agent": user_agent
                     }
                 )
-            
+
             # Emit notification if account was locked
             if was_locked and self.notifications:
                 await self.notifications.emit(
@@ -228,7 +279,18 @@ class AuthService:
         user.locked_until = None
         user.last_login = datetime.now(timezone.utc)
         await user.save()
-        
+
+        # Log successful login (observability)
+        if self.observability:
+            duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            self.observability.log_login_success(
+                user_id=str(user.id),
+                email=user.email,
+                method="password",
+                duration_ms=duration_ms,
+                ip_address=ip_address,
+            )
+
         # Emit notification (fire-and-forget)
         if self.notifications:
             await self.notifications.emit(
@@ -358,6 +420,11 @@ class AuthService:
         token_model.is_revoked = True
         token_model.revoked_at = datetime.now(timezone.utc)
         token_model.revoked_reason = "User logout"
+
+        # Calculate session duration for observability
+        session_start = token_model.created_at
+        session_duration_seconds = (datetime.now(timezone.utc) - session_start).total_seconds()
+
         await token_model.save()
 
         # Optional: Blacklist access token in Redis for immediate revocation
@@ -374,20 +441,28 @@ class AuthService:
                     ttl=remaining_ttl
                 )
 
+        # Fetch user for observability and notifications
+        user = await token_model.fetch_link("user")
+
+        # Log logout (observability)
+        if self.observability and user:
+            self.observability.log_logout(
+                user_id=str(user.id),
+                session_duration_seconds=session_duration_seconds,
+                revoke_all_tokens=blacklist_access_token,
+            )
+
         # Emit notification
-        if self.notifications:
-            # Fetch user to get email for notification
-            user = await token_model.fetch_link("user")
-            if user:
-                await self.notifications.emit(
-                    "user.logout",
-                    data={
-                        "user_id": str(user.id),
-                        "email": user.email,
-                        "session_id": str(token_model.id),
-                        "immediate_revocation": blacklisted
-                    }
-                )
+        if self.notifications and user:
+            await self.notifications.emit(
+                "user.logout",
+                data={
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "session_id": str(token_model.id),
+                    "immediate_revocation": blacklisted
+                }
+            )
 
         return True
 
@@ -421,8 +496,22 @@ class AuthService:
                 audience=self.config.jwt_audience
             )
         except TokenExpiredError:
+            # Log failed token refresh (observability)
+            if self.observability:
+                self.observability.log_token_refreshed(
+                    user_id="unknown",
+                    status="failed",
+                    reason="token_expired",
+                )
             raise
         except TokenInvalidError:
+            # Log failed token refresh (observability)
+            if self.observability:
+                self.observability.log_token_refreshed(
+                    user_id="unknown",
+                    status="failed",
+                    reason="invalid_token",
+                )
             raise RefreshTokenInvalidError(
                 message="Invalid refresh token",
                 details={"reason": "Token verification failed"}
@@ -534,6 +623,13 @@ class AuthService:
             token_model.last_used_at = datetime.now(timezone.utc)
             token_model.usage_count += 1
             await token_model.save()
+
+        # Log successful token refresh (observability)
+        if self.observability:
+            self.observability.log_token_refreshed(
+                user_id=str(user.id),
+                status="success",
+            )
 
         # Track activity (fire-and-forget)
         if self.activity_tracker:

@@ -15,6 +15,9 @@ from outlabs_auth.models.role import RoleModel
 from outlabs_auth.models.permission import PermissionModel
 from outlabs_auth.models.token import RefreshTokenModel
 
+# Import observability (v1.5)
+from outlabs_auth.observability import ObservabilityConfig, ObservabilityService
+
 
 class OutlabsAuth:
     """
@@ -77,6 +80,9 @@ class OutlabsAuth:
         redis_url: Optional[str] = None,
         cache_ttl_seconds: int = 300,
         notification_service: Optional[Any] = None,  # NotificationService instance
+
+        # Observability (v1.5)
+        observability_config: Optional[ObservabilityConfig] = None,
 
         # Model customization (advanced)
         user_model: Type[UserModel] = UserModel,
@@ -159,6 +165,10 @@ class OutlabsAuth:
         
         # Store notification service
         self.notification_service = notification_service
+
+        # Initialize observability (v1.5)
+        self.observability_config = observability_config or ObservabilityConfig()
+        self.observability = None  # Will be initialized in initialize()
 
         # Store models
         self.user_model = user_model
@@ -279,6 +289,10 @@ class OutlabsAuth:
             document_models=document_models
         )
 
+        # Initialize observability service (v1.5)
+        self.observability = ObservabilityService(self.observability_config)
+        await self.observability.initialize()
+
         # Initialize services
         await self._init_services()
 
@@ -317,8 +331,14 @@ class OutlabsAuth:
         from outlabs_auth.services.role import RoleService
         from outlabs_auth.services.permission import BasicPermissionService
 
-        # Core services (always available)
-        self.auth_service = AuthService(self.database, self.config, self.notification_service)
+        # Core services (always available) - pass observability (v1.5)
+        self.auth_service = AuthService(
+            self.database,
+            self.config,
+            notification_service=self.notification_service,
+            activity_tracker=None,  # Set later in _init_services if activity tracking enabled
+            observability=self.observability
+        )
         self.user_service = UserService(self.database, self.config, self.notification_service)
         self.role_service = RoleService(self.database, self.config)
 
@@ -329,12 +349,12 @@ class OutlabsAuth:
             from outlabs_auth.services.entity import EntityService
             from outlabs_auth.services.membership import MembershipService
 
-            self.permission_service = EnterprisePermissionService(self.database, self.config)
+            self.permission_service = EnterprisePermissionService(self.database, self.config, observability=self.observability)
             self.entity_service = EntityService(self.config)
             self.membership_service = MembershipService(self.config)
         else:
             # Basic permission service (flat structure)
-            self.permission_service = BasicPermissionService(self.database, self.config)
+            self.permission_service = BasicPermissionService(self.database, self.config, observability=self.observability)
             self.entity_service = None  # Not available in SimpleRBAC
             self.membership_service = None  # Not available in SimpleRBAC
 
