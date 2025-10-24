@@ -4,6 +4,7 @@ import type { Role } from '~/types/role'
 
 const rolesStore = useRolesStore()
 const search = ref('')
+const showCreateModal = ref(false)
 
 // Fetch roles on mount
 onMounted(async () => {
@@ -103,6 +104,7 @@ const filteredRoles = computed(() => {
             icon="i-lucide-plus"
             label="Create Role"
             color="primary"
+            @click="showCreateModal = true"
           />
         </template>
       </UDashboardNavbar>
@@ -171,12 +173,15 @@ const filteredRoles = computed(() => {
         </template>
       </UTable>
 
-      <UDashboardPagination
+      <UPagination
         v-if="rolesStore.pagination.pages > 1"
-        v-model="rolesStore.pagination.page"
+        v-model:page="rolesStore.pagination.page"
         :total="rolesStore.pagination.total"
         :page-size="rolesStore.pagination.limit"
       />
     </template>
   </UDashboardPanel>
+
+  <!-- Create Role Modal -->
+  <RoleCreateModal v-model:open="showCreateModal" />
 </template>

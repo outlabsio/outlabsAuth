@@ -40,7 +40,15 @@ export interface UpdateRoleData {
 export interface Permission {
   id: string
   name: string
+  display_name: string
   description?: string
-  resource?: string
-  action?: string
+  resource: string
+  action: string
+  scope?: string
+  is_system: boolean
+  is_active: boolean
+  tags?: string[]
+  created_at: string
+  updated_at: string
+  metadata?: Record<string, any>
 }

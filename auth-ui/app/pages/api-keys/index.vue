@@ -3,6 +3,7 @@ import type { TableColumn } from '@nuxt/ui'
 
 const search = ref('')
 const statusFilter = ref<'all' | 'active' | 'revoked' | 'expired'>('all')
+const showCreateModal = ref(false)
 
 // Mock API keys data
 const apiKeys = ref([
@@ -198,6 +199,7 @@ const stats = computed(() => ({
             icon="i-lucide-plus"
             label="Create API Key"
             color="primary"
+            @click="showCreateModal = true"
           />
         </template>
       </UDashboardNavbar>
@@ -312,4 +314,7 @@ const stats = computed(() => ({
       </UTable>
     </template>
   </UDashboardPanel>
+
+  <!-- Create API Key Modal -->
+  <ApiKeyCreateModal v-model:open="showCreateModal" />
 </template>

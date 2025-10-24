@@ -4,7 +4,7 @@
       <UAuthForm
         :schema="loginSchema"
         title="Welcome back!"
-        description="Sign in to your OutlabsAuth account"
+        description="Sign in to your OutlabsAuth account (Mock Mode)"
         icon="i-lucide-lock-keyhole"
         :fields="fields"
         :loading="isLoading"
@@ -12,14 +12,8 @@
       >
         <template #description>
           <p class="text-sm text-gray-600 dark:text-gray-400">
-            Don't have an account? <ULink to="/signup" class="font-medium">Sign up</ULink>.
+            Just enter your email to sign in. Try: <code class="text-xs bg-neutral-100 dark:bg-neutral-800 px-1 py-0.5 rounded">admin@outlabs.com</code>
           </p>
-        </template>
-
-        <template #password-hint>
-          <ULink to="/recovery" class="text-sm font-medium">
-            Forgot password?
-          </ULink>
         </template>
 
         <template #validation v-if="errorMessage">
@@ -45,25 +39,18 @@ definePageMeta({
   layout: false // Use no layout for login page
 })
 
-// Auth form fields configuration
+// Auth form fields configuration - Email only for mock mode
 const fields: AuthFormField[] = [{
   name: 'email',
   type: 'email',
   label: 'Email',
   placeholder: 'you@example.com',
   required: true
-}, {
-  name: 'password',
-  type: 'password',
-  label: 'Password',
-  placeholder: 'Enter your password',
-  required: true
 }]
 
-// Zod validation schema
+// Zod validation schema - Email only for mock mode
 const loginSchema = z.object({
-  email: z.string().email('Invalid email address'),
-  password: z.string().min(1, 'Password is required')
+  email: z.string().email('Invalid email address')
 })
 
 type LoginSchema = z.infer<typeof loginSchema>
@@ -77,7 +64,7 @@ const authStore = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 
-// Form submission
+// Form submission - Mock mode: any password works
 const onSubmit = async (event: FormSubmitEvent<LoginSchema>) => {
   isLoading.value = true
   errorMessage.value = ''
@@ -85,7 +72,7 @@ const onSubmit = async (event: FormSubmitEvent<LoginSchema>) => {
   try {
     await authStore.login({
       email: event.data.email,
-      password: event.data.password
+      password: 'mock-password' // In mock mode, any password works
     })
 
     // Initialize context after successful login
@@ -97,7 +84,7 @@ const onSubmit = async (event: FormSubmitEvent<LoginSchema>) => {
     await router.push(redirect || '/dashboard')
   } catch (error: any) {
     console.error('Login error:', error)
-    errorMessage.value = error.message || 'Invalid email or password'
+    errorMessage.value = error.message || 'Invalid email address'
   } finally {
     isLoading.value = false
   }

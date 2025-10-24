@@ -11,6 +11,7 @@ Handles user management operations:
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from fastapi import Request, Response
 
 from outlabs_auth.models.user import UserModel, UserStatus, UserProfile
 from outlabs_auth.core.config import AuthConfig
@@ -497,3 +498,199 @@ class UserService:
         user.email_verified = True
         await user.save()
         return user
+
+    # ========================================================================
+    # Event Hooks (FastAPI-Users pattern)
+    # ========================================================================
+
+    async def on_after_register(
+        self,
+        user: UserModel,
+        request: Optional[Request] = None
+    ) -> None:
+        """
+        Perform logic after successful user registration.
+
+        Override this method to add custom logic like:
+        - Sending welcome emails
+        - Creating default user data
+        - Logging registration events
+        - Triggering webhooks
+
+        Args:
+            user: The registered user
+            request: Optional FastAPI request that triggered the operation
+
+        Example:
+            ```python
+            async def on_after_register(self, user, request=None):
+                await send_welcome_email(user.email)
+                await create_default_workspace(user.id)
+            ```
+        """
+        pass  # Override in subclass
+
+    async def on_after_login(
+        self,
+        user: UserModel,
+        request: Optional[Request] = None,
+        response: Optional[Response] = None
+    ) -> None:
+        """
+        Perform logic after successful user login.
+
+        Override this method to add custom logic like:
+        - Logging login events
+        - Updating last login timestamp
+        - Sending login notifications
+        - Session tracking
+
+        Args:
+            user: The user that logged in
+            request: Optional FastAPI request
+            response: Optional response built by the router
+
+        Example:
+            ```python
+            async def on_after_login(self, user, request=None, response=None):
+                user.last_login = datetime.utcnow()
+                await user.save()
+                await log_login_event(user.id, request.client.host)
+            ```
+        """
+        pass  # Override in subclass
+
+    async def on_after_update(
+        self,
+        user: UserModel,
+        update_dict: Dict[str, Any],
+        request: Optional[Request] = None
+    ) -> None:
+        """
+        Perform logic after successful user update.
+
+        Override this method to add custom logic like:
+        - Sending update notifications
+        - Logging profile changes
+        - Triggering audit trails
+
+        Args:
+            user: The updated user
+            update_dict: Dictionary with the updated user fields
+            request: Optional FastAPI request
+
+        Example:
+            ```python
+            async def on_after_update(self, user, update_dict, request=None):
+                if "email" in update_dict:
+                    await send_email_change_notification(user)
+            ```
+        """
+        pass  # Override in subclass
+
+    async def on_after_forgot_password(
+        self,
+        user: UserModel,
+        token: str,
+        request: Optional[Request] = None
+    ) -> None:
+        """
+        Perform logic after successful forgot password request.
+
+        Override this method to add custom logic like:
+        - Sending password reset emails
+        - Logging reset requests
+        - Rate limiting notifications
+
+        Args:
+            user: The user that requested password reset
+            token: The password reset token
+            request: Optional FastAPI request
+
+        Example:
+            ```python
+            async def on_after_forgot_password(self, user, token, request=None):
+                reset_link = f"https://example.com/reset?token={token}"
+                await send_password_reset_email(user.email, reset_link)
+            ```
+        """
+        pass  # Override in subclass
+
+    async def on_after_reset_password(
+        self,
+        user: UserModel,
+        request: Optional[Request] = None
+    ) -> None:
+        """
+        Perform logic after successful password reset.
+
+        Override this method to add custom logic like:
+        - Sending password change confirmations
+        - Logging password resets
+        - Invalidating old sessions
+
+        Args:
+            user: The user that reset their password
+            request: Optional FastAPI request
+
+        Example:
+            ```python
+            async def on_after_reset_password(self, user, request=None):
+                await send_password_changed_email(user.email)
+                await invalidate_all_user_sessions(user.id)
+            ```
+        """
+        pass  # Override in subclass
+
+    async def on_after_request_verify(
+        self,
+        user: UserModel,
+        token: str,
+        request: Optional[Request] = None
+    ) -> None:
+        """
+        Perform logic after successful email verification request.
+
+        Override this method to add custom logic like:
+        - Sending verification emails
+        - Logging verification requests
+
+        Args:
+            user: The user requesting email verification
+            token: The verification token
+            request: Optional FastAPI request
+
+        Example:
+            ```python
+            async def on_after_request_verify(self, user, token, request=None):
+                verify_link = f"https://example.com/verify?token={token}"
+                await send_verification_email(user.email, verify_link)
+            ```
+        """
+        pass  # Override in subclass
+
+    async def on_after_verify(
+        self,
+        user: UserModel,
+        request: Optional[Request] = None
+    ) -> None:
+        """
+        Perform logic after successful email verification.
+
+        Override this method to add custom logic like:
+        - Sending welcome emails
+        - Unlocking features
+        - Logging verification events
+
+        Args:
+            user: The verified user
+            request: Optional FastAPI request
+
+        Example:
+            ```python
+            async def on_after_verify(self, user, request=None):
+                await send_welcome_email(user.email)
+                await unlock_premium_features(user.id)
+            ```
+        """
+        pass  # Override in subclass

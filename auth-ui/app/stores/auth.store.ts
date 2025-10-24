@@ -168,7 +168,7 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       // Mock mode
       if (USE_MOCK_DATA) {
-        logMockCall('POST', '/v1/auth/login', credentials)
+        logMockCall('POST', '/auth/login', credentials)
         await mockDelay()
 
         const mockUser = getMockUserByCredentials(credentials.email, credentials.password)
@@ -188,8 +188,8 @@ export const useAuthStore = defineStore('auth', () => {
         return
       }
 
-      // Real API call
-      const response = await fetch(`${config.public.apiBaseUrl}/v1/auth/login`, {
+      // Real API call - OutlabsAuth format
+      const response = await fetch(`${config.public.apiBaseUrl}/auth/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -230,7 +230,7 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       // Call logout endpoint if authenticated
       if (state.refreshToken) {
-        await apiCall('/v1/auth/logout', {
+        await apiCall('/auth/logout', {
           method: 'POST',
           body: JSON.stringify({ refresh_token: state.refreshToken })
         })
@@ -254,7 +254,7 @@ export const useAuthStore = defineStore('auth', () => {
     }
 
     try {
-      const response = await fetch(`${config.public.apiBaseUrl}/v1/auth/refresh`, {
+      const response = await fetch(`${config.public.apiBaseUrl}/auth/refresh`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -292,7 +292,7 @@ export const useAuthStore = defineStore('auth', () => {
   const fetchCurrentUser = async (): Promise<void> => {
     // Mock mode
     if (USE_MOCK_DATA) {
-      logMockCall('GET', '/v1/users/me')
+      logMockCall('GET', '/users/me')
       await mockDelay()
       // User already set from login or localStorage
       if (state.user) {
@@ -308,45 +308,10 @@ export const useAuthStore = defineStore('auth', () => {
     }
 
     // Real API call
-    const user = await apiCall<User>('/v1/users/me')
+    const user = await apiCall<User>('/users/me')
     if (user) {
       state.user = user
       safeLocalStorage.setItem(USER_KEY, JSON.stringify(user))
-    }
-  }
-
-  /**
-   * Check system initialization status
-   * Returns whether the system is initialized and ready
-   */
-  const checkSystemStatus = async (): Promise<SystemStatus> => {
-    // Mock mode - system always initialized
-    if (USE_MOCK_DATA) {
-      logMockCall('GET', '/v1/system/status')
-      await mockDelay()
-      return {
-        initialized: true,
-        requires_setup: false,
-        admin_exists: true,
-        database_connected: true
-      }
-    }
-
-    // Real API call
-    try {
-      const status = await fetch(`${config.public.apiBaseUrl}/v1/system/status`)
-      if (!status.ok) {
-        throw new Error('Failed to check system status')
-      }
-      return await status.json()
-    } catch (error) {
-      console.error('System status check failed:', error)
-      return {
-        initialized: false,
-        requires_setup: true,
-        admin_exists: false,
-        database_connected: false
-      }
     }
   }
 
@@ -379,7 +344,6 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     logout,
     refreshAccessToken,
-    fetchCurrentUser,
-    checkSystemStatus
+    fetchCurrentUser
   }
 })

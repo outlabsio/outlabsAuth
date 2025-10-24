@@ -409,6 +409,107 @@ class EntityService:
             EntityModel.status == "active"
         ).to_list()
 
+    async def get_suggested_entity_types(
+        self,
+        parent_id: Optional[str] = None,
+        entity_class: Optional[EntityClass] = None
+    ) -> Dict[str, Any]:
+        """
+        Get suggested entity types based on siblings (entities with same parent).
+
+        Helps maintain naming consistency by suggesting entity types
+        that already exist at the same hierarchy level.
+
+        Args:
+            parent_id: Parent entity ID (None for root level)
+            entity_class: Filter by entity class (optional)
+
+        Returns:
+            Dict with suggestions, parent info, and total count:
+            {
+                "suggestions": [
+                    {
+                        "entity_type": "brokerage",
+                        "count": 5,
+                        "examples": ["RE/MAX Downtown", "Century 21 West", ...]
+                    },
+                    ...
+                ],
+                "parent_entity": {...} or None,
+                "total_children": 17
+            }
+
+        Example:
+            >>> # Get suggestions for creating entity under RE/MAX California
+            >>> suggestions = await entity_service.get_suggested_entity_types(
+            ...     parent_id=remax_california_id
+            ... )
+            >>> # Returns: [{"entity_type": "brokerage", "count": 15, ...}, ...]
+        """
+        # Build query for siblings (same parent)
+        query = {}
+
+        if parent_id:
+            # Find entities with this parent
+            parent_entity = await self.get_entity(parent_id)
+            query["parent_entity.$id"] = parent_id
+        else:
+            # Find root-level entities (no parent)
+            query["parent_entity"] = None
+
+        # Filter by entity_class if provided
+        if entity_class:
+            query["entity_class"] = entity_class.value
+
+        # Filter only active entities
+        query["status"] = "active"
+
+        # Query all siblings
+        entities = await EntityModel.find(query).to_list()
+
+        # Group by entity_type
+        type_counts = {}
+        for entity in entities:
+            entity_type = entity.entity_type
+
+            if entity_type not in type_counts:
+                type_counts[entity_type] = {
+                    "entity_type": entity_type,
+                    "count": 0,
+                    "examples": []
+                }
+
+            type_counts[entity_type]["count"] += 1
+
+            # Add up to 3 example names
+            if len(type_counts[entity_type]["examples"]) < 3:
+                type_counts[entity_type]["examples"].append(entity.display_name)
+
+        # Sort by count (most common first)
+        suggestions = sorted(
+            type_counts.values(),
+            key=lambda x: x["count"],
+            reverse=True
+        )
+
+        # Get parent entity info if provided
+        parent_entity_data = None
+        if parent_id:
+            parent_entity = await self.get_entity(parent_id)
+            parent_entity_data = {
+                "id": str(parent_entity.id),
+                "name": parent_entity.name,
+                "display_name": parent_entity.display_name,
+                "entity_type": parent_entity.entity_type,
+                "entity_class": parent_entity.entity_class.value
+            }
+
+        return {
+            "suggestions": suggestions,
+            "parent_entity": parent_entity_data,
+            "total_children": len(entities)
+        }
+
     # Closure table maintenance
 
     async def _create_closure_records(self, entity: EntityModel) -> None:

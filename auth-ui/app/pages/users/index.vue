@@ -21,6 +21,7 @@ const table = useTemplateRef('table')
 // State
 const search = ref('')
 const statusFilter = ref<'all' | 'active' | 'inactive'>('all')
+const showCreateModal = ref(false)
 const columnFilters = ref([{ id: 'email', value: '' }])
 const columnVisibility = ref()
 const rowSelection = ref({})
@@ -242,7 +243,7 @@ const columns: TableColumn<User>[] = [
             label="Create User"
             icon="i-lucide-user-plus"
             color="primary"
-            @click="navigateTo('/users/create')"
+            @click="showCreateModal = true"
           />
         </template>
       </UDashboardNavbar>
@@ -314,4 +315,7 @@ const columns: TableColumn<User>[] = [
       </div>
     </template>
   </UDashboardPanel>
+
+  <!-- Create User Modal -->
+  <UserCreateModal v-model:open="showCreateModal" />
 </template>

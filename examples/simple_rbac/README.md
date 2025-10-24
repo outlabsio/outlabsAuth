@@ -43,20 +43,84 @@ pip install -e .
 pip install fastapi uvicorn motor beanie
 ```
 
-## Running the Example
+## Quick Start
+
+### 1. Start MongoDB
 
 ```bash
-# Make sure MongoDB is running
+# Using Docker (recommended)
 docker run -d -p 27017:27017 --name mongodb mongo:latest
 
-# Run the application
-python main.py
+# Or install MongoDB locally
+# https://www.mongodb.com/docs/manual/installation/
+```
 
-# Or use uvicorn directly
+### 2. Seed Demo Data
+
+```bash
+# Create demo users, roles, and blog posts
+python seed_data.py
+```
+
+This creates:
+- **4 roles**: reader, writer, editor, admin
+- **5 demo users** with different roles
+- **15 sample blog posts** (some published, some drafts)
+- **Sample comments** on posts
+
+**Demo Credentials:**
+```
+Admin:     admin@blog.com     / password123
+Editor:    editor@blog.com    / password123
+Writer 1:  writer1@blog.com   / password123
+Writer 2:  writer2@blog.com   / password123
+Reader:    reader@blog.com    / password123
+```
+
+### 3. Run the Application
+
+```bash
+# Using uvicorn (recommended)
 uvicorn main:app --reload --port 8000
+
+# Or run directly
+python main.py
 ```
 
 The API will be available at `http://localhost:8000`
+
+### 4. Test the API
+
+Visit the interactive docs:
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+
+## Test Scenarios
+
+Try these scenarios with the seeded demo data:
+
+1. **Login as Reader** (`reader@blog.com`)
+   - ✅ Can view published posts
+   - ❌ Cannot create new posts (403 Forbidden)
+   - ❌ Cannot edit any posts
+
+2. **Login as Writer** (`writer1@blog.com`)
+   - ✅ Can create new posts
+   - ✅ Can edit their own posts
+   - ❌ Cannot edit Writer 2's posts (403 Forbidden)
+   - ❌ Cannot delete other writers' posts
+
+3. **Login as Editor** (`editor@blog.com`)
+   - ✅ Can edit ANY post (even others' posts)
+   - ✅ Can delete any post
+   - ✅ Can publish/unpublish posts
+   - ✅ Can view all users
+
+4. **Login as Admin** (`admin@blog.com`)
+   - ✅ Full system access
+   - ✅ Can manage users
+   - ✅ Can assign roles
+   - ✅ Can delete posts, users, etc.
 
 ## API Documentation
 
@@ -252,11 +316,30 @@ pytest test_main.py -v
 6. **Logging**: Add comprehensive logging
 7. **Monitoring**: Monitor authentication failures
 
+## Connect Admin UI
+
+You can use the universal admin UI to manage this blog instance:
+
+```bash
+# In a new terminal, navigate to auth-ui
+cd ../../auth-ui
+
+# Set environment variable to point to blog API
+export NUXT_PUBLIC_API_BASE_URL=http://localhost:8000/api
+
+# Start Nuxt dev server
+npm run dev
+```
+
+Then visit `http://localhost:3000` and login with any demo credentials.
+
+The admin UI will automatically detect that this is a SimpleRBAC instance (no entity hierarchy) and hide entity-related features.
+
 ## Next Steps
 
-- Check out the **EnterpriseRBAC example** for hierarchical permissions
-- Check out the **Full-Featured example** for ABAC conditions
-- Read the [API_DESIGN.md](../../docs/API_DESIGN.md) documentation
+- Check out the **EnterpriseRBAC example** (`../enterprise_rbac/`) for hierarchical permissions
+- Check out the **Full-Featured example** (`../full_featured/`) for ABAC conditions
+- Read the [IMPLEMENTATION_PLAN.md](../../IMPLEMENTATION_PLAN.md) for the complete vision
 
 ## License
 

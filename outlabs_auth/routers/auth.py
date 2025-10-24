@@ -96,17 +96,11 @@ def get_auth_router(
         Triggers on_after_login hook.
         """
         try:
-            # Authenticate user
-            user = await auth.auth_service.authenticate(
+            # Authenticate user and get tokens
+            user, tokens = await auth.auth_service.login(
                 email=data.email,
                 password=data.password
             )
-
-            if not user:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid credentials"
-                )
 
             # Check verification requirement
             if requires_verification:
@@ -116,13 +110,14 @@ def get_auth_router(
                         detail="Email verification required"
                     )
 
-            # Generate tokens
-            tokens = await auth.auth_service.create_tokens(user)
-
             # Trigger hook
             await auth.user_service.on_after_login(user)
 
-            return LoginResponse(**tokens)
+            return LoginResponse(
+                access_token=tokens.access_token,
+                refresh_token=tokens.refresh_token,
+                token_type=tokens.token_type
+            )
 
         except HTTPException:
             raise
@@ -141,8 +136,12 @@ def get_auth_router(
     async def refresh(data: RefreshRequest):
         """Refresh access token using refresh token."""
         try:
-            tokens = await auth.auth_service.refresh_token(data.refresh_token)
-            return RefreshResponse(**tokens)
+            tokens = await auth.auth_service.refresh_access_token(data.refresh_token)
+            return RefreshResponse(
+                access_token=tokens.access_token,
+                refresh_token=tokens.refresh_token,
+                token_type=tokens.token_type
+            )
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
