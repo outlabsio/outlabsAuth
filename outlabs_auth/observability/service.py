@@ -112,11 +112,8 @@ class ObservabilityService:
 
         # Add hostname if enabled
         if self.config.metrics_include_hostname:
-            processors.append(
-                structlog.processors.CallsiteParameter(
-                    parameters=[structlog.processors.CallsiteParameterAdder.hostname]
-                )
-            )
+            # Add hostname directly to every log
+            processors.append(lambda _, __, event_dict: {**event_dict, "hostname": self.hostname})
 
         # Choose output format
         if self.config.logs_format == LogsFormat.JSON:

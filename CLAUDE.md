@@ -8,16 +8,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **OutlabsAuth** is being redesigned as a **FastAPI library** that can be installed via pip (`pip install outlabs-auth`) and integrated directly into applications. This replaces the previous centralized API service approach.
 
+**Inspired by FastAPI-Users**: We've adopted many excellent patterns from [FastAPI-Users](https://github.com/fastapi-users/fastapi-users) including lifecycle hooks, router factories, and transport/strategy patterns (see DD-038 to DD-046).
+
 ### What Changed
 - **From**: Standalone FastAPI service with multi-platform isolation
 - **To**: Python library with single-tenant per application
 
-### What Stayed
+### What Stayed (Core OutlabsAuth Features)
 - ✅ Entity hierarchy (STRUCTURAL + ACCESS_GROUP)
 - ✅ Tree permissions (hierarchical access control)
 - ✅ Context-aware roles
 - ✅ Flexible entity types
 - ✅ Hybrid authorization (RBAC + ReBAC + ABAC)
+
+### What We Borrowed from FastAPI-Users
+- ✅ Lifecycle hooks (on_after_register, on_after_login, etc.)
+- ✅ Router factory pattern
+- ✅ Transport/Strategy pattern
+- ✅ Dynamic dependency injection with makefun
+- ✅ Service-based architecture
 
 ## Current Project Status
 
@@ -25,8 +34,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Status**: Planning Phase → Starting Implementation
 **Version**: 1.4 (Unified Architecture + Performance Improvements)
 
-### Key Documentation
-All comprehensive design docs are in **`docs/`**:
+### Documentation Structure
+
+**IMPORTANT**: There are TWO documentation folders with different purposes:
+
+#### `docs/` - System Specifications (For Maintainers)
+Complete design specs and architectural decisions (13 files):
 1. **REDESIGN_VISION.md** - Main vision document (start here)
 2. **LIBRARY_ARCHITECTURE.md** - Technical architecture details
 3. **IMPLEMENTATION_ROADMAP.md** - 15-16 week implementation plan
@@ -37,9 +50,19 @@ All comprehensive design docs are in **`docs/`**:
 8. **TESTING_GUIDE.md** - Testing strategies
 9. **DEPLOYMENT_GUIDE.md** - Production deployment
 10. **ERROR_HANDLING.md** - Exception hierarchy
-11. **DESIGN_DECISIONS.md** - 37 architectural decisions (DD-001 to DD-037)
+11. **DESIGN_DECISIONS.md** - 37+ architectural decisions (DD-001 to DD-037+)
 12. **AUTH_EXTENSIONS.md** - Optional OAuth, passwordless, MFA (v1.1-v1.4)
 13. **MIGRATION_GUIDE.md** - For external users migrating from centralized API
+
+**Use these as source of truth for architectural decisions.**
+
+#### `docs-library/` - User Documentation (Implementation-Specific)
+Currently only 9 files - being rebuilt to match actual implementation:
+- Data models, JWT, user status, activity tracking
+- Testing, observability, metrics, log events
+- Extending user model
+
+**Note**: Most user documentation was deleted (48 files) due to inconsistencies with actual implementation. User docs are being rewritten from scratch based on real code, not design specs.
 
 ## Architecture Overview
 
@@ -120,13 +143,36 @@ pip install -e .
 
 ```
 outlabsAuth/
-├── docs/                           # ✅ All design documentation
+├── docs/                           # 📋 SYSTEM SPECS (for maintainers)
+│   ├── README.md                   # Explains design docs vs user docs
+│   ├── REDESIGN_VISION.md          # Project vision
+│   ├── LIBRARY_ARCHITECTURE.md     # Technical architecture
+│   ├── DESIGN_DECISIONS.md         # DD-001 to DD-037+ decisions
+│   ├── API_DESIGN.md               # API design patterns
+│   ├── COMPARISON_MATRIX.md        # SimpleRBAC vs EnterpriseRBAC
+│   ├── IMPLEMENTATION_ROADMAP.md   # Development phases
+│   └── ... (13 design spec files)
+│
+├── docs-library/                   # 📚 USER DOCS (implementation-specific)
+│   ├── 12-Data-Models.md           # Database models
+│   ├── 22-JWT-Tokens.md            # JWT authentication
+│   ├── 48-User-Status-System.md    # User status
+│   ├── 49-Activity-Tracking.md     # DAU/MAU tracking
+│   ├── 95-Testing-Guide.md         # Testing implementation
+│   ├── 96-Extending-UserModel.md   # Extending users
+│   ├── 97-Observability.md         # Logging & metrics
+│   ├── 98-Metrics-Reference.md     # Metrics catalog
+│   └── 99-Log-Events-Reference.md  # Log events catalog
+│   # Note: Only 9 files - user docs being rebuilt from scratch
+│
 ├── _reference/                     # 📁 Archived reference code
 │   ├── models/                     # Old Beanie models from centralized API
 │   └── services/                   # Old service logic from centralized API
+│
 ├── _archive/                       # 📁 Archived old UI
 │   └── frontend-old/               # Old Nuxt 3 admin UI (for reference)
-├── outlabs_auth/                   # 📁 NEW - The library package
+│
+├── outlabs_auth/                   # 📦 THE LIBRARY PACKAGE
 │   ├── __init__.py
 │   ├── core/                       # Base OutlabsAuth class
 │   ├── models/                     # Beanie ODM models
@@ -136,14 +182,19 @@ outlabsAuth/
 │   ├── middleware/                 # Auth middleware
 │   ├── utils/                      # JWT, password hashing, etc.
 │   └── schemas/                    # Pydantic request/response schemas
+│
 ├── examples/                       # 📁 Example applications
-│   ├── simple_app/                 # SimpleRBAC demo
-│   └── enterprise_app/             # EnterpriseRBAC demo
+│   ├── enterprise_rbac/            # EnterpriseRBAC demo (real estate)
+│   └── notifications/              # Notification system demo
+│   # Note: SimpleRBAC example deleted (had broken metadata hack)
+│
 ├── tests/                          # 📁 Library tests
 │   ├── unit/
 │   └── integration/
+│
 ├── pyproject.toml                  # Package configuration
-└── README.md                       # Library README
+├── README.md                       # Library README
+└── CLAUDE.md                       # This file - Claude Code guidance
 ```
 
 ## Key Features (Core v1.0)
@@ -264,13 +315,14 @@ tests/
 
 All 37 design decisions documented in **DESIGN_DECISIONS.md**:
 
-### Latest (v1.4)
+### Latest (v1.4+)
 - **DD-032**: Unified architecture (single core + thin wrappers)
 - **DD-033**: Redis counters for API keys (99%+ write reduction)
 - **DD-034**: JWT service tokens (~0.5ms auth)
 - **DD-035**: Single AuthDeps class
 - **DD-036**: Closure table for tree permissions (O(1) queries)
 - **DD-037**: Redis Pub/Sub cache invalidation (<100ms)
+- **DD-038 to DD-046**: FastAPI-Users patterns integration (hooks, router factories, transport/strategy)
 
 ### Core Decisions
 - **DD-001**: MongoDB with Beanie ODM

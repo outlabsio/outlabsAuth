@@ -11,16 +11,27 @@
 
 OutlabsAuth is a comprehensive authentication and authorization library for FastAPI applications. Install it via pip and integrate powerful auth capabilities directly into your application - no separate auth service required.
 
+**Inspired by [FastAPI-Users](https://github.com/fastapi-users/fastapi-users)**: We've adopted their battle-tested patterns (lifecycle hooks, router factories, transport/strategy) while adding advanced authorization features like hierarchical permissions, tree permissions, and context-aware roles.
+
 ### Key Features
 
+**Authorization (Unique to OutlabsAuth)**:
 - **Two Presets**: SimpleRBAC (flat) or EnterpriseRBAC (hierarchical)
-- **JWT Authentication**: Access + refresh tokens with automatic rotation
-- **API Key Authentication**: argon2id hashing, rate limiting, IP whitelisting
 - **Hierarchical Permissions**: Tree permissions with O(1) ancestor queries (closure table)
 - **Context-Aware Roles**: Permissions adapt based on organizational context
+- **Entity System**: STRUCTURAL vs ACCESS_GROUP for flexible org modeling
+
+**Authentication (Inspired by FastAPI-Users)**:
+- **JWT Authentication**: Access + refresh tokens with automatic rotation
+- **API Key Authentication**: argon2id hashing, rate limiting, IP whitelisting
 - **Multi-Source Auth**: JWT, API keys, service tokens, superuser, anonymous
+- **Lifecycle Hooks**: 20+ overrideable hooks (on_after_register, on_after_login, etc.)
+- **Router Factories**: Pre-built FastAPI routers for rapid setup
+
+**Developer Experience**:
 - **FastAPI Native**: Designed specifically for FastAPI with dependency injection
 - **Production Ready**: Redis caching, Pub/Sub invalidation, comprehensive security
+- **Extensible**: Override services, add custom hooks, create custom transports
 
 ## Quick Start
 
@@ -44,6 +55,13 @@ deps = AuthDeps(auth)
 # Initialize database
 await auth.initialize()
 
+# Assign role to user (uses UserRoleMembership table)
+await auth.role_service.assign_role(
+    user_id=user.id,
+    role_id=admin_role.id,
+    assigned_by=current_user.id
+)
+
 # Protected route
 @app.get("/users/me")
 async def get_me(ctx = Depends(deps.require_auth())):
@@ -58,6 +76,8 @@ async def delete_user(
     await auth.user_service.delete_user(user_id)
     return {"success": True}
 ```
+
+**Note**: SimpleRBAC uses a `UserRoleMembership` table for role assignment, providing audit trails and time-based access control even in the simple preset. This makes migration to EnterpriseRBAC seamless. See [DD-047](docs/DESIGN_DECISIONS.md#dd-047-userrolemembership-table-for-simplerbac) for rationale.
 
 ### Enterprise RBAC Example
 
@@ -276,7 +296,9 @@ result = await auth.permission_service.check_permission_with_context(
 
 ## Documentation
 
-Comprehensive documentation in `docs/`:
+### Design Specifications (`docs/`)
+
+System design and architectural decisions for maintainers:
 
 - **[REDESIGN_VISION.md](docs/REDESIGN_VISION.md)** - Project vision and goals
 - **[LIBRARY_ARCHITECTURE.md](docs/LIBRARY_ARCHITECTURE.md)** - Technical architecture
@@ -286,7 +308,23 @@ Comprehensive documentation in `docs/`:
 - **[SECURITY.md](docs/SECURITY.md)** - Security hardening
 - **[TESTING_GUIDE.md](docs/TESTING_GUIDE.md)** - Testing strategies
 - **[DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md)** - Production deployment
-- **[DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md)** - Architectural decisions
+- **[DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md)** - Architectural decisions (DD-001 to DD-037+)
+
+### User Documentation (`docs-library/`)
+
+Implementation-specific documentation (9 files):
+
+- **[12-Data-Models.md](docs-library/12-Data-Models.md)** - Database models and schemas
+- **[22-JWT-Tokens.md](docs-library/22-JWT-Tokens.md)** - JWT authentication
+- **[48-User-Status-System.md](docs-library/48-User-Status-System.md)** - User status management
+- **[49-Activity-Tracking.md](docs-library/49-Activity-Tracking.md)** - DAU/MAU/WAU tracking
+- **[95-Testing-Guide.md](docs-library/95-Testing-Guide.md)** - Testing implementation
+- **[96-Extending-UserModel.md](docs-library/96-Extending-UserModel.md)** - Custom user fields
+- **[97-Observability.md](docs-library/97-Observability.md)** - Logging and metrics
+- **[98-Metrics-Reference.md](docs-library/98-Metrics-Reference.md)** - Metrics catalog
+- **[99-Log-Events-Reference.md](docs-library/99-Log-Events-Reference.md)** - Log events catalog
+
+**Note**: User documentation is being rebuilt. See `docs/` for complete design specifications.
 
 ## Development Status
 
@@ -326,6 +364,23 @@ MIT License - see LICENSE file for details
 ## Contributing
 
 Contributions welcome! Please see CONTRIBUTING.md for guidelines.
+
+## Acknowledgments
+
+OutlabsAuth is heavily inspired by [FastAPI-Users](https://github.com/fastapi-users/fastapi-users) and adopts many of their excellent patterns:
+
+- **Lifecycle Hooks**: Extensibility through overrideable async hooks
+- **Router Factories**: Pre-built routers for common auth flows
+- **Transport/Strategy Pattern**: Clean separation of credential delivery vs validation
+- **Dynamic Dependencies**: makefun integration for perfect OpenAPI schemas
+
+We extend these patterns with advanced authorization features:
+- Hierarchical entity system
+- Tree permissions with closure table
+- Context-aware roles
+- Multi-tenant support
+
+Special thanks to the FastAPI-Users team for pioneering these patterns in the FastAPI ecosystem.
 
 ## Support
 

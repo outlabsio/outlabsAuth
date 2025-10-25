@@ -5,7 +5,11 @@
       "Bash(uvicorn:*)",
       "Bash(lsof:*)",
       "Bash(xargs kill:*)",
-      "mcp__playwright__browser_close"
+      "mcp__playwright__browser_close",
+      "Bash(chmod:*)",
+      "Bash(python3:*)",
+      "Bash(find:*)",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []
