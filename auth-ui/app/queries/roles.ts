@@ -69,7 +69,7 @@ export function useCreateRoleMutation() {
     },
     onSuccess: () => {
       // Invalidate all role list queries
-      queryClient.invalidateQueries({ queryKey: ROLE_KEYS.lists() })
+      queryClient.invalidateQueries({ key: ROLE_KEYS.lists() })
       toast.add({
         title: 'Role created',
         description: 'The role has been created successfully',
@@ -101,9 +101,9 @@ export function useUpdateRoleMutation() {
     },
     onSuccess: (_data, { roleId }) => {
       // Invalidate specific role detail
-      queryClient.invalidateQueries({ queryKey: ROLE_KEYS.detail(roleId) })
+      queryClient.invalidateQueries({ key: ROLE_KEYS.detail(roleId) })
       // Invalidate all role lists (role might appear in filtered lists)
-      queryClient.invalidateQueries({ queryKey: ROLE_KEYS.lists() })
+      queryClient.invalidateQueries({ key: ROLE_KEYS.lists() })
       toast.add({
         title: 'Role updated',
         description: 'The role has been updated successfully',
@@ -133,52 +133,23 @@ export function useDeleteRoleMutation() {
       const rolesAPI = createRolesAPI()
       return rolesAPI.deleteRole(roleId)
     },
-    onMutate: async (roleId) => {
-      // Cancel ongoing queries
-      await queryClient.cancelQueries({ queryKey: ROLE_KEYS.all })
-
-      // Snapshot current state for rollback
-      const previousLists = queryClient.getQueriesData({ queryKey: ROLE_KEYS.lists() })
-
-      // Optimistically update all role lists
-      queryClient.setQueriesData<any>(
-        { queryKey: ROLE_KEYS.lists() },
-        (old: any) => {
-          if (!old?.items) return old
-          return {
-            ...old,
-            items: old.items.filter((role: Role) => role.id !== roleId),
-            total: old.total - 1
-          }
-        }
-      )
-
-      return { previousLists, roleId }
-    },
-    onError: (error: any, _roleId, context) => {
-      // Rollback on error
-      if (context?.previousLists) {
-        context.previousLists.forEach(([queryKey, data]) => {
-          queryClient.setQueryData(queryKey, data)
-        })
-      }
-
-      toast.add({
-        title: 'Error deleting role',
-        description: error.message || 'Failed to delete role',
-        color: 'error'
-      })
-    },
     onSuccess: (_data, roleId) => {
       // Invalidate to refetch fresh data
-      queryClient.invalidateQueries({ queryKey: ROLE_KEYS.lists() })
-      // Remove detail query for deleted role
-      queryClient.removeQueries({ queryKey: ROLE_KEYS.detail(roleId) })
+      queryClient.invalidateQueries({ key: ROLE_KEYS.lists() })
+      // Invalidate detail query for deleted role
+      queryClient.invalidateQueries({ key: ROLE_KEYS.detail(roleId) })
 
       toast.add({
         title: 'Role deleted',
         description: 'The role has been deleted successfully',
         color: 'success'
+      })
+    },
+    onError: (error: any) => {
+      toast.add({
+        title: 'Error deleting role',
+        description: error.message || 'Failed to delete role',
+        color: 'error'
       })
     },
   })
@@ -199,9 +170,9 @@ export function useAssignPermissionsMutation() {
     },
     onSuccess: (_data, { roleId }) => {
       // Invalidate specific role detail (permissions changed)
-      queryClient.invalidateQueries({ queryKey: ROLE_KEYS.detail(roleId) })
+      queryClient.invalidateQueries({ key: ROLE_KEYS.detail(roleId) })
       // Invalidate role lists (might affect filtered views)
-      queryClient.invalidateQueries({ queryKey: ROLE_KEYS.lists() })
+      queryClient.invalidateQueries({ key: ROLE_KEYS.lists() })
       toast.add({
         title: 'Permissions assigned',
         description: 'Permissions have been assigned to the role',
@@ -233,9 +204,9 @@ export function useRemovePermissionsMutation() {
     },
     onSuccess: (_data, { roleId }) => {
       // Invalidate specific role detail (permissions changed)
-      queryClient.invalidateQueries({ queryKey: ROLE_KEYS.detail(roleId) })
+      queryClient.invalidateQueries({ key: ROLE_KEYS.detail(roleId) })
       // Invalidate role lists (might affect filtered views)
-      queryClient.invalidateQueries({ queryKey: ROLE_KEYS.lists() })
+      queryClient.invalidateQueries({ key: ROLE_KEYS.lists() })
       toast.add({
         title: 'Permissions removed',
         description: 'Permissions have been removed from the role',

@@ -24,7 +24,7 @@ const state = reactive({
 watch(() => state.name, (newName) => {
   if (newName && newName.includes(':')) {
     const parts = newName.split(':')
-    if (parts.length >= 2) {
+    if (parts.length >= 2 && parts[0] && parts[1]) {
       state.resource = parts[0].trim()
 
       // Check for scope suffix
@@ -305,7 +305,7 @@ const formatExample = computed(() => {
 
             <UAlert
               icon="i-lucide-info"
-              color="blue"
+              color="primary"
               variant="subtle"
               title="Automatically Derived"
               description="These values are parsed from the permission name. You can override them if needed."
@@ -757,7 +757,7 @@ const formatExample = computed(() => {
           <UCard>
             <div class="space-y-2">
               <div class="flex items-center gap-2">
-                <UBadge color="blue" variant="subtle" size="xs">System</UBadge>
+                <UBadge color="primary" variant="subtle" size="xs">System</UBadge>
               </div>
               <ul class="text-xs text-muted space-y-1">
                 <li>" Built-in permissions</li>
@@ -770,7 +770,7 @@ const formatExample = computed(() => {
           <UCard>
             <div class="space-y-2">
               <div class="flex items-center gap-2">
-                <UBadge color="purple" variant="subtle" size="xs">Custom</UBadge>
+                <UBadge color="secondary" variant="subtle" size="xs">Custom</UBadge>
               </div>
               <ul class="text-xs text-muted space-y-1">
                 <li>" Application-specific</li>

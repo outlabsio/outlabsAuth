@@ -44,14 +44,14 @@ const currentUser = computed(() => authStore.currentUser)
               <label class="text-sm font-medium text-muted">Account Status</label>
               <div class="mt-1">
                 <UBadge
-                  :color="currentUser?.is_active ? 'green' : 'red'"
+                  :color="currentUser?.is_active ? 'success' : 'error'"
                   variant="subtle"
                 >
                   {{ currentUser?.is_active ? 'Active' : 'Inactive' }}
                 </UBadge>
                 <UBadge
                   v-if="currentUser?.is_superuser"
-                  color="purple"
+                  color="secondary"
                   variant="subtle"
                   class="ml-2"
                 >
@@ -154,7 +154,7 @@ const currentUser = computed(() => authStore.currentUser)
 
             <div>
               <label class="text-sm font-medium text-muted">Environment</label>
-              <UBadge color="blue" variant="subtle" class="mt-1">
+              <UBadge color="primary" variant="subtle" class="mt-1">
                 Development
               </UBadge>
             </div>

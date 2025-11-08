@@ -163,7 +163,7 @@ Same pattern for all resources.
 2. **Start Frontend:**
    ```bash
    cd auth-ui
-   npm run dev
+   bun run dev
    ```
 
 3. **Test Users:**

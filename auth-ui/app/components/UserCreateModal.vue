@@ -49,24 +49,21 @@ const passwordColor = computed(() => {
 })
 
 // Mutation for creating users
-const { mutate: createUser, isPending } = useCreateUserMutation()
+const { mutate: createUser, isLoading: isSubmitting } = useCreateUserMutation()
 
 // Submit handler
 async function handleSubmit() {
   try {
-    await createUser(state, {
-      onSuccess: () => {
-        // Close modal and reset form
-        open.value = false
-        Object.assign(state, {
-          username: '',
-          email: '',
-          password: '',
-          full_name: '',
-          is_active: true,
-          is_superuser: false
-        })
-      }
+    await createUser(state)
+    // Close modal and reset form on success
+    open.value = false
+    Object.assign(state, {
+      username: '',
+      email: '',
+      password: '',
+      full_name: '',
+      is_active: true,
+      is_superuser: false
     })
   } catch (error) {
     // Error handling is done by the mutation
@@ -174,12 +171,12 @@ async function handleSubmit() {
           color="neutral"
           variant="outline"
           @click="open = false"
-          :disabled="isPending"
+          :disabled="isSubmitting"
         />
         <UButton
           label="Create User"
           icon="i-lucide-user-plus"
-          :loading="isPending"
+          :loading="isSubmitting"
           @click="handleSubmit"
         />
       </div>

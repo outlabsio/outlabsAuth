@@ -1,38 +1,52 @@
 # Pinia Colada Migration Guide
 
-**Status:** ✅ Phase 1 Complete → ✅ Phase 2 Complete → ✅ Phase 2.5 Complete → ✅ **Phase 2.6 Complete (Permission Bug Fixed)** → ⏳ Phase 3 Next (Testing)
+**Status:** ✅ Phase 1 Complete → ✅ Phase 2 Complete → ✅ Phase 2.5 Complete → ✅ Phase 2.6 Complete → ✅ Phase 2.7 Complete → 🔄 **Phase 3 In Progress (Testing)**
 **Started:** 2025-01-08
 **Completed Phase 1:** 2025-01-08 (~2.5 hours)
 **Completed Phase 2:** 2025-11-08 (~2 hours)
 **Completed Phase 2.5:** 2025-11-08 (~1.5 hours)
 **Completed Phase 2.6:** 2025-11-08 (~3 hours - Investigation + Fix)
+**Completed Phase 2.7:** 2025-11-08 (~1.5 hours - TypeScript Cleanup)
+**Phase 3 Started:** 2025-11-08
 **Goal:** Replace manual API state management with Pinia Colada for better DX, performance, and UX
 
 ---
 
 ## 🚀 QUICK START (Coming Back With Zero Context?)
 
-**WHERE WE ARE:** ✅ **Permission bug FIXED** - Ready to test!
+**WHERE WE ARE:** 🔄 **Phase 3 Testing - Users page working!** - Backend Beanie fixes applied, testing in progress
 
-**WHAT WE FIXED (Phase 2.6):**
-- ✅ Added `.fetch_links()` to permission service query (fixed role resolution)
-- ✅ Removed silent fallback in dependencies (no more hidden errors)
-- ✅ Admin role has all required permissions in database
-- ✅ System user has admin role assigned
+**WHAT WE FIXED (Phase 3 - Beanie Link Query Fixes):**
+- ✅ Fixed Beanie Link field query syntax (dictionary → query operators)
+- ✅ Fixed Link resolution (already fetched via fetch_links=True)
+- ✅ Fixed user fetching with linked data (fetch_links=True parameter)
+- ✅ **Users page now loads all 5 users successfully!**
+
+**PREVIOUS FIXES (Phase 2.7 - TypeScript):**
+- ✅ Fixed Pinia Colada API mismatches (queryKey → key, removed TanStack Query methods)
+- ✅ Fixed mutation return types (isPending → isLoading)
+- ✅ Fixed component type errors (computed refs, button sizes, colors)
+- ✅ **69 errors → 9 errors (87% improvement)**
 
 **WHAT WORKS:**
-- ✅ All UI queries/mutations defined
+- ✅ All UI queries/mutations defined (~800 lines)
 - ✅ Backend routers have all required endpoints
 - ✅ `/v1` URL prefix applied throughout
 - ✅ Authentication working (login, logout, refresh)
 - ✅ Frontend types aligned with backend
 - ✅ Fresh database with seeded demo data
-- ✅ **Permission service bug fixed**
+- ✅ Permission service bug fixed (Beanie Link queries)
+- ✅ **Users page: List, search, pagination working**
+- ✅ **Showing 5 users correctly**
 
-**WHAT TO DO NEXT:**
-1. **Restart backend** (after system restart)
-2. **Start admin UI**
-3. **Test roles page** - should load without 403!
+**WHAT TO TEST NEXT:**
+1. ✅ Users page - list, search, pagination (DONE)
+2. ⏳ Users page - create user
+3. ⏳ Users page - delete user (optimistic updates)
+4. ⏳ Roles page - list and CRUD
+5. ⏳ Permissions page - list and filter
+6. ⏳ Cache behavior (navigate away/back)
+7. ⏳ Race conditions in search
 
 **STARTUP COMMANDS:**
 ```bash
@@ -51,7 +65,7 @@ REDIS_URL="redis://localhost:6380" \
 uv run uvicorn main:app --host 0.0.0.0 --port 8003 --reload
 
 # 3. Start admin UI (from project root)
-cd auth-ui && npm run dev
+cd auth-ui && bun run dev
 
 # 4. Test it!
 # - Login: system@outlabs.io / Asd123$$$
@@ -59,7 +73,24 @@ cd auth-ui && npm run dev
 # - Should load successfully! ✅
 ```
 
-**FILES MODIFIED (Phase 2.6):**
+**FILES MODIFIED:**
+
+**Phase 3 (Beanie Link Query Fixes):**
+- `outlabs_auth/services/permission.py:204-223` - Fixed UserRoleMembership query (dictionary → query operators), fixed Link resolution
+- `outlabs_auth/services/user.py:160` - Added `fetch_links=True` parameter to user fetching
+
+**Phase 2.7 (TypeScript Fixes):**
+- `auth-ui/app/queries/users.ts` - Fixed Pinia Colada API (queryKey → key)
+- `auth-ui/app/queries/roles.ts` - Fixed Pinia Colada API, removed optimistic updates
+- `auth-ui/app/queries/entities.ts` - Fixed Pinia Colada API, removed optimistic updates
+- `auth-ui/app/components/RoleCreateModal.vue` - Fixed computed refs, mutation return type
+- `auth-ui/app/components/UserCreateModal.vue` - Fixed mutation return type (isPending → isLoading)
+- `auth-ui/app/components/EntityCreateModal.vue` - Fixed button sizes, added EntityClass type
+- `auth-ui/app/components/PermissionCreateModal.vue` - Fixed colors, undefined handling
+- `auth-ui/app/pages/settings/index.vue` - Fixed badge colors (green/red → success/error)
+- `auth-ui/app/pages/settings/security.vue` - Fixed badge colors
+
+**Phase 2.6 (Backend Permission Fixes):**
 - `outlabs_auth/services/permission.py:212` - Added `.fetch_links()`
 - `outlabs_auth/dependencies.py:215` - Removed silent fallback
 - `examples/simple_rbac/main.py:290-315` - Updated admin role permissions
@@ -1187,7 +1218,7 @@ uv run uvicorn main:app --port 8003 --reload
 2. **Start Frontend:**
 ```bash
 cd auth-ui
-npm run dev  # http://localhost:3000
+bun run dev  # http://localhost:3000
 ```
 
 3. **Test Users Page:**
@@ -1399,8 +1430,8 @@ curl http://localhost:8003/health
 **Frontend Setup:**
 ```bash
 cd auth-ui
-npm install  # If first time
-npm run dev  # Starts on http://localhost:3000
+bun install  # If first time
+bun run dev  # Starts on http://localhost:3000
 ```
 
 **Login:**
@@ -1488,6 +1519,98 @@ npm run dev  # Starts on http://localhost:3000
    - Update testing instructions
    - Note any limitations
 
+### Phase 3 Progress - Beanie Link Query Fixes (2025-11-08)
+
+**Status:** ✅ **Users page working!** - Fixed critical Beanie Link field query bugs
+
+#### Issues Discovered & Fixed
+
+**1. Beanie Link Field Query Syntax**
+
+**Problem:** Using dictionary syntax to query Link fields in Beanie doesn't work:
+```python
+# ❌ BROKEN - Dictionary syntax doesn't work with Link fields
+memberships = await UserRoleMembership.find(
+    {"user.$id": user_oid, "status": MembershipStatus.ACTIVE.value}
+).to_list()
+# Result: 0 memberships found (even though data exists!)
+```
+
+**Fix:**  Use Beanie query operator syntax for Link fields:
+```python
+# ✅ WORKS - Query operator syntax
+memberships = await UserRoleMembership.find(
+    UserRoleMembership.user.id == user_oid,
+    UserRoleMembership.status == MembershipStatus.ACTIVE,
+    fetch_links=True
+).to_list()
+# Result: Correctly finds 1 membership!
+```
+
+**File:** `outlabs_auth/services/permission.py:210-214`
+
+**2. Link Resolution After `fetch_links=True`**
+
+**Problem:** Trying to call `.fetch()` on already-resolved Link fields:
+```python
+# ❌ BROKEN - role is already fetched!
+memberships = await UserRoleMembership.find(..., fetch_links=True).to_list()
+for membership in memberships:
+    role = await membership.role.fetch()  # AttributeError: 'RoleModel' object has no attribute 'fetch'
+```
+
+**Fix:** Access the Link directly when `fetch_links=True` is used:
+```python
+# ✅ WORKS - role is already a RoleModel object
+memberships = await UserRoleMembership.find(..., fetch_links=True).to_list()
+for membership in memberships:
+    role = membership.role  # Already a RoleModel instance!
+    all_permissions.update(role.permissions)
+```
+
+**File:** `outlabs_auth/services/permission.py:240-244`
+
+**3. User Fetching Without Links**
+
+**Problem:** `get_user_by_id()` wasn't fetching linked data:
+```python
+# ❌ BROKEN - Links not resolved
+return await UserModel.get(user_id)
+```
+
+**Fix:** Add `fetch_links=True` parameter:
+```python
+# ✅ WORKS - Links resolved
+return await UserModel.get(user_id, fetch_links=True)
+```
+
+**File:** `outlabs_auth/services/user.py:160`
+
+#### Test Results
+
+✅ **Users Page Now Working:**
+- Loads all 5 users successfully
+- Shows correct pagination: "Showing 5 of 5 users"
+- All user data displayed:
+  - System Admin (system@outlabs.io)
+  - Sarah Writer (writer@example.com)
+  - John Editor (editor@example.com)
+  - Jane Reader (reader@example.com)
+  - Temp Contractor (contractor@example.com)
+
+**Backend Logs Confirm:**
+```
+[PERMISSION DEBUG] Found 1 memberships
+[PERMISSION DEBUG] Role: admin, permissions: ['post:create', 'user:read', ...]
+INFO: "GET /v1/users/?page=1&limit=20 HTTP/1.1" 200 OK
+```
+
+#### Key Learnings
+
+1. **Beanie Link Query Syntax:** Always use query operators (`Model.field.id == value`) instead of dictionary syntax for Link fields
+2. **fetch_links Parameter:** When using `fetch_links=True`, links are pre-resolved - don't call `.fetch()` again
+3. **Beanie API Changes:** Beanie 1.30.0 uses `fetch_links=True` as a parameter, not `.fetch_links()` as a chainable method
+
 ### Known Issues to Check
 
 1. **Empty Permissions List**
@@ -1549,8 +1672,10 @@ npm run dev  # Starts on http://localhost:3000
 **Phase 1 Status:** ✅ Complete - UI fully migrated to Pinia Colada
 **Phase 2 Status:** ✅ Complete - Backend endpoints added to library
 **Phase 2.5 Status:** ✅ Complete - Integration fixes (auth, permissions, types)
-**Phase 3 Status:** ⏳ Next - UI testing and final polish
-**Overall Progress:** ~85% complete (2.5 of 3 phases done)
+**Phase 2.6 Status:** ✅ Complete - Backend permission fixes
+**Phase 2.7 Status:** ✅ Complete - TypeScript fixes (87% error reduction)
+**Phase 3 Status:** 🔄 In Progress - Beanie Link fixes done, Users page working!
+**Overall Progress:** ~90% complete (Phase 3 testing in progress)
 
 **Key Achievements:**
 - ✅ All 4 query files created (~800 lines)
@@ -1564,6 +1689,8 @@ npm run dev  # Starts on http://localhost:3000
 - ✅ Pagination schema created
 - ✅ Docker setup cleaned and centralized
 - ✅ Fresh demo data seeded
+- ✅ **Fixed critical Beanie Link field query bugs**
+- ✅ **Users page loading all 5 users successfully**
 
 **Biggest Win:** Zero race conditions! Query keys make them impossible.
 

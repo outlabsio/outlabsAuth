@@ -250,7 +250,7 @@ When connected to EnterpriseRBAC backend:
 3. **Start Admin UI**:
    ```bash
    cd auth-ui
-   npm run dev  # Runs on http://localhost:3000
+   bun run dev  # Runs on http://localhost:3000
    ```
 
 ### Test Cases

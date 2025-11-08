@@ -77,7 +77,7 @@ export function useCreateUserMutation() {
     },
     onSuccess: () => {
       // Invalidate all user list queries
-      queryClient.invalidateQueries({ queryKey: USER_KEYS.lists() })
+      queryClient.invalidateQueries({ key: USER_KEYS.lists() })
       toast.add({
         title: 'User created',
         description: 'The user has been created successfully',
@@ -109,9 +109,9 @@ export function useUpdateUserMutation() {
     },
     onSuccess: (_data, { userId }) => {
       // Invalidate specific user detail
-      queryClient.invalidateQueries({ queryKey: USER_KEYS.detail(userId) })
+      queryClient.invalidateQueries({ key: USER_KEYS.detail(userId) })
       // Invalidate all user lists (user might appear in filtered lists)
-      queryClient.invalidateQueries({ queryKey: USER_KEYS.lists() })
+      queryClient.invalidateQueries({ key: USER_KEYS.lists() })
       toast.add({
         title: 'User updated',
         description: 'The user has been updated successfully',
@@ -141,52 +141,23 @@ export function useDeleteUserMutation() {
       const usersAPI = createUsersAPI()
       return usersAPI.deleteUser(userId)
     },
-    onMutate: async (userId) => {
-      // Cancel ongoing queries
-      await queryClient.cancelQueries({ queryKey: USER_KEYS.all })
-
-      // Snapshot current state for rollback
-      const previousLists = queryClient.getQueriesData({ queryKey: USER_KEYS.lists() })
-
-      // Optimistically update all user lists
-      queryClient.setQueriesData<any>(
-        { queryKey: USER_KEYS.lists() },
-        (old: any) => {
-          if (!old?.items) return old
-          return {
-            ...old,
-            items: old.items.filter((user: User) => user.id !== userId),
-            total: old.total - 1
-          }
-        }
-      )
-
-      return { previousLists, userId }
-    },
-    onError: (error: any, _userId, context) => {
-      // Rollback on error
-      if (context?.previousLists) {
-        context.previousLists.forEach(([queryKey, data]) => {
-          queryClient.setQueryData(queryKey, data)
-        })
-      }
-
-      toast.add({
-        title: 'Error deleting user',
-        description: error.message || 'Failed to delete user',
-        color: 'error'
-      })
-    },
     onSuccess: (_data, userId) => {
       // Invalidate to refetch fresh data
-      queryClient.invalidateQueries({ queryKey: USER_KEYS.lists() })
-      // Remove detail query for deleted user
-      queryClient.removeQueries({ queryKey: USER_KEYS.detail(userId) })
+      queryClient.invalidateQueries({ key: USER_KEYS.lists() })
+      // Invalidate detail query for deleted user
+      queryClient.invalidateQueries({ key: USER_KEYS.detail(userId) })
 
       toast.add({
         title: 'User deleted',
         description: 'The user has been deleted successfully',
         color: 'success'
+      })
+    },
+    onError: (error: any) => {
+      toast.add({
+        title: 'Error deleting user',
+        description: error.message || 'Failed to delete user',
+        color: 'error'
       })
     },
   })

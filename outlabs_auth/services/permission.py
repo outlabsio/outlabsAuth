@@ -199,25 +199,24 @@ class BasicPermissionService:
         if user.is_superuser:
             return ["*:*"]
 
-        # In SimpleRBAC, user roles are assigned via UserRoleMembership table
-        # This provides audit trail and time-based role assignments
+        all_permissions: Set[str] = set()
+
+        # SimpleRBAC: Get permissions from UserRoleMembership table
         from outlabs_auth.models.user_role_membership import UserRoleMembership
         from outlabs_auth.models.membership_status import MembershipStatus
 
-        # Find all active role memberships for user
-        # Convert user_id to ObjectId for Beanie Link query
         user_oid = ObjectId(user_id)
+        # Use Beanie query operator syntax for Link fields, not dictionary syntax
         memberships = await UserRoleMembership.find(
-            {"user.$id": user_oid, "status": MembershipStatus.ACTIVE.value}
-        ).fetch_links().to_list()
+            UserRoleMembership.user.id == user_oid,
+            UserRoleMembership.status == MembershipStatus.ACTIVE,
+            fetch_links=True
+        ).to_list()
 
-        # Aggregate permissions from all valid roles
-        all_permissions: Set[str] = set()
         for membership in memberships:
-            # Check if membership can grant permissions (status + time validity)
             if membership.can_grant_permissions():
-                # Fetch the role and add its permissions
-                role = await membership.role.fetch()
+                # Role is already fetched due to fetch_links=True
+                role = membership.role
                 if role:
                     all_permissions.update(role.permissions)
 

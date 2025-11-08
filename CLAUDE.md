@@ -430,8 +430,8 @@ auth-ui/
 ### Running the Admin UI
 ```bash
 cd auth-ui
-npm install
-npm run dev  # Runs on http://localhost:3000
+bun install
+bun run dev  # Runs on http://localhost:3000
 ```
 
 **Must point to a running OutlabsAuth API** (SimpleRBAC or EnterpriseRBAC example)
@@ -453,7 +453,7 @@ uv run uvicorn main:app --port 8003 --reload
 
 # Terminal 2: Run admin UI
 cd auth-ui
-npm run dev
+bun run dev
 
 # Login at http://localhost:3000
 # system@outlabs.io / Asd123$$

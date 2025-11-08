@@ -157,7 +157,7 @@ class UserService:
             >>> user.email if user else None
             'john@example.com'
         """
-        return await UserModel.get(user_id)
+        return await UserModel.get(user_id, fetch_links=True)
 
     async def get_user_by_email(self, email: str) -> Optional[UserModel]:
         """

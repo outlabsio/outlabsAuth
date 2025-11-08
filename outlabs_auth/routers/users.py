@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from outlabs_auth.schemas.user import (
     UserResponse,
+    UserCreateRequest,
     UserUpdateRequest,
     ChangePasswordRequest,
 )
@@ -34,13 +35,14 @@ def get_users_router(
         APIRouter with user management endpoints
 
     Routes:
-        GET / - List users with pagination (admin only)
+        POST / - Create new user (admin only, requires user:create permission)
+        GET / - List users with pagination (requires user:read permission)
         GET /me - Get current user profile
         PATCH /me - Update current user profile
         POST /me/change-password - Change password
-        GET /{user_id} - Get user by ID (admin only)
-        PATCH /{user_id} - Update user by ID (admin only)
-        DELETE /{user_id} - Delete user by ID (admin only)
+        GET /{user_id} - Get user by ID (requires user:read permission)
+        PATCH /{user_id} - Update user by ID (requires user:update permission)
+        DELETE /{user_id} - Delete user by ID (requires user:delete permission)
 
     Example:
         ```python
@@ -52,6 +54,52 @@ def get_users_router(
         ```
     """
     router = APIRouter(prefix=prefix, tags=tags or ["users"])
+
+    @router.post(
+        "/",
+        response_model=UserResponse,
+        status_code=status.HTTP_201_CREATED,
+        summary="Create user",
+        description="Create a new user account (requires user:create permission)"
+    )
+    async def create_user(
+        data: UserCreateRequest,
+        auth_result = Depends(auth.deps.require_permission("user:create"))
+    ):
+        """
+        Create a new user (admin only).
+
+        Allows admins to create users with specific settings including is_superuser.
+        Different from /auth/register which is for self-registration.
+
+        Triggers on_after_register hook.
+        """
+        try:
+            user = await auth.user_service.create_user(
+                email=data.email,
+                password=data.password,
+                first_name=data.first_name,
+                last_name=data.last_name,
+                is_superuser=data.is_superuser
+            )
+
+            # Trigger on_after_register hook
+            await auth.user_service.on_after_register(user, None)
+
+            return UserResponse(
+                id=str(user.id),
+                email=user.email,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                status=user.status.value,
+                email_verified=user.email_verified,
+                is_superuser=user.is_superuser
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e)
+            )
 
     @router.get(
         "/",

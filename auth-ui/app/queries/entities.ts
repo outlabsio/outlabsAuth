@@ -86,11 +86,11 @@ export function useCreateEntityMutation() {
     },
     onSuccess: (newEntity) => {
       // Invalidate all entity list queries
-      queryClient.invalidateQueries({ queryKey: ENTITY_KEYS.lists() })
+      queryClient.invalidateQueries({ key: ENTITY_KEYS.lists() })
 
       // If entity has a parent, invalidate parent's hierarchy
       if (newEntity.parent_id) {
-        queryClient.invalidateQueries({ queryKey: ENTITY_KEYS.hierarchy(newEntity.parent_id) })
+        queryClient.invalidateQueries({ key: ENTITY_KEYS.hierarchy(newEntity.parent_id) })
       }
 
       toast.add({
@@ -124,11 +124,11 @@ export function useUpdateEntityMutation() {
     },
     onSuccess: (_data, { entityId }) => {
       // Invalidate specific entity detail
-      queryClient.invalidateQueries({ queryKey: ENTITY_KEYS.detail(entityId) })
+      queryClient.invalidateQueries({ key: ENTITY_KEYS.detail(entityId) })
       // Invalidate entity hierarchy (name/metadata might have changed)
-      queryClient.invalidateQueries({ queryKey: ENTITY_KEYS.hierarchy(entityId) })
+      queryClient.invalidateQueries({ key: ENTITY_KEYS.hierarchy(entityId) })
       // Invalidate all entity lists
-      queryClient.invalidateQueries({ queryKey: ENTITY_KEYS.lists() })
+      queryClient.invalidateQueries({ key: ENTITY_KEYS.lists() })
 
       toast.add({
         title: 'Entity updated',
@@ -166,21 +166,21 @@ export function useMoveEntityMutation() {
     },
     onSuccess: ({ entityId, newParentId, oldParentId }) => {
       // Invalidate the moved entity's detail and hierarchy
-      queryClient.invalidateQueries({ queryKey: ENTITY_KEYS.detail(entityId) })
-      queryClient.invalidateQueries({ queryKey: ENTITY_KEYS.hierarchy(entityId) })
+      queryClient.invalidateQueries({ key: ENTITY_KEYS.detail(entityId) })
+      queryClient.invalidateQueries({ key: ENTITY_KEYS.hierarchy(entityId) })
 
       // Invalidate new parent's hierarchy
       if (newParentId) {
-        queryClient.invalidateQueries({ queryKey: ENTITY_KEYS.hierarchy(newParentId) })
+        queryClient.invalidateQueries({ key: ENTITY_KEYS.hierarchy(newParentId) })
       }
 
       // Invalidate old parent's hierarchy if different from new parent
       if (oldParentId && oldParentId !== newParentId) {
-        queryClient.invalidateQueries({ queryKey: ENTITY_KEYS.hierarchy(oldParentId) })
+        queryClient.invalidateQueries({ key: ENTITY_KEYS.hierarchy(oldParentId) })
       }
 
       // Invalidate all lists (entity appears in different places now)
-      queryClient.invalidateQueries({ queryKey: ENTITY_KEYS.lists() })
+      queryClient.invalidateQueries({ key: ENTITY_KEYS.lists() })
 
       toast.add({
         title: 'Entity moved',
@@ -212,59 +212,29 @@ export function useDeleteEntityMutation() {
       await entitiesAPI.deleteEntity(entityId)
       return { entityId, parentId }
     },
-    onMutate: async ({ entityId }) => {
-      // Cancel ongoing queries
-      await queryClient.cancelQueries({ queryKey: ENTITY_KEYS.all })
-
-      // Snapshot current state for rollback
-      const previousLists = queryClient.getQueriesData({ queryKey: ENTITY_KEYS.lists() })
-
-      // Optimistically update all entity lists
-      queryClient.setQueriesData<any>(
-        { queryKey: ENTITY_KEYS.lists() },
-        (old: any) => {
-          if (!old?.items) return old
-          return {
-            ...old,
-            items: old.items.filter((entity: Entity) => entity.id !== entityId),
-            total: old.total - 1
-          }
-        }
-      )
-
-      return { previousLists, entityId }
-    },
-    onError: (error: any, _vars, context) => {
-      // Rollback on error
-      if (context?.previousLists) {
-        context.previousLists.forEach(([queryKey, data]) => {
-          queryClient.setQueryData(queryKey, data)
-        })
-      }
-
-      toast.add({
-        title: 'Error deleting entity',
-        description: error.message || 'Failed to delete entity',
-        color: 'error'
-      })
-    },
     onSuccess: ({ entityId, parentId }) => {
       // Invalidate to refetch fresh data
-      queryClient.invalidateQueries({ queryKey: ENTITY_KEYS.lists() })
-
-      // Remove detail and hierarchy queries for deleted entity
-      queryClient.removeQueries({ queryKey: ENTITY_KEYS.detail(entityId) })
-      queryClient.removeQueries({ queryKey: ENTITY_KEYS.hierarchy(entityId) })
+      queryClient.invalidateQueries({ key: ENTITY_KEYS.lists() })
+      // Invalidate detail and hierarchy queries for deleted entity
+      queryClient.invalidateQueries({ key: ENTITY_KEYS.detail(entityId) })
+      queryClient.invalidateQueries({ key: ENTITY_KEYS.hierarchy(entityId) })
 
       // Invalidate parent's hierarchy if exists
       if (parentId) {
-        queryClient.invalidateQueries({ queryKey: ENTITY_KEYS.hierarchy(parentId) })
+        queryClient.invalidateQueries({ key: ENTITY_KEYS.hierarchy(parentId) })
       }
 
       toast.add({
         title: 'Entity deleted',
         description: 'The entity has been deleted successfully',
         color: 'success'
+      })
+    },
+    onError: (error: any) => {
+      toast.add({
+        title: 'Error deleting entity',
+        description: error.message || 'Failed to delete entity',
+        color: 'error'
       })
     },
   })

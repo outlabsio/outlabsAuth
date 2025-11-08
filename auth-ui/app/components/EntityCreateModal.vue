@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { EntityClass } from '~/types/entity'
+
 const open = defineModel<boolean>('open', { default: false })
 
 const entitiesStore = useEntitiesStore()
@@ -9,7 +11,7 @@ const state = reactive({
   name: '',
   slug: '',
   description: '',
-  entity_class: 'STRUCTURAL',
+  entity_class: 'STRUCTURAL' as EntityClass,
   entity_type: '',
   parent_id: undefined
 })
@@ -121,7 +123,7 @@ async function handleSubmit() {
                     icon="i-lucide-help-circle"
                     color="neutral"
                     variant="ghost"
-                    size="2xs"
+                    size="xs"
                     class="text-muted hover:text-highlighted"
                   />
                   <template #content>
@@ -158,7 +160,7 @@ async function handleSubmit() {
                     icon="i-lucide-help-circle"
                     color="neutral"
                     variant="ghost"
-                    size="2xs"
+                    size="xs"
                     class="text-muted hover:text-highlighted"
                   />
                   <template #content>
@@ -243,7 +245,7 @@ async function handleSubmit() {
                     icon="i-lucide-help-circle"
                     color="neutral"
                     variant="ghost"
-                    size="2xs"
+                    size="xs"
                     class="text-muted hover:text-highlighted"
                   />
                   <template #content>
@@ -300,7 +302,7 @@ async function handleSubmit() {
                       icon="i-lucide-help-circle"
                       color="neutral"
                       variant="ghost"
-                      size="2xs"
+                      size="xs"
                       class="text-muted hover:text-highlighted"
                     />
                     <template #content>
@@ -378,7 +380,7 @@ async function handleSubmit() {
                       icon="i-lucide-help-circle"
                       color="neutral"
                       variant="ghost"
-                      size="2xs"
+                      size="xs"
                       class="text-muted hover:text-highlighted"
                     />
                     <template #content>

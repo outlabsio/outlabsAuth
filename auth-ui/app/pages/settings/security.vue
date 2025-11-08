@@ -174,7 +174,7 @@ const changePassword = async () => {
                   <p class="text-sm text-muted">Chrome on macOS • San Francisco, US</p>
                 </div>
               </div>
-              <UBadge color="green" variant="subtle">
+              <UBadge color="success" variant="subtle">
                 Active Now
               </UBadge>
             </div>

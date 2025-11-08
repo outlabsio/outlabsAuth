@@ -10,12 +10,12 @@ const availablePermissions = computed(() => authStore.availablePermissions);
 
 // Group permissions by category
 const permissionsByCategory = computed(() => {
-    const grouped: Record<string, typeof availablePermissions> = {};
-    availablePermissions.forEach((perm) => {
+    const grouped: Record<string, typeof availablePermissions.value> = {};
+    availablePermissions.value.forEach((perm) => {
         if (!grouped[perm.category]) {
             grouped[perm.category] = [];
         }
-        grouped[perm.category].push(perm);
+        grouped[perm.category]!.push(perm);
     });
     return grouped;
 });
@@ -95,24 +95,21 @@ function toggleCategory(category: string) {
 const showPermissionsHelp = ref(false);
 
 // Mutation for creating roles
-const { mutate: createRole, isPending } = useCreateRoleMutation()
+const { mutate: createRole, isLoading: isSubmitting } = useCreateRoleMutation()
 
 async function handleSubmit() {
     try {
-        await createRole(state, {
-            onSuccess: () => {
-                // Close modal and reset form
-                open.value = false;
-                Object.assign(state, {
-                    name: "",
-                    display_name: "",
-                    description: "",
-                    permissions: [],
-                    entity_type: undefined,
-                    is_context_aware: false,
-                });
-            }
-        })
+        await createRole(state)
+        // Close modal and reset form on success
+        open.value = false;
+        Object.assign(state, {
+            name: "",
+            display_name: "",
+            description: "",
+            permissions: [],
+            entity_type: undefined,
+            is_context_aware: false,
+        });
     } catch (error) {
         // Error handling is done by the mutation
     }
@@ -150,7 +147,7 @@ async function handleSubmit() {
                                             icon="i-lucide-help-circle"
                                             color="neutral"
                                             variant="ghost"
-                                            size="2xs"
+                                            size="xs"
                                             class="text-muted hover:text-highlighted"
                                         />
                                         <template #content>
@@ -209,7 +206,7 @@ async function handleSubmit() {
                                             icon="i-lucide-help-circle"
                                             color="neutral"
                                             variant="ghost"
-                                            size="2xs"
+                                            size="xs"
                                             class="text-muted hover:text-highlighted"
                                         />
                                         <template #content>
@@ -348,7 +345,7 @@ async function handleSubmit() {
                                             icon="i-lucide-help-circle"
                                             color="neutral"
                                             variant="ghost"
-                                            size="2xs"
+                                            size="xs"
                                             class="text-muted hover:text-highlighted"
                                         />
                                         <template #content>
@@ -561,12 +558,12 @@ async function handleSubmit() {
                         color="neutral"
                         variant="outline"
                         @click="open = false"
-                        :disabled="isPending"
+                        :disabled="isSubmitting"
                     />
                     <UButton
                         label="Create Role"
                         icon="i-lucide-shield"
-                        :loading="isPending"
+                        :loading="isSubmitting"
                         @click="handleSubmit"
                     />
                 </div>
