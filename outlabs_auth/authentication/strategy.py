@@ -4,9 +4,10 @@ Strategy classes define HOW authentication credentials are validated.
 Transport/Strategy separation pattern from FastAPI-Users (DD-038).
 """
 
-from typing import Optional, Protocol, Any
-from jose import jwt, JWTError
 from datetime import datetime, timedelta
+from typing import Any, Optional, Protocol
+
+from jose import JWTError, jwt
 
 
 class Strategy(Protocol):
@@ -17,11 +18,7 @@ class Strategy(Protocol):
     Examples: JWT validation, API key lookup, database session, etc.
     """
 
-    async def authenticate(
-        self,
-        credentials: str,
-        **kwargs: Any
-    ) -> Optional[dict]:
+    async def authenticate(self, credentials: str, **kwargs: Any) -> Optional[dict]:
         """
         Authenticate credentials and return user data.
 
@@ -48,7 +45,7 @@ class JWTStrategy:
         algorithm: str = "HS256",
         audience: Optional[str] = None,
         verify_exp: bool = True,
-        redis_client: Optional[Any] = None
+        redis_client: Optional[Any] = None,
     ):
         """
         Initialize JWT strategy.
@@ -67,10 +64,7 @@ class JWTStrategy:
         self.redis_client = redis_client
 
     async def authenticate(
-        self,
-        credentials: str,
-        user_service: Any = None,
-        **kwargs: Any
+        self, credentials: str, user_service: Any = None, **kwargs: Any
     ) -> Optional[dict]:
         """
         Validate JWT token and return user data.
@@ -92,15 +86,20 @@ class JWTStrategy:
                 self.secret,
                 algorithms=[self.algorithm],
                 audience=self.audience,
-                options={"verify_exp": self.verify_exp}
+                options={"verify_exp": self.verify_exp},
             )
             print(f"[JWT] Token decoded successfully. User ID: {payload.get('sub')}")
 
             # Check Redis blacklist if available (for immediate logout)
             jti = payload.get("jti")
             if jti and self.redis_client:
-                if hasattr(self.redis_client, 'is_available') and self.redis_client.is_available:
-                    is_blacklisted = await self.redis_client.exists(f"blacklist:jwt:{jti}")
+                if (
+                    hasattr(self.redis_client, "is_available")
+                    and self.redis_client.is_available
+                ):
+                    is_blacklisted = await self.redis_client.exists(
+                        f"blacklist:jwt:{jti}"
+                    )
                     if is_blacklisted:
                         print(f"[JWT] Token {jti} is blacklisted")
                         return None
@@ -115,14 +114,16 @@ class JWTStrategy:
             if user_service:
                 print(f"[JWT] Fetching user {user_id} from database...")
                 user = await user_service.get_user_by_id(user_id)
-                print(f"[JWT] User found: {user is not None}, Can auth: {user.can_authenticate() if user else 'N/A'}")
+                print(
+                    f"[JWT] User found: {user is not None}, Can auth: {user.can_authenticate() if user else 'N/A'}"
+                )
                 if user and user.can_authenticate():
                     return {
                         "user": user,
                         "user_id": str(user.id),
                         "source": "jwt",
                         "metadata": payload,
-                        "jti": jti  # Include JTI for logout
+                        "jti": jti,  # Include JTI for logout
                     }
             else:
                 print("[JWT] No user_service provided")
@@ -142,9 +143,9 @@ class JWTStrategy:
 
 class ApiKeyStrategy:
     """
-    Validate API keys and return user information.
+    Verify API keys and return user information.
 
-    Uses argon2id hashing for security (DD-028).
+    Uses SHA-256 hashing for fast verification of high-entropy secrets (DD-028 corrected).
     Checks temporary locks and tracks failures (DD-028).
 
     Note: Activity tracking (DD-049) happens in AuthDeps middleware
@@ -153,13 +154,10 @@ class ApiKeyStrategy:
     """
 
     async def authenticate(
-        self,
-        credentials: str,
-        api_key_service: Any = None,
-        **kwargs: Any
+        self, credentials: str, api_key_service: Any = None, **kwargs: Any
     ) -> Optional[dict]:
         """
-        Validate API key and return user data.
+        Verify API key and return user data.
 
         Activity tracking happens automatically in AuthDeps after this
         method returns a valid user.
@@ -176,21 +174,28 @@ class ApiKeyStrategy:
             return None
 
         try:
-            # Verify API key (checks hash, locks, permissions, IP, etc.)
-            api_key_result = await api_key_service.verify_api_key(credentials)
+            # Verify API key (checks hash, locks, scopes, IP, etc.)
+            # Returns tuple: (api_key_model, usage_count)
+            api_key, usage_count = await api_key_service.verify_api_key(credentials)
 
-            if api_key_result:
+            if api_key:
+                # Fetch the user (API key has owner relationship)
+                user = await api_key.owner.fetch()
+
+                if not user:
+                    return None
+
                 return {
-                    "user": api_key_result["user"],
-                    "user_id": str(api_key_result["user"].id),
+                    "user": user,
+                    "user_id": str(user.id),
                     "source": "api_key",
-                    "api_key": api_key_result["api_key"],
+                    "api_key": api_key,
                     "metadata": {
-                        "key_id": str(api_key_result["api_key"].id),
-                        "key_prefix": api_key_result["api_key"].key_prefix,
-                        "permissions": api_key_result["api_key"].permissions,
-                        "environment": api_key_result["api_key"].environment
-                    }
+                        "key_id": str(api_key.id),
+                        "key_prefix": api_key.prefix,
+                        "scopes": api_key.scopes,
+                        "usage_count": usage_count,
+                    },
                 }
 
             return None
@@ -211,7 +216,7 @@ class ServiceTokenStrategy:
         self,
         secret: str,
         algorithm: str = "HS256",
-        audience: str = "outlabs-auth:service"
+        audience: str = "outlabs-auth:service",
     ):
         """
         Initialize service token strategy.
@@ -225,11 +230,7 @@ class ServiceTokenStrategy:
         self.algorithm = algorithm
         self.audience = audience
 
-    async def authenticate(
-        self,
-        credentials: str,
-        **kwargs: Any
-    ) -> Optional[dict]:
+    async def authenticate(self, credentials: str, **kwargs: Any) -> Optional[dict]:
         """
         Validate service token.
 
@@ -249,7 +250,7 @@ class ServiceTokenStrategy:
                 self.secret,
                 algorithms=[self.algorithm],
                 audience=[self.audience],
-                options={"verify_exp": True}
+                options={"verify_exp": True},
             )
 
             # Service tokens must have service_name
@@ -267,8 +268,8 @@ class ServiceTokenStrategy:
                     "service_name": service_name,
                     "permissions": payload.get("permissions", []),
                     "iat": payload.get("iat"),
-                    "exp": payload.get("exp")
-                }
+                    "exp": payload.get("exp"),
+                },
             }
 
         except jwt.ExpiredSignatureError:
@@ -297,10 +298,7 @@ class SuperuserStrategy:
         self.superuser_token = superuser_token
 
     async def authenticate(
-        self,
-        credentials: str,
-        user_service: Any = None,
-        **kwargs: Any
+        self, credentials: str, user_service: Any = None, **kwargs: Any
     ) -> Optional[dict]:
         """
         Validate superuser token.
@@ -328,7 +326,7 @@ class SuperuserStrategy:
                 "user": superuser,
                 "user_id": str(superuser.id) if superuser else None,
                 "source": "superuser",
-                "metadata": {"superuser": True}
+                "metadata": {"superuser": True},
             }
 
         return None
@@ -341,11 +339,7 @@ class AnonymousStrategy:
     Used when authentication is optional.
     """
 
-    async def authenticate(
-        self,
-        credentials: str,
-        **kwargs: Any
-    ) -> Optional[dict]:
+    async def authenticate(self, credentials: str, **kwargs: Any) -> Optional[dict]:
         """
         Always return anonymous user data.
 
@@ -360,5 +354,5 @@ class AnonymousStrategy:
             "user": None,
             "user_id": None,
             "source": "anonymous",
-            "metadata": {"anonymous": True}
+            "metadata": {"anonymous": True},
         }

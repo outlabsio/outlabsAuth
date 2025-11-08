@@ -90,7 +90,7 @@ auth = OutlabsAuth(
     enable_entity_hierarchy=True,      # Feature flags
     enable_context_aware_roles=True,
     enable_abac=True,
-    enable_caching=True,
+    redis_enabled=True,                # Enable Redis features
     redis_url="redis://localhost:6379"
 )
 ```
@@ -267,8 +267,8 @@ outlabsAuth/
 ## Key Features (Core v1.0)
 
 ### Authentication System
-- **JWT Authentication**: Access tokens (15 min) + refresh tokens (30 days)
-- **API Keys**: argon2id hashing, 12-char prefixes, temporary locks
+- **JWT Authentication**: Access tokens (15 min) + refresh tokens (30 days), optional rotation
+- **API Keys**: SHA-256 hashing (fast for high-entropy secrets), 12-char prefixes, temporary locks
 - **JWT Service Tokens**: ~0.5ms authentication for internal services
 - **Multi-Source Auth**: JWT, API keys, service tokens, superuser, anonymous
 
@@ -390,6 +390,13 @@ All 37 design decisions documented in **DESIGN_DECISIONS.md**:
 - **DD-036**: Closure table for tree permissions (O(1) queries)
 - **DD-037**: Redis Pub/Sub cache invalidation (<100ms)
 - **DD-038 to DD-046**: FastAPI-Users patterns integration (hooks, router factories, transport/strategy)
+- **DD-047**: UserRoleMembership with MembershipStatus enum
+- **DD-048**: Redis configuration simplification (single `redis_enabled` flag)
+
+### Corrections (2025-01-26)
+- **DD-028 CORRECTED**: API keys use SHA-256 (not argon2id) - fast hashing appropriate for high-entropy secrets
+- **DD-028 UPDATED**: Refresh token rotation is OPTIONAL (not automatic) - simpler default, high-security apps can enable
+- **DD-031**: Superseded by corrected DD-028
 
 ### Core Decisions
 - **DD-001**: MongoDB with Beanie ODM

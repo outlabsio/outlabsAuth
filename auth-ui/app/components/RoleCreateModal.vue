@@ -26,8 +26,6 @@ const state = reactive({
     display_name: "",
     description: "",
     permissions: [] as string[],
-    entity_type: undefined as string | undefined,
-    is_context_aware: false,
 });
 
 // Auto-generate name from display_name
@@ -39,26 +37,6 @@ watch(
                 .toLowerCase()
                 .replace(/\s+/g, "_")
                 .replace(/[^a-z0-9_-]/g, "");
-        }
-    },
-);
-
-// Entity type options for context-aware roles
-const entityTypeOptions = [
-    { label: "None (Global Role)", value: undefined },
-    { label: "Organization", value: "organization" },
-    { label: "Department", value: "department" },
-    { label: "Team", value: "team" },
-    { label: "Project", value: "project" },
-    { label: "Division", value: "division" },
-];
-
-// Clear entity_type when not context-aware
-watch(
-    () => state.is_context_aware,
-    (isContextAware) => {
-        if (!isContextAware) {
-            state.entity_type = undefined;
         }
     },
 );
@@ -107,8 +85,6 @@ async function handleSubmit() {
             display_name: "",
             description: "",
             permissions: [],
-            entity_type: undefined,
-            is_context_aware: false,
         });
     } catch (error) {
         // Error handling is done by the mutation
@@ -277,147 +253,6 @@ async function handleSubmit() {
                         </div>
                     </div>
 
-                    <UDivider v-if="authStore.isEnterpriseRBAC" />
-
-                    <!-- Only show Context Settings in EnterpriseRBAC mode -->
-                    <div v-if="authStore.isEnterpriseRBAC">
-                        <h3
-                            class="text-lg font-semibold mb-4 flex items-center gap-2"
-                        >
-                            <UIcon name="i-lucide-settings" class="w-5 h-5" />
-                            Context Settings
-                            <UPopover>
-                                <UButton
-                                    icon="i-lucide-help-circle"
-                                    color="neutral"
-                                    variant="ghost"
-                                    size="xs"
-                                />
-                                <template #content>
-                                    <div class="p-4 max-w-sm space-y-2">
-                                        <h4 class="font-semibold text-sm">
-                                            Context-Aware Roles
-                                        </h4>
-                                        <p class="text-sm text-muted">
-                                            Enable this for roles that should
-                                            have different permissions based on
-                                            the entity type they're assigned to.
-                                        </p>
-                                        <div
-                                            class="text-xs text-muted mt-2 space-y-1"
-                                        >
-                                            <p class="font-medium">Example:</p>
-                                            <p>A "Manager" role could have:</p>
-                                            <ul
-                                                class="list-disc list-inside pl-2"
-                                            >
-                                                <li>Full control in Teams</li>
-                                                <li>
-                                                    Read-only in Departments
-                                                </li>
-                                                <li>
-                                                    No access in Organizations
-                                                </li>
-                                            </ul>
-                                        </div>
-                                    </div>
-                                </template>
-                            </UPopover>
-                        </h3>
-
-                        <div class="space-y-3">
-                            <UCheckbox
-                                v-model="state.is_context_aware"
-                                label="Context-aware role"
-                                help="Role permissions adapt based on entity type"
-                            />
-
-                            <div
-                                v-if="state.is_context_aware"
-                                class="space-y-2"
-                            >
-                                <label
-                                    class="block text-sm font-medium flex items-center gap-1.5"
-                                >
-                                    Entity Type
-                                    <UPopover>
-                                        <UButton
-                                            icon="i-lucide-help-circle"
-                                            color="neutral"
-                                            variant="ghost"
-                                            size="xs"
-                                            class="text-muted hover:text-highlighted"
-                                        />
-                                        <template #content>
-                                            <div class="p-4 max-w-sm space-y-2">
-                                                <h4
-                                                    class="font-semibold text-sm"
-                                                >
-                                                    Entity Type
-                                                </h4>
-                                                <p class="text-sm text-muted">
-                                                    Specify which type of entity
-                                                    this role's permissions
-                                                    apply to. When assigned, the
-                                                    role will adapt its
-                                                    permissions based on the
-                                                    entity type.
-                                                </p>
-                                                <UAlert
-                                                    icon="i-lucide-lightbulb"
-                                                    color="info"
-                                                    variant="subtle"
-                                                    title="Context-Aware Behavior"
-                                                    description="Same role, different permissions depending on where it's assigned in your organization."
-                                                    class="mt-2"
-                                                />
-                                                <div
-                                                    class="text-xs text-muted mt-2"
-                                                >
-                                                    <p class="font-medium mb-1">
-                                                        Example:
-                                                    </p>
-                                                    <p class="mb-1">
-                                                        A "Manager" role set to
-                                                        "Team" type:
-                                                    </p>
-                                                    <ul
-                                                        class="list-disc list-inside pl-2 space-y-0.5"
-                                                    >
-                                                        <li>
-                                                            Full permissions
-                                                            when assigned to a
-                                                            Team
-                                                        </li>
-                                                        <li>
-                                                            Different
-                                                            permissions when
-                                                            assigned to a
-                                                            Department
-                                                        </li>
-                                                        <li>
-                                                            May have no
-                                                            permissions at
-                                                            Organization level
-                                                        </li>
-                                                    </ul>
-                                                </div>
-                                            </div>
-                                        </template>
-                                    </UPopover>
-                                </label>
-                                <USelect
-                                    v-model="state.entity_type"
-                                    :items="entityTypeOptions"
-                                    placeholder="Select entity type"
-                                />
-                                <p class="text-xs text-muted">
-                                    Which entity type does this role apply to?
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-
                     <!-- Selected permissions count -->
                     <UCard>
                         <div class="flex items-center gap-3">
@@ -549,8 +384,7 @@ async function handleSubmit() {
         <template #footer>
             <div class="flex items-center justify-between w-full">
                 <div class="text-sm text-muted">
-                    All fields are required except description and context
-                    settings
+                    All fields are required except description
                 </div>
                 <div class="flex justify-end gap-2">
                     <UButton

@@ -14,9 +14,14 @@
 
 ## 🚀 QUICK START (Coming Back With Zero Context?)
 
-**WHERE WE ARE:** 🔄 **Phase 3 Testing - User CRUD complete!** - Testing roles and permissions next
+**WHERE WE ARE:** 🔄 **Phase 3 Testing - User CRUD + Roles List Complete!** - Testing role CRUD next
 
 **WHAT WE FIXED (Phase 3 - Latest):**
+- ✅ **Fixed roles endpoint 500 error** (ObjectId serialization + Link field issues)
+- ✅ **Roles page now loads successfully!** (GET /v1/roles/?page=1&limit=100 → 200 OK)
+- ✅ Added pagination support to roles list endpoint
+- ✅ Fixed ObjectId serialization (mode='json' in model_dump)
+- ✅ Excluded entity Link field from serialization
 - ✅ **Fixed 204 No Content response handling** (DELETE operations were failing)
 - ✅ **User deletion now works perfectly!** (test user deleted, 6 → 5 users)
 - ✅ **Added missing POST /v1/users/ endpoint** (admin user creation)
@@ -48,10 +53,11 @@
 1. ✅ Users page - list, search, pagination (DONE)
 2. ✅ Users page - create user (DONE)
 3. ✅ Users page - delete user (DONE - optimistic updates working)
-4. ⏳ Roles page - list and CRUD
-5. ⏳ Permissions page - list and filter
-6. ⏳ Cache behavior (navigate away/back)
-7. ⏳ Race conditions in search
+4. ✅ Roles page - list with pagination (DONE - 200 OK, "No roles found" displayed)
+5. ⏳ Roles page - create, update, delete roles
+6. ⏳ Permissions page - list and filter
+7. ⏳ Cache behavior (navigate away/back)
+8. ⏳ Race conditions in search
 
 **STARTUP COMMANDS:**
 ```bash
@@ -79,6 +85,11 @@ cd auth-ui && bun run dev
 ```
 
 **FILES MODIFIED:**
+
+**Phase 3 (Roles Endpoint Fixes - 2025-11-08):**
+- `outlabs_auth/routers/roles.py:15` - Added `PaginatedResponse` import
+- `outlabs_auth/routers/roles.py:54-91` - Updated `list_roles` endpoint with pagination support
+- `outlabs_auth/routers/roles.py:79,118,143,169,213,237` - Fixed all `model_dump()` calls to use `mode='json', exclude={"entity"}`
 
 **Phase 3 (204 No Content Response Fix - 2025-11-08):**
 - `auth-ui/app/stores/auth.store.ts:160-163` - Fixed 204/205 status code handling before JSON parsing
@@ -1659,6 +1670,90 @@ async def create_user(
 - Server reloaded with new endpoint
 - Route available at POST /v1/users/
 - Ready for UI testing
+
+---
+
+### Phase 3 Progress - Roles Endpoint Fixes (2025-11-08)
+
+**Status:** ✅ **Roles page loading successfully!** - Fixed ObjectId serialization + Link field issues
+
+#### Issue Discovered
+
+When accessing the roles page at `http://localhost:3000/roles`, the page displayed "Error: HTTP 500":
+```
+GET /v1/roles/?page=1&limit=100 HTTP/1.1" 500 Internal Server Error
+```
+
+**Root Cause Discovery Process:**
+1. Initially thought missing pagination support → added pagination but still got 500
+2. Found `RoleModel` has `entity: Link["EntityModel"]` field → excluded it but still got 500
+3. Tested serialization directly → discovered ObjectId type mismatch
+4. **Final Root Cause:** `role.model_dump()` returns `id` as MongoDB `ObjectId` type, but `RoleResponse` schema expects `id: str`
+
+**Validation Error:**
+```python
+ValidationError: 1 validation error for RoleResponse
+id
+  Input should be a valid string [type=string_type,
+  input_value=ObjectId('690facc186543b4cc1b7b21f'),
+  input_type=PydanticObjectId]
+```
+
+#### Solution Implemented
+
+**1. Added Pagination Support** (`outlabs_auth/routers/roles.py:54-91`):
+- Changed response model from `List[RoleResponse]` to `PaginatedResponse[RoleResponse]`
+- Added `page` and `limit` query parameters
+- Called existing `auth.role_service.list_roles(page=page, limit=limit, is_global=is_global)`
+- Calculated total pages: `pages = (total + limit - 1) // limit`
+
+**2. Fixed ObjectId Serialization** (all endpoints in `roles.py`):
+```python
+# ❌ BEFORE - ObjectId not converted to string
+role.model_dump(exclude={"entity"})
+
+# ✅ AFTER - mode='json' serializes ObjectId to string
+role.model_dump(mode='json', exclude={"entity"})
+```
+
+**Applied to all 6 endpoints:**
+- Line 79: `list_roles` endpoint
+- Line 118: `create_role` endpoint
+- Line 143: `get_role` endpoint
+- Line 169: `update_role` endpoint
+- Line 213: `add_permissions` endpoint
+- Line 237: `remove_permissions` endpoint
+
+**3. Excluded Link Field:**
+- `exclude={"entity"}` prevents Beanie Link field serialization errors
+- `entity: Optional[Link["EntityModel"]]` can't be directly serialized to JSON
+
+#### Test Results
+
+✅ **Roles endpoint working correctly:**
+- Server log: `GET /v1/roles/?page=1&limit=100 HTTP/1.1" 200 OK`
+- Page loads with proper table structure
+- Displays "No roles found" message (correct - no roles seeded yet)
+- Table headers: Role, Permissions, Context, Description, Actions
+- "Create your first role" button visible and ready
+
+**Backend Response:**
+```json
+{
+  "items": [],
+  "total": 0,
+  "page": 1,
+  "limit": 100,
+  "pages": 0
+}
+```
+
+#### Key Learnings
+
+1. **Pydantic mode='json'**: Essential for proper MongoDB ObjectId serialization
+2. **Beanie Link fields**: Must be excluded from `model_dump()` output
+3. **Pagination**: Added support using existing service layer methods
+4. **Testing approach**: Test serialization directly when debugging 500 errors
 
 ---
 

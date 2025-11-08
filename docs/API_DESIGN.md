@@ -9,7 +9,8 @@
 - **JWT Service Tokens**: Zero-DB authentication for internal microservices (DD-034)
 - **Redis Counters**: API key usage tracking with 99%+ reduction in DB writes (DD-033)
 - **Temporary Locks**: API keys locked for 30 min after 10 failures (no permanent revocation) (DD-028)
-- **12-Char Prefixes**: API key prefixes increased from 8 to 12 characters (DD-028)
+- **12-Char Prefixes**: API key prefixes (12 characters for identification) (DD-028)
+- **SHA-256 Hashing**: Fast hashing appropriate for high-entropy secrets (DD-028 corrected)
 
 ---
 
@@ -654,20 +655,20 @@ service_user = await auth.user_service.create_user(
 # Create API key for production service
 raw_key, api_key_model = await auth.api_key_service.create_api_key(
     name="Production Service",
-    permissions=["user:read", "entity:read"],
-    environment="production",  # sk_prod_ prefix
-    allowed_ips=["10.0.1.0/24", "192.168.1.100"],  # IP whitelist
+    owner_id=service_user.id,
+    scopes=["user:read", "entity:read"],
+    ip_whitelist=["10.0.1.0/24", "192.168.1.100"],  # Optional IP whitelist
     rate_limit_per_minute=60,
-    expires_at=datetime.now() + timedelta(days=90),  # 90-day expiry
-    created_by=service_user.id
+    expires_in_days=90,  # 90-day expiry
+    prefix_type="sk_live"  # sk_live_ prefix
 )
 
 # CRITICAL: raw_key is only shown ONCE - store securely!
-print(f"API Key: {raw_key}")  # sk_prod_AbCdEfGh...
+print(f"API Key: {raw_key}")  # sk_live_abc123...
 print(f"Store this key securely - it won't be shown again!")
 
-# Key is now hashed with argon2id in database
-# Only the prefix (first 8 chars) is stored in plaintext for identification
+# Key is now hashed with SHA-256 in database (fast for high-entropy secrets)
+# Only the prefix (first 12 chars) is stored in plaintext for identification
 ```
 
 ### Example 2: API Keys for Different Environments
@@ -676,41 +677,25 @@ print(f"Store this key securely - it won't be shown again!")
 # Production key (most restrictive)
 prod_key, prod_model = await auth.api_key_service.create_api_key(
     name="Production API",
-    permissions=["user:read", "entity:read"],
-    environment="production",  # sk_prod_
-    allowed_ips=["10.0.1.0/24"],
+    owner_id=user.id,
+    scopes=["user:read", "entity:read"],
+    ip_whitelist=["10.0.1.0/24"],
     rate_limit_per_minute=60,
-    created_by=user.id
+    prefix_type="sk_live"
 )
 
-# Staging key (more permissive)
-staging_key, staging_model = await auth.api_key_service.create_api_key(
-    name="Staging API",
-    permissions=["user:read", "user:create", "entity:read"],
-    environment="staging",  # sk_stag_
-    allowed_ips=["192.168.1.0/24"],
-    rate_limit_per_minute=120,
-    created_by=user.id
-)
-
-# Development key (most permissive)
-dev_key, dev_model = await auth.api_key_service.create_api_key(
-    name="Development API",
-    permissions=["user:read", "user:create", "user:update", "entity:read", "entity:create"],
-    environment="development",  # sk_dev_
-    allowed_ips=[],  # No IP restrictions
-    rate_limit_per_minute=300,
-    created_by=user.id
-)
-
-# Test key (for automated testing)
+# Test key (more permissive)
 test_key, test_model = await auth.api_key_service.create_api_key(
-    name="Test Suite",
-    permissions=["user:read"],
-    environment="test",  # sk_test_
-    expires_at=datetime.now() + timedelta(days=30),
-    created_by=user.id
+    name="Test API",
+    owner_id=user.id,
+    scopes=["user:read", "user:create", "entity:read"],
+    ip_whitelist=None,  # No IP restrictions for testing
+    rate_limit_per_minute=120,
+    prefix_type="sk_test"
 )
+
+# Note: Use different prefixes to distinguish environments
+# Common prefixes: sk_live (production), sk_test (testing)
 ```
 
 ### Example 3: Using API Keys in Routes
@@ -943,7 +928,7 @@ curl -X GET https://api.example.com/api/users \
 
 ### Why JWT Service Tokens?
 
-- **Performance**: ~0.5ms validation vs ~50-100ms for API keys (no DB lookup required)
+- **Performance**: ~0.5ms validation vs ~0.5-1ms for API keys (similar but no DB lookup)
 - **Stateless**: Pure JWT validation, no database queries
 - **Perfect for**: High-frequency internal service-to-service communication
 - **Complements API Keys**: Use API keys for external partners, JWT tokens for internal services
@@ -1001,7 +986,7 @@ async def process_payment(
     Fast internal endpoint using JWT service tokens.
 
     Validation: ~0.5ms (pure JWT validation, no DB)
-    vs API keys: ~50-100ms (DB lookup + argon2id verification)
+    vs API keys: ~0.5-1ms (DB lookup + SHA-256 verification)
     """
 
     # Service name from JWT payload
@@ -1022,14 +1007,14 @@ async def process_payment(
 ```python
 # Comparison of authentication methods
 
-# API Keys (external partners, slower, persistent)
+# API Keys (external partners, persistent)
 # - Use: External integrations, third-party services
-# - Storage: MongoDB (hashed with argon2id)
-# - Validation: ~50-100ms (DB lookup + hash verification)
+# - Storage: MongoDB (hashed with SHA-256)
+# - Validation: ~0.5-1ms (DB lookup + hash verification)
 # - Lifespan: Long-lived (90-365 days)
 # - Rotation: Manual via API
 # - Rate Limiting: Per-key limits in Redis
-# - Security: argon2id hashing, temp locks after 10 failures
+# - Security: SHA-256 hashing (fast for high-entropy), temp locks after 10 failures
 
 api_key = await auth.api_key_service.create_api_key(
     name="Partner API",

@@ -3,18 +3,20 @@ API Key Service
 
 Handles API key management and validation with Redis counter pattern for usage tracking.
 """
-from typing import Optional, List, Dict
-from datetime import datetime, timezone, timedelta
-from motor.motor_asyncio import AsyncIOMotorDatabase
-import logging
 
-from outlabs_auth.models.api_key import APIKeyModel, APIKeyStatus
-from outlabs_auth.models.user import UserModel
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Optional
+
+from motor.motor_asyncio import AsyncIOMotorDatabase
+
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
-    UserNotFoundError,
     InvalidInputError,
+    UserNotFoundError,
 )
+from outlabs_auth.models.api_key import APIKeyModel, APIKeyStatus
+from outlabs_auth.models.user import UserModel
 
 logger = logging.getLogger(__name__)
 
@@ -118,8 +120,7 @@ class APIKeyService:
         owner = await UserModel.get(owner_id)
         if not owner:
             raise UserNotFoundError(
-                message="User not found",
-                details={"user_id": owner_id}
+                message="User not found", details={"user_id": owner_id}
             )
 
         # Generate API key
@@ -151,12 +152,14 @@ class APIKeyService:
 
         await api_key.save()
 
-        logger.info(f"Created API key '{name}' for user {owner_id} with prefix {prefix}")
+        logger.info(
+            f"Created API key '{name}' for user {owner_id} with prefix {prefix}"
+        )
 
         # Return full key (only time it's ever shown!)
         return full_key, api_key
 
-    async def validate_api_key(
+    async def verify_api_key(
         self,
         api_key_string: str,
         required_scope: Optional[str] = None,
@@ -164,7 +167,7 @@ class APIKeyService:
         ip_address: Optional[str] = None,
     ) -> tuple[Optional[APIKeyModel], int]:
         """
-        Validate API key and track usage with Redis counter.
+        Verify API key and track usage with Redis counter.
 
         This is the core method for API key authentication.
         Uses Redis INCR for fast, low-latency usage tracking.
@@ -181,7 +184,7 @@ class APIKeyService:
                 - current_usage: Current usage count (from Redis)
 
         Example:
-            >>> api_key, usage = await api_key_service.validate_api_key(
+            >>> api_key, usage = await api_key_service.verify_api_key(
             ...     request.headers.get("X-API-Key"),
             ...     required_scope="user:read",
             ...     ip_address=request.client.host
@@ -197,17 +200,23 @@ class APIKeyService:
 
         # Check if key is active
         if not api_key.is_active():
-            logger.warning(f"Inactive API key: {api_key.prefix} (status: {api_key.status})")
+            logger.warning(
+                f"Inactive API key: {api_key.prefix} (status: {api_key.status})"
+            )
             return None, 0
 
         # Check scope if required
         if required_scope and not api_key.has_scope(required_scope):
-            logger.warning(f"API key {api_key.prefix} lacks required scope: {required_scope}")
+            logger.warning(
+                f"API key {api_key.prefix} lacks required scope: {required_scope}"
+            )
             return None, 0
 
         # Check entity access if required
         if entity_id and not api_key.has_entity_access(entity_id):
-            logger.warning(f"API key {api_key.prefix} lacks access to entity: {entity_id}")
+            logger.warning(
+                f"API key {api_key.prefix} lacks access to entity: {entity_id}"
+            )
             return None, 0
 
         # Check IP whitelist if required
@@ -226,7 +235,7 @@ class APIKeyService:
             await self.redis_client.set(
                 last_used_key,
                 datetime.now(timezone.utc).isoformat(),
-                ttl=self.config.cache_ttl_seconds
+                ttl=self.config.cache_ttl_seconds,
             )
         else:
             # Fallback: Direct MongoDB write (slow - ~15ms)
@@ -259,11 +268,10 @@ class APIKeyService:
         # Check per-minute limit
         if api_key.rate_limit_per_minute:
             minute_key = self._make_rate_limit_key(key_id, "minute")
-            count = await self.redis_client.increment_with_ttl(
-                minute_key,
-                amount=1,
-                ttl=60
-            ) or 0
+            count = (
+                await self.redis_client.increment_with_ttl(minute_key, amount=1, ttl=60)
+                or 0
+            )
 
             if count > api_key.rate_limit_per_minute:
                 raise InvalidInputError(
@@ -271,18 +279,17 @@ class APIKeyService:
                     details={
                         "limit": api_key.rate_limit_per_minute,
                         "current": count,
-                        "window": "minute"
-                    }
+                        "window": "minute",
+                    },
                 )
 
         # Check per-hour limit
         if api_key.rate_limit_per_hour:
             hour_key = self._make_rate_limit_key(key_id, "hour")
-            count = await self.redis_client.increment_with_ttl(
-                hour_key,
-                amount=1,
-                ttl=3600
-            ) or 0
+            count = (
+                await self.redis_client.increment_with_ttl(hour_key, amount=1, ttl=3600)
+                or 0
+            )
 
             if count > api_key.rate_limit_per_hour:
                 raise InvalidInputError(
@@ -290,18 +297,17 @@ class APIKeyService:
                     details={
                         "limit": api_key.rate_limit_per_hour,
                         "current": count,
-                        "window": "hour"
-                    }
+                        "window": "hour",
+                    },
                 )
 
         # Check per-day limit
         if api_key.rate_limit_per_day:
             day_key = self._make_rate_limit_key(key_id, "day")
-            count = await self.redis_client.increment_with_ttl(
-                day_key,
-                amount=1,
-                ttl=86400
-            ) or 0
+            count = (
+                await self.redis_client.increment_with_ttl(day_key, amount=1, ttl=86400)
+                or 0
+            )
 
             if count > api_key.rate_limit_per_day:
                 raise InvalidInputError(
@@ -309,8 +315,8 @@ class APIKeyService:
                     details={
                         "limit": api_key.rate_limit_per_day,
                         "current": count,
-                        "window": "day"
-                    }
+                        "window": "day",
+                    },
                 )
 
     async def sync_usage_counters_to_db(self) -> Dict[str, int]:
@@ -384,7 +390,9 @@ class APIKeyService:
                     stats["synced_keys"] += 1
                     stats["total_usage"] += usage_count
 
-                    logger.debug(f"Synced {usage_count} uses for API key {api_key.prefix}")
+                    logger.debug(
+                        f"Synced {usage_count} uses for API key {api_key.prefix}"
+                    )
 
                 except Exception as e:
                     logger.error(f"Error syncing counter {counter_key}: {e}")
@@ -422,9 +430,7 @@ class APIKeyService:
         return await APIKeyModel.get(key_id)
 
     async def list_user_api_keys(
-        self,
-        user_id: str,
-        status: Optional[APIKeyStatus] = None
+        self, user_id: str, status: Optional[APIKeyStatus] = None
     ) -> List[APIKeyModel]:
         """
         List all API keys for a user.
@@ -466,11 +472,7 @@ class APIKeyService:
         logger.info(f"Revoked API key: {api_key.prefix}")
         return True
 
-    async def update_api_key(
-        self,
-        key_id: str,
-        **updates
-    ) -> Optional[APIKeyModel]:
+    async def update_api_key(self, key_id: str, **updates) -> Optional[APIKeyModel]:
         """
         Update API key fields.
 
@@ -487,9 +489,17 @@ class APIKeyService:
 
         # Update allowed fields
         allowed_fields = {
-            "name", "description", "scopes", "rate_limit_per_minute",
-            "rate_limit_per_hour", "rate_limit_per_day", "entity_ids",
-            "ip_whitelist", "status", "expires_at", "metadata"
+            "name",
+            "description",
+            "scopes",
+            "rate_limit_per_minute",
+            "rate_limit_per_hour",
+            "rate_limit_per_day",
+            "entity_ids",
+            "ip_whitelist",
+            "status",
+            "expires_at",
+            "metadata",
         }
 
         for field, value in updates.items():

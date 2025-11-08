@@ -74,8 +74,11 @@ def get_roles_router(
             # Calculate total pages
             pages = (total + limit - 1) // limit if total > 0 else 0
 
-            # Convert to response schema
-            items = [RoleResponse(**role.model_dump()) for role in roles]
+            # Convert to response schema (exclude Link fields)
+            items = [
+                RoleResponse(**role.model_dump(mode='json', exclude={"entity"}))
+                for role in roles
+            ]
 
             return PaginatedResponse(
                 items=items,
@@ -112,7 +115,7 @@ def get_roles_router(
                 is_global=data.is_global,
                 assignable_at_types=data.assignable_at_types
             )
-            return RoleResponse(**role.model_dump())
+            return RoleResponse(**role.model_dump(mode='json', exclude={"entity"}))
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -137,7 +140,7 @@ def get_roles_router(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Role not found"
                 )
-            return RoleResponse(**role.model_dump())
+            return RoleResponse(**role.model_dump(mode='json', exclude={"entity"}))
         except HTTPException:
             raise
         except Exception as e:
@@ -163,7 +166,7 @@ def get_roles_router(
                 role_id=role_id,
                 update_dict=data.model_dump(exclude_unset=True)
             )
-            return RoleResponse(**role.model_dump())
+            return RoleResponse(**role.model_dump(mode='json', exclude={"entity"}))
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -207,7 +210,7 @@ def get_roles_router(
                 role_id=role_id,
                 permissions=permissions
             )
-            return RoleResponse(**role.model_dump())
+            return RoleResponse(**role.model_dump(mode='json', exclude={"entity"}))
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -231,7 +234,7 @@ def get_roles_router(
                 role_id=role_id,
                 permissions=permissions
             )
-            return RoleResponse(**role.model_dump())
+            return RoleResponse(**role.model_dump(mode='json', exclude={"entity"}))
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

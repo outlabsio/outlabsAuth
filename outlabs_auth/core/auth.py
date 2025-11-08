@@ -74,6 +74,7 @@ class OutlabsAuth:
         api_key_rate_limit_per_minute: int = 60,
         api_key_temporary_lock_minutes: int = 30,
         # Optional dependencies
+        redis_enabled: bool = False,
         redis_url: Optional[str] = None,
         cache_ttl_seconds: int = 300,
         notification_service: Optional[Any] = None,  # NotificationService instance
@@ -103,12 +104,13 @@ class OutlabsAuth:
             enable_entity_hierarchy: Enable entity system (EnterpriseRBAC)
             enable_context_aware_roles: Context-based role permissions (optional)
             enable_abac: Attribute-based access control (optional)
-            enable_caching: Redis caching for performance (optional)
+            enable_caching: Redis caching for performance (optional, deprecated - use redis_enabled)
             multi_tenant: Multi-tenant isolation (optional)
             enable_audit_log: Audit logging for compliance (optional)
             enable_notifications: Enable notification system (optional)
 
-            redis_url: Redis connection URL (required if enable_caching=True)
+            redis_enabled: Enable Redis features (caching, counters, activity tracking)
+            redis_url: Redis connection URL (required if redis_enabled=True)
             notification_service: NotificationService instance (optional)
             user_model: Custom user model class
             role_model: Custom role model class
@@ -129,6 +131,11 @@ class OutlabsAuth:
             redis_url=redis_url,
         )
 
+        # Set redis_enabled based on redis_url if not explicitly set
+        # If user provides redis_url, assume they want Redis enabled (unless they explicitly set redis_enabled=False)
+        if redis_url and "redis_enabled" not in kwargs:
+            redis_enabled = True
+
         # Create configuration object
         self.config = AuthConfig(
             secret_key=secret_key,
@@ -148,6 +155,7 @@ class OutlabsAuth:
             enable_context_aware_roles=enable_context_aware_roles,
             enable_abac=enable_abac,
             enable_caching=enable_caching,
+            redis_enabled=redis_enabled,  # Add explicit redis_enabled to config
             multi_tenant=multi_tenant,
             enable_audit_log=enable_audit_log,
             enable_notifications=enable_notifications,
@@ -360,8 +368,8 @@ class OutlabsAuth:
             self.entity_service = None  # Not available in SimpleRBAC
             self.membership_service = None  # Not available in SimpleRBAC
 
-        # Initialize Redis client if caching enabled
-        if self.config.enable_caching or self.config.redis_url:
+        # Initialize Redis client if redis_enabled
+        if self.config.redis_enabled and self.config.redis_url:
             from outlabs_auth.services.redis_client import RedisClient
 
             self.redis_client = RedisClient(self.config)

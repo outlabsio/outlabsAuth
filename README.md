@@ -22,8 +22,8 @@ OutlabsAuth is a comprehensive authentication and authorization library for Fast
 - **Entity System**: STRUCTURAL vs ACCESS_GROUP for flexible org modeling
 
 **Authentication (Inspired by FastAPI-Users)**:
-- **JWT Authentication**: Access + refresh tokens with automatic rotation
-- **API Key Authentication**: argon2id hashing, rate limiting, IP whitelisting
+- **JWT Authentication**: Access + refresh tokens with optional rotation
+- **API Key Authentication**: SHA-256 hashing (fast, secure for high-entropy secrets), rate limiting, IP whitelisting
 - **Multi-Source Auth**: JWT, API keys, service tokens, superuser, anonymous
 - **Lifecycle Hooks**: 20+ overrideable hooks (on_after_register, on_after_login, etc.)
 - **Router Factories**: Pre-built FastAPI routers for rapid setup
@@ -89,7 +89,7 @@ auth = EnterpriseRBAC(
     database=mongo_client,
     enable_context_aware_roles=True,  # Permissions adapt by entity type
     enable_abac=True,                 # Attribute-based conditions
-    enable_caching=True,              # Redis caching
+    redis_enabled=True,               # Enable Redis features
     redis_url="redis://localhost:6379"
 )
 
@@ -186,18 +186,23 @@ await auth.auth_service.logout(refresh_token)
 # Create API key
 raw_key, key_model = await auth.api_key_service.create_api_key(
     name="production_api",
-    created_by=user_id,
-    permissions=["api:read", "api:write"],
-    environment="production",
-    rate_limit_per_minute=100
+    owner_id=user_id,
+    scopes=["user:read", "entity:read"],
+    rate_limit_per_minute=100,
+    ip_whitelist=["10.0.0.0/8"]  # Optional
 )
 
 # ⚠️ Save raw_key securely - it's only shown once!
 
-# Use in requests (header or query param)
+# Verify API key
+api_key, usage = await auth.api_key_service.verify_api_key(
+    raw_key,
+    required_scope="user:read",
+    ip_address=request.client.host
+)
+
+# Use in requests
 headers = {"X-API-Key": raw_key}
-# or
-url = "/api/data?api_key=sk_prod_..."
 ```
 
 ### JWT Service Tokens

@@ -1525,7 +1525,7 @@ Phased delivery of extensions, each independent and optional.
 
 ## DD-028: API Key System for Service Authentication (Core v1.0)
 
-**Date**: 2025-01-14
+**Date**: 2025-01-14 (Updated: 2025-01-26 - Corrected hashing algorithm)
 **Status**: Accepted (Core Feature)
 **Deciders**: Core team
 **Context**: Need service-to-service authentication for API integrations and webhooks
@@ -1552,29 +1552,32 @@ Phased delivery of extensions, each independent and optional.
 Implement full API key system in core v1.0 (Phase 2 - SimpleRBAC).
 
 **Features**:
-- Prefixed keys (8 characters): `sk_prod_`, `sk_stag_`, `sk_dev_`, `sk_test_`
-- argon2id hashing (NOT SHA256 - security requirement)
+- Prefixed keys (12 characters): `sk_live_abc1`, `sk_test_xyz2`
+- **SHA-256 hashing** (fast hashing appropriate for high-entropy secrets)
 - Key lifecycle: create, rotate, revoke
-- Permission-based access control
-- IP whitelisting
-- Rate limiting per key
+- Scope-based access control (not permission-based - simpler)
+- IP whitelisting (optional)
+- Rate limiting per key (Redis counters for performance)
 - Usage tracking and audit logging
-- Automatic revocation on abuse detection
+- Temporary lock after abuse detection
 
 **Design**:
 ```python
 # Create API key
 raw_key, key = await auth.api_key_service.create_api_key(
     name="production_api",
-    created_by=user_id,
-    permissions=["api:read", "api:write"],
-    environment="production",
+    owner_id=user_id,
+    scopes=["user:read", "entity:read"],
     rate_limit_per_minute=100,
-    allowed_ips=["10.0.0.0/8"]
+    ip_whitelist=["10.0.0.0/8"]  # Optional
 )
 
-# Use in requests
-headers = {"X-API-Key": raw_key}
+# Verify API key
+api_key, usage = await auth.api_key_service.verify_api_key(
+    raw_key,
+    required_scope="user:read",
+    ip_address=request.client.host
+)
 ```
 
 **Reasoning**:
@@ -1585,15 +1588,81 @@ headers = {"X-API-Key": raw_key}
 - Should be available from v1.0, not an extension
 
 **Security Requirements**:
-- argon2id hashing with time_cost=2, memory_cost=102400, parallelism=8
+- **SHA-256 hashing** (see "Design Correction" below)
 - Never log raw keys, only prefixes
 - Optional expiration (recommended 90 days) with manual rotation API
-- IP whitelisting strictly enforced
+- IP whitelisting (optional but recommended)
 - Temporary lock after 10 failed attempts in 10 minutes (30-min cooldown)
+- Rate limiting enforced per key
+
+### Design Correction: Why SHA-256 Instead of Argon2id?
+
+**Original Decision (INCORRECT)**: Use argon2id for API key hashing  
+**Corrected Decision**: Use SHA-256 for API key hashing
+
+**Rationale**:
+API keys are **NOT passwords**. They are cryptographically secure random secrets with 256 bits of entropy.
+
+**Why argon2id is wrong here**:
+- Argon2id is designed to slow down brute force attacks on **low-entropy human passwords**
+- API keys cannot be brute-forced (2^256 possible values = 10^77 combinations)
+- Argon2id would add ~100ms overhead to **every API request** for zero security benefit
+- No attacker can guess a 256-bit random secret through trial and error
+
+**Where security actually comes from**:
+1. ✅ Cryptographically secure random generation (`secrets.token_hex(32)`)
+2. ✅ Rate limiting per key (60/min, 1000/hour via Redis counters)
+3. ✅ Temporary locks after repeated failures (10 in 10 min → 30-min cooldown)
+4. ✅ HTTPS transmission (user responsibility)
+5. ✅ IP whitelisting (optional)
+6. ❌ **NOT from slow hashing** (unnecessary for high-entropy secrets)
+
+**Industry precedent**:
+- **GitHub**: Fast hashing for API tokens
+- **Stripe**: Fast hashing for API keys
+- **AWS**: Fast hashing for access keys
+- All use slow hashing (bcrypt/argon2) **only for passwords**
+
+**Performance impact**:
+- SHA-256: ~0.1ms per API request (✅ acceptable)
+- Argon2id: ~100ms per API request (❌ 1000x slower, no benefit)
+
+**What we DO use argon2id for**:
+- ✅ User passwords (correct - passwords have low entropy)
+- ❌ API keys (incorrect - keys have high entropy)
+
+### Refresh Token Rotation (Optional Feature)
+
+**Decision**: Make refresh token rotation **optional**, default OFF.
+
+**Rationale**:
+- Rotation adds complexity for marginal security benefit
+- Can break concurrent refresh attempts from same client
+- If client loses connection after receiving new token but before saving it, they're locked out
+- Most apps are fine with: 30-day refresh token + manual "revoke all sessions"
+
+**Recommended approach**:
+- Default: Refresh tokens valid for 30 days, reusable
+- Implement "revoke all sessions" feature (already have it)
+- Add detection for refresh token reuse **after revocation** (indicates theft)
+- High-security apps can enable rotation via `enable_refresh_token_rotation=True`
+
+**Configuration**:
+```python
+# Default (no rotation - simpler, fewer edge cases)
+auth = SimpleRBAC(database=db, secret_key="secret")
+
+# High-security apps (rotation enabled)
+auth = SimpleRBAC(
+    database=db,
+    secret_key="secret",
+    enable_refresh_token_rotation=True
+)
+```
 
 ### Consequences
-- **Positive**: Production-ready from day one, industry standard, enables integrations
-- **Negative**: Adds ~500 LOC to core, requires argon2 dependency
+- **Positive**: Production-ready from day one, industry standard, enables integrations, fast performance
+- **Negative**: Adds ~500 LOC to core
 - **Neutral**: Both SimpleRBAC and EnterpriseRBAC support API keys equally
 
 ### Timeline Impact
@@ -1604,7 +1673,7 @@ headers = {"X-API-Key": raw_key}
 ### Related Decisions
 - DD-029 (Multi-source authentication)
 - DD-030 (Dependency patterns)
-- DD-031 (API key security model)
+- DD-031 (API key security model - superseded by this correction)
 
 ---
 
@@ -1764,10 +1833,14 @@ def test_endpoint(client, mock_auth):
 
 ## DD-031: API Key Security Model
 
-**Date**: 2025-01-14
-**Status**: Accepted (Core Feature)
+**Date**: 2025-01-14 (Updated: 2025-01-26)
+**Status**: Superseded by DD-028 (Corrected)
 **Deciders**: Core team, Security review
 **Context**: API keys are sensitive credentials requiring strong security
+
+> **⚠️ SUPERSEDED**: This decision has been superseded by the corrected DD-028.
+> The original recommendation to use argon2id for API keys was incorrect.
+> See DD-028 for the corrected approach using SHA-256 for high-entropy secrets.
 
 ### Options Considered
 
@@ -2868,6 +2941,110 @@ The data is already structured correctly—just add entity context.
 
 ---
 
+## DD-048: Redis Configuration Simplification
+
+**Date**: 2025-01-26
+**Status**: Accepted (Clarification)
+**Deciders**: Core team
+**Context**: Simplify Redis enablement to reduce configuration confusion
+
+### The Problem
+Current implementation has confusing dual-flag system:
+- `enable_caching` flag (config parameter)
+- `redis_enabled` flag (internal config)
+- `redis_url` parameter (connection string)
+
+**Confusion**:
+- Users provide `redis_url` but Redis doesn't connect (forgot `enable_caching=True`)
+- Why have both `enable_caching` AND `redis_enabled`?
+- Unclear which features require Redis
+
+### Decision
+Simplify to single `redis_enabled` flag as source of truth.
+
+**Simple Rules**:
+1. User provides `redis_enabled=True` → Use Redis for all features
+2. User provides `redis_url` but `redis_enabled=False` → Redis available but not used (user's explicit choice)
+3. Redis unavailable → Graceful degradation to in-memory/direct DB
+
+**Configuration**:
+```python
+# Redis disabled (default - in-memory only)
+auth = SimpleRBAC(
+    database=db,
+    secret_key="secret"
+)
+
+# Redis enabled
+auth = SimpleRBAC(
+    database=db,
+    secret_key="secret",
+    redis_enabled=True,
+    redis_url="redis://localhost:6379"
+)
+```
+
+**Features Requiring Redis** (gracefully degrade if unavailable):
+- ✅ Permission caching (falls back to direct DB queries)
+- ✅ API key usage counters (falls back to direct DB writes)
+- ✅ API key rate limiting (falls back to in-memory counters)
+- ✅ JWT token blacklist (falls back to DB-only revocation with 15-min window)
+- ✅ Activity tracking DAU/MAU (falls back to disabled)
+- ✅ Entity path caching (falls back to direct closure table queries)
+
+**Why Not Auto-Enable on redis_url?**
+- User may provide `redis_url` for future use but not want it active yet
+- Explicit is better than implicit (Zen of Python)
+- Allows configuration via environment variables without auto-activation
+- User maintains control over when Redis features activate
+
+### Implementation
+```python
+# In OutlabsAuth.__init__
+if redis_url and redis_enabled:
+    self.redis_client = RedisClient(config)
+else:
+    self.redis_client = None
+
+# In RedisClient.connect()
+if not self.config.redis_enabled:
+    logger.info("Redis disabled in configuration")
+    return False
+```
+
+**Remove**:
+- `enable_caching` parameter (redundant with `redis_enabled`)
+- Automatic Redis enablement on `redis_url` presence
+
+### Consequences
+- **Positive**: Clearer configuration, single source of truth, explicit control
+- **Negative**: Requires `redis_enabled=True` even when `redis_url` provided
+- **Neutral**: One-line change for users (add `redis_enabled=True`)
+
+### Migration for Existing Code
+```python
+# OLD (confusing)
+auth = SimpleRBAC(
+    database=db,
+    enable_caching=True,
+    redis_url="redis://localhost:6379"
+)
+
+# NEW (clear)
+auth = SimpleRBAC(
+    database=db,
+    redis_enabled=True,
+    redis_url="redis://localhost:6379"
+)
+```
+
+### Related Decisions
+- DD-010 (Redis caching optional)
+- DD-033 (Redis counters for API keys)
+- DD-037 (Redis Pub/Sub cache invalidation)
+
+---
+
 ## Questions Still Open
 
 Track questions that need decisions:
@@ -2900,11 +3077,13 @@ Track questions that need decisions:
 | 2025-01-14 | DD-032 through DD-037 | All Accepted (Architectural Improvements) |
 | 2025-01-14 | DD-038 through DD-046 | All Accepted (FastAPI-Users Inspired Patterns) |
 | 2025-01-14 | DD-047 | Accepted (UserRoleMembership for SimpleRBAC) |
+| 2025-01-26 | DD-048 | Accepted (Redis Configuration Simplification) |
 | 2025-01-14 | DD-003 | Superseded by DD-015 |
-| 2025-01-14 | DD-028, DD-031 | Updated (removed automatic rotation, added temp locks) |
+| 2025-01-26 | DD-028 | **CORRECTED** - Changed from argon2id to SHA-256 for API keys; made refresh token rotation optional |
+| 2025-01-26 | DD-031 | Superseded by DD-028 (corrected) |
 | 2025-01-14 | DD-030 | Superseded by DD-035 |
 
 ---
 
-**Last Updated**: 2025-01-25 (Updated DD-047: Added MembershipStatus enum for rich lifecycle tracking)
+**Last Updated**: 2025-01-26 (DD-028 corrected: SHA-256 for API keys, optional refresh rotation; DD-048 added: Redis config simplification; DD-031 superseded)
 **Next Review**: End of Phase 1 (Week 2)

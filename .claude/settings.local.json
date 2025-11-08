@@ -44,7 +44,8 @@
       "Bash(mongosh:*)",
       "Bash(/tmp/login_response.json)",
       "mcp__playwright__browser_handle_dialog",
-      "mcp__playwright__browser_take_screenshot"
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_type"
     ],
     "deny": [],
     "ask": []

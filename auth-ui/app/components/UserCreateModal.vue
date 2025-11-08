@@ -5,22 +5,11 @@ const open = defineModel<boolean>('open', { default: false })
 
 // Form state
 const state = reactive({
-  username: '',
   email: '',
   password: '',
-  full_name: '',
-  is_active: true,
+  first_name: '',
+  last_name: '',
   is_superuser: false
-})
-
-// Auto-generate username from email
-watch(() => state.email, (newEmail) => {
-  if (newEmail && !state.username) {
-    const emailPrefix = newEmail.split('@')[0]
-    if (emailPrefix) {
-      state.username = emailPrefix.toLowerCase().replace(/[^a-z0-9_-]/g, '')
-    }
-  }
 })
 
 // Password strength indicator
@@ -82,22 +71,21 @@ async function handleSubmit() {
         <!-- Grid layout for names -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div class="space-y-2">
-            <label class="block text-sm font-medium">Full Name</label>
+            <label class="block text-sm font-medium">First Name</label>
             <UInput
-              v-model="state.full_name"
-              placeholder="John Doe"
+              v-model="state.first_name"
+              placeholder="John"
               icon="i-lucide-user"
             />
           </div>
 
           <div class="space-y-2">
-            <label class="block text-sm font-medium">Username</label>
+            <label class="block text-sm font-medium">Last Name</label>
             <UInput
-              v-model="state.username"
-              placeholder="johndoe"
-              icon="i-lucide-at-sign"
+              v-model="state.last_name"
+              placeholder="Doe"
+              icon="i-lucide-user"
             />
-            <p class="text-xs text-muted">Lowercase, no spaces</p>
           </div>
         </div>
 
@@ -147,14 +135,8 @@ async function handleSubmit() {
 
         <UDivider label="Permissions" />
 
-        <!-- Switches in grid -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <UCheckbox
-            v-model="state.is_active"
-            label="Active"
-            help="User can log in and access the system"
-          />
-
+        <!-- Switches -->
+        <div class="space-y-4">
           <UCheckbox
             v-model="state.is_superuser"
             label="Superuser"
