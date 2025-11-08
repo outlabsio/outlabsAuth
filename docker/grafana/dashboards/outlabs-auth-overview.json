@@ -1,203 +1,215 @@
 {
-  "dashboard": {
-    "title": "OutlabsAuth Overview",
-    "tags": ["outlabs-auth", "authentication", "authorization"],
-    "timezone": "browser",
-    "schemaVersion": 16,
-    "version": 1,
-    "refresh": "10s",
-    "panels": [
-      {
-        "id": 1,
-        "title": "Login Success Rate",
-        "type": "stat",
-        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
-        "targets": [
-          {
-            "expr": "rate(outlabs_auth_login_attempts_total{status=\"success\"}[5m]) * 60",
-            "legendFormat": "Logins/min"
-          }
-        ],
-        "options": {
-          "reduceOptions": {"calcs": ["lastNotNull"]},
-          "textMode": "auto",
-          "colorMode": "value",
-          "graphMode": "area"
-        },
-        "fieldConfig": {
-          "defaults": {
-            "color": {"mode": "thresholds"},
-            "thresholds": {
-              "mode": "absolute",
-              "steps": [
-                {"value": null, "color": "green"}
-              ]
-            },
-            "unit": "reqps"
-          }
+  "title": "OutlabsAuth Overview",
+  "tags": ["outlabs-auth", "authentication", "authorization"],
+  "timezone": "browser",
+  "schemaVersion": 16,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Login Success Rate",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(outlabs_auth_login_attempts_total{status=\"success\"}[5m]) * 60",
+          "legendFormat": "Logins/min"
         }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
       },
-      {
-        "id": 2,
-        "title": "Login Failure Rate",
-        "type": "stat",
-        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
-        "targets": [
-          {
-            "expr": "rate(outlabs_auth_login_attempts_total{status=\"failed\"}[5m]) * 60",
-            "legendFormat": "Failed/min"
-          }
-        ],
-        "options": {
-          "reduceOptions": {"calcs": ["lastNotNull"]},
-          "textMode": "auto",
-          "colorMode": "value",
-          "graphMode": "area"
-        },
-        "fieldConfig": {
-          "defaults": {
-            "color": {"mode": "thresholds"},
-            "thresholds": {
-              "mode": "absolute",
-              "steps": [
-                {"value": null, "color": "green"},
-                {"value": 5, "color": "red"}
-              ]
-            },
-            "unit": "reqps"
-          }
-        }
-      },
-      {
-        "id": 3,
-        "title": "Active Sessions",
-        "type": "stat",
-        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
-        "targets": [
-          {
-            "expr": "outlabs_auth_active_sessions",
-            "legendFormat": "Sessions"
-          }
-        ],
-        "options": {
-          "reduceOptions": {"calcs": ["lastNotNull"]},
-          "textMode": "auto",
-          "colorMode": "value"
-        },
-        "fieldConfig": {
-          "defaults": {
-            "color": {"mode": "thresholds"},
-            "thresholds": {
-              "mode": "absolute",
-              "steps": [
-                {"value": null, "color": "blue"}
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": 4,
-        "title": "Permission Check Rate",
-        "type": "stat",
-        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
-        "targets": [
-          {
-            "expr": "rate(outlabs_auth_permission_checks_total[5m])",
-            "legendFormat": "Checks/sec"
-          }
-        ],
-        "options": {
-          "reduceOptions": {"calcs": ["lastNotNull"]},
-          "textMode": "auto",
-          "colorMode": "value",
-          "graphMode": "area"
-        },
-        "fieldConfig": {
-          "defaults": {
-            "color": {"mode": "thresholds"},
-            "thresholds": {
-              "mode": "absolute",
-              "steps": [
-                {"value": null, "color": "blue"}
-              ]
-            },
-            "unit": "reqps"
-          }
-        }
-      },
-      {
-        "id": 5,
-        "title": "Login Attempts Over Time",
-        "type": "timeseries",
-        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
-        "targets": [
-          {
-            "expr": "rate(outlabs_auth_login_attempts_total{status=\"success\"}[5m]) * 60",
-            "legendFormat": "Success"
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "value": null, "color": "green" }]
           },
-          {
-            "expr": "rate(outlabs_auth_login_attempts_total{status=\"failed\"}[5m]) * 60",
-            "legendFormat": "Failed"
-          }
-        ],
-        "fieldConfig": {
-          "defaults": {
-            "custom": {
-              "drawStyle": "line",
-              "lineInterpolation": "smooth",
-              "fillOpacity": 10
-            },
-            "unit": "reqps"
-          },
-          "overrides": [
-            {
-              "matcher": {"id": "byName", "options": "Success"},
-              "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}]
-            },
-            {
-              "matcher": {"id": "byName", "options": "Failed"},
-              "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}]
-            }
-          ]
-        }
-      },
-      {
-        "id": 6,
-        "title": "Permission Checks Over Time",
-        "type": "timeseries",
-        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
-        "targets": [
-          {
-            "expr": "rate(outlabs_auth_permission_checks_total{result=\"granted\"}[5m])",
-            "legendFormat": "Granted"
-          },
-          {
-            "expr": "rate(outlabs_auth_permission_checks_total{result=\"denied\"}[5m])",
-            "legendFormat": "Denied"
-          }
-        ],
-        "fieldConfig": {
-          "defaults": {
-            "custom": {
-              "drawStyle": "line",
-              "lineInterpolation": "smooth",
-              "fillOpacity": 10
-            },
-            "unit": "reqps"
-          },
-          "overrides": [
-            {
-              "matcher": {"id": "byName", "options": "Granted"},
-              "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}]
-            },
-            {
-              "matcher": {"id": "byName", "options": "Denied"},
-              "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "orange"}}]
-            }
-          ]
+          "unit": "reqps"
         }
       }
-    ]
-  }
+    },
+    {
+      "id": 2,
+      "title": "Login Failure Rate",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(outlabs_auth_login_attempts_total{status=\"failed\"}[5m]) * 60",
+          "legendFormat": "Failed/min"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 5, "color": "red" }
+            ]
+          },
+          "unit": "reqps"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Active Sessions",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "outlabs_auth_active_sessions",
+          "legendFormat": "Sessions"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "auto",
+        "colorMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "value": null, "color": "blue" }]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Permission Check Rate",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(outlabs_auth_permission_checks_total[5m])",
+          "legendFormat": "Checks/sec"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "value": null, "color": "blue" }]
+          },
+          "unit": "reqps"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Login Attempts Over Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "rate(outlabs_auth_login_attempts_total{status=\"success\"}[5m]) * 60",
+          "legendFormat": "Success"
+        },
+        {
+          "expr": "rate(outlabs_auth_login_attempts_total{status=\"failed\"}[5m]) * 60",
+          "legendFormat": "Failed"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          },
+          "unit": "reqps"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Success" },
+            "properties": [
+              {
+                "id": "color",
+                "value": { "mode": "fixed", "fixedColor": "green" }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Failed" },
+            "properties": [
+              {
+                "id": "color",
+                "value": { "mode": "fixed", "fixedColor": "red" }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "title": "Permission Checks Over Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "expr": "rate(outlabs_auth_permission_checks_total{result=\"granted\"}[5m])",
+          "legendFormat": "Granted"
+        },
+        {
+          "expr": "rate(outlabs_auth_permission_checks_total{result=\"denied\"}[5m])",
+          "legendFormat": "Denied"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10
+          },
+          "unit": "reqps"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Granted" },
+            "properties": [
+              {
+                "id": "color",
+                "value": { "mode": "fixed", "fixedColor": "green" }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Denied" },
+            "properties": [
+              {
+                "id": "color",
+                "value": { "mode": "fixed", "fixedColor": "orange" }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
 }
