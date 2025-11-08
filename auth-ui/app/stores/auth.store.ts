@@ -157,7 +157,11 @@ export const useAuthStore = defineStore("auth", () => {
         throw error;
       }
 
-      // Handle empty responses
+      // Handle empty responses (204 No Content, 205 Reset Content have no body)
+      if (response.status === 204 || response.status === 205) {
+        return {} as T;
+      }
+
       const contentType = response.headers.get("content-type");
       if (contentType && contentType.includes("application/json")) {
         return await response.json();

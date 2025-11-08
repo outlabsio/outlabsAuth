@@ -12,6 +12,7 @@ from outlabs_auth.schemas.role import (
     RoleCreateRequest,
     RoleUpdateRequest,
 )
+from outlabs_auth.schemas.common import PaginatedResponse
 
 
 def get_roles_router(
@@ -52,18 +53,37 @@ def get_roles_router(
 
     @router.get(
         "/",
-        response_model=List[RoleResponse],
+        response_model=PaginatedResponse[RoleResponse],
         summary="List roles",
-        description="List all roles (requires role:read permission)"
+        description="List all roles with pagination (requires role:read permission)"
     )
     async def list_roles(
+        page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+        limit: int = Query(20, ge=1, le=100, description="Results per page"),
         is_global: Optional[bool] = Query(None, description="Filter by global/non-global roles"),
         auth_result = Depends(auth.deps.require_permission("role:read"))
     ):
-        """List all roles with optional filtering."""
+        """List all roles with pagination and optional filtering."""
         try:
-            roles = await auth.role_service.list_roles(is_global=is_global)
-            return [RoleResponse(**role.model_dump()) for role in roles]
+            roles, total = await auth.role_service.list_roles(
+                page=page,
+                limit=limit,
+                is_global=is_global
+            )
+
+            # Calculate total pages
+            pages = (total + limit - 1) // limit if total > 0 else 0
+
+            # Convert to response schema
+            items = [RoleResponse(**role.model_dump()) for role in roles]
+
+            return PaginatedResponse(
+                items=items,
+                total=total,
+                page=page,
+                limit=limit,
+                pages=pages
+            )
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

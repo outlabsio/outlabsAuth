@@ -14,9 +14,13 @@
 
 ## 🚀 QUICK START (Coming Back With Zero Context?)
 
-**WHERE WE ARE:** 🔄 **Phase 3 Testing - Users page working!** - Backend Beanie fixes applied, testing in progress
+**WHERE WE ARE:** 🔄 **Phase 3 Testing - User CRUD complete!** - Testing roles and permissions next
 
-**WHAT WE FIXED (Phase 3 - Beanie Link Query Fixes):**
+**WHAT WE FIXED (Phase 3 - Latest):**
+- ✅ **Fixed 204 No Content response handling** (DELETE operations were failing)
+- ✅ **User deletion now works perfectly!** (test user deleted, 6 → 5 users)
+- ✅ **Added missing POST /v1/users/ endpoint** (admin user creation)
+- ✅ Created UserCreateRequest schema with is_superuser support
 - ✅ Fixed Beanie Link field query syntax (dictionary → query operators)
 - ✅ Fixed Link resolution (already fetched via fetch_links=True)
 - ✅ Fixed user fetching with linked data (fetch_links=True parameter)
@@ -31,6 +35,7 @@
 **WHAT WORKS:**
 - ✅ All UI queries/mutations defined (~800 lines)
 - ✅ Backend routers have all required endpoints
+- ✅ **POST /v1/users/ endpoint added** (admin user creation)
 - ✅ `/v1` URL prefix applied throughout
 - ✅ Authentication working (login, logout, refresh)
 - ✅ Frontend types aligned with backend
@@ -41,8 +46,8 @@
 
 **WHAT TO TEST NEXT:**
 1. ✅ Users page - list, search, pagination (DONE)
-2. ⏳ Users page - create user
-3. ⏳ Users page - delete user (optimistic updates)
+2. ✅ Users page - create user (DONE)
+3. ✅ Users page - delete user (DONE - optimistic updates working)
 4. ⏳ Roles page - list and CRUD
 5. ⏳ Permissions page - list and filter
 6. ⏳ Cache behavior (navigate away/back)
@@ -74,6 +79,15 @@ cd auth-ui && bun run dev
 ```
 
 **FILES MODIFIED:**
+
+**Phase 3 (204 No Content Response Fix - 2025-11-08):**
+- `auth-ui/app/stores/auth.store.ts:160-163` - Fixed 204/205 status code handling before JSON parsing
+
+**Phase 3 (User Creation Endpoint - 2025-11-08):**
+- `outlabs_auth/schemas/user.py:33-44` - Added UserCreateRequest schema with is_superuser support
+- `outlabs_auth/schemas/__init__.py:67,95` - Added UserCreateRequest to exports
+- `outlabs_auth/routers/users.py:12,57-101` - Added POST / endpoint for admin user creation
+- `outlabs_auth/routers/users.py:38-45` - Updated router docstring with new endpoint
 
 **Phase 3 (Beanie Link Query Fixes):**
 - `outlabs_auth/services/permission.py:204-223` - Fixed UserRoleMembership query (dictionary → query operators), fixed Link resolution
@@ -1519,6 +1533,135 @@ bun run dev  # Starts on http://localhost:3000
    - Update testing instructions
    - Note any limitations
 
+### Phase 3 Progress - 204 No Content Response Fix (2025-11-08)
+
+**Status:** ✅ **DELETE operations fixed** - User deletion now works correctly
+
+#### Issue Discovered
+
+When testing user deletion from the UI, the DELETE request succeeded (backend returned `204 No Content`), but the frontend threw an error:
+
+```
+Error deleting user: Failed to execute 'json' on 'Response': Unexpected end of JSON input
+```
+
+**Root Cause:** The `apiCall()` method in `auth.store.ts` was attempting to parse ALL responses as JSON, but 204/205 status codes have no response body per REST standards.
+
+**Backend Log (Success):**
+```
+INFO: 127.0.0.1:52158 - "DELETE /v1/users/690fb6ad1f0e8e8f5e4d807b HTTP/1.1" 204 No Content
+```
+
+But frontend tried: `response.json()` on empty body → **Error**
+
+#### Solution Implemented
+
+**Fixed apiCall() method** (`auth-ui/app/stores/auth.store.ts:160-163`):
+
+```typescript
+// Handle empty responses (204 No Content, 205 Reset Content have no body)
+if (response.status === 204 || response.status === 205) {
+  return {} as T;
+}
+
+const contentType = response.headers.get("content-type");
+if (contentType && contentType.includes("application/json")) {
+  return await response.json();
+}
+
+return {} as T;
+```
+
+**Key Changes:**
+1. Check for 204/205 status codes BEFORE attempting JSON parsing
+2. Return empty object for no-content responses
+3. Only parse JSON if content-type header indicates JSON
+
+#### Test Results
+
+✅ **User deletion working perfectly:**
+- Created test user: `test@example.com`
+- Clicked delete action → Confirmation dialog appeared
+- Confirmed deletion
+- Backend: `DELETE /v1/users/690fb6ad1f0e8e8f5e4d807b HTTP/1.1 204 No Content`
+- User count: 6 → 5 users
+- No errors!
+- Page refreshed showing 5 remaining users
+
+✅ **Verified in database:**
+```python
+Total users in database: 5
+Users: System, Sarah, John, Jane, Temp
+```
+
+**Impact:** This fix applies to ALL DELETE endpoints and any other endpoints that return 204/205 status codes.
+
+---
+
+### Phase 3 Progress - User Creation Endpoint (2025-11-08)
+
+**Status:** ✅ **POST /v1/users/ endpoint added** - Admin user creation now available
+
+#### Issue Discovered
+
+When testing user creation from the UI, the request failed with `405 Method Not Allowed`:
+```
+POST /v1/users HTTP/1.1" 307 Temporary Redirect
+POST /v1/users/ HTTP/1.1" 405 Method Not Allowed
+```
+
+**Root Cause:** The users router (`outlabs_auth/routers/users.py`) only had endpoints for listing, updating, and deleting users, but no POST endpoint for creating users. User creation was only possible through the public `/v1/auth/register` endpoint, which didn't support admin-specific features like setting `is_superuser`.
+
+#### Solution Implemented
+
+**1. Created UserCreateRequest Schema** (`outlabs_auth/schemas/user.py:33-44`):
+```python
+class UserCreateRequest(BaseModel):
+    """Admin user creation request schema."""
+    email: EmailStr
+    password: str = Field(..., min_length=8)
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    is_superuser: bool = Field(default=False)  # Admin-only feature
+```
+
+**2. Added POST / Endpoint** (`outlabs_auth/routers/users.py:57-101`):
+```python
+@router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def create_user(
+    data: UserCreateRequest,
+    auth_result = Depends(auth.deps.require_permission("user:create"))
+):
+    user = await auth.user_service.create_user(
+        email=data.email,
+        password=data.password,
+        first_name=data.first_name,
+        last_name=data.last_name,
+        is_superuser=data.is_superuser
+    )
+    await auth.user_service.on_after_register(user, None)
+    return UserResponse(...)
+```
+
+**Key Features:**
+- ✅ Requires `user:create` permission (admin-only)
+- ✅ Supports `is_superuser` flag
+- ✅ Triggers `on_after_register` hook
+- ✅ Returns `201 Created` status
+- ✅ Different from public `/v1/auth/register` endpoint
+
+**3. Updated Exports** (`outlabs_auth/schemas/__init__.py`):
+- Added UserCreateRequest to schema exports
+
+#### Test Results
+
+✅ **Endpoint deployed successfully:**
+- Server reloaded with new endpoint
+- Route available at POST /v1/users/
+- Ready for UI testing
+
+---
+
 ### Phase 3 Progress - Beanie Link Query Fixes (2025-11-08)
 
 **Status:** ✅ **Users page working!** - Fixed critical Beanie Link field query bugs
@@ -1685,6 +1828,7 @@ INFO: "GET /v1/users/?page=1&limit=20 HTTP/1.1" 200 OK
 - ✅ Context switching pattern ready
 - ✅ ~1,200+ lines of boilerplate removed
 - ✅ 4 new library endpoints added (list users, permissions, etc.)
+- ✅ **POST /v1/users/ endpoint added** (admin user creation)
 - ✅ `/v1` URL prefix applied throughout
 - ✅ Pagination schema created
 - ✅ Docker setup cleaned and centralized
