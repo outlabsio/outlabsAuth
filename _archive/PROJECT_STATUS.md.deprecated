@@ -1,8 +1,8 @@
 # OutlabsAuth Project Status
 
-**Last Updated**: 2025-01-24
+**Last Updated**: 2025-01-25
 **Branch**: `library-redesign`
-**Version**: 1.5 (Core Complete + Examples Fixed + Observability Documentation Ready)
+**Version**: 1.5 (Core Complete + Examples Fixed + Observability Documentation + MembershipStatus Enum)
 
 ---
 
@@ -39,6 +39,40 @@ The core library is **fully functional** and ready for use:
 | **Presets** | ✅ Complete | SimpleRBAC and EnterpriseRBAC both functional |
 
 #### Recent Updates
+
+**2025-01-25: MembershipStatus Enum Migration** ✨
+
+Migrated UserRoleMembership from boolean `is_active` flag to rich `MembershipStatus` enum:
+
+1. **MembershipStatus Enum Created**:
+   - 6 states: ACTIVE, SUSPENDED, REVOKED, EXPIRED, PENDING, REJECTED
+   - Helper methods: `can_grant_permissions()`, `is_inactive()`, `active_states()`, `inactive_states()`
+
+2. **UserRoleMembership Model Enhanced**:
+   - Replaced `is_active: bool` with `status: MembershipStatus`
+   - Added `revoked_at` and `revoked_by` for revocation audit trail
+   - Updated `can_grant_permissions()` to check both status and time validity
+   - Updated database indexes from `is_active` to `status`
+
+3. **Service Updates**:
+   - **RoleService**: All queries updated to use status field
+   - **PermissionService**: SimpleRBAC queries updated, EnterpriseRBAC marked with TODOs
+   - `revoke_role_from_user()` now records full audit trail (who revoked, when)
+
+4. **Schema Updates**:
+   - `UserRoleMembershipResponse`: Added status, revoked_at, revoked_by_id, can_grant_permissions
+   - `UserRoleMembershipUpdate`: Changed is_active to status field
+
+5. **Documentation Updated**:
+   - `IMPLEMENTATION_SUMMARY_USER_ROLE_MEMBERSHIP.md` - Updated all examples
+   - `docs/DESIGN_DECISIONS.md` - Updated DD-047 with enum rationale
+   - `test_user_role_membership.py` - Updated test outputs
+
+**Benefits**:
+- ✅ Rich lifecycle tracking (distinguish manual revocation from expiration)
+- ✅ Better audit trail (know *why* access was removed)
+- ✅ Future-ready for approval workflows (PENDING/REJECTED states)
+- ✅ Matches UserStatus enum pattern for consistency
 
 **2025-01-24: Logout Flow & Token Revocation** ✨
 

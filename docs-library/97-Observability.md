@@ -61,8 +61,9 @@ await auth.initialize()
 # Add /metrics endpoint for Prometheus scraping
 app.include_router(create_metrics_router(auth.observability))
 
-# Optional: Add auto-instrumentation middleware
-app.add_middleware(auth.observability.create_middleware())
+# Optional: Add correlation ID middleware for request tracing
+from outlabs_auth.observability import CorrelationIDMiddleware
+app.add_middleware(CorrelationIDMiddleware, obs_service=auth.observability)
 ```
 
 ### Verify It Works

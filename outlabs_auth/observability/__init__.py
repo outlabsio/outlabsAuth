@@ -6,12 +6,14 @@ for debugging, performance monitoring, and security analysis.
 """
 
 from .config import ObservabilityConfig, ObservabilityPresets
-from .service import ObservabilityService
 from .middleware import CorrelationIDMiddleware
+from .router import create_metrics_router
+from .service import ObservabilityService
 
 __all__ = [
     "ObservabilityConfig",
     "ObservabilityPresets",
     "ObservabilityService",
     "CorrelationIDMiddleware",
+    "create_metrics_router",
 ]

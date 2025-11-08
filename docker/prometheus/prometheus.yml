@@ -1,0 +1,30 @@
+# Prometheus Configuration for OutlabsAuth Examples
+#
+# This configuration scrapes metrics from all OutlabsAuth example applications.
+
+global:
+  scrape_interval: 10s       # Scrape every 10 seconds
+  evaluation_interval: 10s   # Evaluate rules every 10 seconds
+
+scrape_configs:
+  # SimpleRBAC Example (Blog API)
+  - job_name: 'simple-rbac'
+    static_configs:
+      - targets: ['simple-rbac:8003']
+        labels:
+          app: 'outlabs-simple-rbac'
+          preset: 'SimpleRBAC'
+          example: 'blog'
+    scrape_interval: 10s
+    metrics_path: '/metrics'
+
+  # EnterpriseRBAC Example (when available)
+  # - job_name: 'enterprise-rbac'
+  #   static_configs:
+  #     - targets: ['enterprise-rbac:8004']
+  #       labels:
+  #         app: 'outlabs-enterprise-rbac'
+  #         preset: 'EnterpriseRBAC'
+  #         example: 'real-estate'
+  #   scrape_interval: 10s
+  #   metrics_path: '/metrics'

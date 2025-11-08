@@ -6,17 +6,19 @@ Unified service for emitting structured logs and Prometheus metrics.
 
 import asyncio
 import socket
-import structlog
 from contextvars import ContextVar
 from datetime import datetime
 from typing import Any, Dict, Optional
-from prometheus_client import Counter, Histogram, Gauge
 
-from .config import ObservabilityConfig, LogsFormat, LogsLevel, PermissionCheckLogging
+import structlog
+from prometheus_client import Counter, Gauge, Histogram
 
+from .config import LogsFormat, LogsLevel, ObservabilityConfig, PermissionCheckLogging
 
 # Context variable for correlation ID
-correlation_id_var: ContextVar[Optional[str]] = ContextVar("correlation_id", default=None)
+correlation_id_var: ContextVar[Optional[str]] = ContextVar(
+    "correlation_id", default=None
+)
 
 
 class ObservabilityService:
@@ -113,7 +115,9 @@ class ObservabilityService:
         # Add hostname if enabled
         if self.config.metrics_include_hostname:
             # Add hostname directly to every log
-            processors.append(lambda _, __, event_dict: {**event_dict, "hostname": self.hostname})
+            processors.append(
+                lambda _, __, event_dict: {**event_dict, "hostname": self.hostname}
+            )
 
         # Choose output format
         if self.config.logs_format == LogsFormat.JSON:
@@ -307,7 +311,12 @@ class ObservabilityService:
         else:
             log_method(event, **kwargs)
 
-    def _increment_counter(self, metric_name: str, labels: Optional[Dict[str, str]] = None, value: float = 1.0) -> None:
+    def _increment_counter(
+        self,
+        metric_name: str,
+        labels: Optional[Dict[str, str]] = None,
+        value: float = 1.0,
+    ) -> None:
         """Increment a Prometheus counter."""
         if not self.config.enable_metrics or metric_name not in self.metrics:
             return
@@ -318,7 +327,9 @@ class ObservabilityService:
         else:
             metric.inc(value)
 
-    def _observe_histogram(self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None) -> None:
+    def _observe_histogram(
+        self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None
+    ) -> None:
         """Observe a value in a Prometheus histogram."""
         if not self.config.enable_metrics or metric_name not in self.metrics:
             return
@@ -329,7 +340,9 @@ class ObservabilityService:
         else:
             metric.observe(value)
 
-    def _set_gauge(self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None) -> None:
+    def _set_gauge(
+        self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None
+    ) -> None:
         """Set a Prometheus gauge value."""
         if not self.config.enable_metrics or metric_name not in self.metrics:
             return
@@ -362,8 +375,12 @@ class ObservabilityService:
             ip_address=ip_address if self.config.log_ip_addresses else None,
             **extra,
         )
-        self._increment_counter("login_attempts", {"status": "success", "method": method})
-        self._observe_histogram("login_duration", duration_ms / 1000.0, {"method": method})
+        self._increment_counter(
+            "login_attempts", {"status": "success", "method": method}
+        )
+        self._observe_histogram(
+            "login_duration", duration_ms / 1000.0, {"method": method}
+        )
 
     def log_login_failed(
         self,
@@ -385,7 +402,9 @@ class ObservabilityService:
             ip_address=ip_address if self.config.log_ip_addresses else None,
             **extra,
         )
-        self._increment_counter("login_attempts", {"status": "failed", "method": method})
+        self._increment_counter(
+            "login_attempts", {"status": "failed", "method": method}
+        )
         self._increment_counter("failed_login_attempts", {"reason": reason})
 
     def log_account_locked(
@@ -441,7 +460,11 @@ class ObservabilityService:
         # Respect log_permission_checks config
         should_log = (
             self.config.log_permission_checks == PermissionCheckLogging.ALL
-            or (self.config.log_permission_checks == PermissionCheckLogging.FAILURES_ONLY and result == "denied")
+            or (
+                self.config.log_permission_checks
+                == PermissionCheckLogging.FAILURES_ONLY
+                and result == "denied"
+            )
         )
 
         if should_log:
@@ -457,7 +480,9 @@ class ObservabilityService:
                 **extra,
             )
 
-        self._increment_counter("permission_checks", {"result": result, "permission": permission})
+        self._increment_counter(
+            "permission_checks", {"result": result, "permission": permission}
+        )
         self._observe_histogram("permission_check_duration", duration_ms / 1000.0)
 
     def log_role_assigned(
@@ -606,7 +631,9 @@ class ObservabilityService:
                 **extra,
             )
 
-        self._observe_histogram("db_query_duration", duration_ms / 1000.0, {"operation": operation})
+        self._observe_histogram(
+            "db_query_duration", duration_ms / 1000.0, {"operation": operation}
+        )
 
     # Public API - Session Management
 
@@ -667,3 +694,92 @@ class ObservabilityService:
     def clear_correlation_id() -> None:
         """Clear correlation ID from current context."""
         correlation_id_var.set(None)
+
+    # Context managers for timing operations
+
+    def time_login(self, method: str):
+        """
+        Context manager to time login operations.
+
+        Args:
+            method: Authentication method (password, google, api_key, etc.)
+
+        Example:
+            >>> with obs.time_login("password"):
+            ...     await authenticate_user()
+        """
+        import time
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _timer():
+            start = time.time()
+            try:
+                yield
+            finally:
+                duration = (time.time() - start) * 1000  # Convert to ms
+                self._observe_histogram(
+                    "login_duration", duration / 1000.0, {"method": method}
+                )
+
+        return _timer()
+
+    def time_permission_check(self):
+        """
+        Context manager to time permission check operations.
+
+        Example:
+            >>> with obs.time_permission_check() as timer:
+            ...     result = await check_permission()
+            ...     timer.set_duration_ms()  # Records duration
+        """
+        import time
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _timer():
+            start = time.time()
+            duration_ms = [0.0]  # Mutable container for duration
+
+            class Timer:
+                def set_duration(self):
+                    duration_ms[0] = (time.time() - start) * 1000
+
+            timer = Timer()
+            try:
+                yield timer
+            finally:
+                if duration_ms[0] == 0:
+                    # Auto-record if not manually set
+                    duration_ms[0] = (time.time() - start) * 1000
+                self._observe_histogram(
+                    "permission_check_duration", duration_ms[0] / 1000.0
+                )
+
+        return _timer()
+
+    def time_db_query(self, operation: str):
+        """
+        Context manager to time database query operations.
+
+        Args:
+            operation: Database operation type (find, insert, update, delete, etc.)
+
+        Example:
+            >>> with obs.time_db_query("find"):
+            ...     results = await collection.find(query)
+        """
+        import time
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _timer():
+            start = time.time()
+            try:
+                yield
+            finally:
+                duration = (time.time() - start) * 1000  # Convert to ms
+                if self.config.log_db_queries:
+                    self.log_db_query(operation=operation, duration_ms=duration)
+
+        return _timer()

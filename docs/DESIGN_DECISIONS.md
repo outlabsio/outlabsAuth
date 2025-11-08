@@ -2628,10 +2628,10 @@ We are grateful to the FastAPI-Users team for pioneering these excellent pattern
 
 ## DD-047: UserRoleMembership Table for SimpleRBAC
 
-**Date**: 2025-01-14
+**Date**: 2025-01-14 (Updated: 2025-01-25 - Added MembershipStatus enum)
 **Status**: Accepted
 **Deciders**: Core team
-**Context**: SimpleRBAC needs user-role assignment mechanism
+**Context**: SimpleRBAC needs user-role assignment mechanism with rich lifecycle tracking
 
 ### The Problem
 SimpleRBAC preset needs a way to assign roles to users. Three approaches were considered, each with different trade-offs.
@@ -2655,6 +2655,24 @@ Use dedicated `UserRoleMembership` collection for SimpleRBAC.
 
 **Schema**:
 ```python
+class MembershipStatus(str, Enum):
+    """
+    Status of a role membership assignment.
+
+    - ACTIVE: Membership is currently active and grants permissions
+    - SUSPENDED: Temporarily paused, does not grant permissions
+    - REVOKED: Manually removed by admin, does not grant permissions
+    - EXPIRED: Automatically expired based on valid_until timestamp
+    - PENDING: Awaiting approval (future feature for approval workflows)
+    - REJECTED: Request denied (future feature for approval workflows)
+    """
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    REVOKED = "revoked"
+    EXPIRED = "expired"
+    PENDING = "pending"
+    REJECTED = "rejected"
+
 class UserRoleMembership(BaseDocument):
     """
     User-role membership for SimpleRBAC (flat, no entity context).
@@ -2666,13 +2684,23 @@ class UserRoleMembership(BaseDocument):
     assigned_by: Optional[Link[UserModel]] = None
     valid_from: Optional[datetime] = None
     valid_until: Optional[datetime] = None
-    is_active: bool = True
+
+    # Status lifecycle tracking (replaces is_active bool)
+    status: MembershipStatus = Field(default=MembershipStatus.ACTIVE)
+    revoked_at: Optional[datetime] = None
+    revoked_by: Optional[Link[UserModel]] = None
+
+    def can_grant_permissions(self) -> bool:
+        """Check if membership can currently grant permissions."""
+        if self.status != MembershipStatus.ACTIVE:
+            return False
+        return self.is_currently_valid()  # Time-based check
 
     class Settings:
         name = "user_role_memberships"
         indexes = [
             ("user", "role"),      # Unique assignment
-            ("user", "is_active"), # Active roles for user
+            ("user", "status"),    # Active/suspended roles for user
             ("valid_until",),      # Expire cleanup
         ]
 ```
@@ -2750,20 +2778,44 @@ The `UserRoleMembership` collection becomes a natural place for metadata:
 
 Without a membership table, this metadata has nowhere to live.
 
+#### 7. MembershipStatus Enum (Updated 2025-01-25)
+The initial implementation used `is_active: bool` for soft delete. This was updated to `status: MembershipStatus` enum for:
+
+**Why Enum over Boolean**:
+- **Rich lifecycle tracking**: Distinguish between manual revocation, expiration, suspension, and pending approval
+- **Better audit trail**: Know *why* a membership is inactive (revoked vs expired vs suspended)
+- **Future-ready**: Supports approval workflows (PENDING/REJECTED states) without schema changes
+- **Consistency**: Matches UserModel's UserStatus enum pattern
+- **Compliance**: Security audits require knowing *how* access was removed
+
+**Use Cases**:
+- **ACTIVE**: Normal operating state, grants permissions
+- **SUSPENDED**: Temporarily pause access (user on leave, pending investigation)
+- **REVOKED**: Admin manually removed role (security incident, user left team)
+- **EXPIRED**: Role automatically expired via valid_until (contractor role after 90 days)
+- **PENDING**: Role request awaiting approval (future feature)
+- **REJECTED**: Role request denied (future feature)
+
+This provides much richer information than a binary active/inactive flag, essential for production systems with compliance requirements.
+
 ### Consequences
 
 **Positive**:
-- ✅ Full audit trail from day one
+- ✅ Full audit trail from day one (who, when, why)
 - ✅ Time-based access control built-in
 - ✅ Architectural consistency (single core implementation)
 - ✅ Seamless migration path: SimpleRBAC → EnterpriseRBAC
 - ✅ Industry standard pattern
 - ✅ Extensible for future needs
 - ✅ Security & compliance ready
+- ✅ Rich status lifecycle tracking (6 states vs boolean)
+- ✅ Revocation audit trail (who revoked, when, why)
+- ✅ Approval workflow ready (PENDING/REJECTED states)
 
 **Negative**:
 - ❌ One extra collection (negligible in MongoDB)
 - ❌ One extra query (~5ms with indexes, cacheable)
+- ❌ Slightly more complex than boolean flag
 
 **Neutral**:
 - Both SimpleRBAC and EnterpriseRBAC use membership pattern
@@ -2854,5 +2906,5 @@ Track questions that need decisions:
 
 ---
 
-**Last Updated**: 2025-01-14 (Added DD-038 to DD-047: FastAPI-Users patterns, UserRoleMembership for SimpleRBAC)
+**Last Updated**: 2025-01-25 (Updated DD-047: Added MembershipStatus enum for rich lifecycle tracking)
 **Next Review**: End of Phase 1 (Week 2)

@@ -13,6 +13,10 @@ from outlabs_auth.models.role import RoleModel
 from outlabs_auth.models.permission import PermissionModel
 from outlabs_auth.models.token import RefreshTokenModel
 
+# SimpleRBAC models
+from outlabs_auth.models.user_role_membership import UserRoleMembership
+from outlabs_auth.models.membership_status import MembershipStatus
+
 # Entity models (EnterpriseRBAC only)
 from outlabs_auth.models.entity import EntityModel, EntityClass
 from outlabs_auth.models.membership import EntityMembershipModel
@@ -31,6 +35,9 @@ __all__ = [
     "RoleModel",
     "PermissionModel",
     "RefreshTokenModel",
+    # SimpleRBAC models
+    "UserRoleMembership",
+    "MembershipStatus",
     # Entity models
     "EntityModel",
     "EntityClass",

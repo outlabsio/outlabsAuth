@@ -328,27 +328,36 @@ Implementation-specific documentation (9 files):
 
 ## Development Status
 
-**Current Phase**: Starting Phase 1 - Core Foundation
+**Current Version**: 1.5 (SimpleRBAC Complete + Enhanced Membership System)
 **Branch**: `library-redesign`
-**Version**: 1.4 (Unified Architecture + Performance Improvements)
+**Status**: Phases 1-2 Complete, Phase 1.5 Complete (Beyond Plan), Phase 3+ Pending
 
-See [PROJECT_STATUS.md](PROJECT_STATUS.md) for detailed progress tracking.
+### Progress Summary
+
+✅ **Phase 1 Complete** - Core foundation + SimpleRBAC
+✅ **Phase 2 Complete** - API Keys + Multi-source Auth + Testing
+✅ **Phase 1.5 Complete** - MembershipStatus Enum, User Status System, Activity Tracking, Observability Docs
+⏸️ **Phase 3+ Pending** - EnterpriseRBAC Entity System (planned after observability implementation)
+
+**See [IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md) for detailed progress, implementation status, and phase breakdowns.**
 
 ## Roadmap
 
 ### Core Library (v1.0) - 6-7 weeks
-- **Phase 1**: Core foundation + SimpleRBAC
-- **Phase 2**: Complete SimpleRBAC + API keys
-- **Phase 3**: EnterpriseRBAC entity system
-- **Phase 4**: Optional features (context-aware, ABAC)
-- **Phase 5**: Complete testing + Redis patterns
-- **Phase 6**: CLI tools, docs, examples
+- ✅ **Phase 1**: Core foundation + SimpleRBAC
+- ✅ **Phase 2**: Complete SimpleRBAC + API keys
+- ⏸️ **Phase 3**: EnterpriseRBAC entity system
+- ⏸️ **Phase 4**: Optional features (context-aware, ABAC)
+- ⏸️ **Phase 5**: Complete testing + Redis patterns
+- ⏸️ **Phase 6**: CLI tools, docs, examples
 
 ### Optional Extensions (post-v1.0) - 9 weeks
 - **v1.1**: Notification system
 - **v1.2**: OAuth/social login (Google, Facebook, Apple)
 - **v1.3**: Passwordless auth (magic links, OTP)
 - **v1.4**: MFA/TOTP
+
+**For complete roadmap with task breakdowns, see [IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md)**
 
 ## Requirements
 

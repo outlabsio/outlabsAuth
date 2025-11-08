@@ -198,32 +198,25 @@ class BasicPermissionService:
         if user.is_superuser:
             return ["*:*"]
 
-        # In SimpleRBAC, user roles are stored directly on the user
-        # For now, we'll implement a simple role assignment via metadata
-        # (In Phase 3, we'll have proper role assignment)
+        # In SimpleRBAC, user roles are assigned via UserRoleMembership table
+        # This provides audit trail and time-based role assignments
+        from outlabs_auth.models.user_role_membership import UserRoleMembership
+        from outlabs_auth.models.membership_status import MembershipStatus
 
-        # Get user's assigned role IDs from metadata
-        role_ids = user.metadata.get("role_ids", [])
-        if not role_ids:
-            return []
-
-        # Convert string IDs to ObjectIds
-        from bson import ObjectId
-        try:
-            object_ids = [ObjectId(rid) for rid in role_ids]
-        except Exception:
-            # If conversion fails, return empty list
-            return []
-
-        # Get all roles
-        roles = await RoleModel.find(
-            {"_id": {"$in": object_ids}}
+        # Find all active role memberships for user
+        memberships = await UserRoleMembership.find(
+            {"user.$id": user_id, "status": MembershipStatus.ACTIVE.value}
         ).to_list()
 
-        # Aggregate permissions from all roles
+        # Aggregate permissions from all valid roles
         all_permissions: Set[str] = set()
-        for role in roles:
-            all_permissions.update(role.permissions)
+        for membership in memberships:
+            # Check if membership can grant permissions (status + time validity)
+            if membership.can_grant_permissions():
+                # Fetch the role and add its permissions
+                role = await membership.role.fetch()
+                if role:
+                    all_permissions.update(role.permissions)
 
         return list(all_permissions)
 
@@ -581,6 +574,8 @@ class EnterprisePermissionService(BasicPermissionService):
         target_entity_type = target_entity.entity_type if target_entity else None
 
         # Get all user memberships
+        # TODO: Update to use status field when EntityMembershipModel is created
+        # Should be: {"user.$id": user.id, "status": MembershipStatus.ACTIVE.value}
         memberships = await EntityMembershipModel.find(
             EntityMembershipModel.user.id == user.id,
             EntityMembershipModel.is_active == True
@@ -828,6 +823,9 @@ class EnterprisePermissionService(BasicPermissionService):
         except Exception:
             return []
 
+        # TODO: Update to use status field when EntityMembershipModel is created
+        # Should use: {"user.$id": user.id, "entity.$id": entity_oid, "status": MembershipStatus.ACTIVE.value}
+        # and membership.can_grant_permissions() instead of is_active + is_currently_valid()
         membership = await EntityMembershipModel.find_one(
             EntityMembershipModel.user.id == user.id,
             EntityMembershipModel.entity.id == entity_oid,
@@ -1042,6 +1040,8 @@ class EnterprisePermissionService(BasicPermissionService):
             return has_rbac_perm, source
 
         # Get memberships to check role conditions
+        # TODO: Update to use status field when EntityMembershipModel is created
+        # Should be: {"user.$id": user.id, "status": MembershipStatus.ACTIVE.value}
         memberships = await EntityMembershipModel.find(
             EntityMembershipModel.user.id == user.id,
             EntityMembershipModel.is_active == True

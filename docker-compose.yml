@@ -1,29 +1,148 @@
-services:
-  api:
-    build: .
-    container_name: outlabs_auth_api
-    ports:
-      - "8030:8030"
-    volumes:
-      - .:/app
-    environment:
-      - DATABASE_URL=mongodb://host.docker.internal:27017
-      - MONGO_DATABASE=outlabsAuth
-      - REDIS_URL=redis://:guest@host.docker.internal:6379
-      - SECRET_KEY=c3c1e8e8a0e8asdsdfaeasdf87878e8a0e8e8d0a2
-      - ACCESS_TOKEN_EXPIRE_MINUTES=15
-      - REFRESH_TOKEN_EXPIRE_DAYS=30
-      - ALGORITHM=HS256
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8030 --reload
+# OutlabsAuth Complete Development Stack
+#
+# This stack includes everything you need for local development and testing:
+# - MongoDB (database) - port 27018 (to avoid conflict with local MongoDB)
+# - Redis (caching, activity tracking) - port 6380 (to avoid conflict with local Redis)
+# - Prometheus (metrics collection) - port 9090
+# - Grafana (metrics visualization) - port 3011 (to avoid conflict with admin UI on 3000)
+# - SimpleRBAC Example (Blog API) - port 8003
+#
+# Usage:
+#   docker compose up -d              # Start all services
+#   docker compose up -d mongodb redis # Start only infra
+#   docker compose logs -f simple-rbac # View SimpleRBAC logs
+#   docker compose down               # Stop all services
+#   docker compose down -v            # Stop and remove volumes
 
-  # admin-ui:
-  #   build:
-  #     context: ./admin-ui
-  #     dockerfile: Dockerfile
-  #   container_name: outlabs_auth_admin_ui
-  #   ports:
-  #     - "8088:80"
-  #   depends_on:
-  #     - api
-  #   environment:
-  #     - VITE_API_BASE_URL=http://localhost:8030
+services:
+  # ============================================================================
+  # Infrastructure Services
+  # ============================================================================
+
+  # MongoDB - Shared database for all examples
+  # Using port 27018 to avoid conflict with local dev MongoDB
+  mongodb:
+    image: mongo:8
+    container_name: outlabs-mongodb
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - outlabs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis - Shared cache and activity tracking
+  # Using port 6380 to avoid conflict with local dev Redis
+  redis:
+    image: redis:latest
+    container_name: outlabs-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - outlabs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # Observability Stack
+  # ============================================================================
+
+  # Prometheus - Metrics collection from example apps
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: outlabs-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    networks:
+      - outlabs
+    restart: unless-stopped
+    depends_on:
+      - simple-rbac
+
+  # Grafana - Metrics visualization and dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: outlabs-grafana
+    ports:
+      - "3011:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3011
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - outlabs
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+  # ============================================================================
+  # Example Applications
+  # ============================================================================
+
+  # SimpleRBAC Example - Blog API with Observability (port 8003)
+  simple-rbac:
+    build:
+      context: .
+      dockerfile: examples/simple_rbac/Dockerfile
+    container_name: outlabs-simple-rbac
+    ports:
+      - "8003:8003"
+    environment:
+      - MONGODB_URL=mongodb://mongodb:27017
+      - DATABASE_NAME=blog_simple_rbac
+      - REDIS_URL=redis://redis:6379
+      - SECRET_KEY=simple-rbac-secret-key-change-in-production
+      - ENV=development # development = text logs, production = JSON logs
+    volumes:
+      - ./outlabs_auth:/app/outlabs_auth # Mount source for hot reload
+      - ./examples/simple_rbac:/app/examples/simple_rbac
+    networks:
+      - outlabs
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "cd /app/examples/simple_rbac &&
+             uvicorn main:app --host 0.0.0.0 --port 8003 --reload"
+
+networks:
+  outlabs:
+    driver: bridge
+    name: outlabs-network
+
+volumes:
+  mongodb-data:
+    name: outlabs-mongodb-data
+  redis-data:
+    name: outlabs-redis-data
+  prometheus-data:
+    name: outlabs-prometheus-data
+  grafana-data:
+    name: outlabs-grafana-data

@@ -31,8 +31,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Current Project Status
 
 **Branch**: `library-redesign`
-**Status**: Planning Phase → Starting Implementation
-**Version**: 1.4 (Unified Architecture + Performance Improvements)
+**Status**: In Progress - Phases 1-2 Complete, Phase 1.5 Complete, Phase 3+ Pending
+**Version**: 1.5 (SimpleRBAC Complete + Enhanced Membership System)
+
+**Progress**:
+- ✅ Phase 1 Complete (Core foundation + SimpleRBAC)
+- ✅ Phase 2 Complete (API Keys + Multi-source Auth + Testing)
+- ✅ Phase 1.5 Complete (Beyond Plan: MembershipStatus, User Status, Activity Tracking, Observability)
+- ✅ Frontend Integration Verified (SimpleRBAC login working)
+- ⏸️ Phase 3+ Pending (EnterpriseRBAC - planned after observability implementation)
+
+**PROJECT MANAGEMENT**: We use [IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md) as the primary project management tool. All phase tracking, status updates, and task breakdowns are maintained in the roadmap. Always update the roadmap when completing phases or tasks.
+
+**For complete implementation status and detailed task breakdown, see [IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md)**
 
 ### Documentation Structure
 
@@ -107,6 +118,25 @@ auth = OutlabsAuth(
 ### Decision: Do You Have Departments/Teams?
 - **NO** → Use `SimpleRBAC`
 - **YES** → Use `EnterpriseRBAC`
+
+## Local Development Infrastructure
+
+**IMPORTANT**: All local development uses these containers:
+
+```bash
+# Check running containers
+docker ps
+
+# You should see:
+# - local-mongodb (mongo:8) on port 27017
+# - local-redis (redis:latest) on port 6379
+
+# If they're not running, start them:
+docker start local-mongodb
+docker start local-redis
+```
+
+These containers are shared across all examples and development work.
 
 ## Essential Commands
 

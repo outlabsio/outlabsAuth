@@ -267,6 +267,11 @@ class OutlabsAuth:
             EntityModel,  # Always included for forward ref resolution in RoleModel
         ]
 
+        # Add SimpleRBAC models (when entity hierarchy is disabled)
+        if not self.config.enable_entity_hierarchy:
+            from outlabs_auth.models.user_role_membership import UserRoleMembership
+            document_models.append(UserRoleMembership)
+
         # Add additional enterprise models if entity hierarchy is enabled
         if self.config.enable_entity_hierarchy:
             if self.entity_model is None:

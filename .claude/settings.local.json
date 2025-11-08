@@ -9,7 +9,11 @@
       "Bash(chmod:*)",
       "Bash(python3:*)",
       "Bash(find:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(python:*)",
+      "Bash(uv run python:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker logs:*)"
     ],
     "deny": [],
     "ask": []
