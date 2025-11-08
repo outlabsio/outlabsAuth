@@ -1,34 +1,55 @@
 """API Key request/response schemas."""
 
-from typing import Optional, List
 from datetime import datetime
+from typing import List, Optional
+
 from pydantic import BaseModel, Field
+
+from outlabs_auth.models.api_key import APIKeyStatus
 
 
 class ApiKeyCreateRequest(BaseModel):
     """API key creation request schema."""
+
     name: str = Field(..., description="Friendly name for the API key")
-    permissions: List[str] = Field(default_factory=list, description="List of allowed permissions")
-    environment: str = Field(default="production", description="Environment: production, staging, development, test")
-    allowed_ips: Optional[List[str]] = Field(default=None, description="IP whitelist (optional)")
+    scopes: List[str] = Field(
+        default_factory=list, description="List of allowed permissions/scopes"
+    )
+    prefix_type: str = Field(
+        default="sk_live", description="Key prefix type: sk_live, sk_test, etc."
+    )
+    ip_whitelist: Optional[List[str]] = Field(
+        default=None, description="IP whitelist (optional)"
+    )
     rate_limit_per_minute: int = Field(default=60, description="Rate limit per minute")
-    expires_at: Optional[datetime] = Field(default=None, description="Optional expiration date")
+    expires_at: Optional[datetime] = Field(
+        default=None, description="Optional expiration date"
+    )
+    description: Optional[str] = Field(
+        default=None, description="Optional key description"
+    )
+    entity_ids: Optional[List[str]] = Field(
+        default=None, description="Restrict to specific entities (None = all)"
+    )
 
 
 class ApiKeyResponse(BaseModel):
     """API key response schema."""
+
     id: str
-    key_prefix: str  # First 12 chars only
+    prefix: str  # First 12 chars only
     name: str
-    permissions: List[str]
-    environment: str
-    allowed_ips: Optional[List[str]] = None
+    scopes: List[str]
+    ip_whitelist: Optional[List[str]] = None
     rate_limit_per_minute: int
-    is_active: bool
+    status: APIKeyStatus
     usage_count: int
     created_at: datetime
     expires_at: Optional[datetime] = None
     last_used_at: Optional[datetime] = None
+    description: Optional[str] = None
+    entity_ids: Optional[List[str]] = None
+    owner_id: Optional[str] = None  # String representation of owner ID
 
     class Config:
         from_attributes = True
@@ -36,13 +57,17 @@ class ApiKeyResponse(BaseModel):
 
 class ApiKeyCreateResponse(ApiKeyResponse):
     """API key creation response (includes full key - ONLY shown once!)."""
+
     api_key: str  # Full key with prefix
 
 
 class ApiKeyUpdateRequest(BaseModel):
     """API key update request schema."""
+
     name: Optional[str] = None
-    permissions: Optional[List[str]] = None
-    allowed_ips: Optional[List[str]] = None
+    scopes: Optional[List[str]] = None
+    ip_whitelist: Optional[List[str]] = None
     rate_limit_per_minute: Optional[int] = None
-    is_active: Optional[bool] = None
+    status: Optional[APIKeyStatus] = None
+    description: Optional[str] = None
+    entity_ids: Optional[List[str]] = None

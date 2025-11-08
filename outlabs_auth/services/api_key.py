@@ -44,8 +44,8 @@ class APIKeyService:
         ... )
         >>> print(key)  # Only shown once: sk_live_abc123...
         >>>
-        >>> # Validate key (fast - uses Redis counter)
-        >>> api_key, usage = await api_key_service.validate_api_key(key)
+        >>> # Verify key (fast - uses Redis counter)
+        >>> api_key, usage = await api_key_service.verify_api_key(key)
         >>> if not api_key:
         ...     raise InvalidAPIKeyError()
     """

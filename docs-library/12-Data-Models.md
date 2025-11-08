@@ -641,6 +641,8 @@ engineering = EntityModel(
 **User memberships in entities with roles.**
 
 ```python
+from outlabs_auth.models.membership_status import MembershipStatus
+
 class EntityMembershipModel(BaseDocument):
     # Relationships
     user: Link[UserModel]
@@ -657,8 +659,15 @@ class EntityMembershipModel(BaseDocument):
     valid_from: Optional[datetime] = None
     valid_until: Optional[datetime] = None
 
-    # Status
-    is_active: bool = True
+    # Status (uses MembershipStatus enum)
+    status: MembershipStatus = Field(
+        default=MembershipStatus.ACTIVE,
+        description="Current status of the membership"
+    )
+
+    # Revocation metadata (when status=REVOKED)
+    revoked_at: Optional[datetime] = Field(default=None)
+    revoked_by: Optional[Link[UserModel]] = Field(default=None)
 ```
 
 **Indexes**:
@@ -667,7 +676,7 @@ indexes = [
     [("user", 1), ("entity", 1)],  # Unique constraint
     "entity",                       # Entity members
     "user",                         # User memberships
-    "is_active",
+    "status",                       # Filter by status
     [("tenant_id", 1)]
 ]
 ```
@@ -675,17 +684,29 @@ indexes = [
 **Key Methods**:
 ```python
 def is_currently_valid(self) -> bool:
-    """Check if membership is currently valid"""
+    """Check if membership is currently valid (time-based)"""
+
+def can_grant_permissions(self) -> bool:
+    """Check if membership can currently grant permissions (status + time)"""
 ```
 
 **Example**:
 ```python
+# Create active membership
 membership = EntityMembershipModel(
     user=john,
     entity=engineering_dept,
     roles=[manager_role, developer_role],
-    is_active=True
+    status=MembershipStatus.ACTIVE,
+    joined_by=admin_user
 )
+await membership.insert()
+
+# Revoke membership (soft delete)
+membership.status = MembershipStatus.REVOKED
+membership.revoked_at = datetime.now(timezone.utc)
+membership.revoked_by = admin_user
+await membership.save()
 ```
 
 **See**: [[54-Entity-Memberships]] for membership management.

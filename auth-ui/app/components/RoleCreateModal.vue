@@ -77,6 +77,7 @@ const { mutate: createRole, isLoading: isSubmitting } = useCreateRoleMutation()
 
 async function handleSubmit() {
     try {
+        console.log('🚀 [RoleCreateModal] Submitting role with payload:', JSON.stringify(state, null, 2))
         await createRole(state)
         // Close modal and reset form on success
         open.value = false;
@@ -87,6 +88,7 @@ async function handleSubmit() {
             permissions: [],
         });
     } catch (error) {
+        console.error('❌ [RoleCreateModal] Error creating role:', error)
         // Error handling is done by the mutation
     }
 }

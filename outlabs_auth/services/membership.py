@@ -4,21 +4,23 @@ Membership Service
 Manages entity memberships for EnterpriseRBAC.
 Handles user-entity-role relationships with multiple roles per membership.
 """
-from typing import List, Optional
-from datetime import datetime, timezone
 
-from outlabs_auth.models.membership import EntityMembershipModel
-from outlabs_auth.models.entity import EntityModel
-from outlabs_auth.models.user import UserModel
-from outlabs_auth.models.role import RoleModel
+from datetime import datetime, timezone
+from typing import List, Optional
+
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
     EntityNotFoundError,
-    UserNotFoundError,
-    RoleNotFoundError,
     InvalidInputError,
     MembershipNotFoundError,
+    RoleNotFoundError,
+    UserNotFoundError,
 )
+from outlabs_auth.models.entity import EntityModel
+from outlabs_auth.models.membership import EntityMembershipModel
+from outlabs_auth.models.membership_status import MembershipStatus
+from outlabs_auth.models.role import RoleModel
+from outlabs_auth.models.user import UserModel
 
 
 class MembershipService:
@@ -83,16 +85,14 @@ class MembershipService:
         entity = await EntityModel.get(entity_id)
         if not entity:
             raise EntityNotFoundError(
-                message="Entity not found",
-                details={"entity_id": entity_id}
+                message="Entity not found", details={"entity_id": entity_id}
             )
 
         # Validate user exists
         user = await UserModel.get(user_id)
         if not user:
             raise UserNotFoundError(
-                message="User not found",
-                details={"user_id": user_id}
+                message="User not found", details={"user_id": user_id}
             )
 
         # Validate roles exist
@@ -101,22 +101,20 @@ class MembershipService:
             role = await RoleModel.get(role_id)
             if not role:
                 raise RoleNotFoundError(
-                    message=f"Role not found",
-                    details={"role_id": role_id}
+                    message=f"Role not found", details={"role_id": role_id}
                 )
             roles.append(role)
 
         # Check if membership already exists
         existing = await EntityMembershipModel.find_one(
             EntityMembershipModel.user.id == user.id,
-            EntityMembershipModel.entity.id == entity.id
+            EntityMembershipModel.entity.id == entity.id,
         )
 
         # Check max_members limit only for NEW memberships
         if not existing and entity.max_members:
             current_members = await self.get_entity_members_count(
-                entity_id,
-                active_only=True
+                entity_id, active_only=True
             )
             if current_members >= entity.max_members:
                 raise InvalidInputError(
@@ -124,14 +122,14 @@ class MembershipService:
                     details={
                         "entity_id": entity_id,
                         "max_members": entity.max_members,
-                        "current_members": current_members
-                    }
+                        "current_members": current_members,
+                    },
                 )
 
         if existing:
             # Update existing membership
             existing.roles = roles
-            existing.is_active = True
+            existing.status = MembershipStatus.ACTIVE
             existing.valid_from = valid_from
             existing.valid_until = valid_until
             existing.updated_at = datetime.now(timezone.utc)
@@ -150,23 +148,22 @@ class MembershipService:
             joined_by=joined_by_user,
             valid_from=valid_from,
             valid_until=valid_until,
-            tenant_id=entity.tenant_id
+            tenant_id=entity.tenant_id,
         )
 
         await membership.save()
         return membership
 
     async def remove_member(
-        self,
-        entity_id: str,
-        user_id: str
+        self, entity_id: str, user_id: str, revoked_by: Optional[str] = None
     ) -> bool:
         """
-        Remove user from entity (soft delete by setting is_active=False).
+        Remove user from entity (soft delete by setting status=REVOKED).
 
         Args:
             entity_id: Entity ID
             user_id: User ID
+            revoked_by: Optional user ID who is revoking the membership
 
         Returns:
             bool: True if membership removed
@@ -175,47 +172,47 @@ class MembershipService:
             MembershipNotFoundError: If membership not found
 
         Example:
-            >>> await membership_service.remove_member(entity_id, user_id)
+            >>> await membership_service.remove_member(entity_id, user_id, current_user_id)
         """
         # Fetch user and entity to get ObjectIds for query
         user = await UserModel.get(user_id)
         if not user:
             raise UserNotFoundError(
-                message="User not found",
-                details={"user_id": user_id}
+                message="User not found", details={"user_id": user_id}
             )
 
         entity = await EntityModel.get(entity_id)
         if not entity:
             raise EntityNotFoundError(
-                message="Entity not found",
-                details={"entity_id": entity_id}
+                message="Entity not found", details={"entity_id": entity_id}
             )
 
         # Find membership
         membership = await EntityMembershipModel.find_one(
             EntityMembershipModel.user.id == user.id,
-            EntityMembershipModel.entity.id == entity.id
+            EntityMembershipModel.entity.id == entity.id,
         )
 
         if not membership:
             raise MembershipNotFoundError(
                 message="Membership not found",
-                details={"entity_id": entity_id, "user_id": user_id}
+                details={"entity_id": entity_id, "user_id": user_id},
             )
 
-        # Soft delete
-        membership.is_active = False
+        # Soft delete - set status to REVOKED with audit trail
+        membership.status = MembershipStatus.REVOKED
+        membership.revoked_at = datetime.now(timezone.utc)
+        if revoked_by:
+            revoked_by_user = await UserModel.get(revoked_by)
+            if revoked_by_user:
+                membership.revoked_by = revoked_by_user
         membership.updated_at = datetime.now(timezone.utc)
         await membership.save()
 
         return True
 
     async def update_member_roles(
-        self,
-        entity_id: str,
-        user_id: str,
-        role_ids: List[str]
+        self, entity_id: str, user_id: str, role_ids: List[str]
     ) -> EntityMembershipModel:
         """
         Update user's roles in entity.
@@ -243,27 +240,25 @@ class MembershipService:
         user = await UserModel.get(user_id)
         if not user:
             raise UserNotFoundError(
-                message="User not found",
-                details={"user_id": user_id}
+                message="User not found", details={"user_id": user_id}
             )
 
         entity = await EntityModel.get(entity_id)
         if not entity:
             raise EntityNotFoundError(
-                message="Entity not found",
-                details={"entity_id": entity_id}
+                message="Entity not found", details={"entity_id": entity_id}
             )
 
         # Find membership using ObjectIds
         membership = await EntityMembershipModel.find_one(
             EntityMembershipModel.user.id == user.id,
-            EntityMembershipModel.entity.id == entity.id
+            EntityMembershipModel.entity.id == entity.id,
         )
 
         if not membership:
             raise MembershipNotFoundError(
                 message="Membership not found",
-                details={"entity_id": entity_id, "user_id": user_id}
+                details={"entity_id": entity_id, "user_id": user_id},
             )
 
         # Validate and fetch roles
@@ -272,8 +267,7 @@ class MembershipService:
             role = await RoleModel.get(role_id)
             if not role:
                 raise RoleNotFoundError(
-                    message=f"Role not found",
-                    details={"role_id": role_id}
+                    message=f"Role not found", details={"role_id": role_id}
                 )
             roles.append(role)
 
@@ -285,11 +279,7 @@ class MembershipService:
         return membership
 
     async def get_entity_members(
-        self,
-        entity_id: str,
-        page: int = 1,
-        limit: int = 50,
-        active_only: bool = True
+        self, entity_id: str, page: int = 1, limit: int = 50, active_only: bool = True
     ) -> tuple[List[EntityMembershipModel], int]:
         """
         Get members of entity with pagination.
@@ -318,23 +308,26 @@ class MembershipService:
         # Build query
         query_conditions = [EntityMembershipModel.entity.id == entity.id]
         if active_only:
-            query_conditions.append(EntityMembershipModel.is_active == True)
+            query_conditions.append(
+                EntityMembershipModel.status == MembershipStatus.ACTIVE
+            )
 
         # Get total count
         total_count = await EntityMembershipModel.find(*query_conditions).count()
 
         # Get paginated results
         skip = (page - 1) * limit
-        memberships = await EntityMembershipModel.find(
-            *query_conditions
-        ).skip(skip).limit(limit).to_list()
+        memberships = (
+            await EntityMembershipModel.find(*query_conditions)
+            .skip(skip)
+            .limit(limit)
+            .to_list()
+        )
 
         return memberships, total_count
 
     async def get_entity_members_count(
-        self,
-        entity_id: str,
-        active_only: bool = True
+        self, entity_id: str, active_only: bool = True
     ) -> int:
         """
         Get count of entity members.
@@ -356,7 +349,9 @@ class MembershipService:
 
         query_conditions = [EntityMembershipModel.entity.id == entity.id]
         if active_only:
-            query_conditions.append(EntityMembershipModel.is_active == True)
+            query_conditions.append(
+                EntityMembershipModel.status == MembershipStatus.ACTIVE
+            )
 
         return await EntityMembershipModel.find(*query_conditions).count()
 
@@ -366,7 +361,7 @@ class MembershipService:
         page: int = 1,
         limit: int = 50,
         entity_type: Optional[str] = None,
-        active_only: bool = True
+        active_only: bool = True,
     ) -> tuple[List[EntityMembershipModel], int]:
         """
         Get entities user belongs to with pagination.
@@ -395,7 +390,9 @@ class MembershipService:
         # Build query
         query_conditions = [EntityMembershipModel.user.id == user.id]
         if active_only:
-            query_conditions.append(EntityMembershipModel.is_active == True)
+            query_conditions.append(
+                EntityMembershipModel.status == MembershipStatus.ACTIVE
+            )
 
         # Note: entity_type filtering requires fetching entities
         # For performance, we'll filter after query if needed
@@ -407,7 +404,11 @@ class MembershipService:
         if entity_type:
             filtered_memberships = []
             for membership in all_memberships:
-                entity = await membership.entity.fetch() if hasattr(membership.entity, 'fetch') else membership.entity
+                entity = (
+                    await membership.entity.fetch()
+                    if hasattr(membership.entity, "fetch")
+                    else membership.entity
+                )
                 if entity and entity.entity_type == entity_type.lower():
                     filtered_memberships.append(membership)
             all_memberships = filtered_memberships
@@ -416,14 +417,12 @@ class MembershipService:
 
         # Apply pagination
         skip = (page - 1) * limit
-        memberships = all_memberships[skip:skip + limit]
+        memberships = all_memberships[skip : skip + limit]
 
         return memberships, total_count
 
     async def get_member(
-        self,
-        entity_id: str,
-        user_id: str
+        self, entity_id: str, user_id: str
     ) -> Optional[EntityMembershipModel]:
         """
         Get specific membership.
@@ -449,14 +448,11 @@ class MembershipService:
 
         return await EntityMembershipModel.find_one(
             EntityMembershipModel.user.id == user.id,
-            EntityMembershipModel.entity.id == entity.id
+            EntityMembershipModel.entity.id == entity.id,
         )
 
     async def is_member(
-        self,
-        entity_id: str,
-        user_id: str,
-        active_only: bool = True
+        self, entity_id: str, user_id: str, active_only: bool = True
     ) -> bool:
         """
         Check if user is member of entity.
@@ -483,11 +479,13 @@ class MembershipService:
 
         query_conditions = [
             EntityMembershipModel.user.id == user.id,
-            EntityMembershipModel.entity.id == entity.id
+            EntityMembershipModel.entity.id == entity.id,
         ]
 
         if active_only:
-            query_conditions.append(EntityMembershipModel.is_active == True)
+            query_conditions.append(
+                EntityMembershipModel.status == MembershipStatus.ACTIVE
+            )
 
         membership = await EntityMembershipModel.find_one(*query_conditions)
         return membership is not None

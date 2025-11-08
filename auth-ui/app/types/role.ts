@@ -22,10 +22,6 @@ export interface CreateRoleData {
   display_name: string
   description?: string
   permissions: string[]
-  is_global?: boolean
-  entity_id?: string
-  entity_type?: string
-  metadata?: Record<string, any>
 }
 
 export interface UpdateRoleData {

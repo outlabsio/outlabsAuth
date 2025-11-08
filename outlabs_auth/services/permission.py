@@ -6,20 +6,23 @@ Handles permission checking and management:
 - EnterprisePermissionService: Hierarchical permissions (EnterpriseRBAC) - Phase 3
 - ABAC Support: Attribute-Based Access Control (Phase 4.2)
 """
-from typing import List, Optional, Set, Dict, Any
-from motor.motor_asyncio import AsyncIOMotorDatabase
-from bson import ObjectId
 
-from outlabs_auth.models.user import UserModel
-from outlabs_auth.models.role import RoleModel
-from outlabs_auth.models.permission import PermissionModel
+from typing import Any, Dict, List, Optional, Set
+
+from bson import ObjectId
+from motor.motor_asyncio import AsyncIOMotorDatabase
+
 from outlabs_auth.core.config import AuthConfig
-from outlabs_auth.core.exceptions import UserNotFoundError, PermissionDeniedError
-from outlabs_auth.utils.validation import validate_permission_name
-from outlabs_auth.services.policy_engine import PolicyEvaluationEngine
+from outlabs_auth.core.exceptions import PermissionDeniedError, UserNotFoundError
+from outlabs_auth.models.membership_status import MembershipStatus
+from outlabs_auth.models.permission import PermissionModel
+from outlabs_auth.models.role import RoleModel
+from outlabs_auth.models.user import UserModel
 
 # Import observability (v1.5)
 from outlabs_auth.observability import ObservabilityService
+from outlabs_auth.services.policy_engine import PolicyEvaluationEngine
+from outlabs_auth.utils.validation import validate_permission_name
 
 
 class BasicPermissionService:
@@ -80,21 +83,23 @@ class BasicPermissionService:
         """
         # Start timing for observability
         from datetime import datetime, timezone
+
         start_time = datetime.now(timezone.utc)
 
         # Get user
         user = await UserModel.get(user_id)
         if not user:
             raise UserNotFoundError(
-                message="User not found",
-                details={"user_id": user_id}
+                message="User not found", details={"user_id": user_id}
             )
 
         # Superusers have all permissions
         if user.is_superuser:
             # Log permission check (observability)
             if self.observability:
-                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                duration_ms = (
+                    datetime.now(timezone.utc) - start_time
+                ).total_seconds() * 1000
                 self.observability.log_permission_check(
                     user_id=user_id,
                     permission=permission,
@@ -111,7 +116,9 @@ class BasicPermissionService:
         if permission in user_permissions:
             # Log permission check (observability)
             if self.observability:
-                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                duration_ms = (
+                    datetime.now(timezone.utc) - start_time
+                ).total_seconds() * 1000
                 self.observability.log_permission_check(
                     user_id=user_id,
                     permission=permission,
@@ -123,14 +130,18 @@ class BasicPermissionService:
 
         # Check wildcard permissions
         # For example: "user:*" matches "user:create"
-        resource, action = permission.split(":") if ":" in permission else (permission, "*")
+        resource, action = (
+            permission.split(":") if ":" in permission else (permission, "*")
+        )
 
         # Check resource wildcard (e.g., "user:*")
         resource_wildcard = f"{resource}:*"
         if resource_wildcard in user_permissions:
             # Log permission check (observability)
             if self.observability:
-                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                duration_ms = (
+                    datetime.now(timezone.utc) - start_time
+                ).total_seconds() * 1000
                 self.observability.log_permission_check(
                     user_id=user_id,
                     permission=permission,
@@ -144,7 +155,9 @@ class BasicPermissionService:
         if "*:*" in user_permissions:
             # Log permission check (observability)
             if self.observability:
-                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                duration_ms = (
+                    datetime.now(timezone.utc) - start_time
+                ).total_seconds() * 1000
                 self.observability.log_permission_check(
                     user_id=user_id,
                     permission=permission,
@@ -156,7 +169,9 @@ class BasicPermissionService:
 
         # Permission denied - log (observability)
         if self.observability:
-            duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            duration_ms = (
+                datetime.now(timezone.utc) - start_time
+            ).total_seconds() * 1000
             self.observability.log_permission_check(
                 user_id=user_id,
                 permission=permission,
@@ -191,8 +206,7 @@ class BasicPermissionService:
         user = await UserModel.get(user_id)
         if not user:
             raise UserNotFoundError(
-                message="User not found",
-                details={"user_id": user_id}
+                message="User not found", details={"user_id": user_id}
             )
 
         # Superusers have all permissions (represented as wildcard)
@@ -202,15 +216,15 @@ class BasicPermissionService:
         all_permissions: Set[str] = set()
 
         # SimpleRBAC: Get permissions from UserRoleMembership table
-        from outlabs_auth.models.user_role_membership import UserRoleMembership
         from outlabs_auth.models.membership_status import MembershipStatus
+        from outlabs_auth.models.user_role_membership import UserRoleMembership
 
         user_oid = ObjectId(user_id)
         # Use Beanie query operator syntax for Link fields, not dictionary syntax
         memberships = await UserRoleMembership.find(
             UserRoleMembership.user.id == user_oid,
             UserRoleMembership.status == MembershipStatus.ACTIVE,
-            fetch_links=True
+            fetch_links=True,
         ).to_list()
 
         for membership in memberships:
@@ -249,7 +263,7 @@ class BasicPermissionService:
         if not has_permission:
             raise PermissionDeniedError(
                 message=f"Permission denied: {permission}",
-                details={"required_permission": permission}
+                details={"required_permission": permission},
             )
 
     async def require_any_permission(
@@ -280,7 +294,7 @@ class BasicPermissionService:
 
         raise PermissionDeniedError(
             message=f"Permission denied: requires one of {permissions}",
-            details={"required_permissions": permissions}
+            details={"required_permissions": permissions},
         )
 
     async def require_all_permissions(
@@ -313,7 +327,7 @@ class BasicPermissionService:
         if missing_permissions:
             raise PermissionDeniedError(
                 message=f"Permission denied: missing {len(missing_permissions)} required permission(s)",
-                details={"missing_permissions": missing_permissions}
+                details={"missing_permissions": missing_permissions},
             )
 
     # Permission CRUD operations
@@ -412,7 +426,9 @@ class BasicPermissionService:
 
         # Get paginated results
         skip = (page - 1) * limit
-        permissions = await PermissionModel.find(query).skip(skip).limit(limit).to_list()
+        permissions = (
+            await PermissionModel.find(query).skip(skip).limit(limit).to_list()
+        )
 
         return permissions, total_count
 
@@ -440,9 +456,13 @@ class BasicPermissionService:
         # Protect system permissions
         if permission.is_system:
             from outlabs_auth.core.exceptions import InvalidInputError
+
             raise InvalidInputError(
                 message="Cannot delete system permission",
-                details={"permission_id": permission_id, "permission_name": permission.name}
+                details={
+                    "permission_id": permission_id,
+                    "permission_name": permission.name,
+                },
             )
 
         await permission.delete()
@@ -533,9 +553,9 @@ class EnterprisePermissionService(BasicPermissionService):
             ... )
             >>> print(f"Permission granted via: {source}")
         """
+        from outlabs_auth.models.closure import EntityClosureModel
         from outlabs_auth.models.entity import EntityModel
         from outlabs_auth.models.membership import EntityMembershipModel
-        from outlabs_auth.models.closure import EntityClosureModel
 
         # Try Redis cache first (if enabled)
         if self.redis_client and self.redis_client.is_available:
@@ -544,14 +564,15 @@ class EnterprisePermissionService(BasicPermissionService):
             )
             cached = await self.redis_client.get(cache_key)
             if cached is not None:
-                return cached.get("has_permission", False), cached.get("source", "cached")
+                return cached.get("has_permission", False), cached.get(
+                    "source", "cached"
+                )
 
         # Get user
         user = await UserModel.get(user_id)
         if not user:
             raise UserNotFoundError(
-                message="User not found",
-                details={"user_id": user_id}
+                message="User not found", details={"user_id": user_id}
             )
 
         # Superusers have all permissions
@@ -576,11 +597,9 @@ class EnterprisePermissionService(BasicPermissionService):
         target_entity_type = target_entity.entity_type if target_entity else None
 
         # Get all user memberships
-        # TODO: Update to use status field when EntityMembershipModel is created
-        # Should be: {"user.$id": user.id, "status": MembershipStatus.ACTIVE.value}
         memberships = await EntityMembershipModel.find(
             EntityMembershipModel.user.id == user.id,
-            EntityMembershipModel.is_active == True
+            EntityMembershipModel.status == MembershipStatus.ACTIVE,
         ).to_list()
 
         # Extract permission names:
@@ -598,7 +617,11 @@ class EnterprisePermissionService(BasicPermissionService):
                 continue
 
             # Fetch entity
-            entity = await membership.entity.fetch() if hasattr(membership.entity, 'fetch') else membership.entity
+            entity = (
+                await membership.entity.fetch()
+                if hasattr(membership.entity, "fetch")
+                else membership.entity
+            )
             if entity:
                 entity_id_str = str(entity.id)
                 direct_entity_ids.add(entity_id_str)
@@ -606,11 +629,17 @@ class EnterprisePermissionService(BasicPermissionService):
 
                 # Fetch and check permissions from roles
                 for role_link in membership.roles:
-                    role = await role_link.fetch() if hasattr(role_link, 'fetch') else role_link
+                    role = (
+                        await role_link.fetch()
+                        if hasattr(role_link, "fetch")
+                        else role_link
+                    )
                     if role and isinstance(role, RoleModel):
                         # Get permissions for this membership's entity type
                         membership_entity_type = entity.entity_type
-                        context_permissions = role.get_permissions_for_entity_type(membership_entity_type)
+                        context_permissions = role.get_permissions_for_entity_type(
+                            membership_entity_type
+                        )
 
                         # If this is the target entity, add to user_permissions
                         if entity_id_str == entity_id:
@@ -626,25 +655,31 @@ class EnterprisePermissionService(BasicPermissionService):
             # User is a direct member of the target entity
             if permission in user_permissions:
                 result = (True, "direct")
-                await self._cache_permission_result(user_id, permission, entity_id, result)
+                await self._cache_permission_result(
+                    user_id, permission, entity_id, result
+                )
                 return result
 
             # Check wildcard permissions
             if f"{resource}:*" in user_permissions:
                 result = (True, "direct")
-                await self._cache_permission_result(user_id, permission, entity_id, result)
+                await self._cache_permission_result(
+                    user_id, permission, entity_id, result
+                )
                 return result
 
             if "*:*" in user_permissions:
                 result = (True, "direct")
-                await self._cache_permission_result(user_id, permission, entity_id, result)
+                await self._cache_permission_result(
+                    user_id, permission, entity_id, result
+                )
                 return result
 
         # 2. Check tree permission in ancestors
         # Get all ancestors of target entity using closure table
         ancestor_closures = await EntityClosureModel.find(
             EntityClosureModel.descendant_id == entity_id,
-            EntityClosureModel.depth > 0  # Exclude self
+            EntityClosureModel.depth > 0,  # Exclude self
         ).to_list()
 
         ancestor_ids = {closure.ancestor_id for closure in ancestor_closures}
@@ -659,14 +694,24 @@ class EnterprisePermissionService(BasicPermissionService):
                 # Re-evaluate permissions for this specific ancestor context
                 ancestor_permissions: Set[str] = set()
                 for membership in memberships:
-                    entity = await membership.entity.fetch() if hasattr(membership.entity, 'fetch') else membership.entity
+                    entity = (
+                        await membership.entity.fetch()
+                        if hasattr(membership.entity, "fetch")
+                        else membership.entity
+                    )
                     if entity and str(entity.id) == ancestor_id:
                         # This is the membership in the ancestor entity
                         for role_link in membership.roles:
-                            role = await role_link.fetch() if hasattr(role_link, 'fetch') else role_link
+                            role = (
+                                await role_link.fetch()
+                                if hasattr(role_link, "fetch")
+                                else role_link
+                            )
                             if role and isinstance(role, RoleModel):
                                 # Use context-aware permissions for this ancestor entity type
-                                context_perms = role.get_permissions_for_entity_type(ancestor_entity_type)
+                                context_perms = role.get_permissions_for_entity_type(
+                                    ancestor_entity_type
+                                )
                                 ancestor_permissions.update(context_perms)
 
                 # Check for tree permission
@@ -674,13 +719,17 @@ class EnterprisePermissionService(BasicPermissionService):
 
                 if tree_permission in ancestor_permissions:
                     result = (True, "tree")
-                    await self._cache_permission_result(user_id, permission, entity_id, result)
+                    await self._cache_permission_result(
+                        user_id, permission, entity_id, result
+                    )
                     return result
 
                 # Check tree wildcard
                 if f"{resource}:*_tree" in ancestor_permissions:
                     result = (True, "tree")
-                    await self._cache_permission_result(user_id, permission, entity_id, result)
+                    await self._cache_permission_result(
+                        user_id, permission, entity_id, result
+                    )
                     return result
 
         # 3. Check platform-wide permission (_all suffix) from any membership
@@ -735,9 +784,7 @@ class EnterprisePermissionService(BasicPermissionService):
         """
         # Use check_permission which already handles tree logic
         has_perm, source = await self.check_permission(
-            user_id,
-            permission.replace("_tree", ""),
-            target_entity_id
+            user_id, permission.replace("_tree", ""), target_entity_id
         )
 
         return has_perm and source in ["tree", "all", "superuser"]
@@ -775,9 +822,7 @@ class EnterprisePermissionService(BasicPermissionService):
         return has_perm
 
     async def get_user_permissions_in_entity(
-        self,
-        user_id: str,
-        entity_id: str
+        self, user_id: str, entity_id: str
     ) -> List[str]:
         """
         Get all permissions user has in specific entity.
@@ -804,8 +849,7 @@ class EnterprisePermissionService(BasicPermissionService):
         user = await UserModel.get(user_id)
         if not user:
             raise UserNotFoundError(
-                message="User not found",
-                details={"user_id": user_id}
+                message="User not found", details={"user_id": user_id}
             )
 
         # Superusers have all permissions
@@ -813,25 +857,26 @@ class EnterprisePermissionService(BasicPermissionService):
             return ["*:*"]
 
         # Get entity to determine its type
-        from outlabs_auth.models.entity import EntityModel
         from bson import ObjectId
+
+        from outlabs_auth.models.entity import EntityModel
 
         target_entity = await EntityModel.get(entity_id)
         target_entity_type = target_entity.entity_type if target_entity else None
 
         # Get membership in entity (convert entity_id to ObjectId for comparison)
         try:
-            entity_oid = ObjectId(entity_id) if isinstance(entity_id, str) else entity_id
+            entity_oid = (
+                ObjectId(entity_id) if isinstance(entity_id, str) else entity_id
+            )
         except Exception:
             return []
 
-        # TODO: Update to use status field when EntityMembershipModel is created
-        # Should use: {"user.$id": user.id, "entity.$id": entity_oid, "status": MembershipStatus.ACTIVE.value}
-        # and membership.can_grant_permissions() instead of is_active + is_currently_valid()
+        # Get membership in entity
         membership = await EntityMembershipModel.find_one(
             EntityMembershipModel.user.id == user.id,
             EntityMembershipModel.entity.id == entity_oid,
-            EntityMembershipModel.is_active == True
+            EntityMembershipModel.status == MembershipStatus.ACTIVE,
         )
 
         if not membership or not membership.is_currently_valid():
@@ -840,7 +885,7 @@ class EnterprisePermissionService(BasicPermissionService):
         # Aggregate permissions from roles (use context-aware permissions)
         all_permissions: Set[str] = set()
         for role_link in membership.roles:
-            role = await role_link.fetch() if hasattr(role_link, 'fetch') else role_link
+            role = await role_link.fetch() if hasattr(role_link, "fetch") else role_link
             if role and isinstance(role, RoleModel):
                 # Use context-aware permissions for this entity type
                 context_perms = role.get_permissions_for_entity_type(target_entity_type)
@@ -879,9 +924,7 @@ class EnterprisePermissionService(BasicPermissionService):
         }
 
         await self.redis_client.set(
-            cache_key,
-            cache_value,
-            ttl=self.config.cache_permission_ttl
+            cache_key, cache_value, ttl=self.config.cache_permission_ttl
         )
 
     async def invalidate_user_permissions(self, user_id: str) -> int:
@@ -912,8 +955,7 @@ class EnterprisePermissionService(BasicPermissionService):
         # Publish invalidation event for other instances
         if deleted > 0:
             await self.redis_client.publish(
-                self.config.redis_invalidation_channel,
-                f"user:{user_id}:permissions"
+                self.config.redis_invalidation_channel, f"user:{user_id}:permissions"
             )
 
         return deleted
@@ -946,7 +988,7 @@ class EnterprisePermissionService(BasicPermissionService):
         if deleted > 0:
             await self.redis_client.publish(
                 self.config.redis_invalidation_channel,
-                f"entity:{entity_id}:permissions"
+                f"entity:{entity_id}:permissions",
             )
 
         return deleted
@@ -974,8 +1016,7 @@ class EnterprisePermissionService(BasicPermissionService):
         # Publish invalidation event
         if deleted > 0:
             await self.redis_client.publish(
-                self.config.redis_invalidation_channel,
-                "all:permissions"
+                self.config.redis_invalidation_channel, "all:permissions"
             )
 
         return deleted
@@ -1022,7 +1063,9 @@ class EnterprisePermissionService(BasicPermissionService):
         from outlabs_auth.models.membership import EntityMembershipModel
 
         # First check basic RBAC permission
-        has_rbac_perm, source = await self.check_permission(user_id, permission, entity_id)
+        has_rbac_perm, source = await self.check_permission(
+            user_id, permission, entity_id
+        )
 
         # If no RBAC permission, no need to check ABAC
         if not has_rbac_perm:
@@ -1042,11 +1085,9 @@ class EnterprisePermissionService(BasicPermissionService):
             return has_rbac_perm, source
 
         # Get memberships to check role conditions
-        # TODO: Update to use status field when EntityMembershipModel is created
-        # Should be: {"user.$id": user.id, "status": MembershipStatus.ACTIVE.value}
         memberships = await EntityMembershipModel.find(
             EntityMembershipModel.user.id == user.id,
-            EntityMembershipModel.is_active == True
+            EntityMembershipModel.status == MembershipStatus.ACTIVE,
         ).to_list()
 
         # Check conditions for each applicable role
@@ -1058,12 +1099,20 @@ class EnterprisePermissionService(BasicPermissionService):
             if not membership.is_currently_valid():
                 continue
 
-            entity = await membership.entity.fetch() if hasattr(membership.entity, 'fetch') else membership.entity
+            entity = (
+                await membership.entity.fetch()
+                if hasattr(membership.entity, "fetch")
+                else membership.entity
+            )
             if not entity:
                 continue
 
             for role_link in membership.roles:
-                role = await role_link.fetch() if hasattr(role_link, 'fetch') else role_link
+                role = (
+                    await role_link.fetch()
+                    if hasattr(role_link, "fetch")
+                    else role_link
+                )
                 if not role or not isinstance(role, RoleModel):
                     continue
 
@@ -1131,7 +1180,7 @@ class EnterprisePermissionService(BasicPermissionService):
                 "is_superuser": user.is_superuser,
                 "status": user.status,
                 # Add metadata attributes for ABAC
-                **user.metadata  # User metadata as attributes
+                **user.metadata,  # User metadata as attributes
             }
 
         # Get entity/resource model
@@ -1146,21 +1195,18 @@ class EnterprisePermissionService(BasicPermissionService):
                     "display_name": entity.display_name,
                     "entity_class": entity.entity_class,
                     # Add metadata as attributes
-                    **entity.metadata
+                    **entity.metadata,
                 }
 
         # Create context using policy engine
         context = self.policy_engine.create_context(
-            user=user_attrs,
-            resource=resource_attrs
+            user=user_attrs, resource=resource_attrs
         )
 
         return context
 
     async def evaluate_role_conditions(
-        self,
-        role: RoleModel,
-        context: Dict[str, Any]
+        self, role: RoleModel, context: Dict[str, Any]
     ) -> bool:
         """
         Evaluate all conditions for a role.

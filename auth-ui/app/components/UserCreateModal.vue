@@ -47,11 +47,10 @@ async function handleSubmit() {
     // Close modal and reset form on success
     open.value = false
     Object.assign(state, {
-      username: '',
       email: '',
       password: '',
-      full_name: '',
-      is_active: true,
+      first_name: '',
+      last_name: '',
       is_superuser: false
     })
   } catch (error) {
