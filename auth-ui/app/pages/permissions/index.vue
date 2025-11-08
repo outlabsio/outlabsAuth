@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import type { TableColumn } from '@nuxt/ui'
 import type { Permission } from '~/types/role'
+import { useQuery } from '@pinia/colada'
+import { permissionsQueries } from '~/queries/permissions'
 
-const permissionsStore = usePermissionsStore()
 const search = ref('')
 const showCreateModal = ref(false)
 
-// Fetch permissions on mount
-onMounted(async () => {
-  await permissionsStore.fetchAvailablePermissions()
-})
+// Query permissions with Pinia Colada (60s staleTime since permissions change rarely)
+const { data: permissions, isLoading, error } = useQuery(
+  () => permissionsQueries.available()
+)
 
 // Table columns
 const columns: TableColumn<Permission>[] = [
@@ -99,12 +100,13 @@ const columns: TableColumn<Permission>[] = [
   }
 ]
 
-// Filtered permissions based on search
+// Filtered permissions based on search (client-side filtering)
 const filteredPermissions = computed(() => {
-  if (!search.value) return permissionsStore.availablePermissions
+  if (!permissions.value) return []
+  if (!search.value) return permissions.value
 
   const searchLower = search.value.toLowerCase()
-  return permissionsStore.availablePermissions.filter(permission =>
+  return permissions.value.filter(permission =>
     permission.name.toLowerCase().includes(searchLower) ||
     permission.display_name.toLowerCase().includes(searchLower) ||
     permission.description?.toLowerCase().includes(searchLower) ||
@@ -161,21 +163,16 @@ const filteredPermissions = computed(() => {
     </template>
 
     <template #body>
-      <UCard v-if="permissionsStore.isLoading">
+      <UCard v-if="isLoading">
         <div class="flex items-center justify-center py-12">
           <UIcon name="i-lucide-loader-2" class="w-8 h-8 animate-spin text-primary" />
         </div>
       </UCard>
 
-      <UCard v-else-if="permissionsStore.error">
+      <UCard v-else-if="error">
         <div class="flex flex-col items-center justify-center py-12 gap-4">
           <UIcon name="i-lucide-alert-circle" class="w-12 h-12 text-error" />
-          <p class="text-error">{{ permissionsStore.error }}</p>
-          <UButton
-            icon="i-lucide-refresh-cw"
-            label="Retry"
-            @click="permissionsStore.fetchAvailablePermissions()"
-          />
+          <p class="text-error">{{ error }}</p>
         </div>
       </UCard>
 

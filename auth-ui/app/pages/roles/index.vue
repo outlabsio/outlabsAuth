@@ -1,15 +1,28 @@
 <script setup lang="ts">
 import type { TableColumn } from '@nuxt/ui'
 import type { Role } from '~/types/role'
+import { useQuery } from '@pinia/colada'
+import { rolesQueries, useDeleteRoleMutation } from '~/queries/roles'
 
-const rolesStore = useRolesStore()
 const search = ref('')
 const showCreateModal = ref(false)
 
-// Fetch roles on mount
-onMounted(async () => {
-  await rolesStore.fetchRoles()
+// Reactive filters for query
+const filters = computed(() => {
+  const f: any = {}
+  if (search.value) {
+    f.search = search.value
+  }
+  return f
 })
+
+// Query roles with Pinia Colada (auto-fetches and auto-refetches when search changes)
+const { data: rolesData, isLoading, error } = useQuery(
+  () => rolesQueries.list(filters.value, { page: 1, limit: 100 })
+)
+
+// Mutations
+const { mutate: deleteRole } = useDeleteRoleMutation()
 
 // Table columns
 const columns: TableColumn<Role>[] = [
@@ -72,23 +85,15 @@ const columns: TableColumn<Role>[] = [
         color: 'error',
         variant: 'ghost',
         size: 'xs',
-        onClick: () => console.log('Delete role:', row.original.id)
+        onClick: async () => {
+          if (confirm(`Are you sure you want to delete role "${row.original.display_name || row.original.name}"?`)) {
+            await deleteRole(row.original.id)
+          }
+        }
       })
     ])
   }
 ]
-
-// Filtered roles based on search
-const filteredRoles = computed(() => {
-  if (!search.value) return rolesStore.roles
-
-  const searchLower = search.value.toLowerCase()
-  return rolesStore.roles.filter(role =>
-    role.name.toLowerCase().includes(searchLower) ||
-    role.display_name?.toLowerCase().includes(searchLower) ||
-    role.description?.toLowerCase().includes(searchLower)
-  )
-})
 </script>
 
 <template>
@@ -137,28 +142,23 @@ const filteredRoles = computed(() => {
     </template>
 
     <template #body>
-      <UCard v-if="rolesStore.isLoading">
+      <UCard v-if="isLoading">
         <div class="flex items-center justify-center py-12">
           <UIcon name="i-lucide-loader-2" class="w-8 h-8 animate-spin text-primary" />
         </div>
       </UCard>
 
-      <UCard v-else-if="rolesStore.error">
+      <UCard v-else-if="error">
         <div class="flex flex-col items-center justify-center py-12 gap-4">
           <UIcon name="i-lucide-alert-circle" class="w-12 h-12 text-error" />
-          <p class="text-error">{{ rolesStore.error }}</p>
-          <UButton
-            icon="i-lucide-refresh-cw"
-            label="Retry"
-            @click="rolesStore.fetchRoles()"
-          />
+          <p class="text-error">{{ error }}</p>
         </div>
       </UCard>
 
       <UTable
         v-else
         :columns="columns"
-        :rows="filteredRoles"
+        :rows="rolesData?.items || []"
       >
         <template #empty>
           <div class="flex flex-col items-center justify-center py-12 gap-4">
@@ -168,16 +168,17 @@ const filteredRoles = computed(() => {
               icon="i-lucide-plus"
               label="Create your first role"
               variant="outline"
+              @click="showCreateModal = true"
             />
           </div>
         </template>
       </UTable>
 
       <UPagination
-        v-if="rolesStore.pagination.pages > 1"
-        v-model:page="rolesStore.pagination.page"
-        :total="rolesStore.pagination.total"
-        :page-size="rolesStore.pagination.limit"
+        v-if="rolesData && rolesData.pages > 1"
+        :model-value="rolesData.page"
+        :total="rolesData.total"
+        :page-size="rolesData.limit"
       />
     </template>
   </UDashboardPanel>

@@ -31,6 +31,7 @@ def get_memberships_router(
         APIRouter with membership management endpoints
 
     Routes:
+        GET /me - Get current user's memberships
         POST / - Add user to entity
         GET /entity/{entity_id} - Get all members of an entity
         GET /user/{user_id} - Get all entities for a user
@@ -47,6 +48,38 @@ def get_memberships_router(
         ```
     """
     router = APIRouter(prefix=prefix, tags=tags or ["memberships"])
+
+    @router.get(
+        "/me",
+        response_model=List[MembershipResponse],
+        summary="Get my memberships",
+        description="Get all entity memberships for the authenticated user"
+    )
+    async def get_my_memberships(
+        auth_result = Depends(auth.deps.require_auth())
+    ):
+        """
+        Get all entity memberships for the currently authenticated user.
+
+        This endpoint is used for context switching in the admin UI.
+        Users can always see their own memberships without special permissions.
+
+        For SimpleRBAC (which doesn't have entity memberships), returns empty list.
+        """
+        try:
+            # SimpleRBAC doesn't have membership_service (no entity hierarchy)
+            # Return empty list for SimpleRBAC compatibility
+            if not hasattr(auth, 'membership_service') or auth.membership_service is None:
+                return []
+
+            user_id = auth_result["user_id"]
+            memberships = await auth.membership_service.get_user_entities(user_id)
+            return [MembershipResponse(**m.model_dump()) for m in memberships]
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e)
+            )
 
     @router.post(
         "/",

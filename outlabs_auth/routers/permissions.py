@@ -30,6 +30,8 @@ def get_permissions_router(
         APIRouter with permission utility endpoints
 
     Routes:
+        GET / - List all available permissions
+        GET /me - Get current user's permissions
         POST /check - Check if user has specific permissions
         GET /user/{user_id} - Get all permissions for a user
 
@@ -43,6 +45,80 @@ def get_permissions_router(
         ```
     """
     router = APIRouter(prefix=prefix, tags=tags or ["permissions"])
+
+    @router.get(
+        "/",
+        response_model=List[str],
+        summary="List all permissions",
+        description="List all available permissions in the system (requires authentication)"
+    )
+    async def list_permissions(
+        auth_result = Depends(auth.deps.require_auth())
+    ):
+        """
+        List all unique permissions defined across all roles.
+
+        Returns a sorted list of all permission strings found in the system.
+        This is useful for permission selectors in admin UIs.
+        """
+        try:
+            # Get all roles
+            roles = await auth.role_service.list_roles()
+
+            # Collect all unique permissions
+            all_permissions = set()
+            for role in roles:
+                if hasattr(role, 'permissions') and role.permissions:
+                    all_permissions.update(role.permissions)
+
+            # Return sorted list
+            return sorted(list(all_permissions))
+
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e)
+            )
+
+    @router.get(
+        "/me",
+        response_model=List[str],
+        summary="Get current user's permissions",
+        description="Get all permissions for the authenticated user"
+    )
+    async def get_my_permissions(
+        entity_id: Optional[str] = None,
+        auth_result = Depends(auth.deps.require_auth())
+    ):
+        """
+        Get all permissions for the currently authenticated user.
+
+        Optionally filter by entity context (for EnterpriseRBAC).
+        """
+        try:
+            user_id = auth_result["user_id"]
+
+            # Get permissions (handle both SimpleRBAC and EnterpriseRBAC)
+            # SimpleRBAC: get_user_permissions(user_id)
+            # EnterpriseRBAC: get_user_permissions(user_id, entity_id=None)
+            try:
+                # Try with entity_id parameter (EnterpriseRBAC)
+                permissions = await auth.permission_service.get_user_permissions(
+                    user_id=user_id,
+                    entity_id=entity_id
+                )
+            except TypeError:
+                # Fall back to SimpleRBAC (no entity_id parameter)
+                permissions = await auth.permission_service.get_user_permissions(
+                    user_id=user_id
+                )
+
+            return permissions
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e)
+            )
 
     @router.post(
         "/check",
@@ -110,11 +186,18 @@ def get_permissions_router(
                     detail="User not found"
                 )
 
-            # Get permissions
-            permissions = await auth.permission_service.get_user_permissions(
-                user_id=user_id,
-                entity_id=entity_id
-            )
+            # Get permissions (handle both SimpleRBAC and EnterpriseRBAC)
+            try:
+                # Try with entity_id parameter (EnterpriseRBAC)
+                permissions = await auth.permission_service.get_user_permissions(
+                    user_id=user_id,
+                    entity_id=entity_id
+                )
+            except TypeError:
+                # Fall back to SimpleRBAC (no entity_id parameter)
+                permissions = await auth.permission_service.get_user_permissions(
+                    user_id=user_id
+                )
 
             return permissions
         except HTTPException:

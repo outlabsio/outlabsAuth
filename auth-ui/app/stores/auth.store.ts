@@ -4,15 +4,22 @@
  * Based on proven patterns from archived frontend
  */
 
-import { defineStore } from 'pinia'
-import type { User, LoginCredentials, AuthTokens, AuthState, SystemStatus } from '~/types/auth'
+import { defineStore } from "pinia";
+import type {
+  User,
+  LoginCredentials,
+  AuthTokens,
+  AuthState,
+  SystemStatus,
+  AuthConfig,
+} from "~/types/auth";
 
-const ACCESS_TOKEN_KEY = 'outlabs_auth_access_token'
-const REFRESH_TOKEN_KEY = 'outlabs_auth_refresh_token'
-const USER_KEY = 'outlabs_auth_user'
+const ACCESS_TOKEN_KEY = "outlabs_auth_access_token";
+const REFRESH_TOKEN_KEY = "outlabs_auth_refresh_token";
+const USER_KEY = "outlabs_auth_user";
 
-export const useAuthStore = defineStore('auth', () => {
-  const config = useRuntimeConfig()
+export const useAuthStore = defineStore("auth", () => {
+  const config = useRuntimeConfig();
 
   // State
   const state = reactive<AuthState>({
@@ -20,20 +27,33 @@ export const useAuthStore = defineStore('auth', () => {
     refreshToken: null,
     user: null,
     isAuthenticated: false,
-    isInitialized: false
-  })
+    isInitialized: false,
+    config: null,
+    isConfigLoaded: false,
+  });
 
   // Helper to safely access localStorage
   const safeLocalStorage = {
-    getItem: (key: string) => import.meta.client ? localStorage.getItem(key) : null,
-    setItem: (key: string, value: string) => import.meta.client && localStorage.setItem(key, value),
-    removeItem: (key: string) => import.meta.client && localStorage.removeItem(key)
-  }
+    getItem: (key: string) =>
+      import.meta.client ? localStorage.getItem(key) : null,
+    setItem: (key: string, value: string) =>
+      import.meta.client && localStorage.setItem(key, value),
+    removeItem: (key: string) =>
+      import.meta.client && localStorage.removeItem(key),
+  };
 
   // Getters
-  const isAuthenticated = computed(() => state.isAuthenticated)
-  const currentUser = computed(() => state.user)
-  const accessToken = computed(() => state.accessToken)
+  const isAuthenticated = computed(() => state.isAuthenticated);
+  const currentUser = computed(() => state.user);
+  const accessToken = computed(() => state.accessToken);
+  const isSimpleRBAC = computed(() => state.config?.preset === "SimpleRBAC");
+  const isEnterpriseRBAC = computed(
+    () => state.config?.preset === "EnterpriseRBAC",
+  );
+  const features = computed(() => state.config?.features || {});
+  const availablePermissions = computed(
+    () => state.config?.available_permissions || [],
+  );
 
   /**
    * Initialize auth state from localStorage
@@ -41,54 +61,59 @@ export const useAuthStore = defineStore('auth', () => {
    */
   const initialize = async (): Promise<boolean> => {
     if (state.isInitialized) {
-      return state.isAuthenticated
+      return state.isAuthenticated;
     }
 
     // Skip initialization on server-side
     if (import.meta.server) {
-      state.isInitialized = true
-      return false
+      state.isInitialized = true;
+      return false;
     }
 
     try {
       // Load tokens and user from localStorage
-      const storedAccessToken = safeLocalStorage.getItem(ACCESS_TOKEN_KEY)
-      const storedRefreshToken = safeLocalStorage.getItem(REFRESH_TOKEN_KEY)
-      const storedUser = safeLocalStorage.getItem(USER_KEY)
+      const storedAccessToken = safeLocalStorage.getItem(ACCESS_TOKEN_KEY);
+      const storedRefreshToken = safeLocalStorage.getItem(REFRESH_TOKEN_KEY);
+      const storedUser = safeLocalStorage.getItem(USER_KEY);
 
       if (storedAccessToken && storedUser) {
-        state.accessToken = storedAccessToken
-        state.refreshToken = storedRefreshToken
-        state.user = JSON.parse(storedUser)
-        state.isAuthenticated = true
+        state.accessToken = storedAccessToken;
+        state.refreshToken = storedRefreshToken;
+        state.user = JSON.parse(storedUser);
+        state.isAuthenticated = true;
 
         // Verify token is still valid by fetching current user
         try {
-          await fetchCurrentUser()
+          await fetchCurrentUser();
         } catch (error) {
           // Token expired or invalid, try to refresh
           if (state.refreshToken) {
             try {
-              await refreshAccessToken()
-              await fetchCurrentUser()
+              await refreshAccessToken();
+              await fetchCurrentUser();
             } catch {
               // Refresh failed, clear auth state
-              clearAuthState()
+              clearAuthState();
             }
           } else {
-            clearAuthState()
+            clearAuthState();
           }
         }
       }
 
-      state.isInitialized = true
-      return state.isAuthenticated
+      // Fetch config after authentication is verified
+      if (state.isAuthenticated) {
+        await fetchConfig();
+      }
+
+      state.isInitialized = true;
+      return state.isAuthenticated;
     } catch (error) {
-      console.error('Failed to initialize auth:', error)
-      state.isInitialized = true
-      return false
+      console.error("Failed to initialize auth:", error);
+      state.isInitialized = true;
+      return false;
     }
-  }
+  };
 
   /**
    * Make authenticated API call with automatic token refresh
@@ -96,68 +121,68 @@ export const useAuthStore = defineStore('auth', () => {
    */
   const apiCall = async <T>(
     endpoint: string,
-    options: RequestInit & { baseURL?: string } = {}
+    options: RequestInit & { baseURL?: string } = {},
   ): Promise<T> => {
-    const contextStore = useContextStore()
-    const baseURL = options.baseURL || config.public.apiBaseUrl
+    const contextStore = useContextStore();
+    const baseURL = options.baseURL || config.public.apiBaseUrl;
 
     // Get context headers if available
-    const contextHeaders = contextStore?.getContextHeaders() || {}
+    const contextHeaders = contextStore?.getContextHeaders() || {};
 
     const makeRequest = async (token: string | null): Promise<T> => {
       const headers: HeadersInit = {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
         ...contextHeaders,
         ...options.headers,
-        ...(token && { Authorization: `Bearer ${token}` })
-      }
+        ...(token && { Authorization: `Bearer ${token}` }),
+      };
 
       const response = await fetch(`${baseURL}${endpoint}`, {
         ...options,
         headers,
-        credentials: 'include' // Important for httpOnly cookies
-      })
+        credentials: "include", // Important for httpOnly cookies
+      });
 
       if (!response.ok) {
-        const error: any = new Error(`HTTP ${response.status}`)
-        error.status = response.status
-        error.statusText = response.statusText
+        const error: any = new Error(`HTTP ${response.status}`);
+        error.status = response.status;
+        error.statusText = response.statusText;
 
         try {
-          error.data = await response.json()
+          error.data = await response.json();
         } catch {
-          error.data = { detail: response.statusText }
+          error.data = { detail: response.statusText };
         }
 
-        throw error
+        throw error;
       }
 
       // Handle empty responses
-      const contentType = response.headers.get('content-type')
-      if (contentType && contentType.includes('application/json')) {
-        return await response.json()
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        return await response.json();
       }
 
-      return {} as T
-    }
+      return {} as T;
+    };
 
     try {
-      return await makeRequest(state.accessToken)
+      return await makeRequest(state.accessToken);
     } catch (error: any) {
       // If 401 and we have a refresh token, try to refresh and retry
       if (error.status === 401 && state.refreshToken) {
         try {
-          const newToken = await refreshAccessToken()
-          return await makeRequest(newToken)
+          const newToken = await refreshAccessToken();
+          return await makeRequest(newToken);
         } catch (refreshError) {
           // Refresh failed, logout user
-          await logout()
-          throw error
+          await logout();
+          throw error;
         }
       }
-      throw error
+      throw error;
     }
-  }
+  };
 
   /**
    * Login with email and password
@@ -165,39 +190,42 @@ export const useAuthStore = defineStore('auth', () => {
   const login = async (credentials: LoginCredentials): Promise<void> => {
     try {
       // Real API call - OutlabsAuth format
-      const response = await fetch(`${config.public.apiBaseUrl}/auth/login`, {
-        method: 'POST',
+      const response = await fetch(`${config.public.apiBaseUrl}/v1/auth/login`, {
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json'
+          "Content-Type": "application/json",
         },
         body: JSON.stringify(credentials),
-        credentials: 'include'
-      })
+        credentials: "include",
+      });
 
       if (!response.ok) {
-        const error: any = await response.json()
-        throw new Error(error.detail || 'Login failed')
+        const error: any = await response.json();
+        throw new Error(error.detail || "Login failed");
       }
 
-      const data: AuthTokens = await response.json()
+      const data: AuthTokens = await response.json();
 
       // Store tokens
-      state.accessToken = data.access_token
-      state.refreshToken = data.refresh_token
-      state.isAuthenticated = true
+      state.accessToken = data.access_token;
+      state.refreshToken = data.refresh_token;
+      state.isAuthenticated = true;
 
-      safeLocalStorage.setItem(ACCESS_TOKEN_KEY, data.access_token)
+      safeLocalStorage.setItem(ACCESS_TOKEN_KEY, data.access_token);
       if (data.refresh_token) {
-        safeLocalStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token)
+        safeLocalStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
       }
 
       // Fetch current user
-      await fetchCurrentUser()
+      await fetchCurrentUser();
+
+      // Fetch auth config
+      await fetchConfig();
     } catch (error) {
-      clearAuthState()
-      throw error
+      clearAuthState();
+      throw error;
     }
-  }
+  };
 
   /**
    * Logout user
@@ -206,94 +234,130 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       // Call logout endpoint if authenticated (direct fetch, not apiCall to avoid infinite loop)
       if (state.refreshToken && state.accessToken) {
-        await fetch(`${config.public.apiBaseUrl}/auth/logout`, {
-          method: 'POST',
+        await fetch(`${config.public.apiBaseUrl}/v1/auth/logout`, {
+          method: "POST",
           headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${state.accessToken}`
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${state.accessToken}`,
           },
           body: JSON.stringify({ refresh_token: state.refreshToken }),
-          credentials: 'include'
+          credentials: "include",
         }).catch(() => {
           // Ignore logout errors - we're clearing state anyway
-        })
+        });
       }
     } catch (error) {
-      console.error('Logout error:', error)
+      console.error("Logout error:", error);
     } finally {
-      clearAuthState()
+      clearAuthState();
 
       // Navigate to login
-      await navigateTo('/login')
+      await navigateTo("/login");
     }
-  }
+  };
 
   /**
    * Refresh access token using refresh token
    */
   const refreshAccessToken = async (): Promise<string> => {
     if (!state.refreshToken) {
-      throw new Error('No refresh token available')
+      throw new Error("No refresh token available");
     }
 
     try {
-      const response = await fetch(`${config.public.apiBaseUrl}/auth/refresh`, {
-        method: 'POST',
+      const response = await fetch(`${config.public.apiBaseUrl}/v1/auth/refresh`, {
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json'
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({ refresh_token: state.refreshToken }),
-        credentials: 'include'
-      })
+        credentials: "include",
+      });
 
       if (!response.ok) {
-        throw new Error('Token refresh failed')
+        throw new Error("Token refresh failed");
       }
 
-      const data: AuthTokens = await response.json()
+      const data: AuthTokens = await response.json();
 
-      state.accessToken = data.access_token
+      state.accessToken = data.access_token;
       if (data.refresh_token) {
-        state.refreshToken = data.refresh_token
+        state.refreshToken = data.refresh_token;
       }
 
-      safeLocalStorage.setItem(ACCESS_TOKEN_KEY, data.access_token)
+      safeLocalStorage.setItem(ACCESS_TOKEN_KEY, data.access_token);
       if (data.refresh_token) {
-        safeLocalStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token)
+        safeLocalStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
       }
 
-      return data.access_token
+      return data.access_token;
     } catch (error) {
-      clearAuthState()
-      throw error
+      clearAuthState();
+      throw error;
     }
-  }
+  };
 
   /**
    * Fetch current user
    */
   const fetchCurrentUser = async (): Promise<void> => {
     // Real API call
-    const user = await apiCall<User>('/users/me')
+    const user = await apiCall<User>("/v1/users/me");
     if (user) {
-      state.user = user
-      safeLocalStorage.setItem(USER_KEY, JSON.stringify(user))
+      // Enrich user with computed fields
+      const { enrichUser } = useUserHelpers();
+      state.user = enrichUser(user);
+      safeLocalStorage.setItem(USER_KEY, JSON.stringify(state.user));
     }
-  }
+  };
+
+  /**
+   * Fetch auth configuration
+   * Detects SimpleRBAC vs EnterpriseRBAC and available features
+   */
+  const fetchConfig = async (): Promise<void> => {
+    try {
+      const config = await apiCall<AuthConfig>("/v1/auth/config");
+      state.config = config;
+      state.isConfigLoaded = true;
+
+      console.log(`✅ Auth config loaded: ${config.preset}`, {
+        features: config.features,
+        permissions: config.available_permissions.length,
+      });
+    } catch (error) {
+      console.error("Failed to fetch auth config:", error);
+      // Set defaults if config fetch fails (assume SimpleRBAC)
+      state.config = {
+        preset: "SimpleRBAC",
+        features: {
+          entity_hierarchy: false,
+          context_aware_roles: false,
+          abac: false,
+          tree_permissions: false,
+          api_keys: true,
+          user_status: true,
+          activity_tracking: true,
+        },
+        available_permissions: [],
+      };
+      state.isConfigLoaded = true;
+    }
+  };
 
   /**
    * Clear auth state and localStorage
    */
   const clearAuthState = (): void => {
-    state.accessToken = null
-    state.refreshToken = null
-    state.user = null
-    state.isAuthenticated = false
+    state.accessToken = null;
+    state.refreshToken = null;
+    state.user = null;
+    state.isAuthenticated = false;
 
-    safeLocalStorage.removeItem(ACCESS_TOKEN_KEY)
-    safeLocalStorage.removeItem(REFRESH_TOKEN_KEY)
-    safeLocalStorage.removeItem(USER_KEY)
-  }
+    safeLocalStorage.removeItem(ACCESS_TOKEN_KEY);
+    safeLocalStorage.removeItem(REFRESH_TOKEN_KEY);
+    safeLocalStorage.removeItem(USER_KEY);
+  };
 
   return {
     // State (do not use readonly - prevents Pinia mutations)
@@ -303,6 +367,10 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated,
     currentUser,
     accessToken,
+    isSimpleRBAC,
+    isEnterpriseRBAC,
+    features,
+    availablePermissions,
 
     // Actions
     initialize,
@@ -310,6 +378,7 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     logout,
     refreshAccessToken,
-    fetchCurrentUser
-  }
-})
+    fetchCurrentUser,
+    fetchConfig,
+  };
+});

@@ -128,12 +128,35 @@ auth = OutlabsAuth(
 docker ps
 
 # You should see:
-# - local-mongodb (mongo:8) on port 27017
-# - local-redis (redis:latest) on port 6379
+# - outlabs-mongodb (mongo:8) - Host port 27018 → Container port 27017
+# - outlabs-redis (redis:latest) - Host port 6380 → Container port 6379
+# - local-redis (redis:latest) - Host port 6379 → Container port 6379 (legacy)
 
 # If they're not running, start them:
-docker start local-mongodb
-docker start local-redis
+docker start outlabs-mongodb outlabs-redis
+```
+
+### Port Reference
+
+**SimpleRBAC Example** (`examples/simple_rbac/`):
+- Backend API: `http://localhost:8003`
+- MongoDB: `mongodb://localhost:27018` (database: `blog_simple_rbac`)
+- Redis: `redis://localhost:6380`
+- Admin UI: `http://localhost:3000` (when running `auth-ui`)
+
+**EnterpriseRBAC Example** (`examples/enterprise_rbac/`):
+- Backend API: `http://localhost:8004` (when implemented)
+- MongoDB: `mongodb://localhost:27018` (database: `realestate_enterprise_rbac`)
+- Redis: `redis://localhost:6380`
+
+**Connection Strings**:
+```bash
+# SimpleRBAC example startup
+MONGODB_URL="mongodb://localhost:27018" \
+DATABASE_NAME="blog_simple_rbac" \
+SECRET_KEY="simple-rbac-secret-key-change-in-production" \
+REDIS_URL="redis://localhost:6380" \
+uv run uvicorn main:app --port 8003 --reload
 ```
 
 These containers are shared across all examples and development work.
@@ -181,7 +204,8 @@ outlabsAuth/
 │   ├── API_DESIGN.md               # API design patterns
 │   ├── COMPARISON_MATRIX.md        # SimpleRBAC vs EnterpriseRBAC
 │   ├── IMPLEMENTATION_ROADMAP.md   # Development phases
-│   └── ... (13 design spec files)
+│   ├── AUTH_UI.md                  # Admin UI documentation (NEW)
+│   └── ... (14 design spec files)
 │
 ├── docs-library/                   # 📚 USER DOCS (implementation-specific)
 │   ├── 12-Data-Models.md           # Database models
@@ -194,6 +218,19 @@ outlabsAuth/
 │   ├── 98-Metrics-Reference.md     # Metrics catalog
 │   └── 99-Log-Events-Reference.md  # Log events catalog
 │   # Note: Only 9 files - user docs being rebuilt from scratch
+│
+├── auth-ui/                        # 🎨 ADMIN UI (pluggable Nuxt 4 SPA)
+│   ├── app/
+│   │   ├── components/             # UI components (modals, forms)
+│   │   ├── stores/                 # Pinia stores (auth, users, roles, etc.)
+│   │   ├── pages/                  # Routes (users, roles, entities, etc.)
+│   │   └── types/                  # TypeScript types
+│   ├── nuxt.config.ts              # Nuxt configuration
+│   ├── .env                        # API URL configuration
+│   └── package.json                # Nuxt UI v4.0.1
+│   # Pluggable admin interface for any OutlabsAuth-powered app
+│   # Auto-detects SimpleRBAC vs EnterpriseRBAC mode
+│   # See docs/AUTH_UI.md for full documentation
 │
 ├── _reference/                     # 📁 Archived reference code
 │   ├── models/                     # Old Beanie models from centralized API
@@ -361,11 +398,77 @@ All 37 design decisions documented in **DESIGN_DECISIONS.md**:
 - **DD-005**: Entity hierarchy always in Enterprise
 - **DD-008**: No cross-app SSO (each app is independent)
 
+## Admin UI (`auth-ui/`)
+
+**IMPORTANT**: The admin UI is NOT part of the core library - it's a **separate pluggable component** that can be integrated into any app using OutlabsAuth.
+
+### What It Is
+- **Nuxt 4 SPA** (not part of the Python package)
+- **Nuxt UI v4** components (Radix UI primitives)
+- **Pinia state management** with auto-syncing to backend
+- **Preset-aware**: Auto-detects SimpleRBAC vs EnterpriseRBAC
+
+### Key Features
+- ✅ Full CRUD for users, roles, permissions, entities, API keys
+- ✅ Context switching (EnterpriseRBAC)
+- ✅ JWT authentication with auto-refresh
+- ✅ Keyboard shortcuts (`g-u` for users, `g-r` for roles, etc.)
+- ✅ Mock data mode for UI development
+
+### Location & Structure
+```
+auth-ui/
+├── app/
+│   ├── components/    # Modals, forms (RoleCreateModal.vue, etc.)
+│   ├── stores/        # auth.store.ts, users.store.ts, roles.store.ts
+│   ├── pages/         # Routes: /users, /roles, /entities
+│   └── types/         # TypeScript types
+├── .env               # NUXT_PUBLIC_API_BASE_URL=http://localhost:8003
+└── package.json       # Nuxt UI v4.0.1
+```
+
+### Running the Admin UI
+```bash
+cd auth-ui
+npm install
+npm run dev  # Runs on http://localhost:3000
+```
+
+**Must point to a running OutlabsAuth API** (SimpleRBAC or EnterpriseRBAC example)
+
+### Config Detection (NEW - In Progress)
+The UI fetches `/v1/auth/config` to determine:
+- Which preset is running (SimpleRBAC vs EnterpriseRBAC)
+- Which features are enabled (entity_hierarchy, context_aware_roles, etc.)
+- Available permissions for that preset
+
+This allows the UI to **hide/show features** based on backend capabilities.
+
+### Testing with Examples
+```bash
+# Terminal 1: Run SimpleRBAC example
+cd examples/simple_rbac
+docker compose up -d  # MongoDB + Redis
+uv run uvicorn main:app --port 8003 --reload
+
+# Terminal 2: Run admin UI
+cd auth-ui
+npm run dev
+
+# Login at http://localhost:3000
+# system@outlabs.io / Asd123$$
+```
+
+### Full Documentation
+See **`docs/AUTH_UI.md`** for complete architecture, stores, API integration, and customization.
+
+---
+
 ## Common Pitfalls to Avoid
 
 1. **Don't reference old centralized API docs** - Use `docs/` only
 2. **Reference code is for inspiration** - Don't copy-paste without adapting
-3. **Library is backend-only** - No admin UI in v1.0 (that's v1.6)
+3. **Admin UI is separate** - It's NOT in the Python package (it's a Nuxt app in `auth-ui/`)
 4. **Each app is independent** - No multi-platform/multi-tenant by default
 5. **Start simple** - SimpleRBAC first, then EnterpriseRBAC features
 

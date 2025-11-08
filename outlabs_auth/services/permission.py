@@ -8,6 +8,7 @@ Handles permission checking and management:
 """
 from typing import List, Optional, Set, Dict, Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from bson import ObjectId
 
 from outlabs_auth.models.user import UserModel
 from outlabs_auth.models.role import RoleModel
@@ -204,9 +205,11 @@ class BasicPermissionService:
         from outlabs_auth.models.membership_status import MembershipStatus
 
         # Find all active role memberships for user
+        # Convert user_id to ObjectId for Beanie Link query
+        user_oid = ObjectId(user_id)
         memberships = await UserRoleMembership.find(
-            {"user.$id": user_id, "status": MembershipStatus.ACTIVE.value}
-        ).to_list()
+            {"user.$id": user_oid, "status": MembershipStatus.ACTIVE.value}
+        ).fetch_links().to_list()
 
         # Aggregate permissions from all valid roles
         all_permissions: Set[str] = set()

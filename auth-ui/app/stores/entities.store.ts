@@ -6,8 +6,6 @@
 import { defineStore } from 'pinia'
 import type { Entity, EntityClass } from '~/types/entity'
 import type { PaginationParams, PaginatedResponse } from '~/types/api'
-import { USE_MOCK_DATA, mockDelay, logMockCall, mockId } from '~/utils/mock'
-import { mockEntities, getMockEntityHierarchy } from '~/utils/mockData'
 
 export interface EntityFilters {
   search?: string
@@ -61,9 +59,6 @@ export const useEntitiesStore = defineStore('entities', () => {
     }
   })
 
-  // Mock entities storage (in-memory for mock mode)
-  const mockEntitiesData = ref<Entity[]>([...mockEntities])
-
   // Getters
   const entities = computed(() => state.entities)
   const selectedEntity = computed(() => state.selectedEntity)
@@ -109,83 +104,6 @@ export const useEntitiesStore = defineStore('entities', () => {
       state.isLoading = true
       state.error = null
 
-      // Mock mode
-      if (USE_MOCK_DATA) {
-        logMockCall('GET', '/v1/entities', { filters, params })
-        await mockDelay()
-
-        // Apply filters
-        let filtered = [...mockEntitiesData.value]
-
-        // Search filter (name, description)
-        if (filters.search) {
-          const search = filters.search.toLowerCase()
-          filtered = filtered.filter(
-            entity =>
-              entity.name.toLowerCase().includes(search) ||
-              entity.description?.toLowerCase().includes(search)
-          )
-        }
-
-        // Entity class filter
-        if (filters.entity_class) {
-          filtered = filtered.filter(e => e.entity_class === filters.entity_class)
-        }
-
-        // Entity type filter
-        if (filters.entity_type) {
-          filtered = filtered.filter(e => e.entity_type === filters.entity_type)
-        }
-
-        // Parent filter
-        if (filters.parent_id !== undefined) {
-          if (filters.parent_id === null || filters.parent_id === '') {
-            filtered = filtered.filter(e => !e.parent_id)
-          } else {
-            filtered = filtered.filter(e => e.parent_id === filters.parent_id)
-          }
-        }
-
-        // Root only filter
-        if (filters.root_only) {
-          filtered = filtered.filter(e => !e.parent_id)
-        }
-
-        // Sorting
-        const sortBy = params.sort_by || 'name'
-        const sortOrder = params.sort_order || 'asc'
-        filtered.sort((a: any, b: any) => {
-          const aVal = a[sortBy]
-          const bVal = b[sortBy]
-          if (sortOrder === 'asc') {
-            return aVal > bVal ? 1 : -1
-          } else {
-            return aVal < bVal ? 1 : -1
-          }
-        })
-
-        // Pagination
-        const page = params.page || 1
-        const limit = params.limit || 50
-        const total = filtered.length
-        const pages = Math.ceil(total / limit)
-        const startIndex = (page - 1) * limit
-        const endIndex = startIndex + limit
-
-        state.entities = filtered.slice(startIndex, endIndex)
-        state.pagination = {
-          total,
-          page,
-          limit,
-          pages
-        }
-
-        // Build tree structure
-        state.entityTree = buildTree(filtered)
-        return
-      }
-
-      // Real API call
       const queryParams = new URLSearchParams()
       if (filters.search) queryParams.append('search', filters.search)
       if (filters.entity_class) queryParams.append('entity_class', filters.entity_class)
@@ -227,21 +145,6 @@ export const useEntitiesStore = defineStore('entities', () => {
       state.isLoading = true
       state.error = null
 
-      // Mock mode
-      if (USE_MOCK_DATA) {
-        logMockCall('GET', `/v1/entities/${entityId}`)
-        await mockDelay()
-
-        const entity = mockEntitiesData.value.find(e => e.id === entityId)
-        if (!entity) {
-          throw new Error('Entity not found')
-        }
-
-        state.selectedEntity = entity
-        return entity
-      }
-
-      // Real API call
       const entity = await authStore.apiCall<Entity>(`/v1/entities/${entityId}`)
       state.selectedEntity = entity
       return entity
@@ -262,20 +165,6 @@ export const useEntitiesStore = defineStore('entities', () => {
       state.isLoading = true
       state.error = null
 
-      // Mock mode
-      if (USE_MOCK_DATA) {
-        logMockCall('GET', `/v1/entities/${entityId}/hierarchy`)
-        await mockDelay()
-
-        const hierarchy = getMockEntityHierarchy(entityId)
-        if (!hierarchy) {
-          throw new Error('Entity not found')
-        }
-
-        return hierarchy
-      }
-
-      // Real API call
       const hierarchy = await authStore.apiCall<EntityHierarchy>(
         `/v1/entities/${entityId}/hierarchy`
       )
@@ -313,36 +202,6 @@ export const useEntitiesStore = defineStore('entities', () => {
       state.isLoading = true
       state.error = null
 
-      // Mock mode
-      if (USE_MOCK_DATA) {
-        logMockCall('POST', '/v1/entities', data)
-        await mockDelay()
-
-        // Validate parent exists
-        if (data.parent_id) {
-          const parentExists = mockEntitiesData.value.some(e => e.id === data.parent_id)
-          if (!parentExists) {
-            throw new Error('Parent entity not found')
-          }
-        }
-
-        const newEntity: Entity = {
-          id: mockId(),
-          name: data.name,
-          entity_type: data.entity_type,
-          entity_class: data.entity_class,
-          parent_id: data.parent_id,
-          description: data.description || '',
-          metadata: data.metadata || {},
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        }
-
-        mockEntitiesData.value.push(newEntity)
-        return newEntity
-      }
-
-      // Real API call
       const entity = await authStore.apiCall<Entity>('/v1/entities', {
         method: 'POST',
         body: JSON.stringify(data)
@@ -366,36 +225,6 @@ export const useEntitiesStore = defineStore('entities', () => {
       state.isLoading = true
       state.error = null
 
-      // Mock mode
-      if (USE_MOCK_DATA) {
-        logMockCall('PATCH', `/v1/entities/${entityId}`, data)
-        await mockDelay()
-
-        const entityIndex = mockEntitiesData.value.findIndex(e => e.id === entityId)
-        if (entityIndex === -1) {
-          throw new Error('Entity not found')
-        }
-
-        const currentEntity = mockEntitiesData.value[entityIndex]
-        if (!currentEntity) {
-          throw new Error('Entity not found')
-        }
-
-        const updatedEntity: Entity = {
-          ...currentEntity,
-          name: data.name ?? currentEntity.name,
-          entity_type: data.entity_type ?? currentEntity.entity_type,
-          description: data.description ?? currentEntity.description,
-          metadata: data.metadata ?? currentEntity.metadata,
-          updated_at: new Date().toISOString()
-        }
-
-        mockEntitiesData.value[entityIndex] = updatedEntity
-        state.selectedEntity = updatedEntity
-        return updatedEntity
-      }
-
-      // Real API call
       const entity = await authStore.apiCall<Entity>(`/v1/entities/${entityId}`, {
         method: 'PATCH',
         body: JSON.stringify(data)
@@ -420,44 +249,6 @@ export const useEntitiesStore = defineStore('entities', () => {
       state.isLoading = true
       state.error = null
 
-      // Mock mode
-      if (USE_MOCK_DATA) {
-        logMockCall('POST', `/v1/entities/${entityId}/move`, { parent_id: newParentId })
-        await mockDelay()
-
-        const entityIndex = mockEntitiesData.value.findIndex(e => e.id === entityId)
-        if (entityIndex === -1) {
-          throw new Error('Entity not found')
-        }
-
-        // Validate new parent exists
-        if (newParentId) {
-          const parentExists = mockEntitiesData.value.some(e => e.id === newParentId)
-          if (!parentExists) {
-            throw new Error('Parent entity not found')
-          }
-
-          // Prevent circular reference
-          if (newParentId === entityId) {
-            throw new Error('Cannot move entity to itself')
-          }
-        }
-
-        const entity = mockEntitiesData.value[entityIndex]
-        if (entity) {
-          entity.parent_id = newParentId || undefined
-          entity.updated_at = new Date().toISOString()
-        }
-
-        if (state.selectedEntity?.id === entityId) {
-          state.selectedEntity.parent_id = newParentId || undefined
-          state.selectedEntity.updated_at = new Date().toISOString()
-        }
-
-        return true
-      }
-
-      // Real API call
       await authStore.apiCall(`/v1/entities/${entityId}/move`, {
         method: 'POST',
         body: JSON.stringify({ parent_id: newParentId })
@@ -481,39 +272,6 @@ export const useEntitiesStore = defineStore('entities', () => {
       state.isLoading = true
       state.error = null
 
-      // Mock mode
-      if (USE_MOCK_DATA) {
-        logMockCall('DELETE', `/v1/entities/${entityId}`)
-        await mockDelay()
-
-        const entityIndex = mockEntitiesData.value.findIndex(e => e.id === entityId)
-        if (entityIndex === -1) {
-          throw new Error('Entity not found')
-        }
-
-        // Check for children
-        const hasChildren = mockEntitiesData.value.some(e => e.parent_id === entityId)
-        if (hasChildren) {
-          throw new Error('Cannot delete entity with children')
-        }
-
-        mockEntitiesData.value.splice(entityIndex, 1)
-
-        // Remove from state.entities if present
-        const stateIndex = state.entities.findIndex(e => e.id === entityId)
-        if (stateIndex !== -1) {
-          state.entities.splice(stateIndex, 1)
-        }
-
-        // Clear selected entity if it was deleted
-        if (state.selectedEntity?.id === entityId) {
-          state.selectedEntity = null
-        }
-
-        return true
-      }
-
-      // Real API call
       await authStore.apiCall(`/v1/entities/${entityId}`, {
         method: 'DELETE'
       })
@@ -566,19 +324,6 @@ export const useEntitiesStore = defineStore('entities', () => {
     state.error = null
   }
 
-  /**
-   * Reset mock data (useful for testing)
-   */
-  const resetMockData = (): void => {
-    if (USE_MOCK_DATA) {
-      mockEntitiesData.value = [...mockEntities]
-      state.entities = []
-      state.selectedEntity = null
-      state.entityTree = []
-      state.error = null
-    }
-  }
-
   return {
     // State (do not use readonly - prevents Pinia mutations)
     state,
@@ -607,7 +352,6 @@ export const useEntitiesStore = defineStore('entities', () => {
     getChildren,
     hasChildren,
     clearSelectedEntity,
-    clearError,
-    resetMockData
+    clearError
   }
 })

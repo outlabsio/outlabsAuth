@@ -3,6 +3,8 @@ import type { TableColumn } from '@nuxt/ui'
 import type { Row } from '@tanstack/table-core'
 import { getPaginationRowModel } from '@tanstack/table-core'
 import type { User } from '~/types/auth'
+import { useQuery } from '@pinia/colada'
+import { usersQueries, useDeleteUserMutation } from '~/queries/users'
 
 definePageMeta({
   layout: 'default'
@@ -30,38 +32,38 @@ const pagination = ref({
   pageSize: 20
 })
 
-// Fetch users on mount
-onMounted(async () => {
-  await fetchUsers()
+// Reset to page 1 when filters change
+watch([search, statusFilter], () => {
+  pagination.value.pageIndex = 0
 })
 
-// Fetch users with current filters
-const fetchUsers = async () => {
-  const filters: any = {}
+// Reactive filters and params for query
+const filters = computed(() => {
+  const f: any = {}
 
   if (search.value) {
-    filters.search = search.value
+    f.search = search.value
   }
 
   if (statusFilter.value !== 'all') {
-    filters.is_active = statusFilter.value === 'active'
+    f.is_active = statusFilter.value === 'active'
   }
 
-  await usersStore.fetchUsers(filters, {
-    page: pagination.value.pageIndex + 1,
-    limit: pagination.value.pageSize
-  })
-}
-
-// Watch filters with debounce
-watchDebounced([search, statusFilter], () => {
-  pagination.value.pageIndex = 0
-  fetchUsers()
-}, { debounce: 300 })
-
-watch(() => pagination.value.pageIndex, () => {
-  fetchUsers()
+  return f
 })
+
+const params = computed(() => ({
+  page: pagination.value.pageIndex + 1,
+  limit: pagination.value.pageSize
+}))
+
+// Query users with Pinia Colada (auto-fetches and auto-refetches when filters/params change)
+const { data: usersData, isLoading, error } = useQuery(
+  () => usersQueries.list(filters.value, params.value)
+)
+
+// Mutations
+const { mutate: deleteUser } = useDeleteUserMutation()
 
 // Get row action items
 function getRowItems(row: Row<User>) {
@@ -101,7 +103,7 @@ function getRowItems(row: Row<User>) {
             title: `User ${action}d`,
             description: `${row.original.full_name || row.original.username} has been ${action}d.`
           })
-          await fetchUsers()
+          // No need to manually refetch - Pinia Colada will auto-invalidate
         } else {
           toast.add({
             title: 'Error',
@@ -120,20 +122,8 @@ function getRowItems(row: Row<User>) {
       color: 'error',
       onSelect: async () => {
         if (confirm(`Are you sure you want to delete ${row.original.full_name || row.original.username}?`)) {
-          const success = await usersStore.deleteUser(row.original.id)
-          if (success) {
-            toast.add({
-              title: 'User deleted',
-              description: `${row.original.full_name || row.original.username} has been deleted.`
-            })
-            await fetchUsers()
-          } else {
-            toast.add({
-              title: 'Error',
-              description: 'Failed to delete user.',
-              color: 'error'
-            })
-          }
+          // Uses optimistic update mutation - UI updates instantly!
+          await deleteUser(row.original.id)
         }
       }
     }
@@ -285,9 +275,9 @@ const columns: TableColumn<User>[] = [
           getPaginationRowModel: getPaginationRowModel()
         }"
         class="shrink-0"
-        :data="usersStore.users"
+        :data="usersData?.items || []"
         :columns="columns"
-        :loading="usersStore.isLoading"
+        :loading="isLoading"
         :ui="{
           base: 'table-fixed border-separate border-spacing-0',
           thead: '[&>tr]:bg-elevated/50 [&>tr]:after:content-none',
@@ -300,15 +290,15 @@ const columns: TableColumn<User>[] = [
       <!-- Pagination -->
       <div class="flex items-center justify-between gap-3 border-t border-default pt-4 mt-auto">
         <div class="text-sm text-muted">
-          Showing {{ usersStore.users.length }} of {{ usersStore.pagination.total }} users
+          Showing {{ usersData?.items?.length || 0 }} of {{ usersData?.total || 0 }} users
         </div>
 
         <div class="flex items-center gap-1.5">
           <UPagination
-            v-if="usersStore.pagination.pages > 1"
-            :model-value="usersStore.pagination.page"
-            :items-per-page="usersStore.pagination.limit"
-            :total="usersStore.pagination.total"
+            v-if="usersData && usersData.total > pagination.pageSize"
+            :model-value="pagination.pageIndex + 1"
+            :items-per-page="pagination.pageSize"
+            :total="usersData.total"
             @update:model-value="(p: number) => { pagination.pageIndex = p - 1 }"
           />
         </div>

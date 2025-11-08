@@ -1,8 +1,7 @@
 <script setup lang="ts">
-const open = defineModel<boolean>('open', { default: false })
+import { useCreateUserMutation } from '~/queries/users'
 
-const usersStore = useUsersStore()
-const toast = useToast()
+const open = defineModel<boolean>('open', { default: false })
 
 // Form state
 const state = reactive({
@@ -49,46 +48,28 @@ const passwordColor = computed(() => {
   return 'success'
 })
 
+// Mutation for creating users
+const { mutate: createUser, isPending } = useCreateUserMutation()
+
 // Submit handler
-const isSubmitting = ref(false)
-
 async function handleSubmit() {
-  isSubmitting.value = true
   try {
-    const success = await usersStore.createUser(state)
-
-    if (success) {
-      toast.add({
-        title: 'User created',
-        description: `${state.full_name} has been created successfully.`,
-        color: 'success'
-      })
-
-      // Close modal and reset form
-      open.value = false
-      Object.assign(state, {
-        username: '',
-        email: '',
-        password: '',
-        full_name: '',
-        is_active: true,
-        is_superuser: false
-      })
-    } else {
-      toast.add({
-        title: 'Error',
-        description: 'Failed to create user. Please try again.',
-        color: 'error'
-      })
-    }
-  } catch (error: any) {
-    toast.add({
-      title: 'Error',
-      description: error.message || 'Failed to create user',
-      color: 'error'
+    await createUser(state, {
+      onSuccess: () => {
+        // Close modal and reset form
+        open.value = false
+        Object.assign(state, {
+          username: '',
+          email: '',
+          password: '',
+          full_name: '',
+          is_active: true,
+          is_superuser: false
+        })
+      }
     })
-  } finally {
-    isSubmitting.value = false
+  } catch (error) {
+    // Error handling is done by the mutation
   }
 }
 </script>
@@ -193,12 +174,12 @@ async function handleSubmit() {
           color="neutral"
           variant="outline"
           @click="open = false"
-          :disabled="isSubmitting"
+          :disabled="isPending"
         />
         <UButton
           label="Create User"
           icon="i-lucide-user-plus"
-          :loading="isSubmitting"
+          :loading="isPending"
           @click="handleSubmit"
         />
       </div>

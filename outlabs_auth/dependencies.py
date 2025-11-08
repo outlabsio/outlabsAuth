@@ -196,8 +196,23 @@ class AuthDeps:
             if not auth_result:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
-            # Check permissions
-            user_permissions = auth_result.get("metadata", {}).get("permissions", [])
+            # Fetch user's permissions from database
+            permission_service = self.services.get("permission_service")
+            if not permission_service:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Permission service not configured"
+                )
+
+            user_id = auth_result.get("user_id")
+            if not user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="User ID not found in auth result"
+                )
+
+            # Get permissions from database (SimpleRBAC doesn't need entity_id)
+            user_permissions = await permission_service.get_user_permissions(user_id=user_id)
 
             if require_all:
                 # Require ALL permissions

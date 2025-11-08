@@ -1,15 +1,28 @@
 <script setup lang="ts">
 import type { TableColumn } from '@nuxt/ui'
 import type { Entity } from '~/types/entity'
+import { useQuery } from '@pinia/colada'
+import { entitiesQueries, useDeleteEntityMutation } from '~/queries/entities'
 
-const entitiesStore = useEntitiesStore()
 const search = ref('')
 const showCreateModal = ref(false)
 
-// Fetch entities on mount
-onMounted(async () => {
-  await entitiesStore.fetchEntities()
+// Reactive filters for query
+const filters = computed(() => {
+  const f: any = {}
+  if (search.value) {
+    f.search = search.value
+  }
+  return f
 })
+
+// Query entities with Pinia Colada (auto-fetches and auto-refetches when search changes)
+const { data: entitiesData, isLoading, error } = useQuery(
+  () => entitiesQueries.list(filters.value, { page: 1, limit: 100 })
+)
+
+// Mutations
+const { mutate: deleteEntity } = useDeleteEntityMutation()
 
 // Table columns
 const columns: TableColumn<Entity>[] = [
@@ -49,23 +62,18 @@ const columns: TableColumn<Entity>[] = [
         color: 'error',
         variant: 'ghost',
         size: 'xs',
-        onClick: () => console.log('Delete entity:', row.original.id)
+        onClick: async () => {
+          if (confirm(`Are you sure you want to delete entity "${row.original.name}"?`)) {
+            await deleteEntity({
+              entityId: row.original.id,
+              parentId: row.original.parent_id
+            })
+          }
+        }
       })
     ])
   }
 ]
-
-// Filtered entities based on search
-const filteredEntities = computed(() => {
-  if (!search.value) return entitiesStore.entities
-
-  const searchLower = search.value.toLowerCase()
-  return entitiesStore.entities.filter(entity =>
-    entity.name.toLowerCase().includes(searchLower) ||
-    entity.entity_type.toLowerCase().includes(searchLower) ||
-    entity.description?.toLowerCase().includes(searchLower)
-  )
-})
 </script>
 
 <template>
@@ -114,28 +122,23 @@ const filteredEntities = computed(() => {
     </template>
 
     <template #body>
-      <UCard v-if="entitiesStore.isLoading">
+      <UCard v-if="isLoading">
         <div class="flex items-center justify-center py-12">
           <UIcon name="i-lucide-loader-2" class="w-8 h-8 animate-spin text-primary" />
         </div>
       </UCard>
 
-      <UCard v-else-if="entitiesStore.error">
+      <UCard v-else-if="error">
         <div class="flex flex-col items-center justify-center py-12 gap-4">
           <UIcon name="i-lucide-alert-circle" class="w-12 h-12 text-error" />
-          <p class="text-error">{{ entitiesStore.error }}</p>
-          <UButton
-            icon="i-lucide-refresh-cw"
-            label="Retry"
-            @click="entitiesStore.fetchEntities()"
-          />
+          <p class="text-error">{{ error }}</p>
         </div>
       </UCard>
 
       <UTable
         v-else
         :columns="columns"
-        :rows="filteredEntities"
+        :rows="entitiesData?.items || []"
       >
         <template #empty>
           <div class="flex flex-col items-center justify-center py-12 gap-4">
@@ -152,10 +155,10 @@ const filteredEntities = computed(() => {
       </UTable>
 
       <UPagination
-        v-if="entitiesStore.pagination.pages > 1"
-        v-model:page="entitiesStore.pagination.page"
-        :total="entitiesStore.pagination.total"
-        :page-size="entitiesStore.pagination.limit"
+        v-if="entitiesData && entitiesData.pages > 1"
+        :model-value="entitiesData.page"
+        :total="entitiesData.total"
+        :page-size="entitiesData.limit"
       />
     </template>
   </UDashboardPanel>

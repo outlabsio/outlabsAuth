@@ -196,14 +196,14 @@ async def lifespan(app: FastAPI):
     # Create default roles if they don't exist
     await create_default_roles()
 
-    # Include standard OutlabsAuth routers (NO /api prefix!)
+    # Include standard OutlabsAuth routers with /v1 prefix
     print("📝 Including API routers...")
-    app.include_router(get_auth_router(auth, prefix="/auth"))
-    app.include_router(get_users_router(auth, prefix="/users"))
-    app.include_router(get_api_keys_router(auth, prefix="/api-keys"))
-    app.include_router(get_roles_router(auth, prefix="/roles"))
-    app.include_router(get_permissions_router(auth, prefix="/permissions"))
-    app.include_router(get_memberships_router(auth, prefix="/memberships"))
+    app.include_router(get_auth_router(auth, prefix="/v1/auth"))
+    app.include_router(get_users_router(auth, prefix="/v1/users"))
+    app.include_router(get_api_keys_router(auth, prefix="/v1/api-keys"))
+    app.include_router(get_roles_router(auth, prefix="/v1/roles"))
+    app.include_router(get_permissions_router(auth, prefix="/v1/permissions"))
+    app.include_router(get_memberships_router(auth, prefix="/v1/memberships"))
 
     # Include observability metrics endpoint (for Prometheus scraping)
     app.include_router(create_metrics_router(auth.observability))
@@ -290,15 +290,27 @@ async def create_default_roles():
         {
             "name": "admin",
             "display_name": "Administrator",
-            "description": "Full control over all posts and comments",
+            "description": "Full administrative control over users, roles, permissions, posts, and comments",
             "permissions": [
+                # Blog permissions
                 "post:create",
                 "post:update",
                 "post:delete",
                 "comment:create",
                 "comment:delete",
+                # User management
                 "user:read",
+                "user:create",
+                "user:update",
+                "user:delete",
                 "user:manage",
+                # Role management
+                "role:read",
+                "role:create",
+                "role:update",
+                "role:delete",
+                # Permission management
+                "permission:read",
             ],
         },
     ]
@@ -604,6 +616,155 @@ async def health_check():
         "version": "1.0.0",
         "preset": "SimpleRBAC",
         "docs": "/docs",
+    }
+
+
+@app.get("/v1/auth/config", tags=["Auth"], summary="Get auth configuration")
+async def get_auth_config():
+    """
+    Get authentication system configuration
+
+    Returns preset type, feature flags, and available permissions.
+    This allows the admin UI to adapt to the backend's capabilities.
+    """
+    return {
+        "preset": "SimpleRBAC",
+        "features": {
+            "entity_hierarchy": False,
+            "context_aware_roles": False,
+            "abac": False,
+            "tree_permissions": False,
+            "api_keys": True,
+            "user_status": True,
+            "activity_tracking": True,
+        },
+        "available_permissions": [
+            # User permissions
+            {
+                "value": "user:read",
+                "label": "User Read",
+                "category": "Users",
+                "description": "View user information and profiles",
+            },
+            {
+                "value": "user:create",
+                "label": "User Create",
+                "category": "Users",
+                "description": "Create new user accounts",
+            },
+            {
+                "value": "user:update",
+                "label": "User Update",
+                "category": "Users",
+                "description": "Update user information and profiles",
+            },
+            {
+                "value": "user:delete",
+                "label": "User Delete",
+                "category": "Users",
+                "description": "Delete user accounts",
+            },
+            # Role permissions
+            {
+                "value": "role:read",
+                "label": "Role Read",
+                "category": "Roles",
+                "description": "View role definitions and assignments",
+            },
+            {
+                "value": "role:create",
+                "label": "Role Create",
+                "category": "Roles",
+                "description": "Create new roles",
+            },
+            {
+                "value": "role:update",
+                "label": "Role Update",
+                "category": "Roles",
+                "description": "Update role definitions and permissions",
+            },
+            {
+                "value": "role:delete",
+                "label": "Role Delete",
+                "category": "Roles",
+                "description": "Delete roles",
+            },
+            # Permission permissions
+            {
+                "value": "permission:read",
+                "label": "Permission Read",
+                "category": "Permissions",
+                "description": "View permission definitions",
+            },
+            {
+                "value": "permission:create",
+                "label": "Permission Create",
+                "category": "Permissions",
+                "description": "Create new permissions",
+            },
+            {
+                "value": "permission:update",
+                "label": "Permission Update",
+                "category": "Permissions",
+                "description": "Update permission definitions",
+            },
+            # API Key permissions
+            {
+                "value": "api_key:read",
+                "label": "API Key Read",
+                "category": "API Keys",
+                "description": "View API keys (hashed)",
+            },
+            {
+                "value": "api_key:create",
+                "label": "API Key Create",
+                "category": "API Keys",
+                "description": "Generate new API keys",
+            },
+            {
+                "value": "api_key:revoke",
+                "label": "API Key Revoke",
+                "category": "API Keys",
+                "description": "Revoke existing API keys",
+            },
+            # Blog-specific permissions (SimpleRBAC example)
+            {
+                "value": "post:read",
+                "label": "Post Read",
+                "category": "Blog",
+                "description": "View blog posts",
+            },
+            {
+                "value": "post:create",
+                "label": "Post Create",
+                "category": "Blog",
+                "description": "Create new blog posts",
+            },
+            {
+                "value": "post:update",
+                "label": "Post Update",
+                "category": "Blog",
+                "description": "Edit blog posts",
+            },
+            {
+                "value": "post:delete",
+                "label": "Post Delete",
+                "category": "Blog",
+                "description": "Delete blog posts",
+            },
+            {
+                "value": "comment:create",
+                "label": "Comment Create",
+                "category": "Blog",
+                "description": "Add comments to posts",
+            },
+            {
+                "value": "comment:delete",
+                "label": "Comment Delete",
+                "category": "Blog",
+                "description": "Delete comments",
+            },
+        ],
     }
 
 

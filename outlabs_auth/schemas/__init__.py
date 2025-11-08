@@ -4,6 +4,9 @@ OutlabsAuth Schemas
 Public exports for all Pydantic request/response schemas.
 """
 
+# Common schemas
+from outlabs_auth.schemas.common import PaginatedResponse
+
 # API Key schemas
 from outlabs_auth.schemas.api_key import (
     ApiKeyCreateRequest,
@@ -75,6 +78,8 @@ from outlabs_auth.schemas.user_role_membership import (
 )
 
 __all__ = [
+    # Common
+    "PaginatedResponse",
     # Auth
     "LoginRequest",
     "LoginResponse",

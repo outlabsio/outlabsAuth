@@ -7,8 +7,6 @@
 import { defineStore } from 'pinia'
 import type { EntityContext } from '~/types/entity'
 import { SYSTEM_CONTEXT } from '~/types/entity'
-import { USE_MOCK_DATA, mockDelay, logMockCall } from '~/utils/mock'
-import { mockEntityContexts } from '~/utils/mockData'
 
 const SELECTED_ENTITY_KEY = 'outlabs_auth_selected_entity'
 
@@ -108,28 +106,14 @@ export const useContextStore = defineStore('context', () => {
     try {
       state.isLoading = true
 
-      // Mock mode
-      if (USE_MOCK_DATA) {
-        logMockCall('GET', '/v1/memberships/me')
-        await mockDelay()
-
-        const entities = [...mockEntityContexts]
-
-        // Add system context if user is superuser
-        if (authStore.currentUser?.is_superuser) {
-          entities.unshift(SYSTEM_CONTEXT)
-        }
-
-        state.availableEntities = entities
-        return
-      }
-
-      // Real API call
       // Get user's memberships to determine available entities
       const memberships = await authStore.apiCall<any>('/v1/memberships/me')
 
+      // Handle SimpleRBAC (returns array) vs EnterpriseRBAC (returns object with items)
+      const membershipList = Array.isArray(memberships) ? memberships : (memberships?.items || [])
+
       // Extract unique entities from memberships
-      const entities: EntityContext[] = memberships.items.map((m: any) => ({
+      const entities: EntityContext[] = membershipList.map((m: any) => ({
         id: m.entity.id,
         name: m.entity.name,
         entity_type: m.entity.entity_type,

@@ -6,8 +6,6 @@
 import { defineStore } from 'pinia'
 import type { User } from '~/types/auth'
 import type { PaginationParams, PaginatedResponse } from '~/types/api'
-import { USE_MOCK_DATA, mockDelay, logMockCall, mockId } from '~/utils/mock'
-import { mockUsers } from '~/utils/mockData'
 
 export interface UserFilters {
   search?: string
@@ -52,9 +50,6 @@ export const useUsersStore = defineStore('users', () => {
     }
   })
 
-  // Mock users storage (in-memory for mock mode)
-  const mockUsersData = ref<User[]>([...mockUsers])
-
   // Getters
   const users = computed(() => state.users)
   const selectedUser = computed(() => state.selectedUser)
@@ -73,67 +68,6 @@ export const useUsersStore = defineStore('users', () => {
       state.isLoading = true
       state.error = null
 
-      // Mock mode
-      if (USE_MOCK_DATA) {
-        logMockCall('GET', '/v1/users', { filters, params })
-        await mockDelay()
-
-        // Apply filters
-        let filtered = [...mockUsersData.value]
-
-        // Search filter (email, username, full_name)
-        if (filters.search) {
-          const search = filters.search.toLowerCase()
-          filtered = filtered.filter(
-            user =>
-              user.email.toLowerCase().includes(search) ||
-              user.username.toLowerCase().includes(search) ||
-              user.full_name?.toLowerCase().includes(search)
-          )
-        }
-
-        // Active filter
-        if (filters.is_active !== undefined) {
-          filtered = filtered.filter(user => user.is_active === filters.is_active)
-        }
-
-        // Superuser filter
-        if (filters.is_superuser !== undefined) {
-          filtered = filtered.filter(user => user.is_superuser === filters.is_superuser)
-        }
-
-        // Sorting
-        const sortBy = params.sort_by || 'created_at'
-        const sortOrder = params.sort_order || 'desc'
-        filtered.sort((a: any, b: any) => {
-          const aVal = a[sortBy]
-          const bVal = b[sortBy]
-          if (sortOrder === 'asc') {
-            return aVal > bVal ? 1 : -1
-          } else {
-            return aVal < bVal ? 1 : -1
-          }
-        })
-
-        // Pagination
-        const page = params.page || 1
-        const limit = params.limit || 20
-        const total = filtered.length
-        const pages = Math.ceil(total / limit)
-        const startIndex = (page - 1) * limit
-        const endIndex = startIndex + limit
-
-        state.users = filtered.slice(startIndex, endIndex)
-        state.pagination = {
-          total,
-          page,
-          limit,
-          pages
-        }
-        return
-      }
-
-      // Real API call
       const queryParams = new URLSearchParams()
       if (filters.search) queryParams.append('search', filters.search)
       if (filters.is_active !== undefined) queryParams.append('is_active', String(filters.is_active))
@@ -171,21 +105,6 @@ export const useUsersStore = defineStore('users', () => {
       state.isLoading = true
       state.error = null
 
-      // Mock mode
-      if (USE_MOCK_DATA) {
-        logMockCall('GET', `/v1/users/${userId}`)
-        await mockDelay()
-
-        const user = mockUsersData.value.find(u => u.id === userId)
-        if (!user) {
-          throw new Error('User not found')
-        }
-
-        state.selectedUser = user
-        return user
-      }
-
-      // Real API call
       const user = await authStore.apiCall<User>(`/v1/users/${userId}`)
       state.selectedUser = user
       return user
@@ -206,40 +125,6 @@ export const useUsersStore = defineStore('users', () => {
       state.isLoading = true
       state.error = null
 
-      // Mock mode
-      if (USE_MOCK_DATA) {
-        logMockCall('POST', '/v1/users', data)
-        await mockDelay()
-
-        // Check if email already exists
-        const emailExists = mockUsersData.value.some(u => u.email === data.email)
-        if (emailExists) {
-          throw new Error('Email already exists')
-        }
-
-        // Check if username already exists
-        const usernameExists = mockUsersData.value.some(u => u.username === data.username)
-        if (usernameExists) {
-          throw new Error('Username already exists')
-        }
-
-        const newUser: User = {
-          id: mockId(),
-          email: data.email,
-          username: data.username,
-          full_name: data.full_name || '',
-          is_active: data.is_active !== undefined ? data.is_active : true,
-          is_superuser: data.is_superuser || false,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          metadata: data.metadata || {}
-        }
-
-        mockUsersData.value.push(newUser)
-        return newUser
-      }
-
-      // Real API call
       const user = await authStore.apiCall<User>('/v1/users', {
         method: 'POST',
         body: JSON.stringify(data)
@@ -263,58 +148,6 @@ export const useUsersStore = defineStore('users', () => {
       state.isLoading = true
       state.error = null
 
-      // Mock mode
-      if (USE_MOCK_DATA) {
-        logMockCall('PATCH', `/v1/users/${userId}`, data)
-        await mockDelay()
-
-        const userIndex = mockUsersData.value.findIndex(u => u.id === userId)
-        if (userIndex === -1) {
-          throw new Error('User not found')
-        }
-
-        // Check for email conflicts
-        if (data.email) {
-          const emailExists = mockUsersData.value.some(
-            u => u.email === data.email && u.id !== userId
-          )
-          if (emailExists) {
-            throw new Error('Email already exists')
-          }
-        }
-
-        // Check for username conflicts
-        if (data.username) {
-          const usernameExists = mockUsersData.value.some(
-            u => u.username === data.username && u.id !== userId
-          )
-          if (usernameExists) {
-            throw new Error('Username already exists')
-          }
-        }
-
-        const currentUser = mockUsersData.value[userIndex]
-        if (!currentUser) {
-          throw new Error('User not found')
-        }
-
-        const updatedUser: User = {
-          ...currentUser,
-          email: data.email ?? currentUser.email,
-          username: data.username ?? currentUser.username,
-          full_name: data.full_name ?? currentUser.full_name,
-          is_active: data.is_active ?? currentUser.is_active,
-          is_superuser: data.is_superuser ?? currentUser.is_superuser,
-          metadata: data.metadata ?? currentUser.metadata,
-          updated_at: new Date().toISOString()
-        }
-
-        mockUsersData.value[userIndex] = updatedUser
-        state.selectedUser = updatedUser
-        return updatedUser
-      }
-
-      // Real API call
       const user = await authStore.apiCall<User>(`/v1/users/${userId}`, {
         method: 'PATCH',
         body: JSON.stringify(data)
@@ -339,33 +172,6 @@ export const useUsersStore = defineStore('users', () => {
       state.isLoading = true
       state.error = null
 
-      // Mock mode
-      if (USE_MOCK_DATA) {
-        logMockCall('DELETE', `/v1/users/${userId}`)
-        await mockDelay()
-
-        const userIndex = mockUsersData.value.findIndex(u => u.id === userId)
-        if (userIndex === -1) {
-          throw new Error('User not found')
-        }
-
-        mockUsersData.value.splice(userIndex, 1)
-
-        // Remove from state.users if present
-        const stateIndex = state.users.findIndex(u => u.id === userId)
-        if (stateIndex !== -1) {
-          state.users.splice(stateIndex, 1)
-        }
-
-        // Clear selected user if it was deleted
-        if (state.selectedUser?.id === userId) {
-          state.selectedUser = null
-        }
-
-        return true
-      }
-
-      // Real API call
       await authStore.apiCall(`/v1/users/${userId}`, {
         method: 'DELETE'
       })
@@ -426,19 +232,6 @@ export const useUsersStore = defineStore('users', () => {
       state.isLoading = true
       state.error = null
 
-      // Mock mode
-      if (USE_MOCK_DATA) {
-        logMockCall('POST', `/v1/users/${userId}/change-password`, {
-          currentPassword: '***',
-          newPassword: '***'
-        })
-        await mockDelay()
-
-        // In mock mode, just succeed
-        return true
-      }
-
-      // Real API call
       await authStore.apiCall(`/v1/users/${userId}/change-password`, {
         method: 'POST',
         body: JSON.stringify({
@@ -471,18 +264,6 @@ export const useUsersStore = defineStore('users', () => {
     state.error = null
   }
 
-  /**
-   * Reset mock data (useful for testing)
-   */
-  const resetMockData = (): void => {
-    if (USE_MOCK_DATA) {
-      mockUsersData.value = [...mockUsers]
-      state.users = []
-      state.selectedUser = null
-      state.error = null
-    }
-  }
-
   return {
     // State
     state: readonly(state),
@@ -504,7 +285,6 @@ export const useUsersStore = defineStore('users', () => {
     deactivateUser,
     changePassword,
     clearSelectedUser,
-    clearError,
-    resetMockData
+    clearError
   }
 })

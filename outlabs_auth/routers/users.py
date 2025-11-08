@@ -5,13 +5,14 @@ Provides ready-to-use user management routes (DD-041).
 """
 
 from typing import Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from outlabs_auth.schemas.user import (
     UserResponse,
     UserUpdateRequest,
     ChangePasswordRequest,
 )
+from outlabs_auth.schemas.common import PaginatedResponse
 
 
 def get_users_router(
@@ -33,6 +34,7 @@ def get_users_router(
         APIRouter with user management endpoints
 
     Routes:
+        GET / - List users with pagination (admin only)
         GET /me - Get current user profile
         PATCH /me - Update current user profile
         POST /me/change-password - Change password
@@ -50,6 +52,72 @@ def get_users_router(
         ```
     """
     router = APIRouter(prefix=prefix, tags=tags or ["users"])
+
+    @router.get(
+        "/",
+        response_model=PaginatedResponse[UserResponse],
+        summary="List users",
+        description="List all users with pagination and optional search filtering (requires user:read permission)"
+    )
+    async def list_users(
+        page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+        limit: int = Query(20, ge=1, le=100, description="Results per page"),
+        search: Optional[str] = Query(None, description="Search by email, first name, or last name"),
+        auth_result = Depends(auth.deps.require_permission("user:read"))
+    ):
+        """
+        List users with pagination and optional search.
+
+        If search term is provided, searches across email, first_name, and last_name fields.
+        Returns paginated results with total count.
+        """
+        try:
+            if search:
+                # Use search functionality (no pagination for search)
+                all_users = await auth.user_service.search_users(search_term=search, limit=1000)
+
+                # Manual pagination of search results
+                total = len(all_users)
+                start_idx = (page - 1) * limit
+                end_idx = start_idx + limit
+                users = all_users[start_idx:end_idx]
+            else:
+                # Use standard list with pagination
+                users, total = await auth.user_service.list_users(
+                    page=page,
+                    limit=limit
+                )
+
+            # Calculate total pages
+            pages = (total + limit - 1) // limit if total > 0 else 0
+
+            # Convert to response schema
+            items = [
+                UserResponse(
+                    id=str(user.id),
+                    email=user.email,
+                    first_name=user.first_name,
+                    last_name=user.last_name,
+                    status=user.status.value,
+                    email_verified=user.email_verified,
+                    is_superuser=user.is_superuser
+                )
+                for user in users
+            ]
+
+            return PaginatedResponse(
+                items=items,
+                total=total,
+                page=page,
+                limit=limit,
+                pages=pages
+            )
+
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(e)
+            )
 
     @router.get(
         "/me",

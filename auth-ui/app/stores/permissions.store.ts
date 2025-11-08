@@ -5,8 +5,6 @@
 
 import { defineStore } from 'pinia'
 import type { Permission } from '~/types/role'
-import { USE_MOCK_DATA, mockDelay, logMockCall } from '~/utils/mock'
-import { mockPermissions } from '~/utils/mockData'
 
 export interface UserPermissions {
   permissions: string[]
@@ -82,16 +80,6 @@ export const usePermissionsStore = defineStore('permissions', () => {
       state.isLoading = true
       state.error = null
 
-      // Mock mode
-      if (USE_MOCK_DATA) {
-        logMockCall('GET', '/v1/permissions')
-        await mockDelay()
-
-        state.availablePermissions = [...mockPermissions]
-        return
-      }
-
-      // Real API call
       const permissions = await authStore.apiCall<Permission[]>('/v1/permissions')
       state.availablePermissions = permissions
     } catch (error: any) {
@@ -115,38 +103,6 @@ export const usePermissionsStore = defineStore('permissions', () => {
         throw new Error('No authenticated user')
       }
 
-      // Mock mode
-      if (USE_MOCK_DATA) {
-        const entityId = contextStore.selectedEntity?.id
-        logMockCall('GET', '/v1/users/me/permissions', { entity_id: entityId })
-        await mockDelay()
-
-        // For mock: superuser gets all permissions
-        if (currentUser.is_superuser) {
-          state.userPermissions = {
-            permissions: ['*:*'],
-            roles: ['admin'],
-            is_superuser: true
-          }
-          return
-        }
-
-        // For regular users: return subset of permissions based on mock roles
-        // In a real implementation, this would come from the backend
-        state.userPermissions = {
-          permissions: [
-            'user:read',
-            'entity:read',
-            'role:read',
-            'project:read'
-          ],
-          roles: ['viewer'],
-          is_superuser: false
-        }
-        return
-      }
-
-      // Real API call
       const contextHeaders: Record<string, string> = {}
       if (contextStore.selectedEntity && !contextStore.selectedEntity.is_system) {
         contextHeaders['X-Entity-Context'] = contextStore.selectedEntity.id

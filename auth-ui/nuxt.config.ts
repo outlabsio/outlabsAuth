@@ -12,6 +12,7 @@ export default defineNuxtConfig({
   modules: [
     '@nuxt/ui',
     '@pinia/nuxt',
+    '@pinia/colada-nuxt',
     '@vueuse/nuxt'
   ],
 
@@ -20,8 +21,7 @@ export default defineNuxtConfig({
   runtimeConfig: {
     public: {
       apiBaseUrl: process.env.NUXT_PUBLIC_API_BASE_URL || 'http://localhost:8000',
-      siteUrl: process.env.NUXT_PUBLIC_SITE_URL || 'http://localhost:3000',
-      useRealApi: process.env.NUXT_PUBLIC_USE_REAL_API === 'true'
+      siteUrl: process.env.NUXT_PUBLIC_SITE_URL || 'http://localhost:3000'
     }
   }
 })
