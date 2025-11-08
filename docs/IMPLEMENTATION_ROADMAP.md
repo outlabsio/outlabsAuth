@@ -24,14 +24,16 @@
 | Phase 2 | ✅ Complete | 2025-01-24 | API Keys, Testing, Examples |
 | Phase 1.5 | ✅ Complete | 2025-01-25 | Beyond plan: MembershipStatus, User Status, Activity Tracking, Logout, Observability docs |
 | Frontend Integration | ✅ Verified | 2025-01-26 | SimpleRBAC login working with auth-ui frontend |
-| Observability Implementation | ✅ Complete | 2025-01-26 | Structured logging, Prometheus metrics, correlation IDs (code complete) |
+| Observability Implementation | ✅ Complete | 2025-11-08 | Full stack: Prometheus, Grafana, structured logging, metrics |
+| Docker Stack | ✅ Complete | 2025-11-08 | Unified compose with MongoDB, Redis, Prometheus, Grafana |
+| **Testing & Hardening** | 🔄 In Progress | - | **SimpleRBAC UI testing, bug fixes, observability verification** |
 | Phase 3 | ⏸️ Not Started | - | EnterpriseRBAC entity system |
 | Phase 4 | ⏸️ Not Started | - | Context-aware roles + ABAC |
 | Phase 5 | ⏸️ Not Started | - | EnterpriseRBAC testing |
 | Phase 6 | ⏸️ Not Started | - | Documentation polish |
 | Phase 7-10 | ⏸️ Not Started | - | Optional extensions |
 
-**Current Focus**: Observability system implemented, ready for production testing or Phase 3
+**Current Focus**: Testing & hardening SimpleRBAC with admin UI, verifying observability stack before Phase 3
 
 ---
 
@@ -685,10 +687,132 @@ Complete documentation already exists from Phase 1.5:
 
 ---
 
+## Testing & Hardening Phase (November 2025) 🔄 IN PROGRESS
+
+**Status**: 🔄 In Progress
+**Started**: 2025-11-08
+**Goal**: Verify SimpleRBAC is production-ready through comprehensive UI and integration testing
+
+### Objectives
+
+This phase focuses on solidifying what we have before moving to EnterpriseRBAC:
+
+1. **SimpleRBAC UI Testing** - Test all functionality through the admin UI
+2. **Bug Fixes** - Fix any issues discovered during testing
+3. **Observability Verification** - Ensure Grafana dashboards show correct metrics
+4. **Documentation Updates** - Document testing procedures and known issues
+5. **Performance Validation** - Verify the stack performs well under load
+
+### Tasks
+
+#### 1. SimpleRBAC Admin UI Testing 🔄
+**Status**: In Progress (Started 2025-11-08)
+**Approach**: Testing through admin UI (port 3000) to verify implementation matches design concepts
+
+**Testing Methodology**:
+- Review UI layout and ensure it aligns with SimpleRBAC design principles
+- Verify CRUD operations work correctly for each entity
+- Test that SimpleRBAC-specific features work (flat structure, no entity hierarchy)
+- Ensure EnterpriseRBAC-only features are hidden or disabled
+
+**Testing Order** (logical dependency chain):
+1. 🔄 **Roles** (IN PROGRESS) - Foundation for everything else
+   - [ ] View existing roles (reader, writer, editor, admin)
+   - [ ] Create new role
+   - [ ] Edit role (name, description)
+   - [ ] Delete role
+   - [ ] Verify UI layout matches SimpleRBAC concepts
+   - [ ] Test role creation modal/form
+   
+2. ⏸️ **Permissions** - What roles can do
+   - [ ] View available permissions
+   - [ ] Assign permissions to roles
+   - [ ] Remove permissions from roles
+   - [ ] Verify permission format (resource:action)
+   
+3. ⏸️ **Users** - Assign configured roles to people
+   - [ ] View all users
+   - [ ] Create new user
+   - [ ] Assign roles to users
+   - [ ] Remove roles from users
+   - [ ] Change user status (active/suspended/banned)
+   
+4. ⏸️ **Entities Section** - Should be hidden/disabled for SimpleRBAC
+   - [ ] Verify Entities section is hidden OR
+   - [ ] Shows message: "Entities only available in EnterpriseRBAC"
+
+5. ⏸️ **Additional Features**
+   - [ ] API key generation and usage
+   - [ ] Token refresh flows
+   - [ ] Logout (single device and all devices)
+   - [ ] Activity tracking (verify DAU/MAU counts)
+   - [ ] Blog post CRUD operations
+   - [ ] Comment system
+
+#### 2. Observability Stack Verification 🔄
+**Status**: In Progress
+
+- [x] Docker Compose stack running (MongoDB:27018, Redis:6380, Prometheus:9090, Grafana:3011)
+- [x] Prometheus scraping SimpleRBAC metrics every 10s
+- [x] Grafana dashboard auto-provisioned
+- [x] Login metrics working (success/failure counts)
+- [ ] Verify all metric types appear in Grafana:
+  - [ ] Login attempts (success/failure)
+  - [ ] Permission checks (granted/denied)
+  - [ ] Active sessions count
+  - [ ] API key validations
+  - [ ] Cache hit/miss rates
+- [ ] Test correlation IDs across requests
+- [ ] Verify structured logging in production mode
+
+#### 3. Bug Fixes ⏸️
+**Status**: Pending (waiting for bug reports from testing)
+
+- [x] Fixed missing `asyncio` import in core/auth.py
+- [ ] Additional bugs TBD based on UI testing
+
+#### 4. Documentation Updates ⏸️
+**Status**: Pending
+
+- [x] Updated IMPLEMENTATION_ROADMAP.md with current status
+- [x] Created unified DOCKER.md with complete setup guide
+- [x] Updated example READMEs to reference unified stack
+- [ ] Create testing checklist for SimpleRBAC
+- [ ] Document any workarounds or known issues
+- [ ] Update API examples with real credentials
+
+#### 5. Performance & Load Testing ⏸️
+**Status**: Not Started
+
+- [ ] Load test SimpleRBAC with 100 concurrent users
+- [ ] Verify Redis caching improves performance
+- [ ] Check Prometheus/Grafana impact on system
+- [ ] Ensure metrics collection doesn't slow down requests
+
+### Success Criteria
+
+Before moving to Phase 3, we need:
+
+- ✅ All SimpleRBAC features working correctly through admin UI
+- ✅ No critical bugs remaining
+- ✅ Observability dashboard showing real-time metrics
+- ✅ Documentation complete and accurate
+- ✅ Performance acceptable under expected load
+
+### Deliverables
+
+1. **Test Report** - Document all tests performed and results
+2. **Bug List** - All discovered issues (fixed and remaining)
+3. **Updated Documentation** - Accurate setup and usage instructions
+4. **Grafana Dashboard** - Working dashboard with real metrics
+5. **Go/No-Go Decision** - Ready for Phase 3 or needs more work?
+
+---
+
 ## Phase 3: EnterpriseRBAC - Entity System (Week 3) ⏸️ NOT STARTED
 
 **Status**: ⏸️ Not Started
-**Planned Start**: TBD (after observability implementation)
+**Planned Start**: TBD (after Testing & Hardening phase complete)
 **Note**: This phase will add entity hierarchy and tree permissions for EnterpriseRBAC preset
 
 ### Goals
