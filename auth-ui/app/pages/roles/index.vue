@@ -10,6 +10,13 @@ const UBadge = resolveComponent('UBadge')
 
 const search = ref('')
 const showCreateModal = ref(false)
+const showEditModal = ref(false)
+const selectedRoleId = ref('')
+
+function openEditModal(roleId: string) {
+    selectedRoleId.value = roleId
+    showEditModal.value = true
+}
 
 // Reactive filters for query
 const filters = computed(() => {
@@ -82,7 +89,7 @@ const columns: TableColumn<Role>[] = [
         color: 'neutral',
         variant: 'ghost',
         size: 'xs',
-        onClick: () => console.log('Edit role:', row.original.id)
+        onClick: () => openEditModal(row.original.id)
       }),
       h(UButton, {
         icon: 'i-lucide-trash-2',
@@ -189,4 +196,11 @@ const columns: TableColumn<Role>[] = [
 
   <!-- Create Role Modal -->
   <RoleCreateModal v-model:open="showCreateModal" />
+
+  <!-- Edit Role Modal -->
+  <RoleUpdateModal
+    v-if="selectedRoleId"
+    v-model:open="showEditModal"
+    :role-id="selectedRoleId"
+  />
 </template>

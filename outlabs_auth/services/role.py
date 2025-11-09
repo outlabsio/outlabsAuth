@@ -9,7 +9,7 @@ Handles role management operations:
 - List roles
 - Assign roles to users (SimpleRBAC via UserRoleMembership)
 """
-from typing import Optional, List, TYPE_CHECKING
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from datetime import datetime
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -167,20 +167,16 @@ class RoleService:
     async def update_role(
         self,
         role_id: str,
-        display_name: Optional[str] = None,
-        description: Optional[str] = None,
-        permissions: Optional[List[str]] = None,
+        update_dict: Dict[str, Any]
     ) -> RoleModel:
         """
-        Update role.
+        Update role with fields from update_dict.
 
         Note: Cannot update system roles.
 
         Args:
             role_id: Role ID
-            display_name: Updated display name
-            description: Updated description
-            permissions: Updated permission list (replaces existing)
+            update_dict: Dictionary of fields to update (supports display_name, description, permissions)
 
         Returns:
             RoleModel: Updated role
@@ -192,7 +188,7 @@ class RoleService:
         Example:
             >>> role = await role_service.update_role(
             ...     role_id="507f1f77bcf86cd799439011",
-            ...     permissions=["user:create", "user:read", "user:update"]
+            ...     update_dict={"permissions": ["user:create", "user:read", "user:update"]}
             ... )
             >>> len(role.permissions)
             3
@@ -211,15 +207,15 @@ class RoleService:
                 details={"role_id": role_id, "role_name": role.name}
             )
 
-        # Update fields
-        if display_name is not None:
-            role.display_name = validate_name(display_name, "display_name")
+        # Update fields from dict (only supported fields for SimpleRBAC)
+        if "display_name" in update_dict:
+            role.display_name = validate_name(update_dict["display_name"], "display_name")
 
-        if description is not None:
-            role.description = description
+        if "description" in update_dict:
+            role.description = update_dict["description"]
 
-        if permissions is not None:
-            role.permissions = permissions
+        if "permissions" in update_dict:
+            role.permissions = update_dict["permissions"]
 
         await role.save()
         return role

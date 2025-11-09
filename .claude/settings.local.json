@@ -50,7 +50,8 @@
       "Bash(kill:*)",
       "mcp__playwright__browser_evaluate",
       "mcp__playwright__browser_press_key",
-      "mcp__playwright__browser_wait_for"
+      "mcp__playwright__browser_wait_for",
+      "Bash(docker start:*)"
     ],
     "deny": [],
     "ask": []

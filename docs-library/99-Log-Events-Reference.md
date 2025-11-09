@@ -676,14 +676,26 @@ jq 'select(.event == "api_key_validation_failed") | .ip_address' app.log | sort 
 **When:** HTTP 500 Internal Server Error occurs
 **Frequency:** Should be very rare in production
 
+**How it's logged:**
+Automatically logged when using `ObservabilityContext.log_500_error()`:
+
+```python
+try:
+    user = await auth.user_service.create_user(data)
+except Exception as e:
+    obs.log_500_error(e, email=data.email)  # Logs this event
+    raise HTTPException(500, detail="Failed to create user")
+```
+
 **Fields:**
-- `endpoint` (string) - API endpoint that failed (e.g., "/v1/users")
-- `error_class` (string) - Exception class name (e.g., "DatabaseError")
+- `endpoint` (string) - API endpoint that failed (e.g., "/v1/users/")
+- `error_class` (string) - Exception class name (e.g., "UserAlreadyExistsError")
 - `error_message` (string) - Error message
 - `method` (string, optional) - HTTP method (GET, POST, etc.)
 - `user_id` (string, optional) - User ID if authenticated
 - `request_id` (string, optional) - Request/correlation ID
 - `stack_trace` (string, optional) - Full stack trace (if enabled in config)
+- Plus any extra fields you provide to `log_500_error(**extra)`
 
 **Example:**
 ```json

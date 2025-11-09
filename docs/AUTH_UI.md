@@ -1027,10 +1027,12 @@ Mock data defined in `app/utils/mockData.ts`:
 - ✅ Mock data mode
 - ✅ **Pinia Colada migration** (Phase 1 & 2 complete)
 - ✅ **User CRUD testing** (Phase 3 - complete)
-- ✅ **Role CRUD testing** (Phase 3 - complete)
+- ✅ **Role Create testing** (Phase 3 - complete)
+- ✅ **Role Update testing** (Phase 3 - complete)
 
 **In Progress**:
 - 🔄 Config detection (SimpleRBAC vs EnterpriseRBAC)
+- 🔄 Role Delete testing
 - 🔄 Permission CRUD testing
 - 🔄 Entity CRUD testing (EnterpriseRBAC)
 
@@ -1273,6 +1275,230 @@ Object.assign(state, {
 - ✅ Form resets correctly
 - ✅ Roles table auto-refreshes
 - ✅ New role appears with correct data
+
+### Role Update Testing ✅
+
+**Status**: Complete
+**Date**: 2025-11-09
+
+**Test Scenarios**:
+- ✅ Edit button opens update modal
+- ✅ Modal pre-populates with existing role data
+- ✅ Update display name
+- ✅ Update description
+- ✅ Update permissions
+- ✅ Submit changes and verify persistence
+
+**Test Case: Update "Content Moderator" Role**
+
+**Initial State**:
+```json
+{
+  "display_name": "Content Moderator",
+  "name": "content_moderator",
+  "description": "Can moderate posts and comments",
+  "permissions": ["post:update", "comment:delete"],
+  "is_global": true
+}
+```
+
+**Update Payload**:
+```json
+{
+  "display_name": "Content Moderator Pro",
+  "description": "Enhanced moderation capabilities for managing posts and comments with additional user oversight",
+  "permissions": ["user:read"],
+  "is_global": true
+}
+```
+
+**Result**: ✅ Success (HTTP 200 OK)
+- Display name updated from "Content Moderator" to "Content Moderator Pro"
+- Description updated with new text
+- Permissions changed from 2 to 1 permission
+- Success notification appeared
+- Modal closed automatically
+- Table refreshed with updated data
+
+**Issues Encountered & Fixed**:
+
+#### 1. **Backend Method Signature Mismatch (Critical Bug)**
+**Problem**: Router calling `update_role(role_id=role_id, update_dict=data.model_dump(exclude_unset=True))` but service method expected individual parameters
+
+**Error**: Would cause `TypeError: update_role() got an unexpected keyword argument 'update_dict'`
+
+**Root Cause**: Role service `update_role()` method signature didn't match how router was calling it
+
+**Fix**: Rewrote service method to accept `update_dict` parameter
+
+**File**: `outlabs_auth/services/role.py:167-221`
+```python
+# BEFORE (Multiple parameters)
+async def update_role(
+    self,
+    role_id: str,
+    display_name: Optional[str] = None,
+    description: Optional[str] = None,
+    permissions: Optional[List[str]] = None,
+) -> RoleModel:
+    # ... individual parameter handling
+
+# AFTER (Dictionary parameter)
+async def update_role(
+    self,
+    role_id: str,
+    update_dict: Dict[str, Any]
+) -> RoleModel:
+    """Update role with fields from update_dict."""
+    # ... extract fields from dict
+    if "display_name" in update_dict:
+        role.display_name = validate_name(update_dict["display_name"], "display_name")
+    if "description" in update_dict:
+        role.description = update_dict["description"]
+    if "permissions" in update_dict:
+        role.permissions = update_dict["permissions"]
+```
+
+#### 2. **Missing Update Modal Component**
+**Problem**: No `RoleUpdateModal.vue` component existed, edit button only logged to console
+
+**Fix**: Created complete update modal component
+
+**File**: `auth-ui/app/components/RoleUpdateModal.vue` (NEW - 624 lines)
+
+**Key Features**:
+- Fetches existing role data via `useQuery()` with `enabled` based on modal state
+- Pre-populates form fields using `watch()` on fetched data
+- Name field is disabled (cannot change technical identifier)
+- Uses `useUpdateRoleMutation()` for submission
+- Shows loading spinner while fetching role data
+
+**Implementation Pattern**:
+```typescript
+// Fetch existing role data
+const { data: existingRole, isLoading: isLoadingRole } = useQuery({
+    key: computed(() => ['role', props.roleId]),
+    query: () => rolesQueries.detail(props.roleId),
+    enabled: computed(() => open.value && !!props.roleId)
+});
+
+// Pre-populate form when data loads
+watch(existingRole, (role) => {
+    if (role) {
+        state.name = role.name;
+        state.display_name = role.display_name;
+        state.description = role.description || "";
+        state.permissions = role.permissions || [];
+        state.is_global = role.is_global ?? true;
+    }
+}, { immediate: true });
+
+// Submit mutation
+async function handleSubmit() {
+    await updateRole({
+        roleId: props.roleId,
+        data: {
+            display_name: state.display_name,
+            description: state.description,
+            permissions: state.permissions,
+            is_global: state.is_global
+        }
+    })
+    open.value = false;  // Close on success
+}
+```
+
+#### 3. **Edit Button Not Wired Up**
+**Problem**: Edit button in roles table only logged to console, didn't open modal
+
+**Fix**: Added state variables and modal integration
+
+**File**: `auth-ui/app/pages/roles/index.vue:12-19, 92, 200-206`
+```typescript
+// Added state
+const showEditModal = ref(false)
+const selectedRoleId = ref('')
+
+// Added function
+function openEditModal(roleId: string) {
+    selectedRoleId.value = roleId
+    showEditModal.value = true
+}
+
+// Updated button onClick
+onClick: () => openEditModal(row.original.id)
+
+// Added modal to template
+<RoleUpdateModal
+  v-if="selectedRoleId"
+  v-model:open="showEditModal"
+  :role-id="selectedRoleId"
+/>
+```
+
+#### 4. **Added Observability Logging** (Consistency)
+**Fix**: Added structured logging to update endpoint matching create endpoint pattern
+
+**File**: `outlabs_auth/routers/roles.py:169-214`
+```python
+try:
+    update_dict = data.model_dump(exclude_unset=True)
+
+    if auth.observability:
+        auth.observability.logger.debug(
+            "role_update_request",
+            role_id=role_id,
+            fields_to_update=list(update_dict.keys()),
+            has_permissions="permissions" in update_dict
+        )
+
+    role = await auth.role_service.update_role(
+        role_id=role_id,
+        update_dict=update_dict
+    )
+    return RoleResponse(**role.model_dump(mode='json', exclude={"entity"}))
+except HTTPException:
+    raise
+except Exception as e:
+    if auth.observability:
+        auth.observability.logger.error(
+            "role_update_error",
+            role_id=role_id,
+            error=str(e),
+            error_type=type(e).__name__,
+            traceback=traceback.format_exc()
+        )
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=str(e)
+    )
+```
+
+**Summary of Files Modified**:
+1. `outlabs_auth/services/role.py` - Changed method signature to accept `update_dict` (lines 167-221)
+2. `outlabs_auth/routers/roles.py` - Added observability logging (lines 169-214)
+3. `auth-ui/app/components/RoleUpdateModal.vue` - Created complete update modal (NEW FILE - 624 lines)
+4. `auth-ui/app/pages/roles/index.vue` - Wired up edit button (lines 12-19, 92, 200-206)
+
+**Key Learnings**:
+1. ✅ **Backend method signatures must match router calls** - Router calling with dict requires service to accept dict
+2. ✅ **Conditional query fetching** - Use `enabled` computed property to control when queries run
+3. ✅ **Form pre-population pattern** - Watch fetched data and update reactive state
+4. ✅ **Pinia Colada optimistic updates** - Automatic cache invalidation refreshes UI instantly
+5. ✅ **Observability consistency** - All CRUD endpoints should have structured logging
+
+**Testing Verification**:
+- ✅ Edit button opens modal with selected role
+- ✅ Modal fetches role data via Pinia Colada
+- ✅ Form fields pre-populate with existing values
+- ✅ Name field is disabled (technical identifier)
+- ✅ Display name, description, permissions can be modified
+- ✅ Submit button sends update request
+- ✅ Backend processes update (200 OK)
+- ✅ Success notification appears
+- ✅ Modal closes automatically
+- ✅ Table auto-refreshes with updated data
+- ✅ Changes persist in database
 
 ---
 

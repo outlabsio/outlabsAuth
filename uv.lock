@@ -1345,6 +1345,7 @@ dependencies = [
     { name = "python-dateutil" },
     { name = "python-jose", extra = ["cryptography"] },
     { name = "python-multipart" },
+    { name = "redis" },
     { name = "structlog" },
 ]
 
@@ -1477,6 +1478,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.6" },
     { name = "python-telegram-bot", marker = "extra == 'all'", specifier = ">=20.0" },
     { name = "python-telegram-bot", marker = "extra == 'notifications'", specifier = ">=20.0" },
+    { name = "redis", specifier = ">=6.2.0" },
     { name = "redis", marker = "extra == 'all'", specifier = ">=5.0.0" },
     { name = "redis", marker = "extra == 'redis'", specifier = ">=5.0.0" },
     { name = "requests", marker = "extra == 'stress'", specifier = ">=2.31.0" },

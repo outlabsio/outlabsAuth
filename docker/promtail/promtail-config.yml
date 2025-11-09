@@ -9,6 +9,36 @@ clients:
   - url: http://loki:3100/loki/api/v1/push
 
 scrape_configs:
+  # Scrape local log files
+  - job_name: outlabs-auth-local
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: outlabs-auth
+          service: simple-rbac
+          __path__: /tmp/outlabs-auth.log
+
+    pipeline_stages:
+      # Parse JSON logs from OutlabsAuth
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            event: event
+            user_id: user_id
+            error_type: error_type
+            error_message: error_message
+            endpoint: endpoint
+            correlation_id: correlation_id
+
+      # Add labels from parsed JSON
+      - labels:
+          level:
+          event:
+          error_type:
+          endpoint:
+
   # Scrape Docker container logs
   - job_name: docker
     docker_sd_configs:
@@ -16,26 +46,29 @@ scrape_configs:
         refresh_interval: 5s
     relabel_configs:
       # Only scrape containers in the outlabs network
-      - source_labels: ['__meta_docker_network_name']
-        regex: 'outlabs-network'
+      - source_labels: ["__meta_docker_network_name"]
+        regex: "outlabs-network"
         action: keep
 
       # Extract container name
-      - source_labels: ['__meta_docker_container_name']
-        regex: '/(.*)'
-        target_label: 'container'
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: "container"
 
       # Extract service name from container labels
-      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
-        target_label: 'service'
+      - source_labels:
+          ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: "service"
 
       # Set job label
-      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
-        target_label: 'job'
+      - source_labels:
+          ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: "job"
 
       # Extract compose project
-      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
-        target_label: 'project'
+      - source_labels:
+          ["__meta_docker_container_label_com_docker_compose_project"]
+        target_label: "project"
 
     pipeline_stages:
       # Parse JSON logs from OutlabsAuth (when ENV=production)

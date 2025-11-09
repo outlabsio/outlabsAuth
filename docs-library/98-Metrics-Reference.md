@@ -599,8 +599,19 @@ sum by (location) (rate(outlabs_auth_errors_total[5m]))
 **Description:** Total HTTP 500 Internal Server Errors
 
 **Labels:**
-- `endpoint` - API endpoint (e.g., `/v1/users`, `/v1/auth/login`)
-- `error_class` - Exception class (e.g., `DatabaseConnectionError`)
+- `endpoint` - API endpoint (e.g., `/v1/users/`, `/v1/auth/login`)
+- `error_class` - Exception class (e.g., `UserAlreadyExistsError`, `AttributeError`)
+
+**How it's incremented:**
+Automatically incremented when using `ObservabilityContext.log_500_error()` in your routes:
+
+```python
+try:
+    user = await auth.user_service.create_user(data)
+except Exception as e:
+    obs.log_500_error(e)  # Increments this metric
+    raise HTTPException(500, detail="Failed to create user")
+```
 
 **Example Queries:**
 
@@ -650,11 +661,22 @@ rate(outlabs_auth_500_errors_total{endpoint="/v1/users"}[5m])
 ### outlabs_auth_router_errors_total
 
 **Type:** Counter
-**Description:** Total router-level errors
+**Description:** Total router-level errors (for tracking non-500 errors you still want to monitor)
 
 **Labels:**
 - `router` - Router name (e.g., `users`, `roles`, `auth`)
-- `endpoint` - Full endpoint path
+- `operation` - Operation name (e.g., `create_user`, `update_role`)
+
+**How it's incremented:**
+Use `ObservabilityContext.log_router_error()` for errors you want to track but aren't 500s:
+
+```python
+try:
+    user = await auth.user_service.create_user(data)
+except ValidationError as e:
+    obs.log_router_error("users", "create_user", e)  # Increments this metric
+    raise HTTPException(400, detail="Invalid data")
+```
 
 **Example Queries:**
 

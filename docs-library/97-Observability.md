@@ -25,11 +25,12 @@ Authentication is critical infrastructure. When auth fails, you need to know:
 
 ### Basic Setup (5 minutes)
 
+**Step 1: Initialize OutlabsAuth with Observability**
+
 ```python
 from fastapi import FastAPI
 from motor.motor_asyncio import AsyncIOMotorClient
 from outlabs_auth import SimpleRBAC
-from outlabs_auth.observability import ObservabilityConfig, create_metrics_router
 
 app = FastAPI()
 
@@ -37,34 +38,145 @@ app = FastAPI()
 client = AsyncIOMotorClient("mongodb://localhost:27017")
 db = client["my_database"]
 
-# Initialize OutlabsAuth with observability
+# Initialize OutlabsAuth - observability is enabled by default
 auth = SimpleRBAC(
     database=db,
-    secret_key="your-secret-key",
-    observability_config=ObservabilityConfig(
-        # Logs - JSON format for production
-        logs_format="json",          # "json" | "console" | "auto"
-        logs_level="INFO",            # DEBUG, INFO, WARNING, ERROR
-
-        # Metrics - Prometheus endpoint
-        enable_metrics=True,
-        metrics_path="/metrics",
-
-        # Feature-specific logging
-        log_permission_checks="failures_only",  # "all" | "failures_only" | "none"
-        log_api_key_hits=False,                  # Usually too noisy
-    )
+    secret_key="your-secret-key"
 )
 
 await auth.initialize()
 
 # Add /metrics endpoint for Prometheus scraping
-app.include_router(create_metrics_router(auth.observability))
-
-# Optional: Add correlation ID middleware for request tracing
-from outlabs_auth.observability import CorrelationIDMiddleware
-app.add_middleware(CorrelationIDMiddleware, obs_service=auth.observability)
+# This is automatically included when using auth.include_routers()
+app.include_router(auth.get_users_router(), prefix="/v1/users")
+app.include_router(auth.get_auth_router(), prefix="/v1/auth")
+app.include_router(auth.get_metrics_router())  # Adds /metrics endpoint
 ```
+
+**Step 2: Use ObservabilityContext in Your Routes**
+
+The modern way to add observability is through **dependency injection**:
+
+```python
+from fastapi import APIRouter, Depends, HTTPException
+from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
+
+router = APIRouter()
+
+@router.post("/users/")
+async def create_user(
+    data: UserCreateRequest,
+    obs: ObservabilityContext = Depends(
+        get_observability_with_auth(
+            auth.observability,
+            auth.deps.require_permission("user:create"),
+        )
+    ),
+):
+    """
+    Create a new user with automatic error logging.
+    
+    ObservabilityContext automatically captures:
+    - endpoint (/v1/users/)
+    - method (POST)
+    - user_id (from auth)
+    - correlation_id (for request tracing)
+    """
+    try:
+        user = await auth.user_service.create_user(data)
+        
+        # Optional: Log success events
+        obs.log_event("user_created", user_id=str(user.id))
+        
+        return user
+    except HTTPException:
+        raise  # Don't log 4xx errors as 500s
+    except Exception as e:
+        # Automatically logs with full context + stack trace
+        obs.log_500_error(e, email=data.email)
+        raise HTTPException(500, detail="Failed to create user")
+```
+
+**For public endpoints (no auth required):**
+
+```python
+from outlabs_auth.observability import get_observability_dependency
+
+# Create dependency at router level
+get_obs = get_observability_dependency(auth.observability)
+
+@router.post("/auth/register")
+async def register(
+    data: RegisterRequest,
+    obs: ObservabilityContext = Depends(get_obs),
+):
+    try:
+        user = await auth.user_service.create_user(data)
+        obs.log_event("user_registered", user_id=str(user.id))
+        return user
+    except Exception as e:
+        obs.log_500_error(e, email=data.email)
+        raise HTTPException(500, detail="Registration failed")
+```
+
+**That's it!** No manual logging, no context passing, no boilerplate. The ObservabilityContext handles everything.
+
+### ObservabilityContext API Reference
+
+The `ObservabilityContext` provides several methods for logging:
+
+#### `obs.log_500_error(exception, **extra)`
+Log a 500 Internal Server Error with automatic context capture.
+
+```python
+try:
+    user = await create_user(data)
+except Exception as e:
+    obs.log_500_error(e, email=data.email, role="admin")
+    raise HTTPException(500, detail="Failed to create user")
+```
+
+**Automatically includes:**
+- `endpoint`, `method`, `user_id`, `correlation_id`
+- `error_class` (exception type name)
+- `error_message` (exception message)
+- `stack_trace` (full traceback)
+- Any `**extra` fields you provide
+
+**Increments metric:** `outlabs_auth_500_errors_total{endpoint, error_class}`
+
+#### `obs.log_event(event_name, **fields)`
+Log a custom event (for successful operations or important state changes).
+
+```python
+obs.log_event("user_created", user_id=str(user.id), created_by=obs.user_id)
+obs.log_event("password_changed", user_id=obs.user_id)
+obs.log_event("role_assigned", user_id=user_id, role_id=role_id)
+```
+
+#### `obs.log_router_error(router, operation, exception, **extra)`
+Log a router-level error (for errors you want to track but aren't 500s).
+
+```python
+obs.log_router_error("users", "create_user", e, email=data.email)
+```
+
+**Increments metric:** `outlabs_auth_router_errors_total{router, operation}`
+
+#### `obs.log_exception(exception, context, **extra)`
+Log any exception with custom context.
+
+```python
+obs.log_exception(e, "database connection failed", table="users")
+```
+
+#### Properties Available
+- `obs.endpoint` - Current endpoint path (e.g., `/v1/users/`)
+- `obs.method` - HTTP method (GET, POST, etc.)
+- `obs.user_id` - Authenticated user ID (if available)
+- `obs.correlation_id` - Request correlation ID for tracing
+- `obs.request` - FastAPI Request object
+- `obs.observability` - ObservabilityService instance
 
 ### Verify It Works
 

@@ -5,17 +5,22 @@ Provides ready-to-use authentication routes (DD-041).
 """
 
 from typing import Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
 
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+
+from outlabs_auth.observability import (
+    ObservabilityContext,
+    get_observability_dependency,
+)
 from outlabs_auth.schemas.auth import (
+    ForgotPasswordRequest,
     LoginRequest,
     LoginResponse,
-    RegisterRequest,
+    LogoutRequest,
     RefreshRequest,
     RefreshResponse,
-    ForgotPasswordRequest,
+    RegisterRequest,
     ResetPasswordRequest,
-    LogoutRequest,
 )
 from outlabs_auth.schemas.user import UserResponse
 
@@ -24,7 +29,7 @@ def get_auth_router(
     auth: Any,
     prefix: str = "",
     tags: Optional[list[str]] = None,
-    requires_verification: bool = False
+    requires_verification: bool = False,
 ) -> APIRouter:
     """
     Generate authentication router with login/register/password routes.
@@ -57,14 +62,20 @@ def get_auth_router(
     """
     router = APIRouter(prefix=prefix, tags=tags or ["auth"])
 
+    # Create observability dependency (no auth required for public endpoints)
+    get_obs = get_observability_dependency(auth.observability)
+
     @router.post(
         "/register",
         response_model=UserResponse,
         status_code=status.HTTP_201_CREATED,
         summary="Register new user",
-        description="Create a new user account"
+        description="Create a new user account",
     )
-    async def register(data: RegisterRequest):
+    async def register(
+        data: RegisterRequest,
+        obs: ObservabilityContext = Depends(get_obs),
+    ):
         """
         Register a new user.
 
@@ -75,22 +86,29 @@ def get_auth_router(
                 email=data.email,
                 password=data.password,
                 first_name=data.first_name,
-                last_name=data.last_name
+                last_name=data.last_name,
             )
+            obs.log_event("user_registered", user_id=str(user.id), email=data.email)
             return user
+        except HTTPException:
+            raise
         except Exception as e:
+            obs.log_500_error(e, email=data.email)
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(e)
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to register user",
             )
 
     @router.post(
         "/login",
         response_model=LoginResponse,
         summary="User login",
-        description="Login with email and password to get JWT tokens"
+        description="Login with email and password to get JWT tokens",
     )
-    async def login(data: LoginRequest):
+    async def login(
+        data: LoginRequest,
+        obs: ObservabilityContext = Depends(get_obs),
+    ):
         """
         Authenticate user and return JWT tokens.
 
@@ -99,8 +117,7 @@ def get_auth_router(
         try:
             # Authenticate user and get tokens
             user, tokens = await auth.auth_service.login(
-                email=data.email,
-                password=data.password
+                email=data.email, password=data.password
             )
 
             # Check verification requirement
@@ -108,7 +125,7 @@ def get_auth_router(
                 if not hasattr(user, "is_verified") or not user.is_verified:
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
-                        detail="Email verification required"
+                        detail="Email verification required",
                     )
 
             # Trigger hook
@@ -118,34 +135,28 @@ def get_auth_router(
                 access_token=tokens.access_token,
                 refresh_token=tokens.refresh_token,
                 token_type=tokens.token_type,
-                expires_in=tokens.expires_in
+                expires_in=tokens.expires_in,
             )
 
         except HTTPException:
             raise
         except Exception as e:
-            # Log unexpected error with structured logging (observability)
-            import traceback
-            if auth.observability:
-                auth.observability.logger.error(
-                    "login_unexpected_error",
-                    email=data.email,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                    traceback=traceback.format_exc()
-                )
+            obs.log_500_error(e, email=data.email)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=str(e)
+                detail="Login failed",
             )
 
     @router.post(
         "/refresh",
         response_model=RefreshResponse,
         summary="Refresh access token",
-        description="Get new access token using refresh token"
+        description="Get new access token using refresh token",
     )
-    async def refresh(data: RefreshRequest):
+    async def refresh(
+        data: RefreshRequest,
+        obs: ObservabilityContext = Depends(get_obs),
+    ):
         """Refresh access token using refresh token."""
         try:
             tokens = await auth.auth_service.refresh_access_token(data.refresh_token)
@@ -153,23 +164,26 @@ def get_auth_router(
                 access_token=tokens.access_token,
                 refresh_token=tokens.refresh_token,
                 token_type=tokens.token_type,
-                expires_in=tokens.expires_in
+                expires_in=tokens.expires_in,
             )
+        except HTTPException:
+            raise
         except Exception as e:
+            obs.log_500_error(e)
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid refresh token"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Token refresh failed",
             )
 
     @router.post(
         "/logout",
         status_code=status.HTTP_204_NO_CONTENT,
         summary="User logout",
-        description="Logout and revoke tokens (supports optional immediate access token revocation)"
+        description="Logout and revoke tokens (supports optional immediate access token revocation)",
     )
     async def logout(
         data: Optional[LogoutRequest] = None,
-        auth_result = Depends(auth.deps.require_auth())
+        auth_result=Depends(auth.deps.require_auth()),
     ):
         """
         Logout user with flexible revocation options.
@@ -200,7 +214,7 @@ def get_auth_router(
         jti = auth_result.get("jti") if immediate else None
 
         # Get Redis client if available
-        redis_client = getattr(auth, 'redis_client', None)
+        redis_client = getattr(auth, "redis_client", None)
 
         if data and data.refresh_token:
             # Single device logout (revoke specific refresh token)
@@ -208,7 +222,7 @@ def get_auth_router(
                 data.refresh_token,
                 blacklist_access_token=immediate,
                 access_token_jti=jti,
-                redis_client=redis_client
+                redis_client=redis_client,
             )
         else:
             # Logout from all devices (revoke all user's refresh tokens)
@@ -216,12 +230,10 @@ def get_auth_router(
 
             # If immediate revocation requested, still blacklist current access token
             if immediate and jti and redis_client:
-                if hasattr(redis_client, 'is_available') and redis_client.is_available:
+                if hasattr(redis_client, "is_available") and redis_client.is_available:
                     remaining_ttl = auth.config.access_token_expire_minutes * 60
                     await redis_client.set(
-                        f"blacklist:jwt:{jti}",
-                        "revoked",
-                        ttl=remaining_ttl
+                        f"blacklist:jwt:{jti}", "revoked", ttl=remaining_ttl
                     )
 
         return None
@@ -230,7 +242,7 @@ def get_auth_router(
         "/forgot-password",
         status_code=status.HTTP_204_NO_CONTENT,
         summary="Request password reset",
-        description="Send password reset email"
+        description="Send password reset email",
     )
     async def forgot_password(data: ForgotPasswordRequest):
         """
@@ -260,9 +272,12 @@ def get_auth_router(
         "/reset-password",
         status_code=status.HTTP_204_NO_CONTENT,
         summary="Reset password",
-        description="Reset password using reset token"
+        description="Reset password using reset token",
     )
-    async def reset_password(data: ResetPasswordRequest):
+    async def reset_password(
+        data: ResetPasswordRequest,
+        obs: ObservabilityContext = Depends(get_obs),
+    ):
         """
         Reset password using reset token.
 
@@ -271,17 +286,20 @@ def get_auth_router(
         try:
             # Verify token and reset password
             user = await auth.auth_service.reset_password(
-                token=data.token,
-                new_password=data.new_password
+                token=data.token, new_password=data.new_password
             )
 
             # Trigger hook
             await auth.user_service.on_after_reset_password(user)
+            obs.log_event("password_reset", user_id=str(user.id))
 
+        except HTTPException:
+            raise
         except Exception as e:
+            obs.log_500_error(e)
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid or expired token"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Password reset failed",
             )
 
         return None

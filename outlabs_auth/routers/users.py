@@ -66,7 +66,12 @@ def get_users_router(
     )
     async def create_user(
         data: UserCreateRequest,
-        auth_result=Depends(auth.deps.require_permission("user:create")),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:create"),
+            )
+        ),
     ):
         """
         Create a new user (admin only).
@@ -88,6 +93,9 @@ def get_users_router(
             # Trigger on_after_register hook
             await auth.user_service.on_after_register(user, None)
 
+            # Log successful user creation
+            obs.log_event("user_created", user_id=str(user.id), created_by=obs.user_id)
+
             return UserResponse(
                 id=str(user.id),
                 email=user.email,
@@ -97,8 +105,14 @@ def get_users_router(
                 email_verified=user.email_verified,
                 is_superuser=user.is_superuser,
             )
+        except HTTPException:
+            raise
         except Exception as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+            obs.log_500_error(e, email=data.email)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create user",
+            )
 
     @router.get(
         "/",
@@ -112,7 +126,12 @@ def get_users_router(
         search: Optional[str] = Query(
             None, description="Search by email, first name, or last name"
         ),
-        auth_result=Depends(auth.deps.require_permission("user:read")),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
     ):
         """
         List users with pagination and optional search.
@@ -160,8 +179,10 @@ def get_users_router(
             )
 
         except Exception as e:
+            obs.log_500_error(e, page=page, limit=limit, search=search)
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to list users",
             )
 
     @router.get(
@@ -193,7 +214,12 @@ def get_users_router(
     )
     async def update_me(
         data: UserUpdateRequest,
-        auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_auth(verified=requires_verification),
+            )
+        ),
     ):
         """
         Update current user profile.
@@ -202,12 +228,19 @@ def get_users_router(
         """
         try:
             user = await auth.user_service.update_user(
-                user_id=auth_result["user_id"],
+                user_id=obs.user_id,
                 update_dict=data.model_dump(exclude_unset=True),
             )
+            obs.log_event("user_updated", user_id=obs.user_id)
             return user
+        except HTTPException:
+            raise
         except Exception as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+            obs.log_500_error(e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update user profile",
+            )
 
     @router.post(
         "/me/change-password",
@@ -217,7 +250,12 @@ def get_users_router(
     )
     async def change_password(
         data: ChangePasswordRequest,
-        auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_auth(verified=requires_verification),
+            )
+        ),
     ):
         """
         Change user password.
@@ -225,9 +263,12 @@ def get_users_router(
         Requires current password for verification.
         """
         try:
+            # Get current user
+            user = await auth.user_service.get_user(obs.user_id)
+
             # Verify current password
             is_valid = await auth.auth_service.verify_password(
-                user=auth_result["user"], password=data.current_password
+                user=user, password=data.current_password
             )
 
             if not is_valid:
@@ -238,15 +279,19 @@ def get_users_router(
 
             # Update password
             await auth.user_service.update_user(
-                user_id=auth_result["user_id"],
+                user_id=obs.user_id,
                 update_dict={"password": data.new_password},
             )
+
+            obs.log_event("password_changed", user_id=obs.user_id)
 
         except HTTPException:
             raise
         except Exception as e:
+            obs.log_500_error(e)
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to change password",
             )
 
         return None
@@ -258,7 +303,13 @@ def get_users_router(
         description="Get any user's profile (requires user:read permission)",
     )
     async def get_user(
-        user_id: str, auth_result=Depends(auth.deps.require_permission("user:read"))
+        user_id: str,
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
     ):
         """Get user by ID (admin only)."""
         try:
@@ -271,8 +322,10 @@ def get_users_router(
         except HTTPException:
             raise
         except Exception as e:
+            obs.log_500_error(e, target_user_id=user_id)
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to get user",
             )
 
     @router.patch(
@@ -284,7 +337,12 @@ def get_users_router(
     async def update_user(
         user_id: str,
         data: UserUpdateRequest,
-        auth_result=Depends(auth.deps.require_permission("user:update")),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
     ):
         """
         Update user by ID (admin only).
@@ -295,9 +353,18 @@ def get_users_router(
             user = await auth.user_service.update_user(
                 user_id=user_id, update_dict=data.model_dump(exclude_unset=True)
             )
+            obs.log_event(
+                "user_updated", target_user_id=user_id, updated_by=obs.user_id
+            )
             return user
+        except HTTPException:
+            raise
         except Exception as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+            obs.log_500_error(e, target_user_id=user_id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update user",
+            )
 
     @router.delete(
         "/{user_id}",
@@ -306,7 +373,13 @@ def get_users_router(
         description="Delete user account (requires user:delete permission)",
     )
     async def delete_user(
-        user_id: str, auth_result=Depends(auth.deps.require_permission("user:delete"))
+        user_id: str,
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:delete"),
+            )
+        ),
     ):
         """
         Delete user by ID (admin only).
@@ -315,8 +388,17 @@ def get_users_router(
         """
         try:
             await auth.user_service.delete_user(user_id)
+            obs.log_event(
+                "user_deleted", target_user_id=user_id, deleted_by=obs.user_id
+            )
+        except HTTPException:
+            raise
         except Exception as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+            obs.log_500_error(e, target_user_id=user_id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to delete user",
+            )
 
         return None
 
