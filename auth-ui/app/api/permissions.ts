@@ -7,15 +7,47 @@ import type { Permission } from '~/types/role'
 import type { UserPermissions } from '~/stores/permissions.store'
 import { createAPIClient } from './client'
 
+/**
+ * Permission creation data
+ */
+export interface CreatePermissionData {
+  name: string
+  display_name: string
+  description?: string
+  is_system?: boolean
+  is_active?: boolean
+  tags?: string[]
+  metadata?: Record<string, any>
+}
+
+/**
+ * Permission update data
+ */
+export interface UpdatePermissionData {
+  display_name?: string
+  description?: string
+  is_active?: boolean
+  tags?: string[]
+  metadata?: Record<string, any>
+}
+
 export function createPermissionsAPI() {
   const client = createAPIClient()
 
   return {
     /**
      * Fetch all available permissions
+     * Note: Backend returns paginated data, we request a large limit to get all
      */
     async fetchAvailablePermissions(): Promise<Permission[]> {
-      return client.call<Permission[]>('/v1/permissions')
+      const response = await client.call<{
+        items: Permission[]
+        total: number
+        page: number
+        limit: number
+        pages: number
+      }>('/v1/permissions?page=1&limit=1000')
+      return response.items
     },
 
     /**
@@ -31,6 +63,42 @@ export function createPermissionsAPI() {
 
       return client.call<UserPermissions>('/v1/users/me/permissions', {
         headers: contextHeaders
+      })
+    },
+
+    /**
+     * Create a new permission
+     */
+    async createPermission(data: CreatePermissionData): Promise<Permission> {
+      return client.call<Permission>('/v1/permissions/', {
+        method: 'POST',
+        body: data
+      })
+    },
+
+    /**
+     * Get permission by ID
+     */
+    async getPermission(permissionId: string): Promise<Permission> {
+      return client.call<Permission>(`/v1/permissions/${permissionId}`)
+    },
+
+    /**
+     * Update permission
+     */
+    async updatePermission(permissionId: string, data: UpdatePermissionData): Promise<Permission> {
+      return client.call<Permission>(`/v1/permissions/${permissionId}`, {
+        method: 'PATCH',
+        body: data
+      })
+    },
+
+    /**
+     * Delete permission
+     */
+    async deletePermission(permissionId: string): Promise<void> {
+      return client.call<void>(`/v1/permissions/${permissionId}`, {
+        method: 'DELETE'
       })
     }
   }

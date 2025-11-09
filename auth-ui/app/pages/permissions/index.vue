@@ -2,7 +2,7 @@
 import type { TableColumn } from '@nuxt/ui'
 import type { Permission } from '~/types/role'
 import { useQuery } from '@pinia/colada'
-import { permissionsQueries } from '~/queries/permissions'
+import { permissionsQueries, useDeletePermissionMutation } from '~/queries/permissions'
 
 // Resolve components for use in cell renderers
 const UButton = resolveComponent('UButton')
@@ -10,11 +10,49 @@ const UBadge = resolveComponent('UBadge')
 
 const search = ref('')
 const showCreateModal = ref(false)
+const toast = useToast()
 
 // Query permissions with Pinia Colada (60s staleTime since permissions change rarely)
 const { data: permissions, isLoading, error } = useQuery(
   () => permissionsQueries.available()
 )
+
+// Delete mutation
+const { mutate: deletePermission, isPending: isDeleting } = useDeletePermissionMutation()
+
+// Handle delete permission
+function handleDelete(permission: Permission) {
+  if (permission.is_system) {
+    toast.add({
+      title: 'Cannot delete',
+      description: 'System permissions cannot be deleted',
+      color: 'error'
+    })
+    return
+  }
+
+  // TODO: Add confirmation dialog
+  deletePermission(permission.id)
+}
+
+// Handle edit permission (placeholder)
+function handleEdit(permission: Permission) {
+  if (permission.is_system) {
+    toast.add({
+      title: 'Cannot edit',
+      description: 'System permissions cannot be edited',
+      color: 'warning'
+    })
+    return
+  }
+
+  // TODO: Open edit modal
+  toast.add({
+    title: 'Edit coming soon',
+    description: `Edit functionality for "${permission.name}" will be available soon`,
+    color: 'info'
+  })
+}
 
 // Table columns
 const columns: TableColumn<Permission>[] = [
@@ -90,15 +128,15 @@ const columns: TableColumn<Permission>[] = [
         variant: 'ghost',
         size: 'xs',
         disabled: row.original.is_system,
-        onClick: () => console.log('Edit permission:', row.original.id)
+        onClick: () => handleEdit(row.original)
       }),
       h(UButton, {
         icon: 'i-lucide-trash-2',
         color: 'error',
         variant: 'ghost',
         size: 'xs',
-        disabled: row.original.is_system,
-        onClick: () => console.log('Delete permission:', row.original.id)
+        disabled: row.original.is_system || isDeleting,
+        onClick: () => handleDelete(row.original)
       })
     ])
   }

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useCreatePermissionMutation } from '~/queries/permissions'
+import type { CreatePermissionData } from '~/api/permissions'
+
 const open = defineModel<boolean>('open', { default: false })
 
 const toast = useToast()
@@ -19,6 +22,9 @@ const state = reactive({
   tags: [] as string[],
   metadata: {} as Record<string, any>
 })
+
+// Create mutation
+const { mutate: createPermission, isPending: isSubmitting } = useCreatePermissionMutation()
 
 // Auto-parse permission name
 watch(() => state.name, (newName) => {
@@ -100,8 +106,6 @@ const validationMessage = computed(() => {
 })
 
 // Submit handler
-const isSubmitting = ref(false)
-
 async function handleSubmit() {
   if (!canSubmit.value) {
     toast.add({
@@ -112,27 +116,22 @@ async function handleSubmit() {
     return
   }
 
-  isSubmitting.value = true
-  try {
-    // In mock mode, just simulate success
-    await new Promise(resolve => setTimeout(resolve, 500))
-
-    toast.add({
-      title: 'Permission created',
-      description: `Permission "${state.name}" has been created successfully`,
-      color: 'success'
-    })
-
-    closeModal()
-  } catch (error: any) {
-    toast.add({
-      title: 'Error',
-      description: error.message || 'Failed to create permission',
-      color: 'error'
-    })
-  } finally {
-    isSubmitting.value = false
+  // Prepare data for API
+  const permissionData: CreatePermissionData = {
+    name: state.name,
+    display_name: state.display_name,
+    description: state.description || undefined,
+    is_system: state.is_system,
+    is_active: state.is_active,
+    tags: state.tags.length > 0 ? state.tags : undefined,
+    metadata: Object.keys(state.metadata).length > 0 ? state.metadata : undefined
   }
+
+  // Call mutation - toasts handled by mutation callbacks
+  await createPermission(permissionData)
+
+  // Close modal on success
+  closeModal()
 }
 
 // Close and reset

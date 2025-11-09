@@ -153,6 +153,27 @@ PERMISSIONS = [
         "resource": "permission",
         "action": "read",
     },
+    {
+        "name": "permission:create",
+        "display_name": "Create Permissions",
+        "description": "Can create new permissions",
+        "resource": "permission",
+        "action": "create",
+    },
+    {
+        "name": "permission:update",
+        "display_name": "Update Permissions",
+        "description": "Can update existing permissions",
+        "resource": "permission",
+        "action": "update",
+    },
+    {
+        "name": "permission:delete",
+        "display_name": "Delete Permissions",
+        "description": "Can delete permissions",
+        "resource": "permission",
+        "action": "delete",
+    },
 ]
 
 

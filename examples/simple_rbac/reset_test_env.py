@@ -125,7 +125,7 @@ async def reset_database():
                 "comment:create", "comment:delete",
                 "user:read", "user:create", "user:update", "user:delete", "user:manage",
                 "role:read", "role:create", "role:update", "role:delete",
-                "permission:read",
+                "permission:read", "permission:create", "permission:update", "permission:delete",
             ],
             "is_system_role": True,
             "is_global": True,
