@@ -2,7 +2,19 @@
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
-      "Bash(tee:*)"
+      "Bash(tee:*)",
+      "mcp__nuxtui__search_components",
+      "mcp__nuxtui__get_component_details",
+      "Bash(__NEW_LINE__ curl -s -w \"\\nHTTP Status: %{http_code}\\n\" \"http://localhost:8003/v1/users/69109a6e73bc51988f730c04/roles\" -H \"Authorization: Bearer $TOKEN\")",
+      "Bash(MONGODB_URL=\"mongodb://localhost:27018\" DATABASE_NAME=\"blog_simple_rbac\" SECRET_KEY=\"simple-rbac-secret-key-change-in-production\" REDIS_URL=\"redis://localhost:6380\" uv run uvicorn:*)",
+      "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2OTEwOWE2ZTczYmM1MTk4OGY3MzBjMDQiLCJleHAiOjE3NjI3MjAzMTgsImlhdCI6MTc2MjcxOTQxOCwidHlwZSI6ImFjY2VzcyIsImF1ZCI6Im91dGxhYnMtYXV0aCIsImp0aSI6ImN3X3RPTm5KSm5uMzJ5RGpmdWlaYXcifQ.lhAR0J5b-rwebcLql0HRJdN4yZJX8FX0uBoZmjtruB0\")",
+      "Bash(__NEW_LINE__ curl -s -w \"\\nHTTP Status: %{http_code}\\n\" \"http://localhost:8003/v1/users/69109a6e73bc51988f730c06\" )",
+      "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2OTEwOWE2ZTczYmM1MTk4OGY3MzBjMDQiLCJleHAiOjE3NjI3MjEzNTYsImlhdCI6MTc2MjcyMDQ1NiwidHlwZSI6ImFjY2VzcyIsImF1ZCI6Im91dGxhYnMtYXV0aCIsImp0aSI6Ik9iR3k1UDMwNXowd1dZVDcyUy1vSUEifQ.S0WSlza4APr0h0NUDaQwSGh1AUSFIqAKF-EJUyItQa4\")",
+      "Bash(__NEW_LINE__ curl -s -w \"\\nHTTP Status: %{http_code}\\n\" \"http://localhost:8003/v1/users/69109a6e73bc51988f730c04\" -H \"Authorization: Bearer $TOKEN\")",
+      "Bash(docker restart:*)",
+      "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2OTEwOWE2ZTczYmM1MTk4OGY3MzBjMDQiLCJleHAiOjE3NjI3MjE2ODcsImlhdCI6MTc2MjcyMDc4NywidHlwZSI6ImFjY2VzcyIsImF1ZCI6Im91dGxhYnMtYXV0aCIsImp0aSI6Il9nSXhlakVNTS1BZ3ZGNVFjMHVXVkEifQ.4BYtLDEeHNySANibwkRV_kwZirtQYFStD2K2scEGcEM\")",
+      "Bash(__NEW_LINE__ echo \"=== 1. Test GET /v1/users/{id} ===\")",
+      "Bash(__NEW_LINE__ echo \"\")"
     ],
     "deny": [],
     "ask": []

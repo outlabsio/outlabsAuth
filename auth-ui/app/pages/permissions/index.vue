@@ -10,6 +10,8 @@ const UBadge = resolveComponent('UBadge')
 
 const search = ref('')
 const showCreateModal = ref(false)
+const showUpdateModal = ref(false)
+const permissionToEdit = ref<Permission | null>(null)
 const toast = useToast()
 
 // Query permissions with Pinia Colada (60s staleTime since permissions change rarely)
@@ -35,7 +37,7 @@ function handleDelete(permission: Permission) {
   deletePermission(permission.id)
 }
 
-// Handle edit permission (placeholder)
+// Handle edit permission
 function handleEdit(permission: Permission) {
   if (permission.is_system) {
     toast.add({
@@ -46,12 +48,9 @@ function handleEdit(permission: Permission) {
     return
   }
 
-  // TODO: Open edit modal
-  toast.add({
-    title: 'Edit coming soon',
-    description: `Edit functionality for "${permission.name}" will be available soon`,
-    color: 'info'
-  })
+  // Open edit modal with selected permission
+  permissionToEdit.value = permission
+  showUpdateModal.value = true
 }
 
 // Table columns
@@ -241,4 +240,7 @@ const filteredPermissions = computed(() => {
 
   <!-- Create Permission Modal -->
   <PermissionCreateModal v-model:open="showCreateModal" />
+
+  <!-- Update Permission Modal -->
+  <PermissionUpdateModal v-model:open="showUpdateModal" :permission="permissionToEdit" />
 </template>

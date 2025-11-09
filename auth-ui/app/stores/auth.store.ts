@@ -137,11 +137,18 @@ export const useAuthStore = defineStore("auth", () => {
         ...(token && { Authorization: `Bearer ${token}` }),
       };
 
-      const response = await fetch(`${baseURL}${endpoint}`, {
+      // Stringify body if it's an object (required for JSON requests)
+      const requestOptions: RequestInit = {
         ...options,
         headers,
         credentials: "include", // Important for httpOnly cookies
-      });
+      };
+
+      if (requestOptions.body && typeof requestOptions.body === 'object') {
+        requestOptions.body = JSON.stringify(requestOptions.body);
+      }
+
+      const response = await fetch(`${baseURL}${endpoint}`, requestOptions);
 
       if (!response.ok) {
         const error: any = new Error(`HTTP ${response.status}`);

@@ -4,17 +4,22 @@ Users router factory.
 Provides ready-to-use user management routes (DD-041).
 """
 
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
 from outlabs_auth.schemas.common import PaginatedResponse
+from outlabs_auth.schemas.role import RoleResponse
 from outlabs_auth.schemas.user import (
     ChangePasswordRequest,
     UserCreateRequest,
     UserResponse,
     UserUpdateRequest,
+)
+from outlabs_auth.schemas.user_role_membership import (
+    AssignRoleRequest,
+    UserRoleMembershipResponse,
 )
 
 
@@ -264,7 +269,7 @@ def get_users_router(
         """
         try:
             # Get current user
-            user = await auth.user_service.get_user(obs.user_id)
+            user = await auth.user_service.get_user_by_id(obs.user_id)
 
             # Verify current password
             is_valid = await auth.auth_service.verify_password(
@@ -313,12 +318,21 @@ def get_users_router(
     ):
         """Get user by ID (admin only)."""
         try:
-            user = await auth.user_service.get_user(user_id)
+            user = await auth.user_service.get_user_by_id(user_id)
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
                 )
-            return user
+
+            return UserResponse(
+                id=str(user.id),
+                email=user.email,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                status=user.status.value,
+                email_verified=user.email_verified,
+                is_superuser=user.is_superuser,
+            )
         except HTTPException:
             raise
         except Exception as e:
@@ -401,5 +415,232 @@ def get_users_router(
             )
 
         return None
+
+    # ============================================================
+    # USER ROLE MANAGEMENT ENDPOINTS
+    # ============================================================
+
+    @router.get(
+        "/{user_id}/roles",
+        response_model=List[RoleResponse],
+        summary="Get user's roles",
+        description="Get all roles assigned to a user (requires user:read permission)",
+    )
+    async def get_user_roles(
+        user_id: str,
+        include_inactive: bool = Query(
+            False, description="Include inactive memberships"
+        ),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
+    ):
+        """
+        Get all roles assigned to a user.
+
+        Returns list of roles with their details. Optionally includes inactive memberships.
+        """
+        try:
+            # Validate user exists
+            user = await auth.user_service.get_user_by_id(user_id)
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+                )
+
+            # Get roles using role service
+            roles = await auth.role_service.get_user_roles(
+                user_id=user_id, include_inactive=include_inactive
+            )
+
+            # Convert to response schema
+            return [
+                RoleResponse(**role.model_dump(mode="json", exclude={"entity"}))
+                for role in roles
+            ]
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=user_id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to get user roles",
+            )
+
+    @router.post(
+        "/{user_id}/roles",
+        response_model=UserRoleMembershipResponse,
+        status_code=status.HTTP_201_CREATED,
+        summary="Assign role to user",
+        description="Assign a role to a user (requires user:update permission)",
+    )
+    async def assign_role_to_user_endpoint(
+        user_id: str,
+        data: AssignRoleRequest,
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        """
+        Assign a role to a user.
+
+        Creates a new role membership with optional time-based validity.
+        """
+        try:
+            # Validate user exists
+            user = await auth.user_service.get_user_by_id(user_id)
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+                )
+
+            # Validate role exists
+            role = await auth.role_service.get_role(data.role_id)
+            if not role:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Role not found"
+                )
+
+            # Assign role
+            membership = await auth.role_service.assign_role_to_user(
+                user_id=user_id,
+                role_id=data.role_id,
+                assigned_by=obs.user_id,
+                valid_from=data.valid_from,
+                valid_until=data.valid_until,
+            )
+
+            # Log event
+            obs.log_event(
+                "role_assigned",
+                user_id=user_id,
+                role_id=data.role_id,
+                assigned_by=obs.user_id,
+            )
+
+            # Return membership response
+            return UserRoleMembershipResponse(**membership.model_dump(mode="json"))
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=user_id, role_id=data.role_id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to assign role",
+            )
+
+    @router.delete(
+        "/{user_id}/roles/{role_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Remove role from user",
+        description="Revoke a role from a user (requires user:update permission)",
+    )
+    async def remove_role_from_user_endpoint(
+        user_id: str,
+        role_id: str,
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        """
+        Revoke a role from a user.
+
+        Soft deletes the role membership (changes status to REVOKED).
+        """
+        try:
+            # Validate user exists
+            user = await auth.user_service.get_user_by_id(user_id)
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+                )
+
+            # Revoke role
+            success = await auth.role_service.revoke_role_from_user(
+                user_id=user_id, role_id=role_id, revoked_by=obs.user_id
+            )
+
+            if not success:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User does not have this role assigned",
+                )
+
+            # Log event
+            obs.log_event(
+                "role_revoked",
+                user_id=user_id,
+                role_id=role_id,
+                revoked_by=obs.user_id,
+            )
+
+            return None
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=user_id, role_id=role_id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to remove role",
+            )
+
+    @router.get(
+        "/{user_id}/permissions",
+        response_model=List[str],
+        summary="Get user's permissions",
+        description="Get all effective permissions for a user (requires user:read permission)",
+    )
+    async def get_user_permissions(
+        user_id: str,
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
+    ):
+        """
+        Get all effective permissions for a user.
+
+        Collects permissions from all assigned roles and returns a deduplicated sorted list.
+        """
+        try:
+            # Validate user exists
+            user = await auth.user_service.get_user_by_id(user_id)
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+                )
+
+            # Get user's roles
+            roles = await auth.role_service.get_user_roles(user_id=user_id)
+
+            # Collect all permissions from all roles (deduplicated)
+            permissions = set()
+            for role in roles:
+                permissions.update(role.permissions)
+
+            return sorted(list(permissions))
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=user_id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to get user permissions",
+            )
 
     return router

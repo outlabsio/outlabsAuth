@@ -203,3 +203,56 @@ export function useDeletePermissionMutation() {
     },
   })
 }
+
+/**
+ * Update Permission Mutation
+ * Use this composable in components for proper Pinia Colada integration
+ */
+export function useUpdatePermissionMutation() {
+  const queryCache = useQueryCache()
+  const toast = useToast()
+
+  return useMutation({
+    mutation: async ({ id, data }: { id: string; data: UpdatePermissionData }) => {
+      const permissionsAPI = createPermissionsAPI()
+      return permissionsAPI.updatePermission(id, data)
+    },
+    onSuccess: (data, variables) => {
+      // Invalidate to refetch fresh data
+      queryCache.invalidateQueries({ key: PERMISSION_KEYS.available() })
+      queryCache.invalidateQueries({ key: PERMISSION_KEYS.detail(variables.id) })
+
+      toast.add({
+        title: 'Permission updated',
+        description: `Permission "${data.name}" has been updated successfully`,
+        color: 'success'
+      })
+    },
+    onError: (error: any) => {
+      // Extract error message from response body (error.data.detail) or fallback to error.message
+      console.error('[UPDATE PERMISSION ERROR] Full error:', error)
+      console.error('[UPDATE PERMISSION ERROR] error.data:', error.data)
+      console.error('[UPDATE PERMISSION ERROR] error.data.detail:', error.data?.detail)
+      console.error('[UPDATE PERMISSION ERROR] error.message:', error.message)
+
+      // FastAPI returns validation errors as an array in error.data.detail
+      let errorMessage = 'Failed to update permission'
+      if (error.data?.detail) {
+        if (Array.isArray(error.data.detail)) {
+          // Extract messages from validation error array
+          errorMessage = error.data.detail.map((e: any) => e.msg || JSON.stringify(e)).join(', ')
+        } else {
+          errorMessage = error.data.detail
+        }
+      } else if (error.message) {
+        errorMessage = error.message
+      }
+
+      toast.add({
+        title: 'Error updating permission',
+        description: errorMessage,
+        color: 'error'
+      })
+    },
+  })
+}

@@ -71,13 +71,21 @@ auth-ui/
 │   │   └── default.vue      # Main dashboard layout
 │   ├── pages/               # Routes
 │   │   ├── index.vue        # Dashboard
-│   │   ├── users/index.vue  # Users management (uses useQuery)
+│   │   ├── users/
+│   │   │   ├── index.vue    # Users list (uses useQuery)
+│   │   │   └── [id]/        # User detail (nested routes)
+│   │   │       ├── index.vue       # Basic Info tab
+│   │   │       ├── roles.vue       # Roles tab
+│   │   │       ├── permissions.vue # Permissions tab
+│   │   │       └── activity.vue    # Activity tab
 │   │   ├── roles/index.vue  # Roles management (uses useQuery)
 │   │   ├── permissions/index.vue # Permissions (uses useQuery)
 │   │   ├── entities/index.vue    # Entities (uses useQuery)
 │   │   └── api-keys.vue     # API keys management
 │   ├── stores/              # Pinia stores (UI state only now)
 │   │   ├── auth.store.ts    # Authentication + config detection
+│   │   ├── users.store.ts   # Users list management
+│   │   ├── user.store.ts    # 🆕 Single user detail management (328 LOC)
 │   │   ├── context.store.ts # Entity context switching
 │   │   └── ...              # Other stores for local UI state
 │   ├── types/               # TypeScript types
@@ -996,6 +1004,453 @@ NUXT_PUBLIC_API_BASE_URL=http://localhost:8004 bun run dev
 
 ---
 
+## Browser Automation Testing with MCP
+
+**Status**: Active Testing Methodology
+**Tools**: Playwright MCP (Model Context Protocol)
+**Purpose**: Verify UI functionality works correctly before claiming features are complete
+
+### Why Browser Automation Testing?
+
+During development, it's critical to **test in the actual browser** rather than assuming code compilation means features work. Browser automation provides:
+
+- ✅ **Real UI verification** - Tests actual user interactions, not just code syntax
+- ✅ **Visual debugging** - Screenshots capture exact UI state at failure points
+- ✅ **DOM inspection** - See actual rendered HTML, not what we think should render
+- ✅ **Network monitoring** - Verify API calls are actually being made
+- ✅ **Console error detection** - Catch JavaScript errors missed during development
+
+### MCP Tools Used
+
+The Playwright MCP provides these testing capabilities:
+
+#### 1. **Navigation** (`mcp__playwright__browser_navigate`)
+```typescript
+// Navigate to specific page
+mcp__playwright__browser_navigate({ url: "http://localhost:3000/users" })
+```
+
+#### 2. **Page Snapshots** (`mcp__playwright__browser_snapshot`)
+```typescript
+// Capture accessibility tree snapshot (better than screenshot for testing)
+mcp__playwright__browser_snapshot()
+```
+
+**Why snapshots over screenshots?**: Accessibility snapshots show the DOM structure and interactive elements, making it easier to write test automation.
+
+#### 3. **Click Actions** (`mcp__playwright__browser_click`)
+```typescript
+// Click button or link
+mcp__playwright__browser_click({
+  element: "Create Permission button",
+  ref: "button[data-testid='create-permission']"
+})
+```
+
+#### 4. **Form Filling** (`mcp__playwright__browser_fill_form`)
+```typescript
+// Fill out multi-field forms
+mcp__playwright__browser_fill_form({
+  fields: [
+    { name: "Display Name", ref: "input[name='display_name']", value: "Test Permission", type: "textbox" },
+    { name: "Description", ref: "textarea[name='description']", value: "Test description", type: "textbox" }
+  ]
+})
+```
+
+#### 5. **Console Monitoring** (`mcp__playwright__browser_console_messages`)
+```typescript
+// Check for JavaScript errors
+mcp__playwright__browser_console_messages({ onlyErrors: true })
+```
+
+#### 6. **Network Inspection** (`mcp__playwright__browser_network_requests`)
+```typescript
+// Verify API calls were made
+mcp__playwright__browser_network_requests()
+```
+
+### Testing Workflow
+
+**Standard testing flow for new features**:
+
+1. **Compile** - Ensure code compiles without errors
+2. **Navigate** - Use MCP to navigate to the feature page
+3. **Snapshot** - Capture initial page state
+4. **Interact** - Click buttons, fill forms, trigger actions
+5. **Verify** - Check network calls, console errors, UI updates
+6. **Screenshot** - Capture final state for documentation
+
+**Example: Testing Permission Create Feature**
+
+```typescript
+// Step 1: Navigate to permissions page
+mcp__playwright__browser_navigate({ url: "http://localhost:3000/permissions" })
+
+// Step 2: Take snapshot to see initial state
+mcp__playwright__browser_snapshot()
+
+// Step 3: Click "Create Permission" button
+mcp__playwright__browser_click({
+  element: "Create Permission button",
+  ref: "button:has-text('Create Permission')"
+})
+
+// Step 4: Fill out form
+mcp__playwright__browser_fill_form({
+  fields: [
+    { name: "Display Name", ref: "input[name='display_name']", value: "Generate Reports" },
+    { name: "Name", ref: "input[name='name']", value: "report:generate" },
+    { name: "Description", ref: "textarea", value: "Allows users to generate reports" }
+  ]
+})
+
+// Step 5: Submit form
+mcp__playwright__browser_click({
+  element: "Submit button",
+  ref: "button:has-text('Create Permission')"
+})
+
+// Step 6: Check network calls
+mcp__playwright__browser_network_requests()
+// Verify: POST /v1/permissions (201 Created)
+
+// Step 7: Check for errors
+mcp__playwright__browser_console_messages({ onlyErrors: true })
+// Verify: No errors
+
+// Step 8: Take final snapshot
+mcp__playwright__browser_snapshot()
+// Verify: New permission appears in table
+```
+
+### Key Learnings from Testing
+
+**CRITICAL**: Test before claiming success! During development, we discovered:
+
+1. **Permission CREATE not working** - Compiled successfully but API wasn't being called (Pinia Colada mutation pattern bug)
+2. **Permission DELETE showing success but not executing** - Toast appeared but no backend request (composable pattern issue)
+3. **User detail HTTP 500** - Enum not converted to string in response schema
+4. **Nuxt UI v4 table not rendering** - Used `:rows` instead of `:data` prop
+
+All of these issues were **only caught by browser testing**, not by code compilation.
+
+### Testing Checklist
+
+Before marking a feature as "complete", verify:
+
+- [ ] **Navigation works** - Can navigate to the feature page
+- [ ] **UI renders correctly** - No "No data" messages when data exists
+- [ ] **Forms submit** - Network tab shows POST/PATCH requests
+- [ ] **Success feedback** - Toasts appear with correct messages
+- [ ] **Data persists** - Refresh page and verify changes saved
+- [ ] **No console errors** - Check console for JavaScript errors
+- [ ] **Backend logs confirm** - Check API logs for request processing
+- [ ] **Optimistic updates work** - UI updates instantly, then confirms
+
+### Testing Anti-Patterns
+
+**❌ DON'T**:
+- Claim features work because code compiles
+- Assume API calls work because the mutation is defined
+- Trust toast notifications without checking backend logs
+- Skip browser testing for "minor" changes
+
+**✅ DO**:
+- Test every feature in the browser before marking complete
+- Verify backend receives and processes requests
+- Check both success and error paths
+- Screenshot final state for documentation
+
+### Screenshots for Documentation
+
+All testing screenshots are saved to `.playwright-mcp/`:
+
+```
+.playwright-mcp/
+├── permissions-page-complete-with-badges.png
+├── permissions-search-post.png
+├── user-detail-basic-info-tab.png
+├── user-detail-roles-tab.png
+└── ... (other test artifacts)
+```
+
+These screenshots serve as:
+- **Documentation** - Visual guide for users
+- **Regression testing baseline** - Compare future changes
+- **Bug reports** - Attach to issues when things break
+
+---
+
+## Nuxt UI v4 Component Development
+
+**CRITICAL**: Nuxt UI v4 has **breaking changes** from v3. Always use the Nuxt UI MCP or copy from existing working examples in this codebase.
+
+### Why Nuxt UI v4 is Different
+
+**Major Breaking Changes**:
+- ✅ **Prop names changed** - `:rows` → `:data` for tables
+- ✅ **Component API changes** - Different props for modals, forms, buttons
+- ✅ **Render function patterns** - Must use `resolveComponent()` for dynamic components
+- ✅ **Radix UI primitives** - New underlying component library
+- ✅ **TypeScript strictness** - Requires explicit component resolution
+
+**DO NOT** use Nuxt UI v3 documentation or examples - they will cause bugs!
+
+### Using the Nuxt UI MCP
+
+The Nuxt UI MCP provides access to official v4 component examples and documentation.
+
+#### 1. **Search for Components** (`mcp__nuxtui__search_components`)
+
+```typescript
+// Find table-related components
+mcp__nuxtui__search_components({ query: "table" })
+
+// Returns:
+// - UTable
+// - UTableRow
+// - UTableHeader
+// - ... (with links to docs)
+```
+
+#### 2. **Get Component Details** (`mcp__nuxtui__get_component_details`)
+
+```typescript
+// Get full documentation for UTable
+mcp__nuxtui__get_component_details({ name: "table" })
+
+// Returns:
+// - Component description
+// - All props with types
+// - Usage examples
+// - Slots available
+// - Events
+```
+
+**Example: Learning UTable Props**
+
+```typescript
+mcp__nuxtui__get_component_details({ name: "table" })
+
+// Output shows:
+// Props:
+//   - data: Array<Record<string, any>> (REQUIRED)  ← Not "rows"!
+//   - columns: Array<Column>
+//   - loading: boolean
+//   - emptyState: EmptyState
+```
+
+#### 3. **Get Component Source Code** (`mcp__nuxtui__get_component_source`)
+
+```typescript
+// Get actual implementation
+mcp__nuxtui__get_component_source({ name: "table", version: "main" })
+
+// Returns:
+// - Full Vue component source
+// - Shows internal patterns
+// - Helps debug complex issues
+```
+
+### Development Workflow
+
+**When implementing a new UI component**:
+
+1. **Search for similar examples in this codebase**
+   - `auth-ui/app/pages/users/index.vue` - Good UTable example
+   - `auth-ui/app/pages/roles/index.vue` - Good modal + form example
+   - `auth-ui/app/pages/permissions/index.vue` - Good badge rendering example
+
+2. **If no example exists, use Nuxt UI MCP**
+   ```typescript
+   // Step 1: Search for component
+   mcp__nuxtui__search_components({ query: "modal" })
+
+   // Step 2: Get component details
+   mcp__nuxtui__get_component_details({ name: "modal" })
+
+   // Step 3: Copy example code
+   // Step 4: Adapt to your use case
+   ```
+
+3. **Test in browser immediately**
+   - Don't assume it works because code compiles
+   - Use Playwright MCP to verify rendering
+   - Check console for errors
+
+### Common Nuxt UI v4 Patterns
+
+#### Pattern 1: UTable with Render Functions
+
+**✅ CORRECT** (from `pages/roles/index.vue`):
+```typescript
+import { h, resolveComponent } from 'vue'
+
+const UButton = resolveComponent('UButton')  // ← Required!
+const UBadge = resolveComponent('UBadge')
+
+const columns = [
+  {
+    key: 'actions',
+    label: 'Actions',
+    class: 'w-24',
+    cellClass: 'flex gap-1',
+    cell: ({ row }) => {
+      return [
+        h(UButton, {  // ← Use resolved component
+          icon: 'i-lucide-pencil',
+          color: 'primary',
+          variant: 'ghost',
+          size: 'xs',
+          onClick: () => openEditModal(row.original.id)
+        }),
+        h(UButton, {
+          icon: 'i-lucide-trash-2',
+          color: 'error',
+          variant: 'ghost',
+          size: 'xs',
+          onClick: async () => {
+            if (confirm(`Delete role "${row.original.display_name}"?`)) {
+              await deleteRole(row.original.id)
+            }
+          }
+        })
+      ]
+    }
+  }
+]
+```
+
+**❌ WRONG**:
+```typescript
+// Missing resolveComponent
+h('UButton', { ... })  // ← Will fail at runtime!
+
+// Missing component import
+const UButton = 'UButton'  // ← Wrong!
+```
+
+#### Pattern 2: UTable Props
+
+**✅ CORRECT**:
+```vue
+<UTable
+  :data="rolesData?.items || []"
+  :columns="columns"
+  :loading="isLoading"
+/>
+```
+
+**❌ WRONG** (v3 syntax):
+```vue
+<UTable
+  :rows="rolesData?.items || []"  <!-- ❌ v3 prop name -->
+  :columns="columns"
+/>
+```
+
+#### Pattern 3: UModal
+
+**✅ CORRECT** (from `components/RoleCreateModal.vue`):
+```vue
+<UModal v-model:open="open">
+  <UCard>
+    <template #header>
+      <h2>Create Role</h2>
+    </template>
+
+    <UForm :state="state" @submit="handleSubmit">
+      <!-- Form fields -->
+    </UForm>
+
+    <template #footer>
+      <UButton type="submit">Create</UButton>
+    </template>
+  </UCard>
+</UModal>
+```
+
+#### Pattern 4: UBadge in Render Functions
+
+**✅ CORRECT**:
+```typescript
+const UBadge = resolveComponent('UBadge')
+
+cell: ({ row }) => {
+  return h(UBadge, {
+    color: row.original.is_active ? 'success' : 'error',
+    label: row.original.is_active ? 'Active' : 'Inactive'
+  })
+}
+```
+
+### Component Reference Quick Links
+
+Use Nuxt UI MCP to get latest docs for:
+
+**Layout**:
+- `UDashboardPanel` - Main layout wrapper
+- `UDashboardNavbar` - Top navigation bar
+- `UContainer` - Content container
+
+**Data Display**:
+- `UTable` - Data tables with sorting/filtering
+- `UBadge` - Status indicators
+- `UCard` - Content cards
+
+**Forms**:
+- `UForm` - Form validation wrapper
+- `UInput` - Text inputs
+- `UTextarea` - Multiline text
+- `USelect` - Dropdowns
+- `UCheckbox` - Checkboxes
+- `UTabs` - Tab navigation
+
+**Feedback**:
+- `UModal` - Dialogs and modals
+- `UToast` - Notifications (via `useToast()`)
+- `UButton` - Buttons and actions
+
+**Example: Get UForm Details**
+
+```typescript
+mcp__nuxtui__get_component_details({ name: "form" })
+
+// Shows:
+// - How to use with Pydantic schemas
+// - Validation patterns
+// - Submit handling
+// - Error display
+```
+
+### Debugging Component Issues
+
+**Symptom**: Component not rendering
+
+**Check**:
+1. Did you `resolveComponent()` for render functions?
+2. Are you using `:data` not `:rows` for tables?
+3. Is the component imported (if using in template)?
+4. Check Nuxt UI MCP for correct prop names
+
+**Example Debug Session**:
+```typescript
+// Issue: UTable showing "No data"
+
+// Step 1: Check what you're passing
+console.log(rolesData?.items)  // [{ id: '1', name: 'admin' }]
+
+// Step 2: Check Nuxt UI MCP
+mcp__nuxtui__get_component_details({ name: "table" })
+// Docs say: Use :data prop, not :rows
+
+// Step 3: Fix
+<UTable :data="rolesData?.items" />  // ✅ Works!
+```
+
+---
+
 ## Mock Data Mode
 
 For UI development without a running backend:
@@ -1032,11 +1487,11 @@ Mock data defined in `app/utils/mockData.ts`:
 - ✅ **Permission CRUD backend** (Phase 3 - complete - All endpoints implemented and working)
 
 **In Progress**:
-- 🔄 **Permission CRUD frontend** (Phase 3 - 90% complete)
+- ✅ **Permission CRUD frontend** (Phase 3 - 100% complete)
   - ✅ LIST working
   - ✅ CREATE working (fixed with `useCreatePermissionMutation()` composable)
+  - ✅ UPDATE working (fixed with `useUpdatePermissionMutation()` composable + `PermissionUpdateModal.vue`)
   - ✅ DELETE working (fixed with `useDeletePermissionMutation()` composable)
-  - ❌ UPDATE not implemented (modal needed)
 - 🔄 Config detection (SimpleRBAC vs EnterpriseRBAC)
 - 🔄 Entity CRUD testing (EnterpriseRBAC)
 
@@ -1055,25 +1510,27 @@ Mock data defined in `app/utils/mockData.ts`:
 **Admin UI**: `http://localhost:3000`
 **Date**: 2025-11-08
 
-### User CRUD Testing ✅
+### User CRUD Testing ⚠️
 
-**Status**: Complete
+**Status**: In Progress (75% - UPDATE interface being implemented)
 
 **Test Scenarios**:
 - ✅ List users with pagination
-- ✅ Create new user
-- ✅ Update user details
-- ✅ Delete user
-- ✅ Deactivate/reactivate user
+- ✅ Create new user (`UserCreateModal.vue`)
+- 🔄 Update user details (Implementing nested routes with tabs - see Phase 3.1 below)
+- ✅ Delete user (dropdown action with `useDeleteUserMutation()`)
+- ✅ Deactivate/reactivate user (dropdown action with status toggle)
 
 **Issues Encountered**:
 1. **UTable Component Rendering** - Fixed by using proper `h()` render functions
 2. **Permission Wildcard Checking** - Fixed by adding `fetch_links()` in permission service
 3. **Component Resolution** - Fixed by using `resolveComponent()` for dynamic components
+4. **CRITICAL: JSON Body Not Stringified** (2025-11-09) - `apiCall()` method wasn't stringifying request bodies for POST/PATCH operations, causing "JSON decode error" (422). Fixed by adding `JSON.stringify()` check in `auth.store.ts:147-149`. This bug blocked ALL CREATE/UPDATE operations across the UI.
 
 **Files Modified**:
 - `auth-ui/app/pages/users/index.vue` - Updated table column renderers
 - `outlabs_auth/services/permission.py` - Added `.fetch_links()` for Link fields
+- `auth-ui/app/stores/auth.store.ts` - Fixed critical JSON.stringify() bug in `apiCall()` method
 
 ### Role CRUD Testing ✅
 
@@ -1976,9 +2433,9 @@ The permissions page is now fully functional with:
 
 ### Permission CRUD Implementation Status (2025-11-09)
 
-**Date**: 2025-11-09 (Updated after DELETE fix)
-**Status**: Backend Complete, Frontend 75% Complete (DELETE Fixed!)
-**Testing**: Partial (CREATE needs re-testing, DELETE verified working)
+**Date**: 2025-11-09 (Updated after UPDATE implementation + critical bug fix)
+**Status**: Backend Complete, Frontend 100% Complete (All CRUD operations working!)
+**Testing**: Complete (CREATE, READ, UPDATE, DELETE all verified working)
 
 #### Backend Implementation ✅
 
@@ -2009,16 +2466,46 @@ The permissions page is now fully functional with:
 - `auth-ui/app/pages/permissions/index.vue:20-36` - Delete/edit handlers (simplified after composable fix)
 
 **Frontend Features**:
-1. ✅ **LIST** - Displays permissions with pagination handling (24 after test deletion)
-2. ⚠️ **CREATE** - Modal implemented, but testing incomplete
+1. ✅ **LIST** - Displays permissions with pagination handling (24 permissions)
+2. ✅ **CREATE** - Modal implemented and tested (creates new permissions with tags)
 3. ✅ **DELETE** - Working! Fixed with `useDeletePermissionMutation()` composable pattern
-4. ❌ **UPDATE** - Not implemented (shows placeholder toast)
+4. ✅ **UPDATE** - Complete! Implemented with `useUpdatePermissionMutation()` + `PermissionUpdateModal.vue`
 
 #### Critical Issues Found During Testing 🐛
 
-##### Issue #1: JWT Token Expiration
+##### Issue #1: JSON Body Not Stringified ✅ FIXED (Critical Bug!)
+**Status**: Fixed (2025-11-09)
+**Impact**: CRITICAL - Blocked ALL POST/PATCH/PUT operations
+**File**: `auth-ui/app/stores/auth.store.ts:140-149`
+
+**Symptoms**:
+- All mutations (CREATE, UPDATE) failed with `422 Unprocessable Entity`
+- Backend error: "JSON decode error"
+- DELETE worked because it has no body
+
+**Root Cause**: The `apiCall()` method in `auth.store.ts` was not stringifying the request body before sending to fetch. It set `Content-Type: application/json` but passed the body as an object instead of a string.
+
+**Fix Applied**:
+```typescript
+// Stringify body if it's an object (required for JSON requests)
+const requestOptions: RequestInit = {
+  ...options,
+  headers,
+  credentials: "include",
+};
+
+if (requestOptions.body && typeof requestOptions.body === 'object') {
+  requestOptions.body = JSON.stringify(requestOptions.body);
+}
+```
+
+**Why This Was Missed**: The `login()` method manually calls `JSON.stringify()` on the body, which hid the bug. Only discovered when testing Permission UPDATE which uses the generic `apiCall()` method.
+
+**Impact**: This fix unblocks all CRUD operations across the entire admin UI (Users, Roles, Permissions, Entities, API Keys).
+
+##### Issue #2: JWT Token Expiration
 **Status**: Not Fixed
-**Impact**: HIGH - Blocks all mutation testing
+**Impact**: MEDIUM - Requires manual re-login after 15 minutes
 
 **Symptoms**:
 - Console error: `Failed to load resource: 401 (Unauthorized) @ http://localhost:8003/v1/users/me`
@@ -2238,6 +2725,254 @@ export function useCreatePermissionMutation() {
 
 ---
 
-**Last Updated**: 2025-11-08  
-**Maintainer**: OutlabsAuth Team  
+## User Detail Pages (Nested Routes)
+
+**Status**: ✅ Implemented (2025-01-09)
+**Routes**: `/users/{id}`, `/users/{id}/roles`, `/users/{id}/permissions`, `/users/{id}/activity`
+
+The user detail interface uses Nuxt's nested routing pattern with a tabbed layout for comprehensive user management.
+
+### Architecture
+
+**Layout Wrapper**: `pages/users/[id].vue` (149 lines)
+- Provides shell with user header and tab navigation
+- Fetches user data + roles + permissions on mount
+- Renders child routes via `<NuxtPage>` outlet
+- Reactive tab highlighting based on current route
+
+**Tab Pages** (Child Routes):
+- `pages/users/[id]/index.vue` - Basic Info tab (265 lines)
+- `pages/users/[id]/roles.vue` - Roles tab (168 lines)
+- `pages/users/[id]/permissions.vue` - Permissions tab (290 lines)
+- `pages/users/[id]/activity.vue` - Activity tab (258 lines)
+
+### Store: user.store.ts (328 lines)
+
+Dedicated Pinia store for single-user detail operations, separate from `users.store.ts` (which handles list operations).
+
+**State**:
+```typescript
+{
+  currentUser: User | null,
+  userRoles: UserMembership[],
+  userPermissions: UserPermissionSource[],
+  isLoadingUser: boolean,
+  isLoadingRoles: boolean,
+  isLoadingPermissions: boolean,
+  error: string | null
+}
+```
+
+**Key Methods**:
+```typescript
+// User operations
+fetchUser(userId: string): Promise<User | null>
+updateUser(userId: string, updates: UserUpdate): Promise<boolean>
+changePassword(userId: string, newPassword: string): Promise<boolean>
+toggleStatus(userId: string): Promise<boolean>
+
+// Role operations
+fetchUserRoles(userId: string): Promise<UserMembership[]>
+assignRole(userId: string, roleId: string): Promise<boolean>
+removeRole(userId: string, roleId: string): Promise<boolean>
+
+// Permission operations
+fetchUserPermissions(userId: string): Promise<UserPermissionSource[]>
+```
+
+### Tab Pages
+
+#### 1. Basic Info (`pages/users/[id]/index.vue`)
+
+Displays and edits core user information.
+
+**Features**:
+- Email address (with verification badge)
+- Username (read-only, auto-generated)
+- Full name
+- Status toggle (active/inactive)
+- Change password modal
+- System metadata (ID, created_at, updated_at, is_superuser)
+
+**API Endpoints Used**:
+- `GET /v1/users/{id}` - Fetch user data
+- `PATCH /v1/users/{id}` - Update user profile
+- `POST /v1/users/{id}/password` - Change password
+
+**UI Components**:
+- Form inputs (email, name)
+- Status toggle switch
+- Password change button → modal
+- Save button (triggers update)
+
+#### 2. Roles (`pages/users/[id]/roles.vue`)
+
+Manage role assignments for the user.
+
+**Features**:
+- List of assigned roles with badges
+- Role count display
+- Add role dropdown + button
+- Remove role button (per role)
+- Empty state when no roles assigned
+
+**API Endpoints Used**:
+- `GET /v1/users/{id}/roles` - Fetch user's roles
+- `POST /v1/users/{id}/roles` - Assign role
+- `DELETE /v1/users/{id}/roles/{role_id}` - Remove role
+
+**UI Flow**:
+1. Select role from dropdown (shows available roles)
+2. Click "Add Role" button
+3. Optimistic update → role appears instantly
+4. Server confirms → invalidates cache
+5. Remove role → confirmation → optimistic removal
+
+#### 3. Permissions (`pages/users/[id]/permissions.vue`)
+
+View effective permissions from all assigned roles.
+
+**Features**:
+- Permission count badge
+- Search filter (by name, resource, action)
+- View toggle: List vs Grouped
+- Permission cards with metadata:
+  - Display name
+  - Resource + Action badges
+  - Source badge (Role vs Direct)
+  - Active/Inactive status
+- Summary: "X From Roles" + "Y Direct Permissions"
+- Empty state
+
+**API Endpoints Used**:
+- `GET /v1/users/{id}/permissions` - Fetch effective permissions
+
+**View Modes**:
+- **List View**: All permissions in flat list, sorted
+- **Grouped View**: Permissions grouped by resource
+
+**Permission Card Details**:
+```vue
+<UCard>
+  <p class="font-medium">{{ permission.display_name }}</p>
+  <code>{{ permission.resource }}</code>
+  <code>{{ permission.action }}</code>
+  <UBadge color="blue">From Role</UBadge>
+  <UBadge color="success">Active</UBadge>
+</UCard>
+```
+
+#### 4. Activity (`pages/users/[id]/activity.vue`)
+
+Display user activity metrics and account details.
+
+**Features**:
+- **Activity Statistics**:
+  - Last Login (relative time + absolute)
+  - Account Created (relative time + absolute)
+  - Account Age (calculated from created_at)
+- **Activity Status Indicators**:
+  - DAU (Daily Active User) - last 24h
+  - WAU (Weekly Active User) - last 7 days
+  - MAU (Monthly Active User) - last 30 days
+- **Account Details**:
+  - User ID (copyable)
+  - Email verification status
+  - Account status
+  - Superuser badge
+  - Metadata JSON (if present)
+
+**Data Source**:
+- `user.updated_at` → Last login approximation
+- `user.created_at` → Account age calculation
+- `user.metadata` → Additional info
+
+**Note**: DAU/WAU/MAU indicators are currently placeholders. In production, these would be populated by backend activity tracking (see `docs-library/49-Activity-Tracking.md`).
+
+### Routing Pattern
+
+Nuxt nested routes automatically map to this structure:
+
+```
+pages/users/[id].vue           → /users/{id}        (wrapper)
+  ├── pages/users/[id]/index.vue       → /users/{id}        (Basic Info)
+  ├── pages/users/[id]/roles.vue       → /users/{id}/roles  (Roles)
+  ├── pages/users/[id]/permissions.vue → /users/{id}/permissions (Permissions)
+  └── pages/users/[id]/activity.vue    → /users/{id}/activity (Activity)
+```
+
+### Navigation Flow
+
+**From Users List**:
+```typescript
+// In users/index.vue row actions
+{
+  label: 'Edit user',
+  icon: 'i-lucide-pencil',
+  onSelect() {
+    navigateTo(`/users/${row.original.id}`)
+  }
+}
+```
+
+**Tab Navigation**:
+```vue
+<template>
+  <UTabs v-model="currentTab" :items="tabs" />
+  <NuxtPage :user="user" />
+</template>
+
+<script setup>
+const tabs = [
+  { label: 'Basic Info', to: `/users/${userId.value}` },
+  { label: 'Roles', to: `/users/${userId.value}/roles` },
+  { label: 'Permissions', to: `/users/${userId.value}/permissions` },
+  { label: 'Activity', to: `/users/${userId.value}/activity` }
+]
+</script>
+```
+
+### Backend API Requirements
+
+These pages require the following backend endpoints (see `docs-library/23-User-Management-API.md`):
+
+- `GET /v1/users/{id}` - Fetch user details
+- `GET /v1/users/{id}/roles` - Fetch user's roles
+- `POST /v1/users/{id}/roles` - Assign role to user
+- `DELETE /v1/users/{id}/roles/{role_id}` - Remove role from user
+- `GET /v1/users/{id}/permissions` - Fetch effective permissions
+
+All endpoints require authentication and appropriate permissions (`user:read` or `user:update`).
+
+### Example Usage
+
+**Accessing User Detail**:
+```bash
+# Navigate to user detail page
+http://localhost:3000/users/69109a6e73bc51988f730c04
+
+# Automatically fetches:
+# - User data (GET /v1/users/{id})
+# - User roles (GET /v1/users/{id}/roles)
+# - User permissions (GET /v1/users/{id}/permissions)
+```
+
+**Assigning a Role**:
+1. Navigate to Roles tab (`/users/{id}/roles`)
+2. Select role from dropdown
+3. Click "Add Role"
+4. Frontend calls `POST /v1/users/{id}/roles`
+5. Role appears instantly (optimistic update)
+6. Cache invalidates and refetches on success
+
+**Viewing Permissions**:
+1. Navigate to Permissions tab (`/users/{id}/permissions`)
+2. Toggle between List/Grouped view
+3. Use search to filter permissions
+4. See color-coded source badges (From Roles vs Direct)
+
+---
+
+**Last Updated**: 2025-01-09
+**Maintainer**: OutlabsAuth Team
 **Questions**: See `docs/REDESIGN_VISION.md`

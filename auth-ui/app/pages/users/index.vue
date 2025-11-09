@@ -83,7 +83,7 @@ function getRowItems(row: Row<User>) {
       label: 'Edit user',
       icon: 'i-lucide-pencil',
       onSelect() {
-        navigateTo(`/users/${row.original.id}/edit`)
+        navigateTo(`/users/${row.original.id}`)
       }
     },
     {
