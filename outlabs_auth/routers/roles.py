@@ -106,17 +106,34 @@ def get_roles_router(
     ):
         """Create a new role."""
         try:
+            # Log the incoming data for debugging
+            import traceback
+            if auth.observability:
+                auth.observability.logger.debug(
+                    "role_create_request",
+                    name=data.name,
+                    display_name=data.display_name,
+                    permissions_count=len(data.permissions),
+                    is_global=data.is_global
+                )
+
             role = await auth.role_service.create_role(
                 name=data.name,
                 display_name=data.display_name,
                 description=data.description,
                 permissions=data.permissions,
-                entity_type_permissions=data.entity_type_permissions,
-                is_global=data.is_global,
-                assignable_at_types=data.assignable_at_types
+                is_global=data.is_global
             )
             return RoleResponse(**role.model_dump(mode='json', exclude={"entity"}))
         except Exception as e:
+            # Log error with observability
+            if auth.observability:
+                auth.observability.logger.error(
+                    "role_create_error",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    traceback=traceback.format_exc()
+                )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(e)

@@ -30,7 +30,7 @@ export function createRolesAPI() {
         sort_order: params.sort_order
       })
 
-      return client.call<PaginatedResponse<Role>>(`/v1/roles${queryString}`)
+      return client.call<PaginatedResponse<Role>>(`/v1/roles/${queryString}`)
     },
 
     /**

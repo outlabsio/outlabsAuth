@@ -6,17 +6,20 @@ Configures structured logging, Prometheus metrics, and correlation ID tracking.
 
 from enum import Enum
 from typing import Optional
+
 from pydantic import BaseModel, Field
 
 
 class LogsFormat(str, Enum):
     """Log output format."""
+
     JSON = "json"
     TEXT = "text"
 
 
 class LogsLevel(str, Enum):
     """Log verbosity level."""
+
     DEBUG = "DEBUG"
     INFO = "INFO"
     WARNING = "WARNING"
@@ -25,6 +28,7 @@ class LogsLevel(str, Enum):
 
 class PermissionCheckLogging(str, Enum):
     """Permission check logging mode."""
+
     ALL = "all"
     FAILURES_ONLY = "failures_only"
     NONE = "none"
@@ -58,107 +62,95 @@ class ObservabilityConfig(BaseModel):
 
     # Logging Configuration
     logs_format: LogsFormat = Field(
-        default=LogsFormat.JSON,
-        description="Log output format (json or text)"
+        default=LogsFormat.JSON, description="Log output format (json or text)"
     )
 
     logs_level: LogsLevel = Field(
-        default=LogsLevel.INFO,
-        description="Minimum log level to output"
+        default=LogsLevel.INFO, description="Minimum log level to output"
     )
 
     logs_include_timestamps: bool = Field(
-        default=True,
-        description="Include timestamps in log output"
+        default=True, description="Include timestamps in log output"
     )
 
     logs_include_correlation_id: bool = Field(
-        default=True,
-        description="Include correlation ID in log output"
+        default=True, description="Include correlation ID in log output"
     )
 
     # Metrics Configuration
     enable_metrics: bool = Field(
-        default=True,
-        description="Enable Prometheus metrics collection"
+        default=True, description="Enable Prometheus metrics collection"
     )
 
     metrics_path: str = Field(
-        default="/metrics",
-        description="HTTP path for Prometheus metrics endpoint"
+        default="/metrics", description="HTTP path for Prometheus metrics endpoint"
     )
 
     metrics_include_hostname: bool = Field(
-        default=True,
-        description="Include hostname in metric labels"
+        default=True, description="Include hostname in metric labels"
     )
 
     # Detailed Logging Controls
     log_permission_checks: PermissionCheckLogging = Field(
         default=PermissionCheckLogging.FAILURES_ONLY,
-        description="Permission check logging mode"
+        description="Permission check logging mode",
     )
 
     log_api_key_hits: bool = Field(
-        default=False,
-        description="Log every API key validation (can be noisy)"
+        default=False, description="Log every API key validation (can be noisy)"
     )
 
     log_cache_hits: bool = Field(
-        default=False,
-        description="Log cache hits/misses (can be noisy)"
+        default=False, description="Log cache hits/misses (can be noisy)"
     )
 
     log_db_queries: bool = Field(
-        default=False,
-        description="Log database queries with timing (can be noisy)"
+        default=False, description="Log database queries with timing (can be noisy)"
     )
 
     log_jwt_validations: bool = Field(
-        default=False,
-        description="Log every JWT validation (can be noisy)"
+        default=False, description="Log every JWT validation (can be noisy)"
     )
 
     # Performance Configuration
     async_logging: bool = Field(
-        default=True,
-        description="Use async logging to avoid blocking requests"
+        default=True, description="Use async logging to avoid blocking requests"
     )
 
     max_log_queue_size: int = Field(
-        default=10000,
-        description="Maximum async log queue size before dropping"
+        default=10000, description="Maximum async log queue size before dropping"
     )
 
     # Correlation ID Configuration
     correlation_id_header: str = Field(
-        default="X-Correlation-ID",
-        description="HTTP header name for correlation ID"
+        default="X-Correlation-ID", description="HTTP header name for correlation ID"
     )
 
     generate_correlation_id: bool = Field(
-        default=True,
-        description="Auto-generate correlation ID if not provided"
+        default=True, description="Auto-generate correlation ID if not provided"
     )
 
     # Security Configuration
     log_ip_addresses: bool = Field(
-        default=True,
-        description="Include IP addresses in security logs"
+        default=True, description="Include IP addresses in security logs"
     )
 
     log_user_agents: bool = Field(
-        default=True,
-        description="Include user agents in security logs"
+        default=True, description="Include user agents in security logs"
     )
 
     redact_sensitive_data: bool = Field(
+        default=True, description="Redact passwords, tokens, etc. from logs"
+    )
+
+    log_stack_traces: bool = Field(
         default=True,
-        description="Redact passwords, tokens, etc. from logs"
+        description="Include stack traces in error logs (disable in production for cleaner logs)",
     )
 
     class Config:
         """Pydantic model configuration."""
+
         use_enum_values = True
 
 

@@ -670,6 +670,179 @@ jq 'select(.event == "api_key_validation_failed") | .ip_address' app.log | sort 
 
 ---
 
+### http_500_internal_server_error
+
+**Level:** ERROR
+**When:** HTTP 500 Internal Server Error occurs
+**Frequency:** Should be very rare in production
+
+**Fields:**
+- `endpoint` (string) - API endpoint that failed (e.g., "/v1/users")
+- `error_class` (string) - Exception class name (e.g., "DatabaseError")
+- `error_message` (string) - Error message
+- `method` (string, optional) - HTTP method (GET, POST, etc.)
+- `user_id` (string, optional) - User ID if authenticated
+- `request_id` (string, optional) - Request/correlation ID
+- `stack_trace` (string, optional) - Full stack trace (if enabled in config)
+
+**Example:**
+```json
+{
+  "timestamp": "2025-01-26T10:15:23.456Z",
+  "level": "error",
+  "event": "http_500_internal_server_error",
+  "correlation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "service": "outlabs_auth",
+  "endpoint": "/v1/users",
+  "error_class": "DatabaseConnectionError",
+  "error_message": "Unable to connect to MongoDB",
+  "method": "GET",
+  "user_id": "507f1f77bcf86cd799439011",
+  "request_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "stack_trace": "Traceback (most recent call last):\n  File..."
+}
+```
+
+**Search Examples:**
+```bash
+# Find all 500 errors
+jq 'select(.event == "http_500_internal_server_error")' app.log
+
+# 500 errors by endpoint
+jq 'select(.event == "http_500_internal_server_error") | .endpoint' app.log | sort | uniq -c
+
+# 500 errors by error type
+jq 'select(.event == "http_500_internal_server_error") | .error_class' app.log | sort | uniq -c
+
+# Recent 500 errors with stack traces
+jq 'select(.event == "http_500_internal_server_error") | {timestamp, endpoint, error_class, stack_trace}' app.log | tail -10
+```
+
+---
+
+### router_error
+
+**Level:** ERROR
+**When:** Error occurs in a FastAPI router/route handler
+**Frequency:** Should be rare
+
+**Fields:**
+- `router` (string) - Router name (e.g., "users", "roles", "auth")
+- `endpoint` (string) - Full endpoint path (e.g., "/v1/users/{user_id}")
+- `operation` (string) - Operation being performed (e.g., "list_users", "create_role")
+- `error_type` (string) - Exception class name
+- `error_message` (string) - Error message
+- `user_id` (string, optional) - User ID if available
+- `stack_trace` (string, optional) - Stack trace
+
+**Example:**
+```json
+{
+  "timestamp": "2025-01-26T10:20:00.789Z",
+  "level": "error",
+  "event": "router_error",
+  "correlation_id": "b2c3d4e5-f6a7-8901-bcde-f23456789abc",
+  "service": "outlabs_auth",
+  "router": "users",
+  "endpoint": "/v1/users",
+  "operation": "list_users",
+  "error_type": "MongoDBError",
+  "error_message": "Connection timeout",
+  "user_id": "507f1f77bcf86cd799439011",
+  "stack_trace": "Traceback..."
+}
+```
+
+**Search Examples:**
+```bash
+# Errors by router
+jq 'select(.event == "router_error") | .router' app.log | sort | uniq -c
+
+# Errors in users router
+jq 'select(.event == "router_error" and .router == "users")' app.log
+
+# Most error-prone operations
+jq 'select(.event == "router_error") | .operation' app.log | sort | uniq -c | sort -rn
+```
+
+---
+
+### service_error
+
+**Level:** ERROR
+**When:** Error occurs in a business logic service
+**Frequency:** Should be rare
+
+**Fields:**
+- `service` (string) - Service name (e.g., "auth", "user", "role", "permission")
+- `operation` (string) - Operation being performed (e.g., "login", "create_user")
+- `error_type` (string) - Exception class name
+- `error_message` (string) - Error message
+- `user_id` (string, optional) - User ID if available
+- `stack_trace` (string, optional) - Stack trace
+
+**Example:**
+```json
+{
+  "timestamp": "2025-01-26T10:25:00.123Z",
+  "level": "error",
+  "event": "service_error",
+  "correlation_id": "c3d4e5f6-a7b8-9012-cdef-34567890abcd",
+  "service": "outlabs_auth",
+  "service": "auth",
+  "operation": "login",
+  "error_type": "DatabaseError",
+  "error_message": "Failed to query users collection",
+  "user_id": "507f1f77bcf86cd799439011",
+  "stack_trace": "Traceback..."
+}
+```
+
+**Search Examples:**
+```bash
+# Errors by service
+jq 'select(.event == "service_error") | .service' app.log | sort | uniq -c
+
+# Auth service errors
+jq 'select(.event == "service_error" and .service == "auth")' app.log
+
+# Database errors across all services
+jq 'select(.event == "service_error" and .error_type == "DatabaseError")' app.log
+```
+
+---
+
+### exception_occurred
+
+**Level:** ERROR
+**When:** Generic exception logged via `log_exception()`
+**Frequency:** Varies by usage
+
+**Fields:**
+- `error_type` (string) - Exception class name
+- `error_message` (string) - Error message
+- `context` (string) - Context where exception occurred
+- `user_id` (string, optional) - User ID if available
+- `stack_trace` (string, optional) - Stack trace
+
+**Example:**
+```json
+{
+  "timestamp": "2025-01-26T10:30:00.456Z",
+  "level": "error",
+  "event": "exception_occurred",
+  "correlation_id": "d4e5f6a7-b8c9-0123-def4-567890abcdef",
+  "service": "outlabs_auth",
+  "error_type": "ValueError",
+  "error_message": "Invalid user ID format",
+  "context": "users_router.get_user",
+  "user_id": "507f1f77bcf86cd799439011",
+  "stack_trace": "Traceback..."
+}
+```
+
+---
+
 ## Filtering & Searching
 
 ### Common jq Patterns

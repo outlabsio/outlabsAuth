@@ -94,6 +94,113 @@ curl http://localhost:8000/metrics
 
 ---
 
+## Complete Observability Stack (Docker Compose)
+
+**Want to see everything working together?** OutlabsAuth includes a complete Docker Compose stack with:
+
+- ✅ **MongoDB** - Database (port 27018)
+- ✅ **Redis** - Caching & activity tracking (port 6380)
+- ✅ **Prometheus** - Metrics collection (port 9090)
+- ✅ **Grafana** - Pre-configured dashboards (port 3011)
+- ✅ **SimpleRBAC Example** - Blog API with full observability (port 8003)
+- ✅ **Admin UI** - Optional web interface (port 3000)
+
+### Quick Start (Complete Stack)
+
+```bash
+# 1. Start the complete stack
+docker compose up -d
+
+# 2. Wait for services to be ready (~30 seconds)
+docker compose logs -f simple-rbac  # Watch SimpleRBAC startup
+
+# 3. Access the services:
+#    - SimpleRBAC API: http://localhost:8003/docs
+#    - Prometheus:     http://localhost:9090
+#    - Grafana:        http://localhost:3011 (admin/admin)
+#    - Admin UI:       http://localhost:3000 (optional, run separately)
+
+# 4. View real-time metrics in Grafana
+#    - Pre-configured dashboard already imported!
+#    - See login attempts, permission checks, API key usage, etc.
+```
+
+### What You Get
+
+**Pre-configured Grafana Dashboard** (`docker/grafana/dashboards/outlabs-auth-overview.json`):
+- **Authentication Metrics** - Login success/failure rates, methods used
+- **Permission Checks** - Granted vs denied, by permission type
+- **API Key Usage** - Active keys, usage counts, rate limits
+- **Performance** - P50/P95/P99 latencies for auth operations
+- **Activity Tracking** - DAU/MAU/WAU trends (if enabled)
+
+**Prometheus Scraping** (`docker/prometheus/prometheus.yml`):
+- Automatically scrapes metrics from SimpleRBAC example (port 8003)
+- 15-second scrape interval
+- Configured targets ready to add your own apps
+
+**Example Integration**:
+The SimpleRBAC example (`examples/simple_rbac/`) demonstrates:
+- Complete observability setup with `ObservabilityConfig`
+- Correlation ID middleware for request tracing
+- JSON structured logging (production mode)
+- Console logging (development mode)
+- `/metrics` endpoint for Prometheus
+
+### Using with Your Own App
+
+Once you've seen the stack in action, integrate it with your app:
+
+```bash
+# Keep infrastructure running
+docker compose up -d mongodb redis prometheus grafana
+
+# Run your app locally pointing to these services
+MONGODB_URL="mongodb://localhost:27018" \
+REDIS_URL="redis://localhost:6380" \
+uvicorn your_app:app --reload
+
+# Prometheus will scrape your app if you add it to prometheus.yml
+# Grafana dashboard will show metrics from all configured apps
+```
+
+### Stack Management
+
+```bash
+# Start everything
+docker compose up -d
+
+# Start only infrastructure (no examples)
+docker compose up -d mongodb redis prometheus grafana
+
+# View logs from specific service
+docker compose logs -f grafana
+docker compose logs -f simple-rbac
+
+# Stop everything
+docker compose down
+
+# Stop and remove all data (fresh start)
+docker compose down -v
+```
+
+### Ports Reference
+
+| Service | Internal Port | Host Port | URL |
+|---------|--------------|-----------|-----|
+| MongoDB | 27017 | 27018 | `mongodb://localhost:27018` |
+| Redis | 6379 | 6380 | `redis://localhost:6380` |
+| Prometheus | 9090 | 9090 | http://localhost:9090 |
+| Grafana | 3000 | 3011 | http://localhost:3011 |
+| SimpleRBAC API | 8003 | 8003 | http://localhost:8003 |
+| Admin UI* | 3000 | 3000 | http://localhost:3000 |
+
+*Admin UI runs separately (not in docker-compose): `cd auth-ui && bun run dev`
+
+**Why different ports?** To avoid conflicts with local development services you might already be running.
+
+---
+
 ## Configuration Reference
 
 ### ObservabilityConfig
@@ -664,8 +771,9 @@ cat app.log | jq 'select(.correlation_id == "a1b2c3d4-...")'
 
 - **[98-Metrics-Reference.md](98-Metrics-Reference.md)** - Complete metrics catalog
 - **[99-Log-Events-Reference.md](99-Log-Events-Reference.md)** - Complete log events catalog
-- **[Grafana Dashboard Guide](../grafana-dashboards/README.md)** - Pre-built dashboard
-- **[Observability Example](../examples/observability/)** - Docker Compose full stack
+- **[Docker Compose Stack](../docker-compose.yml)** - Complete observability stack (MongoDB + Redis + Prometheus + Grafana + SimpleRBAC example)
+- **[Grafana Dashboard](../docker/grafana/dashboards/outlabs-auth-overview.json)** - Pre-built dashboard (auto-loaded in Docker Compose stack)
+- **[SimpleRBAC Example](../examples/simple_rbac/)** - Working example with full observability integration
 
 ---
 

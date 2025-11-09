@@ -1014,7 +1014,7 @@ Mock data defined in `app/utils/mockData.ts`:
 
 ## Current Status (2025-11-08)
 
-**Phase**: Testing & Hardening  
+**Phase**: Testing & Hardening
 **Branch**: `library-redesign`
 
 **Completed**:
@@ -1025,17 +1025,254 @@ Mock data defined in `app/utils/mockData.ts`:
 - ✅ Context switching (EnterpriseRBAC)
 - ✅ Keyboard shortcuts
 - ✅ Mock data mode
+- ✅ **Pinia Colada migration** (Phase 1 & 2 complete)
+- ✅ **User CRUD testing** (Phase 3 - complete)
+- ✅ **Role CRUD testing** (Phase 3 - complete)
 
 **In Progress**:
 - 🔄 Config detection (SimpleRBAC vs EnterpriseRBAC)
-- 🔄 UI layout improvements (Roles modal)
-- 🔄 Testing all CRUD operations
+- 🔄 Permission CRUD testing
+- 🔄 Entity CRUD testing (EnterpriseRBAC)
 
 **Not Yet Started**:
 - ⏸️ Activity tracking dashboard
 - ⏸️ Metrics visualization
 - ⏸️ User permissions matrix view
 - ⏸️ Bulk operations
+
+---
+
+## Phase 3: CRUD Testing Results
+
+**Testing Environment**: SimpleRBAC example (`examples/simple_rbac/`)
+**API**: `http://localhost:8003`
+**Admin UI**: `http://localhost:3000`
+**Date**: 2025-11-08
+
+### User CRUD Testing ✅
+
+**Status**: Complete
+
+**Test Scenarios**:
+- ✅ List users with pagination
+- ✅ Create new user
+- ✅ Update user details
+- ✅ Delete user
+- ✅ Deactivate/reactivate user
+
+**Issues Encountered**:
+1. **UTable Component Rendering** - Fixed by using proper `h()` render functions
+2. **Permission Wildcard Checking** - Fixed by adding `fetch_links()` in permission service
+3. **Component Resolution** - Fixed by using `resolveComponent()` for dynamic components
+
+**Files Modified**:
+- `auth-ui/app/pages/users/index.vue` - Updated table column renderers
+- `outlabs_auth/services/permission.py` - Added `.fetch_links()` for Link fields
+
+### Role CRUD Testing ✅
+
+**Status**: Complete
+
+**Test Scenarios**:
+- ✅ List roles with pagination
+- ✅ Create new role with permissions
+- ✅ Display role permissions count
+- ✅ Show role context (Global/Entity-specific)
+- ✅ Auto-refresh after creation
+- ✅ Success notifications
+
+**Test Case: Create "Content Moderator" Role**
+```json
+{
+  "display_name": "Content Moderator",
+  "name": "content_moderator",
+  "description": "Can moderate posts and comments",
+  "permissions": ["post:update", "comment:delete"],
+  "is_global": true
+}
+```
+
+**Result**: ✅ Success (HTTP 201 Created)
+- Role created successfully
+- Appeared in roles table with correct data
+- Permissions count: 2 permissions
+- Context: Global
+- Auto-refresh via Pinia Colada cache invalidation
+
+**Issues Encountered & Fixed**:
+
+#### 1. **307 Temporary Redirect (Trailing Slash)**
+**Problem**: Backend route defined as `/v1/roles/` but frontend calling `/v1/roles`
+
+**Error Log**:
+```
+INFO: 172.19.0.1:61116 - 'GET /v1/roles?page=1&limit=100 HTTP/1.1' 307 Temporary Redirect
+```
+
+**Root Cause**: FastAPI redirects when trailing slashes don't match route definitions
+
+**Fix**: Added trailing slash to frontend API calls
+
+**File**: `auth-ui/app/api/roles.ts:33`
+```typescript
+// BEFORE
+return client.call<PaginatedResponse<Role>>(`/v1/roles${queryString}`)
+
+// AFTER
+return client.call<PaginatedResponse<Role>>(`/v1/roles/${queryString}`)
+```
+
+#### 2. **Unsupported Parameter Error (EnterpriseRBAC params in SimpleRBAC)**
+**Problem**: Router passing `entity_type_permissions` and `assignable_at_types` to SimpleRBAC service
+
+**Error**:
+```json
+{"detail": "RoleService.create_role() got an unexpected keyword argument 'entity_type_permissions'"}
+```
+
+**Root Cause**: `RoleService.create_role()` in SimpleRBAC doesn't accept EnterpriseRBAC-only parameters
+
+**Fix**: Removed unsupported parameters from router service call
+
+**File**: `outlabs_auth/routers/roles.py:108-126`
+```python
+# BEFORE
+role = await auth.role_service.create_role(
+    name=data.name,
+    display_name=data.display_name,
+    description=data.description,
+    permissions=data.permissions,
+    entity_type_permissions=data.entity_type_permissions,  # ❌ Not supported in SimpleRBAC
+    is_global=data.is_global,
+    assignable_at_types=data.assignable_at_types  # ❌ Not supported in SimpleRBAC
+)
+
+# AFTER
+role = await auth.role_service.create_role(
+    name=data.name,
+    display_name=data.display_name,
+    description=data.description,
+    permissions=data.permissions,
+    is_global=data.is_global
+)
+```
+
+#### 3. **Insufficient Error Logging (Observability Pattern)**
+**Problem**: 500 errors in API without descriptive logging for debugging
+
+**Initial Approach**: Added standard Python logging (❌ Wrong pattern)
+```python
+import logging
+logger = logging.getLogger(__name__)
+logger.error(f"Login error: {str(e)}")
+```
+
+**User Feedback**: "Okay, but isn't the logging tied in with our observability? Just have a look at that because we should keep the same patterns."
+
+**Correct Fix**: Use observability service's structured logger
+
+**Files Modified**:
+- `outlabs_auth/routers/roles.py:109-140` - Added observability logging
+- `outlabs_auth/routers/auth.py:124-140` - Added observability logging
+
+**Pattern**:
+```python
+try:
+    # Log incoming request for debugging
+    if auth.observability:
+        auth.observability.logger.debug(
+            "role_create_request",
+            name=data.name,
+            display_name=data.display_name,
+            permissions_count=len(data.permissions),
+            is_global=data.is_global
+        )
+
+    role = await auth.role_service.create_role(...)
+    return RoleResponse(**role.model_dump(mode='json', exclude={"entity"}))
+
+except Exception as e:
+    # Log error with structured logging
+    if auth.observability:
+        auth.observability.logger.error(
+            "role_create_error",
+            error=str(e),
+            error_type=type(e).__name__,
+            traceback=traceback.format_exc()
+        )
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=str(e)
+    )
+```
+
+**Key Observability Fields**:
+- Event name (e.g., `"role_create_request"`, `"role_create_error"`)
+- Contextual data (e.g., `name`, `permissions_count`)
+- Error details (e.g., `error`, `error_type`, `traceback`)
+
+#### 4. **Missing is_global Field (422 Unprocessable Entity)**
+**Problem**: Frontend not sending `is_global` field, causing Pydantic validation failure
+
+**Error**: HTTP 422 Unprocessable Entity
+
+**Root Cause**: `RoleCreateRequest` schema requires `is_global` but form state wasn't sending it
+
+**Fix**: Added `is_global: true` to form state
+
+**File**: `auth-ui/app/components/RoleCreateModal.vue:24-30, 85-91`
+```typescript
+// BEFORE
+const state = reactive({
+    name: "",
+    display_name: "",
+    description: "",
+    permissions: [] as string[],
+});
+
+// AFTER
+const state = reactive({
+    name: "",
+    display_name: "",
+    description: "",
+    permissions: [] as string[],
+    is_global: true,  // ✅ SimpleRBAC roles are always global
+});
+
+// Also updated reset logic
+Object.assign(state, {
+    name: "",
+    display_name: "",
+    description: "",
+    permissions: [],
+    is_global: true,  // ✅ Reset to true
+});
+```
+
+**Summary of Files Modified**:
+1. `auth-ui/app/api/roles.ts` - Fixed trailing slash (line 33)
+2. `outlabs_auth/routers/roles.py` - Removed Enterprise params (lines 108-126), added observability logging (lines 109-140)
+3. `outlabs_auth/routers/auth.py` - Added observability logging (lines 124-140)
+4. `auth-ui/app/components/RoleCreateModal.vue` - Added `is_global: true` (lines 24-30, 85-91)
+
+**Key Learnings**:
+1. ✅ **FastAPI trailing slashes matter** - Always match route definitions
+2. ✅ **Preset-aware parameters** - Don't pass EnterpriseRBAC params to SimpleRBAC services
+3. ✅ **Follow observability patterns** - Use `auth.observability.logger` instead of standard Python logging
+4. ✅ **Schema validation** - Ensure all required fields are sent from frontend
+5. ✅ **Pinia Colada invalidation** - Automatic cache invalidation works perfectly
+
+**Testing Verification**:
+- ✅ Modal opens with all form fields
+- ✅ Auto-generate role name from display name
+- ✅ Permission selection via checkboxes
+- ✅ Form submission with correct payload
+- ✅ Backend processes request (201 Created)
+- ✅ Success notification appears
+- ✅ Modal closes automatically
+- ✅ Form resets correctly
+- ✅ Roles table auto-refreshes
+- ✅ New role appears with correct data
 
 ---
 

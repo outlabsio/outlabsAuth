@@ -282,6 +282,31 @@ class ObservabilityService:
             buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5],
         )
 
+        # Error metrics (NEW - for 500 error tracking)
+        self.metrics["errors_total"] = Counter(
+            "outlabs_auth_errors_total",
+            "Total errors by type and location",
+            ["error_type", "location"],
+        )
+
+        self.metrics["500_errors_total"] = Counter(
+            "outlabs_auth_500_errors_total",
+            "Total 500 Internal Server Errors",
+            ["endpoint", "error_class"],
+        )
+
+        self.metrics["router_errors_total"] = Counter(
+            "outlabs_auth_router_errors_total",
+            "Total router-level errors",
+            ["router", "endpoint"],
+        )
+
+        self.metrics["service_errors_total"] = Counter(
+            "outlabs_auth_service_errors_total",
+            "Total service-level errors",
+            ["service", "operation"],
+        )
+
     async def _log_worker(self) -> None:
         """Background worker for async logging."""
         while True:
@@ -783,3 +808,249 @@ class ObservabilityService:
                     self.log_db_query(operation=operation, duration_ms=duration)
 
         return _timer()
+
+    # Public API - Error Logging (NEW - for 500 error tracking)
+
+    def log_error(
+        self,
+        event: str,
+        error_type: str,
+        error_message: str,
+        location: str,
+        endpoint: Optional[str] = None,
+        user_id: Optional[str] = None,
+        stack_trace: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log a general error with structured context.
+
+        Args:
+            event: Event name (e.g., "router_error", "service_error")
+            error_type: Error class name (e.g., "ValueError", "DatabaseError")
+            error_message: Error message
+            location: Where error occurred (e.g., "users_router.list_users")
+            endpoint: Optional API endpoint (e.g., "/v1/users")
+            user_id: Optional user ID if available
+            stack_trace: Optional stack trace for debugging
+            **extra: Additional context fields
+
+        Example:
+            >>> obs.log_error(
+            ...     event="router_error",
+            ...     error_type="ValueError",
+            ...     error_message="Invalid user ID format",
+            ...     location="users_router.get_user",
+            ...     endpoint="/v1/users/{user_id}",
+            ...     user_id="invalid_id"
+            ... )
+        """
+        self._emit_log(
+            "error",
+            event,
+            error_type=error_type,
+            error_message=error_message,
+            location=location,
+            endpoint=endpoint,
+            user_id=user_id,
+            stack_trace=stack_trace if self.config.log_stack_traces else None,
+            **extra,
+        )
+        self._increment_counter(
+            "errors_total", {"error_type": error_type, "location": location}
+        )
+
+    def log_500_error(
+        self,
+        endpoint: str,
+        error_class: str,
+        error_message: str,
+        method: Optional[str] = None,
+        user_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        stack_trace: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log a 500 Internal Server Error with full context.
+
+        Args:
+            endpoint: API endpoint that failed (e.g., "/v1/users")
+            error_class: Exception class name (e.g., "DatabaseError")
+            error_message: Error message
+            method: HTTP method (GET, POST, etc.)
+            user_id: User ID if authenticated
+            request_id: Request/correlation ID
+            stack_trace: Full stack trace for debugging
+            **extra: Additional context fields
+
+        Example:
+            >>> obs.log_500_error(
+            ...     endpoint="/v1/users",
+            ...     error_class="DatabaseConnectionError",
+            ...     error_message="Unable to connect to MongoDB",
+            ...     method="GET",
+            ...     stack_trace=traceback.format_exc()
+            ... )
+        """
+        self._emit_log(
+            "error",
+            "http_500_internal_server_error",
+            endpoint=endpoint,
+            error_class=error_class,
+            error_message=error_message,
+            method=method,
+            user_id=user_id,
+            request_id=request_id,
+            stack_trace=stack_trace if self.config.log_stack_traces else None,
+            **extra,
+        )
+        self._increment_counter(
+            "500_errors_total", {"endpoint": endpoint, "error_class": error_class}
+        )
+
+    def log_router_error(
+        self,
+        router: str,
+        endpoint: str,
+        operation: str,
+        error_type: str,
+        error_message: str,
+        user_id: Optional[str] = None,
+        stack_trace: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log a router-level error (e.g., in FastAPI route handlers).
+
+        Args:
+            router: Router name (e.g., "users", "roles", "auth")
+            endpoint: Full endpoint path (e.g., "/v1/users/{user_id}")
+            operation: Operation being performed (e.g., "list_users", "create_role")
+            error_type: Exception class name
+            error_message: Error message
+            user_id: User ID if available
+            stack_trace: Stack trace
+            **extra: Additional context
+
+        Example:
+            >>> obs.log_router_error(
+            ...     router="users",
+            ...     endpoint="/v1/users",
+            ...     operation="list_users",
+            ...     error_type="MongoDBError",
+            ...     error_message="Connection timeout",
+            ...     stack_trace=traceback.format_exc()
+            ... )
+        """
+        self._emit_log(
+            "error",
+            "router_error",
+            router=router,
+            endpoint=endpoint,
+            operation=operation,
+            error_type=error_type,
+            error_message=error_message,
+            user_id=user_id,
+            stack_trace=stack_trace if self.config.log_stack_traces else None,
+            **extra,
+        )
+        self._increment_counter(
+            "router_errors_total", {"router": router, "endpoint": endpoint}
+        )
+        self._increment_counter(
+            "errors_total", {"error_type": error_type, "location": f"{router}_router"}
+        )
+
+    def log_service_error(
+        self,
+        service: str,
+        operation: str,
+        error_type: str,
+        error_message: str,
+        user_id: Optional[str] = None,
+        stack_trace: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log a service-level error (e.g., in business logic services).
+
+        Args:
+            service: Service name (e.g., "auth", "user", "role", "permission")
+            operation: Operation being performed (e.g., "login", "create_user")
+            error_type: Exception class name
+            error_message: Error message
+            user_id: User ID if available
+            stack_trace: Stack trace
+            **extra: Additional context
+
+        Example:
+            >>> obs.log_service_error(
+            ...     service="auth",
+            ...     operation="login",
+            ...     error_type="DatabaseError",
+            ...     error_message="Failed to query users collection",
+            ...     user_id="507f1f77bcf86cd799439011",
+            ...     stack_trace=traceback.format_exc()
+            ... )
+        """
+        self._emit_log(
+            "error",
+            "service_error",
+            service=service,
+            operation=operation,
+            error_type=error_type,
+            error_message=error_message,
+            user_id=user_id,
+            stack_trace=stack_trace if self.config.log_stack_traces else None,
+            **extra,
+        )
+        self._increment_counter(
+            "service_errors_total", {"service": service, "operation": operation}
+        )
+        self._increment_counter(
+            "errors_total", {"error_type": error_type, "location": f"{service}_service"}
+        )
+
+    def log_exception(
+        self,
+        exception: Exception,
+        context: str,
+        user_id: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log an exception with automatic stack trace capture.
+
+        Args:
+            exception: The exception that occurred
+            context: Context where exception occurred (e.g., "users_router.create_user")
+            user_id: User ID if available
+            **extra: Additional context fields
+
+        Example:
+            >>> try:
+            ...     await some_operation()
+            ... except Exception as e:
+            ...     obs.log_exception(e, context="users_router.create_user")
+            ...     raise
+        """
+        import traceback
+
+        error_type = type(exception).__name__
+        error_message = str(exception)
+        stack_trace = traceback.format_exc() if self.config.log_stack_traces else None
+
+        self._emit_log(
+            "error",
+            "exception_occurred",
+            error_type=error_type,
+            error_message=error_message,
+            context=context,
+            user_id=user_id,
+            stack_trace=stack_trace,
+            **extra,
+        )
+        self._increment_counter(
+            "errors_total", {"error_type": error_type, "location": context}
+        )

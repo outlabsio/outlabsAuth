@@ -211,19 +211,31 @@ class AuthDeps:
                     detail="User ID not found in auth result"
                 )
 
-            # Get permissions from database (SimpleRBAC doesn't need entity_id)
-            user_permissions = await permission_service.get_user_permissions(user_id=user_id)
-
+            # Check permissions using permission service (handles wildcards properly)
             if require_all:
                 # Require ALL permissions
-                if not all(perm in user_permissions for perm in permissions):
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="Insufficient permissions"
+                for perm in permissions:
+                    has_perm = await permission_service.check_permission(
+                        user_id=user_id,
+                        permission=perm
                     )
+                    if not has_perm:
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Insufficient permissions"
+                        )
             else:
                 # Require ANY permission
-                if not any(perm in user_permissions for perm in permissions):
+                has_any = False
+                for perm in permissions:
+                    if await permission_service.check_permission(
+                        user_id=user_id,
+                        permission=perm
+                    ):
+                        has_any = True
+                        break
+
+                if not has_any:
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="Insufficient permissions"

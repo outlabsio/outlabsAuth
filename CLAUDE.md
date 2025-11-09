@@ -192,6 +192,46 @@ uv build
 pip install -e .
 ```
 
+## Development Testing Utilities
+
+### Quick Test Environment Reset (SimpleRBAC Example)
+
+When testing auth features, you'll often need a clean database with known test users. The **reset script** provides instant reset to a known-good state:
+
+```bash
+cd examples/simple_rbac
+python reset_test_env.py
+```
+
+**What it does:**
+- ✅ Clears all test data (users, roles, permissions, memberships)
+- ✅ Creates 21 permissions (user:*, role:*, permission:*, apikey:*, post:*, comment:*)
+- ✅ Creates 4 default roles (reader, writer, editor, admin) with appropriate permissions
+- ✅ Creates 3 test users with different permission levels
+- ✅ Takes ~2 seconds to complete
+
+**Test Users Created:**
+
+| Email | Password | Role | Permissions |
+|-------|----------|------|-------------|
+| `admin@test.com` | `Test123!!` | Admin | Full system access (user:*, role:*, post:*, comment:*) |
+| `editor@test.com` | `Test123!!` | Editor | Content management (post:*, comment:*) |
+| `writer@test.com` | `Test123!!` | Writer | Content creation (post:read/create/update, comment:create) |
+
+**When to use this:**
+- 🔄 After breaking auth/permissions during development
+- 🧪 Before running integration tests on the frontend (auth-ui)
+- 🚀 Setting up a demo environment
+- 🐛 Debugging auth issues with known-good credentials
+- 🎨 Testing the admin UI with a fresh slate
+
+**Configuration:**
+Uses environment variables (can override):
+- `MONGODB_URL` (default: `mongodb://localhost:27018`)
+- `DATABASE_NAME` (default: `blog_simple_rbac`)
+
+**Important:** This script is designed for development/testing only. Never run in production!
+
 ## Directory Structure
 
 ```
@@ -251,9 +291,13 @@ outlabsAuth/
 │   └── schemas/                    # Pydantic request/response schemas
 │
 ├── examples/                       # 📁 Example applications
+│   ├── simple_rbac/                # SimpleRBAC demo (blog application)
+│   │   ├── main.py                 # FastAPI app with SimpleRBAC preset
+│   │   ├── reset_test_env.py       # Quick test environment reset script
+│   │   ├── README.md               # Example documentation
+│   │   └── ...
 │   ├── enterprise_rbac/            # EnterpriseRBAC demo (real estate)
 │   └── notifications/              # Notification system demo
-│   # Note: SimpleRBAC example deleted (had broken metadata hack)
 │
 ├── tests/                          # 📁 Library tests
 │   ├── unit/
@@ -478,6 +522,8 @@ See **`docs/AUTH_UI.md`** for complete architecture, stores, API integration, an
 3. **Admin UI is separate** - It's NOT in the Python package (it's a Nuxt app in `auth-ui/`)
 4. **Each app is independent** - No multi-platform/multi-tenant by default
 5. **Start simple** - SimpleRBAC first, then EnterpriseRBAC features
+6. **Getting auth errors during testing?** - Use `python reset_test_env.py` to quickly reset to known-good state with test users
+7. **Backend is source of truth** - Frontend schemas must exactly match backend Pydantic models; remove any extra fields
 
 ## Development Workflow
 

@@ -50,6 +50,37 @@ cd examples/simple_rbac
 docker compose down
 ```
 
+## Development & Testing
+
+### Quick Test Environment Reset
+
+When testing auth features, you'll often need a clean database with known test users. Use the **reset script** to instantly reset to a good state:
+
+```bash
+cd examples/simple_rbac
+python reset_test_env.py
+```
+
+This script:
+- ✅ Clears all test data (users, roles, permissions, memberships)
+- ✅ Creates default roles (reader, writer, editor, admin)
+- ✅ Creates 3 test users with different permission levels
+- ✅ Takes ~2 seconds
+
+**Test Users Created:**
+
+| Email | Password | Role | Use For |
+|-------|----------|------|---------|
+| `admin@test.com` | `Test123!!` | Admin | Full access testing |
+| `editor@test.com` | `Test123!!` | Editor | Content management testing |
+| `writer@test.com` | `Test123!!` | Writer | Basic content creation testing |
+
+**When to use this:**
+- 🔄 After breaking auth/permissions during development
+- 🧪 Before running integration tests
+- 🚀 Setting up a demo environment
+- 🐛 Debugging auth issues
+
 ## What This Example Demonstrates
 
 ### SimpleRBAC Features

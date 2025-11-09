@@ -4,6 +4,10 @@ import type { Role } from '~/types/role'
 import { useQuery } from '@pinia/colada'
 import { rolesQueries, useDeleteRoleMutation } from '~/queries/roles'
 
+// Resolve components for use in cell renderers
+const UButton = resolveComponent('UButton')
+const UBadge = resolveComponent('UBadge')
+
 const search = ref('')
 const showCreateModal = ref(false)
 
@@ -158,7 +162,7 @@ const columns: TableColumn<Role>[] = [
       <UTable
         v-else
         :columns="columns"
-        :rows="rolesData?.items || []"
+        :data="rolesData?.items || []"
       >
         <template #empty>
           <div class="flex flex-col items-center justify-center py-12 gap-4">

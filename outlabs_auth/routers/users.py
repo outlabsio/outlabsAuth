@@ -5,22 +5,24 @@ Provides ready-to-use user management routes (DD-041).
 """
 
 from typing import Any, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from outlabs_auth.schemas.user import (
-    UserResponse,
-    UserCreateRequest,
-    UserUpdateRequest,
-    ChangePasswordRequest,
-)
+from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
 from outlabs_auth.schemas.common import PaginatedResponse
+from outlabs_auth.schemas.user import (
+    ChangePasswordRequest,
+    UserCreateRequest,
+    UserResponse,
+    UserUpdateRequest,
+)
 
 
 def get_users_router(
     auth: Any,
     prefix: str = "",
     tags: Optional[list[str]] = None,
-    requires_verification: bool = False
+    requires_verification: bool = False,
 ) -> APIRouter:
     """
     Generate user management router.
@@ -60,11 +62,11 @@ def get_users_router(
         response_model=UserResponse,
         status_code=status.HTTP_201_CREATED,
         summary="Create user",
-        description="Create a new user account (requires user:create permission)"
+        description="Create a new user account (requires user:create permission)",
     )
     async def create_user(
         data: UserCreateRequest,
-        auth_result = Depends(auth.deps.require_permission("user:create"))
+        auth_result=Depends(auth.deps.require_permission("user:create")),
     ):
         """
         Create a new user (admin only).
@@ -80,7 +82,7 @@ def get_users_router(
                 password=data.password,
                 first_name=data.first_name,
                 last_name=data.last_name,
-                is_superuser=data.is_superuser
+                is_superuser=data.is_superuser,
             )
 
             # Trigger on_after_register hook
@@ -93,25 +95,24 @@ def get_users_router(
                 last_name=user.last_name,
                 status=user.status.value,
                 email_verified=user.email_verified,
-                is_superuser=user.is_superuser
+                is_superuser=user.is_superuser,
             )
         except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(e)
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     @router.get(
         "/",
         response_model=PaginatedResponse[UserResponse],
         summary="List users",
-        description="List all users with pagination and optional search filtering (requires user:read permission)"
+        description="List all users with pagination and optional search filtering (requires user:read permission)",
     )
     async def list_users(
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
         limit: int = Query(20, ge=1, le=100, description="Results per page"),
-        search: Optional[str] = Query(None, description="Search by email, first name, or last name"),
-        auth_result = Depends(auth.deps.require_permission("user:read"))
+        search: Optional[str] = Query(
+            None, description="Search by email, first name, or last name"
+        ),
+        auth_result=Depends(auth.deps.require_permission("user:read")),
     ):
         """
         List users with pagination and optional search.
@@ -122,7 +123,9 @@ def get_users_router(
         try:
             if search:
                 # Use search functionality (no pagination for search)
-                all_users = await auth.user_service.search_users(search_term=search, limit=1000)
+                all_users = await auth.user_service.search_users(
+                    search_term=search, limit=1000
+                )
 
                 # Manual pagination of search results
                 total = len(all_users)
@@ -132,8 +135,7 @@ def get_users_router(
             else:
                 # Use standard list with pagination
                 users, total = await auth.user_service.list_users(
-                    page=page,
-                    limit=limit
+                    page=page, limit=limit
                 )
 
             # Calculate total pages
@@ -148,32 +150,29 @@ def get_users_router(
                     last_name=user.last_name,
                     status=user.status.value,
                     email_verified=user.email_verified,
-                    is_superuser=user.is_superuser
+                    is_superuser=user.is_superuser,
                 )
                 for user in users
             ]
 
             return PaginatedResponse(
-                items=items,
-                total=total,
-                page=page,
-                limit=limit,
-                pages=pages
+                items=items, total=total, page=page, limit=limit, pages=pages
             )
 
         except Exception as e:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=str(e)
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
             )
 
     @router.get(
         "/me",
         response_model=UserResponse,
         summary="Get current user",
-        description="Get the authenticated user's profile"
+        description="Get the authenticated user's profile",
     )
-    async def get_me(auth_result = Depends(auth.deps.require_auth(verified=requires_verification))):
+    async def get_me(
+        auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
+    ):
         """Get current user profile."""
         user = auth_result["user"]
         return UserResponse(
@@ -183,18 +182,18 @@ def get_users_router(
             last_name=user.last_name,
             status=user.status.value,
             email_verified=user.email_verified,
-            is_superuser=user.is_superuser
+            is_superuser=user.is_superuser,
         )
 
     @router.patch(
         "/me",
         response_model=UserResponse,
         summary="Update current user",
-        description="Update the authenticated user's profile"
+        description="Update the authenticated user's profile",
     )
     async def update_me(
         data: UserUpdateRequest,
-        auth_result = Depends(auth.deps.require_auth(verified=requires_verification))
+        auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
     ):
         """
         Update current user profile.
@@ -204,24 +203,21 @@ def get_users_router(
         try:
             user = await auth.user_service.update_user(
                 user_id=auth_result["user_id"],
-                update_dict=data.model_dump(exclude_unset=True)
+                update_dict=data.model_dump(exclude_unset=True),
             )
             return user
         except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(e)
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     @router.post(
         "/me/change-password",
         status_code=status.HTTP_204_NO_CONTENT,
         summary="Change password",
-        description="Change the authenticated user's password"
+        description="Change the authenticated user's password",
     )
     async def change_password(
         data: ChangePasswordRequest,
-        auth_result = Depends(auth.deps.require_auth(verified=requires_verification))
+        auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
     ):
         """
         Change user password.
@@ -231,28 +227,26 @@ def get_users_router(
         try:
             # Verify current password
             is_valid = await auth.auth_service.verify_password(
-                user=auth_result["user"],
-                password=data.current_password
+                user=auth_result["user"], password=data.current_password
             )
 
             if not is_valid:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Invalid current password"
+                    detail="Invalid current password",
                 )
 
             # Update password
             await auth.user_service.update_user(
                 user_id=auth_result["user_id"],
-                update_dict={"password": data.new_password}
+                update_dict={"password": data.new_password},
             )
 
         except HTTPException:
             raise
         except Exception as e:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=str(e)
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
             )
 
         return None
@@ -261,39 +255,36 @@ def get_users_router(
         "/{user_id}",
         response_model=UserResponse,
         summary="Get user by ID",
-        description="Get any user's profile (requires user:read permission)"
+        description="Get any user's profile (requires user:read permission)",
     )
     async def get_user(
-        user_id: str,
-        auth_result = Depends(auth.deps.require_permission("user:read"))
+        user_id: str, auth_result=Depends(auth.deps.require_permission("user:read"))
     ):
         """Get user by ID (admin only)."""
         try:
             user = await auth.user_service.get_user(user_id)
             if not user:
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="User not found"
+                    status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
                 )
             return user
         except HTTPException:
             raise
         except Exception as e:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=str(e)
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
             )
 
     @router.patch(
         "/{user_id}",
         response_model=UserResponse,
         summary="Update user by ID",
-        description="Update any user's profile (requires user:update permission)"
+        description="Update any user's profile (requires user:update permission)",
     )
     async def update_user(
         user_id: str,
         data: UserUpdateRequest,
-        auth_result = Depends(auth.deps.require_permission("user:update"))
+        auth_result=Depends(auth.deps.require_permission("user:update")),
     ):
         """
         Update user by ID (admin only).
@@ -302,25 +293,20 @@ def get_users_router(
         """
         try:
             user = await auth.user_service.update_user(
-                user_id=user_id,
-                update_dict=data.model_dump(exclude_unset=True)
+                user_id=user_id, update_dict=data.model_dump(exclude_unset=True)
             )
             return user
         except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(e)
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     @router.delete(
         "/{user_id}",
         status_code=status.HTTP_204_NO_CONTENT,
         summary="Delete user",
-        description="Delete user account (requires user:delete permission)"
+        description="Delete user account (requires user:delete permission)",
     )
     async def delete_user(
-        user_id: str,
-        auth_result = Depends(auth.deps.require_permission("user:delete"))
+        user_id: str, auth_result=Depends(auth.deps.require_permission("user:delete"))
     ):
         """
         Delete user by ID (admin only).
@@ -330,10 +316,7 @@ def get_users_router(
         try:
             await auth.user_service.delete_user(user_id)
         except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(e)
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
         return None
 

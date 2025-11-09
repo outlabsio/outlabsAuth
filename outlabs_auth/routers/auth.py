@@ -124,6 +124,16 @@ def get_auth_router(
         except HTTPException:
             raise
         except Exception as e:
+            # Log unexpected error with structured logging (observability)
+            import traceback
+            if auth.observability:
+                auth.observability.logger.error(
+                    "login_unexpected_error",
+                    email=data.email,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    traceback=traceback.format_exc()
+                )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=str(e)

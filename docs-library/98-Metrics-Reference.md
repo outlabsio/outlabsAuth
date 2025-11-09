@@ -537,6 +537,211 @@ sum by (type) (rate(outlabs_auth_suspicious_activity_total[1h]))
 
 ---
 
+## Error Metrics
+
+### outlabs_auth_errors_total
+
+**Type:** Counter
+**Description:** Total errors by type and location
+
+**Labels:**
+- `error_type` - Exception class name (e.g., `DatabaseError`, `ValueError`)
+- `location` - Where error occurred (e.g., `users_router`, `auth_service`)
+
+**Example Queries:**
+
+```promql
+# Total error rate
+sum(rate(outlabs_auth_errors_total[5m]))
+
+# Errors by type
+sum by (error_type) (rate(outlabs_auth_errors_total[5m]))
+
+# Top 10 error types
+topk(10, sum by (error_type) (increase(outlabs_auth_errors_total[1h])))
+
+# Database errors
+sum(rate(outlabs_auth_errors_total{error_type=~".*Database.*"}[5m]))
+
+# Errors by location
+sum by (location) (rate(outlabs_auth_errors_total[5m]))
+```
+
+**Recommended Alerts:**
+
+```yaml
+# High error rate
+- alert: HighErrorRate
+  expr: sum(rate(outlabs_auth_errors_total[5m])) > 1
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "High error rate detected"
+    description: "{{ $value }} errors per second"
+
+# Specific error type spike
+- alert: DatabaseErrorSpike
+  expr: sum(rate(outlabs_auth_errors_total{error_type=~".*Database.*"}[5m])) > 0.5
+  for: 2m
+  labels:
+    severity: critical
+  annotations:
+    summary: "Database errors increasing"
+    description: "Database errors: {{ $value }}/sec"
+```
+
+---
+
+### outlabs_auth_500_errors_total
+
+**Type:** Counter
+**Description:** Total HTTP 500 Internal Server Errors
+
+**Labels:**
+- `endpoint` - API endpoint (e.g., `/v1/users`, `/v1/auth/login`)
+- `error_class` - Exception class (e.g., `DatabaseConnectionError`)
+
+**Example Queries:**
+
+```promql
+# 500 error rate
+sum(rate(outlabs_auth_500_errors_total[5m]))
+
+# 500 errors by endpoint
+sum by (endpoint) (rate(outlabs_auth_500_errors_total[5m]))
+
+# Top endpoints with 500s
+topk(5, sum by (endpoint) (increase(outlabs_auth_500_errors_total[1h])))
+
+# 500 errors by error type
+sum by (error_class) (rate(outlabs_auth_500_errors_total[5m]))
+
+# Specific endpoint error rate
+rate(outlabs_auth_500_errors_total{endpoint="/v1/users"}[5m])
+```
+
+**Recommended Alerts:**
+
+```yaml
+# Any 500 errors
+- alert: InternalServerErrors
+  expr: sum(rate(outlabs_auth_500_errors_total[5m])) > 0
+  for: 1m
+  labels:
+    severity: critical
+  annotations:
+    summary: "500 errors detected"
+    description: "{{ $value }} 500 errors per second"
+
+# Specific endpoint failing
+- alert: EndpointFailing
+  expr: rate(outlabs_auth_500_errors_total{endpoint="/v1/auth/login"}[5m]) > 0.1
+  for: 2m
+  labels:
+    severity: critical
+  annotations:
+    summary: "Login endpoint failing"
+    description: "Login returning 500s: {{ $value }}/sec"
+```
+
+---
+
+### outlabs_auth_router_errors_total
+
+**Type:** Counter
+**Description:** Total router-level errors
+
+**Labels:**
+- `router` - Router name (e.g., `users`, `roles`, `auth`)
+- `endpoint` - Full endpoint path
+
+**Example Queries:**
+
+```promql
+# Errors by router
+sum by (router) (rate(outlabs_auth_router_errors_total[5m]))
+
+# Most error-prone router
+topk(1, sum by (router) (increase(outlabs_auth_router_errors_total[1h])))
+
+# Users router error rate
+sum(rate(outlabs_auth_router_errors_total{router="users"}[5m]))
+
+# Error rate heatmap (by router and endpoint)
+sum by (router, endpoint) (rate(outlabs_auth_router_errors_total[5m]))
+```
+
+**Recommended Alerts:**
+
+```yaml
+# Router error spike
+- alert: RouterErrorSpike
+  expr: sum by (router) (rate(outlabs_auth_router_errors_total[5m])) > 0.5
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "{{ $labels.router }} router errors spiking"
+    description: "{{ $value }} errors/sec in {{ $labels.router }} router"
+```
+
+---
+
+### outlabs_auth_service_errors_total
+
+**Type:** Counter
+**Description:** Total service-level errors
+
+**Labels:**
+- `service` - Service name (e.g., `auth`, `user`, `role`, `permission`)
+- `operation` - Operation being performed (e.g., `login`, `create_user`)
+
+**Example Queries:**
+
+```promql
+# Errors by service
+sum by (service) (rate(outlabs_auth_service_errors_total[5m]))
+
+# Errors by operation
+sum by (operation) (rate(outlabs_auth_service_errors_total[5m]))
+
+# Auth service errors
+sum(rate(outlabs_auth_service_errors_total{service="auth"}[5m]))
+
+# Login operation errors
+sum(rate(outlabs_auth_service_errors_total{operation="login"}[5m]))
+
+# Most error-prone operations
+topk(10, sum by (operation) (increase(outlabs_auth_service_errors_total[1h])))
+```
+
+**Recommended Alerts:**
+
+```yaml
+# Service error spike
+- alert: ServiceErrorSpike
+  expr: sum by (service) (rate(outlabs_auth_service_errors_total[5m])) > 0.5
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "{{ $labels.service }} service errors spiking"
+    description: "{{ $value }} errors/sec in {{ $labels.service }} service"
+
+# Login failures
+- alert: LoginServiceFailing
+  expr: sum(rate(outlabs_auth_service_errors_total{operation="login"}[5m])) > 0.1
+  for: 2m
+  labels:
+    severity: critical
+  annotations:
+    summary: "Login service experiencing errors"
+    description: "{{ $value }} login errors per second"
+```
+
+---
+
 ## Performance Metrics
 
 ### outlabs_auth_cache_hits_total

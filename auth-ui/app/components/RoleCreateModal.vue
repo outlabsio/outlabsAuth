@@ -26,6 +26,7 @@ const state = reactive({
     display_name: "",
     description: "",
     permissions: [] as string[],
+    is_global: true, // SimpleRBAC roles are always global
 });
 
 // Auto-generate name from display_name
@@ -86,6 +87,7 @@ async function handleSubmit() {
             display_name: "",
             description: "",
             permissions: [],
+            is_global: true,
         });
     } catch (error) {
         console.error('❌ [RoleCreateModal] Error creating role:', error)

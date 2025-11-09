@@ -89,6 +89,7 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=http://localhost:3011
+      - GF_FEATURE_TOGGLES_ENABLE=tempoSearch,tempoBackendSearch
     volumes:
       - grafana-data:/var/lib/grafana
       - ./docker/grafana/provisioning:/etc/grafana/provisioning
@@ -98,6 +99,53 @@ services:
     restart: unless-stopped
     depends_on:
       - prometheus
+      - loki
+      - tempo
+
+  # Loki - Log aggregation (like Elasticsearch for logs, but lighter)
+  loki:
+    image: grafana/loki:latest
+    container_name: outlabs-loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-data:/loki
+    networks:
+      - outlabs
+    restart: unless-stopped
+
+  # Promtail - Log shipper (sends logs from containers to Loki)
+  promtail:
+    image: grafana/promtail:latest
+    container_name: outlabs-promtail
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./docker/promtail/promtail-config.yml:/etc/promtail/config.yml
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - outlabs
+    restart: unless-stopped
+    depends_on:
+      - loki
+
+  # Tempo - Distributed tracing (for request tracing across services)
+  tempo:
+    image: grafana/tempo:latest
+    container_name: outlabs-tempo
+    user: "0:0" # Run as root to avoid permission issues in development
+    ports:
+      - "3200:3200" # Tempo HTTP
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./docker/tempo/tempo.yaml:/etc/tempo.yaml
+      - tempo-data:/var/tempo
+    networks:
+      - outlabs
+    restart: unless-stopped
 
   # ============================================================================
   # Example Applications
@@ -146,3 +194,7 @@ volumes:
     name: outlabs-prometheus-data
   grafana-data:
     name: outlabs-grafana-data
+  loki-data:
+    name: outlabs-loki-data
+  tempo-data:
+    name: outlabs-tempo-data

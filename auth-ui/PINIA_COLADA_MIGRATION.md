@@ -17,8 +17,12 @@
 **WHERE WE ARE:** 🔄 **Phase 3 Testing - User CRUD + Roles List Complete!** - Testing role CRUD next
 
 **WHAT WE FIXED (Phase 3 - Latest):**
+- ✅ **Fixed roles page UTable rendering** (`:rows` → `:data` prop)
+- ✅ **Roles page now displays all 4 roles!** (Backend → Query → Template all working)
+- ✅ **Fixed critical permission checking bug** (wildcard `*:*` not working)
+- ✅ Changed permission check from string matching to `permission_service.check_permission()`
 - ✅ **Fixed roles endpoint 500 error** (ObjectId serialization + Link field issues)
-- ✅ **Roles page now loads successfully!** (GET /v1/roles/?page=1&limit=100 → 200 OK)
+- ✅ **Roles page loads successfully!** (GET /v1/roles/?page=1&limit=100 → 200 OK)
 - ✅ Added pagination support to roles list endpoint
 - ✅ Fixed ObjectId serialization (mode='json' in model_dump)
 - ✅ Excluded entity Link field from serialization
@@ -53,8 +57,8 @@
 1. ✅ Users page - list, search, pagination (DONE)
 2. ✅ Users page - create user (DONE)
 3. ✅ Users page - delete user (DONE - optimistic updates working)
-4. ✅ Roles page - list with pagination (DONE - 200 OK, "No roles found" displayed)
-5. ⏳ Roles page - create, update, delete roles
+4. ✅ Roles page - list with pagination (DONE - displaying all 4 roles correctly)
+5. ⏳ Roles page - create, update, delete roles (NEXT - test role mutations)
 6. ⏳ Permissions page - list and filter
 7. ⏳ Cache behavior (navigate away/back)
 8. ⏳ Race conditions in search
@@ -85,6 +89,11 @@ cd auth-ui && bun run dev
 ```
 
 **FILES MODIFIED:**
+
+**Phase 3 (Roles Page Rendering + Permission Fix - 2025-11-08):**
+- `auth-ui/app/pages/roles/index.vue:36-45` - Added debug computed `tableRows` with logging
+- `auth-ui/app/pages/roles/index.vue:184` - Fixed UTable prop (`:rows` → `:data`)
+- `outlabs_auth/dependencies.py:214-242` - Fixed permission wildcard checking (string matching → `permission_service.check_permission()`)
 
 **Phase 3 (Roles Endpoint Fixes - 2025-11-08):**
 - `outlabs_auth/routers/roles.py:15` - Added `PaginatedResponse` import
@@ -1754,6 +1763,174 @@ role.model_dump(mode='json', exclude={"entity"})
 2. **Beanie Link fields**: Must be excluded from `model_dump()` output
 3. **Pagination**: Added support using existing service layer methods
 4. **Testing approach**: Test serialization directly when debugging 500 errors
+
+---
+
+### Phase 3 Progress - Roles Page Rendering + Permission Wildcard Fix (2025-11-08)
+
+**Status:** ✅ **Roles page fully working!** - Fixed two critical bugs
+
+#### Issue 1: UTable Not Rendering Data
+
+**Problem:** Roles page showed "No roles found" even though:
+- Backend returned 200 OK with 4 roles
+- Pinia Colada query successfully fetched data
+- Console logs confirmed `rolesData` contained 4 items
+
+**Investigation:**
+```javascript
+// Console showed query working perfectly:
+[ROLES PAGE] Query state changed: {
+  data: {items: Array(4), total: 4, page: 1, limit: 100, pages: 1},
+  loading: false,
+  error: null,
+  itemsCount: 4
+}
+// ✅ Data is there! But UI shows "No roles found" 🤔
+```
+
+**Root Cause:** Incorrect UTable prop name
+
+**File:** `auth-ui/app/pages/roles/index.vue:172`
+
+**Before (BROKEN):**
+```vue
+<UTable
+  v-else
+  :columns="columns"
+  :rows="rolesData?.items || []"  ❌ WRONG PROP NAME
+>
+```
+
+**After (FIXED):**
+```vue
+<UTable
+  v-else
+  :columns="columns"
+  :data="rolesData?.items || []"  ✅ CORRECT PROP NAME
+>
+```
+
+**Why This Matters:**
+- Nuxt UI's UTable component expects `:data` prop for table rows
+- Users page (working correctly) uses `:data="usersData?.items || []"` at line 278
+- Using `:rows` instead of `:data` caused UTable to treat the data as empty
+- The `#empty` slot rendered instead of the table rows
+
+---
+
+#### Issue 2: Permission Wildcard Not Working
+
+**Problem:** Superusers with `*:*` wildcard permission were getting 403 Forbidden on roles page
+
+**Root Cause:** String matching doesn't handle wildcards
+
+**File:** `outlabs_auth/dependencies.py:214-242`
+
+**Before (BROKEN):**
+```python
+# Simple string matching
+user_permissions = await permission_service.get_user_permissions(user_id=user_id)
+# Returns: ["*:*"] for superusers
+
+if require_all:
+    if not all(perm in user_permissions for perm in permissions):
+        # ❌ Checks: "role:read" in ["*:*"] → False!
+        raise HTTPException(status_code=403)
+```
+
+**After (FIXED):**
+```python
+# Use permission service's wildcard-aware check_permission() method
+if require_all:
+    for perm in permissions:
+        has_perm = await permission_service.check_permission(
+            user_id=user_id,
+            permission=perm  # Checks wildcards: *:*, user:*, exact matches
+        )
+        if not has_perm:
+            raise HTTPException(status_code=403)
+```
+
+**Permission Service Wildcard Logic** (`outlabs_auth/services/permission.py:58-168`):
+```python
+async def check_permission(self, user_id: str, permission: str) -> bool:
+    # Superusers always have all permissions
+    if user.is_superuser:
+        return True
+
+    user_permissions = await self.get_user_permissions(user_id)
+
+    # Check exact match
+    if permission in user_permissions:
+        return True
+
+    # Check wildcard permissions
+    resource, action = permission.split(":") if ":" in permission else (permission, "*")
+
+    # Check resource wildcard (e.g., "user:*" matches "user:read", "user:create")
+    if f"{resource}:*" in user_permissions:
+        return True
+
+    # Check full wildcard (e.g., "*:*" matches everything)
+    if "*:*" in user_permissions:
+        return True
+
+    return False
+```
+
+---
+
+#### Test Results
+
+✅ **Roles Page Now Fully Working:**
+- Displays all 4 roles in table
+- Proper table structure with columns: Role, Permissions, Context, Description, Actions
+- Role data shows:
+  - **Reader** - 0 permissions
+  - **Writer** - 2 permissions (post:create, comment:create)
+  - **Editor** - 4 permissions (post:create, post:update_own, post:delete_own, comment:create)
+  - **Admin** - 14 permissions (full wildcard via `*:*` would show all, but UI displays actual list)
+
+✅ **Permission Checking Working:**
+- Superusers can now access all protected endpoints
+- Wildcard `*:*` correctly grants all permissions
+- Resource wildcards like `user:*` work correctly
+- Exact permission matches work as before
+
+**Backend Logs Confirm:**
+```
+INFO: "GET /v1/roles/?page=1&limit=100 HTTP/1.1" 200 OK
+```
+
+**Console Shows Data Flow:**
+```javascript
+[ROLES PAGE] Query state changed:
+  {data: {...}, loading: false, error: null, itemsCount: 4}
+[ROLES PAGE] tableRows computed:
+  {rolesData: {...}, items: Array(4), rowsLength: 4, rows: Array(4)}
+```
+
+---
+
+#### Files Modified
+
+**Frontend:**
+- `auth-ui/app/pages/roles/index.vue:36-45` - Added debug computed `tableRows`
+- `auth-ui/app/pages/roles/index.vue:172` - Changed `:rows` → `:data`
+
+**Backend:**
+- `outlabs_auth/dependencies.py:214-242` - Replaced string matching with `permission_service.check_permission()` calls
+
+---
+
+#### Key Learnings
+
+1. **Nuxt UI UTable API**: Always use `:data` prop, not `:rows`
+2. **Component API Consistency**: Check working examples (users page) when debugging similar components
+3. **Permission Wildcards**: Never use simple string matching - always use the permission service's wildcard-aware methods
+4. **Debugging Template Issues**: If query has data but template shows empty, check component prop names first
+5. **Test with Debug Logging**: Added computed properties with logging to trace data flow from query → template
 
 ---
 

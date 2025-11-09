@@ -45,7 +45,12 @@
       "Bash(/tmp/login_response.json)",
       "mcp__playwright__browser_handle_dialog",
       "mcp__playwright__browser_take_screenshot",
-      "mcp__playwright__browser_type"
+      "mcp__playwright__browser_type",
+      "Bash(MONGODB_URL=\"mongodb://localhost:27018\" DATABASE_NAME=\"blog_simple_rbac\" SECRET_KEY=\"simple-rbac-secret-key-change-in-production\" REDIS_URL=\"redis://localhost:6380\" uv run:*)",
+      "Bash(kill:*)",
+      "mcp__playwright__browser_evaluate",
+      "mcp__playwright__browser_press_key",
+      "mcp__playwright__browser_wait_for"
     ],
     "deny": [],
     "ask": []
