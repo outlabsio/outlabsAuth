@@ -44,7 +44,5 @@ export interface Permission {
   is_system: boolean
   is_active: boolean
   tags?: string[]
-  created_at: string
-  updated_at: string
   metadata?: Record<string, any>
 }

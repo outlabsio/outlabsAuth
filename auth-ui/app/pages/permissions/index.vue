@@ -4,6 +4,10 @@ import type { Permission } from '~/types/role'
 import { useQuery } from '@pinia/colada'
 import { permissionsQueries } from '~/queries/permissions'
 
+// Resolve components for use in cell renderers
+const UButton = resolveComponent('UButton')
+const UBadge = resolveComponent('UBadge')
+
 const search = ref('')
 const showCreateModal = ref(false)
 
@@ -24,12 +28,12 @@ const columns: TableColumn<Permission>[] = [
           h('p', {
             class: `font-mono text-sm font-medium ${isDeprecated ? 'line-through text-muted' : ''}`
           }, row.original.name),
-          row.original.is_system && h('UBadge', {
+          row.original.is_system && h(UBadge, {
             color: 'blue',
             variant: 'subtle',
             size: 'xs'
           }, () => 'System'),
-          !row.original.is_active && h('UBadge', {
+          !row.original.is_active && h(UBadge, {
             color: 'neutral',
             variant: 'subtle',
             size: 'xs'
@@ -42,7 +46,7 @@ const columns: TableColumn<Permission>[] = [
   {
     accessorKey: 'resource',
     header: 'Resource',
-    cell: ({ row }) => h('UBadge', {
+    cell: ({ row }) => h(UBadge, {
       color: row.original.resource === '*' ? 'error' : 'primary',
       variant: 'subtle'
     }, () => row.original.resource)
@@ -50,7 +54,7 @@ const columns: TableColumn<Permission>[] = [
   {
     accessorKey: 'action',
     header: 'Action',
-    cell: ({ row }) => h('UBadge', {
+    cell: ({ row }) => h(UBadge, {
       color: row.original.action === '*' ? 'error' : 'neutral',
       variant: 'outline'
     }, () => row.original.action)
@@ -62,7 +66,7 @@ const columns: TableColumn<Permission>[] = [
       if (!row.original.scope) {
         return h('span', { class: 'text-sm text-muted' }, '-')
       }
-      return h('UBadge', {
+      return h(UBadge, {
         color: 'purple',
         variant: 'subtle',
         size: 'xs'
@@ -179,7 +183,7 @@ const filteredPermissions = computed(() => {
       <UTable
         v-else
         :columns="columns"
-        :rows="filteredPermissions"
+        :data="filteredPermissions"
       >
         <template #empty>
           <div class="flex flex-col items-center justify-center py-12 gap-4">

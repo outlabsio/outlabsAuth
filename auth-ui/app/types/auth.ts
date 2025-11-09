@@ -50,9 +50,10 @@ export interface SystemStatus {
 }
 
 /**
- * Permission definition from backend
+ * Permission option for config endpoint (simplified format for UI dropdowns)
+ * Note: This is different from the full Permission type in types/role.ts
  */
-export interface Permission {
+export interface PermissionOption {
   value: string;
   label: string;
   category: string;
@@ -74,5 +75,5 @@ export interface AuthConfig {
     user_status: boolean;
     activity_tracking: boolean;
   };
-  available_permissions: Permission[];
+  available_permissions: PermissionOption[];
 }

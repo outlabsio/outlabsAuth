@@ -51,7 +51,11 @@
       "mcp__playwright__browser_evaluate",
       "mcp__playwright__browser_press_key",
       "mcp__playwright__browser_wait_for",
-      "Bash(docker start:*)"
+      "Bash(docker start:*)",
+      "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2OTBmNWJjNDBlMjI3MjI3NmQ0MmViOWIiLCJleHAiOjE3NjI2MjU4MDcsImlhdCI6MTc2MjYyNDkwNywidHlwZSI6ImFjY2VzcyIsImF1ZCI6Im91dGxhYnMtYXV0aCIsImp0aSI6ImRLc2NweDRLZHctUFNDNjV2cjdmbXcifQ.cztWBtIgO1dhY3VDjFvYmNDtZuFLUQMdpX8KNIav1fk\" curl -s -w \"\\nHTTP Status: %{http_code}\\n\" \"http://localhost:8003/v1/permissions/\" -H \"Authorization: Bearer $TOKEN\")",
+      "Bash(bun run dev)",
+      "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2OTBmZTg4MzlmY2ZmNDk3MDA0YWE2ODMiLCJleHAiOjE3NjI2OTIyNzIsImlhdCI6MTc2MjY5MTM3MiwidHlwZSI6ImFjY2VzcyIsImF1ZCI6Im91dGxhYnMtYXV0aCIsImp0aSI6IjUtSUZOaFZnTG5vWW93ODg3OVkwYlEifQ.d6GO8ukrhUT-x1YmhLDLb_UCGvwUMbw21zynLmaVcRo\" curl -s \"http://localhost:8003/v1/permissions/\" -H \"Authorization: Bearer $TOKEN\")",
+      "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2OTBmZTg4MzlmY2ZmNDk3MDA0YWE2ODMiLCJleHAiOjE3NjI2OTIyNzIsImlhdCI6MTc2MjY5MTM3MiwidHlwZSI6ImFjY2VzcyIsImF1ZCI6Im91dGxhYnMtYXV0aCIsImp0aSI6IjUtSUZOaFZnTG5vWW93ODg3OVkwYlEifQ.d6GO8ukrhUT-x1YmhLDLb_UCGvwUMbw21zynLmaVcRo\")"
     ],
     "deny": [],
     "ask": []

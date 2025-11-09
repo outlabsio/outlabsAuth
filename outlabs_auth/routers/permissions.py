@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from outlabs_auth.schemas.permission import (
     PermissionCheckRequest,
     PermissionCheckResponse,
+    PermissionResponse,
 )
 
 
@@ -48,7 +49,7 @@ def get_permissions_router(
 
     @router.get(
         "/",
-        response_model=List[str],
+        response_model=List[PermissionResponse],
         summary="List all permissions",
         description="List all available permissions in the system (requires authentication)"
     )
@@ -56,23 +57,35 @@ def get_permissions_router(
         auth_result = Depends(auth.deps.require_auth())
     ):
         """
-        List all unique permissions defined across all roles.
+        List all permissions from the PermissionModel collection.
 
-        Returns a sorted list of all permission strings found in the system.
-        This is useful for permission selectors in admin UIs.
+        Returns a list of all permissions with full metadata (name, description, etc.).
+        This is useful for permission management and selectors in admin UIs.
         """
         try:
-            # Get all roles
-            roles = await auth.role_service.list_roles()
+            # Query PermissionModel collection directly
+            permissions, total = await auth.permission_service.list_permissions(
+                page=1,
+                limit=1000  # Large limit to get all permissions
+            )
 
-            # Collect all unique permissions
-            all_permissions = set()
-            for role in roles:
-                if hasattr(role, 'permissions') and role.permissions:
-                    all_permissions.update(role.permissions)
-
-            # Return sorted list
-            return sorted(list(all_permissions))
+            # Convert to response schema
+            return [
+                PermissionResponse(
+                    id=str(perm.id),
+                    name=perm.name,
+                    display_name=perm.display_name,
+                    description=perm.description,
+                    resource=perm.resource,
+                    action=perm.action,
+                    scope=perm.scope,
+                    is_system=perm.is_system,
+                    is_active=perm.is_active,
+                    tags=perm.tags or [],
+                    metadata=perm.metadata or {}
+                )
+                for perm in permissions
+            ]
 
         except Exception as e:
             raise HTTPException(
