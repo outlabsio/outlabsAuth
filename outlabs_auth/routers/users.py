@@ -100,7 +100,13 @@ def get_users_router(
             await auth.user_service.on_after_register(user, None)
 
             # Log successful user creation
-            obs.log_event("user_created", user_id=str(user.id), created_by=obs.user_id)
+            if auth.observability:
+                auth.observability.logger.info(
+                    "user_created",
+                    user_id=str(user.id),
+                    email=user.email,
+                    created_by=obs.user_id,
+                )
 
             return UserResponse(
                 id=str(user.id),
@@ -513,7 +519,7 @@ def get_users_router(
                 )
 
             # Validate role exists
-            role = await auth.role_service.get_role(data.role_id)
+            role = await auth.role_service.get_role_by_id(data.role_id)
             if not role:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="Role not found"
@@ -529,15 +535,55 @@ def get_users_router(
             )
 
             # Log event
-            obs.log_event(
-                "role_assigned",
-                user_id=user_id,
-                role_id=data.role_id,
-                assigned_by=obs.user_id,
-            )
+            if auth.observability:
+                auth.observability.logger.info(
+                    "role_assigned",
+                    user_id=user_id,
+                    role_id=data.role_id,
+                    assigned_by=obs.user_id,
+                )
 
             # Return membership response
-            return UserRoleMembershipResponse(**membership.model_dump(mode="json"))
+            # Handle Link fields - extract ID whether fetched or not
+            user_id = (
+                str(membership.user.id)
+                if hasattr(membership.user, "id")
+                else str(membership.user.ref.id)
+            )
+            role_id = (
+                str(membership.role.id)
+                if hasattr(membership.role, "id")
+                else str(membership.role.ref.id)
+            )
+            assigned_by_id = None
+            if membership.assigned_by:
+                assigned_by_id = (
+                    str(membership.assigned_by.id)
+                    if hasattr(membership.assigned_by, "id")
+                    else str(membership.assigned_by.ref.id)
+                )
+            revoked_by_id = None
+            if membership.revoked_by:
+                revoked_by_id = (
+                    str(membership.revoked_by.id)
+                    if hasattr(membership.revoked_by, "id")
+                    else str(membership.revoked_by.ref.id)
+                )
+
+            return UserRoleMembershipResponse(
+                id=str(membership.id),
+                user_id=user_id,
+                role_id=role_id,
+                assigned_at=membership.assigned_at,
+                assigned_by_id=assigned_by_id,
+                valid_from=membership.valid_from,
+                valid_until=membership.valid_until,
+                status=membership.status,
+                revoked_at=membership.revoked_at,
+                revoked_by_id=revoked_by_id,
+                is_currently_valid=membership.is_currently_valid(),
+                can_grant_permissions=membership.can_grant_permissions(),
+            )
 
         except HTTPException:
             raise
@@ -589,12 +635,13 @@ def get_users_router(
                 )
 
             # Log event
-            obs.log_event(
-                "role_revoked",
-                user_id=user_id,
-                role_id=role_id,
-                revoked_by=obs.user_id,
-            )
+            if auth.observability:
+                auth.observability.logger.info(
+                    "role_revoked",
+                    user_id=user_id,
+                    role_id=role_id,
+                    revoked_by=obs.user_id,
+                )
 
             return None
 

@@ -147,8 +147,11 @@ export const useUserStore = defineStore("user", () => {
     try {
       state.error = null;
 
-      await authStore.apiCall(`/v1/users/${userId}/roles/${roleId}`, {
+      await authStore.apiCall(`/v1/users/${userId}/roles`, {
         method: "POST",
+        body: {
+          role_id: roleId,
+        },
       });
 
       // Refresh user roles

@@ -529,13 +529,21 @@ class RoleService:
         """
         from datetime import datetime, timezone
 
+        from beanie import PydanticObjectId
+
         from outlabs_auth.models.membership_status import MembershipStatus as MStatus
         from outlabs_auth.models.user import UserModel
         from outlabs_auth.models.user_role_membership import UserRoleMembership
 
-        # Find active membership
+        # Find active membership (convert string IDs to ObjectId for Link query)
+        user_obj_id = PydanticObjectId(user_id)
+        role_obj_id = PydanticObjectId(role_id)
         membership = await UserRoleMembership.find_one(
-            {"user.$id": user_id, "role.$id": role_id, "status": MStatus.ACTIVE.value}
+            {
+                "user.$id": user_obj_id,
+                "role.$id": role_obj_id,
+                "status": MStatus.ACTIVE.value,
+            }
         )
 
         if not membership:
