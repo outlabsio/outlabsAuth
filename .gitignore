@@ -7,7 +7,7 @@
 .venv
 env/
 venv/
-
+temp/
 # Python
 __pycache__/
 *.pyc
@@ -85,6 +85,7 @@ test_report.json
 test-results/
 playwright-report/
 playwright/.cache/
+.playwright-mcp/
 
 # Logs
 logs/

@@ -4,24 +4,25 @@
  * Separate from users.store.ts which handles list operations
  */
 
-import { defineStore } from 'pinia'
-import type { User } from '~/types/auth'
-import type { Role, Permission } from '~/types/role'
+import { defineStore } from "pinia";
+import type { User } from "~/types/auth";
+import type { Role, Permission } from "~/types/role";
 
 export interface UserMembership {
-  role: Role
-  granted_at: string
-  granted_by?: string
+  role: Role;
+  granted_at: string;
+  granted_by?: string;
 }
 
 export interface UserPermissionSource {
-  permission: Permission
-  source: 'role' | 'direct'
-  role_name?: string // If from role, which role granted it
+  permission: Permission;
+  source: "role" | "direct";
+  source_id?: string; // ID of the role if source is 'role'
+  source_name?: string; // Name of the role if source is 'role'
 }
 
-export const useUserStore = defineStore('user', () => {
-  const authStore = useAuthStore()
+export const useUserStore = defineStore("user", () => {
+  const authStore = useAuthStore();
 
   // State
   const state = reactive({
@@ -40,37 +41,38 @@ export const useUserStore = defineStore('user', () => {
     isLoadingPermissions: false,
 
     // Error handling
-    error: null as string | null
-  })
+    error: null as string | null,
+  });
 
   // Getters
-  const currentUser = computed(() => state.currentUser)
-  const userRoles = computed(() => state.userRoles)
-  const userPermissions = computed(() => state.userPermissions)
-  const isLoading = computed(() =>
-    state.isLoadingUser || state.isLoadingRoles || state.isLoadingPermissions
-  )
-  const error = computed(() => state.error)
+  const currentUser = computed(() => state.currentUser);
+  const userRoles = computed(() => state.userRoles);
+  const userPermissions = computed(() => state.userPermissions);
+  const isLoading = computed(
+    () =>
+      state.isLoadingUser || state.isLoadingRoles || state.isLoadingPermissions,
+  );
+  const error = computed(() => state.error);
 
   /**
    * Fetch user by ID
    */
   const fetchUser = async (userId: string): Promise<User | null> => {
     try {
-      state.isLoadingUser = true
-      state.error = null
+      state.isLoadingUser = true;
+      state.error = null;
 
-      const user = await authStore.apiCall<User>(`/v1/users/${userId}`)
-      state.currentUser = user
-      return user
+      const user = await authStore.apiCall<User>(`/v1/users/${userId}`);
+      state.currentUser = user;
+      return user;
     } catch (error: any) {
-      state.error = error.message || 'Failed to fetch user'
-      console.error('[user.store] Failed to fetch user:', error)
-      return null
+      state.error = error.message || "Failed to fetch user";
+      console.error("[user.store] Failed to fetch user:", error);
+      return null;
     } finally {
-      state.isLoadingUser = false
+      state.isLoadingUser = false;
     }
-  }
+  };
 
   /**
    * Fetch user's role memberships
@@ -79,180 +81,190 @@ export const useUserStore = defineStore('user', () => {
    */
   const fetchUserRoles = async (userId: string): Promise<UserMembership[]> => {
     try {
-      state.isLoadingRoles = true
-      state.error = null
+      state.isLoadingRoles = true;
+      state.error = null;
 
       // SimpleRBAC endpoint: /v1/users/:id/roles
-      const roles = await authStore.apiCall<Role[]>(`/v1/users/${userId}/roles`)
+      const roles = await authStore.apiCall<Role[]>(
+        `/v1/users/${userId}/roles`,
+      );
 
       // Convert to UserMembership format
-      state.userRoles = roles.map(role => ({
+      state.userRoles = roles.map((role) => ({
         role,
-        granted_at: new Date().toISOString() // TODO: Backend should provide this
-      }))
+        granted_at: new Date().toISOString(), // TODO: Backend should provide this
+      }));
 
-      return state.userRoles
+      return state.userRoles;
     } catch (error: any) {
-      state.error = error.message || 'Failed to fetch user roles'
-      console.error('[user.store] Failed to fetch user roles:', error)
-      return []
+      state.error = error.message || "Failed to fetch user roles";
+      console.error("[user.store] Failed to fetch user roles:", error);
+      return [];
     } finally {
-      state.isLoadingRoles = false
+      state.isLoadingRoles = false;
     }
-  }
+  };
 
   /**
    * Fetch user's effective permissions
    * Returns permissions from roles + any directly assigned permissions
    */
-  const fetchUserPermissions = async (userId: string): Promise<UserPermissionSource[]> => {
+  const fetchUserPermissions = async (
+    userId: string,
+  ): Promise<UserPermissionSource[]> => {
     try {
-      state.isLoadingPermissions = true
-      state.error = null
+      state.isLoadingPermissions = true;
+      state.error = null;
 
       // SimpleRBAC endpoint: /v1/users/:id/permissions
-      const permissions = await authStore.apiCall<Permission[]>(
-        `/v1/users/${userId}/permissions`
-      )
+      // Backend now returns UserPermissionSource[] with full permission details and source info
+      const permissions = await authStore.apiCall<UserPermissionSource[]>(
+        `/v1/users/${userId}/permissions`,
+      );
 
-      // Convert to UserPermissionSource format
-      // TODO: Backend should indicate source (role vs direct)
-      state.userPermissions = permissions.map(permission => ({
-        permission,
-        source: 'role' as const // Default to role for now
-      }))
+      // Store the permissions directly (no mapping needed)
+      state.userPermissions = permissions;
 
-      return state.userPermissions
+      return state.userPermissions;
     } catch (error: any) {
-      state.error = error.message || 'Failed to fetch user permissions'
-      console.error('[user.store] Failed to fetch user permissions:', error)
-      return []
+      state.error = error.message || "Failed to fetch user permissions";
+      console.error("[user.store] Failed to fetch user permissions:", error);
+      return [];
     } finally {
-      state.isLoadingPermissions = false
+      state.isLoadingPermissions = false;
     }
-  }
+  };
 
   /**
    * Assign a role to the user
    * SimpleRBAC: Assigns global role
    * EnterpriseRBAC: Would need entity_id parameter
    */
-  const assignRole = async (userId: string, roleId: string): Promise<boolean> => {
+  const assignRole = async (
+    userId: string,
+    roleId: string,
+  ): Promise<boolean> => {
     try {
-      state.error = null
+      state.error = null;
 
       await authStore.apiCall(`/v1/users/${userId}/roles/${roleId}`, {
-        method: 'POST'
-      })
+        method: "POST",
+      });
 
       // Refresh user roles
-      await fetchUserRoles(userId)
+      await fetchUserRoles(userId);
 
       // Show success toast
-      const toast = useToast()
+      const toast = useToast();
       toast.add({
-        title: 'Role assigned',
-        description: 'Role has been assigned to the user successfully',
-        color: 'success'
-      })
+        title: "Role assigned",
+        description: "Role has been assigned to the user successfully",
+        color: "success",
+      });
 
-      return true
+      return true;
     } catch (error: any) {
-      state.error = error.message || 'Failed to assign role'
-      console.error('[user.store] Failed to assign role:', error)
+      state.error = error.message || "Failed to assign role";
+      console.error("[user.store] Failed to assign role:", error);
 
-      const toast = useToast()
+      const toast = useToast();
       toast.add({
-        title: 'Error assigning role',
+        title: "Error assigning role",
         description: state.error,
-        color: 'error'
-      })
+        color: "error",
+      });
 
-      return false
+      return false;
     }
-  }
+  };
 
   /**
    * Remove a role from the user
    */
-  const removeRole = async (userId: string, roleId: string): Promise<boolean> => {
+  const removeRole = async (
+    userId: string,
+    roleId: string,
+  ): Promise<boolean> => {
     try {
-      state.error = null
+      state.error = null;
 
       await authStore.apiCall(`/v1/users/${userId}/roles/${roleId}`, {
-        method: 'DELETE'
-      })
+        method: "DELETE",
+      });
 
       // Refresh user roles
-      await fetchUserRoles(userId)
+      await fetchUserRoles(userId);
 
       // Show success toast
-      const toast = useToast()
+      const toast = useToast();
       toast.add({
-        title: 'Role removed',
-        description: 'Role has been removed from the user successfully',
-        color: 'success'
-      })
+        title: "Role removed",
+        description: "Role has been removed from the user successfully",
+        color: "success",
+      });
 
-      return true
+      return true;
     } catch (error: any) {
-      state.error = error.message || 'Failed to remove role'
-      console.error('[user.store] Failed to remove role:', error)
+      state.error = error.message || "Failed to remove role";
+      console.error("[user.store] Failed to remove role:", error);
 
-      const toast = useToast()
+      const toast = useToast();
       toast.add({
-        title: 'Error removing role',
+        title: "Error removing role",
         description: state.error,
-        color: 'error'
-      })
+        color: "error",
+      });
 
-      return false
+      return false;
     }
-  }
+  };
 
   /**
    * Update user basic information
    * Note: This uses the mutation from users.store, but updates local state
    */
-  const updateUser = async (userId: string, data: {
-    email?: string
-    full_name?: string
-    is_active?: boolean
-    metadata?: Record<string, any>
-  }): Promise<boolean> => {
+  const updateUser = async (
+    userId: string,
+    data: {
+      email?: string;
+      full_name?: string;
+      is_active?: boolean;
+      metadata?: Record<string, any>;
+    },
+  ): Promise<boolean> => {
     try {
-      state.error = null
+      state.error = null;
 
       const updatedUser = await authStore.apiCall<User>(`/v1/users/${userId}`, {
-        method: 'PATCH',
-        body: data
-      })
+        method: "PATCH",
+        body: data,
+      });
 
-      state.currentUser = updatedUser
+      state.currentUser = updatedUser;
 
       // Show success toast
-      const toast = useToast()
+      const toast = useToast();
       toast.add({
-        title: 'User updated',
-        description: 'User information has been updated successfully',
-        color: 'success'
-      })
+        title: "User updated",
+        description: "User information has been updated successfully",
+        color: "success",
+      });
 
-      return true
+      return true;
     } catch (error: any) {
-      state.error = error.message || 'Failed to update user'
-      console.error('[user.store] Failed to update user:', error)
+      state.error = error.message || "Failed to update user";
+      console.error("[user.store] Failed to update user:", error);
 
-      const toast = useToast()
+      const toast = useToast();
       toast.add({
-        title: 'Error updating user',
+        title: "Error updating user",
         description: state.error,
-        color: 'error'
-      })
+        color: "error",
+      });
 
-      return false
+      return false;
     }
-  }
+  };
 
   /**
    * Change user password
@@ -260,59 +272,59 @@ export const useUserStore = defineStore('user', () => {
   const changePassword = async (
     userId: string,
     currentPassword: string,
-    newPassword: string
+    newPassword: string,
   ): Promise<boolean> => {
     try {
-      state.error = null
+      state.error = null;
 
       await authStore.apiCall(`/v1/users/${userId}/change-password`, {
-        method: 'POST',
+        method: "POST",
         body: {
           current_password: currentPassword,
-          new_password: newPassword
-        }
-      })
+          new_password: newPassword,
+        },
+      });
 
       // Show success toast
-      const toast = useToast()
+      const toast = useToast();
       toast.add({
-        title: 'Password changed',
-        description: 'Password has been changed successfully',
-        color: 'success'
-      })
+        title: "Password changed",
+        description: "Password has been changed successfully",
+        color: "success",
+      });
 
-      return true
+      return true;
     } catch (error: any) {
-      state.error = error.message || 'Failed to change password'
-      console.error('[user.store] Failed to change password:', error)
+      state.error = error.message || "Failed to change password";
+      console.error("[user.store] Failed to change password:", error);
 
-      const toast = useToast()
+      const toast = useToast();
       toast.add({
-        title: 'Error changing password',
+        title: "Error changing password",
         description: state.error,
-        color: 'error'
-      })
+        color: "error",
+      });
 
-      return false
+      return false;
     }
-  }
+  };
 
   /**
    * Clear current user and reset state
    */
   const clearUser = (): void => {
-    state.currentUser = null
-    state.userRoles = []
-    state.userPermissions = []
-    state.error = null
-  }
+    state.currentUser = null;
+    state.userRoles = [];
+    state.userPermissions = [];
+    state.error = null;
+  };
 
   /**
    * Clear error
    */
   const clearError = (): void => {
-    state.error = null
-  }
+    state.error = null;
+  };
 
   return {
     // State
@@ -334,6 +346,6 @@ export const useUserStore = defineStore('user', () => {
     updateUser,
     changePassword,
     clearUser,
-    clearError
-  }
-})
+    clearError,
+  };
+});

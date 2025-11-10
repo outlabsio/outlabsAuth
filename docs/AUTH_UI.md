@@ -2808,9 +2808,28 @@ python reset_test_env.py
 
 ## User Detail Pages (Nested Routes)
 
-**Status**: ✅ **COMPLETE** - Fully Implemented and Browser Tested (2025-11-10)
+**Status**: ✅ **COMPLETE** - All tabs fully functional (2025-11-10)
 **Routes**: `/users/{id}`, `/users/{id}/roles`, `/users/{id}/permissions`, `/users/{id}/activity`
-**Testing**: ✅ All tabs tested in browser, user update functionality verified working
+**Testing**: ✅ All tabs verified working with real data display
+
+### Implementation Notes (2025-11-10)
+
+**Issues Fixed**:
+1. **Data Seeding** - Reset script was creating invalid Beanie Link references by using raw MongoDB inserts. Fixed by using Beanie models directly.
+2. **Query Type Conversion** - RoleService queries required `PydanticObjectId` type instead of string for Beanie Link fields.
+3. **API Response Schema** - Enhanced `/v1/users/{id}/permissions` endpoint to return full `UserPermissionSource` objects instead of just permission names.
+4. **Frontend Type Alignment** - Updated `UserPermissionSource` interface to match backend response structure (`source_id` and `source_name`).
+
+**Key Files Modified**:
+- `examples/simple_rbac/reset_test_env.py` - Rewrote to use Beanie models
+- `outlabs_auth/services/role.py:588` - Added PydanticObjectId conversion
+- `outlabs_auth/schemas/permission.py` - Added UserPermissionSource schema
+- `outlabs_auth/routers/users.py:609-683` - Enhanced permissions endpoint
+- `auth-ui/app/stores/user.store.ts` - Updated to handle new response format
+
+**Verified Working**:
+- ✅ Roles tab: Displays role name, scope, description, permission count, and assignment date
+- ✅ Permissions tab: Displays all 21 permissions with display names, resource/action codes, active status, source badges, and scrolling
 
 The user detail interface uses Nuxt's nested routing pattern with a tabbed layout for comprehensive user management.
 

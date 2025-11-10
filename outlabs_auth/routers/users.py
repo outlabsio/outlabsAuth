@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
 from outlabs_auth.schemas.common import PaginatedResponse
+from outlabs_auth.schemas.permission import PermissionResponse, UserPermissionSource
 from outlabs_auth.schemas.role import RoleResponse
 from outlabs_auth.schemas.user import (
     ChangePasswordRequest,
@@ -608,9 +609,9 @@ def get_users_router(
 
     @router.get(
         "/{user_id}/permissions",
-        response_model=List[str],
+        response_model=List[UserPermissionSource],
         summary="Get user's permissions",
-        description="Get all effective permissions for a user (requires user:read permission)",
+        description="Get all effective permissions for a user with source information (requires user:read permission)",
     )
     async def get_user_permissions(
         user_id: str,
@@ -622,9 +623,9 @@ def get_users_router(
         ),
     ):
         """
-        Get all effective permissions for a user.
+        Get all effective permissions for a user with source information.
 
-        Collects permissions from all assigned roles and returns a deduplicated sorted list.
+        Returns detailed permission objects with information about which role granted each permission.
         """
         try:
             # Validate user exists
@@ -637,12 +638,45 @@ def get_users_router(
             # Get user's roles
             roles = await auth.role_service.get_user_roles(user_id=user_id)
 
-            # Collect all permissions from all roles (deduplicated)
-            permissions = set()
-            for role in roles:
-                permissions.update(role.permissions)
+            # Get all permission objects from database
+            from outlabs_auth.models.permission import PermissionModel
 
-            return sorted(list(permissions))
+            # Collect permissions with their sources
+            permission_sources = []
+            seen_permissions = set()
+
+            for role in roles:
+                for perm_name in role.permissions:
+                    if perm_name not in seen_permissions:
+                        # Fetch the actual permission object
+                        perm = await PermissionModel.find_one({"name": perm_name})
+                        if perm:
+                            permission_sources.append(
+                                UserPermissionSource(
+                                    permission=PermissionResponse(
+                                        id=str(perm.id),
+                                        name=perm.name,
+                                        display_name=perm.display_name,
+                                        description=perm.description,
+                                        resource=perm.resource,
+                                        action=perm.action,
+                                        scope=perm.scope,
+                                        is_system=perm.is_system,
+                                        is_active=perm.is_active,
+                                        tags=perm.tags or [],
+                                        metadata=perm.metadata or {},
+                                    ),
+                                    source="role",
+                                    source_id=str(role.id),
+                                    source_name=role.name,
+                                )
+                            )
+                            seen_permissions.add(perm_name)
+
+            # Sort by permission name
+            permission_sources.sort(key=lambda x: x.permission.name)
+
+            return permission_sources
 
         except HTTPException:
             raise

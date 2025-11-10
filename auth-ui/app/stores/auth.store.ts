@@ -144,7 +144,7 @@ export const useAuthStore = defineStore("auth", () => {
         credentials: "include", // Important for httpOnly cookies
       };
 
-      if (requestOptions.body && typeof requestOptions.body === 'object') {
+      if (requestOptions.body && typeof requestOptions.body === "object") {
         requestOptions.body = JSON.stringify(requestOptions.body);
       }
 
@@ -201,14 +201,17 @@ export const useAuthStore = defineStore("auth", () => {
   const login = async (credentials: LoginCredentials): Promise<void> => {
     try {
       // Real API call - OutlabsAuth format
-      const response = await fetch(`${config.public.apiBaseUrl}/v1/auth/login`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const response = await fetch(
+        `${config.public.apiBaseUrl}/v1/auth/login`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(credentials),
+          credentials: "include",
         },
-        body: JSON.stringify(credentials),
-        credentials: "include",
-      });
+      );
 
       if (!response.ok) {
         const error: any = await response.json();
@@ -276,14 +279,17 @@ export const useAuthStore = defineStore("auth", () => {
     }
 
     try {
-      const response = await fetch(`${config.public.apiBaseUrl}/v1/auth/refresh`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const response = await fetch(
+        `${config.public.apiBaseUrl}/v1/auth/refresh`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ refresh_token: state.refreshToken }),
+          credentials: "include",
         },
-        body: JSON.stringify({ refresh_token: state.refreshToken }),
-        credentials: "include",
-      });
+      );
 
       if (!response.ok) {
         throw new Error("Token refresh failed");
