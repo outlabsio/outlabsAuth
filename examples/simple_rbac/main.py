@@ -868,6 +868,21 @@ async def get_auth_config():
 # ============================================================================
 
 if __name__ == "__main__":
+    from pathlib import Path
+
     import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8003, reload=True)
+    # Watch both the example directory and the library code
+    project_root = Path(__file__).parent.parent.parent
+    reload_dirs = [
+        str(Path(__file__).parent),  # examples/simple_rbac
+        str(project_root / "outlabs_auth"),  # library code
+    ]
+
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8003,
+        reload=True,
+        reload_dirs=reload_dirs,
+    )

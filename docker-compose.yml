@@ -6,13 +6,17 @@
 # - Prometheus (metrics collection) - port 9090
 # - Grafana (metrics visualization) - port 3011 (to avoid conflict with admin UI on 3000)
 # - SimpleRBAC Example (Blog API) - port 8003
+# - EnterpriseRBAC Example (Real Estate API) - port 8004
 #
 # Usage:
-#   docker compose up -d              # Start all services
-#   docker compose up -d mongodb redis # Start only infra
-#   docker compose logs -f simple-rbac # View SimpleRBAC logs
-#   docker compose down               # Stop all services
-#   docker compose down -v            # Stop and remove volumes
+#   docker compose up -d                    # Start all services
+#   docker compose up -d mongodb redis      # Start only infra
+#   docker compose up -d simple-rbac        # Start SimpleRBAC example
+#   docker compose up -d enterprise-rbac    # Start EnterpriseRBAC example
+#   docker compose logs -f simple-rbac      # View SimpleRBAC logs
+#   docker compose logs -f enterprise-rbac  # View EnterpriseRBAC logs
+#   docker compose down                     # Stop all services
+#   docker compose down -v                  # Stop and remove volumes
 
 services:
   # ============================================================================
@@ -179,6 +183,35 @@ services:
     command: >
       sh -c "cd /app/examples/simple_rbac &&
              uvicorn main:app --host 0.0.0.0 --port 8003 --reload"
+
+  # EnterpriseRBAC Example - Real Estate API with Entity Hierarchy (port 8004)
+  enterprise-rbac:
+    build:
+      context: .
+      dockerfile: examples/enterprise_rbac/Dockerfile
+    container_name: outlabs-enterprise-rbac
+    ports:
+      - "8004:8004"
+    environment:
+      - MONGODB_URL=mongodb://mongodb:27017
+      - DATABASE_NAME=realestate_enterprise_rbac
+      - REDIS_URL=redis://redis:6379
+      - SECRET_KEY=enterprise-rbac-secret-change-in-production-please
+      - ENV=development # development = text logs, production = JSON logs
+    volumes:
+      - ./outlabs_auth:/app/outlabs_auth # Mount source for hot reload
+      - ./examples/enterprise_rbac:/app/examples/enterprise_rbac
+    networks:
+      - outlabs
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "cd /app/examples/enterprise_rbac &&
+             uvicorn main:app --host 0.0.0.0 --port 8004 --reload"
 
 networks:
   outlabs:

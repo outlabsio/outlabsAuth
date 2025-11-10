@@ -504,6 +504,7 @@ class EnterprisePermissionService(BasicPermissionService):
         database: AsyncIOMotorDatabase,
         config: AuthConfig,
         redis_client: Optional["RedisClient"] = None,
+        observability: Optional[ObservabilityService] = None,
     ):
         """
         Initialize EnterprisePermissionService.
@@ -512,10 +513,47 @@ class EnterprisePermissionService(BasicPermissionService):
             database: MongoDB database instance
             config: Authentication configuration
             redis_client: Optional Redis client for caching
+            observability: Optional observability service for logging/metrics
         """
-        super().__init__(database, config)
+        super().__init__(database, config, observability=observability)
         self.redis_client = redis_client
         self.policy_engine = PolicyEvaluationEngine()  # For ABAC condition evaluation
+
+    async def get_user_permissions(self, user_id: str) -> List[str]:
+        """
+        Get all permissions for a user across all entities in EnterpriseRBAC.
+
+        Aggregates permissions from all active entity memberships.
+
+        Args:
+            user_id: User ID
+
+        Returns:
+            List of permission names
+        """
+        from outlabs_auth.models.membership import (
+            EntityMembershipModel,
+            MembershipStatus,
+        )
+
+        all_permissions = set()
+
+        user_oid = ObjectId(user_id)
+        # Get all entity memberships for the user
+        memberships = await EntityMembershipModel.find(
+            EntityMembershipModel.user.id == user_oid,
+            EntityMembershipModel.status == MembershipStatus.ACTIVE,
+            fetch_links=True,
+        ).to_list()
+
+        for membership in memberships:
+            if membership.can_grant_permissions():
+                # Iterate through all roles in this membership
+                for role in membership.roles:
+                    if role:
+                        all_permissions.update(role.permissions)
+
+        return list(all_permissions)
 
     async def check_permission(
         self,

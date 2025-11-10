@@ -4,8 +4,9 @@ Dynamic dependency injection with makefun for perfect OpenAPI schema.
 Implements dynamic dependency pattern from FastAPI-Users (DD-039).
 """
 
-from typing import Sequence, Optional, Any, Callable
 from inspect import Parameter, Signature
+from typing import Any, Callable, Optional, Sequence
+
 from fastapi import Depends, HTTPException, Request, status
 from makefun import with_signature
 
@@ -45,7 +46,7 @@ class AuthDeps:
         user_service: Any = None,
         api_key_service: Any = None,
         activity_tracker: Any = None,
-        **services: Any
+        **services: Any,
     ):
         """
         Initialize dynamic dependencies.
@@ -64,10 +65,7 @@ class AuthDeps:
         self.services = services
 
     def require_auth(
-        self,
-        active: bool = True,
-        verified: bool = False,
-        optional: bool = False
+        self, active: bool = True, verified: bool = False, optional: bool = False
     ) -> Callable:
         """
         Generate dependency that requires authentication from any backend.
@@ -99,9 +97,11 @@ class AuthDeps:
         signature = self._get_dependency_signature()
 
         @with_signature(signature)
-        async def dependency(*args: Any, **kwargs: Any) -> Optional[dict]:
+        async def dependency(
+            request: Request, *args: Any, **kwargs: Any
+        ) -> Optional[dict]:
             """Try all backends in order until one authenticates."""
-            request: Request = kwargs.get("request")
+            # request is now a direct parameter, not from kwargs
 
             # Try each backend
             for backend in self.backends:
@@ -111,7 +111,7 @@ class AuthDeps:
                         request,
                         user_service=self.user_service,
                         api_key_service=self.api_key_service,
-                        **self.services
+                        **self.services,
                     )
 
                     if result:
@@ -128,6 +128,7 @@ class AuthDeps:
                         # Track activity (fire-and-forget, non-blocking)
                         if self.activity_tracker and result.get("user"):
                             import asyncio
+
                             user_id = str(result["user"].id)
                             asyncio.create_task(
                                 self.activity_tracker.track_activity(user_id)
@@ -145,16 +146,13 @@ class AuthDeps:
                 return None
 
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Not authenticated"
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
             )
 
         return dependency
 
     def require_permission(
-        self,
-        *permissions: str,
-        require_all: bool = False
+        self, *permissions: str, require_all: bool = False
     ) -> Callable:
         """
         Generate dependency that requires specific permissions.
@@ -201,14 +199,14 @@ class AuthDeps:
             if not permission_service:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Permission service not configured"
+                    detail="Permission service not configured",
                 )
 
             user_id = auth_result.get("user_id")
             if not user_id:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="User ID not found in auth result"
+                    detail="User ID not found in auth result",
                 )
 
             # Check permissions using permission service (handles wildcards properly)
@@ -216,21 +214,19 @@ class AuthDeps:
                 # Require ALL permissions
                 for perm in permissions:
                     has_perm = await permission_service.check_permission(
-                        user_id=user_id,
-                        permission=perm
+                        user_id=user_id, permission=perm
                     )
                     if not has_perm:
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
-                            detail="Insufficient permissions"
+                            detail="Insufficient permissions",
                         )
             else:
                 # Require ANY permission
                 has_any = False
                 for perm in permissions:
                     if await permission_service.check_permission(
-                        user_id=user_id,
-                        permission=perm
+                        user_id=user_id, permission=perm
                     ):
                         has_any = True
                         break
@@ -238,7 +234,7 @@ class AuthDeps:
                 if not has_any:
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
-                        detail="Insufficient permissions"
+                        detail="Insufficient permissions",
                     )
 
             return auth_result
@@ -278,7 +274,7 @@ class AuthDeps:
             if not auth_result or auth_result.get("source") != source:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail=f"Authentication via {source} required"
+                    detail=f"Authentication via {source} required",
                 )
 
             return auth_result
@@ -298,9 +294,7 @@ class AuthDeps:
         parameters = [
             # Always include request
             Parameter(
-                name="request",
-                kind=Parameter.POSITIONAL_OR_KEYWORD,
-                annotation=Request
+                name="request", kind=Parameter.POSITIONAL_OR_KEYWORD, annotation=Request
             )
         ]
 
@@ -314,17 +308,14 @@ class AuthDeps:
                     name=f"{backend.name}_credentials",
                     kind=Parameter.POSITIONAL_OR_KEYWORD,
                     default=Depends(backend.transport.get_credentials),
-                    annotation=Optional[str]
+                    annotation=Optional[str],
                 )
             )
 
         return Signature(parameters)
 
 
-def create_auth_deps(
-    backends: Sequence[AuthBackend],
-    **services: Any
-) -> AuthDeps:
+def create_auth_deps(backends: Sequence[AuthBackend], **services: Any) -> AuthDeps:
     """
     Factory function to create AuthDeps instance.
 
