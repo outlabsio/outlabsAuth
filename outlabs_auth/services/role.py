@@ -9,17 +9,19 @@ Handles role management operations:
 - List roles
 - Assign roles to users (SimpleRBAC via UserRoleMembership)
 """
-from typing import Optional, List, Dict, Any, TYPE_CHECKING
+
 from datetime import datetime
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from outlabs_auth.models.role import RoleModel
-from outlabs_auth.models.permission import PermissionModel
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
-    RoleNotFoundError,
     InvalidInputError,
+    RoleNotFoundError,
 )
+from outlabs_auth.models.permission import PermissionModel
+from outlabs_auth.models.role import RoleModel
 from outlabs_auth.utils.validation import validate_name, validate_slug
 
 if TYPE_CHECKING:
@@ -99,20 +101,19 @@ class RoleService:
         if existing_role:
             raise InvalidInputError(
                 message=f"Role with name '{name}' already exists",
-                details={"name": name}
+                details={"name": name},
             )
 
         # Fetch entity if entity_id provided (EnterpriseRBAC)
         entity = None
         if entity_id:
-            from outlabs_auth.models.entity import EntityModel
             from outlabs_auth.core.exceptions import EntityNotFoundError
+            from outlabs_auth.models.entity import EntityModel
 
             entity = await EntityModel.get(entity_id)
             if not entity:
                 raise EntityNotFoundError(
-                    message="Entity not found",
-                    details={"entity_id": entity_id}
+                    message="Entity not found", details={"entity_id": entity_id}
                 )
 
         # Create role
@@ -164,11 +165,7 @@ class RoleService:
         name = validate_slug(name, "name")
         return await RoleModel.find_one(RoleModel.name == name)
 
-    async def update_role(
-        self,
-        role_id: str,
-        update_dict: Dict[str, Any]
-    ) -> RoleModel:
+    async def update_role(self, role_id: str, update_dict: Dict[str, Any]) -> RoleModel:
         """
         Update role with fields from update_dict.
 
@@ -196,20 +193,21 @@ class RoleService:
         role = await RoleModel.get(role_id)
         if not role:
             raise RoleNotFoundError(
-                message="Role not found",
-                details={"role_id": role_id}
+                message="Role not found", details={"role_id": role_id}
             )
 
         # Protect system roles
         if role.is_system_role:
             raise InvalidInputError(
                 message="Cannot modify system role",
-                details={"role_id": role_id, "role_name": role.name}
+                details={"role_id": role_id, "role_name": role.name},
             )
 
         # Update fields from dict (only supported fields for SimpleRBAC)
         if "display_name" in update_dict:
-            role.display_name = validate_name(update_dict["display_name"], "display_name")
+            role.display_name = validate_name(
+                update_dict["display_name"], "display_name"
+            )
 
         if "description" in update_dict:
             role.description = update_dict["description"]
@@ -248,15 +246,14 @@ class RoleService:
         role = await RoleModel.get(role_id)
         if not role:
             raise RoleNotFoundError(
-                message="Role not found",
-                details={"role_id": role_id}
+                message="Role not found", details={"role_id": role_id}
             )
 
         # Protect system roles
         if role.is_system_role:
             raise InvalidInputError(
                 message="Cannot modify system role",
-                details={"role_id": role_id, "role_name": role.name}
+                details={"role_id": role_id, "role_name": role.name},
             )
 
         # Add permissions (avoid duplicates)
@@ -296,20 +293,21 @@ class RoleService:
         role = await RoleModel.get(role_id)
         if not role:
             raise RoleNotFoundError(
-                message="Role not found",
-                details={"role_id": role_id}
+                message="Role not found", details={"role_id": role_id}
             )
 
         # Protect system roles
         if role.is_system_role:
             raise InvalidInputError(
                 message="Cannot modify system role",
-                details={"role_id": role_id, "role_name": role.name}
+                details={"role_id": role_id, "role_name": role.name},
             )
 
         # Remove permissions
         permissions_to_remove = set(permissions)
-        role.permissions = [p for p in role.permissions if p not in permissions_to_remove]
+        role.permissions = [
+            p for p in role.permissions if p not in permissions_to_remove
+        ]
 
         await role.save()
         return role
@@ -342,7 +340,7 @@ class RoleService:
         if role.is_system_role:
             raise InvalidInputError(
                 message="Cannot delete system role",
-                details={"role_id": role_id, "role_name": role.name}
+                details={"role_id": role_id, "role_name": role.name},
             )
 
         await role.delete()
@@ -407,8 +405,7 @@ class RoleService:
         role = await RoleModel.get(role_id)
         if not role:
             raise RoleNotFoundError(
-                message="Role not found",
-                details={"role_id": role_id}
+                message="Role not found", details={"role_id": role_id}
             )
 
         return role.permissions
@@ -422,9 +419,9 @@ class RoleService:
         user_id: str,
         role_id: str,
         assigned_by: Optional[str] = None,
-        valid_from: Optional['datetime'] = None,
-        valid_until: Optional['datetime'] = None,
-    ) -> 'UserRoleMembership':
+        valid_from: Optional["datetime"] = None,
+        valid_until: Optional["datetime"] = None,
+    ) -> "UserRoleMembership":
         """
         Assign role to user (SimpleRBAC only).
 
@@ -455,24 +452,22 @@ class RoleService:
             >>> membership.status
             MembershipStatus.ACTIVE
         """
-        from outlabs_auth.models.user_role_membership import UserRoleMembership
-        from outlabs_auth.models.user import UserModel
         from outlabs_auth.core.exceptions import UserNotFoundError
+        from outlabs_auth.models.user import UserModel
+        from outlabs_auth.models.user_role_membership import UserRoleMembership
 
         # Validate user exists
         user = await UserModel.get(user_id)
         if not user:
             raise UserNotFoundError(
-                message="User not found",
-                details={"user_id": user_id}
+                message="User not found", details={"user_id": user_id}
             )
 
         # Validate role exists
         role = await RoleModel.get(role_id)
         if not role:
             raise RoleNotFoundError(
-                message="Role not found",
-                details={"role_id": role_id}
+                message="Role not found", details={"role_id": role_id}
             )
 
         # Check if membership already exists
@@ -484,7 +479,7 @@ class RoleService:
         if existing_membership:
             raise InvalidInputError(
                 message="User already has this role assigned",
-                details={"user_id": user_id, "role_id": role_id}
+                details={"user_id": user_id, "role_id": role_id},
             )
 
         # Create membership
@@ -498,7 +493,7 @@ class RoleService:
             assigned_by=assigned_by_user,
             valid_from=valid_from,
             valid_until=valid_until,
-            status=MStatus.ACTIVE
+            status=MStatus.ACTIVE,
         )
 
         await membership.save()
@@ -532,10 +527,11 @@ class RoleService:
             >>> revoked
             True
         """
-        from outlabs_auth.models.user_role_membership import UserRoleMembership
+        from datetime import datetime, timezone
+
         from outlabs_auth.models.membership_status import MembershipStatus as MStatus
         from outlabs_auth.models.user import UserModel
-        from datetime import datetime, timezone
+        from outlabs_auth.models.user_role_membership import UserRoleMembership
 
         # Find active membership
         membership = await UserRoleMembership.find_one(
@@ -579,14 +575,17 @@ class RoleService:
             >>> [role.name for role in roles]
             ['admin', 'editor']
         """
-        from outlabs_auth.models.user_role_membership import UserRoleMembership
-        from outlabs_auth.models.membership_status import MembershipStatus as MStatus
+        from beanie import PydanticObjectId
 
-        # Build query
+        from outlabs_auth.models.membership_status import MembershipStatus as MStatus
+        from outlabs_auth.models.user_role_membership import UserRoleMembership
+
+        # Build query (convert user_id string to PydanticObjectId for Link query)
+        user_obj_id = PydanticObjectId(user_id)
         if include_inactive:
-            query = {"user.$id": user_id}
+            query = {"user.$id": user_obj_id}
         else:
-            query = {"user.$id": user_id, "status": MStatus.ACTIVE.value}
+            query = {"user.$id": user_obj_id, "status": MStatus.ACTIVE.value}
 
         # Find all memberships
         memberships = await UserRoleMembership.find(query).to_list()
@@ -606,7 +605,7 @@ class RoleService:
         self,
         user_id: str,
         include_inactive: bool = False,
-    ) -> List['UserRoleMembership']:
+    ) -> List["UserRoleMembership"]:
         """
         Get all role memberships for a user (SimpleRBAC only).
 
@@ -624,8 +623,8 @@ class RoleService:
             >>> for m in memberships:
             ...     print(f"Role: {m.role.name}, Assigned: {m.assigned_at}")
         """
-        from outlabs_auth.models.user_role_membership import UserRoleMembership
         from outlabs_auth.models.membership_status import MembershipStatus as MStatus
+        from outlabs_auth.models.user_role_membership import UserRoleMembership
 
         # Build query
         if include_inactive:

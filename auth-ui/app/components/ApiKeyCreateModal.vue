@@ -1,83 +1,117 @@
 <script setup lang="ts">
+import { useQuery } from '@pinia/colada'
+import { permissionsQueries } from '~/queries/permissions'
+import { useCreateApiKeyMutation } from '~/queries/api-keys'
+import type { CreateApiKeyRequest, PrefixType, ApiKeyCreateResponse } from '~/types/api-key'
+
 const open = defineModel<boolean>('open', { default: false })
 
-const toast = useToast()
+// Fetch available permissions dynamically
+const { data: permissions, isLoading: loadingPermissions } = useQuery(permissionsQueries.available())
 
-// Available scopes
-const availableScopes = [
-  { value: '*:*', label: 'All Permissions', description: 'Full access to all resources' },
-  { value: 'user:read', label: 'User Read', description: 'Read user information' },
-  { value: 'user:create', label: 'User Create', description: 'Create new users' },
-  { value: 'user:update', label: 'User Update', description: 'Update user information' },
-  { value: 'user:delete', label: 'User Delete', description: 'Delete users' },
-  { value: 'role:read', label: 'Role Read', description: 'Read role information' },
-  { value: 'role:create', label: 'Role Create', description: 'Create new roles' },
-  { value: 'role:update', label: 'Role Update', description: 'Update roles' },
-  { value: 'role:delete', label: 'Role Delete', description: 'Delete roles' },
-  { value: 'entity:read', label: 'Entity Read', description: 'Read entity information' },
-  { value: 'entity:create', label: 'Entity Create', description: 'Create new entities' },
-  { value: 'entity:update', label: 'Entity Update', description: 'Update entities' },
-  { value: 'entity:delete', label: 'Entity Delete', description: 'Delete entities' },
-  { value: 'permission:read', label: 'Permission Read', description: 'Read permissions' }
+// Available scopes computed from permissions
+const availableScopes = computed(() => {
+  if (!permissions.value) return []
+
+  // Add "All Permissions" option
+  const allPermissions = {
+    value: '*:*',
+    label: 'All Permissions',
+    description: '⚠️ Full access to all resources - use with caution'
+  }
+
+  // Map permissions to scope options
+  const scopeOptions = permissions.value.map(p => ({
+    value: p.name,
+    label: p.display_name || p.name,
+    description: p.description || ''
+  }))
+
+  return [allPermissions, ...scopeOptions]
+})
+
+// Prefix type options
+const prefixTypes: { value: PrefixType; label: string; description: string }[] = [
+  { value: 'sk_live', label: 'Live', description: 'Production environment' },
+  { value: 'sk_test', label: 'Test', description: 'Testing environment' },
+  { value: 'sk_prod', label: 'Prod', description: 'Production (alternative)' },
+  { value: 'sk_dev', label: 'Dev', description: 'Development environment' }
 ]
 
 // Form state
-const state = reactive({
+const state = reactive<CreateApiKeyRequest & { never_expires: boolean; ip_whitelist_raw: string; saved_confirmation: boolean }>({
   name: '',
   description: '',
-  scopes: [] as string[],
+  scopes: [],
+  prefix_type: 'sk_live',
+  ip_whitelist: [],
+  ip_whitelist_raw: '',
+  rate_limit_per_minute: 60,
+  rate_limit_per_hour: undefined,
+  rate_limit_per_day: undefined,
   expires_in_days: 90,
-  never_expires: false
+  never_expires: false,
+  saved_confirmation: false
 })
 
 // Watch never_expires to clear expiration
 watch(() => state.never_expires, (neverExpires) => {
   if (neverExpires) {
-    state.expires_in_days = 0
-  } else if (state.expires_in_days === 0) {
+    state.expires_in_days = undefined
+  } else if (!state.expires_in_days) {
     state.expires_in_days = 90
   }
 })
 
-// Generated API key (shown after creation)
-const generatedKey = ref<string | null>(null)
+// Watch IP whitelist raw input
+watch(() => state.ip_whitelist_raw, (raw) => {
+  if (raw.trim()) {
+    // Split by newlines and comma, trim whitespace
+    state.ip_whitelist = raw
+      .split(/[\n,]+/)
+      .map(ip => ip.trim())
+      .filter(ip => ip.length > 0)
+  } else {
+    state.ip_whitelist = []
+  }
+})
+
+// Generated API key response (shown after creation)
+const generatedKeyResponse = ref<ApiKeyCreateResponse | null>(null)
+
+// Create mutation
+const createMutation = useCreateApiKeyMutation()
 
 // Submit handler
-const isSubmitting = ref(false)
-
 async function handleSubmit() {
-  isSubmitting.value = true
+  // Build request payload
+  const payload: CreateApiKeyRequest = {
+    name: state.name,
+    description: state.description || undefined,
+    scopes: state.scopes.length > 0 ? state.scopes : undefined,
+    prefix_type: state.prefix_type,
+    ip_whitelist: state.ip_whitelist.length > 0 ? state.ip_whitelist : undefined,
+    rate_limit_per_minute: state.rate_limit_per_minute,
+    rate_limit_per_hour: state.rate_limit_per_hour,
+    rate_limit_per_day: state.rate_limit_per_day,
+    expires_in_days: state.never_expires ? undefined : state.expires_in_days,
+  }
+
   try {
-    // In mock mode, generate a fake API key
-    const prefix = 'olauth_' + state.name.toLowerCase().replace(/\s+/g, '_').substring(0, 10)
-    const mockKey = `${prefix}_${Math.random().toString(36).substring(2, 15)}${Math.random().toString(36).substring(2, 15)}`
-
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 500))
-
-    // Show generated key
-    generatedKey.value = mockKey
-
-    toast.add({
-      title: 'API Key created',
-      description: 'Your API key has been created. Make sure to copy it now!',
-      color: 'success'
-    })
-  } catch (error: any) {
-    toast.add({
-      title: 'Error',
-      description: error.message || 'Failed to create API key',
-      color: 'error'
-    })
-  } finally {
-    isSubmitting.value = false
+    const result = await createMutation.mutateAsync(payload)
+    generatedKeyResponse.value = result
+    state.saved_confirmation = false
+  } catch (error) {
+    // Error handling done by mutation
+    console.error('Failed to create API key:', error)
   }
 }
 
 // Copy to clipboard
 async function copyToClipboard() {
-  if (generatedKey.value) {
-    await navigator.clipboard.writeText(generatedKey.value)
+  if (generatedKeyResponse.value?.api_key) {
+    await navigator.clipboard.writeText(generatedKeyResponse.value.api_key)
+    const toast = useToast()
     toast.add({
       title: 'Copied!',
       description: 'API key copied to clipboard',
@@ -90,13 +124,20 @@ async function copyToClipboard() {
 function closeModal() {
   open.value = false
   setTimeout(() => {
-    generatedKey.value = null
+    generatedKeyResponse.value = null
     Object.assign(state, {
       name: '',
       description: '',
       scopes: [],
+      prefix_type: 'sk_live',
+      ip_whitelist: [],
+      ip_whitelist_raw: '',
+      rate_limit_per_minute: 60,
+      rate_limit_per_hour: undefined,
+      rate_limit_per_day: undefined,
       expires_in_days: 90,
-      never_expires: false
+      never_expires: false,
+      saved_confirmation: false
     })
   }, 300)
 }
@@ -105,47 +146,67 @@ function closeModal() {
 <template>
   <UModal
     v-model:open="open"
-    :title="generatedKey ? 'API Key Created' : 'Create API Key'"
-    :description="generatedKey ? 'Save your API key - you won\'t be able to see it again!' : 'Generate a new API key for programmatic access'"
+    :title="generatedKeyResponse ? 'API Key Created ✅' : 'Create API Key'"
+    :description="generatedKeyResponse ? 'Save your API key - you won\'t be able to see it again!' : 'Generate a new API key for programmatic access'"
+    size="xl"
+    fullscreen
   >
     <template #body>
       <!-- Show generated key -->
-      <div v-if="generatedKey" class="space-y-4">
+      <div v-if="generatedKeyResponse" class="space-y-4">
         <UAlert
           icon="i-lucide-alert-triangle"
-          color="warning"
-          variant="subtle"
-          title="Save this key now"
-          description="This is the only time you'll see this key. Store it securely."
+          color="error"
+          variant="solid"
+          title="⚠️ CRITICAL: Save this key immediately"
+          description="This is the ONLY time you'll see the full API key. Once you close this dialog, it cannot be recovered. Copy and store it in a secure password manager or secrets vault."
         />
 
         <div class="space-y-2">
           <label class="text-sm font-medium">Your API Key</label>
           <div class="flex items-center gap-2">
             <UInput
-              :model-value="generatedKey"
+              :model-value="generatedKeyResponse.api_key"
               readonly
               class="flex-1 font-mono text-sm"
             />
             <UButton
               icon="i-lucide-copy"
-              color="neutral"
-              variant="outline"
+              color="primary"
+              variant="solid"
               @click="copyToClipboard"
+              label="Copy"
             />
           </div>
+          <p class="text-xs text-muted">Prefix: {{ generatedKeyResponse.prefix }}</p>
         </div>
+
+        <UAlert
+          icon="i-lucide-shield-check"
+          color="primary"
+          variant="subtle"
+          title="Security Best Practices"
+          description="Store in a password manager or secrets vault. Never commit to version control. Rotate keys regularly. Use environment variables in production."
+        />
+
+        <!-- Confirmation checkbox -->
+        <UCheckbox
+          v-model="state.saved_confirmation"
+          label="I have securely saved this API key"
+          help="Required before closing this dialog"
+        />
       </div>
 
       <!-- Creation form -->
-      <div v-else class="space-y-4">
+      <div v-else class="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
         <!-- Name & Description -->
         <div class="space-y-2">
-          <label class="block text-sm font-medium">Name</label>
+          <label class="block text-sm font-medium">Name <span class="text-error">*</span></label>
           <UInput
             v-model="state.name"
             placeholder="Production API Key"
             icon="i-lucide-key"
+            required
           />
           <p class="text-xs text-muted">A memorable name for this API key</p>
         </div>
@@ -159,13 +220,40 @@ function closeModal() {
           />
         </div>
 
-        <UDivider label="Permissions" />
+        <USeparator label="Environment" />
+
+        <!-- Prefix Type Selection -->
+        <div class="space-y-2">
+          <label class="block text-sm font-medium">Environment Type</label>
+          <div class="grid grid-cols-2 gap-2">
+            <div
+              v-for="prefix in prefixTypes"
+              :key="prefix.value"
+              class="flex items-start gap-2 p-3 border rounded-lg cursor-pointer transition-colors"
+              :class="state.prefix_type === prefix.value ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'"
+              @click="state.prefix_type = prefix.value"
+            >
+              <div class="mt-0.5 w-4 h-4 rounded-full border-2 flex items-center justify-center" :class="state.prefix_type === prefix.value ? 'border-primary' : 'border-muted'">
+                <div v-if="state.prefix_type === prefix.value" class="w-2 h-2 rounded-full bg-primary"></div>
+              </div>
+              <div class="flex-1">
+                <p class="text-sm font-medium">{{ prefix.label }}</p>
+                <p class="text-xs text-muted">{{ prefix.description }}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <USeparator label="Permissions" />
 
         <!-- Scopes Selection -->
         <div class="space-y-2">
-          <label class="block text-sm font-medium">Scopes</label>
-          <div class="space-y-2">
-            <div v-for="scope in availableScopes" :key="scope.value" class="flex items-start gap-2">
+          <label class="block text-sm font-medium">Scopes (Permissions)</label>
+          <p class="text-xs text-muted mb-2">
+            {{ loadingPermissions ? 'Loading permissions...' : `Select which permissions this API key can access (${state.scopes.length} selected)` }}
+          </p>
+          <div class="space-y-2 max-h-64 overflow-y-auto border rounded-lg p-3">
+            <div v-for="scope in availableScopes" :key="scope.value" class="flex items-start gap-2 p-2 hover:bg-muted/30 rounded transition-colors">
               <UCheckbox
                 :model-value="state.scopes.includes(scope.value)"
                 @update:model-value="(checked) => {
@@ -184,14 +272,66 @@ function closeModal() {
           </div>
         </div>
 
-        <UDivider label="Expiration" />
+        <USeparator label="Rate Limits" />
+
+        <!-- Rate Limiting -->
+        <div class="space-y-3">
+          <div class="space-y-2">
+            <label class="block text-sm font-medium">Requests per minute</label>
+            <UInput
+              v-model.number="state.rate_limit_per_minute"
+              type="number"
+              min="1"
+              placeholder="60"
+              icon="i-lucide-gauge"
+            />
+            <p class="text-xs text-muted">Default: 60 requests/minute</p>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div class="space-y-2">
+              <label class="block text-sm font-medium">Per hour (optional)</label>
+              <UInput
+                v-model.number="state.rate_limit_per_hour"
+                type="number"
+                min="1"
+                placeholder="3600"
+              />
+            </div>
+            <div class="space-y-2">
+              <label class="block text-sm font-medium">Per day (optional)</label>
+              <UInput
+                v-model.number="state.rate_limit_per_day"
+                type="number"
+                min="1"
+                placeholder="86400"
+              />
+            </div>
+          </div>
+        </div>
+
+        <USeparator label="Security" />
+
+        <!-- IP Whitelist -->
+        <div class="space-y-2">
+          <label class="block text-sm font-medium">IP Whitelist (optional)</label>
+          <UTextarea
+            v-model="state.ip_whitelist_raw"
+            placeholder="192.168.1.1&#10;10.0.0.0/24&#10;203.0.113.0"
+            :rows="3"
+          />
+          <p class="text-xs text-muted">
+            One IP address or CIDR per line. Leave empty to allow all IPs.
+            {{ state.ip_whitelist.length > 0 ? `(${state.ip_whitelist.length} IPs configured)` : '' }}
+          </p>
+        </div>
 
         <!-- Expiration Settings -->
         <div class="space-y-3">
           <UCheckbox
             v-model="state.never_expires"
             label="Never expires"
-            help="Key will remain valid indefinitely (not recommended for production)"
+            help="⚠️ Not recommended for production - keys should be rotated regularly"
           />
 
           <div v-if="!state.never_expires" class="space-y-2">
@@ -204,18 +344,19 @@ function closeModal() {
               placeholder="90"
               icon="i-lucide-calendar"
             />
-            <p class="text-xs text-muted">Recommended: 90 days</p>
+            <p class="text-xs text-muted">Recommended: 90 days for production keys</p>
           </div>
         </div>
       </div>
     </template>
 
     <template #footer>
-      <div v-if="generatedKey" class="flex justify-end">
+      <div v-if="generatedKeyResponse" class="flex justify-end">
         <UButton
           label="Done"
           color="primary"
           @click="closeModal"
+          :disabled="!state.saved_confirmation"
         />
       </div>
       <div v-else class="flex justify-end gap-2">
@@ -224,12 +365,13 @@ function closeModal() {
           color="neutral"
           variant="outline"
           @click="open = false"
-          :disabled="isSubmitting"
+          :disabled="createMutation.isPending"
         />
         <UButton
           label="Generate API Key"
           icon="i-lucide-key"
-          :loading="isSubmitting"
+          :loading="createMutation.isPending"
+          :disabled="!state.name || state.scopes.length === 0"
           @click="handleSubmit"
         />
       </div>

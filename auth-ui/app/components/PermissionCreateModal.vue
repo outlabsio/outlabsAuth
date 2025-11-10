@@ -598,7 +598,7 @@ const formatExample = computed(() => {
         </p>
       </div>
 
-      <UDivider />
+      <USeparator />
 
       <!-- Permission Format -->
       <div class="space-y-3">
@@ -619,7 +619,7 @@ const formatExample = computed(() => {
         </div>
       </div>
 
-      <UDivider />
+      <USeparator />
 
       <!-- Permission Examples -->
       <div class="space-y-3">
@@ -655,7 +655,7 @@ const formatExample = computed(() => {
         </div>
       </div>
 
-      <UDivider />
+      <USeparator />
 
       <!-- Scope Explanation -->
       <div class="space-y-3">
@@ -708,7 +708,7 @@ const formatExample = computed(() => {
         </div>
       </div>
 
-      <UDivider />
+      <USeparator />
 
       <!-- Best Practices -->
       <div class="space-y-3">
@@ -744,7 +744,7 @@ const formatExample = computed(() => {
         </ul>
       </div>
 
-      <UDivider />
+      <USeparator />
 
       <!-- System vs Custom -->
       <div class="space-y-3">
@@ -782,7 +782,7 @@ const formatExample = computed(() => {
         </div>
       </div>
 
-      <UDivider />
+      <USeparator />
 
       <!-- How Permissions are Used -->
       <div class="space-y-3">

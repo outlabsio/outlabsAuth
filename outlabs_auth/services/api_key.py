@@ -137,7 +137,7 @@ class APIKeyService:
             name=name,
             prefix=prefix,
             key_hash=key_hash,
-            owner=owner,
+            owner=owner,  # Beanie handles Link conversion automatically
             status=APIKeyStatus.ACTIVE,
             expires_at=expires_at,
             scopes=scopes or [],
@@ -427,7 +427,7 @@ class APIKeyService:
 
     async def get_api_key(self, key_id: str) -> Optional[APIKeyModel]:
         """Get API key by ID."""
-        return await APIKeyModel.get(key_id)
+        return await APIKeyModel.get(key_id, fetch_links=True)
 
     async def list_user_api_keys(
         self, user_id: str, status: Optional[APIKeyStatus] = None
@@ -446,11 +446,19 @@ class APIKeyService:
         if not user:
             return []
 
-        query_conditions = [APIKeyModel.owner.id == user.id]
+        # Query using Beanie's Link field syntax (owner.id)
+        # This is the correct way to query by linked document ID
+        # IMPORTANT: Use fetch_links=True parameter to populate the owner Link field
         if status:
-            query_conditions.append(APIKeyModel.status == status)
-
-        return await APIKeyModel.find(*query_conditions).to_list()
+            return await APIKeyModel.find(
+                APIKeyModel.owner.id == user.id,
+                APIKeyModel.status == status,
+                fetch_links=True,
+            ).to_list()
+        else:
+            return await APIKeyModel.find(
+                APIKeyModel.owner.id == user.id, fetch_links=True
+            ).to_list()
 
     async def revoke_api_key(self, key_id: str) -> bool:
         """
@@ -483,7 +491,7 @@ class APIKeyService:
         Returns:
             Optional[APIKeyModel]: Updated key or None
         """
-        api_key = await APIKeyModel.get(key_id)
+        api_key = await APIKeyModel.get(key_id, fetch_links=True)
         if not api_key:
             return None
 
@@ -507,4 +515,6 @@ class APIKeyService:
                 setattr(api_key, field, value)
 
         await api_key.save()
+        # Refresh to get updated data with links
+        await api_key.sync()
         return api_key

@@ -26,6 +26,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 
 from outlabs_auth import SimpleRBAC
+from outlabs_auth.models.api_key import APIKeyModel
 from outlabs_auth.models.permission import PermissionModel
 from outlabs_auth.models.role import RoleModel
 from outlabs_auth.models.user import UserModel
@@ -172,6 +173,8 @@ async def lifespan(app: FastAPI):
     auth = SimpleRBAC(
         database=db,
         secret_key=SECRET_KEY,
+        access_token_expire_minutes=480,  # 8 hours for dev (default: 15 min)
+        refresh_token_expire_days=7,      # 7 days for dev (default: 30 days)
         redis_client=redis_client,
         redis_url=REDIS_URL if redis_client else None,
         enable_caching=redis_client is not None,
@@ -185,6 +188,7 @@ async def lifespan(app: FastAPI):
             UserModel,
             RoleModel,
             PermissionModel,
+            APIKeyModel,
             BlogPost,
             Comment,
         ],
@@ -290,7 +294,7 @@ async def create_default_roles():
         {
             "name": "admin",
             "display_name": "Administrator",
-            "description": "Full administrative control over users, roles, permissions, posts, and comments",
+            "description": "Full administrative control over users, roles, permissions, API keys, posts, and comments",
             "permissions": [
                 # Blog permissions
                 "post:create",
@@ -311,6 +315,13 @@ async def create_default_roles():
                 "role:delete",
                 # Permission management
                 "permission:read",
+                "permission:create",
+                "permission:update",
+                "permission:delete",
+                # API Key management
+                "api_key:read",
+                "api_key:create",
+                "api_key:revoke",
             ],
         },
     ]
@@ -707,6 +718,12 @@ async def get_auth_config():
                 "label": "Permission Update",
                 "category": "Permissions",
                 "description": "Update permission definitions",
+            },
+            {
+                "value": "permission:delete",
+                "label": "Permission Delete",
+                "category": "Permissions",
+                "description": "Delete custom permissions",
             },
             # API Key permissions
             {

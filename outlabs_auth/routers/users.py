@@ -364,13 +364,23 @@ def get_users_router(
         Triggers on_after_update hook.
         """
         try:
+            update_data = data.model_dump(exclude_unset=True)
             user = await auth.user_service.update_user(
-                user_id=user_id, update_dict=data.model_dump(exclude_unset=True)
+                user_id=user_id,
+                first_name=update_data.get("first_name"),
+                last_name=update_data.get("last_name"),
+                metadata=update_data.get("metadata"),
             )
-            obs.log_event(
-                "user_updated", target_user_id=user_id, updated_by=obs.user_id
+            # TODO: Add proper observability logging for user updates
+            return UserResponse(
+                id=str(user.id),
+                email=user.email,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                status=user.status.value,
+                email_verified=user.email_verified,
+                is_superuser=user.is_superuser,
             )
-            return user
         except HTTPException:
             raise
         except Exception as e:

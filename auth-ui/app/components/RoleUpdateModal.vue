@@ -454,7 +454,7 @@ async function handleSubmit() {
                     </div>
                 </div>
 
-                <UDivider />
+                <USeparator />
 
                 <div>
                     <h4 class="font-semibold mb-2">
@@ -507,7 +507,7 @@ async function handleSubmit() {
                     </div>
                 </div>
 
-                <UDivider />
+                <USeparator />
 
                 <div>
                     <h4 class="font-semibold mb-2">Permission Categories</h4>
@@ -566,7 +566,7 @@ async function handleSubmit() {
                     </div>
                 </div>
 
-                <UDivider />
+                <USeparator />
 
                 <div>
                     <h4 class="font-semibold mb-2">Best Practices</h4>

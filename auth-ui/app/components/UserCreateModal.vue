@@ -132,7 +132,7 @@ async function handleSubmit() {
           </div>
         </div>
 
-        <UDivider label="Permissions" />
+        <USeparator label="Permissions" />
 
         <!-- Switches -->
         <div class="space-y-4">

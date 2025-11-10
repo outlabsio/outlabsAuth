@@ -22,8 +22,8 @@ class ApiKeyCreateRequest(BaseModel):
         default=None, description="IP whitelist (optional)"
     )
     rate_limit_per_minute: int = Field(default=60, description="Rate limit per minute")
-    expires_at: Optional[datetime] = Field(
-        default=None, description="Optional expiration date"
+    expires_in_days: Optional[int] = Field(
+        default=None, description="Days until expiration (service converts to expires_at)"
     )
     description: Optional[str] = Field(
         default=None, description="Optional key description"

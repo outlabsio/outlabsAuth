@@ -4,6 +4,7 @@ API Keys router factory.
 Provides ready-to-use API key management routes (DD-041).
 """
 
+import traceback
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -65,17 +66,18 @@ def get_api_keys_router(
             # Convert to response format
             response_list = []
             for api_key in api_keys:
-                response_data = api_key.model_dump()
+                response_data = api_key.model_dump(exclude={'owner'})
                 response_data["id"] = str(api_key.id)
                 response_data["owner_id"] = (
-                    str(api_key.owner.ref.id) if api_key.owner else None
+                    str(api_key.owner.id) if api_key.owner else None
                 )
                 response_list.append(ApiKeyResponse(**response_data))
 
             return response_list
         except Exception as e:
+            error_detail = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error_detail
             )
 
     @router.post(
@@ -105,16 +107,16 @@ def get_api_keys_router(
                 prefix_type=data.prefix_type,
                 ip_whitelist=data.ip_whitelist,
                 rate_limit_per_minute=data.rate_limit_per_minute,
-                expires_at=data.expires_at,
+                expires_in_days=data.expires_in_days,
                 description=data.description,
                 entity_ids=data.entity_ids,
             )
 
             # Convert model to response with full key
-            response_data = api_key_model.model_dump()
+            response_data = api_key_model.model_dump(exclude={'owner'})
             response_data["id"] = str(api_key_model.id)
             response_data["owner_id"] = (
-                str(api_key_model.owner.ref.id) if api_key_model.owner else None
+                str(api_key_model.owner.id) if api_key_model.owner else None
             )
             response_data["api_key"] = full_key  # Full key (ONLY time it's shown!)
 
@@ -140,14 +142,14 @@ def get_api_keys_router(
                 )
 
             # Verify ownership
-            owner_id = str(api_key.owner.ref.id) if api_key.owner else None
+            owner_id = str(api_key.owner.id) if api_key.owner else None
             if owner_id != auth_result["user_id"]:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
                 )
 
             # Convert to response format
-            response_data = api_key.model_dump()
+            response_data = api_key.model_dump(exclude={'owner'})
             response_data["id"] = str(api_key.id)
             response_data["owner_id"] = owner_id
             return ApiKeyResponse(**response_data)
@@ -174,7 +176,7 @@ def get_api_keys_router(
         try:
             # Get and verify ownership
             api_key = await auth.api_key_service.get_api_key(key_id)
-            owner_id = str(api_key.owner.ref.id) if api_key and api_key.owner else None
+            owner_id = str(api_key.owner.id) if api_key and api_key.owner else None
             if not api_key or owner_id != auth_result["user_id"]:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
@@ -186,10 +188,10 @@ def get_api_keys_router(
             )
 
             # Convert to response format
-            response_data = updated_key.model_dump()
+            response_data = updated_key.model_dump(exclude={'owner'})
             response_data["id"] = str(updated_key.id)
             response_data["owner_id"] = (
-                str(updated_key.owner.ref.id) if updated_key.owner else None
+                str(updated_key.owner.id) if updated_key.owner else None
             )
             return ApiKeyResponse(**response_data)
 
@@ -215,7 +217,7 @@ def get_api_keys_router(
         try:
             # Get and verify ownership
             api_key = await auth.api_key_service.get_api_key(key_id)
-            owner_id = str(api_key.owner.ref.id) if api_key and api_key.owner else None
+            owner_id = str(api_key.owner.id) if api_key and api_key.owner else None
             if not api_key or owner_id != auth_result["user_id"]:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
@@ -250,7 +252,7 @@ def get_api_keys_router(
         try:
             # Get and verify ownership
             api_key = await auth.api_key_service.get_api_key(key_id)
-            owner_id = str(api_key.owner.ref.id) if api_key and api_key.owner else None
+            owner_id = str(api_key.owner.id) if api_key and api_key.owner else None
             if not api_key or owner_id != auth_result["user_id"]:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
