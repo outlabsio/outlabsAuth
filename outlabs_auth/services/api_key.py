@@ -77,6 +77,8 @@ class APIKeyService:
         rate_limit_per_hour: Optional[int] = None,
         rate_limit_per_day: Optional[int] = None,
         entity_ids: Optional[List[str]] = None,
+        entity_id: Optional[str] = None,
+        inherit_from_tree: bool = False,
         ip_whitelist: Optional[List[str]] = None,
         expires_in_days: Optional[int] = None,
         description: Optional[str] = None,
@@ -93,7 +95,9 @@ class APIKeyService:
             rate_limit_per_minute: Max requests per minute
             rate_limit_per_hour: Max requests per hour
             rate_limit_per_day: Max requests per day
-            entity_ids: Restrict to specific entities
+            entity_ids: Restrict to specific entities (legacy list-based)
+            entity_id: Scope to specific entity (EnterpriseRBAC)
+            inherit_from_tree: Allow access to descendant entities (EnterpriseRBAC)
             ip_whitelist: Allowed IP addresses
             expires_in_days: Days until expiration
             description: Optional description
@@ -145,6 +149,8 @@ class APIKeyService:
             rate_limit_per_hour=rate_limit_per_hour,
             rate_limit_per_day=rate_limit_per_day,
             entity_ids=entity_ids,
+            entity_id=entity_id,
+            inherit_from_tree=inherit_from_tree,
             ip_whitelist=ip_whitelist,
             description=description,
             metadata=metadata or {},
@@ -212,12 +218,24 @@ class APIKeyService:
             )
             return None, 0
 
-        # Check entity access if required
-        if entity_id and not api_key.has_entity_access(entity_id):
-            logger.warning(
-                f"API key {api_key.prefix} lacks access to entity: {entity_id}"
-            )
-            return None, 0
+        # Check entity access if required (supports tree permissions)
+        if entity_id:
+            # Use tree-aware check for entity_id field
+            if api_key.entity_id is not None:
+                has_access = await self.check_entity_access_with_tree(
+                    api_key, entity_id
+                )
+                if not has_access:
+                    logger.warning(
+                        f"API key {api_key.prefix} lacks access to entity: {entity_id}"
+                    )
+                    return None, 0
+            # Fall back to legacy entity_ids list check
+            elif not api_key.has_entity_access(entity_id):
+                logger.warning(
+                    f"API key {api_key.prefix} lacks access to entity: {entity_id}"
+                )
+                return None, 0
 
         # Check IP whitelist if required
         if ip_address and not api_key.check_ip(ip_address):
@@ -518,3 +536,52 @@ class APIKeyService:
         # Refresh to get updated data with links
         await api_key.sync()
         return api_key
+
+    async def check_entity_access_with_tree(
+        self, api_key: APIKeyModel, target_entity_id: str
+    ) -> bool:
+        """
+        Check if API key has access to target entity, including tree permissions.
+
+        This method checks:
+        1. Direct access: If entity_id matches target_entity_id
+        2. Tree access: If inherit_from_tree=True and target is a descendant
+
+        Args:
+            api_key: API key to check
+            target_entity_id: Target entity ID to access
+
+        Returns:
+            bool: True if API key has access
+
+        Example:
+            >>> # API key scoped to west_coast region with inherit_from_tree=True
+            >>> has_access = await service.check_entity_access_with_tree(
+            ...     api_key,
+            ...     "los_angeles_office_id"  # Child of west_coast
+            ... )
+            >>> # Returns True due to tree permissions
+        """
+        # No entity_id = global access
+        if not api_key.entity_id:
+            return True
+
+        # Direct match
+        if api_key.entity_id == target_entity_id:
+            return True
+
+        # Check tree access if enabled
+        if api_key.inherit_from_tree:
+            from outlabs_auth.models.closure import EntityClosureModel
+
+            # Check if target is a descendant of api_key's entity
+            closure = await EntityClosureModel.find_one(
+                EntityClosureModel.ancestor_id == api_key.entity_id,
+                EntityClosureModel.descendant_id == target_entity_id,
+                EntityClosureModel.depth > 0,  # Exclude self
+            )
+
+            if closure:
+                return True
+
+        return False

@@ -314,6 +314,89 @@ class AuthDeps:
 
         return Signature(parameters)
 
+    def require_in_entity(self, *permissions: str, entity_id: str) -> Callable:
+        """
+        Generate dependency that requires permissions in a specific entity.
+
+        This is for entity-scoped permission checking in EnterpriseRBAC.
+
+        Args:
+            *permissions: Required permissions
+            entity_id: Entity ID to check permissions in
+
+        Returns:
+            FastAPI dependency function
+
+        Example:
+            ```python
+            @app.get("/entities/{entity_id}/leads")
+            async def get_leads(
+                entity_id: str,
+                auth_result = Depends(deps.require_in_entity("lead:read", entity_id=entity_id))
+            ):
+                return {"leads": [...]}
+            ```
+        """
+        signature = self._get_dependency_signature()
+
+        @with_signature(signature)
+        async def dependency(
+            request: Request, *args: Any, **kwargs: Any
+        ) -> Optional[dict]:
+            """Check permissions in entity context."""
+            # First authenticate
+            auth_result = None
+            for backend in self.backends:
+                result = await backend.authenticate(
+                    request=request,
+                    user_service=self.user_service,
+                    api_key_service=self.api_key_service,
+                    **self.services,
+                )
+                if result:
+                    auth_result = result
+                    break
+
+            if not auth_result:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Not authenticated",
+                )
+
+            # Check permissions in entity context
+            user_id = auth_result["metadata"].get("user_id")
+            if not user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Cannot check permissions without user",
+                )
+
+            # Import here to avoid circular dependency
+            from outlabs_auth.services.permission import PermissionService
+
+            permission_service = PermissionService(database=self.user_service.database)
+
+            for permission in permissions:
+                has_perm, source = await permission_service.check_permission(
+                    user_id=user_id,
+                    permission=permission,
+                    entity_id=entity_id,
+                )
+
+                if not has_perm:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail=f"Missing permission '{permission}' in entity '{entity_id}'",
+                    )
+
+            # Add entity context to metadata
+            auth_result["metadata"]["entity_id"] = entity_id
+            auth_result["metadata"]["entity_permissions"] = list(permissions)
+
+            return auth_result
+
+        return dependency
+
 
 def create_auth_deps(backends: Sequence[AuthBackend], **services: Any) -> AuthDeps:
     """

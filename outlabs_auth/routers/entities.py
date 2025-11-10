@@ -263,13 +263,13 @@ def get_entities_router(
     )
     async def get_descendants(
         entity_id: str,
-        max_depth: Optional[int] = Query(None, description="Maximum depth to traverse"),
+        entity_type: Optional[str] = Query(None, description="Filter by entity type"),
         auth_result=Depends(auth.deps.require_permission("entity:read")),
     ):
         """Get all descendant entities (entire subtree)."""
         try:
             descendants = await auth.entity_service.get_descendants(
-                entity_id=entity_id, max_depth=max_depth
+                entity_id=entity_id, entity_type=entity_type
             )
             return [_entity_to_response(desc) for desc in descendants]
         except Exception as e:

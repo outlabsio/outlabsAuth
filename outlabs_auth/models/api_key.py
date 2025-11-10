@@ -4,13 +4,15 @@ API Key Model
 Represents API keys for programmatic authentication.
 Supports Redis counter pattern for high-performance usage tracking.
 """
+
+import hashlib
+import secrets
 from datetime import datetime, timezone
-from typing import Optional, List
 from enum import Enum
+from typing import List, Optional
+
 from beanie import Indexed, Link
 from pydantic import Field
-import secrets
-import hashlib
 
 from outlabs_auth.models.base import BaseDocument
 from outlabs_auth.models.user import UserModel
@@ -18,6 +20,7 @@ from outlabs_auth.models.user import UserModel
 
 class APIKeyStatus(str, Enum):
     """API key status"""
+
     ACTIVE = "active"
     SUSPENDED = "suspended"
     REVOKED = "revoked"
@@ -49,31 +52,62 @@ class APIKeyModel(BaseDocument):
 
     # Key Information
     name: str = Field(..., description="Human-readable key name")
-    prefix: Indexed(str) = Field(..., description="Key prefix for identification (e.g., 'sk_live_abc123')")
+    prefix: str = Field(
+        ..., description="Key prefix for identification (e.g., 'sk_live_abc123')"
+    )
     key_hash: str = Field(..., description="Hashed full key (never store plain key)")
 
     # Ownership
     owner: Link[UserModel] = Field(..., description="User who owns this API key")
 
     # Status & Lifecycle
-    status: APIKeyStatus = Field(default=APIKeyStatus.ACTIVE, description="Current key status")
-    expires_at: Optional[datetime] = Field(default=None, description="When key expires (None = never)")
-    last_used_at: Optional[datetime] = Field(default=None, description="Last time key was used")
+    status: APIKeyStatus = Field(
+        default=APIKeyStatus.ACTIVE, description="Current key status"
+    )
+    expires_at: Optional[datetime] = Field(
+        default=None, description="When key expires (None = never)"
+    )
+    last_used_at: Optional[datetime] = Field(
+        default=None, description="Last time key was used"
+    )
 
     # Usage Tracking (synced from Redis)
-    usage_count: int = Field(default=0, description="Total number of times key has been used")
+    usage_count: int = Field(
+        default=0, description="Total number of times key has been used"
+    )
 
     # Rate Limiting
-    rate_limit_per_minute: int = Field(default=60, description="Max requests per minute")
-    rate_limit_per_hour: Optional[int] = Field(default=None, description="Max requests per hour")
-    rate_limit_per_day: Optional[int] = Field(default=None, description="Max requests per day")
+    rate_limit_per_minute: int = Field(
+        default=60, description="Max requests per minute"
+    )
+    rate_limit_per_hour: Optional[int] = Field(
+        default=None, description="Max requests per hour"
+    )
+    rate_limit_per_day: Optional[int] = Field(
+        default=None, description="Max requests per day"
+    )
 
     # Permissions & Scoping
-    scopes: List[str] = Field(default_factory=list, description="Allowed permissions/scopes")
-    entity_ids: Optional[List[str]] = Field(default=None, description="Restrict to specific entities (None = all)")
+    scopes: List[str] = Field(
+        default_factory=list, description="Allowed permissions/scopes"
+    )
+    entity_ids: Optional[List[str]] = Field(
+        default=None, description="Restrict to specific entities (None = all)"
+    )
+
+    # Entity-Scoped API Keys (EnterpriseRBAC)
+    entity_id: Optional[str] = Field(
+        default=None, description="Scope API key to specific entity (EnterpriseRBAC)"
+    )
+    inherit_from_tree: bool = Field(
+        default=False,
+        description="If True, key can access descendant entities via tree permissions",
+    )
 
     # Security
-    ip_whitelist: Optional[List[str]] = Field(default=None, description="Allowed IP addresses (None = all)")
+    ip_whitelist: Optional[List[str]] = Field(
+        default=None, description="Allowed IP addresses (None = all)"
+    )
 
     # Metadata
     description: Optional[str] = Field(default=None, description="Key description")
@@ -81,6 +115,7 @@ class APIKeyModel(BaseDocument):
 
     class Settings:
         """Beanie document settings"""
+
         name = "api_keys"
         indexes = [
             "prefix",

@@ -266,6 +266,11 @@ class OutlabsAuth:
             EntityModel,  # Always included for forward ref resolution in RoleModel
         ]
 
+        # Add APIKeyModel (always included)
+        from outlabs_auth.models.api_key import APIKeyModel
+
+        document_models.append(APIKeyModel)
+
         # Add SimpleRBAC models (when entity hierarchy is disabled)
         if not self.config.enable_entity_hierarchy:
             from outlabs_auth.models.user_role_membership import UserRoleMembership
