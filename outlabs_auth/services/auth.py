@@ -7,38 +7,47 @@ Handles user authentication operations:
 - Token refresh
 - Current user retrieval
 """
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple, Any
-from motor.motor_asyncio import AsyncIOMotorDatabase
-import hashlib
-from beanie import PydanticObjectId
 
-from outlabs_auth.models.user import UserModel, UserStatus
-from outlabs_auth.models.token import RefreshTokenModel
+import hashlib
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional, Tuple
+
+from beanie import PydanticObjectId
+from motor.motor_asyncio import AsyncIOMotorDatabase
+
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
-    InvalidCredentialsError,
-    TokenInvalidError,
-    TokenExpiredError,
-    AccountLockedError,
     AccountInactiveError,
-    UserNotFoundError,
+    AccountLockedError,
+    InvalidCredentialsError,
     RefreshTokenInvalidError,
+    TokenExpiredError,
+    TokenInvalidError,
+    UserNotFoundError,
 )
-from outlabs_auth.utils.password import verify_password
+from outlabs_auth.models.token import RefreshTokenModel
+from outlabs_auth.models.user import UserModel, UserStatus
+
+# Import observability (v1.5)
+from outlabs_auth.observability import ObservabilityService
 from outlabs_auth.utils.jwt import (
     create_token_pair,
     verify_token,
 )
+from outlabs_auth.utils.password import verify_password
 from outlabs_auth.utils.validation import validate_email
-
-# Import observability (v1.5)
-from outlabs_auth.observability import ObservabilityService
 
 
 class TokenPair:
     """Container for access and refresh tokens"""
-    def __init__(self, access_token: str, refresh_token: str, token_type: str = "bearer", expires_in: int = 900):
+
+    def __init__(
+        self,
+        access_token: str,
+        refresh_token: str,
+        token_type: str = "bearer",
+        expires_in: int = 900,
+    ):
         self.access_token = access_token
         self.refresh_token = refresh_token
         self.token_type = token_type
@@ -136,7 +145,9 @@ class AuthService:
         if not user:
             # Log failed login attempt (observability)
             if self.observability:
-                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                duration_ms = (
+                    datetime.now(timezone.utc) - start_time
+                ).total_seconds() * 1000
                 self.observability.log_login_failed(
                     email=email,
                     reason="user_not_found",
@@ -146,15 +157,16 @@ class AuthService:
                 )
 
             raise InvalidCredentialsError(
-                message="Invalid email or password",
-                details={"email": email}
+                message="Invalid email or password", details={"email": email}
             )
 
         # Check if account is locked
         if user.is_locked:
             # Log failed login attempt on locked account (observability)
             if self.observability:
-                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                duration_ms = (
+                    datetime.now(timezone.utc) - start_time
+                ).total_seconds() * 1000
                 self.observability.log_login_failed(
                     email=email,
                     reason="account_locked",
@@ -166,45 +178,57 @@ class AuthService:
             raise AccountLockedError(
                 message=f"Account is locked until {user.locked_until.isoformat() if user.locked_until else 'unknown'}",
                 details={
-                    "locked_until": user.locked_until.isoformat() if user.locked_until else None,
-                    "reason": "Too many failed login attempts"
-                }
+                    "locked_until": user.locked_until.isoformat()
+                    if user.locked_until
+                    else None,
+                    "reason": "Too many failed login attempts",
+                },
             )
 
         # Check if account is active (provide specific error messages per status)
         if user.status != UserStatus.ACTIVE:
             if user.status == UserStatus.SUSPENDED:
                 # Suspended with optional expiry date
-                suspended_msg = f" until {user.suspended_until.isoformat()}" if user.suspended_until else ""
+                suspended_msg = (
+                    f" until {user.suspended_until.isoformat()}"
+                    if user.suspended_until
+                    else ""
+                )
                 raise AccountInactiveError(
                     message=f"Account is suspended{suspended_msg}",
                     details={
                         "status": "suspended",
-                        "suspended_until": user.suspended_until.isoformat() if user.suspended_until else None
-                    }
+                        "suspended_until": user.suspended_until.isoformat()
+                        if user.suspended_until
+                        else None,
+                    },
                 )
             elif user.status == UserStatus.BANNED:
                 raise AccountInactiveError(
                     message="Account is permanently banned",
-                    details={"status": "banned"}
+                    details={"status": "banned"},
                 )
             elif user.status == UserStatus.DELETED:
                 raise AccountInactiveError(
                     message="Account has been deleted",
                     details={
                         "status": "deleted",
-                        "deleted_at": user.deleted_at.isoformat() if user.deleted_at else None
-                    }
+                        "deleted_at": user.deleted_at.isoformat()
+                        if user.deleted_at
+                        else None,
+                    },
                 )
             else:
                 # Fallback for any unexpected status
                 raise AccountInactiveError(
                     message=f"Account is {user.status.value}",
-                    details={"status": user.status.value}
+                    details={"status": user.status.value},
                 )
 
         # Verify password
-        if not user.hashed_password or not verify_password(password, user.hashed_password):
+        if not user.hashed_password or not verify_password(
+            password, user.hashed_password
+        ):
             # Increment failed login attempts
             user.failed_login_attempts += 1
 
@@ -220,7 +244,9 @@ class AuthService:
 
             # Log failed login attempt (observability)
             if self.observability:
-                duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                duration_ms = (
+                    datetime.now(timezone.utc) - start_time
+                ).total_seconds() * 1000
                 self.observability.log_login_failed(
                     email=user.email,
                     reason="invalid_password",
@@ -246,12 +272,9 @@ class AuthService:
                         "user_id": str(user.id),
                         "email": user.email,
                         "failed_attempts": user.failed_login_attempts,
-                        "max_attempts": self.config.max_login_attempts
+                        "max_attempts": self.config.max_login_attempts,
                     },
-                    metadata={
-                        "ip": ip_address,
-                        "user_agent": user_agent
-                    }
+                    metadata={"ip": ip_address, "user_agent": user_agent},
                 )
 
             # Emit notification if account was locked
@@ -262,8 +285,10 @@ class AuthService:
                         "user_id": str(user.id),
                         "email": user.email,
                         "reason": "Too many failed login attempts",
-                        "locked_until": user.locked_until.isoformat() if user.locked_until else None
-                    }
+                        "locked_until": user.locked_until.isoformat()
+                        if user.locked_until
+                        else None,
+                    },
                 )
 
             raise InvalidCredentialsError(
@@ -271,7 +296,7 @@ class AuthService:
                 details={
                     "failed_attempts": user.failed_login_attempts,
                     "max_attempts": self.config.max_login_attempts,
-                }
+                },
             )
 
         # Successful login - reset failed attempts
@@ -282,7 +307,9 @@ class AuthService:
 
         # Log successful login (observability)
         if self.observability:
-            duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            duration_ms = (
+                datetime.now(timezone.utc) - start_time
+            ).total_seconds() * 1000
             self.observability.log_login_success(
                 user_id=str(user.id),
                 email=user.email,
@@ -298,21 +325,20 @@ class AuthService:
                 data={
                     "user_id": str(user.id),
                     "email": user.email,
-                    "timestamp": user.last_login.isoformat()
+                    "timestamp": user.last_login.isoformat(),
                 },
                 metadata={
                     "ip": ip_address,
                     "device": device_name,
-                    "user_agent": user_agent
-                }
+                    "user_agent": user_agent,
+                },
             )
 
         # Track activity (fire-and-forget)
         if self.activity_tracker:
             import asyncio
-            asyncio.create_task(
-                self.activity_tracker.track_activity(str(user.id))
-            )
+
+            asyncio.create_task(self.activity_tracker.track_activity(str(user.id)))
 
         # Create JWT token pair
         access_token, refresh_token_value = create_token_pair(
@@ -330,9 +356,8 @@ class AuthService:
             refresh_token_model = RefreshTokenModel(
                 user=user,
                 token_hash=refresh_token_hash,
-                expires_at=datetime.now(timezone.utc) + timedelta(
-                    days=self.config.refresh_token_expire_days
-                ),
+                expires_at=datetime.now(timezone.utc)
+                + timedelta(days=self.config.refresh_token_expire_days),
                 device_name=device_name,
                 ip_address=ip_address,
                 user_agent=user_agent,
@@ -343,7 +368,8 @@ class AuthService:
         token_pair = TokenPair(
             access_token=access_token,
             refresh_token=refresh_token_value,
-            expires_in=self.config.access_token_expire_minutes * 60,  # Convert to seconds
+            expires_in=self.config.access_token_expire_minutes
+            * 60,  # Convert to seconds
         )
 
         return user, token_pair
@@ -353,7 +379,7 @@ class AuthService:
         refresh_token: str,
         blacklist_access_token: bool = False,
         access_token_jti: Optional[str] = None,
-        redis_client: Optional[Any] = None
+        redis_client: Optional[Any] = None,
     ) -> bool:
         """
         Logout user by revoking refresh token with optional immediate access token blacklisting.
@@ -391,13 +417,21 @@ class AuthService:
             # Stateless JWT mode - can't revoke refresh tokens
             # Only blacklist access token if requested
             blacklisted = False
-            if blacklist_access_token and access_token_jti and self.config.enable_token_blacklist:
-                if redis_client and hasattr(redis_client, 'is_available') and redis_client.is_available:
+            if (
+                blacklist_access_token
+                and access_token_jti
+                and self.config.enable_token_blacklist
+            ):
+                if (
+                    redis_client
+                    and hasattr(redis_client, "is_available")
+                    and redis_client.is_available
+                ):
                     remaining_ttl = self.config.access_token_expire_minutes * 60
                     blacklisted = await redis_client.set(
                         f"blacklist:jwt:{access_token_jti}",
                         "revoked",
-                        ttl=remaining_ttl
+                        ttl=remaining_ttl,
                     )
             return blacklisted  # Return True if access token was blacklisted
 
@@ -423,22 +457,30 @@ class AuthService:
 
         # Calculate session duration for observability
         session_start = token_model.created_at
-        session_duration_seconds = (datetime.now(timezone.utc) - session_start).total_seconds()
+        session_duration_seconds = (
+            datetime.now(timezone.utc) - session_start
+        ).total_seconds()
 
         await token_model.save()
 
         # Optional: Blacklist access token in Redis for immediate revocation
         blacklisted = False
-        if blacklist_access_token and access_token_jti and self.config.enable_token_blacklist:
-            if redis_client and hasattr(redis_client, 'is_available') and redis_client.is_available:
+        if (
+            blacklist_access_token
+            and access_token_jti
+            and self.config.enable_token_blacklist
+        ):
+            if (
+                redis_client
+                and hasattr(redis_client, "is_available")
+                and redis_client.is_available
+            ):
                 # Calculate remaining TTL for access token
                 remaining_ttl = self.config.access_token_expire_minutes * 60
 
                 # Add to blacklist with TTL (auto-expires when token would anyway)
                 blacklisted = await redis_client.set(
-                    f"blacklist:jwt:{access_token_jti}",
-                    "revoked",
-                    ttl=remaining_ttl
+                    f"blacklist:jwt:{access_token_jti}", "revoked", ttl=remaining_ttl
                 )
 
         # Fetch user for observability and notifications
@@ -460,8 +502,8 @@ class AuthService:
                     "user_id": str(user.id),
                     "email": user.email,
                     "session_id": str(token_model.id),
-                    "immediate_revocation": blacklisted
-                }
+                    "immediate_revocation": blacklisted,
+                },
             )
 
         return True
@@ -493,7 +535,7 @@ class AuthService:
                 self.config.secret_key,
                 self.config.algorithm,
                 expected_type="refresh",
-                audience=self.config.jwt_audience
+                audience=self.config.jwt_audience,
             )
         except TokenExpiredError:
             # Log failed token refresh (observability)
@@ -514,7 +556,7 @@ class AuthService:
                 )
             raise RefreshTokenInvalidError(
                 message="Invalid refresh token",
-                details={"reason": "Token verification failed"}
+                details={"reason": "Token verification failed"},
             )
 
         # Extract user ID from payload
@@ -522,7 +564,7 @@ class AuthService:
         if not user_id:
             raise RefreshTokenInvalidError(
                 message="Invalid refresh token: missing user ID",
-                details={"reason": "No user ID in token"}
+                details={"reason": "No user ID in token"},
             )
 
         # Initialize token_model (will be None in stateless mode)
@@ -538,7 +580,7 @@ class AuthService:
             if not token_model:
                 raise RefreshTokenInvalidError(
                     message="Refresh token not found",
-                    details={"reason": "Token not in database"}
+                    details={"reason": "Token not in database"},
                 )
 
             # Check if token is still valid
@@ -549,17 +591,21 @@ class AuthService:
                         message="Refresh token has been revoked",
                         details={
                             "reason": "revoked",
-                            "revoked_at": token_model.revoked_at.isoformat() if token_model.revoked_at else None,
-                            "revoked_reason": token_model.revoked_reason
-                        }
+                            "revoked_at": token_model.revoked_at.isoformat()
+                            if token_model.revoked_at
+                            else None,
+                            "revoked_reason": token_model.revoked_reason,
+                        },
                     )
                 # Token is expired
                 raise RefreshTokenInvalidError(
                     message="Refresh token has expired",
                     details={
                         "reason": "expired",
-                        "expires_at": token_model.expires_at.isoformat() if token_model.expires_at else None,
-                    }
+                        "expires_at": token_model.expires_at.isoformat()
+                        if token_model.expires_at
+                        else None,
+                    },
                 )
 
             # Get user from token model
@@ -567,45 +613,52 @@ class AuthService:
             if not user:
                 raise UserNotFoundError(
                     message="User not found",
-                    details={"user_id": str(token_model.user.ref.id)}
+                    details={"user_id": str(token_model.user.ref.id)},
                 )
         else:
             # Stateless mode - get user directly from database
             user = await UserModel.find_one(UserModel.id == PydanticObjectId(user_id))
             if not user:
                 raise UserNotFoundError(
-                    message="User not found",
-                    details={"user_id": user_id}
+                    message="User not found", details={"user_id": user_id}
                 )
 
         # Check user status (provide specific error messages per status)
         if user.status != UserStatus.ACTIVE:
             if user.status == UserStatus.SUSPENDED:
-                suspended_msg = f" until {user.suspended_until.isoformat()}" if user.suspended_until else ""
+                suspended_msg = (
+                    f" until {user.suspended_until.isoformat()}"
+                    if user.suspended_until
+                    else ""
+                )
                 raise AccountInactiveError(
                     message=f"Account is suspended{suspended_msg}",
                     details={
                         "status": "suspended",
-                        "suspended_until": user.suspended_until.isoformat() if user.suspended_until else None
-                    }
+                        "suspended_until": user.suspended_until.isoformat()
+                        if user.suspended_until
+                        else None,
+                    },
                 )
             elif user.status == UserStatus.BANNED:
                 raise AccountInactiveError(
                     message="Account is permanently banned",
-                    details={"status": "banned"}
+                    details={"status": "banned"},
                 )
             elif user.status == UserStatus.DELETED:
                 raise AccountInactiveError(
                     message="Account has been deleted",
                     details={
                         "status": "deleted",
-                        "deleted_at": user.deleted_at.isoformat() if user.deleted_at else None
-                    }
+                        "deleted_at": user.deleted_at.isoformat()
+                        if user.deleted_at
+                        else None,
+                    },
                 )
             else:
                 raise AccountInactiveError(
                     message=f"Account is {user.status.value}",
-                    details={"status": user.status.value}
+                    details={"status": user.status.value},
                 )
 
         # Create new access token
@@ -634,15 +687,15 @@ class AuthService:
         # Track activity (fire-and-forget)
         if self.activity_tracker:
             import asyncio
-            asyncio.create_task(
-                self.activity_tracker.track_activity(str(user.id))
-            )
+
+            asyncio.create_task(self.activity_tracker.track_activity(str(user.id)))
 
         # Return new access token with same refresh token
         return TokenPair(
             access_token=access_token,
             refresh_token=refresh_token,  # Same refresh token
-            expires_in=self.config.access_token_expire_minutes * 60,  # Convert to seconds
+            expires_in=self.config.access_token_expire_minutes
+            * 60,  # Convert to seconds
         )
 
     async def get_current_user(self, access_token: str) -> UserModel:
@@ -672,53 +725,59 @@ class AuthService:
             self.config.secret_key,
             self.config.algorithm,
             expected_type="access",
-            audience=self.config.jwt_audience
+            audience=self.config.jwt_audience,
         )
 
         # Get user ID from token
         user_id = payload.get("sub")
         if not user_id:
             raise TokenInvalidError(
-                message="Invalid token: missing user ID",
-                details={"payload": payload}
+                message="Invalid token: missing user ID", details={"payload": payload}
             )
 
         # Get user from database
         user = await UserModel.get(user_id)
         if not user:
             raise UserNotFoundError(
-                message="User not found",
-                details={"user_id": user_id}
+                message="User not found", details={"user_id": user_id}
             )
 
         # Check user status (provide specific error messages per status)
         if user.status != UserStatus.ACTIVE:
             if user.status == UserStatus.SUSPENDED:
-                suspended_msg = f" until {user.suspended_until.isoformat()}" if user.suspended_until else ""
+                suspended_msg = (
+                    f" until {user.suspended_until.isoformat()}"
+                    if user.suspended_until
+                    else ""
+                )
                 raise AccountInactiveError(
                     message=f"Account is suspended{suspended_msg}",
                     details={
                         "status": "suspended",
-                        "suspended_until": user.suspended_until.isoformat() if user.suspended_until else None
-                    }
+                        "suspended_until": user.suspended_until.isoformat()
+                        if user.suspended_until
+                        else None,
+                    },
                 )
             elif user.status == UserStatus.BANNED:
                 raise AccountInactiveError(
                     message="Account is permanently banned",
-                    details={"status": "banned"}
+                    details={"status": "banned"},
                 )
             elif user.status == UserStatus.DELETED:
                 raise AccountInactiveError(
                     message="Account has been deleted",
                     details={
                         "status": "deleted",
-                        "deleted_at": user.deleted_at.isoformat() if user.deleted_at else None
-                    }
+                        "deleted_at": user.deleted_at.isoformat()
+                        if user.deleted_at
+                        else None,
+                    },
                 )
             else:
                 raise AccountInactiveError(
                     message=f"Account is {user.status.value}",
-                    details={"status": user.status.value}
+                    details={"status": user.status.value},
                 )
 
         return user
@@ -742,7 +801,7 @@ class AuthService:
         # Find all active refresh tokens for user
         tokens = await RefreshTokenModel.find(
             RefreshTokenModel.user.ref.id == user_id,
-            RefreshTokenModel.is_revoked == False
+            RefreshTokenModel.is_revoked == False,
         ).to_list()
 
         # Revoke all
@@ -755,6 +814,147 @@ class AuthService:
             revoked_count += 1
 
         return revoked_count
+
+    async def generate_reset_token(self, user: UserModel) -> str:
+        """
+        Generate a password reset token for user.
+
+        Creates a secure random token, hashes it for storage, and sets expiration.
+        The plain token is returned for sending via email.
+
+        Args:
+            user: User requesting password reset
+
+        Returns:
+            str: Plain reset token (to be sent via email)
+
+        Example:
+            >>> token = await auth_service.generate_reset_token(user)
+            >>> reset_link = f"https://example.com/reset-password?token={token}"
+            >>> await send_email(user.email, reset_link)
+        """
+        import secrets
+
+        # Generate secure random token (32 bytes = 64 hex chars)
+        plain_token = secrets.token_urlsafe(32)
+
+        # Hash token for storage (SHA-256)
+        hashed_token = hashlib.sha256(plain_token.encode()).hexdigest()
+
+        # Set expiration (1 hour from now)
+        expires = datetime.now(timezone.utc) + timedelta(hours=1)
+
+        # Store hashed token and expiration
+        user.password_reset_token = hashed_token
+        user.password_reset_expires = expires
+        await user.save()
+
+        return plain_token
+
+    async def reset_password(self, token: str, new_password: str) -> UserModel:
+        """
+        Reset user password using reset token.
+
+        Verifies the token, checks expiration, changes password,
+        and clears reset token fields.
+
+        Args:
+            token: Plain reset token (from email link)
+            new_password: New password (plain text, will be hashed)
+
+        Returns:
+            UserModel: User with updated password
+
+        Raises:
+            TokenInvalidError: If token is invalid or expired
+            InvalidPasswordError: If password doesn't meet requirements
+            UserNotFoundError: If user not found
+
+        Example:
+            >>> user = await auth_service.reset_password(
+            ...     token="abc123...",
+            ...     new_password="NewSecurePass123!"
+            ... )
+        """
+        # Hash token to find user
+        hashed_token = hashlib.sha256(token.encode()).hexdigest()
+
+        # Find user by hashed token
+        user = await UserModel.find_one(UserModel.password_reset_token == hashed_token)
+
+        if not user:
+            raise TokenInvalidError(
+                message="Invalid or expired reset token",
+                details={"reason": "token_not_found"},
+            )
+
+        # Check expiration
+        if (
+            not user.password_reset_expires
+            or user.password_reset_expires < datetime.now(timezone.utc)
+        ):
+            # Clear expired token
+            user.password_reset_token = None
+            user.password_reset_expires = None
+            await user.save()
+
+            raise TokenExpiredError(
+                message="Reset token has expired",
+                details={"expired_at": user.password_reset_expires},
+            )
+
+        # Change password (this will hash it and validate)
+        from outlabs_auth.utils.password import generate_password_hash
+
+        hashed_password = generate_password_hash(new_password, self.config)
+        user.hashed_password = hashed_password
+        user.last_password_change = datetime.now(timezone.utc)
+
+        # Reset failed login attempts
+        user.failed_login_attempts = 0
+        user.locked_until = None
+
+        # Clear reset token
+        user.password_reset_token = None
+        user.password_reset_expires = None
+
+        await user.save()
+
+        # Emit notification
+        if self.notifications:
+            await self.notifications.emit(
+                "user.password_reset",
+                data={
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "reset_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+
+        return user
+
+    async def verify_password(self, user: UserModel, password: str) -> bool:
+        """
+        Verify a password against user's hashed password.
+
+        Used for password change verification (requires current password).
+
+        Args:
+            user: User to verify password for
+            password: Plain text password to verify
+
+        Returns:
+            bool: True if password is correct, False otherwise
+
+        Example:
+            >>> is_valid = await auth_service.verify_password(user, "OldPassword123!")
+            >>> if is_valid:
+            ...     await auth_service.change_password(user, "NewPassword456!")
+        """
+        if not user.hashed_password:
+            return False
+
+        return verify_password(password, user.hashed_password)
 
     def _hash_token(self, token: str) -> str:
         """

@@ -101,10 +101,9 @@ export const useAuthStore = defineStore("auth", () => {
         }
       }
 
-      // Fetch config after authentication is verified
-      if (state.isAuthenticated) {
-        await fetchConfig();
-      }
+      // Fetch config regardless of auth state (it's a public endpoint)
+      // This allows the UI to adapt before user logs in
+      await fetchConfig();
 
       state.isInitialized = true;
       return state.isAuthenticated;
@@ -331,16 +330,33 @@ export const useAuthStore = defineStore("auth", () => {
   /**
    * Fetch auth configuration
    * Detects SimpleRBAC vs EnterpriseRBAC and available features
+   *
+   * This is a public endpoint (no auth required)
    */
   const fetchConfig = async (): Promise<void> => {
     try {
-      const config = await apiCall<AuthConfig>("/v1/auth/config");
-      state.config = config;
+      // Make unauthenticated request to config endpoint
+      const response = await fetch(
+        `${config.public.apiBaseUrl}/v1/auth/config`,
+        {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch config: ${response.status}`);
+      }
+
+      const configData = await response.json();
+      state.config = configData;
       state.isConfigLoaded = true;
 
-      console.log(`✅ Auth config loaded: ${config.preset}`, {
-        features: config.features,
-        permissions: config.available_permissions.length,
+      console.log(`✅ Auth config loaded: ${configData.preset}`, {
+        features: configData.features,
+        permissions: configData.available_permissions.length,
       });
     } catch (error) {
       console.error("Failed to fetch auth config:", error);

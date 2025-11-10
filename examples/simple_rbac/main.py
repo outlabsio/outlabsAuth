@@ -44,6 +44,78 @@ from outlabs_auth.routers import (
     get_roles_router,
     get_users_router,
 )
+from outlabs_auth.services.user import UserService
+
+# ============================================================================
+# Custom User Service with Password Reset Hooks
+# ============================================================================
+
+
+class BlogUserService(UserService):
+    """
+    Custom UserService with password reset hooks for email notifications.
+
+    In a production app, these hooks would send actual emails.
+    For development, we just print the reset links to console.
+    """
+
+    async def on_after_forgot_password(
+        self, user: UserModel, token: str, request: Optional[any] = None
+    ) -> None:
+        """
+        Send password reset email to user.
+
+        In production: Send email with reset link
+        For development: Print reset link to console
+        """
+        # Build reset link (in production, use actual domain)
+        reset_link = f"http://localhost:3000/reset-password?token={token}"
+
+        print("\n" + "=" * 80)
+        print("📧 PASSWORD RESET EMAIL (Development Mode)")
+        print("=" * 80)
+        print(f"To: {user.email}")
+        print(f"Subject: Reset your password")
+        print(f"\nClick the link below to reset your password:")
+        print(f"\n{reset_link}")
+        print(f"\nThis link will expire in 1 hour.")
+        print("=" * 80 + "\n")
+
+        # TODO: Integrate email service for production
+        # In production, you would send an actual email:
+        # await send_email(
+        #     to=user.email,
+        #     subject="Reset your password",
+        #     template="password_reset",
+        #     context={"reset_link": reset_link, "user": user}
+        # )
+
+    async def on_after_reset_password(
+        self, user: UserModel, request: Optional[any] = None
+    ) -> None:
+        """
+        Send password reset confirmation email.
+
+        Notifies user that their password was successfully changed.
+        """
+        print("\n" + "=" * 80)
+        print("✅ PASSWORD RESET CONFIRMATION (Development Mode)")
+        print("=" * 80)
+        print(f"To: {user.email}")
+        print(f"Subject: Password reset successful")
+        print(f"\nYour password has been successfully reset.")
+        print(f"If you didn't make this change, please contact support immediately.")
+        print("=" * 80 + "\n")
+
+        # TODO: Integrate email service for production
+        # In production, you would send an actual email:
+        # await send_email(
+        #     to=user.email,
+        #     subject="Password reset successful",
+        #     template="password_reset_confirmation",
+        #     context={"user": user}
+        # )
+
 
 # ============================================================================
 # Configuration
@@ -174,7 +246,7 @@ async def lifespan(app: FastAPI):
         database=db,
         secret_key=SECRET_KEY,
         access_token_expire_minutes=480,  # 8 hours for dev (default: 15 min)
-        refresh_token_expire_days=7,      # 7 days for dev (default: 30 days)
+        refresh_token_expire_days=7,  # 7 days for dev (default: 30 days)
         redis_client=redis_client,
         redis_url=REDIS_URL if redis_client else None,
         enable_caching=redis_client is not None,
@@ -196,6 +268,12 @@ async def lifespan(app: FastAPI):
 
     await auth.initialize()
     print("✅ Database initialized")
+
+    # Replace user service with custom one that has password reset hooks
+    auth.user_service = BlogUserService(
+        database=db, config=auth.config, notification_service=auth.notification_service
+    )
+    print("✅ Custom user service with password reset hooks enabled")
 
     # Create default roles if they don't exist
     await create_default_roles()

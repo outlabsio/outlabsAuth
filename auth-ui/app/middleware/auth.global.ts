@@ -6,54 +6,58 @@
 export default defineNuxtRouteMiddleware(async (to) => {
   // Skip middleware on server-side
   if (import.meta.server) {
-    return
+    return;
   }
 
-  const authStore = useAuthStore()
-  const contextStore = useContextStore()
+  const authStore = useAuthStore();
+  const contextStore = useContextStore();
 
   // Public routes that don't require authentication
   const publicRoutes = [
-    '/login',
-    '/signup',
-    '/verify',
-    '/recovery',
-    '/reset-password'
-  ]
+    "/login",
+    "/signup",
+    "/verify",
+    "/recovery",
+    "/forgot-password",
+    "/reset-password",
+  ];
 
-  const isPublicRoute = publicRoutes.some(route => to.path.startsWith(route))
+  const isPublicRoute = publicRoutes.some((route) => to.path.startsWith(route));
 
   // Initialize auth state on first load
   if (!authStore.state.isInitialized) {
-    await authStore.initialize()
+    await authStore.initialize();
   }
 
   // If user is authenticated and trying to access public route, redirect to dashboard
   if (isPublicRoute && authStore.isAuthenticated) {
-    // Exception: allow access to recovery/verify/reset pages even when authenticated
-    if (to.path.startsWith('/recovery') ||
-        to.path.startsWith('/verify') ||
-        to.path.startsWith('/reset-password')) {
-      return
+    // Exception: allow access to recovery/verify/forgot-password/reset-password pages even when authenticated
+    if (
+      to.path.startsWith("/recovery") ||
+      to.path.startsWith("/verify") ||
+      to.path.startsWith("/forgot-password") ||
+      to.path.startsWith("/reset-password")
+    ) {
+      return;
     }
 
-    return navigateTo('/dashboard')
+    return navigateTo("/dashboard");
   }
 
   // If protected route and not authenticated, redirect to login
   if (!isPublicRoute && !authStore.isAuthenticated) {
     return navigateTo({
-      path: '/login',
-      query: { redirect: to.fullPath }
-    })
+      path: "/login",
+      query: { redirect: to.fullPath },
+    });
   }
 
   // Initialize context after successful auth (for protected routes)
   if (!isPublicRoute && authStore.isAuthenticated && contextStore) {
     try {
-      await contextStore.initialize()
+      await contextStore.initialize();
     } catch (error) {
-      console.error('Context initialization failed:', error)
+      console.error("Context initialization failed:", error);
     }
   }
-})
+});

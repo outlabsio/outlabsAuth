@@ -1,11 +1,13 @@
 """
 User model for authentication and profile management
 """
-from typing import Optional, Dict, Any, List
+
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any, Dict, List, Optional
+
 from beanie import Indexed
-from pydantic import EmailStr, Field, BaseModel
+from pydantic import BaseModel, EmailStr, Field
 
 from outlabs_auth.models.base import BaseDocument
 
@@ -21,6 +23,7 @@ class UserStatus(str, Enum):
 
     See docs-library/48-User-Status-System.md for detailed semantics.
     """
+
     ACTIVE = "active"
     SUSPENDED = "suspended"
     BANNED = "banned"
@@ -45,17 +48,17 @@ class UserModel(BaseDocument):
     hashed_password: Optional[str] = None  # Optional for OAuth-only users
     auth_methods: List[str] = Field(
         default_factory=lambda: ["PASSWORD"],
-        description="Authentication methods available (PASSWORD, GOOGLE, FACEBOOK, etc.)"
+        description="Authentication methods available (PASSWORD, GOOGLE, FACEBOOK, etc.)",
     )
 
     # Basic Identity (optional - use Beanie Links for extended profiles)
     first_name: Optional[str] = Field(
         default=None,
-        description="User's first name (optional, commonly used for display)"
+        description="User's first name (optional, commonly used for display)",
     )
     last_name: Optional[str] = Field(
         default=None,
-        description="User's last name (optional, commonly used for display)"
+        description="User's last name (optional, commonly used for display)",
     )
 
     # Status
@@ -65,26 +68,32 @@ class UserModel(BaseDocument):
 
     # Status-related timestamps
     suspended_until: Optional[datetime] = Field(
-        default=None,
-        description="Optional auto-expiry for SUSPENDED status"
+        default=None, description="Optional auto-expiry for SUSPENDED status"
     )
     deleted_at: Optional[datetime] = Field(
-        default=None,
-        description="Soft delete timestamp for DELETED status"
+        default=None, description="Soft delete timestamp for DELETED status"
     )
 
     # Security & Activity Tracking
     last_login: Optional[datetime] = Field(
         default=None,
-        description="Last successful login timestamp (only on email/password or OAuth login)"
+        description="Last successful login timestamp (only on email/password or OAuth login)",
     )
     last_activity: Optional[datetime] = Field(
         default=None,
-        description="Last authenticated action timestamp (any authenticated request, updated via background sync)"
+        description="Last authenticated action timestamp (any authenticated request, updated via background sync)",
     )
     last_password_change: Optional[datetime] = None
     failed_login_attempts: int = Field(default=0)
     locked_until: Optional[datetime] = None
+
+    # Password Reset
+    password_reset_token: Optional[str] = Field(
+        default=None, description="Hashed password reset token (SHA-256)"
+    )
+    password_reset_expires: Optional[datetime] = Field(
+        default=None, description="Password reset token expiration timestamp"
+    )
 
     # Metadata
     metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -125,10 +134,7 @@ class UserModel(BaseDocument):
 
         See docs-library/48-User-Status-System.md for status semantics.
         """
-        return (
-            self.status == UserStatus.ACTIVE
-            and not self.is_locked
-        )
+        return self.status == UserStatus.ACTIVE and not self.is_locked
 
     class Settings:
         name = "users"

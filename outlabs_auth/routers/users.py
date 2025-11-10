@@ -8,11 +8,13 @@ from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from outlabs_auth.core.exceptions import UserAlreadyExistsError
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.permission import PermissionResponse, UserPermissionSource
 from outlabs_auth.schemas.role import RoleResponse
 from outlabs_auth.schemas.user import (
+    AdminResetPasswordRequest,
     ChangePasswordRequest,
     UserCreateRequest,
     UserResponse,
@@ -116,6 +118,11 @@ def get_users_router(
                 status=user.status.value,
                 email_verified=user.email_verified,
                 is_superuser=user.is_superuser,
+            )
+        except UserAlreadyExistsError as e:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(e),
             )
         except HTTPException:
             raise
@@ -289,13 +296,17 @@ def get_users_router(
                     detail="Invalid current password",
                 )
 
-            # Update password
-            await auth.user_service.update_user(
+            # Change password
+            await auth.user_service.change_password(
                 user_id=obs.user_id,
-                update_dict={"password": data.new_password},
+                new_password=data.new_password,
             )
 
-            obs.log_event("password_changed", user_id=obs.user_id)
+            # Log password change
+            if auth.observability:
+                auth.observability.logger.info(
+                    "user_password_changed", user_id=obs.user_id
+                )
 
         except HTTPException:
             raise
@@ -397,6 +408,54 @@ def get_users_router(
                 detail="Failed to update user",
             )
 
+    @router.patch(
+        "/{user_id}/password",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Reset user password (admin)",
+        description="Reset user password without requiring current password (requires user:update permission)",
+    )
+    async def admin_reset_password(
+        user_id: str,
+        data: AdminResetPasswordRequest,
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        """
+        Reset user password (admin only).
+
+        Allows administrators to reset a user's password without knowing their current password.
+        This is different from /me/change-password which requires the current password.
+
+        Triggers password_changed notification.
+        """
+        try:
+            # Change user password using user service
+            await auth.user_service.change_password(
+                user_id=user_id,
+                new_password=data.new_password,
+            )
+
+            # Log admin password reset
+            if auth.observability:
+                auth.observability.logger.info(
+                    "admin_password_reset", target_user_id=user_id, reset_by=obs.user_id
+                )
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=user_id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to reset user password",
+            )
+
+        return None
+
     @router.delete(
         "/{user_id}",
         status_code=status.HTTP_204_NO_CONTENT,
@@ -419,9 +478,12 @@ def get_users_router(
         """
         try:
             await auth.user_service.delete_user(user_id)
-            obs.log_event(
-                "user_deleted", target_user_id=user_id, deleted_by=obs.user_id
-            )
+
+            # Log event
+            if auth.observability:
+                auth.observability.logger.info(
+                    "user_deleted", target_user_id=user_id, deleted_by=obs.user_id
+                )
         except HTTPException:
             raise
         except Exception as e:

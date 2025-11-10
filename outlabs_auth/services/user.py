@@ -8,18 +8,20 @@ Handles user management operations:
 - List users with pagination
 - Search users
 """
-from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
-from motor.motor_asyncio import AsyncIOMotorDatabase
-from fastapi import Request, Response
 
-from outlabs_auth.models.user import UserModel, UserStatus
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from fastapi import Request, Response
+from motor.motor_asyncio import AsyncIOMotorDatabase
+
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
+    InvalidPasswordError,
     UserAlreadyExistsError,
     UserNotFoundError,
-    InvalidPasswordError,
 )
+from outlabs_auth.models.user import UserModel, UserStatus
 from outlabs_auth.utils.password import generate_password_hash, hash_password
 from outlabs_auth.utils.validation import validate_email, validate_name
 
@@ -101,7 +103,7 @@ class UserService:
         if existing_user:
             raise UserAlreadyExistsError(
                 message=f"User with email {email} already exists",
-                details={"email": email}
+                details={"email": email},
             )
 
         # Validate names if provided
@@ -126,7 +128,7 @@ class UserService:
         )
 
         await user.save()
-        
+
         # Emit notification (fire-and-forget)
         if self.notifications:
             await self.notifications.emit(
@@ -136,10 +138,12 @@ class UserService:
                     "email": user.email,
                     "first_name": first_name,
                     "last_name": last_name,
-                    "created_at": user.created_at.isoformat() if user.created_at else None
-                }
+                    "created_at": user.created_at.isoformat()
+                    if user.created_at
+                    else None,
+                },
             )
-        
+
         return user
 
     async def get_user_by_id(self, user_id: str) -> Optional[UserModel]:
@@ -210,8 +214,7 @@ class UserService:
         user = await UserModel.get(user_id)
         if not user:
             raise UserNotFoundError(
-                message="User not found",
-                details={"user_id": user_id}
+                message="User not found", details={"user_id": user_id}
             )
 
         # Update basic identity fields
@@ -256,20 +259,20 @@ class UserService:
         user = await UserModel.get(user_id)
         if not user:
             raise UserNotFoundError(
-                message="User not found",
-                details={"user_id": user_id}
+                message="User not found", details={"user_id": user_id}
             )
 
         # Hash new password (with validation)
         hashed_password = generate_password_hash(new_password, self.config)
         user.hashed_password = hashed_password
+        user.last_password_change = datetime.now(timezone.utc)
 
         # Reset failed login attempts
         user.failed_login_attempts = 0
         user.locked_until = None
 
         await user.save()
-        
+
         # Emit notification
         if self.notifications:
             await self.notifications.emit(
@@ -277,10 +280,10 @@ class UserService:
                 data={
                     "user_id": str(user.id),
                     "email": user.email,
-                    "changed_at": datetime.now(timezone.utc).isoformat()
-                }
+                    "changed_at": datetime.now(timezone.utc).isoformat(),
+                },
             )
-        
+
         return user
 
     async def update_user_status(
@@ -312,14 +315,13 @@ class UserService:
         user = await UserModel.get(user_id)
         if not user:
             raise UserNotFoundError(
-                message="User not found",
-                details={"user_id": user_id}
+                message="User not found", details={"user_id": user_id}
             )
 
         old_status = user.status
         user.status = status
         await user.save()
-        
+
         # Emit notification
         if self.notifications:
             await self.notifications.emit(
@@ -329,10 +331,10 @@ class UserService:
                     "email": user.email,
                     "old_status": old_status.value,
                     "new_status": status.value,
-                    "changed_at": datetime.now(timezone.utc).isoformat()
-                }
+                    "changed_at": datetime.now(timezone.utc).isoformat(),
+                },
             )
-        
+
         return user
 
     async def delete_user(self, user_id: str) -> bool:
@@ -356,13 +358,13 @@ class UserService:
         user = await UserModel.get(user_id)
         if not user:
             return False
-        
+
         # Store user data before deletion for notification
         user_email = user.email
         user_id_str = str(user.id)
 
         await user.delete()
-        
+
         # Emit notification
         if self.notifications:
             await self.notifications.emit(
@@ -370,10 +372,10 @@ class UserService:
                 data={
                     "user_id": user_id_str,
                     "email": user_email,
-                    "deleted_at": datetime.now(timezone.utc).isoformat()
-                }
+                    "deleted_at": datetime.now(timezone.utc).isoformat(),
+                },
             )
-        
+
         return True
 
     async def list_users(
@@ -441,13 +443,19 @@ class UserService:
         # Case-insensitive regex search
         search_regex = {"$regex": search_term, "$options": "i"}
 
-        users = await UserModel.find({
-            "$or": [
-                {"email": search_regex},
-                {"first_name": search_regex},
-                {"last_name": search_regex},
-            ]
-        }).limit(limit).to_list()
+        users = (
+            await UserModel.find(
+                {
+                    "$or": [
+                        {"email": search_regex},
+                        {"first_name": search_regex},
+                        {"last_name": search_regex},
+                    ]
+                }
+            )
+            .limit(limit)
+            .to_list()
+        )
 
         return users
 
@@ -472,8 +480,7 @@ class UserService:
         user = await UserModel.get(user_id)
         if not user:
             raise UserNotFoundError(
-                message="User not found",
-                details={"user_id": user_id}
+                message="User not found", details={"user_id": user_id}
             )
 
         user.email_verified = True
@@ -485,9 +492,7 @@ class UserService:
     # ========================================================================
 
     async def on_after_register(
-        self,
-        user: UserModel,
-        request: Optional[Request] = None
+        self, user: UserModel, request: Optional[Request] = None
     ) -> None:
         """
         Perform logic after successful user registration.
@@ -515,7 +520,7 @@ class UserService:
         self,
         user: UserModel,
         request: Optional[Request] = None,
-        response: Optional[Response] = None
+        response: Optional[Response] = None,
     ) -> None:
         """
         Perform logic after successful user login.
@@ -545,7 +550,7 @@ class UserService:
         self,
         user: UserModel,
         update_dict: Dict[str, Any],
-        request: Optional[Request] = None
+        request: Optional[Request] = None,
     ) -> None:
         """
         Perform logic after successful user update.
@@ -570,10 +575,7 @@ class UserService:
         pass  # Override in subclass
 
     async def on_after_forgot_password(
-        self,
-        user: UserModel,
-        token: str,
-        request: Optional[Request] = None
+        self, user: UserModel, token: str, request: Optional[Request] = None
     ) -> None:
         """
         Perform logic after successful forgot password request.
@@ -598,9 +600,7 @@ class UserService:
         pass  # Override in subclass
 
     async def on_after_reset_password(
-        self,
-        user: UserModel,
-        request: Optional[Request] = None
+        self, user: UserModel, request: Optional[Request] = None
     ) -> None:
         """
         Perform logic after successful password reset.
@@ -624,10 +624,7 @@ class UserService:
         pass  # Override in subclass
 
     async def on_after_request_verify(
-        self,
-        user: UserModel,
-        token: str,
-        request: Optional[Request] = None
+        self, user: UserModel, token: str, request: Optional[Request] = None
     ) -> None:
         """
         Perform logic after successful email verification request.
@@ -651,9 +648,7 @@ class UserService:
         pass  # Override in subclass
 
     async def on_after_verify(
-        self,
-        user: UserModel,
-        request: Optional[Request] = None
+        self, user: UserModel, request: Optional[Request] = None
     ) -> None:
         """
         Perform logic after successful email verification.

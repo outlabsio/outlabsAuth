@@ -13,6 +13,7 @@ from outlabs_auth.observability import (
     get_observability_dependency,
 )
 from outlabs_auth.schemas.auth import (
+    AuthConfigResponse,
     ForgotPasswordRequest,
     LoginRequest,
     LoginResponse,
@@ -23,6 +24,7 @@ from outlabs_auth.schemas.auth import (
     ResetPasswordRequest,
 )
 from outlabs_auth.schemas.user import UserResponse
+from outlabs_auth.utils.rate_limit import check_forgot_password_rate_limit
 
 
 def get_auth_router(
@@ -64,6 +66,48 @@ def get_auth_router(
 
     # Create observability dependency (no auth required for public endpoints)
     get_obs = get_observability_dependency(auth.observability)
+
+    @router.get(
+        "/config",
+        response_model=AuthConfigResponse,
+        summary="Get auth configuration",
+        description="Returns preset type and enabled features (used by admin UIs)",
+    )
+    async def get_config():
+        """
+        Get OutlabsAuth configuration.
+
+        Returns:
+            - preset: SimpleRBAC or EnterpriseRBAC
+            - features: Enabled features (entity_hierarchy, context_aware_roles, etc.)
+            - available_permissions: All permission strings for this preset
+
+        This endpoint is used by admin UIs to conditionally show/hide features
+        based on the detected preset and enabled features.
+        """
+        # Determine preset name
+        preset_name = auth.__class__.__name__
+
+        # Get feature flags from config
+        features = {
+            "entity_hierarchy": auth.config.enable_entity_hierarchy,
+            "context_aware_roles": auth.config.enable_context_aware_roles,
+            "abac": auth.config.enable_abac,
+            "tree_permissions": auth.config.enable_entity_hierarchy,  # Tree permissions require hierarchy
+            "api_keys": True,  # Always available
+            "user_status": True,  # Always available
+            "activity_tracking": True,  # Always available
+        }
+
+        # Get available permissions from permission service
+        # For now, return empty list - this will be populated when we have permission enumeration
+        available_permissions = []
+
+        return AuthConfigResponse(
+            preset=preset_name,
+            features=features,
+            available_permissions=available_permissions,
+        )
 
     @router.post(
         "/register",
@@ -242,19 +286,37 @@ def get_auth_router(
         "/forgot-password",
         status_code=status.HTTP_204_NO_CONTENT,
         summary="Request password reset",
-        description="Send password reset email",
+        description="Send password reset email (rate limited: 3 requests per 5 minutes)",
     )
     async def forgot_password(data: ForgotPasswordRequest):
         """
         Request password reset.
 
+        Rate limited to 3 requests per 5 minutes per email address.
+
         Triggers on_after_forgot_password hook with reset token.
         """
+        # Check rate limit
+        is_limited, seconds_until_reset = await check_forgot_password_rate_limit(
+            data.email
+        )
+
+        if is_limited:
+            # Return 429 with retry-after information
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "message": "Too many password reset requests. Please try again later.",
+                    "retry_after_seconds": seconds_until_reset,
+                    "retry_after_minutes": round(seconds_until_reset / 60, 1),
+                },
+            )
+
         try:
             # Get user by email
             user = await auth.user_service.get_user_by_email(data.email)
             if not user:
-                # Don't reveal if email exists
+                # Don't reveal if email exists (but still enforce rate limit)
                 return None
 
             # Generate reset token
@@ -263,8 +325,12 @@ def get_auth_router(
             # Trigger hook (should send email)
             await auth.user_service.on_after_forgot_password(user, token)
 
-        except Exception:
-            pass  # Don't reveal errors
+        except Exception as e:
+            # Log error but don't reveal to user
+            if auth.observability:
+                auth.observability.logger.error(
+                    "forgot_password_error", email=data.email, error=str(e)
+                )
 
         return None
 
