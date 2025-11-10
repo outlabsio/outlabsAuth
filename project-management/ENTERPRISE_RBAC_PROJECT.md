@@ -1,8 +1,8 @@
 # EnterpriseRBAC Implementation Project
 
 **Created**: 2025-01-26
-**Last Updated**: 2025-01-10
-**Status**: Phase 0 Complete - Backend Implementation Starting
+**Last Updated**: 2025-11-10
+**Status**: Phase 5 Testing In Progress - Redis Caching Tests Complete
 **Estimated Duration**: 6-8 days
 **Primary Goal**: Complete EnterpriseRBAC example with full admin UI integration and testing
 
@@ -78,17 +78,50 @@ We're completing the **EnterpriseRBAC example** to demonstrate hierarchical enti
 
 ### Timeline Estimate
 
-| Phase | Duration | Tasks |
-|-------|----------|-------|
-| Phase 1: Seed Data & Setup | 2-3 days | Reset script, entity hierarchy, test users |
-| Phase 2: Docker & Infrastructure | 1 day | Docker compose, port 8004, database isolation |
-| Phase 3: Admin UI Integration | 1-2 days | Config endpoint, entity switching, tree permissions |
-| Phase 4: Testing & Documentation | 2-3 days | Playwright tests, README, QUICKSTART |
-| **Total** | **6-8 days** | **Complete working system** |
+| Phase | Duration | Status | Tasks |
+|-------|----------|--------|-------|
+| Phase 0: Foundation Setup | 2 hours | ✅ Complete (2025-01-10) | Reset script, entity hierarchy, test users |
+| Phase 3: Entity System | 3 days | ✅ Complete (2025-11-10) | Entity models, closure table, tree permissions, entity-scoped API keys |
+| Phase 4: Optional Features | 1 hour | ✅ Complete (2025-11-10) | Context-aware roles, ABAC, Redis caching (already implemented) |
+| Phase 5: Testing | In Progress | 🔄 In Progress | Redis caching (15/15 ✅), Performance tests, Integration tests |
+| Phase 6: Documentation | Not Started | ⏸️ Pending | README, QUICKSTART, integration guides |
+| **Total Remaining** | **3-5 days** | **Complete testing + documentation** |
 
 ---
 
 ## Current State
+
+### Phase 5 Testing Progress (2025-11-10)
+
+**Redis Caching Tests**: ✅ 15/15 Passing (100%)
+
+Just completed comprehensive Redis caching test suite:
+- **Test Coverage**: 15 tests covering all caching behaviors
+  - Cache hit/miss patterns (5 tests)
+  - Cache invalidation (5 tests)
+  - Performance verification (3 tests)
+  - Edge cases and degradation (2 tests)
+- **Test Results**: 15 passed, 0 failed in 6.74s
+- **Key Findings**:
+  - Cache hits provide 20-60x performance improvement over DB queries
+  - Cache invalidation works correctly (with manual triggers as documented)
+  - Graceful degradation when Redis unavailable
+  - TTL expiration working as designed
+- **Documentation**: See `/tests/integration/test_redis_caching.py`
+- **Known Limitations**: Automatic cache invalidation on role changes not implemented (documented in tests as TODO)
+
+**Test Suite Summary**:
+- Phase 3 Tree Permissions: ✅ 21/21 passing
+- Phase 3 Entity-Scoped API Keys: ✅ 25/25 passing
+- Phase 4 Context-Aware Roles: ✅ 10/10 passing (from existing tests)
+- Phase 4 ABAC Conditions: ✅ 17/17 passing (from existing tests)
+- **Phase 5 Redis Caching**: ✅ 15/15 passing (NEW)
+- **Total**: **88 tests passing** (73 existing + 15 new)
+
+**Next Priority**: 
+1. Performance benchmarks (8 tests needed)
+2. Integration tests (10 tests needed)
+3. End-to-end testing with EnterpriseRBAC example
 
 ### What Exists
 

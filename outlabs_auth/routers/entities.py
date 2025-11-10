@@ -4,9 +4,10 @@ Entities router factory.
 Provides ready-to-use entity hierarchy management routes for EnterpriseRBAC.
 """
 
-from typing import Any, List, Optional
+from typing import Any, Generic, List, Optional, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 
 from outlabs_auth.schemas.entity import (
     EntityCreateRequest,
@@ -14,6 +15,19 @@ from outlabs_auth.schemas.entity import (
     EntityUpdateRequest,
     MemberResponse,
 )
+
+# Generic paginated response
+T = TypeVar("T")
+
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    """Paginated response wrapper"""
+
+    items: List[T]
+    total: int
+    page: int
+    limit: int
+    pages: int
 
 
 def _entity_to_response(entity: Any) -> EntityResponse:
@@ -81,7 +95,7 @@ def get_entities_router(
 
     @router.get(
         "/",
-        response_model=List[EntityResponse],
+        response_model=PaginatedResponse[EntityResponse],
         summary="List entities",
         description="List all entities (requires entity:read permission)",
     )
@@ -93,9 +107,11 @@ def get_entities_router(
             None, description="Filter by type (organization/department/team/etc)"
         ),
         parent_id: Optional[str] = Query(None, description="Filter by parent entity"),
+        page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+        limit: int = Query(100, ge=1, le=1000, description="Items per page"),
         auth_result=Depends(auth.deps.require_auth()),
     ):
-        """List all entities with optional filtering."""
+        """List all entities with optional filtering and pagination."""
         try:
             # TODO: Implement filtering in entity service
             # For now, get all entities and filter in Python
@@ -109,8 +125,21 @@ def get_entities_router(
             if parent_id:
                 query["parent_entity_id"] = parent_id
 
-            entities = await EntityModel.find(query).to_list()
-            return [_entity_to_response(entity) for entity in entities]
+            # Get all matching entities
+            all_entities = await EntityModel.find(query).to_list()
+            total = len(all_entities)
+
+            # Calculate pagination
+            skip = (page - 1) * limit
+            paginated_entities = all_entities[skip : skip + limit]
+            pages = (total + limit - 1) // limit  # Ceiling division
+
+            # Convert to response format
+            items = [_entity_to_response(entity) for entity in paginated_entities]
+
+            return PaginatedResponse(
+                items=items, total=total, page=page, limit=limit, pages=pages
+            )
         except Exception as e:
             import traceback
 

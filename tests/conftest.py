@@ -4,25 +4,29 @@ Pytest fixtures for OutlabsAuth testing
 Provides shared fixtures for database connections, auth instances,
 and test data used across all test files.
 """
-import pytest
+
 import asyncio
 from typing import AsyncGenerator
+
+import pytest
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from outlabs_auth import SimpleRBAC
-from outlabs_auth.models.user import UserModel, UserStatus
-from outlabs_auth.models.role import RoleModel
-from outlabs_auth.models.permission import PermissionModel
 from outlabs_auth.core.config import AuthConfig
-
+from outlabs_auth.models.permission import PermissionModel
+from outlabs_auth.models.role import RoleModel
+from outlabs_auth.models.user import UserModel, UserStatus
 
 # ============================================================================
 # Pytest Configuration
 # ============================================================================
 
+
 def pytest_configure(config):
     """Configure pytest with custom markers."""
-    config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
+    config.addinivalue_line(
+        "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
+    )
     config.addinivalue_line("markers", "integration: marks tests as integration tests")
     config.addinivalue_line("markers", "unit: marks tests as unit tests")
 
@@ -30,6 +34,7 @@ def pytest_configure(config):
 # ============================================================================
 # Database Fixtures
 # ============================================================================
+
 
 @pytest.fixture(scope="function")
 async def mongo_client() -> AsyncGenerator[AsyncIOMotorClient, None]:
@@ -48,7 +53,9 @@ async def mongo_client() -> AsyncGenerator[AsyncIOMotorClient, None]:
     try:
         await client.admin.command("ping")
     except Exception as e:
-        pytest.fail(f"Cannot connect to MongoDB: {e}\nMake sure MongoDB is running on localhost:27017")
+        pytest.fail(
+            f"Cannot connect to MongoDB: {e}\nMake sure MongoDB is running on localhost:27017"
+        )
 
     yield client
 
@@ -57,7 +64,9 @@ async def mongo_client() -> AsyncGenerator[AsyncIOMotorClient, None]:
 
 
 @pytest.fixture
-async def test_db(mongo_client: AsyncIOMotorClient) -> AsyncGenerator[AsyncIOMotorDatabase, None]:
+async def test_db(
+    mongo_client: AsyncIOMotorClient,
+) -> AsyncGenerator[AsyncIOMotorDatabase, None]:
     """
     Provide a clean test database for each test.
 
@@ -82,6 +91,7 @@ async def test_db(mongo_client: AsyncIOMotorClient) -> AsyncGenerator[AsyncIOMot
 # ============================================================================
 # Configuration Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def test_secret_key() -> str:
@@ -116,8 +126,11 @@ def auth_config(test_secret_key: str) -> AuthConfig:
 # Auth Instance Fixtures
 # ============================================================================
 
+
 @pytest.fixture
-async def auth(test_db: AsyncIOMotorDatabase, test_secret_key: str) -> AsyncGenerator[SimpleRBAC, None]:
+async def auth(
+    test_db: AsyncIOMotorDatabase, test_secret_key: str
+) -> AsyncGenerator[SimpleRBAC, None]:
     """
     Initialized SimpleRBAC instance for testing.
 
@@ -129,11 +142,21 @@ async def auth(test_db: AsyncIOMotorDatabase, test_secret_key: str) -> AsyncGene
         async def test_something(auth: SimpleRBAC):
             user = await auth.user_service.create_user(...)
     """
+    from outlabs_auth.observability import ObservabilityConfig
+
+    # Disable observability for tests to avoid event loop issues
+    obs_config = ObservabilityConfig(
+        enabled=False,
+        log_format="text",
+        log_level="ERROR",
+    )
+
     auth_instance = SimpleRBAC(
         database=test_db,
         secret_key=test_secret_key,
         access_token_expire_minutes=15,
         refresh_token_expire_days=30,
+        observability_config=obs_config,
     )
 
     # Initialize (creates collections and indexes)
@@ -141,10 +164,25 @@ async def auth(test_db: AsyncIOMotorDatabase, test_secret_key: str) -> AsyncGene
 
     yield auth_instance
 
+    # Cleanup observability if it was started
+    if auth_instance.observability and hasattr(
+        auth_instance.observability, "_log_task"
+    ):
+        if (
+            auth_instance.observability._log_task
+            and not auth_instance.observability._log_task.done()
+        ):
+            auth_instance.observability._log_task.cancel()
+            try:
+                await auth_instance.observability._log_task
+            except:
+                pass
+
 
 # ============================================================================
 # Test Data Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def test_password() -> str:
@@ -272,9 +310,7 @@ async def test_permissions(auth: SimpleRBAC) -> list[PermissionModel]:
 
 @pytest.fixture
 async def test_user_with_role(
-    auth: SimpleRBAC,
-    test_password: str,
-    test_role: RoleModel
+    auth: SimpleRBAC, test_password: str, test_role: RoleModel
 ) -> UserModel:
     """
     Pre-created user with role assigned.
@@ -304,6 +340,7 @@ async def test_user_with_role(
 # FastAPI Fixtures (for dependency testing)
 # ============================================================================
 
+
 @pytest.fixture
 def test_access_token(auth: SimpleRBAC, test_user: UserModel) -> str:
     """
@@ -314,8 +351,9 @@ def test_access_token(auth: SimpleRBAC, test_user: UserModel) -> str:
             headers = {"Authorization": f"Bearer {test_access_token}"}
             response = client.get("/protected", headers=headers)
     """
-    from outlabs_auth.utils.jwt import create_access_token
     from datetime import timedelta
+
+    from outlabs_auth.utils.jwt import create_access_token
 
     token = create_access_token(
         data={"sub": str(test_user.id)},
@@ -337,8 +375,9 @@ def test_expired_token(auth: SimpleRBAC, test_user: UserModel) -> str:
             response = client.get("/protected", headers=headers)
             assert response.status_code == 401
     """
-    from outlabs_auth.utils.jwt import create_access_token
     from datetime import timedelta
+
+    from outlabs_auth.utils.jwt import create_access_token
 
     token = create_access_token(
         data={"sub": str(test_user.id)},
@@ -352,6 +391,7 @@ def test_expired_token(auth: SimpleRBAC, test_user: UserModel) -> str:
 # ============================================================================
 # Utility Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def sample_user_data(test_password: str) -> dict:
@@ -388,3 +428,169 @@ def invalid_user_data() -> dict:
         "first_name": "Invalid",
         "last_name": "User",
     }
+
+
+# ============================================================================
+# EnterpriseRBAC Fixtures (for integration tests)
+# ============================================================================
+
+
+@pytest.fixture
+async def enterprise_auth(test_db, test_secret_key):
+    """EnterpriseRBAC instance for integration testing (no observability to avoid event loop issues)"""
+    from outlabs_auth import EnterpriseRBAC
+    from outlabs_auth.observability import ObservabilityConfig
+
+    # Disable observability for tests to avoid event loop issues
+    obs_config = ObservabilityConfig(
+        enabled=False,
+        log_format="text",
+        log_level="ERROR",
+    )
+
+    auth_instance = EnterpriseRBAC(
+        database=test_db,
+        secret_key=test_secret_key,
+        access_token_expire_minutes=15,
+        refresh_token_expire_days=30,
+        redis_enabled=False,
+        observability_config=obs_config,
+    )
+
+    await auth_instance.initialize()
+    yield auth_instance
+
+    # Cleanup async tasks
+    if hasattr(auth_instance, "_cleanup_task") and auth_instance._cleanup_task:
+        auth_instance._cleanup_task.cancel()
+        try:
+            await auth_instance._cleanup_task
+        except:
+            pass
+
+    if auth_instance.observability and hasattr(auth_instance.observability, "_log_task"):
+        if auth_instance.observability._log_task and not auth_instance.observability._log_task.done():
+            auth_instance.observability._log_task.cancel()
+            try:
+                await auth_instance.observability._log_task
+            except:
+                pass
+
+
+@pytest.fixture
+async def test_entity_hierarchy(enterprise_auth):
+    """Create a 4-level entity hierarchy for testing
+
+    Structure:
+    - Root (org)
+      - Region A
+        - Office A1
+          - Team A1a
+          - Team A1b
+        - Office A2
+      - Region B
+        - Office B1
+        - Office B2
+    """
+    from outlabs_auth.models.closure import EntityClosureModel
+    from outlabs_auth.models.entity import EntityClass
+
+    entity_service = enterprise_auth.entity_service
+
+    # Create entities
+    root = await entity_service.create_entity(
+        name="test_organization",
+        display_name="Test Organization",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="organization",
+        slug="test-organization",
+    )
+
+    region_a = await entity_service.create_entity(
+        name="region_a",
+        display_name="Region A",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="region",
+        parent_id=str(root.id),
+        slug="region-a",
+    )
+
+    region_b = await entity_service.create_entity(
+        name="region_b",
+        display_name="Region B",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="region",
+        parent_id=str(root.id),
+        slug="region-b",
+    )
+
+    office_a1 = await entity_service.create_entity(
+        name="office_a1",
+        display_name="Office A1",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="office",
+        parent_id=str(region_a.id),
+        slug="office-a1",
+    )
+
+    office_a2 = await entity_service.create_entity(
+        name="office_a2",
+        display_name="Office A2",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="office",
+        parent_id=str(region_a.id),
+        slug="office-a2",
+    )
+
+    office_b1 = await entity_service.create_entity(
+        name="office_b1",
+        display_name="Office B1",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="office",
+        parent_id=str(region_b.id),
+        slug="office-b1",
+    )
+
+    office_b2 = await entity_service.create_entity(
+        name="office_b2",
+        display_name="Office B2",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="office",
+        parent_id=str(region_b.id),
+        slug="office-b2",
+    )
+
+    team_a1a = await entity_service.create_entity(
+        name="team_a1a",
+        display_name="Team A1a",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="team",
+        parent_id=str(office_a1.id),
+        slug="team-a1a",
+    )
+
+    team_a1b = await entity_service.create_entity(
+        name="team_a1b",
+        display_name="Team A1b",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="team",
+        parent_id=str(office_a1.id),
+        slug="team-a1b",
+    )
+
+    yield {
+        "root": root,
+        "region_a": region_a,
+        "region_b": region_b,
+        "office_a1": office_a1,
+        "office_a2": office_a2,
+        "office_b1": office_b1,
+        "office_b2": office_b2,
+        "team_a1a": team_a1a,
+        "team_a1b": team_a1b,
+    }
+
+    # Cleanup
+    await EntityClosureModel.delete_all()
+    from outlabs_auth.models.entity import EntityModel
+    await EntityModel.delete_all()
