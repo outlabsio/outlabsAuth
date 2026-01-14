@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import select, func, and_, delete as sql_delete
+from sqlalchemy import and_, func, select, update
+from sqlalchemy import delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -22,8 +23,10 @@ from outlabs_auth.core.exceptions import (
     RoleNotFoundError,
     UserNotFoundError,
 )
-from outlabs_auth.models.sql.entity import Entity
-from outlabs_auth.models.sql.entity_membership import EntityMembership, EntityMembershipRole
+from outlabs_auth.models.sql.entity_membership import (
+    EntityMembership,
+    EntityMembershipRole,
+)
 from outlabs_auth.models.sql.enums import MembershipStatus
 from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user import User
@@ -136,7 +139,6 @@ class MembershipService(BaseService[EntityMembership]):
             existing.status = MembershipStatus.ACTIVE
             existing.valid_from = valid_from
             existing.valid_until = valid_until
-            existing.updated_at = datetime.now(timezone.utc)
 
             # Update roles via junction table
             # First, clear existing roles
@@ -220,12 +222,17 @@ class MembershipService(BaseService[EntityMembership]):
                 details={"entity_id": str(entity_id), "user_id": str(user_id)},
             )
 
-        # Soft delete - set status to REVOKED with audit trail
-        membership.status = MembershipStatus.REVOKED
-        membership.revoked_at = datetime.now(timezone.utc)
-        membership.revoked_by_id = revoked_by_id
-        membership.revocation_reason = reason
-        membership.updated_at = datetime.now(timezone.utc)
+        await session.execute(
+            update(EntityMembership)
+            .where(EntityMembership.id == membership.id)
+            .values(
+                status=MembershipStatus.REVOKED,
+                revoked_at=func.now(),
+                revoked_by_id=revoked_by_id,
+                revocation_reason=reason,
+                updated_at=func.now(),
+            )
+        )
 
         await session.flush()
         return True
@@ -291,7 +298,11 @@ class MembershipService(BaseService[EntityMembership]):
             )
             session.add(role_link)
 
-        membership.updated_at = datetime.now(timezone.utc)
+        await session.execute(
+            update(EntityMembership)
+            .where(EntityMembership.id == membership.id)
+            .values(updated_at=func.now())
+        )
         await session.flush()
         await session.refresh(membership, ["roles"])
 
@@ -420,7 +431,9 @@ class MembershipService(BaseService[EntityMembership]):
             )
         else:
             # Get count without entity_type filter
-            count_stmt = select(func.count()).select_from(EntityMembership).where(*filters)
+            count_stmt = (
+                select(func.count()).select_from(EntityMembership).where(*filters)
+            )
             count_result = await session.execute(count_stmt)
             total_count = count_result.scalar() or 0
 
@@ -603,7 +616,6 @@ class MembershipService(BaseService[EntityMembership]):
 
         membership.status = MembershipStatus.SUSPENDED
         membership.revocation_reason = reason
-        membership.updated_at = datetime.now(timezone.utc)
 
         await session.flush()
         return membership
@@ -644,7 +656,6 @@ class MembershipService(BaseService[EntityMembership]):
         membership.revocation_reason = None
         membership.revoked_at = None
         membership.revoked_by_id = None
-        membership.updated_at = datetime.now(timezone.utc)
 
         await session.flush()
         return membership

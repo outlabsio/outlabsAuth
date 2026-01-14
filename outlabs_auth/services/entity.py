@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import select, update, and_, or_, delete as sql_delete
+from sqlalchemy import and_, or_, select, update
+from sqlalchemy import delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,8 +21,8 @@ from outlabs_auth.core.exceptions import (
     EntityNotFoundError,
     InvalidInputError,
 )
-from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.closure import EntityClosure
+from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.entity_membership import EntityMembership
 from outlabs_auth.models.sql.enums import EntityClass, MembershipStatus
 from outlabs_auth.services.base import BaseService
@@ -100,11 +101,14 @@ class EntityService(BaseService[Entity]):
             parent_entity = await self.get_by_id(session, parent_id)
             if not parent_entity:
                 raise EntityNotFoundError(
-                    message="Parent entity not found", details={"parent_id": str(parent_id)}
+                    message="Parent entity not found",
+                    details={"parent_id": str(parent_id)},
                 )
 
             # Validate hierarchy rules
-            await self._validate_hierarchy(session, parent_entity, entity_class, entity_type)
+            await self._validate_hierarchy(
+                session, parent_entity, entity_class, entity_type
+            )
             parent_depth = parent_entity.depth
             parent_path = parent_entity.path
 
@@ -215,7 +219,6 @@ class EntityService(BaseService[Entity]):
             if hasattr(entity, field):
                 setattr(entity, field, value)
 
-        entity.updated_at = datetime.now(timezone.utc)
         await session.flush()
         await session.refresh(entity)
 
@@ -267,7 +270,6 @@ class EntityService(BaseService[Entity]):
 
         # Soft delete
         entity.status = "archived"
-        entity.updated_at = datetime.now(timezone.utc)
         await session.flush()
 
         # Delete closure records
@@ -283,7 +285,9 @@ class EntityService(BaseService[Entity]):
 
         return True
 
-    async def get_entity_path(self, session: AsyncSession, entity_id: UUID) -> List[Entity]:
+    async def get_entity_path(
+        self, session: AsyncSession, entity_id: UUID
+    ) -> List[Entity]:
         """
         Get path from root to entity (ancestors in order).
 
@@ -368,12 +372,9 @@ class EntityService(BaseService[Entity]):
                 return entities
 
         # Get all descendants from closure table (excluding self)
-        stmt = (
-            select(EntityClosure.descendant_id)
-            .where(
-                EntityClosure.ancestor_id == entity_id,
-                EntityClosure.depth > 0,
-            )
+        stmt = select(EntityClosure.descendant_id).where(
+            EntityClosure.ancestor_id == entity_id,
+            EntityClosure.depth > 0,
         )
         result = await session.execute(stmt)
         descendant_ids = [row[0] for row in result.all()]
@@ -403,7 +404,9 @@ class EntityService(BaseService[Entity]):
 
         return entities
 
-    async def get_children(self, session: AsyncSession, entity_id: UUID) -> List[Entity]:
+    async def get_children(
+        self, session: AsyncSession, entity_id: UUID
+    ) -> List[Entity]:
         """
         Get direct children of entity.
 
@@ -487,7 +490,9 @@ class EntityService(BaseService[Entity]):
                 "name": parent_entity.name,
                 "display_name": parent_entity.display_name,
                 "entity_type": parent_entity.entity_type,
-                "entity_class": parent_entity.entity_class.value if hasattr(parent_entity.entity_class, 'value') else parent_entity.entity_class,
+                "entity_class": parent_entity.entity_class.value
+                if hasattr(parent_entity.entity_class, "value")
+                else parent_entity.entity_class,
             }
 
         return {
@@ -498,7 +503,9 @@ class EntityService(BaseService[Entity]):
 
     # Closure table maintenance
 
-    async def _create_closure_records(self, session: AsyncSession, entity: Entity) -> None:
+    async def _create_closure_records(
+        self, session: AsyncSession, entity: Entity
+    ) -> None:
         """
         Create closure table records for new entity.
 
@@ -540,7 +547,9 @@ class EntityService(BaseService[Entity]):
 
         await session.flush()
 
-    async def _delete_closure_records(self, session: AsyncSession, entity: Entity) -> None:
+    async def _delete_closure_records(
+        self, session: AsyncSession, entity: Entity
+    ) -> None:
         """
         Delete closure table records for entity.
 
@@ -592,8 +601,12 @@ class EntityService(BaseService[Entity]):
             raise InvalidInputError(
                 message="Access groups cannot have structural entities as children",
                 details={
-                    "parent_class": parent.entity_class.value if hasattr(parent.entity_class, 'value') else str(parent.entity_class),
-                    "child_class": child_class.value if hasattr(child_class, 'value') else str(child_class),
+                    "parent_class": parent.entity_class.value
+                    if hasattr(parent.entity_class, "value")
+                    else str(parent.entity_class),
+                    "child_class": child_class.value
+                    if hasattr(child_class, "value")
+                    else str(child_class),
                 },
             )
 
@@ -607,8 +620,10 @@ class EntityService(BaseService[Entity]):
 
         # Rule 3: Check allowed child types (if configured)
         # Note: allowed_child_types is not in current SQL model, so skip if not present
-        if hasattr(parent, 'allowed_child_types') and parent.allowed_child_types:
-            if child_type.lower() not in [t.lower() for t in parent.allowed_child_types]:
+        if hasattr(parent, "allowed_child_types") and parent.allowed_child_types:
+            if child_type.lower() not in [
+                t.lower() for t in parent.allowed_child_types
+            ]:
                 raise InvalidInputError(
                     message=f"Entity type '{child_type}' not allowed as child of '{parent.entity_type}'",
                     details={
@@ -670,12 +685,15 @@ class EntityService(BaseService[Entity]):
         # Publish invalidation event
         if deleted > 0:
             await self.redis_client.publish(
-                self.config.redis_invalidation_channel, f"entity:{entity_id_str}:hierarchy"
+                self.config.redis_invalidation_channel,
+                f"entity:{entity_id_str}:hierarchy",
             )
 
         return deleted
 
-    async def invalidate_entity_tree_cache(self, session: AsyncSession, entity_id: UUID) -> int:
+    async def invalidate_entity_tree_cache(
+        self, session: AsyncSession, entity_id: UUID
+    ) -> int:
         """
         Invalidate cache for entity and all ancestors/descendants.
 

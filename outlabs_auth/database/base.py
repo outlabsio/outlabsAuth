@@ -9,7 +9,7 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from pydantic import ConfigDict
-from sqlalchemy import event
+from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlmodel import Field, SQLModel
@@ -48,6 +48,7 @@ class BaseModel(SQLModel):
         default_factory=lambda: datetime.now(timezone.utc),
         sa_type=TIMESTAMP(timezone=True),
         nullable=False,
+        sa_column_kwargs={"server_default": func.now()},
         description="Timestamp when record was created (UTC)",
     )
 
@@ -55,6 +56,7 @@ class BaseModel(SQLModel):
         default_factory=lambda: datetime.now(timezone.utc),
         sa_type=TIMESTAMP(timezone=True),
         nullable=False,
+        sa_column_kwargs={"server_default": func.now(), "onupdate": func.now()},
         description="Timestamp when record was last updated (UTC)",
     )
 
@@ -71,32 +73,3 @@ class BaseModel(SQLModel):
         arbitrary_types_allowed=True,
         use_enum_values=True,
     )
-
-
-def update_timestamp_on_save(mapper, connection, target):
-    """
-    SQLAlchemy event listener to update `updated_at` on modifications.
-
-    This is registered automatically when models are loaded.
-    """
-    target.updated_at = datetime.now(timezone.utc)
-
-
-def register_timestamp_listener(model_class):
-    """
-    Register the timestamp update listener for a model class.
-
-    Call this after defining models to ensure updated_at is always current.
-
-    Example:
-        class User(BaseModel, table=True):
-            ...
-
-        register_timestamp_listener(User)
-    """
-    event.listen(model_class, "before_update", update_timestamp_on_save)
-
-
-# Note: The updated_at trigger is handled at the application level
-# because PostgreSQL triggers are database-specific and we want
-# the library to be portable across PostgreSQL instances.
