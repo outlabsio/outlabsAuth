@@ -34,6 +34,14 @@ In another terminal, run the smoke script (hits `/v1/*` endpoints):
 uv run python scripts/smoke_enterprise_api.py
 ```
 
+### One-command black-box smoke
+
+This runs seed → start server → hit endpoints → shutdown:
+
+```bash
+uv run python scripts/run_enterprise_example_smoke.py
+```
+
 Config:
 - `BASE_URL` (default `http://localhost:8004/v1`)
 - `EMAIL` / `PASSWORD` (default seeded admin `admin@acme.com` / `Test123!!`)
@@ -52,4 +60,3 @@ Add a dedicated perf harness (k6/locust) and measure:
 - Closure-table descendant queries at depth N (and after move operations)
 - Permission checks under high concurrency
 - Worst-case list endpoints with pagination + indexes
-
