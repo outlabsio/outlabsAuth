@@ -8,9 +8,22 @@ from typing import Any, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from outlabs_auth.models.sql.permission import PermissionCondition
+from outlabs_auth.models.sql.role import ConditionGroup
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
+from outlabs_auth.schemas.abac import (
+    AbacConditionCreateRequest,
+    AbacConditionResponse,
+    AbacConditionUpdateRequest,
+    ConditionGroupCreateRequest,
+    ConditionGroupResponse,
+    ConditionGroupUpdateRequest,
+    parse_uuid,
+    serialize_condition_value,
+)
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.permission import (
     PermissionCheckRequest,
@@ -362,5 +375,274 @@ def get_permissions_router(
         return await auth.permission_service.get_user_permissions(
             session, user_id=user_id
         )
+
+    # ---------------------------------------------------------------------
+    # ABAC: Permission condition groups + conditions
+    # ---------------------------------------------------------------------
+
+    @router.get(
+        "/{permission_id}/condition-groups",
+        response_model=List[ConditionGroupResponse],
+        summary="List permission condition groups",
+        description="List ABAC condition groups for a permission (requires permission:read permission)",
+    )
+    async def list_permission_condition_groups(
+        permission_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_permission("permission:read")),
+    ):
+        groups = await session.execute(
+            select(ConditionGroup).where(ConditionGroup.permission_id == permission_id)
+        )
+        return [
+            ConditionGroupResponse(
+                id=str(g.id),
+                operator=g.operator,
+                description=g.description,
+                role_id=str(g.role_id) if g.role_id else None,
+                permission_id=str(g.permission_id) if g.permission_id else None,
+            )
+            for g in groups.scalars().all()
+        ]
+
+    @router.post(
+        "/{permission_id}/condition-groups",
+        response_model=ConditionGroupResponse,
+        status_code=status.HTTP_201_CREATED,
+        summary="Create permission condition group",
+        description="Create an ABAC condition group for a permission (requires permission:update permission)",
+    )
+    async def create_permission_condition_group(
+        permission_id: UUID,
+        data: ConditionGroupCreateRequest,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_permission("permission:update")),
+    ):
+        perm = await auth.permission_service.get_permission_by_id(
+            session, permission_id
+        )
+        perm = await auth.permission_service.get_permission_by_id(
+            session, permission_id
+        )
+        if not perm:
+            raise HTTPException(status_code=404, detail="Permission not found")
+
+        group = ConditionGroup(
+            permission_id=permission_id,
+            operator=data.operator,
+            description=data.description,
+        )
+        session.add(group)
+        await session.flush()
+        return ConditionGroupResponse(
+            id=str(group.id),
+            operator=group.operator,
+            description=group.description,
+            role_id=None,
+            permission_id=str(permission_id),
+        )
+
+    @router.patch(
+        "/{permission_id}/condition-groups/{group_id}",
+        response_model=ConditionGroupResponse,
+        summary="Update permission condition group",
+        description="Update an ABAC condition group (requires permission:update permission)",
+    )
+    async def update_permission_condition_group(
+        permission_id: UUID,
+        group_id: UUID,
+        data: ConditionGroupUpdateRequest,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_permission("permission:update")),
+    ):
+        group = await session.get(ConditionGroup, group_id)
+        if not group or group.permission_id != permission_id:
+            raise HTTPException(status_code=404, detail="Condition group not found")
+
+        if data.operator is not None:
+            group.operator = data.operator
+        if data.description is not None:
+            group.description = data.description
+        await session.flush()
+        return ConditionGroupResponse(
+            id=str(group.id),
+            operator=group.operator,
+            description=group.description,
+            role_id=str(group.role_id) if group.role_id else None,
+            permission_id=str(group.permission_id) if group.permission_id else None,
+        )
+
+    @router.delete(
+        "/{permission_id}/condition-groups/{group_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Delete permission condition group",
+        description="Delete an ABAC condition group (requires permission:update permission)",
+    )
+    async def delete_permission_condition_group(
+        permission_id: UUID,
+        group_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_permission("permission:update")),
+    ):
+        group = await session.get(ConditionGroup, group_id)
+        if not group or group.permission_id != permission_id:
+            raise HTTPException(status_code=404, detail="Condition group not found")
+        await session.delete(group)
+        await session.flush()
+        return None
+
+    @router.get(
+        "/{permission_id}/conditions",
+        response_model=List[AbacConditionResponse],
+        summary="List permission conditions",
+        description="List ABAC conditions for a permission (requires permission:read permission)",
+    )
+    async def list_permission_conditions(
+        permission_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_permission("permission:read")),
+    ):
+        result = await session.execute(
+            select(PermissionCondition).where(
+                PermissionCondition.permission_id == permission_id
+            )
+        )
+        conditions = result.scalars().all()
+        return [
+            AbacConditionResponse(
+                id=str(c.id),
+                attribute=c.attribute,
+                operator=c.operator,
+                value=c.value,
+                value_type=c.value_type,
+                description=c.description,
+                condition_group_id=str(c.condition_group_id)
+                if c.condition_group_id
+                else None,
+            )
+            for c in conditions
+        ]
+
+    @router.post(
+        "/{permission_id}/conditions",
+        response_model=AbacConditionResponse,
+        status_code=status.HTTP_201_CREATED,
+        summary="Create permission condition",
+        description="Create an ABAC condition for a permission (requires permission:update permission)",
+    )
+    async def create_permission_condition(
+        permission_id: UUID,
+        data: AbacConditionCreateRequest,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_permission("permission:update")),
+    ):
+        perm = await auth.permission_service.get_permission_by_id(
+            session, permission_id
+        )
+        if not perm:
+            raise HTTPException(status_code=404, detail="Permission not found")
+
+        group_id = parse_uuid(data.condition_group_id)
+        if group_id is not None:
+            group = await session.get(ConditionGroup, group_id)
+            if not group or group.permission_id != permission_id:
+                raise HTTPException(
+                    status_code=400, detail="Invalid condition_group_id"
+                )
+
+        cond = PermissionCondition(
+            permission_id=permission_id,
+            condition_group_id=group_id,
+            attribute=data.attribute,
+            operator=data.operator,
+            value=serialize_condition_value(data.value, data.value_type),
+            value_type=data.value_type,
+            description=data.description,
+        )
+        session.add(cond)
+        await session.flush()
+        return AbacConditionResponse(
+            id=str(cond.id),
+            attribute=cond.attribute,
+            operator=cond.operator,
+            value=cond.value,
+            value_type=cond.value_type,
+            description=cond.description,
+            condition_group_id=str(cond.condition_group_id)
+            if cond.condition_group_id
+            else None,
+        )
+
+    @router.patch(
+        "/{permission_id}/conditions/{condition_id}",
+        response_model=AbacConditionResponse,
+        summary="Update permission condition",
+        description="Update an ABAC condition for a permission (requires permission:update permission)",
+    )
+    async def update_permission_condition(
+        permission_id: UUID,
+        condition_id: UUID,
+        data: AbacConditionUpdateRequest,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_permission("permission:update")),
+    ):
+        cond = await session.get(PermissionCondition, condition_id)
+        if not cond or cond.permission_id != permission_id:
+            raise HTTPException(status_code=404, detail="Condition not found")
+
+        if data.condition_group_id is not None:
+            group_id = parse_uuid(data.condition_group_id)
+            if group_id is not None:
+                group = await session.get(ConditionGroup, group_id)
+                if not group or group.permission_id != permission_id:
+                    raise HTTPException(
+                        status_code=400, detail="Invalid condition_group_id"
+                    )
+            cond.condition_group_id = group_id
+
+        if data.attribute is not None:
+            cond.attribute = data.attribute
+        if data.operator is not None:
+            cond.operator = data.operator
+        if data.value_type is not None:
+            cond.value_type = data.value_type
+        if data.value is not None or data.value_type is not None:
+            cond.value = serialize_condition_value(
+                data.value, data.value_type or cond.value_type
+            )
+        if data.description is not None:
+            cond.description = data.description
+
+        await session.flush()
+        return AbacConditionResponse(
+            id=str(cond.id),
+            attribute=cond.attribute,
+            operator=cond.operator,
+            value=cond.value,
+            value_type=cond.value_type,
+            description=cond.description,
+            condition_group_id=str(cond.condition_group_id)
+            if cond.condition_group_id
+            else None,
+        )
+
+    @router.delete(
+        "/{permission_id}/conditions/{condition_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Delete permission condition",
+        description="Delete an ABAC condition for a permission (requires permission:update permission)",
+    )
+    async def delete_permission_condition(
+        permission_id: UUID,
+        condition_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_permission("permission:update")),
+    ):
+        cond = await session.get(PermissionCondition, condition_id)
+        if not cond or cond.permission_id != permission_id:
+            raise HTTPException(status_code=404, detail="Condition not found")
+        await session.delete(cond)
+        await session.flush()
+        return None
 
     return router

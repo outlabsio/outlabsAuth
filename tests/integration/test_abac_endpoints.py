@@ -7,8 +7,7 @@ from fastapi import FastAPI
 
 from outlabs_auth import OutlabsAuth
 from outlabs_auth.middleware import ResourceContextMiddleware
-from outlabs_auth.models.sql.role import RoleCondition
-from outlabs_auth.routers import get_permissions_router
+from outlabs_auth.routers import get_permissions_router, get_roles_router
 from outlabs_auth.services.role import RoleService
 from outlabs_auth.utils.jwt import create_access_token
 
@@ -28,6 +27,7 @@ async def auth(test_engine) -> OutlabsAuth:
 async def app(auth: OutlabsAuth) -> FastAPI:
     app = FastAPI()
     app.add_middleware(ResourceContextMiddleware)
+    app.include_router(get_roles_router(auth, prefix="/v1/roles"))
     app.include_router(get_permissions_router(auth, prefix="/v1/permissions"))
     return app
 
@@ -42,7 +42,7 @@ async def client(app: FastAPI) -> httpx.AsyncClient:
 
 
 @pytest_asyncio.fixture
-async def user_token(auth: OutlabsAuth) -> str:
+async def abac_setup(auth: OutlabsAuth) -> dict:
     async with auth.get_session() as session:
         # Minimal permissions needed to hit POST /permissions/
         await auth.permission_service.create_permission(
@@ -62,7 +62,7 @@ async def user_token(auth: OutlabsAuth) -> str:
             is_global=True,
         )
 
-        user = await auth.user_service.create_user(
+        actor = await auth.user_service.create_user(
             session=session,
             email=f"abac-{uuid.uuid4().hex[:8]}@example.com",
             password="TestPass123!",
@@ -73,39 +73,61 @@ async def user_token(auth: OutlabsAuth) -> str:
         # Assign role (SimpleRBAC membership table)
         await auth.role_service.assign_role_to_user(
             session=session,
-            user_id=user.id,
+            user_id=actor.id,
             role_id=role.id,
+        )
+
+        admin = await auth.user_service.create_user(
+            session=session,
+            email=f"abac-admin-{uuid.uuid4().hex[:8]}@example.com",
+            password="TestPass123!",
+            first_name="ABAC",
+            last_name="Admin",
+            is_superuser=True,
         )
 
         await session.commit()
 
-    return create_access_token(
-        {"sub": str(user.id)},
+    actor_token = create_access_token(
+        {"sub": str(actor.id)},
+        secret_key=auth.config.secret_key,
+        algorithm=auth.config.algorithm,
+        audience=auth.config.jwt_audience,
+    )
+    admin_token = create_access_token(
+        {"sub": str(admin.id)},
         secret_key=auth.config.secret_key,
         algorithm=auth.config.algorithm,
         audience=auth.config.jwt_audience,
     )
 
+    return {
+        "actor_token": actor_token,
+        "admin_token": admin_token,
+        "role_id": str(role.id),
+    }
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_abac_role_condition_denies_when_env_mismatch(
-    auth: OutlabsAuth, client: httpx.AsyncClient, user_token: str
+    auth: OutlabsAuth, client: httpx.AsyncClient, abac_setup: dict
 ):
-    # Attach ABAC condition to the user's role: env.method must be GET (but endpoint is POST).
-    async with auth.get_session() as session:
-        role = await auth.role_service.get_role_by_name(session, "abac_tester")
-        assert role is not None
-        session.add(
-            RoleCondition(
-                role_id=role.id,
-                attribute="env.method",
-                operator="equals",
-                value="GET",
-                value_type="string",
-            )
-        )
-        await session.commit()
+    admin_token = abac_setup["admin_token"]
+    actor_token = abac_setup["actor_token"]
+    role_id = abac_setup["role_id"]
+
+    r_create = await client.post(
+        f"/v1/roles/{role_id}/conditions",
+        json={
+            "attribute": "env.method",
+            "operator": "equals",
+            "value": "GET",
+            "value_type": "string",
+        },
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert r_create.status_code == 201, r_create.text
 
     r = await client.post(
         "/v1/permissions/",
@@ -117,7 +139,7 @@ async def test_abac_role_condition_denies_when_env_mismatch(
             "is_active": True,
             "tags": [],
         },
-        headers={"Authorization": f"Bearer {user_token}"},
+        headers={"Authorization": f"Bearer {actor_token}"},
     )
     assert r.status_code == 403, r.text
 
@@ -125,25 +147,35 @@ async def test_abac_role_condition_denies_when_env_mismatch(
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_abac_role_condition_allows_when_env_matches(
-    auth: OutlabsAuth, client: httpx.AsyncClient, user_token: str
+    auth: OutlabsAuth, client: httpx.AsyncClient, abac_setup: dict
 ):
-    # Clear existing conditions and set env.method must be POST.
-    async with auth.get_session() as session:
-        role = await auth.role_service.get_role_by_name(session, "abac_tester")
-        assert role is not None
-        await session.execute(
-            RoleCondition.__table__.delete().where(RoleCondition.role_id == role.id)
+    admin_token = abac_setup["admin_token"]
+    actor_token = abac_setup["actor_token"]
+    role_id = abac_setup["role_id"]
+
+    existing = await client.get(
+        f"/v1/roles/{role_id}/conditions",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert existing.status_code == 200, existing.text
+    for cond in existing.json():
+        d = await client.delete(
+            f"/v1/roles/{role_id}/conditions/{cond['id']}",
+            headers={"Authorization": f"Bearer {admin_token}"},
         )
-        session.add(
-            RoleCondition(
-                role_id=role.id,
-                attribute="env.method",
-                operator="equals",
-                value="POST",
-                value_type="string",
-            )
-        )
-        await session.commit()
+        assert d.status_code == 204, d.text
+
+    r_create = await client.post(
+        f"/v1/roles/{role_id}/conditions",
+        json={
+            "attribute": "env.method",
+            "operator": "equals",
+            "value": "POST",
+            "value_type": "string",
+        },
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert r_create.status_code == 201, r_create.text
 
     r = await client.post(
         "/v1/permissions/",
@@ -155,7 +187,7 @@ async def test_abac_role_condition_allows_when_env_matches(
             "is_active": True,
             "tags": [],
         },
-        headers={"Authorization": f"Bearer {user_token}"},
+        headers={"Authorization": f"Bearer {actor_token}"},
     )
     assert r.status_code == 201, r.text
 
@@ -163,24 +195,35 @@ async def test_abac_role_condition_allows_when_env_matches(
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_abac_resource_context_from_header(
-    auth: OutlabsAuth, client: httpx.AsyncClient, user_token: str
+    auth: OutlabsAuth, client: httpx.AsyncClient, abac_setup: dict
 ):
-    async with auth.get_session() as session:
-        role = await auth.role_service.get_role_by_name(session, "abac_tester")
-        assert role is not None
-        await session.execute(
-            RoleCondition.__table__.delete().where(RoleCondition.role_id == role.id)
+    admin_token = abac_setup["admin_token"]
+    actor_token = abac_setup["actor_token"]
+    role_id = abac_setup["role_id"]
+
+    existing = await client.get(
+        f"/v1/roles/{role_id}/conditions",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert existing.status_code == 200, existing.text
+    for cond in existing.json():
+        d = await client.delete(
+            f"/v1/roles/{role_id}/conditions/{cond['id']}",
+            headers={"Authorization": f"Bearer {admin_token}"},
         )
-        session.add(
-            RoleCondition(
-                role_id=role.id,
-                attribute="resource.status",
-                operator="equals",
-                value="draft",
-                value_type="string",
-            )
-        )
-        await session.commit()
+        assert d.status_code == 204, d.text
+
+    r_create = await client.post(
+        f"/v1/roles/{role_id}/conditions",
+        json={
+            "attribute": "resource.status",
+            "operator": "equals",
+            "value": "draft",
+            "value_type": "string",
+        },
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert r_create.status_code == 201, r_create.text
 
     # Missing/incorrect resource context should deny.
     denied = await client.post(
@@ -194,7 +237,7 @@ async def test_abac_resource_context_from_header(
             "tags": [],
         },
         headers={
-            "Authorization": f"Bearer {user_token}",
+            "Authorization": f"Bearer {actor_token}",
             "X-Resource-Context": '{"status":"published"}',
         },
     )
@@ -211,7 +254,7 @@ async def test_abac_resource_context_from_header(
             "tags": [],
         },
         headers={
-            "Authorization": f"Bearer {user_token}",
+            "Authorization": f"Bearer {actor_token}",
             "X-Resource-Context": '{"status":"draft"}',
         },
     )
