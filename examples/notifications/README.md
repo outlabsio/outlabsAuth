@@ -90,14 +90,17 @@ pip install -r requirements.txt
 uv sync
 ```
 
-### 2. Setup MongoDB
+### 2. Setup PostgreSQL
 
-Make sure MongoDB is running:
+Make sure PostgreSQL is running:
 ```bash
 # Using Docker
-docker run -d -p 27017:27017 --name mongo mongo:latest
+docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres --name postgres postgres:latest
 
-# Or use your existing MongoDB instance
+# Create the database
+docker exec postgres psql -U postgres -c "CREATE DATABASE outlabs_auth_notifications;"
+
+# Or use your existing PostgreSQL instance
 ```
 
 ### 3. Configure Environment Variables
@@ -111,7 +114,7 @@ Edit `.env` with your credentials:
 
 ```bash
 # Required
-MONGO_URL=mongodb://localhost:27017
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_notifications
 SECRET_KEY=your-super-secret-key-change-this
 
 # Webhook (Optional)

@@ -1,13 +1,17 @@
 """
 Quick test to verify the notification example can initialize properly.
+
+Tests:
+- Notification channel imports
+- NotificationService creation
+- Event emission (fire-and-forget)
 """
 import asyncio
 import os
 import sys
 
 # Set minimal environment variables for testing
-os.environ["MONGO_URL"] = "mongodb://localhost:27017"
-os.environ["MONGO_DB"] = "outlabs_auth_notifications_test"
+os.environ["DATABASE_URL"] = "postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_notifications"
 os.environ["SECRET_KEY"] = "test-secret-key-for-testing-only"
 
 # Import the notification service creation function

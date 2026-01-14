@@ -7,15 +7,15 @@ A complete blog application demonstrating **OutlabsAuth's SimpleRBAC** preset fo
 ### Prerequisites
 
 - Docker and Docker Compose
-- Ports available: 8003, 27017, 6379, 9090, 3000
+- Ports available: 8003, 5432, 6379, 9090, 3000
 
 ### Start the API (Recommended - Unified Stack)
 
-**Use the unified Docker Compose stack** from the project root - it includes MongoDB, Redis, Prometheus, and Grafana:
+**Use the unified Docker Compose stack** from the project root - it includes PostgreSQL, Redis, Prometheus, and Grafana:
 
 ```bash
 # From the project root
-docker-compose up -d mongodb redis simple-rbac
+docker-compose up -d postgres redis simple-rbac
 
 # Or start everything (including observability)
 docker-compose up -d
@@ -32,7 +32,7 @@ See **[DOCKER.md](../../DOCKER.md)** for complete documentation on the unified s
 
 ### Alternative: Local Development
 
-If you have MongoDB and Redis running locally, you can use the example's local docker-compose:
+If you have PostgreSQL and Redis running locally, you can use the example's local docker-compose:
 
 ```bash
 cd examples/simple_rbac
@@ -314,10 +314,9 @@ examples/simple_rbac/
 Environment variables (set in `docker-compose.yml`):
 
 ```yaml
-MONGODB_URL=mongodb://host.docker.internal:27017
-DATABASE_NAME=blog_simple_rbac
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac
 SECRET_KEY=development-secret-key-change-in-production
-REDIS_URL=redis://:guest@host.docker.internal:6379  # Optional
+REDIS_URL=redis://localhost:6379  # Optional
 ```
 
 ## Permission Model
@@ -342,22 +341,22 @@ REDIS_URL=redis://:guest@host.docker.internal:6379  # Optional
 
 ## Database
 
-**Collections created**:
+**Tables created**:
 - `users` - User accounts
 - `roles` - Role definitions
 - `permissions` - Permission registry
 - `blog_posts` - Blog posts
 - `comments` - Post comments
 
-**Default database**: `blog_simple_rbac`
+**Default database**: `blog_simple_rbac` (PostgreSQL)
 
 ## Troubleshooting
 
 ### API won't start
 
-**Check MongoDB**:
+**Check PostgreSQL**:
 ```bash
-mongosh --host localhost:27017
+docker exec postgres psql -U postgres -c "SELECT 1;"
 ```
 
 **Check logs**:
