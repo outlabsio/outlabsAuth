@@ -413,7 +413,7 @@ class OutlabsAuth:
             entity_service=self.entity_service,
             membership_service=self.membership_service,
             activity_tracker=self.activity_tracker,
-            session_factory=self._session_factory,
+            get_session=self.get_session,  # Session factory for PostgreSQL queries
         )
 
     def get_session(self) -> AsyncSession:

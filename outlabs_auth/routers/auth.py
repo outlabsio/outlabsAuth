@@ -7,6 +7,7 @@ Provides ready-to-use authentication routes (DD-041).
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.observability import (
     ObservabilityContext,
@@ -118,6 +119,7 @@ def get_auth_router(
     )
     async def register(
         data: RegisterRequest,
+        session: AsyncSession = Depends(auth.get_session),
         obs: ObservabilityContext = Depends(get_obs),
     ):
         """
@@ -127,16 +129,19 @@ def get_auth_router(
         """
         try:
             user = await auth.user_service.create_user(
+                session,
                 email=data.email,
                 password=data.password,
                 first_name=data.first_name,
                 last_name=data.last_name,
             )
+            await session.commit()
             obs.log_event("user_registered", user_id=str(user.id), email=data.email)
             return user
         except HTTPException:
             raise
         except Exception as e:
+            await session.rollback()
             obs.log_500_error(e, email=data.email)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -151,6 +156,7 @@ def get_auth_router(
     )
     async def login(
         data: LoginRequest,
+        session: AsyncSession = Depends(auth.get_session),
         obs: ObservabilityContext = Depends(get_obs),
     ):
         """
@@ -161,8 +167,9 @@ def get_auth_router(
         try:
             # Authenticate user and get tokens
             user, tokens = await auth.auth_service.login(
-                email=data.email, password=data.password
+                session, email=data.email, password=data.password
             )
+            await session.commit()
 
             # Check verification requirement
             if requires_verification:
@@ -199,11 +206,13 @@ def get_auth_router(
     )
     async def refresh(
         data: RefreshRequest,
+        session: AsyncSession = Depends(auth.get_session),
         obs: ObservabilityContext = Depends(get_obs),
     ):
         """Refresh access token using refresh token."""
         try:
-            tokens = await auth.auth_service.refresh_access_token(data.refresh_token)
+            tokens = await auth.auth_service.refresh_access_token(session, data.refresh_token)
+            await session.commit()
             return RefreshResponse(
                 access_token=tokens.access_token,
                 refresh_token=tokens.refresh_token,
@@ -227,13 +236,14 @@ def get_auth_router(
     )
     async def logout(
         data: Optional[LogoutRequest] = None,
+        session: AsyncSession = Depends(auth.get_session),
         auth_result=Depends(auth.deps.require_auth()),
     ):
         """
         Logout user with flexible revocation options.
 
         Hybrid pattern:
-        - Always revokes refresh token in MongoDB
+        - Always revokes refresh token in database
         - Optionally blacklists access token in Redis (immediate=true)
         - Gracefully degrades if Redis unavailable
 
@@ -263,6 +273,7 @@ def get_auth_router(
         if data and data.refresh_token:
             # Single device logout (revoke specific refresh token)
             await auth.auth_service.logout(
+                session,
                 data.refresh_token,
                 blacklist_access_token=immediate,
                 access_token_jti=jti,
@@ -270,7 +281,7 @@ def get_auth_router(
             )
         else:
             # Logout from all devices (revoke all user's refresh tokens)
-            await auth.auth_service.revoke_all_user_tokens(auth_result["user_id"])
+            await auth.auth_service.revoke_all_user_tokens(session, auth_result["user_id"])
 
             # If immediate revocation requested, still blacklist current access token
             if immediate and jti and redis_client:
@@ -280,6 +291,7 @@ def get_auth_router(
                         f"blacklist:jwt:{jti}", "revoked", ttl=remaining_ttl
                     )
 
+        await session.commit()
         return None
 
     @router.post(
@@ -288,7 +300,10 @@ def get_auth_router(
         summary="Request password reset",
         description="Send password reset email (rate limited: 3 requests per 5 minutes)",
     )
-    async def forgot_password(data: ForgotPasswordRequest):
+    async def forgot_password(
+        data: ForgotPasswordRequest,
+        session: AsyncSession = Depends(auth.get_session),
+    ):
         """
         Request password reset.
 
@@ -314,13 +329,14 @@ def get_auth_router(
 
         try:
             # Get user by email
-            user = await auth.user_service.get_user_by_email(data.email)
+            user = await auth.user_service.get_user_by_email(session, data.email)
             if not user:
                 # Don't reveal if email exists (but still enforce rate limit)
                 return None
 
             # Generate reset token
-            token = await auth.auth_service.generate_reset_token(user)
+            token = await auth.auth_service.generate_reset_token(session, user)
+            await session.commit()
 
             # Trigger hook (should send email)
             await auth.user_service.on_after_forgot_password(user, token)
@@ -342,6 +358,7 @@ def get_auth_router(
     )
     async def reset_password(
         data: ResetPasswordRequest,
+        session: AsyncSession = Depends(auth.get_session),
         obs: ObservabilityContext = Depends(get_obs),
     ):
         """
@@ -352,8 +369,9 @@ def get_auth_router(
         try:
             # Verify token and reset password
             user = await auth.auth_service.reset_password(
-                token=data.token, new_password=data.new_password
+                session, token=data.token, new_password=data.new_password
             )
+            await session.commit()
 
             # Trigger hook
             await auth.user_service.on_after_reset_password(user)

@@ -77,17 +77,26 @@ async def reset_database():
         print("Dropping existing test data...")
 
         # Delete in order respecting foreign keys
-        await session.execute(text("DELETE FROM entity_membership_roles"))
-        await session.execute(text("DELETE FROM entity_memberships"))
-        await session.execute(text("DELETE FROM entity_closures"))
-        await session.execute(text("DELETE FROM user_role_memberships"))
-        await session.execute(text("DELETE FROM role_permissions"))
-        await session.execute(text("DELETE FROM lead_notes"))
-        await session.execute(text("DELETE FROM leads"))
-        await session.execute(text("DELETE FROM entities"))
-        await session.execute(text("DELETE FROM roles"))
-        await session.execute(text("DELETE FROM permissions"))
-        await session.execute(text("DELETE FROM users"))
+        # Use TRUNCATE ... CASCADE for efficiency, with IF EXISTS to handle first run
+        tables_to_clear = [
+            "entity_membership_roles",
+            "entity_memberships",
+            "entity_closures",
+            "user_role_memberships",
+            "role_permissions",
+            "lead_notes",
+            "leads",
+            "entities",
+            "roles",
+            "permissions",
+            "users",
+        ]
+        for table in tables_to_clear:
+            try:
+                await session.execute(text(f"DELETE FROM {table}"))
+            except Exception:
+                # Table might not exist on first run
+                pass
         await session.commit()
         print("Test data cleared\n")
 

@@ -9,6 +9,7 @@ from typing import Any, Callable, Optional, Sequence
 
 from fastapi import Depends, HTTPException, Request, status
 from makefun import with_signature
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.authentication.backend import AuthBackend
 
@@ -30,7 +31,8 @@ class AuthDeps:
         deps = AuthDeps(
             backends=[jwt_backend, api_key_backend],
             user_service=user_service,
-            api_key_service=api_key_service
+            api_key_service=api_key_service,
+            get_session=auth.get_session  # Session factory for PostgreSQL
         )
 
         # Use in routes - ALL backends appear in Swagger UI!
@@ -46,6 +48,7 @@ class AuthDeps:
         user_service: Any = None,
         api_key_service: Any = None,
         activity_tracker: Any = None,
+        get_session: Callable = None,
         **services: Any,
     ):
         """
@@ -56,12 +59,14 @@ class AuthDeps:
             user_service: UserService instance (for JWT, etc.)
             api_key_service: ApiKeyService instance (for API keys)
             activity_tracker: ActivityTracker instance (for DAU/MAU tracking)
+            get_session: Session factory callable (for PostgreSQL queries)
             **services: Additional services for strategies
         """
         self.backends = backends
         self.user_service = user_service
         self.api_key_service = api_key_service
         self.activity_tracker = activity_tracker
+        self.get_session = get_session
         self.services = services
 
     def require_auth(
@@ -96,19 +101,35 @@ class AuthDeps:
         # Generate dynamic signature for this dependency
         signature = self._get_dependency_signature()
 
+        # Store reference to get_session for use inside dependency
+        get_session_factory = self.get_session
+
         @with_signature(signature)
         async def dependency(
-            request: Request, *args: Any, **kwargs: Any
+            request: Request,
+            *args: Any,
+            **kwargs: Any
         ) -> Optional[dict]:
             """Try all backends in order until one authenticates."""
             # request is now a direct parameter, not from kwargs
 
+            # Get session from factory if available (for PostgreSQL queries)
+            # get_session returns an async context manager from async_sessionmaker
+            if get_session_factory:
+                async with get_session_factory() as session:
+                    return await _authenticate_with_session(request, session)
+            else:
+                return await _authenticate_with_session(request, None)
+
+        async def _authenticate_with_session(request: Request, session: Optional[AsyncSession]) -> Optional[dict]:
+            """Authenticate using backends with the provided session."""
             # Try each backend
             for backend in self.backends:
                 try:
-                    # Authenticate using this backend
+                    # Authenticate using this backend (pass session for DB queries)
                     result = await backend.authenticate(
                         request,
+                        session=session,
                         user_service=self.user_service,
                         api_key_service=self.api_key_service,
                         **self.services,
@@ -184,6 +205,7 @@ class AuthDeps:
             ```
         """
         signature = self._get_dependency_signature()
+        get_session_factory = self.get_session
 
         @with_signature(signature)
         async def dependency(*args: Any, **kwargs: Any) -> dict:
@@ -209,12 +231,29 @@ class AuthDeps:
                     detail="User ID not found in auth result",
                 )
 
-            # Check permissions using permission service (handles wildcards properly)
-            if require_all:
+            # Get session for permission checks
+            if get_session_factory:
+                async with get_session_factory() as session:
+                    await _check_permissions_with_session(
+                        session, permission_service, user_id, permissions, require_all
+                    )
+            else:
+                # No session - try without (will fail if service requires session)
+                await _check_permissions_with_session(
+                    None, permission_service, user_id, permissions, require_all
+                )
+
+            return auth_result
+
+        async def _check_permissions_with_session(
+            session, permission_service, user_id, perms, require_all_perms
+        ):
+            """Check permissions using the provided session."""
+            if require_all_perms:
                 # Require ALL permissions
-                for perm in permissions:
+                for perm in perms:
                     has_perm = await permission_service.check_permission(
-                        user_id=user_id, permission=perm
+                        session, user_id=user_id, permission=perm
                     )
                     if not has_perm:
                         raise HTTPException(
@@ -224,9 +263,9 @@ class AuthDeps:
             else:
                 # Require ANY permission
                 has_any = False
-                for perm in permissions:
+                for perm in perms:
                     if await permission_service.check_permission(
-                        user_id=user_id, permission=perm
+                        session, user_id=user_id, permission=perm
                     ):
                         has_any = True
                         break
@@ -236,8 +275,6 @@ class AuthDeps:
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="Insufficient permissions",
                     )
-
-            return auth_result
 
         return dependency
 

@@ -27,6 +27,11 @@ from outlabs_auth.schemas.user_role_membership import (
 )
 
 
+def _get_status_value(status_val: Any) -> str:
+    """Get status value as string, handling both enum and string types."""
+    return status_val.value if hasattr(status_val, 'value') else status_val
+
+
 def get_users_router(
     auth: Any,
     prefix: str = "",
@@ -116,7 +121,7 @@ def get_users_router(
                 email=user.email,
                 first_name=user.first_name,
                 last_name=user.last_name,
-                status=user.status.value,
+                status=_get_status_value(user.status),
                 email_verified=user.email_verified,
                 is_superuser=user.is_superuser,
             )
@@ -187,7 +192,7 @@ def get_users_router(
                     email=user.email,
                     first_name=user.first_name,
                     last_name=user.last_name,
-                    status=user.status.value,
+                    status=_get_status_value(user.status),
                     email_verified=user.email_verified,
                     is_superuser=user.is_superuser,
                 )
@@ -221,7 +226,7 @@ def get_users_router(
             email=user.email,
             first_name=user.first_name,
             last_name=user.last_name,
-            status=user.status.value,
+            status=_get_status_value(user.status),
             email_verified=user.email_verified,
             is_superuser=user.is_superuser,
         )
@@ -348,7 +353,7 @@ def get_users_router(
                 email=user.email,
                 first_name=user.first_name,
                 last_name=user.last_name,
-                status=user.status.value,
+                status=_get_status_value(user.status),
                 email_verified=user.email_verified,
                 is_superuser=user.is_superuser,
             )
@@ -396,7 +401,7 @@ def get_users_router(
                 email=user.email,
                 first_name=user.first_name,
                 last_name=user.last_name,
-                status=user.status.value,
+                status=_get_status_value(user.status),
                 email_verified=user.email_verified,
                 is_superuser=user.is_superuser,
             )

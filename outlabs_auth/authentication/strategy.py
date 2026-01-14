@@ -64,7 +64,7 @@ class JWTStrategy:
         self.redis_client = redis_client
 
     async def authenticate(
-        self, credentials: str, user_service: Any = None, **kwargs: Any
+        self, credentials: str, user_service: Any = None, session: Any = None, **kwargs: Any
     ) -> Optional[dict]:
         """
         Validate JWT token and return user data.
@@ -72,6 +72,7 @@ class JWTStrategy:
         Args:
             credentials: JWT token
             user_service: UserService instance to fetch user
+            session: Database session for PostgreSQL queries
             **kwargs: Additional context
 
         Returns:
@@ -110,10 +111,10 @@ class JWTStrategy:
                 print("[JWT] No user_id in token")
                 return None
 
-            # Fetch user from database
-            if user_service:
+            # Fetch user from database (requires session for PostgreSQL)
+            if user_service and session:
                 print(f"[JWT] Fetching user {user_id} from database...")
-                user = await user_service.get_user_by_id(user_id)
+                user = await user_service.get_user_by_id(session, user_id)
                 print(
                     f"[JWT] User found: {user is not None}, Can auth: {user.can_authenticate() if user else 'N/A'}"
                 )
@@ -125,6 +126,8 @@ class JWTStrategy:
                         "metadata": payload,
                         "jti": jti,  # Include JTI for logout
                     }
+            elif user_service:
+                print("[JWT] No session provided for database query")
             else:
                 print("[JWT] No user_service provided")
 
