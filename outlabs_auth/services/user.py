@@ -14,13 +14,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
+    InvalidCredentialsError,
     UserAlreadyExistsError,
     UserNotFoundError,
 )
-from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.enums import UserStatus
+from outlabs_auth.models.sql.user import User
 from outlabs_auth.services.base import BaseService
-from outlabs_auth.utils.password import generate_password_hash
+from outlabs_auth.utils.password import generate_password_hash, verify_password
 from outlabs_auth.utils.validation import validate_email, validate_name
 
 
@@ -51,6 +52,82 @@ class UserService(BaseService[User]):
         super().__init__(User)
         self.config = config
         self.notifications = notification_service
+
+    # =========================================================================
+    # Lifecycle hooks (override in subclasses)
+    # =========================================================================
+
+    async def on_after_register(
+        self, user: User, request: Optional[Request] = None
+    ) -> None:
+        pass
+
+    async def on_after_login(
+        self,
+        user: User,
+        request: Optional[Request] = None,
+        response: Optional[Response] = None,
+    ) -> None:
+        pass
+
+    async def on_after_update(
+        self, user: User, update_dict: Dict[str, Any], request: Optional[Request] = None
+    ) -> None:
+        pass
+
+    async def on_before_delete(
+        self, user: User, request: Optional[Request] = None
+    ) -> None:
+        pass
+
+    async def on_after_delete(
+        self, user: User, request: Optional[Request] = None
+    ) -> None:
+        pass
+
+    async def on_after_request_verify(
+        self, user: User, token: str, request: Optional[Request] = None
+    ) -> None:
+        pass
+
+    async def on_after_verify(
+        self, user: User, request: Optional[Request] = None
+    ) -> None:
+        pass
+
+    async def on_after_forgot_password(
+        self, user: User, token: str, request: Optional[Request] = None
+    ) -> None:
+        pass
+
+    async def on_after_reset_password(
+        self, user: User, request: Optional[Request] = None
+    ) -> None:
+        pass
+
+    async def on_failed_login(
+        self,
+        email: str,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> None:
+        pass
+
+    async def on_after_oauth_register(
+        self, user: User, provider: str, request: Optional[Request] = None
+    ) -> None:
+        pass
+
+    async def on_after_oauth_login(
+        self, user: User, provider: str, request: Optional[Request] = None
+    ) -> None:
+        pass
+
+    async def on_after_oauth_associate(
+        self, user: User, provider: str, request: Optional[Request] = None
+    ) -> None:
+        pass
 
     async def create_user(
         self,
@@ -201,6 +278,78 @@ class UserService(BaseService[User]):
         await self.update(session, user)
         return user
 
+    async def update_user_fields(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        *,
+        email: Optional[str] = None,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+    ) -> User:
+        """
+        Update user fields (email and/or profile).
+
+        This is a convenience wrapper used by the HTTP routers.
+        """
+        user = await self.get_by_id(session, user_id)
+        if not user:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": str(user_id)},
+            )
+
+        if email is not None:
+            normalized_email = validate_email(email)
+            if normalized_email != user.email:
+                existing = await self.get_one(
+                    session,
+                    User.email == normalized_email,
+                    User.tenant_id == user.tenant_id,
+                )
+                if existing:
+                    raise UserAlreadyExistsError(
+                        message=f"User with email {normalized_email} already exists",
+                        details={"email": normalized_email},
+                    )
+                user.email = normalized_email
+
+        if first_name is not None:
+            user.first_name = validate_name(first_name, "first_name")
+
+        if last_name is not None:
+            user.last_name = validate_name(last_name, "last_name")
+
+        await self.update(session, user)
+        return user
+
+    async def change_password_with_current(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        *,
+        current_password: str,
+        new_password: str,
+    ) -> User:
+        """
+        Change password, verifying the current password first.
+        """
+        user = await self.get_by_id(session, user_id)
+        if not user:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": str(user_id)},
+            )
+
+        if not user.hashed_password or not verify_password(
+            current_password, user.hashed_password
+        ):
+            raise InvalidCredentialsError(message="Current password is incorrect")
+
+        return await self.change_password(
+            session, user_id=user_id, new_password=new_password
+        )
+
     async def change_password(
         self,
         session: AsyncSession,
@@ -291,8 +440,10 @@ class UserService(BaseService[User]):
                 data={
                     "user_id": str(user.id),
                     "email": user.email,
-                    "old_status": old_status.value if hasattr(old_status, 'value') else old_status,
-                    "new_status": status.value if hasattr(status, 'value') else status,
+                    "old_status": old_status.value
+                    if hasattr(old_status, "value")
+                    else old_status,
+                    "new_status": status.value if hasattr(status, "value") else status,
                     "changed_at": datetime.now(timezone.utc).isoformat(),
                 },
             )

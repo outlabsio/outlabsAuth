@@ -4,8 +4,9 @@ Permissions router factory.
 Provides complete CRUD endpoints for permission management.
 """
 
-from typing import Any, Optional, List
+from typing import Any, List, Optional
 from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,9 +22,7 @@ from outlabs_auth.schemas.permission import (
 
 
 def get_permissions_router(
-    auth: Any,
-    prefix: str = "",
-    tags: Optional[list[str]] = None
+    auth: Any, prefix: str = "", tags: Optional[list[str]] = None
 ) -> APIRouter:
     """
     Generate permissions management router.
@@ -61,12 +60,13 @@ def get_permissions_router(
         "/",
         response_model=PaginatedResponse[PermissionResponse],
         summary="List permissions",
-        description="List all permissions with pagination (requires permission:read permission)"
+        description="List all permissions with pagination (requires permission:read permission)",
     )
     async def list_permissions(
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
         limit: int = Query(100, ge=1, le=1000, description="Results per page"),
         resource: Optional[str] = Query(None, description="Filter by resource type"),
+        session: AsyncSession = Depends(auth.session),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
                 auth.observability,
@@ -77,9 +77,7 @@ def get_permissions_router(
         """List all permissions with pagination and optional filtering."""
         try:
             permissions, total = await auth.permission_service.list_permissions(
-                page=page,
-                limit=limit,
-                resource=resource
+                session, page=page, limit=limit, resource=resource
             )
 
             # Calculate total pages
@@ -97,18 +95,14 @@ def get_permissions_router(
                     scope=perm.scope,
                     is_system=perm.is_system,
                     is_active=perm.is_active,
-                    tags=perm.tags or [],
-                    metadata=perm.metadata or {}
+                    tags=[],
+                    metadata={},
                 )
                 for perm in permissions
             ]
 
             return PaginatedResponse(
-                items=items,
-                total=total,
-                page=page,
-                limit=limit,
-                pages=pages
+                items=items, total=total, page=page, limit=limit, pages=pages
             )
         except HTTPException:
             raise
@@ -116,7 +110,7 @@ def get_permissions_router(
             obs.log_500_error(e, page=page, limit=limit, resource=resource)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to list permissions"
+                detail="Failed to list permissions",
             )
 
     @router.post(
@@ -124,11 +118,12 @@ def get_permissions_router(
         response_model=PermissionResponse,
         status_code=status.HTTP_201_CREATED,
         summary="Create permission",
-        description="Create new permission (requires permission:create permission)"
+        description="Create new permission (requires permission:create permission)",
     )
     async def create_permission(
         data: PermissionCreateRequest,
-        auth_result = Depends(auth.deps.require_permission("permission:create"))
+        session: AsyncSession = Depends(auth.session),
+        auth_result=Depends(auth.deps.require_permission("permission:create")),
     ):
         """Create a new permission."""
         try:
@@ -140,35 +135,39 @@ def get_permissions_router(
                     display_name=data.display_name,
                     is_system=data.is_system,
                     is_active=data.is_active,
-                    tags_count=len(data.tags)
+                    tags_count=len(data.tags),
                 )
 
             # Check if permission already exists
-            existing = await auth.permission_service.get_permission_by_name(data.name)
+            existing = await auth.permission_service.get_permission_by_name(
+                session, data.name
+            )
             if existing:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Permission with name '{data.name}' already exists"
+                    detail=f"Permission with name '{data.name}' already exists",
                 )
 
             # Create permission using service
             permission = await auth.permission_service.create_permission(
+                session,
                 name=data.name,
                 display_name=data.display_name,
                 description=data.description or "",
-                is_system=data.is_system
+                is_system=data.is_system,
+                is_active=data.is_active,
+                tags=data.tags,
             )
+            await session.commit()
 
-            # Update additional fields if provided
-            if data.tags:
-                permission.tags = data.tags
-            if data.metadata:
-                permission.metadata = data.metadata
-            if not data.is_active:
-                permission.is_active = data.is_active
-
-            # Save updated permission
-            await permission.save()
+            permission = await auth.permission_service.get_permission_by_id(
+                session, permission.id, load_tags=True
+            )
+            if not permission:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to load created permission",
+                )
 
             return PermissionResponse(
                 id=str(permission.id),
@@ -180,34 +179,30 @@ def get_permissions_router(
                 scope=permission.scope,
                 is_system=permission.is_system,
                 is_active=permission.is_active,
-                tags=permission.tags or [],
-                metadata=permission.metadata or {}
+                tags=[t.name for t in permission.tags] if permission.tags else [],
+                metadata={},
             )
         except HTTPException:
             raise
         except Exception as e:
+            await session.rollback()
             # Log error with observability
             if auth.observability:
                 auth.observability.logger.error(
-                    "permission_create_error",
-                    error=str(e),
-                    error_type=type(e).__name__
+                    "permission_create_error", error=str(e), error_type=type(e).__name__
                 )
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(e)
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     @router.get(
         "/{permission_id}",
         response_model=PermissionResponse,
         summary="Get permission",
-        description="Get permission details by ID (requires permission:read permission)"
+        description="Get permission details by ID (requires permission:read permission)",
     )
     async def get_permission(
         permission_id: str,
-        auth_result = Depends(auth.deps.require_permission("permission:read")),
-        session: AsyncSession = Depends(auth.get_session)
+        auth_result=Depends(auth.deps.require_permission("permission:read")),
+        session: AsyncSession = Depends(auth.session),
     ):
         """Get permission details by ID."""
         try:
@@ -216,8 +211,7 @@ def get_permissions_router(
             )
             if not permission:
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Permission not found"
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Permission not found"
                 )
 
             return PermissionResponse(
@@ -231,27 +225,26 @@ def get_permissions_router(
                 is_system=permission.is_system,
                 is_active=permission.is_active,
                 tags=[tag.name for tag in permission.tags] if permission.tags else [],
-                metadata={}
+                metadata={},
             )
         except HTTPException:
             raise
         except Exception as e:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=str(e)
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
             )
 
     @router.patch(
         "/{permission_id}",
         response_model=PermissionResponse,
         summary="Update permission",
-        description="Update permission details (requires permission:update permission)"
+        description="Update permission details (requires permission:update permission)",
     )
     async def update_permission(
         permission_id: str,
         data: PermissionUpdateRequest,
-        auth_result = Depends(auth.deps.require_permission("permission:update")),
-        session: AsyncSession = Depends(auth.get_session)
+        auth_result=Depends(auth.deps.require_permission("permission:update")),
+        session: AsyncSession = Depends(auth.session),
     ):
         """Update permission details."""
         try:
@@ -260,15 +253,26 @@ def get_permissions_router(
                 UUID(permission_id),
                 display_name=data.display_name,
                 description=data.description,
+                is_active=data.is_active,
+                tags=data.tags,
             )
             await session.commit()
+
+            permission = await auth.permission_service.get_permission_by_id(
+                session, UUID(permission_id), load_tags=True
+            )
+            if not permission:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Permission not found",
+                )
 
             # Log update
             if auth.observability:
                 auth.observability.logger.info(
                     "permission_updated",
                     permission_id=permission_id,
-                    permission_name=permission.name
+                    permission_name=permission.name,
                 )
 
             return PermissionResponse(
@@ -281,8 +285,8 @@ def get_permissions_router(
                 scope=permission.scope,
                 is_system=permission.is_system,
                 is_active=permission.is_active,
-                tags=[],
-                metadata={}
+                tags=[t.name for t in permission.tags] if permission.tags else [],
+                metadata={},
             )
         except HTTPException:
             raise
@@ -290,66 +294,60 @@ def get_permissions_router(
             await session.rollback()
             if auth.observability:
                 auth.observability.logger.error(
-                    "permission_update_error",
-                    error=str(e),
-                    permission_id=permission_id
+                    "permission_update_error", error=str(e), permission_id=permission_id
                 )
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(e)
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     @router.delete(
         "/{permission_id}",
         status_code=status.HTTP_204_NO_CONTENT,
         summary="Delete permission",
-        description="Delete permission (requires permission:delete permission). Cannot delete system permissions."
+        description="Delete permission (requires permission:delete permission). Cannot delete system permissions.",
     )
     async def delete_permission(
         permission_id: str,
-        auth_result = Depends(auth.deps.require_permission("permission:delete"))
+        session: AsyncSession = Depends(auth.session),
+        auth_result=Depends(auth.deps.require_permission("permission:delete")),
     ):
         """Delete permission by ID."""
         try:
-            deleted = await auth.permission_service.delete_permission(permission_id)
+            deleted = await auth.permission_service.delete_permission(
+                session, UUID(permission_id)
+            )
 
             if not deleted:
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Permission not found"
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Permission not found"
                 )
+            await session.commit()
 
             # Log deletion
             if auth.observability:
                 auth.observability.logger.info(
-                    "permission_deleted",
-                    permission_id=permission_id
+                    "permission_deleted", permission_id=permission_id
                 )
 
             return None  # 204 No Content
         except HTTPException:
             raise
         except Exception as e:
+            await session.rollback()
             if auth.observability:
                 auth.observability.logger.error(
-                    "permission_delete_error",
-                    error=str(e),
-                    permission_id=permission_id
+                    "permission_delete_error", error=str(e), permission_id=permission_id
                 )
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(e)
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     @router.get(
         "/me",
         response_model=List[str],
         summary="Get current user's permissions",
-        description="Get all permissions for the authenticated user"
+        description="Get all permissions for the authenticated user",
     )
     async def get_my_permissions(
         entity_id: Optional[str] = None,
-        auth_result = Depends(auth.deps.require_auth())
+        session: AsyncSession = Depends(auth.session),
+        auth_result=Depends(auth.deps.require_auth()),
     ):
         """
         Get all permissions for the currently authenticated user.
@@ -358,115 +356,83 @@ def get_permissions_router(
         """
         try:
             user_id = auth_result["user_id"]
-
-            # Get permissions (handle both SimpleRBAC and EnterpriseRBAC)
-            # SimpleRBAC: get_user_permissions(user_id)
-            # EnterpriseRBAC: get_user_permissions(user_id, entity_id=None)
-            try:
-                # Try with entity_id parameter (EnterpriseRBAC)
-                permissions = await auth.permission_service.get_user_permissions(
-                    user_id=user_id,
-                    entity_id=entity_id
-                )
-            except TypeError:
-                # Fall back to SimpleRBAC (no entity_id parameter)
-                permissions = await auth.permission_service.get_user_permissions(
-                    user_id=user_id
-                )
-
-            return permissions
+            return await auth.permission_service.get_user_permissions(
+                session, user_id=UUID(user_id)
+            )
         except Exception as e:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=str(e)
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
             )
 
     @router.post(
         "/check",
         response_model=PermissionCheckResponse,
         summary="Check permissions",
-        description="Check if user has specific permissions (requires permission:check permission)"
+        description="Check if user has specific permissions (requires permission:check permission)",
     )
     async def check_permissions(
         data: PermissionCheckRequest,
-        auth_result = Depends(auth.deps.require_permission("permission:check"))
+        session: AsyncSession = Depends(auth.session),
+        auth_result=Depends(auth.deps.require_permission("permission:check")),
     ):
         """Check if a user has specific permissions."""
         try:
             # Get user
-            user = await auth.user_service.get_user(data.user_id)
+            user = await auth.user_service.get_user_by_id(session, UUID(data.user_id))
             if not user:
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="User not found"
+                    status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
                 )
 
             # Check each permission
             results = {}
             for permission in data.permissions:
                 has_perm = await auth.permission_service.check_permission(
-                    user_id=data.user_id,
-                    permission=permission,
-                    entity_id=data.entity_id
+                    session, user_id=UUID(data.user_id), permission=permission
                 )
                 results[permission] = has_perm
 
             has_all = all(results.values())
 
             return PermissionCheckResponse(
-                user_id=data.user_id,
-                has_all_permissions=has_all,
-                results=results
+                user_id=data.user_id, has_all_permissions=has_all, results=results
             )
         except HTTPException:
             raise
         except Exception as e:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=str(e)
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
             )
 
     @router.get(
         "/user/{user_id}",
         response_model=List[str],
         summary="Get user permissions",
-        description="Get all permissions for a user (requires permission:read permission)"
+        description="Get all permissions for a user (requires permission:read permission)",
     )
     async def get_user_permissions(
         user_id: str,
         entity_id: Optional[str] = None,
-        auth_result = Depends(auth.deps.require_permission("permission:read"))
+        session: AsyncSession = Depends(auth.session),
+        auth_result=Depends(auth.deps.require_permission("permission:read")),
     ):
         """Get all permissions for a user, optionally in a specific entity context."""
         try:
             # Get user
-            user = await auth.user_service.get_user(user_id)
+            user = await auth.user_service.get_user_by_id(session, UUID(user_id))
             if not user:
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="User not found"
+                    status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
                 )
 
-            # Get permissions (handle both SimpleRBAC and EnterpriseRBAC)
-            try:
-                # Try with entity_id parameter (EnterpriseRBAC)
-                permissions = await auth.permission_service.get_user_permissions(
-                    user_id=user_id,
-                    entity_id=entity_id
-                )
-            except TypeError:
-                # Fall back to SimpleRBAC (no entity_id parameter)
-                permissions = await auth.permission_service.get_user_permissions(
-                    user_id=user_id
-                )
-
-            return permissions
+            return await auth.permission_service.get_user_permissions(
+                session, user_id=UUID(user_id)
+            )
         except HTTPException:
             raise
         except Exception as e:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=str(e)
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
             )
 
     return router

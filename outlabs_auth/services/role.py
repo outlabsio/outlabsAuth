@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -18,11 +19,11 @@ from outlabs_auth.core.exceptions import (
     RoleNotFoundError,
     UserNotFoundError,
 )
-from outlabs_auth.models.sql.role import Role, RolePermission
+from outlabs_auth.models.sql.enums import MembershipStatus
 from outlabs_auth.models.sql.permission import Permission
+from outlabs_auth.models.sql.role import Role, RolePermission
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
-from outlabs_auth.models.sql.enums import MembershipStatus
 from outlabs_auth.services.base import BaseService
 from outlabs_auth.utils.validation import validate_name, validate_slug
 
@@ -267,6 +268,109 @@ class RoleService(BaseService[Role]):
         )
 
         return roles, total_count
+
+    # =========================================================================
+    # Permission Management (by permission name convenience)
+    # =========================================================================
+
+    async def set_permissions_by_name(
+        self,
+        session: AsyncSession,
+        role_id: UUID,
+        permission_names: List[str],
+    ) -> Role:
+        """
+        Replace a role's permissions using permission names.
+        """
+        role = await self.get_by_id(session, role_id)
+        if not role:
+            raise RoleNotFoundError(
+                message="Role not found",
+                details={"role_id": str(role_id)},
+            )
+        if role.is_system_role:
+            raise InvalidInputError(
+                message="Cannot modify system role permissions",
+                details={"role_id": str(role_id), "role_name": role.name},
+            )
+
+        # Clear existing role_permissions
+        await session.execute(
+            sql_delete(RolePermission).where(RolePermission.role_id == role_id)
+        )
+        await session.flush()
+
+        # Add requested permissions
+        await self._add_permissions_by_name(session, role_id, permission_names)
+
+        # Reload role with permissions
+        return (
+            await self.get_role_by_id(session, role_id, load_permissions=True) or role
+        )
+
+    async def add_permissions_by_name(
+        self,
+        session: AsyncSession,
+        role_id: UUID,
+        permission_names: List[str],
+    ) -> Role:
+        """
+        Add permissions to a role using permission names.
+        """
+        role = await self.get_by_id(session, role_id)
+        if not role:
+            raise RoleNotFoundError(
+                message="Role not found",
+                details={"role_id": str(role_id)},
+            )
+        if role.is_system_role:
+            raise InvalidInputError(
+                message="Cannot modify system role permissions",
+                details={"role_id": str(role_id), "role_name": role.name},
+            )
+
+        await self._add_permissions_by_name(session, role_id, permission_names)
+        return (
+            await self.get_role_by_id(session, role_id, load_permissions=True) or role
+        )
+
+    async def remove_permissions_by_name(
+        self,
+        session: AsyncSession,
+        role_id: UUID,
+        permission_names: List[str],
+    ) -> Role:
+        """
+        Remove permissions from a role using permission names.
+        """
+        role = await self.get_by_id(session, role_id)
+        if not role:
+            raise RoleNotFoundError(
+                message="Role not found",
+                details={"role_id": str(role_id)},
+            )
+        if role.is_system_role:
+            raise InvalidInputError(
+                message="Cannot modify system role permissions",
+                details={"role_id": str(role_id), "role_name": role.name},
+            )
+
+        # Resolve permission IDs
+        stmt = select(Permission.id).where(Permission.name.in_(permission_names))
+        result = await session.execute(stmt)
+        perm_ids = [row[0] for row in result.all()]
+        if perm_ids:
+            await session.execute(
+                sql_delete(RolePermission).where(
+                    RolePermission.role_id == role_id,
+                    RolePermission.permission_id.in_(perm_ids),
+                )
+            )
+            await session.flush()
+
+        return (
+            await self.get_role_by_id(session, role_id, load_permissions=True) or role
+        )
 
     # =========================================================================
     # Permission Management (via junction table)

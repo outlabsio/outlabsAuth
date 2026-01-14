@@ -1,175 +1,88 @@
 """
 Token Cleanup Worker
 
-Background worker to clean up expired and old revoked refresh tokens from MongoDB.
+Background cleanup tasks for PostgreSQL/SQLModel.
 
-This prevents the refresh_tokens collection from growing indefinitely by removing:
-1. Expired tokens (past their expires_at date)
-2. Old revoked tokens (revoked > 7 days ago)
-
-Run this periodically (daily recommended) via scheduler:
-- APScheduler
-- Celery Beat
-- System cron
-- Cloud scheduler (AWS EventBridge, GCP Scheduler, etc.)
+Removes:
+1. Expired refresh tokens (past expires_at)
+2. Old revoked refresh tokens (revoked_at older than retention window)
+3. Expired OAuth state rows (optional)
 """
-from datetime import datetime, timezone, timedelta
-import logging
-from typing import Dict
 
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Dict
+from uuid import UUID
+
+from sqlalchemy import delete as sql_delete
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from outlabs_auth.models.sql.oauth_state import OAuthState
 from outlabs_auth.models.sql.token import RefreshToken
 
 logger = logging.getLogger(__name__)
 
 
 async def cleanup_expired_refresh_tokens(
-    revoked_retention_days: int = 7
+    session: AsyncSession,
+    *,
+    revoked_retention_days: int = 7,
 ) -> Dict[str, int]:
     """
     Clean up expired and old revoked refresh tokens.
-
-    Args:
-        revoked_retention_days: Days to retain revoked tokens (default: 7)
-
-    Returns:
-        Dict[str, int]: Cleanup statistics
-            - expired: Number of expired tokens deleted
-            - revoked: Number of old revoked tokens deleted
-            - total: Total tokens deleted
-
-    Example:
-        >>> # In your scheduler
-        >>> from outlabs_auth.workers.token_cleanup import cleanup_expired_refresh_tokens
-        >>>
-        >>> # Run daily at 3 AM
-        >>> scheduler.add_job(
-        ...     cleanup_expired_refresh_tokens,
-        ...     'cron',
-        ...     hour=3,
-        ...     minute=0
-        ... )
-        >>>
-        >>> # Or run manually
-        >>> stats = await cleanup_expired_refresh_tokens()
-        >>> print(f"Cleaned up {stats['total']} tokens")
     """
     now = datetime.now(timezone.utc)
-    logger.info("Starting refresh token cleanup...")
 
-    try:
-        # Delete expired tokens (past their expires_at date)
-        expired_result = await RefreshToken.find(
-            RefreshToken.expires_at < now
-        ).delete()
-        expired_count = expired_result.deleted_count if expired_result else 0
+    # Delete expired tokens
+    expired_stmt = sql_delete(RefreshToken).where(RefreshToken.expires_at < now)
+    expired_result = await session.execute(expired_stmt)
+    expired_count = expired_result.rowcount or 0
 
-        # Delete old revoked tokens (revoked > retention days ago)
-        retention_cutoff = now - timedelta(days=revoked_retention_days)
-        revoked_result = await RefreshToken.find(
-            RefreshToken.is_revoked == True,
-            RefreshToken.revoked_at < retention_cutoff
-        ).delete()
-        revoked_count = revoked_result.deleted_count if revoked_result else 0
+    # Delete old revoked tokens
+    retention_cutoff = now - timedelta(days=revoked_retention_days)
+    revoked_stmt = sql_delete(RefreshToken).where(
+        RefreshToken.is_revoked.is_(True),
+        RefreshToken.revoked_at.is_not(None),
+        RefreshToken.revoked_at < retention_cutoff,
+    )
+    revoked_result = await session.execute(revoked_stmt)
+    revoked_count = revoked_result.rowcount or 0
 
-        total_count = expired_count + revoked_count
-
-        logger.info(
-            f"Token cleanup complete: {expired_count} expired, "
-            f"{revoked_count} old revoked, {total_count} total"
-        )
-
-        return {
+    total_count = expired_count + revoked_count
+    logger.info(
+        "refresh_token_cleanup_complete",
+        extra={
             "expired": expired_count,
             "revoked": revoked_count,
-            "total": total_count
-        }
-
-    except Exception as e:
-        logger.error(f"Error during token cleanup: {e}")
-        return {
-            "expired": 0,
-            "revoked": 0,
-            "total": 0,
-            "error": str(e)
-        }
+            "total": total_count,
+        },
+    )
+    return {"expired": expired_count, "revoked": revoked_count, "total": total_count}
 
 
 async def cleanup_expired_oauth_states(
-    retention_hours: int = 1
+    session: AsyncSession,
+    *,
+    retention_hours: int = 1,
 ) -> Dict[str, int]:
     """
-    Clean up expired OAuth state records.
-
-    OAuth state records are short-lived (used during OAuth flow).
-    Clean up states older than retention period.
-
-    Args:
-        retention_hours: Hours to retain OAuth states (default: 1)
-
-    Returns:
-        Dict[str, int]: Cleanup statistics
-            - deleted: Number of OAuth states deleted
-
-    Example:
-        >>> # Run every hour
-        >>> scheduler.add_job(
-        ...     cleanup_expired_oauth_states,
-        ...     'interval',
-        ...     hours=1
-        ... )
+    Clean up expired OAuth state rows.
     """
-    try:
-        from outlabs_auth.models.sql.oauth_state import OAuthState
-
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=retention_hours)
-
-        result = await OAuthState.find(
-            OAuthState.created_at < cutoff
-        ).delete()
-
-        deleted_count = result.deleted_count if result else 0
-
-        logger.info(f"OAuth state cleanup: {deleted_count} states deleted")
-
-        return {"deleted": deleted_count}
-
-    except ImportError:
-        # OAuth not installed
-        logger.debug("OAuth module not available, skipping OAuth state cleanup")
-        return {"deleted": 0}
-    except Exception as e:
-        logger.error(f"Error during OAuth state cleanup: {e}")
-        return {"deleted": 0, "error": str(e)}
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=retention_hours)
+    stmt = sql_delete(OAuthState).where(OAuthState.created_at < cutoff)
+    result = await session.execute(stmt)
+    deleted = result.rowcount or 0
+    logger.info("oauth_state_cleanup_complete", extra={"deleted": deleted})
+    return {"deleted": deleted}
 
 
-async def cleanup_all() -> Dict[str, Dict[str, int]]:
+async def cleanup_all(session: AsyncSession) -> Dict[str, Dict[str, int]]:
     """
-    Run all cleanup tasks.
-
-    Returns:
-        Dict containing results from all cleanup tasks
-
-    Example:
-        >>> # Run all cleanup tasks daily
-        >>> scheduler.add_job(
-        ...     cleanup_all,
-        ...     'cron',
-        ...     hour=3,
-        ...     minute=0
-        ... )
+    Run all cleanup tasks within the provided session.
     """
-    logger.info("Running all cleanup tasks...")
-
-    results = {
-        "refresh_tokens": await cleanup_expired_refresh_tokens(),
-        "oauth_states": await cleanup_expired_oauth_states()
+    return {
+        "refresh_tokens": await cleanup_expired_refresh_tokens(session),
+        "oauth_states": await cleanup_expired_oauth_states(session),
     }
-
-    total_deleted = (
-        results["refresh_tokens"]["total"] +
-        results["oauth_states"]["deleted"]
-    )
-
-    logger.info(f"All cleanup tasks complete. Total records deleted: {total_deleted}")
-
-    return results

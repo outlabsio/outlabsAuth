@@ -4,10 +4,11 @@ API Keys router factory.
 Provides ready-to-use API key management routes (DD-041).
 """
 
-import traceback
 from typing import Any, List, Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.schemas.api_key import (
     ApiKeyCreateRequest,
@@ -50,34 +51,48 @@ def get_api_keys_router(
     """
     router = APIRouter(prefix=prefix, tags=tags or ["api-keys"])
 
+    async def _to_response(session: AsyncSession, api_key) -> ApiKeyResponse:
+        scopes = await auth.api_key_service.get_api_key_scopes(session, api_key.id)
+        ip_whitelist = await auth.api_key_service.get_api_key_ip_whitelist(
+            session, api_key.id
+        )
+        return ApiKeyResponse(
+            id=str(api_key.id),
+            prefix=api_key.prefix,
+            name=api_key.name,
+            scopes=scopes,
+            ip_whitelist=ip_whitelist or None,
+            rate_limit_per_minute=api_key.rate_limit_per_minute,
+            status=api_key.status,
+            usage_count=api_key.usage_count,
+            created_at=api_key.created_at,
+            expires_at=api_key.expires_at,
+            last_used_at=api_key.last_used_at,
+            description=api_key.description,
+            entity_ids=[str(api_key.entity_id)] if api_key.entity_id else None,
+            owner_id=str(api_key.owner_id) if api_key.owner_id else None,
+        )
+
     @router.get(
         "/",
         response_model=List[ApiKeyResponse],
         summary="List API keys",
         description="List all API keys for the authenticated user",
     )
-    async def list_api_keys(auth_result=Depends(auth.deps.require_auth())):
+    async def list_api_keys(
+        session: AsyncSession = Depends(auth.session),
+        auth_result=Depends(auth.deps.require_auth()),
+    ):
         """List all API keys for the current user."""
         try:
+            user_id = UUID(auth_result["user_id"])
             api_keys = await auth.api_key_service.list_user_api_keys(
-                user_id=auth_result["user_id"]
+                session, user_id=user_id
             )
-
-            # Convert to response format
-            response_list = []
-            for api_key in api_keys:
-                response_data = api_key.model_dump(exclude={'owner'})
-                response_data["id"] = str(api_key.id)
-                response_data["owner_id"] = (
-                    str(api_key.owner.id) if api_key.owner else None
-                )
-                response_list.append(ApiKeyResponse(**response_data))
-
-            return response_list
+            return [await _to_response(session, key) for key in api_keys]
         except Exception as e:
-            error_detail = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error_detail
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
             )
 
     @router.post(
@@ -88,7 +103,9 @@ def get_api_keys_router(
         description="Create new API key (full key shown ONLY ONCE!)",
     )
     async def create_api_key(
-        data: ApiKeyCreateRequest, auth_result=Depends(auth.deps.require_auth())
+        data: ApiKeyCreateRequest,
+        session: AsyncSession = Depends(auth.session),
+        auth_result=Depends(auth.deps.require_auth()),
     ):
         """
         Create new API key.
@@ -99,9 +116,21 @@ def get_api_keys_router(
         Triggers on_api_key_created hook (should email the key to user).
         """
         try:
+            owner_id = UUID(auth_result["user_id"])
+
+            entity_id = None
+            if data.entity_ids:
+                if len(data.entity_ids) != 1:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Multiple entity_ids not supported (use 1 or omit)",
+                    )
+                entity_id = UUID(data.entity_ids[0])
+
             # create_api_key returns tuple: (full_key, api_key_model)
             full_key, api_key_model = await auth.api_key_service.create_api_key(
-                owner_id=auth_result["user_id"],
+                session,
+                owner_id=owner_id,
                 name=data.name,
                 scopes=data.scopes,
                 prefix_type=data.prefix_type,
@@ -109,20 +138,17 @@ def get_api_keys_router(
                 rate_limit_per_minute=data.rate_limit_per_minute,
                 expires_in_days=data.expires_in_days,
                 description=data.description,
-                entity_ids=data.entity_ids,
+                entity_id=entity_id,
             )
+            await session.commit()
 
-            # Convert model to response with full key
-            response_data = api_key_model.model_dump(exclude={'owner'})
-            response_data["id"] = str(api_key_model.id)
-            response_data["owner_id"] = (
-                str(api_key_model.owner.id) if api_key_model.owner else None
+            api_key_response = await _to_response(session, api_key_model)
+            return ApiKeyCreateResponse(
+                **api_key_response.model_dump(), api_key=full_key
             )
-            response_data["api_key"] = full_key  # Full key (ONLY time it's shown!)
-
-            return ApiKeyCreateResponse(**response_data)
 
         except Exception as e:
+            await session.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     @router.get(
@@ -131,10 +157,14 @@ def get_api_keys_router(
         summary="Get API key",
         description="Get API key details (NOT the full key)",
     )
-    async def get_api_key(key_id: str, auth_result=Depends(auth.deps.require_auth())):
+    async def get_api_key(
+        key_id: str,
+        session: AsyncSession = Depends(auth.session),
+        auth_result=Depends(auth.deps.require_auth()),
+    ):
         """Get API key details (without the secret key)."""
         try:
-            api_key = await auth.api_key_service.get_api_key(key_id)
+            api_key = await auth.api_key_service.get_api_key(session, UUID(key_id))
 
             if not api_key:
                 raise HTTPException(
@@ -142,17 +172,12 @@ def get_api_keys_router(
                 )
 
             # Verify ownership
-            owner_id = str(api_key.owner.id) if api_key.owner else None
-            if owner_id != auth_result["user_id"]:
+            if str(api_key.owner_id) != auth_result["user_id"]:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
                 )
 
-            # Convert to response format
-            response_data = api_key.model_dump(exclude={'owner'})
-            response_data["id"] = str(api_key.id)
-            response_data["owner_id"] = owner_id
-            return ApiKeyResponse(**response_data)
+            return await _to_response(session, api_key)
 
         except HTTPException:
             raise
@@ -170,34 +195,47 @@ def get_api_keys_router(
     async def update_api_key(
         key_id: str,
         data: ApiKeyUpdateRequest,
+        session: AsyncSession = Depends(auth.session),
         auth_result=Depends(auth.deps.require_auth()),
     ):
         """Update API key settings."""
         try:
             # Get and verify ownership
-            api_key = await auth.api_key_service.get_api_key(key_id)
-            owner_id = str(api_key.owner.id) if api_key and api_key.owner else None
-            if not api_key or owner_id != auth_result["user_id"]:
+            api_key = await auth.api_key_service.get_api_key(session, UUID(key_id))
+            if not api_key or str(api_key.owner_id) != auth_result["user_id"]:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
                 )
 
+            updates = data.model_dump(exclude_unset=True)
+            if "entity_ids" in updates:
+                entity_ids = updates.pop("entity_ids")
+                if entity_ids:
+                    if len(entity_ids) != 1:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Multiple entity_ids not supported (use 1 or omit)",
+                        )
+                    updates["entity_id"] = UUID(entity_ids[0])
+                else:
+                    updates["entity_id"] = None
+
             # Update
             updated_key = await auth.api_key_service.update_api_key(
-                key_id=key_id, **data.model_dump(exclude_unset=True)
+                session, key_id=UUID(key_id), **updates
             )
+            await session.commit()
 
-            # Convert to response format
-            response_data = updated_key.model_dump(exclude={'owner'})
-            response_data["id"] = str(updated_key.id)
-            response_data["owner_id"] = (
-                str(updated_key.owner.id) if updated_key.owner else None
-            )
-            return ApiKeyResponse(**response_data)
+            if not updated_key:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
+                )
+            return await _to_response(session, updated_key)
 
         except HTTPException:
             raise
         except Exception as e:
+            await session.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     @router.delete(
@@ -207,7 +245,9 @@ def get_api_keys_router(
         description="Delete (revoke) API key",
     )
     async def delete_api_key(
-        key_id: str, auth_result=Depends(auth.deps.require_auth())
+        key_id: str,
+        session: AsyncSession = Depends(auth.session),
+        auth_result=Depends(auth.deps.require_auth()),
     ):
         """
         Delete (revoke) API key.
@@ -216,19 +256,20 @@ def get_api_keys_router(
         """
         try:
             # Get and verify ownership
-            api_key = await auth.api_key_service.get_api_key(key_id)
-            owner_id = str(api_key.owner.id) if api_key and api_key.owner else None
-            if not api_key or owner_id != auth_result["user_id"]:
+            api_key = await auth.api_key_service.get_api_key(session, UUID(key_id))
+            if not api_key or str(api_key.owner_id) != auth_result["user_id"]:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
                 )
 
             # Delete (revoke)
-            await auth.api_key_service.revoke_api_key(key_id)
+            await auth.api_key_service.revoke_api_key(session, UUID(key_id))
+            await session.commit()
 
         except HTTPException:
             raise
         except Exception as e:
+            await session.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
         return None
@@ -240,7 +281,9 @@ def get_api_keys_router(
         description="Create new key and revoke old one",
     )
     async def rotate_api_key(
-        key_id: str, auth_result=Depends(auth.deps.require_auth())
+        key_id: str,
+        session: AsyncSession = Depends(auth.session),
+        auth_result=Depends(auth.deps.require_auth()),
     ):
         """
         Rotate API key (create new, revoke old).
@@ -251,9 +294,8 @@ def get_api_keys_router(
         """
         try:
             # Get and verify ownership
-            api_key = await auth.api_key_service.get_api_key(key_id)
-            owner_id = str(api_key.owner.id) if api_key and api_key.owner else None
-            if not api_key or owner_id != auth_result["user_id"]:
+            api_key = await auth.api_key_service.get_api_key(session, UUID(key_id))
+            if not api_key or str(api_key.owner_id) != auth_result["user_id"]:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
                 )

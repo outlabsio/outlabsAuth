@@ -2,15 +2,20 @@
 Activity Tracker Service for DAU/MAU/WAU/QAU metrics
 
 Uses Redis Sets for O(1) tracking with 99%+ write reduction.
-Background worker syncs to MongoDB for historical analytics.
+Background worker syncs to PostgreSQL for historical analytics.
 """
+
 import logging
 from typing import Optional, Dict, Any
 from datetime import datetime, date, timezone, timedelta
-from redis.asyncio import Redis
+from uuid import UUID
+
+from sqlalchemy import delete as sql_delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.models.sql.activity_metric import ActivityMetric
 from outlabs_auth.models.sql.user import User
+from outlabs_auth.services.redis_client import RedisClient
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +25,7 @@ class ActivityTracker:
     Track user activity for DAU/MAU/WAU/QAU metrics.
 
     Uses Redis Sets for O(1) tracking with 99%+ write reduction.
-    Background worker syncs to MongoDB for historical analytics.
+    Background worker syncs to PostgreSQL for historical analytics.
 
     Redis Keys:
     - active_users:daily:2025-01-24 (TTL: 48h)
@@ -31,7 +36,7 @@ class ActivityTracker:
 
     def __init__(
         self,
-        redis_client: Redis,
+        redis_client: RedisClient,
         enabled: bool = True,
         update_user_model: bool = True,
         store_user_ids: bool = False,
@@ -90,17 +95,15 @@ class ActivityTracker:
 
             # Update last_activity timestamp in Redis
             last_activity_key = f"last_activity:{user_id}"
-            await self.redis.set(
-                last_activity_key,
-                now.isoformat(),
-                ex=7 * 86400  # 7 days TTL
-            )
+            await self.redis.set_raw(last_activity_key, now.isoformat(), ttl=7 * 86400)
 
             logger.debug(f"Tracked activity for user {user_id}")
 
         except Exception as e:
             # NEVER raise - log error and continue
-            logger.error(f"Failed to track activity for user {user_id}: {e}", exc_info=True)
+            logger.error(
+                f"Failed to track activity for user {user_id}: {e}", exc_info=True
+            )
 
     async def get_daily_active_users(self, day: Optional[date] = None) -> int:
         """
@@ -120,9 +123,7 @@ class ActivityTracker:
         return count
 
     async def get_monthly_active_users(
-        self,
-        year: Optional[int] = None,
-        month: Optional[int] = None
+        self, year: Optional[int] = None, month: Optional[int] = None
     ) -> int:
         """
         Get MAU count for a specific month (default: current month).
@@ -143,9 +144,7 @@ class ActivityTracker:
         return count
 
     async def get_quarterly_active_users(
-        self,
-        year: Optional[int] = None,
-        quarter: Optional[int] = None
+        self, year: Optional[int] = None, quarter: Optional[int] = None
     ) -> int:
         """
         Get QAU count for a specific quarter (default: current quarter).
@@ -166,9 +165,9 @@ class ActivityTracker:
         count = await self.redis.scard(key)
         return count
 
-    async def sync_to_mongodb(self) -> Dict[str, Any]:
+    async def sync_to_database(self, session: AsyncSession) -> Dict[str, Any]:
         """
-        Sync Redis activity data to MongoDB (run periodically by background worker).
+        Sync Redis activity data to PostgreSQL (run periodically by background worker).
 
         Creates ActivityMetric snapshots for historical analysis.
         Optionally updates User.last_activity (batched).
@@ -188,7 +187,7 @@ class ActivityTracker:
             "monthly": 0,
             "quarterly": 0,
             "users_updated": 0,
-            "errors": 0
+            "errors": 0,
         }
 
         try:
@@ -196,40 +195,43 @@ class ActivityTracker:
             today = now.date()
 
             # 1. Sync daily metrics
-            await self._sync_period(
-                period_type="daily",
-                period=today.isoformat(),
-                key=self._make_daily_key(today),
-                stats=stats,
-                stats_key="daily"
+            stats["daily"] = await self._upsert_metric(
+                session,
+                metric_type="dau",
+                metric_date=today,
+                redis_key=self._make_daily_key(today),
+                snapshot_at=now,
             )
 
             # 2. Sync monthly metrics
-            await self._sync_period(
-                period_type="monthly",
-                period=f"{now.year:04d}-{now.month:02d}",
-                key=self._make_monthly_key(now.year, now.month),
-                stats=stats,
-                stats_key="monthly"
+            month_date = date(now.year, now.month, 1)
+            stats["monthly"] = await self._upsert_metric(
+                session,
+                metric_type="mau",
+                metric_date=month_date,
+                redis_key=self._make_monthly_key(now.year, now.month),
+                snapshot_at=now,
             )
 
             # 3. Sync quarterly metrics
             quarter = (now.month - 1) // 3 + 1
-            await self._sync_period(
-                period_type="quarterly",
-                period=f"{now.year:04d}-Q{quarter}",
-                key=self._make_quarterly_key(now.year, quarter),
-                stats=stats,
-                stats_key="quarterly"
+            quarter_start_month = 3 * (quarter - 1) + 1
+            quarter_date = date(now.year, quarter_start_month, 1)
+            stats["quarterly"] = await self._upsert_metric(
+                session,
+                metric_type="qau",
+                metric_date=quarter_date,
+                redis_key=self._make_quarterly_key(now.year, quarter),
+                snapshot_at=now,
             )
 
             # 4. Update User.last_activity (batched)
             if self.update_user_model and stats["daily"] > 0:
-                users_updated = await self._batch_update_last_activity()
+                users_updated = await self._batch_update_last_activity(session)
                 stats["users_updated"] = users_updated
 
             # 5. Cleanup old ActivityMetric records
-            await self._cleanup_old_metrics()
+            await self._cleanup_old_metrics(session)
 
             logger.info(
                 f"Activity sync completed: "
@@ -243,69 +245,55 @@ class ActivityTracker:
 
         return stats
 
-    async def _sync_period(
+    async def _upsert_metric(
         self,
-        period_type: str,
-        period: str,
-        key: str,
-        stats: Dict[str, Any],
-        stats_key: str
-    ) -> None:
+        session: AsyncSession,
+        *,
+        metric_type: str,
+        metric_date: date,
+        redis_key: str,
+        snapshot_at: datetime,
+    ) -> int:
         """
-        Sync a single period (daily/monthly/quarterly) to MongoDB.
-
-        Args:
-            period_type: "daily", "monthly", or "quarterly"
-            period: Period identifier (e.g., "2025-01-24", "2025-01", "2025-Q1")
-            key: Redis key to read from
-            stats: Statistics dict to update
-            stats_key: Key in stats dict to update
+        Upsert a single ActivityMetric row from a Redis set.
         """
         try:
-            # Get user IDs from Redis Set
-            user_ids = await self.redis.smembers(key)
+            count = await self.redis.scard(redis_key)
+            if count <= 0:
+                return 0
 
-            if not user_ids:
-                logger.debug(f"No activity for {period_type} period {period}")
-                return
-
-            # Convert bytes to strings (Redis returns bytes)
-            user_ids = [uid.decode('utf-8') if isinstance(uid, bytes) else uid for uid in user_ids]
-            count = len(user_ids)
-
-            # Check if metric already exists
-            existing_metric = await ActivityMetric.find_one(
-                ActivityMetric.period_type == period_type,
-                ActivityMetric.period == period
+            stmt = select(ActivityMetric).where(
+                ActivityMetric.metric_type == metric_type,
+                ActivityMetric.metric_date == metric_date,
+                ActivityMetric.tenant_id.is_(None),
             )
+            result = await session.execute(stmt)
+            metric = result.scalar_one_or_none()
 
-            if existing_metric:
-                # Update existing metric
-                existing_metric.active_users = count
-                if self.store_user_ids:
-                    existing_metric.unique_user_ids = user_ids
-                existing_metric.updated_at = datetime.now(timezone.utc)
-                await existing_metric.save()
+            if metric:
+                metric.count = count
+                metric.unique_users = count
+                metric.snapshot_at = snapshot_at
+                await session.flush()
             else:
-                # Create new metric
                 metric = ActivityMetric(
-                    period_type=period_type,
-                    period=period,
-                    active_users=count,
-                    unique_user_ids=user_ids if self.store_user_ids else None,
-                    created_at=datetime.now(timezone.utc),
-                    updated_at=datetime.now(timezone.utc)
+                    metric_type=metric_type,
+                    metric_date=metric_date,
+                    count=count,
+                    unique_users=count,
+                    snapshot_at=snapshot_at,
                 )
-                await metric.save()
+                session.add(metric)
+                await session.flush()
 
-            stats[stats_key] = count
-            logger.debug(f"Synced {period_type} metric for {period}: {count} users")
-
+            return count
         except Exception as e:
-            logger.error(f"Error syncing {period_type} period {period}: {e}", exc_info=True)
-            stats["errors"] += 1
+            logger.error(
+                f"Error syncing metric {metric_type} {metric_date}: {e}", exc_info=True
+            )
+            return 0
 
-    async def _batch_update_last_activity(self) -> int:
+    async def _batch_update_last_activity(self, session: AsyncSession) -> int:
         """
         Batch update User.last_activity from Redis timestamps.
 
@@ -326,13 +314,11 @@ class ActivityTracker:
 
                 for key in keys:
                     # Extract user_id from key
-                    key_str = key.decode('utf-8') if isinstance(key, bytes) else key
-                    user_id = key_str.replace("last_activity:", "")
+                    user_id = key.replace("last_activity:", "")
 
                     # Get timestamp from Redis
-                    timestamp_str = await self.redis.get(key)
+                    timestamp_str = await self.redis.get_raw(key)
                     if timestamp_str:
-                        timestamp_str = timestamp_str.decode('utf-8') if isinstance(timestamp_str, bytes) else timestamp_str
                         timestamp = datetime.fromisoformat(timestamp_str)
 
                         batch.append((user_id, timestamp))
@@ -348,7 +334,7 @@ class ActivityTracker:
 
             # Process remaining batch
             if batch:
-                updated = await self._update_user_batch(batch)
+                updated = await self._update_user_batch(session, batch)
                 users_updated += updated
 
             logger.debug(f"Updated last_activity for {users_updated} users")
@@ -358,7 +344,9 @@ class ActivityTracker:
             logger.error(f"Error batch updating last_activity: {e}", exc_info=True)
             return 0
 
-    async def _update_user_batch(self, batch: list) -> int:
+    async def _update_user_batch(
+        self, session: AsyncSession, batch: list[tuple[str, datetime]]
+    ) -> int:
         """
         Update a batch of users' last_activity timestamps.
 
@@ -371,38 +359,46 @@ class ActivityTracker:
         updated = 0
         for user_id, timestamp in batch:
             try:
-                # Find and update user
-                user = await User.find_one(User.id == user_id)
-                if user:
-                    user.last_activity = timestamp
-                    await user.save()
-                    updated += 1
-            except Exception as e:
-                logger.error(f"Error updating last_activity for user {user_id}: {e}")
+                user_uuid = UUID(user_id)
+            except Exception:
+                continue
 
+            stmt = select(User).where(User.id == user_uuid)
+            result = await session.execute(stmt)
+            user = result.scalar_one_or_none()
+            if not user:
+                continue
+
+            user.last_activity = timestamp
+            updated += 1
+
+        await session.flush()
         return updated
 
-    async def _cleanup_old_metrics(self) -> None:
+    async def _cleanup_old_metrics(self, session: AsyncSession) -> None:
         """
         Cleanup old ActivityMetric records.
 
         Deletes metrics older than activity_ttl_days (default: 90 days).
         """
         try:
-            # This would use config.activity_ttl_days, but we don't have access to config here
-            # For now, hardcode to 90 days
             ttl_days = 90
             cutoff_date = datetime.now(timezone.utc) - timedelta(days=ttl_days)
-
-            result = await ActivityMetric.find(
+            stmt = sql_delete(ActivityMetric).where(
                 ActivityMetric.created_at < cutoff_date
-            ).delete()
-
-            if result.deleted_count > 0:
-                logger.info(f"Cleaned up {result.deleted_count} old ActivityMetric records")
+            )
+            stmt = sql_delete(ActivityMetric).where(ActivityMetric.created_at < cutoff_date)
+            result = await session.execute(stmt)
+            deleted = result.rowcount or 0
+            if deleted > 0:
+                logger.info(f"Cleaned up {deleted} old ActivityMetric records")
 
         except Exception as e:
             logger.error(f"Error cleaning up old metrics: {e}", exc_info=True)
+
+    # Backwards-compatible name
+    async def sync_to_mongodb(self, session: AsyncSession) -> Dict[str, Any]:
+        return await self.sync_to_database(session)
 
     # Helper methods for Redis key generation
 

@@ -119,7 +119,7 @@ def get_auth_router(
     )
     async def register(
         data: RegisterRequest,
-        session: AsyncSession = Depends(auth.get_session),
+        session: AsyncSession = Depends(auth.session),
         obs: ObservabilityContext = Depends(get_obs),
     ):
         """
@@ -156,7 +156,7 @@ def get_auth_router(
     )
     async def login(
         data: LoginRequest,
-        session: AsyncSession = Depends(auth.get_session),
+        session: AsyncSession = Depends(auth.session),
         obs: ObservabilityContext = Depends(get_obs),
     ):
         """
@@ -206,12 +206,14 @@ def get_auth_router(
     )
     async def refresh(
         data: RefreshRequest,
-        session: AsyncSession = Depends(auth.get_session),
+        session: AsyncSession = Depends(auth.session),
         obs: ObservabilityContext = Depends(get_obs),
     ):
         """Refresh access token using refresh token."""
         try:
-            tokens = await auth.auth_service.refresh_access_token(session, data.refresh_token)
+            tokens = await auth.auth_service.refresh_access_token(
+                session, data.refresh_token
+            )
             await session.commit()
             return RefreshResponse(
                 access_token=tokens.access_token,
@@ -236,7 +238,7 @@ def get_auth_router(
     )
     async def logout(
         data: Optional[LogoutRequest] = None,
-        session: AsyncSession = Depends(auth.get_session),
+        session: AsyncSession = Depends(auth.session),
         auth_result=Depends(auth.deps.require_auth()),
     ):
         """
@@ -281,7 +283,9 @@ def get_auth_router(
             )
         else:
             # Logout from all devices (revoke all user's refresh tokens)
-            await auth.auth_service.revoke_all_user_tokens(session, auth_result["user_id"])
+            await auth.auth_service.revoke_all_user_tokens(
+                session, auth_result["user_id"]
+            )
 
             # If immediate revocation requested, still blacklist current access token
             if immediate and jti and redis_client:
@@ -302,7 +306,7 @@ def get_auth_router(
     )
     async def forgot_password(
         data: ForgotPasswordRequest,
-        session: AsyncSession = Depends(auth.get_session),
+        session: AsyncSession = Depends(auth.session),
     ):
         """
         Request password reset.
@@ -358,7 +362,7 @@ def get_auth_router(
     )
     async def reset_password(
         data: ResetPasswordRequest,
-        session: AsyncSession = Depends(auth.get_session),
+        session: AsyncSession = Depends(auth.session),
         obs: ObservabilityContext = Depends(get_obs),
     ):
         """

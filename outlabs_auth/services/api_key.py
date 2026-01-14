@@ -10,7 +10,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import select, func, delete as sql_delete
+from sqlalchemy import delete as sql_delete
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -19,7 +20,7 @@ from outlabs_auth.core.exceptions import (
     InvalidInputError,
     UserNotFoundError,
 )
-from outlabs_auth.models.sql.api_key import APIKey, APIKeyScope, APIKeyIPWhitelist
+from outlabs_auth.models.sql.api_key import APIKey, APIKeyIPWhitelist, APIKeyScope
 from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.enums import APIKeyStatus
 from outlabs_auth.models.sql.user import User
@@ -303,9 +304,10 @@ class APIKeyService(BaseService[APIKey]):
     async def _check_ip(
         self, session: AsyncSession, api_key_id: UUID, ip_address: str
     ) -> bool:
-        """Check if IP is in whitelist (empty whitelist = allow all)."""
-        stmt = select(func.count()).select_from(APIKeyIPWhitelist).where(
-            APIKeyIPWhitelist.api_key_id == api_key_id
+        stmt = (
+            select(func.count())
+            .select_from(APIKeyIPWhitelist)
+            .where(APIKeyIPWhitelist.api_key_id == api_key_id)
         )
         result = await session.execute(stmt)
         count = result.scalar() or 0
@@ -503,6 +505,17 @@ class APIKeyService(BaseService[APIKey]):
     ) -> List[str]:
         """Get scopes for an API key."""
         stmt = select(APIKeyScope.scope).where(APIKeyScope.api_key_id == key_id)
+        result = await session.execute(stmt)
+        return [row[0] for row in result.all()]
+
+    async def get_api_key_ip_whitelist(
+        self, session: AsyncSession, key_id: UUID
+    ) -> List[str]:
+        """Get IP whitelist entries for an API key."""
+        stmt = select(APIKeyIPWhitelist.ip_address).where(
+            APIKeyIPWhitelist.api_key_id == key_id
+        )
+        stmt = select(APIKeyIPWhitelist.ip_address).where(APIKeyIPWhitelist.api_key_id == key_id)
         result = await session.execute(stmt)
         return [row[0] for row in result.all()]
 

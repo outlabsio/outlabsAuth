@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import UUID
 
-from sqlalchemy import select, or_
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -21,11 +21,15 @@ from outlabs_auth.core.exceptions import (
     PermissionNotFoundError,
     UserNotFoundError,
 )
-from outlabs_auth.models.sql.permission import Permission, PermissionTag, PermissionTagLink
+from outlabs_auth.models.sql.enums import MembershipStatus
+from outlabs_auth.models.sql.permission import (
+    Permission,
+    PermissionTag,
+    PermissionTagLink,
+)
 from outlabs_auth.models.sql.role import Role, RolePermission
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
-from outlabs_auth.models.sql.enums import MembershipStatus
 from outlabs_auth.services.base import BaseService
 from outlabs_auth.utils.validation import validate_permission_name
 
@@ -314,6 +318,8 @@ class PermissionService(BaseService[Permission]):
         display_name: str,
         description: Optional[str] = None,
         is_system: bool = False,
+        is_active: bool = True,
+        tags: Optional[List[str]] = None,
         tenant_id: Optional[str] = None,
     ) -> Permission:
         """
@@ -347,10 +353,15 @@ class PermissionService(BaseService[Permission]):
             display_name=display_name,
             description=description,
             is_system=is_system,
+            is_active=is_active,
             tenant_id=tenant_id,
         )
 
         await self.create(session, permission)
+
+        if tags:
+            await self.set_permission_tags(session, permission.id, tags)
+
         return permission
 
     async def get_permission_by_id(
@@ -399,6 +410,8 @@ class PermissionService(BaseService[Permission]):
         permission_id: UUID,
         display_name: Optional[str] = None,
         description: Optional[str] = None,
+        is_active: Optional[bool] = None,
+        tags: Optional[List[str]] = None,
     ) -> Permission:
         """
         Update permission.
@@ -438,6 +451,70 @@ class PermissionService(BaseService[Permission]):
         if description is not None:
             permission.description = description
 
+        if is_active is not None:
+            permission.is_active = is_active
+
+        await self.update(session, permission)
+
+        if tags is not None:
+            await self.set_permission_tags(session, permission_id, tags)
+
+        return permission
+
+    async def set_permission_tags(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        tags: List[str],
+    ) -> Permission:
+        """
+        Replace a permission's tag set, creating tags if needed.
+        """
+        permission = await self.get_permission_by_id(
+            session, permission_id, load_tags=True
+        )
+        if not permission:
+            raise PermissionNotFoundError(
+                message="Permission not found",
+                details={"permission_id": str(permission_id)},
+            )
+
+        if permission.is_system:
+            raise InvalidInputError(
+                message="Cannot modify system permission",
+                details={
+                    "permission_id": str(permission_id),
+                    "permission_name": permission.name,
+                },
+            )
+
+        normalized = [t.strip() for t in tags if t and t.strip()]
+        # De-duplicate, preserve order
+        normalized = list(dict.fromkeys(normalized))
+
+        if not normalized:
+            permission.tags = []
+            await self.update(session, permission)
+            return permission
+
+        # Load/create tag models
+        stmt = select(PermissionTag).where(
+            PermissionTag.name.in_(normalized),
+            PermissionTag.tenant_id == permission.tenant_id,
+        )
+        result = await session.execute(stmt)
+        existing_tags = {t.name: t for t in result.scalars().all()}
+
+        tag_models: List[PermissionTag] = []
+        for tag_name in normalized:
+            tag_model = existing_tags.get(tag_name)
+            if not tag_model:
+                tag_model = PermissionTag(name=tag_name, tenant_id=permission.tenant_id)
+                session.add(tag_model)
+                await session.flush()
+            tag_models.append(tag_model)
+
+        permission.tags = tag_models
         await self.update(session, permission)
         return permission
 

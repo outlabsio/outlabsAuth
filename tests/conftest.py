@@ -14,15 +14,15 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
 from outlabs_auth import SimpleRBAC
 from outlabs_auth.core.config import AuthConfig
+from outlabs_auth.models.sql.enums import UserStatus
 from outlabs_auth.models.sql.permission import Permission
 from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user import User
-from outlabs_auth.models.sql.enums import UserStatus
 
 # ============================================================================
 # Pytest Configuration
@@ -31,7 +31,7 @@ from outlabs_auth.models.sql.enums import UserStatus
 # Test database URL - uses a separate test database
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test"
+    "postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test",
 )
 
 
@@ -48,6 +48,7 @@ def pytest_configure(config):
 # Event Loop Fixture
 # ============================================================================
 
+
 @pytest.fixture(scope="session")
 def event_loop():
     """Create an event loop for the test session."""
@@ -59,6 +60,7 @@ def event_loop():
 # ============================================================================
 # Database Fixtures
 # ============================================================================
+
 
 @pytest_asyncio.fixture(scope="function")
 async def test_engine():
@@ -105,6 +107,7 @@ async def test_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
 # Configuration Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def test_secret_key() -> str:
     """Test JWT secret key."""
@@ -133,6 +136,7 @@ def auth_config(test_secret_key: str) -> AuthConfig:
 # ============================================================================
 # Auth Instance Fixtures
 # ============================================================================
+
 
 @pytest_asyncio.fixture
 async def auth(test_secret_key: str) -> AsyncGenerator[SimpleRBAC, None]:
@@ -178,6 +182,7 @@ async def auth(test_secret_key: str) -> AsyncGenerator[SimpleRBAC, None]:
 # Test Data Fixtures
 # ============================================================================
 
+
 @pytest.fixture
 def test_password() -> str:
     """
@@ -197,13 +202,16 @@ async def test_user(auth: SimpleRBAC, test_password: str) -> User:
     - Status: ACTIVE
     - Superuser: False
     """
-    user = await auth.user_service.create_user(
-        email="test@example.com",
-        password=test_password,
-        first_name="Test",
-        last_name="User",
-    )
-    return user
+    async with auth.get_session() as session:
+        user = await auth.user_service.create_user(
+            session,
+            email="test@example.com",
+            password=test_password,
+            first_name="Test",
+            last_name="User",
+        )
+        await session.commit()
+        return user
 
 
 @pytest_asyncio.fixture
@@ -217,14 +225,17 @@ async def test_admin(auth: SimpleRBAC, test_password: str) -> User:
     - Status: ACTIVE
     - Superuser: True
     """
-    admin = await auth.user_service.create_user(
-        email="admin@example.com",
-        password=test_password,
-        first_name="Admin",
-        last_name="User",
-        is_superuser=True,
-    )
-    return admin
+    async with auth.get_session() as session:
+        admin = await auth.user_service.create_user(
+            session,
+            email="admin@example.com",
+            password=test_password,
+            first_name="Admin",
+            last_name="User",
+            is_superuser=True,
+        )
+        await session.commit()
+        return admin
 
 
 @pytest_asyncio.fixture
@@ -236,14 +247,15 @@ async def test_role(auth: SimpleRBAC) -> Role:
     - Name: "test_role"
     - Display name: "Test Role"
     """
-    async with auth.get_session_context() as session:
+    async with auth.get_session() as session:
         role = await auth.role_service.create_role(
             session,
             name="test_role",
             display_name="Test Role",
             description="A test role with basic permissions",
-            is_system=False,
+            is_system_role=False,
         )
+        await session.commit()
         return role
 
 
@@ -263,7 +275,7 @@ async def test_permissions(auth: SimpleRBAC) -> list[Permission]:
         ("user:delete", "Delete Users", "Can delete users"),
     ]
 
-    async with auth.get_session_context() as session:
+    async with auth.get_session() as session:
         for name, display_name, description in perm_definitions:
             perm = await auth.permission_service.create_permission(
                 session,
@@ -273,6 +285,7 @@ async def test_permissions(auth: SimpleRBAC) -> list[Permission]:
                 is_system=False,
             )
             permissions.append(perm)
+        await session.commit()
 
     return permissions
 
@@ -281,12 +294,14 @@ async def test_permissions(auth: SimpleRBAC) -> list[Permission]:
 # Token Fixtures
 # ============================================================================
 
+
 @pytest_asyncio.fixture
 async def test_access_token(auth: SimpleRBAC, test_user: User) -> str:
     """
     Generate a valid access token for test_user.
     """
     from datetime import timedelta
+
     from outlabs_auth.utils.jwt import create_access_token
 
     token = create_access_token(
@@ -304,6 +319,7 @@ async def test_expired_token(auth: SimpleRBAC, test_user: User) -> str:
     Generate an expired access token for testing.
     """
     from datetime import timedelta
+
     from outlabs_auth.utils.jwt import create_access_token
 
     token = create_access_token(
@@ -318,6 +334,7 @@ async def test_expired_token(auth: SimpleRBAC, test_user: User) -> str:
 # ============================================================================
 # Utility Fixtures
 # ============================================================================
+
 
 @pytest.fixture
 def sample_user_data(test_password: str) -> dict:

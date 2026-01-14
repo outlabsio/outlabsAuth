@@ -45,7 +45,9 @@ def _entity_to_response(entity: Any) -> EntityResponse:
         display_name=entity.display_name,
         slug=entity.slug,
         description=entity.description,
-        entity_class=entity.entity_class.value if hasattr(entity.entity_class, 'value') else entity.entity_class,
+        entity_class=entity.entity_class.value
+        if hasattr(entity.entity_class, "value")
+        else entity.entity_class,
         entity_type=entity.entity_type,
         parent_entity_id=parent_id,
         status=entity.status,
@@ -103,13 +105,14 @@ def get_entities_router(
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
         limit: int = Query(100, ge=1, le=1000, description="Items per page"),
         auth_result=Depends(auth.deps.require_auth()),
-        session: AsyncSession = Depends(auth.get_session),
+        session: AsyncSession = Depends(auth.session),
     ):
         """List all entities with optional filtering and pagination."""
         try:
+            from sqlalchemy import func, select
+
             from outlabs_auth.models.sql.entity import Entity
             from outlabs_auth.models.sql.enums import EntityClass
-            from sqlalchemy import select, func
 
             # Build query filters
             filters = [Entity.status == "active"]
@@ -171,14 +174,18 @@ def get_entities_router(
     async def create_entity(
         data: EntityCreateRequest,
         auth_result=Depends(auth.deps.require_permission("entity:create")),
-        session: AsyncSession = Depends(auth.get_session),
+        session: AsyncSession = Depends(auth.session),
     ):
         """Create a new entity in the hierarchy."""
         try:
             from outlabs_auth.models.sql.enums import EntityClass
 
             # Parse entity class
-            entity_class = EntityClass(data.entity_class.upper()) if isinstance(data.entity_class, str) else data.entity_class
+            entity_class = (
+                EntityClass(data.entity_class.upper())
+                if isinstance(data.entity_class, str)
+                else data.entity_class
+            )
 
             entity = await auth.entity_service.create_entity(
                 session=session,
@@ -188,7 +195,9 @@ def get_entities_router(
                 description=data.description,
                 entity_class=entity_class,
                 entity_type=data.entity_type,
-                parent_id=UUID(data.parent_entity_id) if data.parent_entity_id else None,
+                parent_id=UUID(data.parent_entity_id)
+                if data.parent_entity_id
+                else None,
                 status=data.status or "active",
             )
             await session.commit()
@@ -206,7 +215,7 @@ def get_entities_router(
     async def get_entity(
         entity_id: str,
         auth_result=Depends(auth.deps.require_permission("entity:read")),
-        session: AsyncSession = Depends(auth.get_session),
+        session: AsyncSession = Depends(auth.session),
     ):
         """Get entity details by ID."""
         try:
@@ -233,7 +242,7 @@ def get_entities_router(
         entity_id: str,
         data: EntityUpdateRequest,
         auth_result=Depends(auth.deps.require_permission("entity:update")),
-        session: AsyncSession = Depends(auth.get_session),
+        session: AsyncSession = Depends(auth.session),
     ):
         """Update entity details."""
         try:
@@ -259,7 +268,7 @@ def get_entities_router(
         entity_id: str,
         cascade: bool = Query(False, description="Cascade delete children"),
         auth_result=Depends(auth.deps.require_permission("entity:delete")),
-        session: AsyncSession = Depends(auth.get_session),
+        session: AsyncSession = Depends(auth.session),
     ):
         """Delete an entity from the hierarchy."""
         try:
@@ -283,7 +292,7 @@ def get_entities_router(
     async def get_children(
         entity_id: str,
         auth_result=Depends(auth.deps.require_permission("entity:read")),
-        session: AsyncSession = Depends(auth.get_session),
+        session: AsyncSession = Depends(auth.session),
     ):
         """Get all direct children of an entity."""
         try:
@@ -304,7 +313,7 @@ def get_entities_router(
         entity_id: str,
         entity_type: Optional[str] = Query(None, description="Filter by entity type"),
         auth_result=Depends(auth.deps.require_permission("entity:read")),
-        session: AsyncSession = Depends(auth.get_session),
+        session: AsyncSession = Depends(auth.session),
     ):
         """Get all descendant entities (entire subtree)."""
         try:
@@ -328,7 +337,7 @@ def get_entities_router(
     async def get_entity_path(
         entity_id: str,
         auth_result=Depends(auth.deps.require_permission("entity:read")),
-        session: AsyncSession = Depends(auth.get_session),
+        session: AsyncSession = Depends(auth.session),
     ):
         """Get the path from root to this entity."""
         try:
@@ -350,13 +359,14 @@ def get_entities_router(
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=100),
         auth_result=Depends(auth.deps.require_permission("entity:read")),
-        session: AsyncSession = Depends(auth.get_session),
+        session: AsyncSession = Depends(auth.session),
     ):
         """Get all members of an entity."""
         try:
+            from sqlalchemy.orm import selectinload
+
             from outlabs_auth.models.sql.entity_membership import EntityMembership
             from outlabs_auth.models.sql.user import User
-            from sqlalchemy.orm import selectinload
 
             # Get memberships with pagination
             memberships, total = await auth.membership_service.get_entity_members(

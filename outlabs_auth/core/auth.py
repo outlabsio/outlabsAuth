@@ -7,13 +7,13 @@ All features are controlled by configuration flags.
 """
 
 import asyncio
-from typing import Any, Dict, Optional, Type
+from typing import Any, AsyncGenerator, Dict, Optional, Type
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import ConfigurationError
-from outlabs_auth.database import create_engine, create_session_factory, DatabaseConfig
+from outlabs_auth.database import DatabaseConfig, create_engine, create_session_factory
 
 
 class OutlabsAuth:
@@ -114,9 +114,7 @@ class OutlabsAuth:
         """
         # Validate we have either database_url or engine
         if not database_url and not engine:
-            raise ConfigurationError(
-                "Either database_url or engine must be provided"
-            )
+            raise ConfigurationError("Either database_url or engine must be provided")
 
         if not secret_key:
             raise ConfigurationError("secret_key is required")
@@ -259,6 +257,7 @@ class OutlabsAuth:
         # Initialize observability service
         if self.observability_config:
             from outlabs_auth.observability import ObservabilityService
+
             self.observability = ObservabilityService(self.observability_config)
             await self.observability.initialize()
 
@@ -287,10 +286,12 @@ class OutlabsAuth:
     async def _run_migrations(self):
         """Run Alembic migrations to head."""
         from outlabs_auth.cli import run_migrations
+
         await run_migrations(self.config.database_url)
 
     async def _init_services(self):
         """Initialize all services based on configuration."""
+        from outlabs_auth.services.api_key import APIKeyService
         from outlabs_auth.services.auth import AuthService
         from outlabs_auth.services.permission import PermissionService
         from outlabs_auth.services.role import RoleService
@@ -316,6 +317,7 @@ class OutlabsAuth:
         # Initialize Redis client if enabled
         if self.config.redis_enabled and self.config.redis_url:
             from outlabs_auth.services.redis_client import RedisClient
+
             self.redis_client = RedisClient(self.config)
 
         # Entity and membership services for EnterpriseRBAC
@@ -325,8 +327,9 @@ class OutlabsAuth:
             self.membership_service = None
 
         # API Key service
-        # TODO: Update APIKeyService for PostgreSQL
-        # self.api_key_service = APIKeyService(...)
+        self.api_key_service = APIKeyService(
+            self.config, redis_client=self.redis_client
+        )
 
         # Service Token service
         # TODO: Update ServiceTokenService for PostgreSQL
@@ -342,6 +345,7 @@ class OutlabsAuth:
                 )
 
             from outlabs_auth.services.activity_tracker import ActivityTracker
+
             self.activity_tracker = ActivityTracker(
                 redis_client=self.redis_client,
                 enabled=True,
@@ -413,7 +417,7 @@ class OutlabsAuth:
             entity_service=self.entity_service,
             membership_service=self.membership_service,
             activity_tracker=self.activity_tracker,
-            get_session=self.get_session,  # Session factory for PostgreSQL queries
+            get_session=self.session,  # Shared FastAPI session dependency
         )
 
     def get_session(self) -> AsyncSession:
@@ -432,6 +436,29 @@ class OutlabsAuth:
                 "Database not initialized. Call await auth.initialize() first."
             )
         return self._session_factory()
+
+    async def session(self) -> AsyncGenerator[AsyncSession, None]:
+        """
+        FastAPI dependency that yields a database session.
+
+        Prefer this over `Depends(auth.get_session)` so sessions are closed reliably.
+
+        Example:
+            >>> @app.get("/users")
+            >>> async def list_users(session: AsyncSession = Depends(auth.session)):
+            ...     ...
+        """
+        if self._session_factory is None:
+            raise ConfigurationError(
+                "Database not initialized. Call await auth.initialize() first."
+            )
+
+        async with self._session_factory() as session:
+            try:
+                yield session
+            except Exception:
+                await session.rollback()
+                raise
 
     async def get_current_user(self, session: AsyncSession, token: str):
         """
@@ -530,15 +557,20 @@ class OutlabsAuth:
 
     def _start_token_cleanup_scheduler(self):
         """Start background task for token cleanup."""
+
         async def cleanup_loop():
             interval_seconds = self.config.token_cleanup_interval_hours * 3600
 
             while True:
                 try:
                     await asyncio.sleep(interval_seconds)
-                    # TODO: Implement token cleanup for PostgreSQL
-                    # async with self.get_session() as session:
-                    #     stats = await cleanup_expired_tokens(session)
+                    from outlabs_auth.workers.token_cleanup import (
+                        cleanup_expired_refresh_tokens,
+                    )
+
+                    async with self.get_session() as session:
+                        await cleanup_expired_refresh_tokens(session)
+                        await session.commit()
                 except Exception as e:
                     print(f"[TokenCleanup] Error: {e}")
 
@@ -546,6 +578,7 @@ class OutlabsAuth:
 
     def _start_activity_sync_scheduler(self):
         """Start background task for activity tracking sync."""
+
         async def activity_sync_loop():
             interval_seconds = self.config.activity_sync_interval
 
@@ -553,7 +586,11 @@ class OutlabsAuth:
                 try:
                     await asyncio.sleep(interval_seconds)
                     if self.activity_tracker:
-                        stats = await self.activity_tracker.sync_to_database()
+                        async with self.get_session() as session:
+                            stats = await self.activity_tracker.sync_to_database(
+                                session
+                            )
+                            await session.commit()
                         if stats.get("daily", 0) > 0 or stats.get("monthly", 0) > 0:
                             print(
                                 f"[ActivitySync] Synced metrics - "

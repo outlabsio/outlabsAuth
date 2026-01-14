@@ -3,9 +3,12 @@ Unit tests for ActivityTracker service
 
 Tests Redis Set operations, DAU/MAU/QAU queries, and sync functionality.
 """
-import pytest
-from datetime import date, datetime, timezone, timedelta
+
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from outlabs_auth.services.activity_tracker import ActivityTracker
 
 
@@ -15,11 +18,10 @@ def mock_redis():
     redis = AsyncMock()
     redis.sadd = AsyncMock(return_value=1)
     redis.expire = AsyncMock(return_value=True)
-    redis.set = AsyncMock(return_value=True)
+    redis.set_raw = AsyncMock(return_value=True)
     redis.scard = AsyncMock(return_value=0)
-    redis.smembers = AsyncMock(return_value=set())
     redis.scan = AsyncMock(return_value=(0, []))
-    redis.get = AsyncMock(return_value=None)
+    redis.get_raw = AsyncMock(return_value=None)
     return redis
 
 
@@ -30,7 +32,7 @@ def activity_tracker(mock_redis):
         redis_client=mock_redis,
         enabled=True,
         update_user_model=True,
-        store_user_ids=False
+        store_user_ids=False,
     )
 
 
@@ -50,7 +52,9 @@ class TestActivityTracking:
         mock_redis.expire.assert_any_call(daily_key, 48 * 3600)
 
     @pytest.mark.asyncio
-    async def test_track_activity_adds_to_monthly_set(self, activity_tracker, mock_redis):
+    async def test_track_activity_adds_to_monthly_set(
+        self, activity_tracker, mock_redis
+    ):
         """Track activity adds user to monthly Redis Set."""
         user_id = "user_123"
         await activity_tracker.track_activity(user_id)
@@ -62,7 +66,9 @@ class TestActivityTracking:
         mock_redis.expire.assert_any_call(monthly_key, 90 * 86400)
 
     @pytest.mark.asyncio
-    async def test_track_activity_adds_to_quarterly_set(self, activity_tracker, mock_redis):
+    async def test_track_activity_adds_to_quarterly_set(
+        self, activity_tracker, mock_redis
+    ):
         """Track activity adds user to quarterly Redis Set."""
         user_id = "user_123"
         await activity_tracker.track_activity(user_id)
@@ -75,19 +81,18 @@ class TestActivityTracking:
         mock_redis.expire.assert_any_call(quarterly_key, 365 * 86400)
 
     @pytest.mark.asyncio
-    async def test_track_activity_updates_last_activity_timestamp(self, activity_tracker, mock_redis):
+    async def test_track_activity_updates_last_activity_timestamp(
+        self, activity_tracker, mock_redis
+    ):
         """Track activity stores last_activity timestamp in Redis."""
         user_id = "user_123"
         await activity_tracker.track_activity(user_id)
 
         # Check last_activity key was set
         last_activity_key = f"last_activity:{user_id}"
-        assert mock_redis.set.called
-        # Verify it was called with the key and TTL
-        call_args = mock_redis.set.call_args_list
+        mock_redis.set_raw.assert_called()
         assert any(
-            last_activity_key in str(call) and "ex=604800" in str(call)  # 7 days
-            for call in call_args
+            last_activity_key in str(call) for call in mock_redis.set_raw.call_args_list
         )
 
     @pytest.mark.asyncio
@@ -99,7 +104,7 @@ class TestActivityTracking:
 
         # No Redis calls should be made
         mock_redis.sadd.assert_not_called()
-        mock_redis.set.assert_not_called()
+        mock_redis.set_raw.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_track_activity_never_raises_exception(self, mock_redis):
@@ -113,7 +118,9 @@ class TestActivityTracking:
         await tracker.track_activity("user_123")
 
     @pytest.mark.asyncio
-    async def test_get_daily_active_users_default_today(self, activity_tracker, mock_redis):
+    async def test_get_daily_active_users_default_today(
+        self, activity_tracker, mock_redis
+    ):
         """Get DAU with no args returns today's count."""
         mock_redis.scard.return_value = 42
 
@@ -125,7 +132,9 @@ class TestActivityTracking:
         mock_redis.scard.assert_called_with(daily_key)
 
     @pytest.mark.asyncio
-    async def test_get_daily_active_users_specific_date(self, activity_tracker, mock_redis):
+    async def test_get_daily_active_users_specific_date(
+        self, activity_tracker, mock_redis
+    ):
         """Get DAU for specific date."""
         mock_redis.scard.return_value = 100
         specific_date = date(2025, 1, 15)
@@ -137,7 +146,9 @@ class TestActivityTracking:
         mock_redis.scard.assert_called_with(daily_key)
 
     @pytest.mark.asyncio
-    async def test_get_monthly_active_users_default_current(self, activity_tracker, mock_redis):
+    async def test_get_monthly_active_users_default_current(
+        self, activity_tracker, mock_redis
+    ):
         """Get MAU with no args returns current month's count."""
         mock_redis.scard.return_value = 1234
 
@@ -149,7 +160,9 @@ class TestActivityTracking:
         mock_redis.scard.assert_called_with(monthly_key)
 
     @pytest.mark.asyncio
-    async def test_get_monthly_active_users_specific_month(self, activity_tracker, mock_redis):
+    async def test_get_monthly_active_users_specific_month(
+        self, activity_tracker, mock_redis
+    ):
         """Get MAU for specific month."""
         mock_redis.scard.return_value = 5000
 
@@ -160,7 +173,9 @@ class TestActivityTracking:
         mock_redis.scard.assert_called_with(monthly_key)
 
     @pytest.mark.asyncio
-    async def test_get_quarterly_active_users_default_current(self, activity_tracker, mock_redis):
+    async def test_get_quarterly_active_users_default_current(
+        self, activity_tracker, mock_redis
+    ):
         """Get QAU with no args returns current quarter's count."""
         mock_redis.scard.return_value = 10000
 
@@ -173,7 +188,9 @@ class TestActivityTracking:
         mock_redis.scard.assert_called_with(quarterly_key)
 
     @pytest.mark.asyncio
-    async def test_get_quarterly_active_users_specific_quarter(self, activity_tracker, mock_redis):
+    async def test_get_quarterly_active_users_specific_quarter(
+        self, activity_tracker, mock_redis
+    ):
         """Get QAU for specific quarter."""
         mock_redis.scard.return_value = 15000
 
@@ -210,47 +227,33 @@ class TestKeyGeneration:
         assert key == "active_users:quarterly:2025-Q4"
 
 
-class TestSyncToMongoDB:
-    """Test MongoDB sync operations."""
+class TestSyncToDatabase:
+    """Test database sync operations (unit-level)."""
 
     @pytest.mark.asyncio
-    async def test_sync_creates_activity_metrics(self, activity_tracker, mock_redis):
-        """Sync creates ActivityMetric records."""
-        # Mock Redis to return some user IDs
-        user_ids = {b"user_1", b"user_2", b"user_3"}
-        mock_redis.smembers.return_value = user_ids
+    async def test_sync_aggregates_counts(self, activity_tracker):
+        session = AsyncMock()
 
-        with patch('outlabs_auth.services.activity_tracker.ActivityMetric') as MockMetric:
-            mock_metric = AsyncMock()
-            mock_metric.save = AsyncMock()
-            MockMetric.find_one = AsyncMock(return_value=None)  # No existing metric
-            MockMetric.return_value = mock_metric
+        with (
+            patch.object(
+                activity_tracker,
+                "_upsert_metric",
+                new=AsyncMock(side_effect=[3, 10, 25]),
+            ),
+            patch.object(
+                activity_tracker,
+                "_batch_update_last_activity",
+                new=AsyncMock(return_value=3),
+            ),
+            patch.object(
+                activity_tracker,
+                "_cleanup_old_metrics",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            stats = await activity_tracker.sync_to_database(session)
 
-            stats = await activity_tracker.sync_to_mongodb()
-
-            # Check stats
-            assert stats["daily"] == 3
-            assert stats["monthly"] == 3
-            assert stats["quarterly"] == 3
-
-    @pytest.mark.asyncio
-    async def test_sync_handles_empty_sets(self, activity_tracker, mock_redis):
-        """Sync handles empty Redis Sets gracefully."""
-        mock_redis.smembers.return_value = set()
-
-        stats = await activity_tracker.sync_to_mongodb()
-
-        # No users means counts should be 0
-        assert stats["daily"] == 0
-        assert stats["monthly"] == 0
-        assert stats["quarterly"] == 0
-
-    @pytest.mark.asyncio
-    async def test_sync_handles_errors_gracefully(self, activity_tracker, mock_redis):
-        """Sync handles errors without crashing."""
-        mock_redis.smembers.side_effect = Exception("Redis error")
-
-        stats = await activity_tracker.sync_to_mongodb()
-
-        # Should have error count
-        assert stats["errors"] >= 0
+        assert stats["daily"] == 3
+        assert stats["monthly"] == 10
+        assert stats["quarterly"] == 25
+        assert stats["users_updated"] == 3

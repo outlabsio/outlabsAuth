@@ -4,15 +4,18 @@ Redis Client Manager
 Handles Redis connections with graceful fallback when Redis is unavailable.
 Provides caching operations with automatic serialization/deserialization.
 """
-from typing import Optional, Any, List
+
 import json
 import logging
 from datetime import timedelta
+from typing import Any, List, Optional
 
 try:
     import redis.asyncio as redis
     from redis.asyncio import Redis
-    from redis.exceptions import RedisError, ConnectionError as RedisConnectionError
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from redis.exceptions import RedisError
+
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
@@ -81,7 +84,9 @@ class RedisClient:
             # Test connection
             await self._client.ping()
             self._available = True
-            logger.info(f"Connected to Redis at {self.config.redis_host}:{self.config.redis_port}")
+            logger.info(
+                f"Connected to Redis at {self.config.redis_host}:{self.config.redis_port}"
+            )
             return True
 
         except (RedisConnectionError, RedisError) as e:
@@ -100,6 +105,74 @@ class RedisClient:
     def is_available(self) -> bool:
         """Check if Redis is available."""
         return self._available
+
+    # Low-level Redis passthroughs (used by activity tracking, etc.)
+
+    async def sadd(self, key: str, *members: str) -> int:
+        if not self._available or not self._client:
+            return 0
+        try:
+            return int(await self._client.sadd(key, *members))
+        except RedisError:
+            return 0
+
+    async def scard(self, key: str) -> int:
+        if not self._available or not self._client:
+            return 0
+        try:
+            return int(await self._client.scard(key))
+        except RedisError:
+            return 0
+
+    async def smembers(self, key: str) -> set[str]:
+        if not self._available or not self._client:
+            return set()
+        try:
+            members = await self._client.smembers(key)
+            return set(members) if members else set()
+        except RedisError:
+            return set()
+
+    async def expire(self, key: str, seconds: int) -> bool:
+        if not self._available or not self._client:
+            return False
+        try:
+            return bool(await self._client.expire(key, seconds))
+        except RedisError:
+            return False
+
+    async def set_raw(self, key: str, value: str, ttl: Optional[int] = None) -> bool:
+        if not self._available or not self._client:
+            return False
+        try:
+            if ttl is not None:
+                await self._client.setex(key, ttl, value)
+            else:
+                await self._client.set(key, value)
+            return True
+        except RedisError:
+            return False
+
+    async def get_raw(self, key: str) -> Optional[str]:
+        if not self._available or not self._client:
+            return None
+        try:
+            return await self._client.get(key)
+        except RedisError:
+            return None
+
+    async def scan(
+        self, cursor: int = 0, match: Optional[str] = None, count: int = 100
+    ) -> tuple[int, list[str]]:
+        if not self._available or not self._client:
+            return 0, []
+        try:
+            next_cursor, keys = await self._client.scan(
+                cursor=cursor, match=match, count=count
+            )
+            return int(next_cursor), list(keys) if keys else []
+        except RedisError:
+            return 0, []
 
     # Cache Operations
 
@@ -125,12 +198,7 @@ class RedisClient:
             logger.debug(f"Cache get failed for {key}: {e}")
             return None
 
-    async def set(
-        self,
-        key: str,
-        value: Any,
-        ttl: Optional[int] = None
-    ) -> bool:
+    async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
         """
         Set value in cache.
 
@@ -334,10 +402,7 @@ class RedisClient:
             return 0
 
     async def increment_with_ttl(
-        self,
-        key: str,
-        amount: int = 1,
-        ttl: Optional[int] = None
+        self, key: str, amount: int = 1, ttl: Optional[int] = None
     ) -> Optional[int]:
         """
         Increment counter and set TTL if it's a new key.
