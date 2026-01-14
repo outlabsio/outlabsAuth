@@ -1,7 +1,7 @@
 [project]
 name = "outlabs-auth"
 version = "1.0.0"
-description = "FastAPI authentication and authorization library with hierarchical RBAC, tree permissions, and multi-tenant support"
+description = "FastAPI authentication and authorization library with RBAC. SimpleRBAC for flat role-based access control (production-ready). EnterpriseRBAC with hierarchical permissions (beta)."
 authors = [
     {name = "Outlabs", email = "contact@outlabs.io"}
 ]
