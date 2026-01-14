@@ -3,9 +3,12 @@ Policy Evaluation Engine for ABAC (Attribute-Based Access Control)
 
 This engine evaluates conditions against a context to determine if access should be granted.
 """
+
+import json
 import re
-from datetime import datetime
-from typing import Any, Dict, Optional, List
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Mapping, Optional
+
 from dateutil import parser as date_parser
 
 from outlabs_auth.models.sql.condition import Condition, ConditionGroup
@@ -73,15 +76,11 @@ class PolicyEvaluationEngine:
 
         # Evaluate based on operator
         return self._evaluate_operator(
-            attribute_value,
-            condition.operator,
-            condition.value
+            attribute_value, condition.operator, condition.value
         )
 
     def evaluate_condition_group(
-        self,
-        condition_group: ConditionGroup,
-        context: Dict[str, Any]
+        self, condition_group: ConditionGroup, context: Dict[str, Any]
     ) -> bool:
         """
         Evaluate a group of conditions with AND/OR logic.
@@ -109,9 +108,7 @@ class PolicyEvaluationEngine:
             raise ValueError(f"Unknown logical operator: {condition_group.operator}")
 
     def evaluate_conditions(
-        self,
-        conditions: List[Condition],
-        context: Dict[str, Any]
+        self, conditions: List[Condition], context: Dict[str, Any]
     ) -> bool:
         """
         Evaluate a list of conditions (AND logic).
@@ -127,8 +124,7 @@ class PolicyEvaluationEngine:
             return True  # No conditions means always pass
 
         return all(
-            self.evaluate_condition(condition, context)
-            for condition in conditions
+            self.evaluate_condition(condition, context) for condition in conditions
         )
 
     def _get_attribute_value(self, attribute_path: str, context: Dict[str, Any]) -> Any:
@@ -156,10 +152,7 @@ class PolicyEvaluationEngine:
         return current
 
     def _evaluate_operator(
-        self,
-        attribute_value: Any,
-        operator: ConditionOperator,
-        expected_value: Any
+        self, attribute_value: Any, operator: ConditionOperator, expected_value: Any
     ) -> bool:
         """
         Evaluate a comparison operator.
@@ -181,33 +174,57 @@ class PolicyEvaluationEngine:
 
         # Numeric comparisons
         if operator == ConditionOperator.LESS_THAN:
-            return self._compare_numeric(attribute_value, expected_value, lambda a, b: a < b)
+            return self._compare_numeric(
+                attribute_value, expected_value, lambda a, b: a < b
+            )
 
         if operator == ConditionOperator.LESS_THAN_OR_EQUAL:
-            return self._compare_numeric(attribute_value, expected_value, lambda a, b: a <= b)
+            return self._compare_numeric(
+                attribute_value, expected_value, lambda a, b: a <= b
+            )
 
         if operator == ConditionOperator.GREATER_THAN:
-            return self._compare_numeric(attribute_value, expected_value, lambda a, b: a > b)
+            return self._compare_numeric(
+                attribute_value, expected_value, lambda a, b: a > b
+            )
 
         if operator == ConditionOperator.GREATER_THAN_OR_EQUAL:
-            return self._compare_numeric(attribute_value, expected_value, lambda a, b: a >= b)
+            return self._compare_numeric(
+                attribute_value, expected_value, lambda a, b: a >= b
+            )
 
         # Collection operations
         if operator == ConditionOperator.IN:
             # Check if attribute_value is in the expected_value list
-            return attribute_value in expected_value if isinstance(expected_value, list) else False
+            return (
+                attribute_value in expected_value
+                if isinstance(expected_value, list)
+                else False
+            )
 
         if operator == ConditionOperator.NOT_IN:
             # Check if attribute_value is NOT in the expected_value list
-            return attribute_value not in expected_value if isinstance(expected_value, list) else True
+            return (
+                attribute_value not in expected_value
+                if isinstance(expected_value, list)
+                else True
+            )
 
         if operator == ConditionOperator.CONTAINS:
             # Check if attribute_value (list) contains expected_value
-            return expected_value in attribute_value if isinstance(attribute_value, (list, tuple, set)) else False
+            return (
+                expected_value in attribute_value
+                if isinstance(attribute_value, (list, tuple, set))
+                else False
+            )
 
         if operator == ConditionOperator.NOT_CONTAINS:
             # Check if attribute_value (list) does NOT contain expected_value
-            return expected_value not in attribute_value if isinstance(attribute_value, (list, tuple, set)) else True
+            return (
+                expected_value not in attribute_value
+                if isinstance(attribute_value, (list, tuple, set))
+                else True
+            )
 
         # String operations
         if operator == ConditionOperator.STARTS_WITH:
@@ -226,10 +243,14 @@ class PolicyEvaluationEngine:
 
         # Time-based operations
         if operator == ConditionOperator.BEFORE:
-            return self._compare_datetime(attribute_value, expected_value, lambda a, b: a < b)
+            return self._compare_datetime(
+                attribute_value, expected_value, lambda a, b: a < b
+            )
 
         if operator == ConditionOperator.AFTER:
-            return self._compare_datetime(attribute_value, expected_value, lambda a, b: a > b)
+            return self._compare_datetime(
+                attribute_value, expected_value, lambda a, b: a > b
+            )
 
         # Unknown operator
         raise ValueError(f"Unknown operator: {operator}")
@@ -279,7 +300,7 @@ class PolicyEvaluationEngine:
         user: Optional[Dict[str, Any]] = None,
         resource: Optional[Dict[str, Any]] = None,
         env: Optional[Dict[str, Any]] = None,
-        time_attrs: Optional[Dict[str, Any]] = None
+        time_attrs: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Create a context dictionary for evaluation.
@@ -306,7 +327,7 @@ class PolicyEvaluationEngine:
 
         # Add time attributes (auto-generate if not provided)
         if time_attrs is None:
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             time_attrs = {
                 "hour": now.hour,
                 "minute": now.minute,
@@ -316,17 +337,110 @@ class PolicyEvaluationEngine:
                 "year": now.year,
                 "is_business_hours": 9 <= now.hour < 17,
                 "is_weekend": now.weekday() >= 5,
-                "timestamp": now.isoformat()
+                "timestamp": now.isoformat(),
             }
         context["time"] = time_attrs
 
         return context
 
-    def add_user_context(
+    def evaluate_sql_conditions(
         self,
+        *,
+        conditions: List[Any],
+        group_ops: Mapping[Optional[str], str],
         context: Dict[str, Any],
-        user_id: str,
-        user_attributes: Dict[str, Any]
+    ) -> bool:
+        """
+        Evaluate SQL-backed RoleCondition / PermissionCondition records.
+
+        Semantics:
+        - conditions without `condition_group_id` are AND-ed together.
+        - conditions within a group are combined using the group's operator (AND/OR).
+        - all groups are AND-ed together.
+        """
+        if not conditions:
+            return True
+
+        grouped: Dict[Optional[str], List[Any]] = {}
+        for cond in conditions:
+            grouped.setdefault(
+                str(getattr(cond, "condition_group_id", None))
+                if getattr(cond, "condition_group_id", None)
+                else None,
+                [],
+            ).append(cond)
+
+        # Ungrouped conditions are always AND-ed
+        ungrouped = grouped.pop(None, [])
+        for cond in ungrouped:
+            if not self.evaluate_condition(
+                Condition(
+                    attribute=cond.attribute,
+                    operator=cond.operator,
+                    value=self._parse_value(
+                        cond.value, getattr(cond, "value_type", "string")
+                    ),
+                ),
+                context,
+            ):
+                return False
+
+        # Grouped conditions
+        for group_id, conds in grouped.items():
+            op = (group_ops.get(group_id) or "AND").upper()
+            results: List[bool] = []
+            for cond in conds:
+                results.append(
+                    self.evaluate_condition(
+                        Condition(
+                            attribute=cond.attribute,
+                            operator=cond.operator,
+                            value=self._parse_value(
+                                cond.value, getattr(cond, "value_type", "string")
+                            ),
+                        ),
+                        context,
+                    )
+                )
+
+            if op == "AND":
+                if not all(results):
+                    return False
+            elif op == "OR":
+                if not any(results):
+                    return False
+            else:
+                raise ValueError(f"Unknown logical operator: {op}")
+
+        return True
+
+    def _parse_value(self, raw: Any, value_type: str) -> Any:
+        if raw is None:
+            return None
+
+        vt = (value_type or "string").lower()
+        if vt == "string":
+            return str(raw)
+        if vt == "integer":
+            return int(raw)
+        if vt == "float":
+            return float(raw)
+        if vt == "boolean":
+            if isinstance(raw, bool):
+                return raw
+            return str(raw).lower() in ("1", "true", "yes", "y", "on")
+        if vt == "list":
+            if isinstance(raw, list):
+                return raw
+            try:
+                parsed = json.loads(str(raw))
+                return parsed if isinstance(parsed, list) else [parsed]
+            except Exception:
+                return [raw]
+        return raw
+
+    def add_user_context(
+        self, context: Dict[str, Any], user_id: str, user_attributes: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
         Add user attributes to context.
@@ -339,10 +453,7 @@ class PolicyEvaluationEngine:
         Returns:
             Updated context
         """
-        context["user"] = {
-            "id": user_id,
-            **user_attributes
-        }
+        context["user"] = {"id": user_id, **user_attributes}
         return context
 
     def add_resource_context(
@@ -350,7 +461,7 @@ class PolicyEvaluationEngine:
         context: Dict[str, Any],
         resource_id: str,
         resource_type: str,
-        resource_attributes: Dict[str, Any]
+        resource_attributes: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
         Add resource attributes to context.
@@ -367,6 +478,6 @@ class PolicyEvaluationEngine:
         context["resource"] = {
             "id": resource_id,
             "type": resource_type,
-            **resource_attributes
+            **resource_attributes,
         }
         return context

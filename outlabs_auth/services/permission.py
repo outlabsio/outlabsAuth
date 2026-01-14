@@ -7,7 +7,7 @@ Handles permission checking and management with PostgreSQL/SQLAlchemy:
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 from uuid import UUID
 
 from sqlalchemy import or_, select
@@ -29,10 +29,12 @@ from outlabs_auth.models.sql.permission import (
     PermissionTag,
     PermissionTagLink,
 )
+from outlabs_auth.models.sql.role import ConditionGroup as SqlConditionGroup
 from outlabs_auth.models.sql.role import Role, RolePermission
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
 from outlabs_auth.services.base import BaseService
+from outlabs_auth.services.policy_engine import PolicyEvaluationEngine
 from outlabs_auth.utils.validation import validate_permission_name
 
 
@@ -73,6 +75,9 @@ class PermissionService(BaseService[Permission]):
         user_id: UUID,
         permission: str,
         entity_id: Optional[UUID] = None,
+        resource_context: Optional[Dict[str, Any]] = None,
+        env_context: Optional[Dict[str, Any]] = None,
+        time_attrs: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Check if user has a specific permission.
@@ -109,15 +114,50 @@ class PermissionService(BaseService[Permission]):
             )
             return True
 
-        # Get global (non-entity scoped) permissions
-        user_permissions = set(await self.get_user_permissions(session, user_id))
+        abac_enabled = bool(getattr(self.config, "enable_abac", False))
+        engine: Optional[PolicyEvaluationEngine] = (
+            PolicyEvaluationEngine() if abac_enabled else None
+        )
+        context: Optional[Dict[str, Any]] = None
+        if abac_enabled:
+            context = engine.create_context(
+                user={
+                    "id": str(user.id),
+                    "email": user.email,
+                    "status": getattr(user.status, "value", user.status),
+                    "timezone": user.timezone,
+                    "locale": user.locale,
+                    "is_superuser": user.is_superuser,
+                },
+                resource=resource_context,
+                env=env_context,
+                time_attrs=time_attrs,
+            )
+            if entity_id is not None:
+                context.setdefault("resource", {})
+                if isinstance(context["resource"], dict):
+                    context["resource"].setdefault("entity_id", str(entity_id))
 
         # Global checks
-        if self._permission_set_allows(permission, user_permissions):
-            self._log_permission_check(
-                user_id, permission, "granted", start_time, "global_match"
-            )
-            return True
+        if not abac_enabled:
+            user_permissions = set(await self.get_user_permissions(session, user_id))
+            if self._permission_set_allows(permission, user_permissions):
+                self._log_permission_check(
+                    user_id, permission, "granted", start_time, "global_match"
+                )
+                return True
+        else:
+            if await self._check_permission_via_user_roles_with_abac(
+                session=session,
+                user_id=user_id,
+                permission=permission,
+                context=context or {},
+                engine=engine,
+            ):
+                self._log_permission_check(
+                    user_id, permission, "granted", start_time, "global_match_abac"
+                )
+                return True
 
         # Optional EnterpriseRBAC check in an entity context
         if entity_id is not None:
@@ -126,6 +166,8 @@ class PermissionService(BaseService[Permission]):
                 user_id=user_id,
                 permission=permission,
                 entity_id=entity_id,
+                context=context,
+                engine=engine,
             ):
                 self._log_permission_check(
                     user_id, permission, "granted", start_time, "entity_match"
@@ -225,6 +267,8 @@ class PermissionService(BaseService[Permission]):
         user_id: UUID,
         permission: str,
         entity_id: UUID,
+        context: Optional[Dict[str, Any]] = None,
+        engine: Optional[PolicyEvaluationEngine] = None,
     ) -> bool:
         """
         EnterpriseRBAC permission evaluation:
@@ -247,7 +291,8 @@ class PermissionService(BaseService[Permission]):
         memberships_stmt = (
             select(EntityMembership)
             .options(
-                selectinload(EntityMembership.roles).selectinload(Role.permissions)
+                selectinload(EntityMembership.roles).selectinload(Role.permissions),
+                selectinload(EntityMembership.roles).selectinload(Role.conditions),
             )
             .where(
                 EntityMembership.user_id == user_id,
@@ -266,17 +311,139 @@ class PermissionService(BaseService[Permission]):
             if membership_depth is None:
                 continue
 
-            granted: Set[str] = set()
             for role in membership.roles:
-                if role and role.permissions:
-                    granted.update(p.name for p in role.permissions)
+                if not role:
+                    continue
 
-            if membership_depth == 0:
-                if self._permission_set_allows(permission, granted):
-                    return True
-            else:
-                if self._permission_set_allows_from_ancestor(permission, granted):
-                    return True
+                granted = set(p.name for p in (role.permissions or []))
+
+                is_match = (
+                    self._permission_set_allows(permission, granted)
+                    if membership_depth == 0
+                    else self._permission_set_allows_from_ancestor(permission, granted)
+                )
+                if not is_match:
+                    continue
+
+                if engine and context is not None:
+                    if not await self._abac_allows_role_and_permission(
+                        session=session,
+                        role=role,
+                        required_permission=permission,
+                        context=context,
+                        engine=engine,
+                    ):
+                        continue
+
+                return True
+
+        return False
+
+    async def _check_permission_via_user_roles_with_abac(
+        self,
+        *,
+        session: AsyncSession,
+        user_id: UUID,
+        permission: str,
+        context: Dict[str, Any],
+        engine: PolicyEvaluationEngine,
+    ) -> bool:
+        stmt = (
+            select(UserRoleMembership)
+            .options(
+                selectinload(UserRoleMembership.role).selectinload(Role.permissions),
+                selectinload(UserRoleMembership.role).selectinload(Role.conditions),
+            )
+            .where(
+                UserRoleMembership.user_id == user_id,
+                UserRoleMembership.status == MembershipStatus.ACTIVE,
+            )
+        )
+        result = await session.execute(stmt)
+        memberships = result.scalars().all()
+
+        for membership in memberships:
+            if not membership.can_grant_permissions():
+                continue
+
+            role = membership.role
+            if not role:
+                continue
+
+            granted = set(p.name for p in (role.permissions or []))
+            if not self._permission_set_allows(permission, granted):
+                continue
+
+            if not await self._abac_allows_role_and_permission(
+                session=session,
+                role=role,
+                required_permission=permission,
+                context=context,
+                engine=engine,
+            ):
+                continue
+
+            return True
+
+        return False
+
+    async def _abac_allows_role_and_permission(
+        self,
+        *,
+        session: AsyncSession,
+        role: Role,
+        required_permission: str,
+        context: Dict[str, Any],
+        engine: PolicyEvaluationEngine,
+    ) -> bool:
+        role_conditions = getattr(role, "conditions", []) or []
+
+        perm_stmt = (
+            select(Permission)
+            .options(selectinload(Permission.conditions))
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .where(RolePermission.role_id == role.id)
+        )
+        perm_result = await session.execute(perm_stmt)
+        perms = perm_result.scalars().all()
+
+        matching_perms = [
+            p
+            for p in perms
+            if p and self._permission_set_allows(required_permission, {p.name})
+        ]
+        if not matching_perms:
+            return False
+
+        group_ids: Set[UUID] = set()
+        for cond in role_conditions:
+            if getattr(cond, "condition_group_id", None):
+                group_ids.add(cond.condition_group_id)
+        for p in matching_perms:
+            for cond in p.conditions or []:
+                if getattr(cond, "condition_group_id", None):
+                    group_ids.add(cond.condition_group_id)
+
+        group_ops: Dict[Optional[str], str] = {}
+        if group_ids:
+            groups_stmt = select(SqlConditionGroup).where(
+                SqlConditionGroup.id.in_(list(group_ids))
+            )
+            groups_result = await session.execute(groups_stmt)
+            groups = groups_result.scalars().all()
+            for g in groups:
+                group_ops[str(g.id)] = g.operator
+
+        if not engine.evaluate_sql_conditions(
+            conditions=role_conditions, group_ops=group_ops, context=context
+        ):
+            return False
+
+        for p in matching_perms:
+            if engine.evaluate_sql_conditions(
+                conditions=(p.conditions or []), group_ops=group_ops, context=context
+            ):
+                return True
 
         return False
 

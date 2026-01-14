@@ -19,7 +19,9 @@ class _PermissionServiceStub:
         self.result = result
         self.calls = []
 
-    async def check_permission(self, session, *, user_id, permission, entity_id=None):
+    async def check_permission(
+        self, session, *, user_id, permission, entity_id=None, **kwargs
+    ):
         self.calls.append(
             {"user_id": user_id, "permission": permission, "entity_id": entity_id}
         )

@@ -173,6 +173,16 @@ class AuthDeps:
                 )
 
             entity_id = _parse_entity_context_id(request)
+            resource_context = getattr(request.state, "resource_context", None)
+            resource_context = (
+                resource_context if isinstance(resource_context, dict) else None
+            )
+            env_context = {
+                "method": request.method,
+                "path": request.url.path,
+                "client_host": request.client.host if request.client else None,
+                "user_agent": request.headers.get("user-agent"),
+            }
 
             if require_all:
                 for perm in permissions:
@@ -181,6 +191,8 @@ class AuthDeps:
                         user_id=user_id_uuid,
                         permission=perm,
                         entity_id=entity_id,
+                        resource_context=resource_context,
+                        env_context=env_context,
                     )
                     if not has_perm:
                         raise HTTPException(
@@ -195,6 +207,8 @@ class AuthDeps:
                         user_id=user_id_uuid,
                         permission=perm,
                         entity_id=entity_id,
+                        resource_context=resource_context,
+                        env_context=env_context,
                     ):
                         has_any = True
                         break
@@ -284,12 +298,24 @@ class AuthDeps:
                 raw_entity_id = request.headers.get("X-Entity-Context")
 
             entity_id = _parse_uuid(raw_entity_id, detail="Entity ID is required")
+            resource_context = getattr(request.state, "resource_context", None)
+            resource_context = (
+                resource_context if isinstance(resource_context, dict) else None
+            )
+            env_context = {
+                "method": request.method,
+                "path": request.url.path,
+                "client_host": request.client.host if request.client else None,
+                "user_agent": request.headers.get("user-agent"),
+            }
 
             has_perm = await permission_service.check_permission(
                 session,
                 user_id=user_id_uuid,
                 permission=permission,
                 entity_id=entity_id,
+                resource_context=resource_context,
+                env_context=env_context,
             )
             if not has_perm:
                 raise HTTPException(
@@ -417,11 +443,24 @@ class AuthDeps:
                 else permission
             )
 
+            resource_context = getattr(request.state, "resource_context", None)
+            resource_context = (
+                resource_context if isinstance(resource_context, dict) else None
+            )
+            env_context = {
+                "method": request.method,
+                "path": request.url.path,
+                "client_host": request.client.host if request.client else None,
+                "user_agent": request.headers.get("user-agent"),
+            }
+
             has_perm = await permission_service.check_permission(
                 session,
                 user_id=user_id_uuid,
                 permission=required_permission,
                 entity_id=entity_id,
+                resource_context=resource_context,
+                env_context=env_context,
             )
             if not has_perm:
                 raise HTTPException(
