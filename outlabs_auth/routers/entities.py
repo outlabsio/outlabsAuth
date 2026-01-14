@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.schemas.entity import (
     EntityCreateRequest,
+    EntityMoveRequest,
     EntityResponse,
     EntityUpdateRequest,
     MemberResponse,
@@ -232,6 +233,45 @@ def get_entities_router(
             session=session,
             entity_id=entity_id,
             **updates,
+        )
+        return _entity_to_response(entity)
+
+    @router.post(
+        "/{entity_id}/move",
+        response_model=EntityResponse,
+        summary="Move entity",
+        description="Re-parent an entity (requires entity:update permission on entity, and entity:create permission on new parent if provided)",
+    )
+    async def move_entity(
+        entity_id: UUID,
+        data: EntityMoveRequest,
+        auth_result=Depends(
+            auth.require_entity_permission("entity:update", "entity_id")
+        ),
+        session: AsyncSession = Depends(auth.uow),
+    ):
+        new_parent_id = UUID(data.new_parent_id) if data.new_parent_id else None
+
+        # If moving under a new parent, require permission to create under that parent
+        # (tree permissions from ancestors apply automatically via the closure table).
+        if new_parent_id is not None:
+            user_id = UUID(auth_result["user_id"])
+            has_create = await auth.permission_service.check_permission(
+                session,
+                user_id=user_id,
+                permission="entity:create",
+                entity_id=new_parent_id,
+            )
+            if not has_create:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Insufficient permissions",
+                )
+
+        entity = await auth.entity_service.move_entity(
+            session=session,
+            entity_id=entity_id,
+            new_parent_id=new_parent_id,
         )
         return _entity_to_response(entity)
 

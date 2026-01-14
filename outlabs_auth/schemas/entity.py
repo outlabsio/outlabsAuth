@@ -64,6 +64,12 @@ class EntityUpdateRequest(BaseModel):
     max_members: Optional[int] = None
 
 
+class EntityMoveRequest(BaseModel):
+    """Entity move (re-parent) request schema."""
+
+    new_parent_id: Optional[str] = None
+
+
 class MemberResponse(BaseModel):
     """Entity member response schema."""
 
