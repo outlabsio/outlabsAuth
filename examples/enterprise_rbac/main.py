@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from models import Lead, LeadNote
 from pydantic import BaseModel, Field
@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import SQLModel
 
 from outlabs_auth import EnterpriseRBAC
+from outlabs_auth.middleware.resource_context import ResourceContextMiddleware
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.observability import ObservabilityPresets
 from outlabs_auth.routers import (
@@ -282,6 +283,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Resource context middleware for ABAC (must be added at module level, before app starts)
+app.add_middleware(ResourceContextMiddleware)
+
 
 # ============================================================================
 # Helper Functions
@@ -293,6 +297,12 @@ def get_auth() -> EnterpriseRBAC:
     if auth is None:
         raise HTTPException(status_code=500, detail="Auth not initialized")
     return auth
+
+
+async def get_session(request: Request):
+    """Get database session from auth.uow"""
+    async for session in get_auth().uow(request):
+        yield session
 
 
 def _lead_to_response(lead: Lead) -> LeadResponse:
@@ -322,6 +332,39 @@ def _lead_to_response(lead: Lead) -> LeadResponse:
 # ============================================================================
 
 
+async def require_lead_create(
+    request: Request, session: AsyncSession = Depends(get_session)
+):
+    """Dependency for lead:create permission in entity context."""
+    # Use require_entity_permission which reads X-Entity-Context header
+    dep_fn = get_auth().deps.require_entity_permission("lead:create")
+    return await dep_fn(request=request, session=session)
+
+
+async def require_lead_read(
+    request: Request, session: AsyncSession = Depends(get_session)
+):
+    """Dependency for lead:read permission"""
+    dep_fn = get_auth().deps.require_permission("lead:read")
+    return await dep_fn(request=request, session=session)
+
+
+async def require_lead_update(
+    request: Request, session: AsyncSession = Depends(get_session)
+):
+    """Dependency for lead:update permission"""
+    dep_fn = get_auth().deps.require_permission("lead:update")
+    return await dep_fn(request=request, session=session)
+
+
+async def require_lead_delete(
+    request: Request, session: AsyncSession = Depends(get_session)
+):
+    """Dependency for lead:delete permission"""
+    dep_fn = get_auth().deps.require_permission("lead:delete")
+    return await dep_fn(request=request, session=session)
+
+
 @app.post(
     "/v1/leads",
     response_model=LeadResponse,
@@ -331,8 +374,9 @@ def _lead_to_response(lead: Lead) -> LeadResponse:
 )
 async def create_lead(
     data: LeadCreateRequest,
-    auth_result=Depends(lambda: get_auth().deps.require_permission("lead:create")),
-    session: AsyncSession = Depends(lambda: get_auth().uow),
+    request: Request,
+    auth_result: dict = Depends(require_lead_create),
+    session: AsyncSession = Depends(get_session),
 ):
     """
     Create a new lead.
@@ -367,14 +411,15 @@ async def create_lead(
 
 @app.get("/v1/leads", response_model=dict, tags=["Leads"], summary="List leads")
 async def list_leads(
+    request: Request,
     entity_id: Optional[str] = Query(None, description="Filter by entity"),
     lead_status: Optional[str] = Query(None, description="Filter by status"),
     lead_type: Optional[str] = Query(None, description="Filter by type"),
     assigned_to: Optional[str] = Query(None, description="Filter by agent"),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
-    auth_result=Depends(lambda: get_auth().deps.require_permission("lead:read")),
-    session: AsyncSession = Depends(lambda: get_auth().uow),
+    auth_result: dict = Depends(require_lead_read),
+    session: AsyncSession = Depends(get_session),
 ):
     """
     List leads.
@@ -426,8 +471,9 @@ async def list_leads(
 )
 async def get_lead(
     lead_id: str,
-    auth_result=Depends(lambda: get_auth().deps.require_permission("lead:read")),
-    session: AsyncSession = Depends(lambda: get_auth().uow),
+    request: Request,
+    auth_result: dict = Depends(require_lead_read),
+    session: AsyncSession = Depends(get_session),
 ):
     """
     Get lead details.
@@ -452,8 +498,9 @@ async def get_lead(
 async def update_lead(
     lead_id: str,
     data: LeadUpdateRequest,
-    auth_result=Depends(lambda: get_auth().deps.require_permission("lead:update")),
-    session: AsyncSession = Depends(lambda: get_auth().uow),
+    request: Request,
+    auth_result: dict = Depends(require_lead_update),
+    session: AsyncSession = Depends(get_session),
 ):
     """
     Update lead.
@@ -489,8 +536,9 @@ async def update_lead(
 )
 async def delete_lead(
     lead_id: str,
-    auth_result=Depends(lambda: get_auth().deps.require_permission("lead:delete")),
-    session: AsyncSession = Depends(lambda: get_auth().uow),
+    request: Request,
+    auth_result: dict = Depends(require_lead_delete),
+    session: AsyncSession = Depends(get_session),
 ):
     """
     Delete lead.

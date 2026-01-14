@@ -6,6 +6,7 @@ signature that includes all configured auth transports so they show up in
 OpenAPI/Swagger.
 """
 
+import inspect
 from inspect import Parameter, Signature
 from typing import Any, Callable, Optional, Sequence
 from uuid import UUID
@@ -100,7 +101,12 @@ class AuthDeps:
         return dependency
 
     def require_permission(
-        self, *permissions: str, require_all: bool = False
+        self,
+        *permissions: str,
+        require_all: bool = False,
+        resource_context_provider: Optional[
+            Callable[[Request, AsyncSession, dict], Any]
+        ] = None,
     ) -> Callable:
         signature = self._get_dependency_signature()
 
@@ -173,10 +179,28 @@ class AuthDeps:
                 )
 
             entity_id = _parse_entity_context_id(request)
-            resource_context = getattr(request.state, "resource_context", None)
-            resource_context = (
-                resource_context if isinstance(resource_context, dict) else None
+            request_resource_context = getattr(request.state, "resource_context", None)
+            request_resource_context = (
+                request_resource_context
+                if isinstance(request_resource_context, dict)
+                else None
             )
+
+            resource_context: Optional[dict] = None
+            if resource_context_provider is not None:
+                maybe_context = resource_context_provider(request, session, auth_result)
+                if inspect.isawaitable(maybe_context):
+                    maybe_context = await maybe_context
+                if isinstance(maybe_context, dict):
+                    # Provider takes precedence over request-provided context (e.g. header middleware).
+                    resource_context = (
+                        {**request_resource_context, **maybe_context}
+                        if request_resource_context
+                        else maybe_context
+                    )
+            else:
+                resource_context = request_resource_context
+
             env_context = {
                 "method": request.method,
                 "path": request.url.path,

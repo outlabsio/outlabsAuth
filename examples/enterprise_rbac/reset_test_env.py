@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 # Import domain models
 from models import Lead, LeadNote
 from sqlalchemy import select, text
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlmodel import SQLModel
@@ -43,7 +44,7 @@ from outlabs_auth import (
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.models.sql.entity_membership import EntityMembershipRole
 from outlabs_auth.models.sql.enums import EntityClass
-from outlabs_auth.models.sql.role import RoleCondition, RolePermission
+from outlabs_auth.models.sql.role import RolePermission
 from outlabs_auth.utils.password import generate_password_hash
 
 # Configuration
@@ -53,9 +54,39 @@ DATABASE_URL = os.getenv(
 )
 
 
+async def _ensure_database_exists(database_url: str) -> None:
+    url = make_url(database_url)
+    if url.get_backend_name() != "postgresql":
+        return
+
+    db_name = url.database
+    if not db_name:
+        return
+
+    if not all(c.isalnum() or c == "_" for c in db_name):
+        raise RuntimeError(f"Unsafe database name in DATABASE_URL: {db_name!r}")
+
+    admin_url = url.set(database="postgres")
+    admin_engine = create_async_engine(
+        admin_url, echo=False, isolation_level="AUTOCOMMIT"
+    )
+    try:
+        async with admin_engine.connect() as conn:
+            exists = await conn.execute(
+                text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                {"name": db_name},
+            )
+            if exists.scalar_one_or_none() is None:
+                await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    finally:
+        await admin_engine.dispose()
+
+
 async def reset_database():
     """Reset database to clean test state using SQLAlchemy."""
     print("Connecting to PostgreSQL...")
+
+    await _ensure_database_exists(DATABASE_URL)
 
     # Create engine
     engine = create_async_engine(DATABASE_URL, echo=False)
@@ -639,25 +670,13 @@ async def reset_database():
         # --------------------------------------------------------------------
         # ABAC demo conditions
         # --------------------------------------------------------------------
-        # Demonstrates ABAC is wired into permission checks. The example app also
-        # enables ABAC and accepts X-Resource-Context for resource.* attributes.
-        print("Adding ABAC demo conditions...")
-        agent_role = roles_map.get("agent")
-        if agent_role:
-            session.add(
-                RoleCondition(
-                    role_id=agent_role.id,
-                    attribute="resource.lead_status",
-                    operator="equals",
-                    value="draft",
-                    value_type="string",
-                    description="Agents can only act on draft leads (demo ABAC)",
-                )
-            )
-            await session.commit()
-            print("   Added RoleCondition: agent -> resource.lead_status == draft\n")
-        else:
-            print("   Skipped ABAC demo condition (agent role not found)\n")
+        # We intentionally do NOT write ABAC conditions directly in this reset script.
+        # The example smoke runner seeds ABAC via the public API endpoints:
+        #   POST /v1/roles/{role_id}/conditions
+        # This keeps examples aligned with how a real integration would configure ABAC.
+        print(
+            "ABAC demo conditions: seeded via API (see scripts/smoke_enterprise_api.py)\n"
+        )
 
     # Close engine
     await engine.dispose()

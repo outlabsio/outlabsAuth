@@ -42,17 +42,17 @@ A project management system demonstrating:
 
 ---
 
-### 3. Full-Featured ABAC (Coming Soon)
+### 3. [ABAC Cookbook](./abac_cookbook/)
 
-**Best for**: Complex applications with attribute-based access control
+**Best for**: Understanding ABAC conditions + condition groups
 
-Will demonstrate:
-- ✅ ABAC conditions (budget limits, department matching)
-- ✅ Context-aware roles (permissions adapt by entity type)
-- ✅ Redis caching for performance
-- ✅ Complex permission evaluation
+Demonstrates:
+- ✅ ABAC role conditions + condition groups (AND/OR)
+- ✅ Server-derived `resource.*` context for permission checks (no client trust)
+- ✅ Public API configuration of ABAC via `/roles/{id}/conditions` endpoints
 
-**Complexity**: ⭐️⭐️⭐️⭐️ Advanced
+**Complexity**: ⭐️⭐️⭐️ Intermediate
+**Running**: `cd abac_cookbook && uv run uvicorn main:app --port 8005`
 
 ---
 
@@ -61,8 +61,8 @@ Will demonstrate:
 ### Prerequisites
 
 ```bash
-# MongoDB (required for all examples)
-docker run -d -p 27017:27017 --name mongodb mongo:latest
+# PostgreSQL (required for all examples)
+docker run -d -p 5432:5432 --name postgres -e POSTGRES_PASSWORD=postgres postgres:16
 
 # Redis (required for full-featured example)
 docker run -d -p 6379:6379 --name redis redis:latest

@@ -170,6 +170,12 @@ class OutlabsAuth:
         # Initialize observability
         self.observability_config = observability_config
         self.observability = None
+        if self.observability_config:
+            from outlabs_auth.observability import ObservabilityService
+
+            # Instantiate early so FastAPI middleware/routers can be registered
+            # before app startup. Async initialization still happens in `initialize()`.
+            self.observability = ObservabilityService(self.observability_config)
 
         # Store enterprise settings
         if enable_entity_hierarchy:
@@ -257,10 +263,7 @@ class OutlabsAuth:
             await self._run_migrations()
 
         # Initialize observability service
-        if self.observability_config:
-            from outlabs_auth.observability import ObservabilityService
-
-            self.observability = ObservabilityService(self.observability_config)
+        if self.observability_config and self.observability:
             await self.observability.initialize()
             self.observability.instrument_sqlalchemy(self._engine)
 
@@ -709,10 +712,28 @@ class OutlabsAuth:
         - Correlation ID middleware (if observability enabled)
         - Centralized exception handlers (uses observability for logging)
         - /metrics endpoint (if enabled and include_metrics=True)
+
+        IMPORTANT: This method adds middleware and must be called BEFORE the app
+        starts (i.e., before uvicorn.run() or entering the lifespan context).
+        Call this at module level after creating the FastAPI app instance.
         """
+        import warnings
+
         from outlabs_auth.fastapi import register_exception_handlers
 
         register_exception_handlers(app, debug=debug, observability=self.observability)
+
+        def _safe_add_middleware(middleware_class: type, **kwargs: object) -> bool:
+            """Try to add middleware, return False if app already started."""
+            try:
+                app.add_middleware(middleware_class, **kwargs)
+                return True
+            except RuntimeError as e:
+                if "Cannot add middleware after" in str(e):
+                    return False
+                raise
+
+        middleware_added = True
 
         if self.observability:
             from outlabs_auth.observability import (
@@ -720,11 +741,24 @@ class OutlabsAuth:
                 create_metrics_router,
             )
 
-            app.add_middleware(CorrelationIDMiddleware, obs_service=self.observability)
+            if not _safe_add_middleware(
+                CorrelationIDMiddleware, obs_service=self.observability
+            ):
+                middleware_added = False
             if include_metrics:
                 app.include_router(create_metrics_router(self.observability))
 
         if include_resource_context:
             from outlabs_auth.middleware import ResourceContextMiddleware
 
-            app.add_middleware(ResourceContextMiddleware)
+            if not _safe_add_middleware(ResourceContextMiddleware):
+                middleware_added = False
+
+        if not middleware_added:
+            warnings.warn(
+                "instrument_fastapi() called after app started - middleware was skipped. "
+                "Move instrument_fastapi() call to module level (before lifespan) for "
+                "full functionality including CorrelationIDMiddleware and ResourceContextMiddleware.",
+                UserWarning,
+                stacklevel=2,
+            )
