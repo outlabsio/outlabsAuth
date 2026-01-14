@@ -1,49 +1,100 @@
 """
 OutlabsAuth Models
 
-Public exports for all Beanie ODM models.
+Public exports for all SQLModel/PostgreSQL models.
 """
 
-# Base
-from outlabs_auth.models.base import BaseDocument
-
-# Core models (all presets)
-from outlabs_auth.models.user import UserModel, UserStatus
-from outlabs_auth.models.role import RoleModel
-from outlabs_auth.models.permission import PermissionModel
-from outlabs_auth.models.token import RefreshTokenModel
-
-# SimpleRBAC models
-from outlabs_auth.models.user_role_membership import UserRoleMembership
-from outlabs_auth.models.membership_status import MembershipStatus
-
-# Entity models (EnterpriseRBAC only)
-from outlabs_auth.models.entity import EntityModel, EntityClass
-from outlabs_auth.models.membership import EntityMembershipModel
-from outlabs_auth.models.closure import EntityClosureModel
-
-# OAuth models (v1.2)
-from outlabs_auth.models.social_account import SocialAccount
-from outlabs_auth.models.oauth_state import OAuthState
+# Re-export everything from sql submodule
+from outlabs_auth.models.sql import (
+    # Enums
+    UserStatus,
+    MembershipStatus,
+    EntityClass,
+    APIKeyStatus,
+    ConditionOperator,
+    # Core
+    User,
+    Permission,
+    PermissionTag,
+    PermissionTagLink,
+    PermissionCondition,
+    RefreshToken,
+    # SimpleRBAC
+    Role,
+    RolePermission,
+    RoleCondition,
+    RoleEntityTypePermission,
+    ConditionGroup,
+    UserRoleMembership,
+    # EnterpriseRBAC
+    Entity,
+    EntityClosure,
+    EntityMembership,
+    EntityMembershipRole,
+    # API Keys
+    APIKey,
+    APIKeyScope,
+    APIKeyIPWhitelist,
+    # OAuth
+    SocialAccount,
+    OAuthState,
+    # Activity
+    ActivityMetric,
+    UserActivity,
+    LoginHistory,
+    # Model groups
+    ALL_MODELS,
+    CORE_MODELS,
+    SIMPLE_RBAC_MODELS,
+    ENTERPRISE_RBAC_MODELS,
+    API_KEY_MODELS,
+    OAUTH_MODELS,
+    ACTIVITY_MODELS,
+)
 
 __all__ = [
-    # Base
-    "BaseDocument",
-    # Core models
-    "UserModel",
+    # Enums
     "UserStatus",
-    "RoleModel",
-    "PermissionModel",
-    "RefreshTokenModel",
-    # SimpleRBAC models
-    "UserRoleMembership",
     "MembershipStatus",
-    # Entity models
-    "EntityModel",
     "EntityClass",
-    "EntityMembershipModel",
-    "EntityClosureModel",
-    # OAuth models
+    "APIKeyStatus",
+    "ConditionOperator",
+    # Core
+    "User",
+    "Permission",
+    "PermissionTag",
+    "PermissionTagLink",
+    "PermissionCondition",
+    "RefreshToken",
+    # SimpleRBAC
+    "Role",
+    "RolePermission",
+    "RoleCondition",
+    "RoleEntityTypePermission",
+    "ConditionGroup",
+    "UserRoleMembership",
+    # EnterpriseRBAC
+    "Entity",
+    "EntityClosure",
+    "EntityMembership",
+    "EntityMembershipRole",
+    # API Keys
+    "APIKey",
+    "APIKeyScope",
+    "APIKeyIPWhitelist",
+    # OAuth
     "SocialAccount",
     "OAuthState",
+    # Activity
+    "ActivityMetric",
+    "UserActivity",
+    "LoginHistory",
+    # Model groups
+    "ALL_MODELS",
+    "CORE_MODELS",
+    "SIMPLE_RBAC_MODELS",
+    "ENTERPRISE_RBAC_MODELS",
+    "API_KEY_MODELS",
+    "OAUTH_MODELS",
+    "ACTIVITY_MODELS",
 ]

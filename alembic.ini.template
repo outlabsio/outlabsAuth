@@ -1,0 +1,72 @@
+# OutlabsAuth Alembic Configuration Template
+#
+# Copy this file to alembic.ini and update the database URL:
+#   cp alembic.ini.template alembic.ini
+#
+# Or set the DATABASE_URL environment variable (takes precedence).
+
+[alembic]
+# Path to migration scripts (relative to this file)
+script_location = outlabs_auth/migrations
+
+# Template used to generate migration files
+file_template = %%(year)d%%(month).2d%%(day).2d_%%(hour).2d%%(minute).2d_%%(rev)s_%%(slug)s
+
+# Set to 'true' to run the environment during the 'revision' command
+prepend_sys_path = .
+
+# Timezone to use for timestamp in migration file names
+timezone = UTC
+
+# Version path separator - leave empty for default
+version_path_separator = os
+
+# Truncate revision hashes in file names
+truncate_slug_length = 40
+
+# Database URL - CHANGE THIS or set DATABASE_URL environment variable
+# Format: postgresql+asyncpg://user:password@host:port/database
+sqlalchemy.url = postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth
+
+[post_write_hooks]
+# Hooks for formatting generated migration files
+
+# Run black on new migration files
+# hooks = black
+# black.type = console_scripts
+# black.entrypoint = black
+# black.options = -q
+
+[loggers]
+keys = root,sqlalchemy,alembic
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARN
+handlers = console
+qualname =
+
+[logger_sqlalchemy]
+level = WARN
+handlers =
+qualname = sqlalchemy.engine
+
+[logger_alembic]
+level = INFO
+handlers =
+qualname = alembic
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+datefmt = %H:%M:%S

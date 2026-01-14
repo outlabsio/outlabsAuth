@@ -12,6 +12,7 @@ from outlabs_auth.database.engine import (
     get_session,
 )
 from outlabs_auth.database.base import BaseModel
+from outlabs_auth.database.registry import ModelRegistry
 
 __all__ = [
     "DatabaseConfig",
@@ -20,4 +21,5 @@ __all__ = [
     "create_session_factory",
     "get_session",
     "BaseModel",
+    "ModelRegistry",
 ]

@@ -9,7 +9,7 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from sqlmodel import SQLModel, Field
-from sqlalchemy import Column, DateTime, String, event
+from sqlalchemy import event
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 
@@ -37,41 +37,31 @@ class BaseModel(SQLModel):
 
     id: UUID = Field(
         default_factory=uuid4,
-        sa_column=Column(
-            PG_UUID(as_uuid=True),
-            primary_key=True,
-            nullable=False,
-        ),
+        primary_key=True,
+        sa_type=PG_UUID(as_uuid=True),
         description="Unique identifier (UUID v4)",
     )
 
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
-        sa_column=Column(
-            DateTime(timezone=True),
-            nullable=False,
-        ),
+        nullable=False,
         description="Timestamp when record was created (UTC)",
     )
 
     updated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
-        sa_column=Column(
-            DateTime(timezone=True),
-            nullable=False,
-        ),
+        nullable=False,
         description="Timestamp when record was last updated (UTC)",
     )
 
     tenant_id: Optional[str] = Field(
         default=None,
-        sa_column=Column(
-            String(36),
-            index=True,
-            nullable=True,
-        ),
+        max_length=36,
+        nullable=True,
         description="Tenant identifier for multi-tenant isolation",
     )
+    # Note: tenant_id is NOT indexed here. Each table defines its own
+    # tenant_id index in __table_args__ for proper naming.
 
     class Config:
         """Pydantic/SQLModel configuration."""

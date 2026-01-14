@@ -1,423 +1,249 @@
 """
-OutlabsAuth CLI Tool
+OutlabsAuth CLI
 
-Command-line interface for common authentication and authorization tasks.
+Command-line interface for database management and migrations.
 
 Usage:
-    python -m outlabs_auth.cli init --preset simple
-    python -m outlabs_auth.cli create-role --name admin --permissions "*:*"
-    python -m outlabs_auth.cli create-user --email admin@example.com
-    python -m outlabs_auth.cli list-roles
-    python -m outlabs_auth.cli benchmark
-
-Requirements:
-    - MongoDB connection
-    - Beanie initialized
+    outlabs-auth migrate          Run migrations to head
+    outlabs-auth init-db          Create all tables (dev only)
+    outlabs-auth drop-db          Drop all tables (dev only)
+    outlabs-auth current          Show current migration revision
+    outlabs-auth history          Show migration history
+    outlabs-auth revision         Create a new migration
 """
+
 import asyncio
+import os
 import sys
-import time
-from typing import Optional, List
-from datetime import datetime
+from pathlib import Path
 
 import click
-from motor.motor_asyncio import AsyncIOMotorClient
-from beanie import init_beanie
-from rich.console import Console
-from rich.table import Table
-from rich.progress import Progress
-
-from outlabs_auth import SimpleRBAC, EnterpriseRBAC
-from outlabs_auth.core.config import AuthConfig
-from outlabs_auth.models.user import UserModel
-from outlabs_auth.models.role import RoleModel
-from outlabs_auth.models.entity import EntityModel, EntityClass
-from outlabs_auth.models.membership import EntityMembershipModel
-from outlabs_auth.models.closure import EntityClosureModel
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlmodel import SQLModel
 
 
-console = Console()
+def get_database_url() -> str:
+    """Get database URL from environment."""
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        click.echo("Error: DATABASE_URL environment variable not set", err=True)
+        click.echo("Example: postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth", err=True)
+        sys.exit(1)
 
+    # Normalize URL for asyncpg
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif url.startswith("postgresql://") and "+asyncpg" not in url:
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-# ============================================================================
-# Helper Functions
-# ============================================================================
+    return url
 
-async def connect_database(mongodb_url: str, database_name: str):
-    """Connect to MongoDB and initialize Beanie"""
-    client = AsyncIOMotorClient(mongodb_url)
-    database = client[database_name]
-
-    await init_beanie(
-        database=database,
-        document_models=[
-            UserModel,
-            RoleModel,
-            EntityModel,
-            EntityMembershipModel,
-            EntityClosureModel,
-        ]
-    )
-
-    return client
-
-
-def create_auth_instance(preset: str, secret_key: str, redis_url: Optional[str] = None):
-    """Create auth instance based on preset"""
-    config = AuthConfig(
-        secret_key=secret_key,
-        algorithm="HS256",
-    )
-
-    if preset == "simple":
-        return SimpleRBAC(config=config)
-    elif preset == "enterprise":
-        return EnterpriseRBAC(config=config)
-    else:
-        raise ValueError(f"Unknown preset: {preset}")
-
-
-# ============================================================================
-# CLI Commands
-# ============================================================================
 
 @click.group()
-def cli():
-    """OutlabsAuth CLI - Manage authentication and authorization"""
+@click.version_option(version="2.0.0", prog_name="outlabs-auth")
+def main():
+    """OutlabsAuth CLI - Database management and migrations."""
     pass
 
 
-@cli.command()
-@click.option("--preset", type=click.Choice(["simple", "enterprise"]), required=True, help="Auth preset")
-@click.option("--mongodb-url", default="mongodb://localhost:27017", help="MongoDB connection string")
-@click.option("--database", default="outlabs_auth", help="Database name")
-@click.option("--secret-key", required=True, help="JWT secret key")
-async def init(preset: str, mongodb_url: str, database: str, secret_key: str):
-    """Initialize OutlabsAuth with a preset"""
-    console.print(f"[bold blue]Initializing OutlabsAuth with {preset} preset...[/bold blue]")
+@main.command()
+@click.option("--revision", default="head", help="Target revision (default: head)")
+def migrate(revision: str):
+    """Run database migrations to specified revision."""
+    from alembic import command
+    from alembic.config import Config
 
-    try:
-        client = await connect_database(mongodb_url, database)
-        auth = create_auth_instance(preset, secret_key)
-        await auth.initialize()
-
-        console.print(f"[bold green]✓ Successfully initialized {preset.upper()} preset[/bold green]")
-        console.print(f"  Database: {database}")
-        console.print(f"  Preset: {preset}")
-
-        client.close()
-
-    except Exception as e:
-        console.print(f"[bold red]✗ Initialization failed: {e}[/bold red]")
+    # Find alembic.ini
+    alembic_ini = Path("alembic.ini")
+    if not alembic_ini.exists():
+        click.echo("Error: alembic.ini not found. Copy from alembic.ini.template", err=True)
         sys.exit(1)
 
+    alembic_cfg = Config(str(alembic_ini))
 
-@cli.command()
-@click.option("--name", required=True, help="Role name")
-@click.option("--display-name", help="Display name")
-@click.option("--permissions", multiple=True, help="Permissions (can specify multiple)")
-@click.option("--mongodb-url", default="mongodb://localhost:27017")
-@click.option("--database", default="outlabs_auth")
-@click.option("--secret-key", required=True)
-@click.option("--preset", type=click.Choice(["simple", "enterprise"]), default="simple")
-async def create_role(
-    name: str,
-    display_name: Optional[str],
-    permissions: tuple,
-    mongodb_url: str,
-    database: str,
-    secret_key: str,
-    preset: str,
-):
-    """Create a new role"""
-    console.print(f"[bold blue]Creating role: {name}[/bold blue]")
+    click.echo(f"Running migrations to {revision}...")
+    command.upgrade(alembic_cfg, revision)
+    click.echo("Done!")
 
-    try:
-        client = await connect_database(mongodb_url, database)
-        auth = create_auth_instance(preset, secret_key)
 
-        role = await auth.role_service.create_role(
-            name=name,
-            display_name=display_name or name.replace("_", " ").title(),
-            description=f"Role: {name}",
-            permissions=list(permissions),
-            is_global=True,
-        )
+@main.command("init-db")
+@click.option("--force", is_flag=True, help="Drop existing tables first")
+def init_db(force: bool):
+    """Create all database tables (development only)."""
+    # Import models to register them
+    from outlabs_auth.models.sql import ALL_MODELS  # noqa: F401
 
-        console.print(f"[bold green]✓ Role created successfully[/bold green]")
-        console.print(f"  ID: {role.id}")
-        console.print(f"  Name: {role.name}")
-        console.print(f"  Permissions: {', '.join(role.permissions)}")
+    url = get_database_url()
 
-        client.close()
+    async def create_tables():
+        engine = create_async_engine(url, echo=False)
 
-    except Exception as e:
-        console.print(f"[bold red]✗ Failed to create role: {e}[/bold red]")
+        async with engine.begin() as conn:
+            if force:
+                click.echo("Dropping existing tables...")
+                await conn.execute(text("DROP SCHEMA public CASCADE"))
+                await conn.execute(text("CREATE SCHEMA public"))
+                await conn.execute(text("GRANT ALL ON SCHEMA public TO postgres"))
+                await conn.execute(text("GRANT ALL ON SCHEMA public TO public"))
+
+            click.echo("Creating tables...")
+            await conn.run_sync(SQLModel.metadata.create_all)
+
+        # Count tables created
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                text("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'")
+            )
+            count = result.scalar()
+
+        await engine.dispose()
+        return count
+
+    count = asyncio.run(create_tables())
+    click.echo(f"Created {count} tables.")
+
+
+@main.command("drop-db")
+@click.confirmation_option(prompt="Are you sure you want to drop all tables?")
+def drop_db():
+    """Drop all database tables (development only)."""
+    url = get_database_url()
+
+    async def drop_tables():
+        engine = create_async_engine(url, echo=False)
+
+        async with engine.begin() as conn:
+            await conn.execute(text("DROP SCHEMA public CASCADE"))
+            await conn.execute(text("CREATE SCHEMA public"))
+            await conn.execute(text("GRANT ALL ON SCHEMA public TO postgres"))
+            await conn.execute(text("GRANT ALL ON SCHEMA public TO public"))
+
+        await engine.dispose()
+
+    click.echo("Dropping all tables...")
+    asyncio.run(drop_tables())
+    click.echo("Done!")
+
+
+@main.command()
+def current():
+    """Show current migration revision."""
+    from alembic import command
+    from alembic.config import Config
+
+    alembic_ini = Path("alembic.ini")
+    if not alembic_ini.exists():
+        click.echo("Error: alembic.ini not found", err=True)
         sys.exit(1)
 
+    alembic_cfg = Config(str(alembic_ini))
+    command.current(alembic_cfg)
 
-@cli.command()
-@click.option("--email", required=True, help="User email")
-@click.option("--username", required=True, help="Username")
-@click.option("--password", required=True, prompt=True, hide_input=True, help="Password")
-@click.option("--full-name", help="Full name")
-@click.option("--role", help="Role name to assign")
-@click.option("--mongodb-url", default="mongodb://localhost:27017")
-@click.option("--database", default="outlabs_auth")
-@click.option("--secret-key", required=True)
-@click.option("--preset", type=click.Choice(["simple", "enterprise"]), default="simple")
-async def create_user(
-    email: str,
-    username: str,
-    password: str,
-    full_name: Optional[str],
-    role: Optional[str],
-    mongodb_url: str,
-    database: str,
-    secret_key: str,
-    preset: str,
-):
-    """Create a new user"""
-    console.print(f"[bold blue]Creating user: {email}[/bold blue]")
 
-    try:
-        client = await connect_database(mongodb_url, database)
-        auth = create_auth_instance(preset, secret_key)
+@main.command()
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed history")
+def history(verbose: bool):
+    """Show migration history."""
+    from alembic import command
+    from alembic.config import Config
 
-        user = await auth.user_service.create_user(
-            email=email,
-            username=username,
-            password=password,
-            full_name=full_name or username,
-        )
-
-        # Assign role if specified
-        if role:
-            role_obj = await auth.role_service.find_by_name(role)
-            if role_obj:
-                user.role_ids = [role_obj.id]
-                await user.save()
-                console.print(f"  Assigned role: {role}")
-
-        console.print(f"[bold green]✓ User created successfully[/bold green]")
-        console.print(f"  ID: {user.id}")
-        console.print(f"  Email: {user.email}")
-        console.print(f"  Username: {user.username}")
-
-        client.close()
-
-    except Exception as e:
-        console.print(f"[bold red]✗ Failed to create user: {e}[/bold red]")
+    alembic_ini = Path("alembic.ini")
+    if not alembic_ini.exists():
+        click.echo("Error: alembic.ini not found", err=True)
         sys.exit(1)
 
+    alembic_cfg = Config(str(alembic_ini))
+    command.history(alembic_cfg, verbose=verbose)
 
-@cli.command()
-@click.option("--mongodb-url", default="mongodb://localhost:27017")
-@click.option("--database", default="outlabs_auth")
-async def list_roles(mongodb_url: str, database: str):
-    """List all roles"""
-    try:
-        client = await connect_database(mongodb_url, database)
 
-        roles = await RoleModel.find_all().to_list()
+@main.command()
+@click.option("--message", "-m", required=True, help="Migration message")
+@click.option("--autogenerate", is_flag=True, help="Auto-generate from model changes")
+def revision(message: str, autogenerate: bool):
+    """Create a new migration revision."""
+    from alembic import command
+    from alembic.config import Config
 
-        if not roles:
-            console.print("[yellow]No roles found[/yellow]")
-            client.close()
-            return
-
-        table = Table(title="Roles")
-        table.add_column("Name", style="cyan")
-        table.add_column("Display Name", style="green")
-        table.add_column("Permissions", style="yellow")
-        table.add_column("Global", style="magenta")
-
-        for role in roles:
-            table.add_row(
-                role.name,
-                role.display_name,
-                ", ".join(role.permissions[:3]) + ("..." if len(role.permissions) > 3 else ""),
-                "✓" if role.is_global else "✗",
-            )
-
-        console.print(table)
-        console.print(f"\n[bold]Total: {len(roles)} roles[/bold]")
-
-        client.close()
-
-    except Exception as e:
-        console.print(f"[bold red]✗ Failed to list roles: {e}[/bold red]")
+    alembic_ini = Path("alembic.ini")
+    if not alembic_ini.exists():
+        click.echo("Error: alembic.ini not found", err=True)
         sys.exit(1)
 
+    alembic_cfg = Config(str(alembic_ini))
 
-@cli.command()
-@click.option("--mongodb-url", default="mongodb://localhost:27017")
-@click.option("--database", default="outlabs_auth")
-async def list_users(mongodb_url: str, database: str):
-    """List all users"""
-    try:
-        client = await connect_database(mongodb_url, database)
+    click.echo(f"Creating migration: {message}")
+    command.revision(alembic_cfg, message=message, autogenerate=autogenerate)
+    click.echo("Done!")
 
-        users = await UserModel.find_all().to_list()
 
-        if not users:
-            console.print("[yellow]No users found[/yellow]")
-            client.close()
-            return
+@main.command()
+def heads():
+    """Show current available heads."""
+    from alembic import command
+    from alembic.config import Config
 
-        table = Table(title="Users")
-        table.add_column("Email", style="cyan")
-        table.add_column("Username", style="green")
-        table.add_column("Full Name", style="yellow")
-        table.add_column("Status", style="magenta")
-        table.add_column("Roles", style="blue")
-
-        for user in users:
-            role_count = len(user.role_ids) if user.role_ids else 0
-            table.add_row(
-                user.email,
-                user.username,
-                user.full_name or "-",
-                user.status.value,
-                str(role_count),
-            )
-
-        console.print(table)
-        console.print(f"\n[bold]Total: {len(users)} users[/bold]")
-
-        client.close()
-
-    except Exception as e:
-        console.print(f"[bold red]✗ Failed to list users: {e}[/bold red]")
+    alembic_ini = Path("alembic.ini")
+    if not alembic_ini.exists():
+        click.echo("Error: alembic.ini not found", err=True)
         sys.exit(1)
 
+    alembic_cfg = Config(str(alembic_ini))
+    command.heads(alembic_cfg)
 
-@cli.command()
-@click.option("--mongodb-url", default="mongodb://localhost:27017")
-@click.option("--database", default="outlabs_auth")
-@click.option("--secret-key", required=True)
-@click.option("--preset", type=click.Choice(["simple", "enterprise"]), default="enterprise")
-async def benchmark(mongodb_url: str, database: str, secret_key: str, preset: str):
-    """Run performance benchmarks"""
-    console.print("[bold blue]Running OutlabsAuth Performance Benchmarks[/bold blue]\n")
 
-    try:
-        client = await connect_database(mongodb_url, database)
-        auth = create_auth_instance(preset, secret_key)
-        await auth.initialize()
+@main.command()
+@click.option("--revision", "-r", default="-1", help="Revision to downgrade to")
+def downgrade(revision: str):
+    """Downgrade to a previous revision."""
+    from alembic import command
+    from alembic.config import Config
 
-        results = {}
-
-        # Benchmark 1: User creation
-        console.print("[cyan]1. User Creation...[/cyan]")
-        start = time.perf_counter()
-        for i in range(10):
-            await auth.user_service.create_user(
-                email=f"bench_user_{i}_{datetime.now().timestamp()}@example.com",
-                username=f"bench_{i}",
-                password="TestPass123!",
-                full_name=f"Bench User {i}",
-            )
-        elapsed = (time.perf_counter() - start) / 10
-        results["user_creation"] = elapsed * 1000
-        console.print(f"   Average: {elapsed * 1000:.2f}ms per user\n")
-
-        # Benchmark 2: Role creation
-        console.print("[cyan]2. Role Creation...[/cyan]")
-        start = time.perf_counter()
-        for i in range(10):
-            await auth.role_service.create_role(
-                name=f"bench_role_{i}_{datetime.now().timestamp()}",
-                display_name=f"Bench Role {i}",
-                description="Benchmark role",
-                permissions=["test:read", "test:write"],
-                is_global=True,
-            )
-        elapsed = (time.perf_counter() - start) / 10
-        results["role_creation"] = elapsed * 1000
-        console.print(f"   Average: {elapsed * 1000:.2f}ms per role\n")
-
-        # Benchmark 3: Permission check (if EnterpriseRBAC)
-        if preset == "enterprise":
-            console.print("[cyan]3. Permission Check (Enterprise)...[/cyan]")
-
-            # Create test entity and user
-            entity = await auth.entity_service.create_entity(
-                name=f"bench_entity_{datetime.now().timestamp()}",
-                display_name="Bench Entity",
-                entity_class=EntityClass.STRUCTURAL,
-                entity_type="department",
-            )
-
-            user = await auth.user_service.create_user(
-                email=f"perm_test_{datetime.now().timestamp()}@example.com",
-                username="perm_test",
-                password="TestPass123!",
-            )
-
-            role = await auth.role_service.create_role(
-                name=f"perm_role_{datetime.now().timestamp()}",
-                display_name="Permission Test Role",
-                description="Test role",
-                permissions=["test:read"],
-                is_global=False,
-            )
-
-            await auth.membership_service.add_member(
-                entity_id=str(entity.id),
-                user_id=str(user.id),
-                role_ids=[str(role.id)],
-            )
-
-            # Benchmark permission check
-            start = time.perf_counter()
-            for _ in range(100):
-                await auth.permission_service.check_permission(
-                    user_id=str(user.id),
-                    permission="test:read",
-                    entity_id=str(entity.id),
-                )
-            elapsed = (time.perf_counter() - start) / 100
-            results["permission_check"] = elapsed * 1000
-            console.print(f"   Average: {elapsed * 1000:.3f}ms per check\n")
-
-        # Display summary
-        console.print("\n[bold green]Benchmark Results Summary:[/bold green]")
-        table = Table()
-        table.add_column("Operation", style="cyan")
-        table.add_column("Average Time", style="yellow")
-        table.add_column("Operations/sec", style="green")
-
-        for operation, time_ms in results.items():
-            ops_per_sec = 1000 / time_ms if time_ms > 0 else 0
-            table.add_row(
-                operation.replace("_", " ").title(),
-                f"{time_ms:.3f}ms",
-                f"{ops_per_sec:.0f}",
-            )
-
-        console.print(table)
-
-        client.close()
-
-    except Exception as e:
-        console.print(f"[bold red]✗ Benchmark failed: {e}[/bold red]")
+    alembic_ini = Path("alembic.ini")
+    if not alembic_ini.exists():
+        click.echo("Error: alembic.ini not found", err=True)
         sys.exit(1)
 
+    alembic_cfg = Config(str(alembic_ini))
 
-# ============================================================================
-# Main
-# ============================================================================
+    click.echo(f"Downgrading to {revision}...")
+    command.downgrade(alembic_cfg, revision)
+    click.echo("Done!")
 
-def main():
-    """Main entry point"""
-    # Make all commands async-compatible
-    for command in cli.commands.values():
-        if asyncio.iscoroutinefunction(command.callback):
-            original_callback = command.callback
-            command.callback = lambda *args, **kwargs: asyncio.run(original_callback(*args, **kwargs))
 
-    cli()
+@main.command()
+def tables():
+    """List all database tables."""
+    url = get_database_url()
+
+    async def list_tables():
+        engine = create_async_engine(url, echo=False)
+
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                text("""
+                    SELECT table_name,
+                           (SELECT COUNT(*) FROM information_schema.columns
+                            WHERE table_name = t.table_name AND table_schema = 'public') as column_count
+                    FROM information_schema.tables t
+                    WHERE table_schema = 'public'
+                    ORDER BY table_name
+                """)
+            )
+            tables = [(row[0], row[1]) for row in result]
+
+        await engine.dispose()
+        return tables
+
+    tables_list = asyncio.run(list_tables())
+
+    if not tables_list:
+        click.echo("No tables found.")
+        return
+
+    click.echo(f"\nDatabase tables ({len(tables_list)} total):\n")
+    for table, columns in tables_list:
+        click.echo(f"  {table} ({columns} columns)")
 
 
 if __name__ == "__main__":
