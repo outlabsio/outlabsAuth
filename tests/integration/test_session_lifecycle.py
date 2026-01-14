@@ -89,6 +89,35 @@ async def registered_user(client: httpx.AsyncClient) -> dict:
     }
 
 
+@pytest_asyncio.fixture
+async def admin_user(auth_instance: SimpleRBAC) -> dict:
+    """Create a superuser admin and return credentials with token."""
+    async with auth_instance.get_session() as session:
+        admin = await auth_instance.user_service.create_user(
+            session,
+            email=f"admin-{uuid.uuid4().hex[:8]}@example.com",
+            password="AdminPass123!",
+            first_name="Admin",
+            last_name="User",
+            is_superuser=True,
+        )
+        await session.commit()
+
+        # Create token for the admin
+        token = create_access_token(
+            data={"sub": str(admin.id)},
+            secret_key=auth_instance.config.secret_key,
+            algorithm=auth_instance.config.algorithm,
+            expires_delta=timedelta(minutes=60),
+        )
+
+        return {
+            "id": str(admin.id),
+            "email": admin.email,
+            "token": token,
+        }
+
+
 # ============================================================================
 # Basic Login/Logout Flow Tests
 # ============================================================================
@@ -704,3 +733,196 @@ async def test_register_then_immediate_login(client: httpx.AsyncClient):
     )
     assert login_resp.status_code == 200
     assert "access_token" in login_resp.json()
+
+
+# ============================================================================
+# User Status Management Tests
+# ============================================================================
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_admin_can_suspend_user(
+    auth_instance: SimpleRBAC, client: httpx.AsyncClient, admin_user: dict
+):
+    """Test that admin can suspend a user."""
+    # Create a user to suspend
+    async with auth_instance.get_session() as session:
+        target_user = await auth_instance.user_service.create_user(
+            session,
+            email=f"tosuspend-{uuid.uuid4().hex[:8]}@example.com",
+            password="TestPass123!",
+            first_name="To",
+            last_name="Suspend",
+        )
+        await session.commit()
+        target_id = str(target_user.id)
+
+    # Suspend the user
+    resp = await client.patch(
+        f"/v1/users/{target_id}/status",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"status": "suspended"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "suspended"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_admin_can_suspend_user_with_expiry(
+    auth_instance: SimpleRBAC, client: httpx.AsyncClient, admin_user: dict
+):
+    """Test that admin can suspend a user with auto-expiry date."""
+    # Create a user to suspend
+    async with auth_instance.get_session() as session:
+        target_user = await auth_instance.user_service.create_user(
+            session,
+            email=f"tempsuspend-{uuid.uuid4().hex[:8]}@example.com",
+            password="TestPass123!",
+            first_name="Temp",
+            last_name="Suspend",
+        )
+        await session.commit()
+        target_id = str(target_user.id)
+
+    # Suspend with expiry
+    expiry = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    resp = await client.patch(
+        f"/v1/users/{target_id}/status",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "status": "suspended",
+            "suspended_until": expiry,
+            "reason": "Policy violation - 7 day suspension",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "suspended"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_admin_can_ban_user(
+    auth_instance: SimpleRBAC, client: httpx.AsyncClient, admin_user: dict
+):
+    """Test that admin can permanently ban a user."""
+    # Create a user to ban
+    async with auth_instance.get_session() as session:
+        target_user = await auth_instance.user_service.create_user(
+            session,
+            email=f"toban-{uuid.uuid4().hex[:8]}@example.com",
+            password="TestPass123!",
+            first_name="To",
+            last_name="Ban",
+        )
+        await session.commit()
+        target_id = str(target_user.id)
+
+    # Ban the user
+    resp = await client.patch(
+        f"/v1/users/{target_id}/status",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"status": "banned", "reason": "Severe ToS violation"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "banned"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_admin_can_reactivate_suspended_user(
+    auth_instance: SimpleRBAC, client: httpx.AsyncClient, admin_user: dict
+):
+    """Test that admin can reactivate a suspended user."""
+    # Create and suspend a user
+    async with auth_instance.get_session() as session:
+        target_user = await auth_instance.user_service.create_user(
+            session,
+            email=f"toreactivate-{uuid.uuid4().hex[:8]}@example.com",
+            password="TestPass123!",
+            first_name="To",
+            last_name="Reactivate",
+        )
+        target_user.status = UserStatus.SUSPENDED
+        await session.commit()
+        target_id = str(target_user.id)
+
+    # Reactivate the user
+    resp = await client.patch(
+        f"/v1/users/{target_id}/status",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"status": "active"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "active"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_cannot_set_status_to_deleted_via_endpoint(
+    auth_instance: SimpleRBAC, client: httpx.AsyncClient, admin_user: dict
+):
+    """Test that setting status to 'deleted' via status endpoint is rejected."""
+    # Create a user
+    async with auth_instance.get_session() as session:
+        target_user = await auth_instance.user_service.create_user(
+            session,
+            email=f"nodelete-{uuid.uuid4().hex[:8]}@example.com",
+            password="TestPass123!",
+            first_name="No",
+            last_name="Delete",
+        )
+        await session.commit()
+        target_id = str(target_user.id)
+
+    # Try to set status to deleted
+    resp = await client.patch(
+        f"/v1/users/{target_id}/status",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"status": "deleted"},
+    )
+    # Should be rejected - 400 for invalid pattern or explicit error
+    assert resp.status_code in [400, 422]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_regular_user_cannot_change_status(
+    auth_instance: SimpleRBAC, client: httpx.AsyncClient, registered_user: dict
+):
+    """Test that regular user cannot change another user's status."""
+    # Login as regular user
+    login_resp = await client.post(
+        "/v1/auth/login",
+        json={
+            "email": registered_user["email"],
+            "password": registered_user["password"],
+        },
+    )
+    tokens = login_resp.json()
+    user_token = tokens["access_token"]
+
+    # Create another user
+    async with auth_instance.get_session() as session:
+        target_user = await auth_instance.user_service.create_user(
+            session,
+            email=f"othertarget-{uuid.uuid4().hex[:8]}@example.com",
+            password="TestPass123!",
+            first_name="Other",
+            last_name="Target",
+        )
+        await session.commit()
+        target_id = str(target_user.id)
+
+    # Try to suspend (should fail - no permission)
+    resp = await client.patch(
+        f"/v1/users/{target_id}/status",
+        headers={"Authorization": f"Bearer {user_token}"},
+        json={"status": "suspended"},
+    )
+    assert resp.status_code == 403

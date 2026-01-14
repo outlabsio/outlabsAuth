@@ -406,6 +406,7 @@ class UserService(BaseService[User]):
         session: AsyncSession,
         user_id: UUID,
         status: UserStatus,
+        suspended_until: Optional[datetime] = None,
     ) -> User:
         """
         Update user status.
@@ -414,6 +415,7 @@ class UserService(BaseService[User]):
             session: Database session
             user_id: User UUID
             status: New user status
+            suspended_until: Optional datetime for suspension auto-expiry
 
         Returns:
             Updated user
@@ -430,6 +432,13 @@ class UserService(BaseService[User]):
 
         old_status = user.status
         user.status = status
+
+        # Handle suspended_until field
+        if status == UserStatus.SUSPENDED:
+            user.suspended_until = suspended_until
+        elif status == UserStatus.ACTIVE:
+            # Clear suspension when activating
+            user.suspended_until = None
 
         await self.update(session, user)
 

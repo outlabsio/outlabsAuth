@@ -10,6 +10,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from outlabs_auth.models.sql.enums import UserStatus
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.permission import PermissionResponse, UserPermissionSource
@@ -19,6 +20,7 @@ from outlabs_auth.schemas.user import (
     ChangePasswordRequest,
     UserCreateRequest,
     UserResponse,
+    UserStatusUpdateRequest,
     UserUpdateRequest,
 )
 from outlabs_auth.schemas.user_role_membership import (
@@ -446,6 +448,100 @@ def get_users_router(
             raise
 
         return None
+
+    @router.patch(
+        "/{user_id}/status",
+        response_model=UserResponse,
+        summary="Update user status",
+        description="Change user account status (activate, suspend, ban). Requires user:update permission.",
+    )
+    async def update_user_status(
+        user_id: UUID,
+        data: UserStatusUpdateRequest,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        """
+        Update user account status.
+
+        Allows administrators to:
+        - Activate a suspended/banned user
+        - Suspend a user temporarily
+        - Ban a user permanently
+
+        Note: Cannot change status to 'deleted' via this endpoint.
+        Use DELETE /{user_id} for soft deletion.
+        """
+        try:
+            # Convert string status to enum
+            try:
+                new_status = UserStatus(data.status)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid status: {data.status}. Must be one of: active, suspended, banned",
+                )
+
+            # Prevent setting status to deleted via this endpoint
+            if new_status == UserStatus.DELETED:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot set status to 'deleted'. Use DELETE endpoint instead.",
+                )
+
+            # Parse suspended_until if provided
+            suspended_until = None
+            if data.suspended_until and new_status == UserStatus.SUSPENDED:
+                from datetime import datetime as dt
+
+                try:
+                    suspended_until = dt.fromisoformat(
+                        data.suspended_until.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid suspended_until format. Use ISO 8601 datetime.",
+                    )
+
+            user = await auth.user_service.update_user_status(
+                session,
+                user_id=user_id,
+                status=new_status,
+                suspended_until=suspended_until,
+            )
+
+            # Log status change
+            if auth.observability:
+                auth.observability.logger.info(
+                    "user_status_changed",
+                    target_user_id=str(user_id),
+                    new_status=data.status,
+                    reason=data.reason,
+                    suspended_until=data.suspended_until,
+                    changed_by=obs.user_id,
+                )
+
+            return UserResponse(
+                id=str(user.id),
+                email=user.email,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                status=_get_status_value(user.status),
+                email_verified=user.email_verified,
+                is_superuser=user.is_superuser,
+            )
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
 
     @router.delete(
         "/{user_id}",

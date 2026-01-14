@@ -57,3 +57,28 @@ class AdminResetPasswordRequest(BaseModel):
     """Admin password reset request schema (no current password required)."""
 
     new_password: str = Field(..., min_length=8)
+
+
+class UserStatusUpdateRequest(BaseModel):
+    """
+    User status update request schema.
+
+    Used by admins to change user account status (activate, suspend, ban).
+
+    For suspensions, optionally provide suspended_until for auto-expiry.
+    """
+
+    status: str = Field(
+        ...,
+        description="New user status: active, suspended, or banned",
+        pattern="^(active|suspended|banned)$",
+    )
+    suspended_until: Optional[str] = Field(
+        None,
+        description="ISO 8601 datetime for suspension auto-expiry (only for 'suspended' status)",
+    )
+    reason: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="Optional reason for status change (stored in audit log)",
+    )
