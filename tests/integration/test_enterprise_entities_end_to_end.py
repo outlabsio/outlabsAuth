@@ -39,6 +39,17 @@ async def _bearer_token(auth: EnterpriseRBAC, user_id: str) -> str:
     )
 
 
+async def _seed_permissions(session, auth: EnterpriseRBAC, names: list[str]) -> None:
+    for name in names:
+        await auth.permission_service.create_permission(
+            session=session,
+            name=name,
+            display_name=name,
+            description=name,
+            is_system=True,
+        )
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_create_entity_requires_tree_permission_in_parent(
@@ -46,14 +57,11 @@ async def test_create_entity_requires_tree_permission_in_parent(
 ):
     async with enterprise_auth.get_session() as session:
         # Seed permissions
-        for name in ("entity:create", "entity:create_tree", "entity:read"):
-            await enterprise_auth.permission_service.create_permission(
-                session=session,
-                name=name,
-                display_name=name,
-                description=name,
-                is_system=True,
-            )
+        await _seed_permissions(
+            session,
+            enterprise_auth,
+            ["entity:create", "entity:create_tree", "entity:read"],
+        )
 
         # Seed roles
         creator_tree_role = await enterprise_auth.role_service.create_role(
@@ -157,19 +165,16 @@ async def test_move_entity_requires_update_on_entity_and_create_tree_on_new_pare
 ):
     async with enterprise_auth.get_session() as session:
         # Seed permissions
-        for name in (
-            "entity:create",
-            "entity:create_tree",
-            "entity:update",
-            "entity:update_tree",
-        ):
-            await enterprise_auth.permission_service.create_permission(
-                session=session,
-                name=name,
-                display_name=name,
-                description=name,
-                is_system=True,
-            )
+        await _seed_permissions(
+            session,
+            enterprise_auth,
+            [
+                "entity:create",
+                "entity:create_tree",
+                "entity:update",
+                "entity:update_tree",
+            ],
+        )
 
         # Roles:
         # - mover: can update entities (tree required by deps when entity_id context exists)
@@ -306,14 +311,11 @@ async def test_add_member_requires_membership_create_tree_in_target_context(
 ):
     async with enterprise_auth.get_session() as session:
         # Seed permissions
-        for name in ("membership:create", "membership:create_tree"):
-            await enterprise_auth.permission_service.create_permission(
-                session=session,
-                name=name,
-                display_name=name,
-                description=name,
-                is_system=True,
-            )
+        await _seed_permissions(
+            session,
+            enterprise_auth,
+            ["membership:create", "membership:create_tree"],
+        )
 
         # Create roles
         membership_tree_role = await enterprise_auth.role_service.create_role(
@@ -415,3 +417,204 @@ async def test_add_member_requires_membership_create_tree_in_target_context(
             headers={"Authorization": f"Bearer {token_base}"},
         )
         assert r_forbidden.status_code == 403, r_forbidden.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_descendants_requires_entity_read_tree(
+    enterprise_app: FastAPI, enterprise_auth: EnterpriseRBAC
+):
+    async with enterprise_auth.get_session() as session:
+        await _seed_permissions(
+            session,
+            enterprise_auth,
+            ["entity:read", "entity:read_tree"],
+        )
+
+        read_tree_role = await enterprise_auth.role_service.create_role(
+            session=session,
+            name="entity_read_tree",
+            display_name="entity_read_tree",
+            permission_names=["entity:read_tree"],
+            is_global=False,
+        )
+        read_base_role = await enterprise_auth.role_service.create_role(
+            session=session,
+            name="entity_read_base",
+            display_name="entity_read_base",
+            permission_names=["entity:read"],
+            is_global=False,
+        )
+
+        user_tree = await enterprise_auth.user_service.create_user(
+            session=session,
+            email="entity-read-tree@example.com",
+            password="TestPass123!",
+            first_name="Entity",
+            last_name="Tree",
+        )
+        user_base = await enterprise_auth.user_service.create_user(
+            session=session,
+            email="entity-read-base@example.com",
+            password="TestPass123!",
+            first_name="Entity",
+            last_name="Base",
+        )
+
+        org = await enterprise_auth.entity_service.create_entity(
+            session=session,
+            name="org_desc",
+            display_name="Org",
+            slug="org-desc",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
+        team = await enterprise_auth.entity_service.create_entity(
+            session=session,
+            name="team_desc",
+            display_name="Team",
+            slug="team-desc",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="team",
+            parent_id=org.id,
+        )
+
+        membership_service = MembershipService(enterprise_auth.config)
+        await membership_service.add_member(
+            session=session,
+            entity_id=org.id,
+            user_id=user_tree.id,
+            role_ids=[read_tree_role.id],
+        )
+        await membership_service.add_member(
+            session=session,
+            entity_id=org.id,
+            user_id=user_base.id,
+            role_ids=[read_base_role.id],
+        )
+
+        await session.commit()
+
+        token_tree = await _bearer_token(enterprise_auth, str(user_tree.id))
+        token_base = await _bearer_token(enterprise_auth, str(user_base.id))
+
+    transport = httpx.ASGITransport(app=enterprise_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        ok = await client.get(
+            f"/entities/{org.id}/descendants",
+            headers={"Authorization": f"Bearer {token_tree}"},
+        )
+        assert ok.status_code == 200, ok.text
+        ids = {item["id"] for item in ok.json()}
+        assert str(team.id) in ids
+
+        forbidden = await client.get(
+            f"/entities/{org.id}/descendants",
+            headers={"Authorization": f"Bearer {token_base}"},
+        )
+        assert forbidden.status_code == 403, forbidden.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_entity_members_requires_membership_read_tree(
+    enterprise_app: FastAPI, enterprise_auth: EnterpriseRBAC
+):
+    async with enterprise_auth.get_session() as session:
+        await _seed_permissions(
+            session,
+            enterprise_auth,
+            ["membership:read", "membership:read_tree"],
+        )
+
+        membership_read_tree_role = await enterprise_auth.role_service.create_role(
+            session=session,
+            name="membership_read_tree",
+            display_name="membership_read_tree",
+            permission_names=["membership:read_tree"],
+            is_global=False,
+        )
+        membership_read_base_role = await enterprise_auth.role_service.create_role(
+            session=session,
+            name="membership_read_base",
+            display_name="membership_read_base",
+            permission_names=["membership:read"],
+            is_global=False,
+        )
+
+        admin_tree = await enterprise_auth.user_service.create_user(
+            session=session,
+            email="membership-read-tree@example.com",
+            password="TestPass123!",
+            first_name="Membership",
+            last_name="Tree",
+        )
+        admin_base = await enterprise_auth.user_service.create_user(
+            session=session,
+            email="membership-read-base@example.com",
+            password="TestPass123!",
+            first_name="Membership",
+            last_name="Base",
+        )
+        member = await enterprise_auth.user_service.create_user(
+            session=session,
+            email="member@example.com",
+            password="TestPass123!",
+            first_name="Member",
+            last_name="User",
+        )
+
+        org = await enterprise_auth.entity_service.create_entity(
+            session=session,
+            name="org_mem_read",
+            display_name="Org",
+            slug="org-mem-read",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
+        team = await enterprise_auth.entity_service.create_entity(
+            session=session,
+            name="team_mem_read",
+            display_name="Team",
+            slug="team-mem-read",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="team",
+            parent_id=org.id,
+        )
+
+        membership_service = MembershipService(enterprise_auth.config)
+        await membership_service.add_member(
+            session=session,
+            entity_id=org.id,
+            user_id=admin_tree.id,
+            role_ids=[membership_read_tree_role.id],
+        )
+        await membership_service.add_member(
+            session=session,
+            entity_id=org.id,
+            user_id=admin_base.id,
+            role_ids=[membership_read_base_role.id],
+        )
+        await membership_service.add_member(
+            session=session, entity_id=team.id, user_id=member.id, role_ids=[]
+        )
+        await session.commit()
+
+        token_tree = await _bearer_token(enterprise_auth, str(admin_tree.id))
+        token_base = await _bearer_token(enterprise_auth, str(admin_base.id))
+
+    transport = httpx.ASGITransport(app=enterprise_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        ok = await client.get(
+            f"/entities/{org.id}/members",
+            params={"page": 1, "limit": 50},
+            headers={"Authorization": f"Bearer {token_tree}"},
+        )
+        assert ok.status_code == 200, ok.text
+
+        forbidden = await client.get(
+            f"/entities/{org.id}/members",
+            params={"page": 1, "limit": 50},
+            headers={"Authorization": f"Bearer {token_base}"},
+        )
+        assert forbidden.status_code == 403, forbidden.text

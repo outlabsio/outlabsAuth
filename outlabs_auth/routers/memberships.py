@@ -126,7 +126,9 @@ def get_memberships_router(
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=100),
         session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_permission("membership:read")),
+        auth_result=Depends(
+            auth.require_tree_permission("membership:read", "entity_id", source="path")
+        ),
     ):
         """Get all members of an entity."""
         memberships, _ = await auth.membership_service.get_entity_members(

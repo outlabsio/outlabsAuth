@@ -319,7 +319,7 @@ def get_entities_router(
     async def get_descendants(
         entity_id: UUID,
         entity_type: Optional[str] = Query(None, description="Filter by entity type"),
-        auth_result=Depends(auth.deps.require_permission("entity:read")),
+        auth_result=Depends(auth.require_tree_permission("entity:read", "entity_id")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Get all descendant entities (entire subtree)."""
@@ -355,7 +355,9 @@ def get_entities_router(
         entity_id: UUID,
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=100),
-        auth_result=Depends(auth.deps.require_permission("entity:read")),
+        auth_result=Depends(
+            auth.require_tree_permission("membership:read", "entity_id")
+        ),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Get all members of an entity."""
