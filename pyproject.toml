@@ -24,9 +24,13 @@ dependencies = [
     "fastapi>=0.104.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
-    # Database (MongoDB via Beanie ODM)
-    "beanie==1.30.0",
-    "motor>=3.3.0",
+    # Database (PostgreSQL via SQLModel/SQLAlchemy)
+    "sqlmodel>=0.0.22",
+    "sqlalchemy[asyncio]>=2.0.0",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.0",
+    # CLI
+    "click>=8.1.0",
     # Authentication & Security
     "bcrypt>=4.0.0,<5.0.0",
     "passlib>=1.7.4",
@@ -134,6 +138,9 @@ all = [
     "structlog>=23.0.0",
     "prometheus-client>=0.19.0",
 ]
+
+[project.scripts]
+outlabs-auth = "outlabs_auth.cli:main"
 
 [build-system]
 requires = ["hatchling"]
