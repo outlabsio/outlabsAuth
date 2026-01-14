@@ -10,7 +10,6 @@ class UserResponse(BaseModel):
     User response schema (safe to expose).
 
     Only includes authentication and basic identity fields.
-    For extended profile data, use Beanie Links to your own profile models.
     """
 
     id: str

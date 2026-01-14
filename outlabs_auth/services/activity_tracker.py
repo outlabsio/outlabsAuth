@@ -6,11 +6,12 @@ Background worker syncs to PostgreSQL for historical analytics.
 """
 
 import logging
-from typing import Optional, Dict, Any
-from datetime import datetime, date, timezone, timedelta
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, Optional
 from uuid import UUID
 
-from sqlalchemy import delete as sql_delete, select
+from sqlalchemy import delete as sql_delete
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.models.sql.activity_metric import ActivityMetric
@@ -387,7 +388,6 @@ class ActivityTracker:
             stmt = sql_delete(ActivityMetric).where(
                 ActivityMetric.created_at < cutoff_date
             )
-            stmt = sql_delete(ActivityMetric).where(ActivityMetric.created_at < cutoff_date)
             result = await session.execute(stmt)
             deleted = result.rowcount or 0
             if deleted > 0:
@@ -395,10 +395,6 @@ class ActivityTracker:
 
         except Exception as e:
             logger.error(f"Error cleaning up old metrics: {e}", exc_info=True)
-
-    # Backwards-compatible name
-    async def sync_to_mongodb(self, session: AsyncSession) -> Dict[str, Any]:
-        return await self.sync_to_database(session)
 
     # Helper methods for Redis key generation
 
