@@ -351,12 +351,33 @@ export const useAuthStore = defineStore("auth", () => {
       }
 
       const configData = await response.json();
-      state.config = configData;
+
+      // Transform available_permissions from string[] to PermissionOption[]
+      // Backend returns: ["user:read", "user:create", ...]
+      // Frontend expects: [{value: "user:read", label: "Read", category: "user"}, ...]
+      const transformedPermissions = (
+        configData.available_permissions || []
+      ).map((perm: string) => {
+        const [resource, action] = perm.split(":");
+        return {
+          value: perm,
+          label: action
+            ? action.charAt(0).toUpperCase() + action.slice(1)
+            : perm,
+          category: resource || "other",
+          description: `${action || "access"} ${resource || "resource"}`,
+        };
+      });
+
+      state.config = {
+        ...configData,
+        available_permissions: transformedPermissions,
+      };
       state.isConfigLoaded = true;
 
       console.log(`✅ Auth config loaded: ${configData.preset}`, {
         features: configData.features,
-        permissions: configData.available_permissions.length,
+        permissions: transformedPermissions.length,
       });
     } catch (error) {
       console.error("Failed to fetch auth config:", error);

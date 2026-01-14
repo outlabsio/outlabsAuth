@@ -92,7 +92,7 @@ const columns: TableColumn<Entity>[] = [
                         ) {
                             await deleteEntity({
                                 entityId: row.original.id,
-                                parentId: row.original.parent_id,
+                                parentId: row.original.parent_entity_id,
                             });
                         }
                     },

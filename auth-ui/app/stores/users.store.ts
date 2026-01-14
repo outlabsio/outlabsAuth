@@ -9,7 +9,7 @@ import type { PaginationParams, PaginatedResponse } from "~/types/api";
 
 export interface UserFilters {
   search?: string;
-  is_active?: boolean;
+  status?: "active" | "suspended" | "banned";
   is_superuser?: boolean;
   entity_id?: string;
 }
@@ -71,8 +71,7 @@ export const useUsersStore = defineStore("users", () => {
 
       const queryParams = new URLSearchParams();
       if (filters.search) queryParams.append("search", filters.search);
-      if (filters.is_active !== undefined)
-        queryParams.append("is_active", String(filters.is_active));
+      if (filters.status) queryParams.append("status", filters.status);
       if (filters.is_superuser !== undefined)
         queryParams.append("is_superuser", String(filters.is_superuser));
       if (filters.entity_id) queryParams.append("entity_id", filters.entity_id);
@@ -203,10 +202,50 @@ export const useUsersStore = defineStore("users", () => {
     }
   };
 
-  // Note: User status changes (activate/deactivate/suspend/ban) require
-  // a dedicated API endpoint. The backend has UserStatus enum (active,
-  // suspended, banned, deleted) and update_user_status service method,
-  // but no HTTP endpoint yet. This will be added in a future update.
+  /**
+   * Update user status (activate, suspend, or ban)
+   * Uses PATCH /v1/users/{user_id}/status endpoint
+   */
+  const updateUserStatus = async (
+    userId: string,
+    status: "active" | "suspended" | "banned",
+    options?: {
+      suspended_until?: string; // ISO 8601 datetime for auto-expiry (suspended only)
+      reason?: string; // Optional reason for audit log
+    },
+  ): Promise<User | null> => {
+    try {
+      state.isLoading = true;
+      state.error = null;
+
+      const user = await authStore.apiCall<User>(`/v1/users/${userId}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          status,
+          suspended_until: options?.suspended_until,
+          reason: options?.reason,
+        }),
+      });
+
+      // Update in local state if present
+      const stateIndex = state.users.findIndex((u) => u.id === userId);
+      if (stateIndex !== -1) {
+        state.users[stateIndex] = user;
+      }
+
+      if (state.selectedUser?.id === userId) {
+        state.selectedUser = user;
+      }
+
+      return user;
+    } catch (error: any) {
+      state.error = error.message || "Failed to update user status";
+      console.error("Failed to update user status:", error);
+      throw error;
+    } finally {
+      state.isLoading = false;
+    }
+  };
 
   /**
    * Change user password
@@ -268,6 +307,7 @@ export const useUsersStore = defineStore("users", () => {
     fetchUser,
     createUser,
     updateUser,
+    updateUserStatus,
     deleteUser,
     changePassword,
     clearSelectedUser,
