@@ -2,9 +2,10 @@
 Real Estate Platform API - EnterpriseRBAC Example
 
 Demonstrates OutlabsAuth's EnterpriseRBAC preset for hierarchical entity-based access control.
+Uses PostgreSQL for database storage.
 
 This example shows:
-- Entity hierarchy (Organization → Region → Office → Team)
+- Entity hierarchy (Organization -> Region -> Office -> Team)
 - Tree permissions (hierarchical access control)
 - Entity memberships (users can have multiple roles in different entities)
 - Real estate domain with leads and notes
@@ -15,27 +16,22 @@ See REQUIREMENTS.md for complete use case documentation.
 
 import os
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import List, Optional
+from uuid import UUID
 
-from beanie import init_beanie
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from models import Lead, LeadNote
-from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import SQLModel
+
+from models import Lead, LeadNote
 
 from outlabs_auth import EnterpriseRBAC
-from outlabs_auth.models.api_key import APIKeyModel
-from outlabs_auth.models.closure import EntityClosureModel
-from outlabs_auth.models.entity import EntityModel
-from outlabs_auth.models.membership import EntityMembershipModel
-from outlabs_auth.models.permission import PermissionModel
-from outlabs_auth.models.role import RoleModel
-from outlabs_auth.models.user import UserModel
+from outlabs_auth.models.sql.user import User
 from outlabs_auth.observability import (
-    CorrelationIDMiddleware,
-    ObservabilityConfig,
     ObservabilityPresets,
     create_metrics_router,
 )
@@ -51,6 +47,20 @@ from outlabs_auth.routers import (
 from outlabs_auth.services.user import UserService
 
 # ============================================================================
+# Configuration
+# ============================================================================
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac"
+)
+SECRET_KEY = os.getenv(
+    "SECRET_KEY", "enterprise-rbac-secret-change-in-production-please"
+)
+REDIS_URL = os.getenv("REDIS_URL", None)
+
+
+# ============================================================================
 # Custom User Service with Password Reset Hooks
 # ============================================================================
 
@@ -64,13 +74,13 @@ class RealEstateUserService(UserService):
     """
 
     async def on_after_forgot_password(
-        self, user: UserModel, token: str, request: Optional[any] = None
+        self, user: User, token: str, request: Optional[any] = None
     ) -> None:
         """Send password reset email to user."""
         reset_link = f"http://localhost:3000/reset-password?token={token}"
 
         print("\n" + "=" * 80)
-        print("📧 PASSWORD RESET EMAIL (Development Mode)")
+        print("PASSWORD RESET EMAIL (Development Mode)")
         print("=" * 80)
         print(f"To: {user.email}")
         print(f"Subject: Reset your password")
@@ -80,29 +90,17 @@ class RealEstateUserService(UserService):
         print("=" * 80 + "\n")
 
     async def on_after_reset_password(
-        self, user: UserModel, request: Optional[any] = None
+        self, user: User, request: Optional[any] = None
     ) -> None:
         """Send password reset confirmation email."""
         print("\n" + "=" * 80)
-        print("✅ PASSWORD RESET CONFIRMATION (Development Mode)")
+        print("PASSWORD RESET CONFIRMATION (Development Mode)")
         print("=" * 80)
         print(f"To: {user.email}")
         print(f"Subject: Password reset successful")
         print(f"\nYour password has been successfully reset.")
         print(f"If you didn't make this change, please contact support immediately.")
         print("=" * 80 + "\n")
-
-
-# ============================================================================
-# Configuration
-# ============================================================================
-
-MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27018")
-DATABASE_NAME = os.getenv("DATABASE_NAME", "realestate_enterprise_rbac")
-SECRET_KEY = os.getenv(
-    "SECRET_KEY", "enterprise-rbac-secret-change-in-production-please"
-)
-REDIS_URL = os.getenv("REDIS_URL", None)
 
 
 # ============================================================================
@@ -187,31 +185,26 @@ async def lifespan(app: FastAPI):
     global auth
 
     # Startup
-    print("🚀 Starting Real Estate API (EnterpriseRBAC) v1.0.0...")
-
-    # Connect to MongoDB
-    print("📦 Connecting to MongoDB...")
-    client = AsyncIOMotorClient(MONGODB_URL)
-    db = client[DATABASE_NAME]
+    print("Starting Real Estate API (EnterpriseRBAC) v1.0.0...")
 
     # Connect to Redis (if available)
     redis_client = None
     if REDIS_URL:
         try:
-            print("📮 Connecting to Redis...")
+            print("Connecting to Redis...")
             import redis.asyncio as redis
 
             redis_client = redis.from_url(REDIS_URL, decode_responses=True)
             # Test connection
             await redis_client.ping()
-            print(f"✅ Redis connected: {REDIS_URL}")
+            print(f"Redis connected: {REDIS_URL}")
         except Exception as e:
-            print(f"⚠️  Redis connection failed: {e}")
-            print("   Continuing without caching...")
+            print(f"Redis connection failed: {e}")
+            print("Continuing without caching...")
             redis_client = None
 
     # Initialize EnterpriseRBAC
-    print("🔐 Initializing OutlabsAuth EnterpriseRBAC...")
+    print("Initializing OutlabsAuth EnterpriseRBAC...")
     env = os.getenv("ENV", "development")
     if env == "production":
         obs_config = ObservabilityPresets.production()
@@ -220,7 +213,7 @@ async def lifespan(app: FastAPI):
         obs_config.enable_metrics = True
 
     auth = EnterpriseRBAC(
-        database=db,
+        database_url=DATABASE_URL,
         secret_key=SECRET_KEY,
         access_token_expire_minutes=480,  # 8 hours for dev (default: 15 min)
         refresh_token_expire_days=7,  # 7 days for dev (default: 30 days)
@@ -230,33 +223,20 @@ async def lifespan(app: FastAPI):
         observability_config=obs_config,
     )
 
-    # Initialize Beanie with all document models
-    await init_beanie(
-        database=db,
-        document_models=[
-            UserModel,
-            RoleModel,
-            PermissionModel,
-            APIKeyModel,
-            EntityModel,
-            EntityClosureModel,
-            EntityMembershipModel,
-            Lead,
-            LeadNote,
-        ],
-    )
-
     await auth.initialize()
-    print("✅ Database initialized")
+
+    # Create tables (including domain models)
+    print("Creating database tables...")
+    async with auth.engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+    print("Database tables created")
 
     # Replace user service with custom one
-    auth.user_service = RealEstateUserService(
-        database=db, config=auth.config, notification_service=auth.notification_service
-    )
-    print("✅ Custom user service with password reset hooks enabled")
+    auth.user_service = RealEstateUserService(config=auth.config)
+    print("Custom user service with password reset hooks enabled")
 
     # Include standard OutlabsAuth routers with /v1 prefix
-    print("📝 Including API routers...")
+    print("Including API routers...")
     app.include_router(get_auth_router(auth, prefix="/v1/auth"))
     app.include_router(get_users_router(auth, prefix="/v1/users"))
     app.include_router(get_api_keys_router(auth, prefix="/v1/api-keys"))
@@ -268,19 +248,18 @@ async def lifespan(app: FastAPI):
     # Include observability metrics endpoint
     app.include_router(create_metrics_router(auth.observability))
 
-    print("✅ Routers included (including /metrics for Prometheus)")
-    print("✅ Real Estate API (EnterpriseRBAC) started successfully")
-    print(f"📦 Database: {DATABASE_NAME}")
-    print(f"📍 API: http://localhost:8004")
-    print(f"📚 Docs: http://localhost:8004/docs")
+    print("Routers included (including /metrics for Prometheus)")
+    print("Real Estate API (EnterpriseRBAC) started successfully")
+    print(f"Database: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else DATABASE_URL}")
+    print(f"API: http://localhost:8004")
+    print(f"Docs: http://localhost:8004/docs")
 
     yield
 
     # Shutdown
-    print("👋 Shutting down...")
+    print("Shutting down...")
     await auth.shutdown()
-    client.close()
-    print("✅ Real Estate API shutdown complete")
+    print("Real Estate API shutdown complete")
 
 
 app = FastAPI(
@@ -299,9 +278,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Note: CorrelationIDMiddleware is added during lifespan startup
-# Cannot add here because auth is not yet initialized
-
 
 # ============================================================================
 # Helper Functions
@@ -313,6 +289,28 @@ def get_auth() -> EnterpriseRBAC:
     if auth is None:
         raise HTTPException(status_code=500, detail="Auth not initialized")
     return auth
+
+
+def _lead_to_response(lead: Lead) -> LeadResponse:
+    """Convert Lead model to response"""
+    return LeadResponse(
+        id=str(lead.id),
+        entity_id=str(lead.entity_id),
+        first_name=lead.first_name,
+        last_name=lead.last_name,
+        email=lead.email,
+        phone=lead.phone,
+        lead_type=lead.lead_type,
+        status=lead.status,
+        source=lead.source,
+        budget=lead.budget,
+        location=lead.location,
+        property_type=lead.property_type,
+        assigned_to=str(lead.assigned_to) if lead.assigned_to else None,
+        created_by=str(lead.created_by),
+        created_at=lead.created_at,
+        updated_at=lead.updated_at,
+    )
 
 
 # ============================================================================
@@ -329,16 +327,19 @@ def get_auth() -> EnterpriseRBAC:
 )
 async def create_lead(
     data: LeadCreateRequest,
-    current_user: UserModel = Depends(lambda: get_auth().deps.requires("lead:create")),
+    auth_result=Depends(lambda: get_auth().deps.require_permission("lead:create")),
+    session: AsyncSession = Depends(lambda: get_auth().get_session),
 ):
     """
     Create a new lead.
 
     Requires `lead:create` permission in the target entity.
     """
+    user = auth_result.get("user")
+
     # Create lead
     lead = Lead(
-        entity_id=data.entity_id,
+        entity_id=UUID(data.entity_id),
         first_name=data.first_name,
         last_name=data.last_name,
         email=data.email,
@@ -349,26 +350,27 @@ async def create_lead(
         budget=data.budget,
         location=data.location,
         property_type=data.property_type,
-        assigned_to=data.assigned_to,
-        created_by=str(current_user.id),
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
+        assigned_to=UUID(data.assigned_to) if data.assigned_to else None,
+        created_by=user.id,
     )
 
-    await lead.insert()
+    session.add(lead)
+    await session.commit()
+    await session.refresh(lead)
 
-    return LeadResponse(id=str(lead.id), **lead.dict(exclude={"id"}))
+    return _lead_to_response(lead)
 
 
 @app.get("/v1/leads", response_model=dict, tags=["Leads"], summary="List leads")
 async def list_leads(
     entity_id: Optional[str] = Query(None, description="Filter by entity"),
-    status: Optional[str] = Query(None, description="Filter by status"),
+    lead_status: Optional[str] = Query(None, description="Filter by status"),
     lead_type: Optional[str] = Query(None, description="Filter by type"),
     assigned_to: Optional[str] = Query(None, description="Filter by agent"),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
-    current_user: UserModel = Depends(lambda: get_auth().deps.requires("lead:read")),
+    auth_result=Depends(lambda: get_auth().deps.require_permission("lead:read")),
+    session: AsyncSession = Depends(lambda: get_auth().get_session),
 ):
     """
     List leads.
@@ -376,31 +378,39 @@ async def list_leads(
     Returns leads based on user's entity memberships and permissions.
     Users with `lead:read_tree` can see leads from descendant entities.
     """
-    # Build query
-    query = {}
+    # Build query filters
+    filters = []
 
     if entity_id:
-        query["entity_id"] = entity_id
-    if status:
-        query["status"] = status
+        filters.append(Lead.entity_id == UUID(entity_id))
+    if lead_status:
+        filters.append(Lead.status == lead_status)
     if lead_type:
-        query["lead_type"] = lead_type
+        filters.append(Lead.lead_type == lead_type)
     if assigned_to:
-        query["assigned_to"] = assigned_to
+        filters.append(Lead.assigned_to == UUID(assigned_to))
 
-    # Paginate
+    # Get total count
+    count_stmt = select(func.count()).select_from(Lead)
+    if filters:
+        count_stmt = count_stmt.where(*filters)
+    count_result = await session.execute(count_stmt)
+    total = count_result.scalar() or 0
+
+    # Get paginated results
     skip = (page - 1) * limit
-    leads = await Lead.find(query).skip(skip).limit(limit).to_list()
-    total = await Lead.find(query).count()
+    stmt = select(Lead).offset(skip).limit(limit)
+    if filters:
+        stmt = stmt.where(*filters)
+    result = await session.execute(stmt)
+    leads = result.scalars().all()
 
     return {
-        "leads": [
-            LeadResponse(id=str(lead.id), **lead.dict(exclude={"id"})) for lead in leads
-        ],
+        "leads": [_lead_to_response(lead) for lead in leads],
         "total": total,
         "page": page,
         "limit": limit,
-        "pages": (total + limit - 1) // limit,
+        "pages": (total + limit - 1) // limit if total > 0 else 0,
     }
 
 
@@ -412,20 +422,21 @@ async def list_leads(
 )
 async def get_lead(
     lead_id: str,
-    current_user: UserModel = Depends(lambda: get_auth().deps.requires("lead:read")),
+    auth_result=Depends(lambda: get_auth().deps.require_permission("lead:read")),
+    session: AsyncSession = Depends(lambda: get_auth().get_session),
 ):
     """
     Get lead details.
 
     Requires `lead:read` permission in the lead's entity.
     """
-    lead = await Lead.get(lead_id)
+    lead = await session.get(Lead, UUID(lead_id))
     if not lead:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found"
         )
 
-    return LeadResponse(id=str(lead.id), **lead.dict(exclude={"id"}))
+    return _lead_to_response(lead)
 
 
 @app.put(
@@ -437,28 +448,33 @@ async def get_lead(
 async def update_lead(
     lead_id: str,
     data: LeadUpdateRequest,
-    current_user: UserModel = Depends(lambda: get_auth().deps.requires("lead:update")),
+    auth_result=Depends(lambda: get_auth().deps.require_permission("lead:update")),
+    session: AsyncSession = Depends(lambda: get_auth().get_session),
 ):
     """
     Update lead.
 
     Requires `lead:update` permission in the lead's entity.
     """
-    lead = await Lead.get(lead_id)
+    lead = await session.get(Lead, UUID(lead_id))
     if not lead:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found"
         )
 
     # Update fields
-    update_data = data.dict(exclude_unset=True)
+    update_data = data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
-        setattr(lead, field, value)
+        if field == "assigned_to" and value:
+            setattr(lead, field, UUID(value))
+        else:
+            setattr(lead, field, value)
 
-    lead.updated_at = datetime.now(UTC)
-    await lead.save()
+    lead.updated_at = datetime.now(timezone.utc)
+    await session.commit()
+    await session.refresh(lead)
 
-    return LeadResponse(id=str(lead.id), **lead.dict(exclude={"id"}))
+    return _lead_to_response(lead)
 
 
 @app.delete(
@@ -469,20 +485,22 @@ async def update_lead(
 )
 async def delete_lead(
     lead_id: str,
-    current_user: UserModel = Depends(lambda: get_auth().deps.requires("lead:delete")),
+    auth_result=Depends(lambda: get_auth().deps.require_permission("lead:delete")),
+    session: AsyncSession = Depends(lambda: get_auth().get_session),
 ):
     """
     Delete lead.
 
     Requires `lead:delete` permission in the lead's entity.
     """
-    lead = await Lead.get(lead_id)
+    lead = await session.get(Lead, UUID(lead_id))
     if not lead:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found"
         )
 
-    await lead.delete()
+    await session.delete(lead)
+    await session.commit()
 
 
 # ============================================================================
@@ -523,167 +541,37 @@ async def get_auth_config():
         },
         "available_permissions": [
             # User permissions
-            {
-                "value": "user:read",
-                "label": "User Read",
-                "category": "Users",
-                "description": "View user information",
-            },
-            {
-                "value": "user:read_tree",
-                "label": "User Read (Tree)",
-                "category": "Users",
-                "description": "View users in entity and all descendants",
-            },
-            {
-                "value": "user:create",
-                "label": "User Create",
-                "category": "Users",
-                "description": "Create new users",
-            },
-            {
-                "value": "user:update",
-                "label": "User Update",
-                "category": "Users",
-                "description": "Update user information",
-            },
-            {
-                "value": "user:delete",
-                "label": "User Delete",
-                "category": "Users",
-                "description": "Delete users",
-            },
+            {"value": "user:read", "label": "User Read", "category": "Users"},
+            {"value": "user:read_tree", "label": "User Read (Tree)", "category": "Users"},
+            {"value": "user:create", "label": "User Create", "category": "Users"},
+            {"value": "user:update", "label": "User Update", "category": "Users"},
+            {"value": "user:delete", "label": "User Delete", "category": "Users"},
             # Entity permissions
-            {
-                "value": "entity:read",
-                "label": "Entity Read",
-                "category": "Entities",
-                "description": "View entity information",
-            },
-            {
-                "value": "entity:read_tree",
-                "label": "Entity Read (Tree)",
-                "category": "Entities",
-                "description": "View entity and all descendants",
-            },
-            {
-                "value": "entity:create",
-                "label": "Entity Create",
-                "category": "Entities",
-                "description": "Create new entities",
-            },
-            {
-                "value": "entity:update",
-                "label": "Entity Update",
-                "category": "Entities",
-                "description": "Update entity information",
-            },
-            {
-                "value": "entity:delete",
-                "label": "Entity Delete",
-                "category": "Entities",
-                "description": "Delete entities",
-            },
+            {"value": "entity:read", "label": "Entity Read", "category": "Entities"},
+            {"value": "entity:read_tree", "label": "Entity Read (Tree)", "category": "Entities"},
+            {"value": "entity:create", "label": "Entity Create", "category": "Entities"},
+            {"value": "entity:update", "label": "Entity Update", "category": "Entities"},
+            {"value": "entity:delete", "label": "Entity Delete", "category": "Entities"},
             # Lead permissions
-            {
-                "value": "lead:read",
-                "label": "Lead Read",
-                "category": "Leads",
-                "description": "View leads in entity",
-            },
-            {
-                "value": "lead:read_tree",
-                "label": "Lead Read (Tree)",
-                "category": "Leads",
-                "description": "View leads in entity and all descendants",
-            },
-            {
-                "value": "lead:create",
-                "label": "Lead Create",
-                "category": "Leads",
-                "description": "Create new leads",
-            },
-            {
-                "value": "lead:update",
-                "label": "Lead Update",
-                "category": "Leads",
-                "description": "Update lead information",
-            },
-            {
-                "value": "lead:delete",
-                "label": "Lead Delete",
-                "category": "Leads",
-                "description": "Delete leads",
-            },
+            {"value": "lead:read", "label": "Lead Read", "category": "Leads"},
+            {"value": "lead:read_tree", "label": "Lead Read (Tree)", "category": "Leads"},
+            {"value": "lead:create", "label": "Lead Create", "category": "Leads"},
+            {"value": "lead:update", "label": "Lead Update", "category": "Leads"},
+            {"value": "lead:delete", "label": "Lead Delete", "category": "Leads"},
             # Role permissions
-            {
-                "value": "role:read",
-                "label": "Role Read",
-                "category": "Roles",
-                "description": "View roles",
-            },
-            {
-                "value": "role:create",
-                "label": "Role Create",
-                "category": "Roles",
-                "description": "Create new roles",
-            },
-            {
-                "value": "role:update",
-                "label": "Role Update",
-                "category": "Roles",
-                "description": "Update roles",
-            },
-            {
-                "value": "role:delete",
-                "label": "Role Delete",
-                "category": "Roles",
-                "description": "Delete roles",
-            },
+            {"value": "role:read", "label": "Role Read", "category": "Roles"},
+            {"value": "role:create", "label": "Role Create", "category": "Roles"},
+            {"value": "role:update", "label": "Role Update", "category": "Roles"},
+            {"value": "role:delete", "label": "Role Delete", "category": "Roles"},
             # Permission permissions
-            {
-                "value": "permission:read",
-                "label": "Permission Read",
-                "category": "Permissions",
-                "description": "View permissions",
-            },
-            {
-                "value": "permission:create",
-                "label": "Permission Create",
-                "category": "Permissions",
-                "description": "Create new permissions",
-            },
-            {
-                "value": "permission:update",
-                "label": "Permission Update",
-                "category": "Permissions",
-                "description": "Update permissions",
-            },
-            {
-                "value": "permission:delete",
-                "label": "Permission Delete",
-                "category": "Permissions",
-                "description": "Delete permissions",
-            },
+            {"value": "permission:read", "label": "Permission Read", "category": "Permissions"},
+            {"value": "permission:create", "label": "Permission Create", "category": "Permissions"},
+            {"value": "permission:update", "label": "Permission Update", "category": "Permissions"},
+            {"value": "permission:delete", "label": "Permission Delete", "category": "Permissions"},
             # API Key permissions
-            {
-                "value": "api_key:read",
-                "label": "API Key Read",
-                "category": "API Keys",
-                "description": "View API keys",
-            },
-            {
-                "value": "api_key:create",
-                "label": "API Key Create",
-                "category": "API Keys",
-                "description": "Create API keys",
-            },
-            {
-                "value": "api_key:revoke",
-                "label": "API Key Revoke",
-                "category": "API Keys",
-                "description": "Revoke API keys",
-            },
+            {"value": "api_key:read", "label": "API Key Read", "category": "API Keys"},
+            {"value": "api_key:create", "label": "API Key Create", "category": "API Keys"},
+            {"value": "api_key:revoke", "label": "API Key Revoke", "category": "API Keys"},
         ],
     }
 

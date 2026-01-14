@@ -1,645 +1,620 @@
 """
 Role Service
 
-Handles role management operations:
-- Create roles
-- Update roles
-- Delete roles
-- Assign permissions to roles
-- List roles
-- Assign roles to users (SimpleRBAC via UserRoleMembership)
+Handles role management operations with PostgreSQL/SQLAlchemy.
 """
 
-from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
+from uuid import UUID
 
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
     InvalidInputError,
     RoleNotFoundError,
+    UserNotFoundError,
 )
-from outlabs_auth.models.permission import PermissionModel
-from outlabs_auth.models.role import RoleModel
+from outlabs_auth.models.sql.role import Role, RolePermission
+from outlabs_auth.models.sql.permission import Permission
+from outlabs_auth.models.sql.user import User
+from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
+from outlabs_auth.models.sql.enums import MembershipStatus
+from outlabs_auth.services.base import BaseService
 from outlabs_auth.utils.validation import validate_name, validate_slug
 
-if TYPE_CHECKING:
-    from outlabs_auth.models.user_role_membership import UserRoleMembership
 
-
-class RoleService:
+class RoleService(BaseService[Role]):
     """
     Role management service.
 
     Handles:
     - Role CRUD operations
-    - Permission assignment to roles
+    - Permission assignment to roles (via junction table)
     - Role listing and search
     - System role protection
+    - User role membership (SimpleRBAC)
     """
 
-    def __init__(
-        self,
-        database: AsyncIOMotorDatabase,
-        config: AuthConfig,
-    ):
+    def __init__(self, config: AuthConfig):
         """
         Initialize RoleService.
 
         Args:
-            database: MongoDB database instance
             config: Authentication configuration
         """
-        self.database = database
+        super().__init__(Role)
         self.config = config
 
     async def create_role(
         self,
+        session: AsyncSession,
         name: str,
         display_name: str,
         description: Optional[str] = None,
-        permissions: Optional[List[str]] = None,
+        permission_names: Optional[List[str]] = None,
         is_global: bool = True,
         is_system_role: bool = False,
-        entity_id: Optional[str] = None,
-    ) -> RoleModel:
+        entity_id: Optional[UUID] = None,
+        tenant_id: Optional[str] = None,
+    ) -> Role:
         """
         Create a new role.
 
         Args:
-            name: Role name (will be used as slug, normalized to lowercase)
+            session: Database session
+            name: Role name (normalized to lowercase slug)
             display_name: Human-readable role name
             description: Optional role description
-            permissions: List of permission names to assign
-            is_global: Whether role can be assigned anywhere (SimpleRBAC default: True)
-            is_system_role: Whether this is a system role (cannot be modified)
-            entity_id: Optional entity ID to scope role to (EnterpriseRBAC only)
+            permission_names: List of permission names to assign
+            is_global: Whether role can be assigned anywhere
+            is_system_role: Whether this is a protected system role
+            entity_id: Optional entity ID to scope role (EnterpriseRBAC)
+            tenant_id: Optional tenant ID
 
         Returns:
-            RoleModel: Created role
+            Role: Created role
 
         Raises:
-            InvalidInputError: If role name already exists or is invalid
-            EntityNotFoundError: If entity_id provided but entity not found
-
-        Example:
-            >>> role = await role_service.create_role(
-            ...     name="admin",
-            ...     display_name="Administrator",
-            ...     permissions=["user:create", "user:delete"]
-            ... )
-            >>> role.name
-            'admin'
+            InvalidInputError: If role name already exists
         """
-        # Validate and normalize name
+        # Validate and normalize
         name = validate_slug(name, "name")
         display_name = validate_name(display_name, "display_name")
 
         # Check if role already exists
-        existing_role = await RoleModel.find_one(RoleModel.name == name)
-        if existing_role:
+        existing = await self.get_one(session, Role.name == name)
+        if existing:
             raise InvalidInputError(
                 message=f"Role with name '{name}' already exists",
                 details={"name": name},
             )
 
-        # Fetch entity if entity_id provided (EnterpriseRBAC)
-        entity = None
-        if entity_id:
-            from outlabs_auth.core.exceptions import EntityNotFoundError
-            from outlabs_auth.models.entity import EntityModel
-
-            entity = await EntityModel.get(entity_id)
-            if not entity:
-                raise EntityNotFoundError(
-                    message="Entity not found", details={"entity_id": entity_id}
-                )
-
         # Create role
-        role = RoleModel(
+        role = Role(
             name=name,
             display_name=display_name,
             description=description,
-            permissions=permissions or [],
             is_global=is_global,
             is_system_role=is_system_role,
-            entity=entity,
+            entity_id=entity_id,
+            tenant_id=tenant_id,
         )
 
-        await role.save()
+        await self.create(session, role)
+
+        # Add permissions via junction table
+        if permission_names:
+            await self._add_permissions_by_name(session, role.id, permission_names)
+
         return role
 
-    async def get_role_by_id(self, role_id: str) -> Optional[RoleModel]:
+    async def get_role_by_id(
+        self,
+        session: AsyncSession,
+        role_id: UUID,
+        load_permissions: bool = False,
+    ) -> Optional[Role]:
         """
         Get role by ID.
 
         Args:
-            role_id: Role ID
+            session: Database session
+            role_id: Role UUID
+            load_permissions: Whether to eager load permissions
 
         Returns:
-            Optional[RoleModel]: Role if found, None otherwise
-
-        Example:
-            >>> role = await role_service.get_role_by_id("507f1f77bcf86cd799439011")
-            >>> role.name if role else None
-            'admin'
+            Role if found, None otherwise
         """
-        return await RoleModel.get(role_id)
+        options = []
+        if load_permissions:
+            options.append(selectinload(Role.permissions))
+        return await self.get_by_id(session, role_id, options=options)
 
-    async def get_role_by_name(self, name: str) -> Optional[RoleModel]:
+    async def get_role_by_name(
+        self,
+        session: AsyncSession,
+        name: str,
+    ) -> Optional[Role]:
         """
         Get role by name.
 
         Args:
+            session: Database session
             name: Role name
 
         Returns:
-            Optional[RoleModel]: Role if found, None otherwise
-
-        Example:
-            >>> role = await role_service.get_role_by_name("admin")
-            >>> role.display_name if role else None
-            'Administrator'
+            Role if found, None otherwise
         """
         name = validate_slug(name, "name")
-        return await RoleModel.find_one(RoleModel.name == name)
+        return await self.get_one(session, Role.name == name)
 
-    async def update_role(self, role_id: str, update_dict: Dict[str, Any]) -> RoleModel:
-        """
-        Update role with fields from update_dict.
-
-        Note: Cannot update system roles.
-
-        Args:
-            role_id: Role ID
-            update_dict: Dictionary of fields to update (supports display_name, description, permissions)
-
-        Returns:
-            RoleModel: Updated role
-
-        Raises:
-            RoleNotFoundError: If role doesn't exist
-            InvalidInputError: If trying to modify system role
-
-        Example:
-            >>> role = await role_service.update_role(
-            ...     role_id="507f1f77bcf86cd799439011",
-            ...     update_dict={"permissions": ["user:create", "user:read", "user:update"]}
-            ... )
-            >>> len(role.permissions)
-            3
-        """
-        role = await RoleModel.get(role_id)
-        if not role:
-            raise RoleNotFoundError(
-                message="Role not found", details={"role_id": role_id}
-            )
-
-        # Protect system roles
-        if role.is_system_role:
-            raise InvalidInputError(
-                message="Cannot modify system role",
-                details={"role_id": role_id, "role_name": role.name},
-            )
-
-        # Update fields from dict (only supported fields for SimpleRBAC)
-        if "display_name" in update_dict:
-            role.display_name = validate_name(
-                update_dict["display_name"], "display_name"
-            )
-
-        if "description" in update_dict:
-            role.description = update_dict["description"]
-
-        if "permissions" in update_dict:
-            role.permissions = update_dict["permissions"]
-
-        await role.save()
-        return role
-
-    async def add_permissions(
+    async def update_role(
         self,
-        role_id: str,
-        permissions: List[str],
-    ) -> RoleModel:
+        session: AsyncSession,
+        role_id: UUID,
+        display_name: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> Role:
         """
-        Add permissions to role (without removing existing).
+        Update role.
 
         Args:
-            role_id: Role ID
-            permissions: Permission names to add
+            session: Database session
+            role_id: Role UUID
+            display_name: New display name
+            description: New description
 
         Returns:
-            RoleModel: Updated role
+            Updated role
 
         Raises:
             RoleNotFoundError: If role doesn't exist
             InvalidInputError: If trying to modify system role
-
-        Example:
-            >>> role = await role_service.add_permissions(
-            ...     role_id="507f1f77bcf86cd799439011",
-            ...     permissions=["user:delete"]
-            ... )
         """
-        role = await RoleModel.get(role_id)
+        role = await self.get_by_id(session, role_id)
         if not role:
             raise RoleNotFoundError(
-                message="Role not found", details={"role_id": role_id}
+                message="Role not found",
+                details={"role_id": str(role_id)},
             )
 
-        # Protect system roles
         if role.is_system_role:
             raise InvalidInputError(
                 message="Cannot modify system role",
-                details={"role_id": role_id, "role_name": role.name},
+                details={"role_id": str(role_id), "role_name": role.name},
             )
 
-        # Add permissions (avoid duplicates)
-        existing_permissions = set(role.permissions)
-        for perm in permissions:
-            existing_permissions.add(perm)
+        if display_name is not None:
+            role.display_name = validate_name(display_name, "display_name")
 
-        role.permissions = list(existing_permissions)
-        await role.save()
+        if description is not None:
+            role.description = description
+
+        await self.update(session, role)
         return role
 
-    async def remove_permissions(
+    async def delete_role(
         self,
-        role_id: str,
-        permissions: List[str],
-    ) -> RoleModel:
-        """
-        Remove permissions from role.
-
-        Args:
-            role_id: Role ID
-            permissions: Permission names to remove
-
-        Returns:
-            RoleModel: Updated role
-
-        Raises:
-            RoleNotFoundError: If role doesn't exist
-            InvalidInputError: If trying to modify system role
-
-        Example:
-            >>> role = await role_service.remove_permissions(
-            ...     role_id="507f1f77bcf86cd799439011",
-            ...     permissions=["user:delete"]
-            ... )
-        """
-        role = await RoleModel.get(role_id)
-        if not role:
-            raise RoleNotFoundError(
-                message="Role not found", details={"role_id": role_id}
-            )
-
-        # Protect system roles
-        if role.is_system_role:
-            raise InvalidInputError(
-                message="Cannot modify system role",
-                details={"role_id": role_id, "role_name": role.name},
-            )
-
-        # Remove permissions
-        permissions_to_remove = set(permissions)
-        role.permissions = [
-            p for p in role.permissions if p not in permissions_to_remove
-        ]
-
-        await role.save()
-        return role
-
-    async def delete_role(self, role_id: str) -> bool:
+        session: AsyncSession,
+        role_id: UUID,
+    ) -> bool:
         """
         Delete role.
 
-        Note: Cannot delete system roles.
-
         Args:
-            role_id: Role ID
+            session: Database session
+            role_id: Role UUID
 
         Returns:
-            bool: True if deleted, False if not found
+            True if deleted, False if not found
 
         Raises:
             InvalidInputError: If trying to delete system role
-
-        Example:
-            >>> deleted = await role_service.delete_role("507f1f77bcf86cd799439011")
-            >>> deleted
-            True
         """
-        role = await RoleModel.get(role_id)
+        role = await self.get_by_id(session, role_id)
         if not role:
             return False
 
-        # Protect system roles
         if role.is_system_role:
             raise InvalidInputError(
                 message="Cannot delete system role",
-                details={"role_id": role_id, "role_name": role.name},
+                details={"role_id": str(role_id), "role_name": role.name},
             )
 
-        await role.delete()
+        await self.delete(session, role)
         return True
 
     async def list_roles(
         self,
+        session: AsyncSession,
         page: int = 1,
         limit: int = 20,
         is_global: Optional[bool] = None,
-    ) -> tuple[List[RoleModel], int]:
+        tenant_id: Optional[str] = None,
+    ) -> Tuple[List[Role], int]:
         """
         List roles with pagination.
 
         Args:
+            session: Database session
             page: Page number (1-indexed)
             limit: Results per page
             is_global: Filter by global flag
+            tenant_id: Filter by tenant
 
         Returns:
-            tuple[List[RoleModel], int]: (roles, total_count)
-
-        Example:
-            >>> roles, total = await role_service.list_roles(page=1, limit=10)
-            >>> len(roles)
-            10
-            >>> total
-            25
+            Tuple of (roles, total_count)
         """
-        # Build query
-        query = {}
+        filters = []
         if is_global is not None:
-            query["is_global"] = is_global
+            filters.append(Role.is_global == is_global)
+        if tenant_id:
+            filters.append(Role.tenant_id == tenant_id)
 
-        # Get total count
-        total_count = await RoleModel.find(query).count()
+        total_count = await self.count(session, *filters)
 
-        # Get paginated results
         skip = (page - 1) * limit
-        roles = await RoleModel.find(query).skip(skip).limit(limit).to_list()
+        roles = await self.get_many(
+            session,
+            *filters,
+            skip=skip,
+            limit=limit,
+            order_by=Role.name,
+        )
 
         return roles, total_count
 
-    async def get_role_permissions(self, role_id: str) -> List[str]:
+    # =========================================================================
+    # Permission Management (via junction table)
+    # =========================================================================
+
+    async def _add_permissions_by_name(
+        self,
+        session: AsyncSession,
+        role_id: UUID,
+        permission_names: List[str],
+    ) -> None:
+        """Add permissions to role by name."""
+        for perm_name in permission_names:
+            # Find permission by name
+            stmt = select(Permission).where(Permission.name == perm_name)
+            result = await session.execute(stmt)
+            perm = result.scalar_one_or_none()
+
+            if perm:
+                # Create junction record
+                role_perm = RolePermission(role_id=role_id, permission_id=perm.id)
+                session.add(role_perm)
+
+        await session.flush()
+
+    async def add_permissions(
+        self,
+        session: AsyncSession,
+        role_id: UUID,
+        permission_ids: List[UUID],
+    ) -> Role:
+        """
+        Add permissions to role.
+
+        Args:
+            session: Database session
+            role_id: Role UUID
+            permission_ids: Permission UUIDs to add
+
+        Returns:
+            Updated role
+
+        Raises:
+            RoleNotFoundError: If role doesn't exist
+            InvalidInputError: If trying to modify system role
+        """
+        role = await self.get_by_id(session, role_id)
+        if not role:
+            raise RoleNotFoundError(
+                message="Role not found",
+                details={"role_id": str(role_id)},
+            )
+
+        if role.is_system_role:
+            raise InvalidInputError(
+                message="Cannot modify system role",
+                details={"role_id": str(role_id)},
+            )
+
+        # Get existing permission IDs
+        stmt = select(RolePermission.permission_id).where(
+            RolePermission.role_id == role_id
+        )
+        result = await session.execute(stmt)
+        existing_ids = {row[0] for row in result}
+
+        # Add new permissions
+        for perm_id in permission_ids:
+            if perm_id not in existing_ids:
+                role_perm = RolePermission(role_id=role_id, permission_id=perm_id)
+                session.add(role_perm)
+
+        await session.flush()
+        return role
+
+    async def remove_permissions(
+        self,
+        session: AsyncSession,
+        role_id: UUID,
+        permission_ids: List[UUID],
+    ) -> Role:
+        """
+        Remove permissions from role.
+
+        Args:
+            session: Database session
+            role_id: Role UUID
+            permission_ids: Permission UUIDs to remove
+
+        Returns:
+            Updated role
+
+        Raises:
+            RoleNotFoundError: If role doesn't exist
+            InvalidInputError: If trying to modify system role
+        """
+        role = await self.get_by_id(session, role_id)
+        if not role:
+            raise RoleNotFoundError(
+                message="Role not found",
+                details={"role_id": str(role_id)},
+            )
+
+        if role.is_system_role:
+            raise InvalidInputError(
+                message="Cannot modify system role",
+                details={"role_id": str(role_id)},
+            )
+
+        # Delete junction records
+        for perm_id in permission_ids:
+            stmt = select(RolePermission).where(
+                RolePermission.role_id == role_id,
+                RolePermission.permission_id == perm_id,
+            )
+            result = await session.execute(stmt)
+            role_perm = result.scalar_one_or_none()
+            if role_perm:
+                await session.delete(role_perm)
+
+        await session.flush()
+        return role
+
+    async def get_role_permissions(
+        self,
+        session: AsyncSession,
+        role_id: UUID,
+    ) -> List[Permission]:
         """
         Get all permissions for a role.
 
         Args:
-            role_id: Role ID
+            session: Database session
+            role_id: Role UUID
 
         Returns:
-            List[str]: Permission names
+            List of Permission objects
 
         Raises:
             RoleNotFoundError: If role doesn't exist
-
-        Example:
-            >>> permissions = await role_service.get_role_permissions("507f...")
-            >>> permissions
-            ['user:create', 'user:read', 'user:update']
         """
-        role = await RoleModel.get(role_id)
+        role = await self.get_by_id(
+            session,
+            role_id,
+            options=[selectinload(Role.permissions)],
+        )
         if not role:
             raise RoleNotFoundError(
-                message="Role not found", details={"role_id": role_id}
+                message="Role not found",
+                details={"role_id": str(role_id)},
             )
 
         return role.permissions
 
-    # -------------------------------------------------------------------------
-    # UserRoleMembership Methods (SimpleRBAC)
-    # -------------------------------------------------------------------------
+    async def get_role_permission_names(
+        self,
+        session: AsyncSession,
+        role_id: UUID,
+    ) -> List[str]:
+        """
+        Get permission names for a role.
+
+        Args:
+            session: Database session
+            role_id: Role UUID
+
+        Returns:
+            List of permission name strings
+        """
+        permissions = await self.get_role_permissions(session, role_id)
+        return [p.name for p in permissions]
+
+    # =========================================================================
+    # User Role Membership (SimpleRBAC)
+    # =========================================================================
 
     async def assign_role_to_user(
         self,
-        user_id: str,
-        role_id: str,
-        assigned_by: Optional[str] = None,
-        valid_from: Optional["datetime"] = None,
-        valid_until: Optional["datetime"] = None,
-    ) -> "UserRoleMembership":
+        session: AsyncSession,
+        user_id: UUID,
+        role_id: UUID,
+        assigned_by_id: Optional[UUID] = None,
+        valid_from: Optional[datetime] = None,
+        valid_until: Optional[datetime] = None,
+    ) -> UserRoleMembership:
         """
-        Assign role to user (SimpleRBAC only).
-
-        Creates a UserRoleMembership record linking user to role with full audit trail.
+        Assign role to user (SimpleRBAC).
 
         Args:
-            user_id: User ID to assign role to
-            role_id: Role ID to assign
-            assigned_by: Optional user ID who performed the assignment (for audit)
-            valid_from: Optional start date for role validity
-            valid_until: Optional end date for role validity (e.g., 90-day contractor)
+            session: Database session
+            user_id: User UUID
+            role_id: Role UUID
+            assigned_by_id: Optional assigner's user UUID
+            valid_from: Optional start of validity
+            valid_until: Optional end of validity
 
         Returns:
-            UserRoleMembership: Created membership record
+            Created membership
 
         Raises:
             UserNotFoundError: If user doesn't exist
             RoleNotFoundError: If role doesn't exist
             InvalidInputError: If membership already exists
-
-        Example:
-            >>> membership = await role_service.assign_role_to_user(
-            ...     user_id="507f...",
-            ...     role_id="507f...",
-            ...     assigned_by=admin_user.id,
-            ...     valid_until=datetime.now(timezone.utc) + timedelta(days=90)
-            ... )
-            >>> membership.status
-            MembershipStatus.ACTIVE
         """
-        from outlabs_auth.core.exceptions import UserNotFoundError
-        from outlabs_auth.models.user import UserModel
-        from outlabs_auth.models.user_role_membership import UserRoleMembership
-
         # Validate user exists
-        user = await UserModel.get(user_id)
+        stmt = select(User).where(User.id == user_id)
+        result = await session.execute(stmt)
+        user = result.scalar_one_or_none()
         if not user:
             raise UserNotFoundError(
-                message="User not found", details={"user_id": user_id}
+                message="User not found",
+                details={"user_id": str(user_id)},
             )
 
         # Validate role exists
-        role = await RoleModel.get(role_id)
+        role = await self.get_by_id(session, role_id)
         if not role:
             raise RoleNotFoundError(
-                message="Role not found", details={"role_id": role_id}
+                message="Role not found",
+                details={"role_id": str(role_id)},
             )
 
-        # Check if membership already exists
-        from outlabs_auth.models.membership_status import MembershipStatus as MStatus
-
-        existing_membership = await UserRoleMembership.find_one(
-            {"user.$id": user_id, "role.$id": role_id, "status": MStatus.ACTIVE.value}
+        # Check for existing active membership
+        stmt = select(UserRoleMembership).where(
+            UserRoleMembership.user_id == user_id,
+            UserRoleMembership.role_id == role_id,
+            UserRoleMembership.status == MembershipStatus.ACTIVE,
         )
-        if existing_membership:
+        result = await session.execute(stmt)
+        if result.scalar_one_or_none():
             raise InvalidInputError(
                 message="User already has this role assigned",
-                details={"user_id": user_id, "role_id": role_id},
+                details={"user_id": str(user_id), "role_id": str(role_id)},
             )
 
         # Create membership
-        assigned_by_user = None
-        if assigned_by:
-            assigned_by_user = await UserModel.get(assigned_by)
-
         membership = UserRoleMembership(
-            user=user,
-            role=role,
-            assigned_by=assigned_by_user,
+            user_id=user_id,
+            role_id=role_id,
+            assigned_by_id=assigned_by_id,
             valid_from=valid_from,
             valid_until=valid_until,
-            status=MStatus.ACTIVE,
+            status=MembershipStatus.ACTIVE,
         )
 
-        await membership.save()
+        session.add(membership)
+        await session.flush()
+        await session.refresh(membership)
         return membership
 
     async def revoke_role_from_user(
         self,
-        user_id: str,
-        role_id: str,
-        revoked_by: Optional[str] = None,
+        session: AsyncSession,
+        user_id: UUID,
+        role_id: UUID,
+        revoked_by_id: Optional[UUID] = None,
+        reason: Optional[str] = None,
     ) -> bool:
         """
-        Revoke role from user (SimpleRBAC only).
-
-        Changes membership status to REVOKED (soft delete for audit trail).
+        Revoke role from user.
 
         Args:
-            user_id: User ID to revoke role from
-            role_id: Role ID to revoke
-            revoked_by: Optional user ID who performed the revocation (for audit)
+            session: Database session
+            user_id: User UUID
+            role_id: Role UUID
+            revoked_by_id: Optional revoker's user UUID
+            reason: Optional revocation reason
 
         Returns:
-            bool: True if role was revoked, False if no active membership found
-
-        Example:
-            >>> revoked = await role_service.revoke_role_from_user(
-            ...     user_id="507f...",
-            ...     role_id="507f...",
-            ...     revoked_by=admin_user.id
-            ... )
-            >>> revoked
-            True
+            True if revoked, False if no active membership found
         """
-        from datetime import datetime, timezone
-
-        from beanie import PydanticObjectId
-
-        from outlabs_auth.models.membership_status import MembershipStatus as MStatus
-        from outlabs_auth.models.user import UserModel
-        from outlabs_auth.models.user_role_membership import UserRoleMembership
-
-        # Find active membership (convert string IDs to ObjectId for Link query)
-        user_obj_id = PydanticObjectId(user_id)
-        role_obj_id = PydanticObjectId(role_id)
-        membership = await UserRoleMembership.find_one(
-            {
-                "user.$id": user_obj_id,
-                "role.$id": role_obj_id,
-                "status": MStatus.ACTIVE.value,
-            }
+        stmt = select(UserRoleMembership).where(
+            UserRoleMembership.user_id == user_id,
+            UserRoleMembership.role_id == role_id,
+            UserRoleMembership.status == MembershipStatus.ACTIVE,
         )
+        result = await session.execute(stmt)
+        membership = result.scalar_one_or_none()
 
         if not membership:
             return False
 
-        # Update to revoked status with audit trail
-        membership.status = MStatus.REVOKED
+        membership.status = MembershipStatus.REVOKED
         membership.revoked_at = datetime.now(timezone.utc)
+        membership.revoked_by_id = revoked_by_id
+        membership.revocation_reason = reason
 
-        if revoked_by:
-            revoked_by_user = await UserModel.get(revoked_by)
-            if revoked_by_user:
-                membership.revoked_by = revoked_by_user
-
-        await membership.save()
+        await session.flush()
         return True
 
     async def get_user_roles(
         self,
-        user_id: str,
+        session: AsyncSession,
+        user_id: UUID,
         include_inactive: bool = False,
-    ) -> List[RoleModel]:
+    ) -> List[Role]:
         """
-        Get all roles assigned to a user (SimpleRBAC only).
-
-        Queries UserRoleMembership to find all roles assigned to the user.
+        Get all roles assigned to a user.
 
         Args:
-            user_id: User ID
-            include_inactive: Whether to include inactive memberships (default: False)
+            session: Database session
+            user_id: User UUID
+            include_inactive: Include revoked/suspended memberships
 
         Returns:
-            List[RoleModel]: List of roles assigned to user (empty if none)
-
-        Example:
-            >>> roles = await role_service.get_user_roles("507f...")
-            >>> [role.name for role in roles]
-            ['admin', 'editor']
+            List of Role objects
         """
-        from beanie import PydanticObjectId
+        filters = [UserRoleMembership.user_id == user_id]
+        if not include_inactive:
+            filters.append(UserRoleMembership.status == MembershipStatus.ACTIVE)
 
-        from outlabs_auth.models.membership_status import MembershipStatus as MStatus
-        from outlabs_auth.models.user_role_membership import UserRoleMembership
+        stmt = (
+            select(UserRoleMembership)
+            .options(selectinload(UserRoleMembership.role))
+            .where(*filters)
+        )
+        result = await session.execute(stmt)
+        memberships = result.scalars().all()
 
-        # Build query (convert user_id string to PydanticObjectId for Link query)
-        user_obj_id = PydanticObjectId(user_id)
-        if include_inactive:
-            query = {"user.$id": user_obj_id}
-        else:
-            query = {"user.$id": user_obj_id, "status": MStatus.ACTIVE.value}
-
-        # Find all memberships
-        memberships = await UserRoleMembership.find(query).to_list()
-
-        # Extract roles (with validity check)
+        # Filter by time-based validity and extract roles
         roles = []
-        for membership in memberships:
-            # Check time-based validity
-            if membership.is_currently_valid():
-                role = await membership.role.fetch()
-                if role:
-                    roles.append(role)
+        for m in memberships:
+            if m.is_currently_valid():
+                roles.append(m.role)
 
         return roles
 
-    async def get_user_memberships(
+    async def get_user_permission_names(
         self,
-        user_id: str,
-        include_inactive: bool = False,
-    ) -> List["UserRoleMembership"]:
+        session: AsyncSession,
+        user_id: UUID,
+    ) -> List[str]:
         """
-        Get all role memberships for a user (SimpleRBAC only).
-
-        Returns full membership records with audit trail.
+        Get all permission names for a user (aggregated from all roles).
 
         Args:
-            user_id: User ID
-            include_inactive: Whether to include inactive memberships (default: False)
+            session: Database session
+            user_id: User UUID
 
         Returns:
-            List[UserRoleMembership]: List of membership records
-
-        Example:
-            >>> memberships = await role_service.get_user_memberships("507f...")
-            >>> for m in memberships:
-            ...     print(f"Role: {m.role.name}, Assigned: {m.assigned_at}")
+            List of unique permission names
         """
-        from outlabs_auth.models.membership_status import MembershipStatus as MStatus
-        from outlabs_auth.models.user_role_membership import UserRoleMembership
+        roles = await self.get_user_roles(session, user_id)
 
-        # Build query
-        if include_inactive:
-            query = {"user.$id": user_id}
-        else:
-            query = {"user.$id": user_id, "status": MStatus.ACTIVE.value}
+        all_permissions = set()
+        for role in roles:
+            # Load permissions for each role
+            perms = await self.get_role_permission_names(session, role.id)
+            all_permissions.update(perms)
 
-        # Find all memberships
-        memberships = await UserRoleMembership.find(query).to_list()
-        return memberships
+        return list(all_permissions)

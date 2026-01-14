@@ -1,6 +1,7 @@
 """
 Core OutlabsAuth class - unified implementation for all presets
 
+PostgreSQL/SQLAlchemy based authentication and authorization.
 This is the single source of truth for all authentication and authorization logic.
 All features are controlled by configuration flags.
 """
@@ -8,18 +9,11 @@ All features are controlled by configuration flags.
 import asyncio
 from typing import Any, Dict, Optional, Type
 
-from beanie import init_beanie
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import ConfigurationError
-from outlabs_auth.models.permission import PermissionModel
-from outlabs_auth.models.role import RoleModel
-from outlabs_auth.models.token import RefreshTokenModel
-from outlabs_auth.models.user import UserModel
-
-# Import observability (v1.5)
-from outlabs_auth.observability import ObservabilityConfig, ObservabilityService
+from outlabs_auth.database import create_engine, create_session_factory, DatabaseConfig
 
 
 class OutlabsAuth:
@@ -33,11 +27,11 @@ class OutlabsAuth:
     - Single codebase (no code duplication)
     - Feature flags control capabilities
     - Services initialized based on config
-    - Models can be customized
+    - PostgreSQL with SQLAlchemy async
 
     Example:
         >>> auth = OutlabsAuth(
-        ...     database=mongo_db,
+        ...     database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
         ...     secret_key="your-secret-key",
         ...     enable_entity_hierarchy=True
         ... )
@@ -47,9 +41,13 @@ class OutlabsAuth:
 
     def __init__(
         self,
-        database: AsyncIOMotorDatabase,
+        # Database configuration
+        database_url: Optional[str] = None,
+        engine: Optional[AsyncEngine] = None,
+        auto_migrate: bool = False,
+        echo_sql: bool = False,
         # Core configuration
-        secret_key: str,
+        secret_key: str = "",
         algorithm: str = "HS256",
         access_token_expire_minutes: int = 15,
         refresh_token_expire_days: int = 30,
@@ -77,14 +75,9 @@ class OutlabsAuth:
         redis_enabled: bool = False,
         redis_url: Optional[str] = None,
         cache_ttl_seconds: int = 300,
-        notification_service: Optional[Any] = None,  # NotificationService instance
-        # Observability (v1.5)
-        observability_config: Optional[ObservabilityConfig] = None,
-        # Model customization (advanced)
-        user_model: Type[UserModel] = UserModel,
-        role_model: Type[RoleModel] = RoleModel,
-        permission_model: Type[PermissionModel] = PermissionModel,
-        entity_model: Optional[Type[Any]] = None,  # Only for EnterpriseRBAC
+        notification_service: Optional[Any] = None,
+        # Observability
+        observability_config: Optional[Any] = None,
         # Enterprise settings (only when enable_entity_hierarchy=True)
         max_entity_depth: int = 10,
         allowed_entity_types: Optional[list[str]] = None,
@@ -95,7 +88,10 @@ class OutlabsAuth:
         Initialize OutlabsAuth core.
 
         Args:
-            database: MongoDB database instance (motor AsyncIOMotorDatabase)
+            database_url: PostgreSQL connection URL (required if engine not provided)
+            engine: Existing SQLAlchemy AsyncEngine (optional, takes precedence over database_url)
+            auto_migrate: Run Alembic migrations on startup
+            echo_sql: Echo SQL statements for debugging
             secret_key: JWT signing key (REQUIRED)
             algorithm: JWT algorithm (default: HS256)
             access_token_expire_minutes: Access token TTL (default: 15)
@@ -104,7 +100,7 @@ class OutlabsAuth:
             enable_entity_hierarchy: Enable entity system (EnterpriseRBAC)
             enable_context_aware_roles: Context-based role permissions (optional)
             enable_abac: Attribute-based access control (optional)
-            enable_caching: Redis caching for performance (optional, deprecated - use redis_enabled)
+            enable_caching: Redis caching for performance (optional)
             multi_tenant: Multi-tenant isolation (optional)
             enable_audit_log: Audit logging for compliance (optional)
             enable_notifications: Enable notification system (optional)
@@ -112,15 +108,18 @@ class OutlabsAuth:
             redis_enabled: Enable Redis features (caching, counters, activity tracking)
             redis_url: Redis connection URL (required if redis_enabled=True)
             notification_service: NotificationService instance (optional)
-            user_model: Custom user model class
-            role_model: Custom role model class
-            permission_model: Custom permission model class
-            entity_model: Custom entity model class (EnterpriseRBAC only)
 
         Raises:
             ConfigurationError: If configuration is invalid
         """
-        self.database = database
+        # Validate we have either database_url or engine
+        if not database_url and not engine:
+            raise ConfigurationError(
+                "Either database_url or engine must be provided"
+            )
+
+        if not secret_key:
+            raise ConfigurationError("secret_key is required")
 
         # Validate configuration
         self._validate_config(
@@ -132,12 +131,14 @@ class OutlabsAuth:
         )
 
         # Set redis_enabled based on redis_url if not explicitly set
-        # If user provides redis_url, assume they want Redis enabled (unless they explicitly set redis_enabled=False)
         if redis_url and "redis_enabled" not in kwargs:
             redis_enabled = True
 
         # Create configuration object
         self.config = AuthConfig(
+            database_url=database_url,
+            auto_migrate=auto_migrate,
+            echo_sql=echo_sql,
             secret_key=secret_key,
             algorithm=algorithm,
             access_token_expire_minutes=access_token_expire_minutes,
@@ -155,10 +156,9 @@ class OutlabsAuth:
             enable_context_aware_roles=enable_context_aware_roles,
             enable_abac=enable_abac,
             enable_caching=enable_caching,
-            redis_enabled=redis_enabled,  # Add explicit redis_enabled to config
+            redis_enabled=redis_enabled,
             multi_tenant=multi_tenant,
             enable_audit_log=enable_audit_log,
-            enable_notifications=enable_notifications,
             redis_url=redis_url,
             cache_ttl_seconds=cache_ttl_seconds,
             **kwargs,
@@ -167,15 +167,9 @@ class OutlabsAuth:
         # Store notification service
         self.notification_service = notification_service
 
-        # Initialize observability (v1.5)
-        self.observability_config = observability_config or ObservabilityConfig()
-        self.observability = None  # Will be initialized in initialize()
-
-        # Store models
-        self.user_model = user_model
-        self.role_model = role_model
-        self.permission_model = permission_model
-        self.entity_model = entity_model if enable_entity_hierarchy else None
+        # Initialize observability
+        self.observability_config = observability_config
+        self.observability = None
 
         # Store enterprise settings
         if enable_entity_hierarchy:
@@ -183,8 +177,11 @@ class OutlabsAuth:
             self.allowed_entity_types = allowed_entity_types
             self.allow_access_groups = allow_access_groups
 
+        # Database engine and session factory
+        self._engine = engine
+        self._session_factory: Optional[async_sessionmaker[AsyncSession]] = None
+
         # Services will be initialized by _init_services()
-        # These are set to None initially and populated during initialization
         self.auth_service = None
         self.user_service = None
         self.role_service = None
@@ -194,19 +191,18 @@ class OutlabsAuth:
         self.entity_service = None
         self.membership_service = None
         self.cache_service = None
-        self.activity_tracker = None  # Activity tracking service (requires Redis)
+        self.activity_tracker = None
 
-        # Redis client (initialized during _init_services if caching enabled)
+        # Redis client
         self.redis_client = None
 
         # Authentication backends and dependency injection
-        # These are initialized by _init_backends() and _init_deps()
         self._backends = []
         self._deps = None
 
         # Background task schedulers
-        self._cleanup_task = None  # Token cleanup
-        self._activity_sync_task = None  # Activity tracking sync
+        self._cleanup_task = None
+        self._activity_sync_task = None
 
         # Track initialization state
         self._initialized = False
@@ -219,20 +215,12 @@ class OutlabsAuth:
         enable_caching: bool,
         redis_url: Optional[str],
     ):
-        """
-        Validate configuration is internally consistent.
-
-        Raises:
-            ConfigurationError: If configuration is invalid
-        """
+        """Validate configuration is internally consistent."""
         # Context-aware roles require entity hierarchy
         if enable_context_aware_roles and not enable_entity_hierarchy:
             raise ConfigurationError(
                 "enable_context_aware_roles requires enable_entity_hierarchy=True"
             )
-
-        # ABAC can work with or without entity hierarchy
-        # (entity-based ABAC requires hierarchy, but attribute-based doesn't)
 
         # Caching requires Redis URL
         if enable_caching and not redis_url:
@@ -240,67 +228,39 @@ class OutlabsAuth:
 
     async def initialize(self):
         """
-        Initialize database collections and indexes.
+        Initialize database and services.
 
         This MUST be called after creating OutlabsAuth instance and before using it.
-        It sets up Beanie document models and creates database indexes.
+        It sets up the database connection, optionally runs migrations, and initializes services.
 
         Example:
-            >>> auth = OutlabsAuth(database=db, secret_key="secret")
+            >>> auth = OutlabsAuth(database_url="...", secret_key="secret")
             >>> await auth.initialize()
             >>> # Now ready to use
         """
         if self._initialized:
             return
 
-        # Import EntityModel for forward reference resolution
-        # (RoleModel has a Link to EntityModel, so it must be initialized even in SimpleRBAC)
-        from outlabs_auth.models.entity import EntityModel
+        # Create engine if not provided
+        if self._engine is None:
+            db_config = DatabaseConfig(
+                database_url=self.config.database_url,
+                echo=self.config.echo_sql,
+            )
+            self._engine = create_engine(db_config)
 
-        # Determine which models to initialize
-        document_models = [
-            self.user_model,
-            self.role_model,
-            self.permission_model,
-            RefreshTokenModel,
-            EntityModel,  # Always included for forward ref resolution in RoleModel
-        ]
+        # Create session factory
+        self._session_factory = create_session_factory(self._engine)
 
-        # Add APIKeyModel (always included)
-        from outlabs_auth.models.api_key import APIKeyModel
+        # Run migrations if auto_migrate is enabled
+        if self.config.auto_migrate:
+            await self._run_migrations()
 
-        document_models.append(APIKeyModel)
-
-        # Add SimpleRBAC models (when entity hierarchy is disabled)
-        if not self.config.enable_entity_hierarchy:
-            from outlabs_auth.models.user_role_membership import UserRoleMembership
-
-            document_models.append(UserRoleMembership)
-
-        # Add additional enterprise models if entity hierarchy is enabled
-        if self.config.enable_entity_hierarchy:
-            if self.entity_model is None:
-                # Import default entity models only when needed
-                from outlabs_auth.models.closure import EntityClosureModel
-                from outlabs_auth.models.membership import EntityMembershipModel
-
-                self.entity_model = EntityModel
-                document_models.extend(
-                    [
-                        EntityMembershipModel,
-                        EntityClosureModel,
-                    ]
-                )
-            else:
-                # Custom entity model provided
-                document_models.append(self.entity_model)
-
-        # Initialize Beanie with all document models
-        await init_beanie(database=self.database, document_models=document_models)
-
-        # Initialize observability service (v1.5)
-        self.observability = ObservabilityService(self.observability_config)
-        await self.observability.initialize()
+        # Initialize observability service
+        if self.observability_config:
+            from outlabs_auth.observability import ObservabilityService
+            self.observability = ObservabilityService(self.observability_config)
+            await self.observability.initialize()
 
         # Initialize services
         await self._init_services()
@@ -315,96 +275,65 @@ class OutlabsAuth:
         # Initialize dependency injection
         self._init_deps()
 
-        # Start token cleanup scheduler if enabled
+        # Start background tasks
         if self.config.enable_token_cleanup and self.config.store_refresh_tokens:
             self._start_token_cleanup_scheduler()
 
-        # Start activity sync scheduler if enabled
         if self.config.enable_activity_tracking and self.activity_tracker:
             self._start_activity_sync_scheduler()
 
         self._initialized = True
 
-    async def _init_services(self):
-        """
-        Initialize all services based on configuration.
+    async def _run_migrations(self):
+        """Run Alembic migrations to head."""
+        from outlabs_auth.cli import run_migrations
+        await run_migrations(self.config.database_url)
 
-        Services are conditionally initialized based on feature flags:
-        - Core services (always available)
-        - Entity services (only if enable_entity_hierarchy=True)
-        - Cache service (only if enable_caching=True)
-        """
-        # Import services
+    async def _init_services(self):
+        """Initialize all services based on configuration."""
         from outlabs_auth.services.auth import AuthService
-        from outlabs_auth.services.permission import BasicPermissionService
+        from outlabs_auth.services.permission import PermissionService
         from outlabs_auth.services.role import RoleService
         from outlabs_auth.services.user import UserService
 
-        # Core services (always available) - pass observability (v1.5)
+        # Core services
         self.auth_service = AuthService(
-            self.database,
             self.config,
             notification_service=self.notification_service,
-            activity_tracker=None,  # Set later in _init_services if activity tracking enabled
+            activity_tracker=None,  # Set later if activity tracking enabled
             observability=self.observability,
         )
         self.user_service = UserService(
-            self.database, self.config, self.notification_service
+            self.config,
+            notification_service=self.notification_service,
         )
-        self.role_service = RoleService(self.database, self.config)
+        self.role_service = RoleService(self.config)
+        self.permission_service = PermissionService(
+            self.config,
+            observability=self.observability,
+        )
 
-        # Permission service (adapts based on features)
-        if self.config.enable_entity_hierarchy:
-            # Enterprise permission service with entity context + tree permissions
-            from outlabs_auth.services.entity import EntityService
-            from outlabs_auth.services.membership import MembershipService
-            from outlabs_auth.services.permission import EnterprisePermissionService
-
-            self.permission_service = EnterprisePermissionService(
-                self.database, self.config, observability=self.observability
-            )
-            self.entity_service = EntityService(self.config)
-            self.membership_service = MembershipService(self.config)
-        else:
-            # Basic permission service (flat structure)
-            self.permission_service = BasicPermissionService(
-                self.database, self.config, observability=self.observability
-            )
-            self.entity_service = None  # Not available in SimpleRBAC
-            self.membership_service = None  # Not available in SimpleRBAC
-
-        # Initialize Redis client if redis_enabled
+        # Initialize Redis client if enabled
         if self.config.redis_enabled and self.config.redis_url:
             from outlabs_auth.services.redis_client import RedisClient
-
             self.redis_client = RedisClient(self.config)
-            # Redis connection happens in initialize(), not here
-        else:
-            self.redis_client = None
 
-        # API Key service (for API key authentication)
-        from outlabs_auth.services.api_key import APIKeyService
+        # Entity and membership services for EnterpriseRBAC
+        if self.config.enable_entity_hierarchy:
+            # TODO: Implement EntityService and MembershipService for PostgreSQL
+            self.entity_service = None
+            self.membership_service = None
 
-        self.api_key_service = APIKeyService(
-            database=self.database, config=self.config, redis_client=self.redis_client
-        )
+        # API Key service
+        # TODO: Update APIKeyService for PostgreSQL
+        # self.api_key_service = APIKeyService(...)
 
-        # Service Token service (for service-to-service auth)
-        from outlabs_auth.services.service_token import ServiceTokenService
+        # Service Token service
+        # TODO: Update ServiceTokenService for PostgreSQL
+        # self.service_token_service = ServiceTokenService(...)
 
-        self.service_token_service = ServiceTokenService(config=self.config)
-
-        # Optional services
-        if self.config.enable_caching and self.config.redis_url:
-            # Cache service (will be implemented in Phase 5)
-            # self.cache_service = CacheService(self.config.redis_url)
-            self.cache_service = None
-        else:
-            self.cache_service = None
-
-        # Activity tracking service (DD-049 - requires Redis)
+        # Activity tracking
         if self.config.enable_activity_tracking:
-            # Validate Redis is available
             if not self.redis_client:
                 raise ConfigurationError(
                     "Activity tracking requires Redis. Either:\n"
@@ -413,41 +342,19 @@ class OutlabsAuth:
                 )
 
             from outlabs_auth.services.activity_tracker import ActivityTracker
-
             self.activity_tracker = ActivityTracker(
                 redis_client=self.redis_client,
                 enabled=True,
                 update_user_model=self.config.activity_update_user_model,
                 store_user_ids=self.config.activity_store_user_ids,
             )
-
-            # Connect activity_tracker to services that need it
             self.auth_service.activity_tracker = self.activity_tracker
-        else:
-            self.activity_tracker = None
 
     def _init_backends(self):
-        """
-        Initialize authentication backends.
-
-        Creates backends for all available authentication methods:
-        - JWT (Bearer token) - always enabled
-        - API Key - enabled if api_key_service exists
-        - Service Token - enabled if service_token_service exists
-
-        Backends combine transports (how credentials are extracted) with
-        strategies (how credentials are validated).
-        """
+        """Initialize authentication backends."""
         from outlabs_auth.authentication.backend import AuthBackend
-        from outlabs_auth.authentication.strategy import (
-            ApiKeyStrategy,
-            JWTStrategy,
-            ServiceTokenStrategy,
-        )
-        from outlabs_auth.authentication.transport import (
-            ApiKeyTransport,
-            BearerTransport,
-        )
+        from outlabs_auth.authentication.strategy import JWTStrategy
+        from outlabs_auth.authentication.transport import BearerTransport
 
         self._backends = []
 
@@ -455,16 +362,21 @@ class OutlabsAuth:
         jwt_strategy = JWTStrategy(
             secret=self.config.secret_key,
             algorithm=self.config.algorithm,
-            audience=self.config.jwt_audience,  # Use configured audience (string, not list)
-            redis_client=self.redis_client,  # Pass Redis client for blacklist checking
+            audience=self.config.jwt_audience,
+            redis_client=self.redis_client,
         )
         jwt_backend = AuthBackend(
-            name="jwt", transport=BearerTransport(), strategy=jwt_strategy
+            name="jwt",
+            transport=BearerTransport(),
+            strategy=jwt_strategy,
         )
         self._backends.append(jwt_backend)
 
-        # API Key Backend (if service exists)
+        # API Key Backend
         if self.api_key_service is not None:
+            from outlabs_auth.authentication.strategy import ApiKeyStrategy
+            from outlabs_auth.authentication.transport import ApiKeyTransport
+
             api_key_strategy = ApiKeyStrategy()
             api_key_backend = AuthBackend(
                 name="api_key",
@@ -473,10 +385,13 @@ class OutlabsAuth:
             )
             self._backends.append(api_key_backend)
 
-        # Service Token Backend (if service exists)
+        # Service Token Backend
         if self.service_token_service is not None:
+            from outlabs_auth.authentication.strategy import ServiceTokenStrategy
+
             service_token_strategy = ServiceTokenStrategy(
-                secret=self.config.secret_key, algorithm=self.config.algorithm
+                secret=self.config.secret_key,
+                algorithm=self.config.algorithm,
             )
             service_token_backend = AuthBackend(
                 name="service_token",
@@ -486,14 +401,7 @@ class OutlabsAuth:
             self._backends.append(service_token_backend)
 
     def _init_deps(self):
-        """
-        Initialize AuthDeps for FastAPI dependency injection.
-
-        Creates the deps instance that routers use via auth.deps.require_auth(),
-        auth.deps.require_permission(), etc.
-
-        This must be called AFTER _init_services() and _init_backends().
-        """
+        """Initialize AuthDeps for FastAPI dependency injection."""
         from outlabs_auth.dependencies import AuthDeps
 
         self._deps = AuthDeps(
@@ -504,18 +412,37 @@ class OutlabsAuth:
             role_service=self.role_service,
             entity_service=self.entity_service,
             membership_service=self.membership_service,
-            activity_tracker=self.activity_tracker,  # For tracking user activity
+            activity_tracker=self.activity_tracker,
+            session_factory=self._session_factory,
         )
 
-    async def get_current_user(self, token: str) -> UserModel:
+    def get_session(self) -> AsyncSession:
+        """
+        Get a new database session.
+
+        Use this with async context manager:
+            async with auth.get_session() as session:
+                user = await auth.user_service.get_user_by_id(session, user_id)
+
+        Returns:
+            AsyncSession context manager
+        """
+        if self._session_factory is None:
+            raise ConfigurationError(
+                "Database not initialized. Call await auth.initialize() first."
+            )
+        return self._session_factory()
+
+    async def get_current_user(self, session: AsyncSession, token: str):
         """
         Get current authenticated user from JWT token.
 
         Args:
+            session: Database session
             token: JWT access token
 
         Returns:
-            UserModel: Authenticated user
+            User: Authenticated user
 
         Raises:
             TokenInvalidError: If token is invalid
@@ -527,20 +454,29 @@ class OutlabsAuth:
                 "OutlabsAuth not initialized. Call await auth.initialize() first."
             )
 
-        # Will be implemented when AuthService is created in Phase 2
-        return await self.auth_service.get_current_user(token)
+        return await self.auth_service.get_current_user(session, token)
+
+    @property
+    def engine(self) -> AsyncEngine:
+        """Get the SQLAlchemy async engine."""
+        if self._engine is None:
+            raise ConfigurationError(
+                "Database not initialized. Call await auth.initialize() first."
+            )
+        return self._engine
+
+    @property
+    def session_factory(self) -> async_sessionmaker[AsyncSession]:
+        """Get the session factory for creating database sessions."""
+        if self._session_factory is None:
+            raise ConfigurationError(
+                "Database not initialized. Call await auth.initialize() first."
+            )
+        return self._session_factory
 
     @property
     def backends(self) -> list:
-        """
-        Get list of configured authentication backends.
-
-        Returns:
-            List of AuthBackend instances
-
-        Raises:
-            ConfigurationError: If backends not initialized
-        """
+        """Get list of configured authentication backends."""
         if not self._backends:
             raise ConfigurationError(
                 "Backends not initialized. Call await auth.initialize() first."
@@ -552,14 +488,8 @@ class OutlabsAuth:
         """
         Get dependency injection instance for FastAPI routes.
 
-        This provides the require_auth(), require_permission(), and require_source()
-        methods used to protect routes.
-
         Returns:
             AuthDeps instance
-
-        Raises:
-            ConfigurationError: If deps not initialized
 
         Example:
             >>> @app.get("/protected")
@@ -574,12 +504,12 @@ class OutlabsAuth:
 
     @property
     def is_enterprise(self) -> bool:
-        """Check if entity hierarchy is enabled (EnterpriseRBAC mode)"""
+        """Check if entity hierarchy is enabled (EnterpriseRBAC mode)."""
         return self.config.enable_entity_hierarchy
 
     @property
     def features(self) -> Dict[str, bool]:
-        """Get all enabled features as a dictionary"""
+        """Get all enabled features as a dictionary."""
         return {
             "entity_hierarchy": self.config.enable_entity_hierarchy,
             "context_aware_roles": self.config.enable_context_aware_roles,
@@ -590,7 +520,7 @@ class OutlabsAuth:
         }
 
     def __repr__(self) -> str:
-        """String representation showing configuration"""
+        """String representation showing configuration."""
         preset = "EnterpriseRBAC" if self.is_enterprise else "SimpleRBAC"
         features = [
             k for k, v in self.features.items() if v and k != "entity_hierarchy"
@@ -599,64 +529,38 @@ class OutlabsAuth:
         return f"<OutlabsAuth: {preset}{features_str}>"
 
     def _start_token_cleanup_scheduler(self):
-        """
-        Start background task for token cleanup.
-
-        Runs cleanup_expired_refresh_tokens() every N hours (configured via token_cleanup_interval_hours).
-        Only starts if enable_token_cleanup=True and store_refresh_tokens=True.
-        """
-        import asyncio
-
-        from outlabs_auth.workers.token_cleanup import cleanup_expired_refresh_tokens
-
+        """Start background task for token cleanup."""
         async def cleanup_loop():
-            """Background cleanup loop"""
             interval_seconds = self.config.token_cleanup_interval_hours * 3600
 
             while True:
                 try:
                     await asyncio.sleep(interval_seconds)
-                    stats = await cleanup_expired_refresh_tokens()
-                    if stats.get("total", 0) > 0:
-                        print(
-                            f"[TokenCleanup] Removed {stats['total']} tokens ({stats['expired']} expired, {stats['revoked']} revoked)"
-                        )
+                    # TODO: Implement token cleanup for PostgreSQL
+                    # async with self.get_session() as session:
+                    #     stats = await cleanup_expired_tokens(session)
                 except Exception as e:
                     print(f"[TokenCleanup] Error: {e}")
-
-        # Start background task
-        import asyncio
 
         self._cleanup_task = asyncio.create_task(cleanup_loop())
 
     def _start_activity_sync_scheduler(self):
-        """
-        Start background task for activity tracking sync.
-
-        Syncs Redis activity data to MongoDB every N seconds (configured via activity_sync_interval).
-        Only starts if enable_activity_tracking=True and activity_tracker is available.
-        """
-        import asyncio
-
+        """Start background task for activity tracking sync."""
         async def activity_sync_loop():
-            """Background activity sync loop"""
             interval_seconds = self.config.activity_sync_interval
 
             while True:
                 try:
                     await asyncio.sleep(interval_seconds)
-                    stats = await self.activity_tracker.sync_to_mongodb()
-                    if stats.get("daily", 0) > 0 or stats.get("monthly", 0) > 0:
-                        print(
-                            f"[ActivitySync] Synced metrics - "
-                            f"DAU: {stats['daily']}, MAU: {stats['monthly']}, QAU: {stats['quarterly']}, "
-                            f"users_updated: {stats['users_updated']}, errors: {stats['errors']}"
-                        )
+                    if self.activity_tracker:
+                        stats = await self.activity_tracker.sync_to_database()
+                        if stats.get("daily", 0) > 0 or stats.get("monthly", 0) > 0:
+                            print(
+                                f"[ActivitySync] Synced metrics - "
+                                f"DAU: {stats['daily']}, MAU: {stats['monthly']}"
+                            )
                 except Exception as e:
                     print(f"[ActivitySync] Error: {e}")
-
-        # Start background task
-        import asyncio
 
         self._activity_sync_task = asyncio.create_task(activity_sync_loop())
 
@@ -684,4 +588,8 @@ class OutlabsAuth:
 
         # Close Redis connection
         if self.redis_client:
-            await self.redis_client.close()
+            await self.redis_client.disconnect()
+
+        # Close database engine
+        if self._engine:
+            await self._engine.dispose()

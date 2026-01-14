@@ -2,26 +2,33 @@
 API Key Service
 
 Handles API key management and validation with Redis counter pattern for usage tracking.
+Uses SQLAlchemy for PostgreSQL backend.
 """
 
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
+from uuid import UUID
 
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from sqlalchemy import select, func, delete as sql_delete
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
     InvalidInputError,
     UserNotFoundError,
 )
-from outlabs_auth.models.api_key import APIKeyModel, APIKeyStatus
-from outlabs_auth.models.user import UserModel
+from outlabs_auth.models.sql.api_key import APIKey, APIKeyScope, APIKeyIPWhitelist
+from outlabs_auth.models.sql.closure import EntityClosure
+from outlabs_auth.models.sql.enums import APIKeyStatus
+from outlabs_auth.models.sql.user import User
+from outlabs_auth.services.base import BaseService
 
 logger = logging.getLogger(__name__)
 
 
-class APIKeyService:
+class APIKeyService(BaseService[APIKey]):
     """
     API key management service with Redis counter pattern.
 
@@ -30,29 +37,11 @@ class APIKeyService:
     - Fast validation with Redis counters
     - Rate limiting
     - Usage tracking (99% fewer DB writes via Redis)
-    - Background sync to MongoDB
-
-    Example:
-        >>> api_key_service = APIKeyService(database, config, redis_client)
-        >>>
-        >>> # Create key
-        >>> key, model = await api_key_service.create_api_key(
-        ...     owner_id=user_id,
-        ...     name="Production Key",
-        ...     scopes=["user:read", "entity:read"],
-        ...     rate_limit_per_minute=60
-        ... )
-        >>> print(key)  # Only shown once: sk_live_abc123...
-        >>>
-        >>> # Verify key (fast - uses Redis counter)
-        >>> api_key, usage = await api_key_service.verify_api_key(key)
-        >>> if not api_key:
-        ...     raise InvalidAPIKeyError()
+    - Background sync to database
     """
 
     def __init__(
         self,
-        database: AsyncIOMotorDatabase,
         config: AuthConfig,
         redis_client: Optional["RedisClient"] = None,
     ):
@@ -60,76 +49,66 @@ class APIKeyService:
         Initialize APIKeyService.
 
         Args:
-            database: MongoDB database instance
             config: Authentication configuration
             redis_client: Optional Redis client for counters
         """
-        self.database = database
+        super().__init__(APIKey)
         self.config = config
         self.redis_client = redis_client
 
     async def create_api_key(
         self,
-        owner_id: str,
+        session: AsyncSession,
+        owner_id: UUID,
         name: str,
         scopes: Optional[List[str]] = None,
         rate_limit_per_minute: int = 60,
         rate_limit_per_hour: Optional[int] = None,
         rate_limit_per_day: Optional[int] = None,
-        entity_ids: Optional[List[str]] = None,
-        entity_id: Optional[str] = None,
+        entity_id: Optional[UUID] = None,
         inherit_from_tree: bool = False,
         ip_whitelist: Optional[List[str]] = None,
         expires_in_days: Optional[int] = None,
         description: Optional[str] = None,
-        metadata: Optional[Dict] = None,
+        tenant_id: Optional[UUID] = None,
         prefix_type: str = "sk_live",
-    ) -> tuple[str, APIKeyModel]:
+    ) -> tuple[str, APIKey]:
         """
         Create a new API key.
 
         Args:
+            session: Database session
             owner_id: User ID who owns the key
             name: Human-readable key name
             scopes: Allowed permissions (None = all)
             rate_limit_per_minute: Max requests per minute
             rate_limit_per_hour: Max requests per hour
             rate_limit_per_day: Max requests per day
-            entity_ids: Restrict to specific entities (legacy list-based)
             entity_id: Scope to specific entity (EnterpriseRBAC)
             inherit_from_tree: Allow access to descendant entities (EnterpriseRBAC)
             ip_whitelist: Allowed IP addresses
             expires_in_days: Days until expiration
             description: Optional description
-            metadata: Additional metadata
+            tenant_id: Optional tenant ID
             prefix_type: Key prefix (sk_live, sk_test)
 
         Returns:
-            tuple[str, APIKeyModel]: (full_api_key, api_key_model)
+            tuple[str, APIKey]: (full_api_key, api_key_model)
                 WARNING: full_api_key is only returned once!
 
         Raises:
             UserNotFoundError: If owner doesn't exist
-
-        Example:
-            >>> key, model = await api_key_service.create_api_key(
-            ...     owner_id=user_id,
-            ...     name="Production API",
-            ...     scopes=["user:read"],
-            ...     rate_limit_per_minute=100
-            ... )
-            >>> # Store 'key' securely - it's never shown again!
         """
         # Validate owner exists
-        owner = await UserModel.get(owner_id)
+        owner = await session.get(User, owner_id)
         if not owner:
             raise UserNotFoundError(
-                message="User not found", details={"user_id": owner_id}
+                message="User not found", details={"user_id": str(owner_id)}
             )
 
         # Generate API key
-        full_key, prefix = APIKeyModel.generate_key(prefix_type)
-        key_hash = APIKeyModel.hash_key(full_key)
+        full_key, prefix = APIKey.generate_key(prefix_type)
+        key_hash = APIKey.hash_key(full_key)
 
         # Calculate expiration
         expires_at = None
@@ -137,26 +116,45 @@ class APIKeyService:
             expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
 
         # Create API key model
-        api_key = APIKeyModel(
+        api_key = APIKey(
             name=name,
             prefix=prefix,
             key_hash=key_hash,
-            owner=owner,  # Beanie handles Link conversion automatically
+            owner_id=owner_id,
             status=APIKeyStatus.ACTIVE,
             expires_at=expires_at,
-            scopes=scopes or [],
             rate_limit_per_minute=rate_limit_per_minute,
             rate_limit_per_hour=rate_limit_per_hour,
             rate_limit_per_day=rate_limit_per_day,
-            entity_ids=entity_ids,
             entity_id=entity_id,
             inherit_from_tree=inherit_from_tree,
-            ip_whitelist=ip_whitelist,
             description=description,
-            metadata=metadata or {},
+            tenant_id=tenant_id,
         )
 
-        await api_key.save()
+        session.add(api_key)
+        await session.flush()
+
+        # Add scopes via junction table
+        if scopes:
+            for scope in scopes:
+                scope_entry = APIKeyScope(
+                    api_key_id=api_key.id,
+                    scope=scope,
+                )
+                session.add(scope_entry)
+
+        # Add IP whitelist
+        if ip_whitelist:
+            for ip in ip_whitelist:
+                ip_entry = APIKeyIPWhitelist(
+                    api_key_id=api_key.id,
+                    ip_address=ip,
+                )
+                session.add(ip_entry)
+
+        await session.flush()
+        await session.refresh(api_key)
 
         logger.info(
             f"Created API key '{name}' for user {owner_id} with prefix {prefix}"
@@ -167,11 +165,12 @@ class APIKeyService:
 
     async def verify_api_key(
         self,
+        session: AsyncSession,
         api_key_string: str,
         required_scope: Optional[str] = None,
-        entity_id: Optional[str] = None,
+        entity_id: Optional[UUID] = None,
         ip_address: Optional[str] = None,
-    ) -> tuple[Optional[APIKeyModel], int]:
+    ) -> tuple[Optional[APIKey], int]:
         """
         Verify API key and track usage with Redis counter.
 
@@ -179,27 +178,32 @@ class APIKeyService:
         Uses Redis INCR for fast, low-latency usage tracking.
 
         Args:
+            session: Database session
             api_key_string: Full API key string
             required_scope: Optional required permission
             entity_id: Optional entity ID for access check
             ip_address: Optional client IP for whitelist check
 
         Returns:
-            tuple[Optional[APIKeyModel], int]: (api_key, current_usage)
+            tuple[Optional[APIKey], int]: (api_key, current_usage)
                 - api_key: Valid API key model or None if invalid
                 - current_usage: Current usage count (from Redis)
-
-        Example:
-            >>> api_key, usage = await api_key_service.verify_api_key(
-            ...     request.headers.get("X-API-Key"),
-            ...     required_scope="user:read",
-            ...     ip_address=request.client.host
-            ... )
-            >>> if not api_key:
-            ...     raise InvalidAPIKeyError()
         """
-        # Verify key exists and hash matches
-        api_key = await APIKeyModel.verify_key(api_key_string)
+        # Extract prefix from key string
+        if not api_key_string or len(api_key_string) < 16:
+            logger.warning("Invalid API key format")
+            return None, 0
+
+        prefix = api_key_string[:16]
+        key_hash = APIKey.hash_key(api_key_string)
+
+        # Find API key by prefix and verify hash
+        api_key = await self.get_one(
+            session,
+            APIKey.prefix == prefix,
+            APIKey.key_hash == key_hash,
+        )
+
         if not api_key:
             logger.warning(f"Invalid API key: {api_key_string[:15]}...")
             return None, 0
@@ -212,35 +216,31 @@ class APIKeyService:
             return None, 0
 
         # Check scope if required
-        if required_scope and not api_key.has_scope(required_scope):
-            logger.warning(
-                f"API key {api_key.prefix} lacks required scope: {required_scope}"
-            )
-            return None, 0
+        if required_scope:
+            has_scope = await self._check_scope(session, api_key.id, required_scope)
+            if not has_scope:
+                logger.warning(
+                    f"API key {api_key.prefix} lacks required scope: {required_scope}"
+                )
+                return None, 0
 
         # Check entity access if required (supports tree permissions)
         if entity_id:
-            # Use tree-aware check for entity_id field
-            if api_key.entity_id is not None:
-                has_access = await self.check_entity_access_with_tree(
-                    api_key, entity_id
-                )
-                if not has_access:
-                    logger.warning(
-                        f"API key {api_key.prefix} lacks access to entity: {entity_id}"
-                    )
-                    return None, 0
-            # Fall back to legacy entity_ids list check
-            elif not api_key.has_entity_access(entity_id):
+            has_access = await self.check_entity_access_with_tree(
+                session, api_key, entity_id
+            )
+            if not has_access:
                 logger.warning(
                     f"API key {api_key.prefix} lacks access to entity: {entity_id}"
                 )
                 return None, 0
 
         # Check IP whitelist if required
-        if ip_address and not api_key.check_ip(ip_address):
-            logger.warning(f"API key {api_key.prefix} rejected IP: {ip_address}")
-            return None, 0
+        if ip_address:
+            is_allowed = await self._check_ip(session, api_key.id, ip_address)
+            if not is_allowed:
+                logger.warning(f"API key {api_key.prefix} rejected IP: {ip_address}")
+                return None, 0
 
         # Increment usage counter in Redis (FAST - ~0.1ms)
         usage_count = 0
@@ -256,10 +256,10 @@ class APIKeyService:
                 ttl=self.config.cache_ttl_seconds,
             )
         else:
-            # Fallback: Direct MongoDB write (slow - ~15ms)
+            # Fallback: Direct database write
             api_key.usage_count += 1
             api_key.last_used_at = datetime.now(timezone.utc)
-            await api_key.save()
+            await session.flush()
             usage_count = api_key.usage_count
 
         # Check rate limits (using Redis counter)
@@ -268,7 +268,61 @@ class APIKeyService:
 
         return api_key, usage_count
 
-    async def _check_rate_limits(self, api_key: APIKeyModel) -> None:
+    async def _check_scope(
+        self, session: AsyncSession, api_key_id: UUID, required_scope: str
+    ) -> bool:
+        """Check if API key has required scope."""
+        # Check for exact match or wildcard
+        stmt = select(APIKeyScope).where(
+            APIKeyScope.api_key_id == api_key_id,
+        )
+        result = await session.execute(stmt)
+        scopes = [row.scope for row in result.scalars().all()]
+
+        # No scopes = full access
+        if not scopes:
+            return True
+
+        # Check for exact match
+        if required_scope in scopes:
+            return True
+
+        # Check for wildcard (e.g., "user:*" matches "user:read")
+        scope_parts = required_scope.split(":")
+        if len(scope_parts) == 2:
+            wildcard = f"{scope_parts[0]}:*"
+            if wildcard in scopes:
+                return True
+
+        # Check for global wildcard
+        if "*" in scopes:
+            return True
+
+        return False
+
+    async def _check_ip(
+        self, session: AsyncSession, api_key_id: UUID, ip_address: str
+    ) -> bool:
+        """Check if IP is in whitelist (empty whitelist = allow all)."""
+        stmt = select(func.count()).select_from(APIKeyIPWhitelist).where(
+            APIKeyIPWhitelist.api_key_id == api_key_id
+        )
+        result = await session.execute(stmt)
+        count = result.scalar() or 0
+
+        # No whitelist = allow all
+        if count == 0:
+            return True
+
+        # Check if IP is in whitelist
+        stmt = select(APIKeyIPWhitelist).where(
+            APIKeyIPWhitelist.api_key_id == api_key_id,
+            APIKeyIPWhitelist.ip_address == ip_address,
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
+    async def _check_rate_limits(self, api_key: APIKey) -> None:
         """
         Check rate limits using Redis counters with TTL.
 
@@ -337,22 +391,15 @@ class APIKeyService:
                     },
                 )
 
-    async def sync_usage_counters_to_db(self) -> Dict[str, int]:
+    async def sync_usage_counters_to_db(self, session: AsyncSession) -> Dict[str, int]:
         """
-        Sync API key usage counters from Redis to MongoDB.
+        Sync API key usage counters from Redis to database.
 
         This is called by background worker (every 5 minutes).
         Implements the Redis counter pattern for 99% DB write reduction.
 
         Returns:
             Dict[str, int]: Stats about sync operation
-                - synced_keys: Number of keys synced
-                - total_usage: Total usage count synced
-                - errors: Number of errors
-
-        Example:
-            >>> stats = await api_key_service.sync_usage_counters_to_db()
-            >>> print(f"Synced {stats['synced_keys']} API keys")
         """
         if not self.redis_client or not self.redis_client.is_available:
             logger.debug("Redis not available - skipping counter sync")
@@ -383,13 +430,13 @@ class APIKeyService:
                     key_id = counter_key.split(":")[1]
 
                     # Get API key
-                    api_key = await APIKeyModel.get(key_id)
+                    api_key = await self.get_by_id(session, UUID(key_id))
                     if not api_key:
                         logger.warning(f"API key not found for counter: {key_id}")
                         await self.redis_client.delete(counter_key)
                         continue
 
-                    # Update usage count in MongoDB
+                    # Update usage count in database
                     api_key.usage_count += usage_count
 
                     # Update last_used_at if we have it in Redis
@@ -400,7 +447,7 @@ class APIKeyService:
                     else:
                         api_key.last_used_at = datetime.now(timezone.utc)
 
-                    await api_key.save()
+                    await session.flush()
 
                     # Reset Redis counter
                     await self.redis_client.delete(counter_key)
@@ -443,73 +490,81 @@ class APIKeyService:
 
     # API Key Management Methods
 
-    async def get_api_key(self, key_id: str) -> Optional[APIKeyModel]:
-        """Get API key by ID."""
-        return await APIKeyModel.get(key_id, fetch_links=True)
+    async def get_api_key(
+        self, session: AsyncSession, key_id: UUID
+    ) -> Optional[APIKey]:
+        """Get API key by ID with owner loaded."""
+        return await self.get_by_id(
+            session, key_id, options=[selectinload(APIKey.owner)]
+        )
+
+    async def get_api_key_scopes(
+        self, session: AsyncSession, key_id: UUID
+    ) -> List[str]:
+        """Get scopes for an API key."""
+        stmt = select(APIKeyScope.scope).where(APIKeyScope.api_key_id == key_id)
+        result = await session.execute(stmt)
+        return [row[0] for row in result.all()]
 
     async def list_user_api_keys(
-        self, user_id: str, status: Optional[APIKeyStatus] = None
-    ) -> List[APIKeyModel]:
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        status: Optional[APIKeyStatus] = None,
+    ) -> List[APIKey]:
         """
         List all API keys for a user.
 
         Args:
+            session: Database session
             user_id: User ID
             status: Optional filter by status
 
         Returns:
-            List[APIKeyModel]: User's API keys
+            List[APIKey]: User's API keys
         """
-        user = await UserModel.get(user_id)
-        if not user:
-            return []
-
-        # Query using Beanie's Link field syntax (owner.id)
-        # This is the correct way to query by linked document ID
-        # IMPORTANT: Use fetch_links=True parameter to populate the owner Link field
+        filters = [APIKey.owner_id == user_id]
         if status:
-            return await APIKeyModel.find(
-                APIKeyModel.owner.id == user.id,
-                APIKeyModel.status == status,
-                fetch_links=True,
-            ).to_list()
-        else:
-            return await APIKeyModel.find(
-                APIKeyModel.owner.id == user.id, fetch_links=True
-            ).to_list()
+            filters.append(APIKey.status == status)
 
-    async def revoke_api_key(self, key_id: str) -> bool:
+        return await self.get_many(session, *filters, limit=1000)
+
+    async def revoke_api_key(self, session: AsyncSession, key_id: UUID) -> bool:
         """
         Revoke an API key.
 
         Args:
+            session: Database session
             key_id: API key ID
 
         Returns:
             bool: True if revoked
         """
-        api_key = await APIKeyModel.get(key_id)
+        api_key = await self.get_by_id(session, key_id)
         if not api_key:
             return False
 
         api_key.status = APIKeyStatus.REVOKED
-        await api_key.save()
+        await session.flush()
 
         logger.info(f"Revoked API key: {api_key.prefix}")
         return True
 
-    async def update_api_key(self, key_id: str, **updates) -> Optional[APIKeyModel]:
+    async def update_api_key(
+        self, session: AsyncSession, key_id: UUID, **updates
+    ) -> Optional[APIKey]:
         """
         Update API key fields.
 
         Args:
+            session: Database session
             key_id: API key ID
             **updates: Fields to update
 
         Returns:
-            Optional[APIKeyModel]: Updated key or None
+            Optional[APIKey]: Updated key or None
         """
-        api_key = await APIKeyModel.get(key_id, fetch_links=True)
+        api_key = await self.get_by_id(session, key_id)
         if not api_key:
             return None
 
@@ -517,28 +572,49 @@ class APIKeyService:
         allowed_fields = {
             "name",
             "description",
-            "scopes",
             "rate_limit_per_minute",
             "rate_limit_per_hour",
             "rate_limit_per_day",
-            "entity_ids",
-            "ip_whitelist",
             "status",
             "expires_at",
-            "metadata",
+            "entity_id",
+            "inherit_from_tree",
         }
 
         for field, value in updates.items():
             if field in allowed_fields and hasattr(api_key, field):
                 setattr(api_key, field, value)
 
-        await api_key.save()
-        # Refresh to get updated data with links
-        await api_key.sync()
+        # Handle scopes separately
+        if "scopes" in updates:
+            # Clear existing scopes
+            stmt = sql_delete(APIKeyScope).where(APIKeyScope.api_key_id == key_id)
+            await session.execute(stmt)
+
+            # Add new scopes
+            for scope in updates["scopes"]:
+                scope_entry = APIKeyScope(api_key_id=key_id, scope=scope)
+                session.add(scope_entry)
+
+        # Handle IP whitelist separately
+        if "ip_whitelist" in updates:
+            # Clear existing IPs
+            stmt = sql_delete(APIKeyIPWhitelist).where(
+                APIKeyIPWhitelist.api_key_id == key_id
+            )
+            await session.execute(stmt)
+
+            # Add new IPs
+            for ip in updates["ip_whitelist"]:
+                ip_entry = APIKeyIPWhitelist(api_key_id=key_id, ip_address=ip)
+                session.add(ip_entry)
+
+        await session.flush()
+        await session.refresh(api_key)
         return api_key
 
     async def check_entity_access_with_tree(
-        self, api_key: APIKeyModel, target_entity_id: str
+        self, session: AsyncSession, api_key: APIKey, target_entity_id: UUID
     ) -> bool:
         """
         Check if API key has access to target entity, including tree permissions.
@@ -548,19 +624,12 @@ class APIKeyService:
         2. Tree access: If inherit_from_tree=True and target is a descendant
 
         Args:
+            session: Database session
             api_key: API key to check
             target_entity_id: Target entity ID to access
 
         Returns:
             bool: True if API key has access
-
-        Example:
-            >>> # API key scoped to west_coast region with inherit_from_tree=True
-            >>> has_access = await service.check_entity_access_with_tree(
-            ...     api_key,
-            ...     "los_angeles_office_id"  # Child of west_coast
-            ... )
-            >>> # Returns True due to tree permissions
         """
         # No entity_id = global access
         if not api_key.entity_id:
@@ -572,16 +641,38 @@ class APIKeyService:
 
         # Check tree access if enabled
         if api_key.inherit_from_tree:
-            from outlabs_auth.models.closure import EntityClosureModel
-
             # Check if target is a descendant of api_key's entity
-            closure = await EntityClosureModel.find_one(
-                EntityClosureModel.ancestor_id == api_key.entity_id,
-                EntityClosureModel.descendant_id == target_entity_id,
-                EntityClosureModel.depth > 0,  # Exclude self
+            stmt = select(EntityClosure).where(
+                EntityClosure.ancestor_id == api_key.entity_id,
+                EntityClosure.descendant_id == target_entity_id,
+                EntityClosure.depth > 0,  # Exclude self
             )
+            result = await session.execute(stmt)
+            closure = result.scalar_one_or_none()
 
             if closure:
                 return True
 
         return False
+
+    async def delete_api_key(self, session: AsyncSession, key_id: UUID) -> bool:
+        """
+        Hard delete an API key (use revoke for soft delete).
+
+        Args:
+            session: Database session
+            key_id: API key ID
+
+        Returns:
+            bool: True if deleted
+        """
+        api_key = await self.get_by_id(session, key_id)
+        if not api_key:
+            return False
+
+        # Scopes and IP whitelist are deleted via cascade
+        await session.delete(api_key)
+        await session.flush()
+
+        logger.info(f"Deleted API key: {api_key.prefix}")
+        return True

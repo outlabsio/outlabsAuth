@@ -6,7 +6,9 @@ Thin wrapper around OutlabsAuth that enables entity hierarchy and tree permissio
 This preset is for enterprise applications that need hierarchical RBAC
 with organizational structures and permission inheritance.
 """
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from typing import Optional
+
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from outlabs_auth.core.auth import OutlabsAuth
 
@@ -36,71 +38,47 @@ class EnterpriseRBAC(OutlabsAuth):
 
     Example:
         >>> from outlabs_auth.presets import EnterpriseRBAC
-        >>> from motor.motor_asyncio import AsyncIOMotorClient
-        >>>
-        >>> client = AsyncIOMotorClient("mongodb://localhost:27017")
-        >>> db = client["my_app"]
         >>>
         >>> auth = EnterpriseRBAC(
-        ...     database=db,
+        ...     database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
         ...     secret_key="your-secret-key-here"
         ... )
         >>> await auth.initialize()
         >>>
         >>> # Create entity hierarchy
-        >>> platform = await auth.entity_service.create_entity(
-        ...     name="platform",
-        ...     display_name="ACME Platform",
-        ...     entity_class=EntityClass.STRUCTURAL,
-        ...     entity_type="platform"
-        ... )
-        >>>
-        >>> org = await auth.entity_service.create_entity(
-        ...     name="acme_corp",
-        ...     display_name="ACME Corp",
-        ...     entity_class=EntityClass.STRUCTURAL,
-        ...     entity_type="organization",
-        ...     parent_id=str(platform.id)
-        ... )
-        >>>
-        >>> # Create user
-        >>> user = await auth.user_service.create_user(
-        ...     email="admin@acme.com",
-        ...     password="SecurePass123!",
-        ...     first_name="Admin",
-        ...     last_name="User"
-        ... )
-        >>>
-        >>> # Create role with tree permissions
-        >>> admin_role = await auth.role_service.create_role(
-        ...     name="platform_admin",
-        ...     display_name="Platform Administrator",
-        ...     permissions=["entity:read_tree", "entity:update_tree"],
-        ...     entity_id=str(platform.id)
-        ... )
-        >>>
-        >>> # Add user to platform with role
-        >>> await auth.membership_service.add_member(
-        ...     entity_id=str(platform.id),
-        ...     user_id=str(user.id),
-        ...     role_ids=[str(admin_role.id)]
-        ... )
+        >>> async with auth.get_session() as session:
+        ...     platform = await auth.entity_service.create_entity(
+        ...         session,
+        ...         name="platform",
+        ...         display_name="ACME Platform",
+        ...         entity_class=EntityClass.STRUCTURAL,
+        ...         entity_type="platform"
+        ...     )
+        ...     await session.commit()
         >>>
         >>> # Check permissions (tree permissions apply to descendants)
-        >>> has_perm, source = await auth.permission_service.check_permission(
-        ...     user_id=str(user.id),
-        ...     permission="entity:update",
-        ...     entity_id=str(org.id)
-        ... )
+        >>> async with auth.get_session() as session:
+        ...     has_perm, source = await auth.permission_service.check_permission(
+        ...         session,
+        ...         user_id=user.id,
+        ...         permission="entity:update",
+        ...         entity_id=org.id
+        ...     )
         >>> # has_perm=True, source="tree"
     """
 
-    def __init__(self, database: AsyncIOMotorDatabase, **kwargs):
+    def __init__(
+        self,
+        database_url: Optional[str] = None,
+        engine: Optional[AsyncEngine] = None,
+        **kwargs,
+    ):
         """
         Initialize EnterpriseRBAC.
 
         Args:
-            database: MongoDB database instance
+            database_url: PostgreSQL connection URL
+            engine: Existing SQLAlchemy AsyncEngine (optional)
             **kwargs: Additional OutlabsAuth configuration options
                      (see OutlabsAuth.__init__ for all options)
 
@@ -111,7 +89,7 @@ class EnterpriseRBAC(OutlabsAuth):
             - enable_abac: False (default, can override)
         """
         # Force enable entity hierarchy
-        kwargs.pop("enable_entity_hierarchy", None)  # Remove if provided
+        kwargs.pop("enable_entity_hierarchy", None)
 
         # Allow context-aware roles and ABAC to be configured by user
         # But default them to False for simplicity
@@ -119,9 +97,10 @@ class EnterpriseRBAC(OutlabsAuth):
         enable_abac = kwargs.pop("enable_abac", False)
 
         super().__init__(
-            database,
-            enable_entity_hierarchy=True,  # Force hierarchical structure
+            database_url=database_url,
+            engine=engine,
+            enable_entity_hierarchy=True,
             enable_context_aware_roles=enable_context_aware,
             enable_abac=enable_abac,
-            **kwargs
+            **kwargs,
         )

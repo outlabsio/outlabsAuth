@@ -118,6 +118,12 @@ class RoleNotFoundError(AuthorizationError):
     status_code = 404
 
 
+class PermissionNotFoundError(AuthorizationError):
+    """Specified permission does not exist"""
+    error_code = "PERMISSION_NOT_FOUND"
+    status_code = 404
+
+
 class InsufficientPermissionsError(AuthorizationError):
     """User lacks required permissions for this operation"""
     error_code = "INSUFFICIENT_PERMISSIONS"

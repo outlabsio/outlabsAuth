@@ -1,21 +1,14 @@
 #!/usr/bin/env python3
 """
-Reset Test Environment Script for EnterpriseRBAC
-Quickly resets the EnterpriseRBAC example database to a known good state for testing.
-
-Creates:
-- 4-level entity hierarchy (Organization → Region → Office → Team)
-- 30 permissions (including tree permissions)
-- 6 roles (Platform Admin, Regional Manager, Office Manager, Team Lead, Agent, Viewer)
-- 6 test users with entity memberships
-- Sample leads assigned to different entities
+Reset Test Environment Script - EnterpriseRBAC Example
+Resets the database to a known good state for testing entity hierarchy.
 
 Usage:
     python reset_test_env.py
 
 Environment Variables:
-    MONGODB_URL: MongoDB connection string (default: mongodb://localhost:27018)
-    DATABASE_NAME: Database name (default: realestate_enterprise_rbac)
+    DATABASE_URL: PostgreSQL connection string
+                  (default: postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac)
 """
 
 import asyncio
@@ -27,782 +20,507 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
-from beanie import init_beanie
+from sqlalchemy import text, select
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+from sqlmodel import SQLModel
+
+from outlabs_auth import (
+    User,
+    Role,
+    Permission,
+    UserRoleMembership,
+    MembershipStatus,
+    UserStatus,
+    Entity,
+    EntityClosure,
+    EntityMembership,
+)
+from outlabs_auth.models.sql.role import RolePermission
+from outlabs_auth.models.sql.entity_membership import EntityMembershipRole
+from outlabs_auth.models.sql.enums import EntityClass
+from outlabs_auth.utils.password import generate_password_hash
+from outlabs_auth.core.config import AuthConfig
 
 # Import domain models
 from models import Lead, LeadNote
-from motor.motor_asyncio import AsyncIOMotorClient
-
-from outlabs_auth.models.closure import EntityClosureModel
-
-# Import models
-from outlabs_auth.models.entity import EntityModel
-from outlabs_auth.models.membership import EntityMembershipModel
-from outlabs_auth.models.permission import PermissionModel
-from outlabs_auth.models.role import RoleModel
-from outlabs_auth.models.user import UserModel
-from outlabs_auth.utils.password import hash_password
 
 # Configuration
-MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27018")
-DATABASE_NAME = os.getenv("DATABASE_NAME", "realestate_enterprise_rbac")
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac"
+)
 
 
 async def reset_database():
-    """Reset database to clean test state with entity hierarchy."""
-    print("🔄 Connecting to MongoDB...")
-    client = AsyncIOMotorClient(MONGODB_URL)
-    db = client[DATABASE_NAME]
+    """Reset database to clean test state using SQLAlchemy."""
+    print("Connecting to PostgreSQL...")
 
-    # Initialize Beanie with all models
-    await init_beanie(
-        database=db,
-        document_models=[
-            UserModel,
-            RoleModel,
-            PermissionModel,
-            EntityModel,
-            EntityClosureModel,
-            EntityMembershipModel,
-            Lead,
-            LeadNote,
-        ],
+    # Create engine
+    engine = create_async_engine(DATABASE_URL, echo=False)
+
+    # Create session factory
+    async_session = sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
     )
 
-    # Drop existing test data
-    print("🗑️  Dropping existing test data...")
-    await UserModel.delete_all()
-    await RoleModel.delete_all()
-    await PermissionModel.delete_all()
-    await EntityModel.delete_all()
-    await EntityClosureModel.delete_all()
-    await EntityMembershipModel.delete_all()
-    await Lead.delete_all()
-    await LeadNote.delete_all()
-    print("✅ Test data cleared\n")
+    # Create all tables
+    print("Creating tables...")
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+    print("Tables created")
 
-    # Create permissions
-    print("📝 Creating permissions (30 total)...")
-    permissions_data = [
-        # User permissions
-        {
-            "name": "user:read",
-            "display_name": "User Read",
-            "resource": "user",
-            "action": "read",
-        },
-        {
-            "name": "user:create",
-            "display_name": "User Create",
-            "resource": "user",
-            "action": "create",
-        },
-        {
-            "name": "user:update",
-            "display_name": "User Update",
-            "resource": "user",
-            "action": "update",
-        },
-        {
-            "name": "user:delete",
-            "display_name": "User Delete",
-            "resource": "user",
-            "action": "delete",
-        },
-        {
-            "name": "user:manage",
-            "display_name": "User Manage",
-            "resource": "user",
-            "action": "manage",
-        },
-        {
-            "name": "user:manage_tree",
-            "display_name": "User Manage Tree",
-            "resource": "user",
-            "action": "manage_tree",
-        },
-        # Role permissions
-        {
-            "name": "role:read",
-            "display_name": "Role Read",
-            "resource": "role",
-            "action": "read",
-        },
-        {
-            "name": "role:create",
-            "display_name": "Role Create",
-            "resource": "role",
-            "action": "create",
-        },
-        {
-            "name": "role:update",
-            "display_name": "Role Update",
-            "resource": "role",
-            "action": "update",
-        },
-        {
-            "name": "role:delete",
-            "display_name": "Role Delete",
-            "resource": "role",
-            "action": "delete",
-        },
-        # Permission permissions
-        {
-            "name": "permission:read",
-            "display_name": "Permission Read",
-            "resource": "permission",
-            "action": "read",
-        },
-        {
-            "name": "permission:create",
-            "display_name": "Permission Create",
-            "resource": "permission",
-            "action": "create",
-        },
-        # Entity permissions
-        {
-            "name": "entity:read",
-            "display_name": "Entity Read",
-            "resource": "entity",
-            "action": "read",
-        },
-        {
-            "name": "entity:create",
-            "display_name": "Entity Create",
-            "resource": "entity",
-            "action": "create",
-        },
-        {
-            "name": "entity:update",
-            "display_name": "Entity Update",
-            "resource": "entity",
-            "action": "update",
-        },
-        {
-            "name": "entity:delete",
-            "display_name": "Entity Delete",
-            "resource": "entity",
-            "action": "delete",
-        },
-        {
-            "name": "entity:read_tree",
-            "display_name": "Entity Read Tree",
-            "resource": "entity",
-            "action": "read_tree",
-        },
-        {
-            "name": "entity:manage_tree",
-            "display_name": "Entity Manage Tree",
-            "resource": "entity",
-            "action": "manage_tree",
-        },
-        # API Key permissions
-        {
-            "name": "apikey:read",
-            "display_name": "API Key Read",
-            "resource": "apikey",
-            "action": "read",
-        },
-        {
-            "name": "apikey:create",
-            "display_name": "API Key Create",
-            "resource": "apikey",
-            "action": "create",
-        },
-        {
-            "name": "apikey:revoke",
-            "display_name": "API Key Revoke",
-            "resource": "apikey",
-            "action": "revoke",
-        },
-        # Lead permissions (real estate domain)
-        {
-            "name": "lead:read",
-            "display_name": "Lead Read",
-            "resource": "lead",
-            "action": "read",
-        },
-        {
-            "name": "lead:create",
-            "display_name": "Lead Create",
-            "resource": "lead",
-            "action": "create",
-        },
-        {
-            "name": "lead:update",
-            "display_name": "Lead Update",
-            "resource": "lead",
-            "action": "update",
-        },
-        {
-            "name": "lead:delete",
-            "display_name": "Lead Delete",
-            "resource": "lead",
-            "action": "delete",
-        },
-        {
-            "name": "lead:assign",
-            "display_name": "Lead Assign",
-            "resource": "lead",
-            "action": "assign",
-        },
-        {
-            "name": "lead:update_own",
-            "display_name": "Lead Update Own",
-            "resource": "lead",
-            "action": "update_own",
-        },
-        {
-            "name": "lead:read_tree",
-            "display_name": "Lead Read Tree",
-            "resource": "lead",
-            "action": "read_tree",
-        },
-        {
-            "name": "lead:manage_tree",
-            "display_name": "Lead Manage Tree",
-            "resource": "lead",
-            "action": "manage_tree",
-        },
-    ]
+    async with async_session() as session:
+        # Drop existing test data (in correct order for foreign keys)
+        print("Dropping existing test data...")
 
-    permissions = []
-    for perm_data in permissions_data:
-        perm = PermissionModel(
-            name=perm_data["name"],
-            display_name=perm_data["display_name"],
-            resource=perm_data["resource"],
-            action=perm_data["action"],
-            description=f"Permission to {perm_data['action']} {perm_data['resource']}",
-            is_system=True,
-            is_active=True,
-        )
-        await perm.insert()
-        permissions.append(perm)
+        # Delete in order respecting foreign keys
+        await session.execute(text("DELETE FROM entity_membership_roles"))
+        await session.execute(text("DELETE FROM entity_memberships"))
+        await session.execute(text("DELETE FROM entity_closures"))
+        await session.execute(text("DELETE FROM user_role_memberships"))
+        await session.execute(text("DELETE FROM role_permissions"))
+        await session.execute(text("DELETE FROM lead_notes"))
+        await session.execute(text("DELETE FROM leads"))
+        await session.execute(text("DELETE FROM entities"))
+        await session.execute(text("DELETE FROM roles"))
+        await session.execute(text("DELETE FROM permissions"))
+        await session.execute(text("DELETE FROM users"))
+        await session.commit()
+        print("Test data cleared\n")
 
-    print(f"   Created {len(permissions)} permissions\n")
+        # Create permissions
+        print("Creating permissions...")
+        permissions_data = [
+            # User permissions
+            {"name": "user:read", "display_name": "User Read", "resource": "user", "action": "read"},
+            {"name": "user:read_tree", "display_name": "User Read Tree", "resource": "user", "action": "read_tree"},
+            {"name": "user:create", "display_name": "User Create", "resource": "user", "action": "create"},
+            {"name": "user:update", "display_name": "User Update", "resource": "user", "action": "update"},
+            {"name": "user:delete", "display_name": "User Delete", "resource": "user", "action": "delete"},
+            {"name": "user:manage", "display_name": "User Manage", "resource": "user", "action": "manage"},
+            # Role permissions
+            {"name": "role:read", "display_name": "Role Read", "resource": "role", "action": "read"},
+            {"name": "role:create", "display_name": "Role Create", "resource": "role", "action": "create"},
+            {"name": "role:update", "display_name": "Role Update", "resource": "role", "action": "update"},
+            {"name": "role:delete", "display_name": "Role Delete", "resource": "role", "action": "delete"},
+            # Permission permissions
+            {"name": "permission:read", "display_name": "Permission Read", "resource": "permission", "action": "read"},
+            {"name": "permission:create", "display_name": "Permission Create", "resource": "permission", "action": "create"},
+            {"name": "permission:update", "display_name": "Permission Update", "resource": "permission", "action": "update"},
+            # Entity permissions
+            {"name": "entity:read", "display_name": "Entity Read", "resource": "entity", "action": "read"},
+            {"name": "entity:read_tree", "display_name": "Entity Read Tree", "resource": "entity", "action": "read_tree"},
+            {"name": "entity:create", "display_name": "Entity Create", "resource": "entity", "action": "create"},
+            {"name": "entity:update", "display_name": "Entity Update", "resource": "entity", "action": "update"},
+            {"name": "entity:delete", "display_name": "Entity Delete", "resource": "entity", "action": "delete"},
+            # Lead permissions
+            {"name": "lead:read", "display_name": "Lead Read", "resource": "lead", "action": "read"},
+            {"name": "lead:read_tree", "display_name": "Lead Read Tree", "resource": "lead", "action": "read_tree"},
+            {"name": "lead:create", "display_name": "Lead Create", "resource": "lead", "action": "create"},
+            {"name": "lead:update", "display_name": "Lead Update", "resource": "lead", "action": "update"},
+            {"name": "lead:delete", "display_name": "Lead Delete", "resource": "lead", "action": "delete"},
+            # API Key permissions
+            {"name": "apikey:read", "display_name": "API Key Read", "resource": "apikey", "action": "read"},
+            {"name": "apikey:create", "display_name": "API Key Create", "resource": "apikey", "action": "create"},
+            {"name": "apikey:revoke", "display_name": "API Key Revoke", "resource": "apikey", "action": "revoke"},
+        ]
 
-    # Create entity hierarchy
-    print("🏢 Creating entity hierarchy...")
+        permissions_map = {}
+        for perm_data in permissions_data:
+            perm = Permission(
+                name=perm_data["name"],
+                display_name=perm_data["display_name"],
+                resource=perm_data["resource"],
+                action=perm_data["action"],
+                description=f"Permission to {perm_data['action']} {perm_data['resource']}",
+                is_system=True,
+                is_active=True,
+            )
+            session.add(perm)
+            permissions_map[perm_data["name"]] = perm
 
-    # Root: Organization
-    diverse_platform = EntityModel(
-        name="diverse_platform",
-        display_name="Diverse Platform",
-        slug="diverse-platform",
-        entity_class="structural",
-        entity_type="organization",
-        description="Main real estate platform organization",
-        status="active",
-    )
-    await diverse_platform.insert()
-    print(f"   ✓ Created {diverse_platform.name} (Organization)")
+        await session.flush()
+        print(f"   Created {len(permissions_map)} permissions\n")
 
-    # Create closure for root (self-reference)
-    await EntityClosureModel(
-        ancestor_id=str(diverse_platform.id),
-        descendant_id=str(diverse_platform.id),
-        depth=0,
-    ).insert()
+        # Create roles
+        print("Creating roles...")
+        roles_data = [
+            {
+                "name": "agent",
+                "display_name": "Agent",
+                "description": "Real estate agent - can manage leads in their team",
+                "permissions": [
+                    "lead:read",
+                    "lead:create",
+                    "lead:update",
+                ],
+            },
+            {
+                "name": "team_lead",
+                "display_name": "Team Lead",
+                "description": "Team leader - can manage leads and view team members",
+                "permissions": [
+                    "lead:read",
+                    "lead:read_tree",
+                    "lead:create",
+                    "lead:update",
+                    "lead:delete",
+                    "user:read",
+                ],
+            },
+            {
+                "name": "office_manager",
+                "display_name": "Office Manager",
+                "description": "Office manager - full access to office and all descendants",
+                "permissions": [
+                    "lead:read",
+                    "lead:read_tree",
+                    "lead:create",
+                    "lead:update",
+                    "lead:delete",
+                    "user:read",
+                    "user:read_tree",
+                    "user:create",
+                    "entity:read",
+                    "entity:read_tree",
+                ],
+            },
+            {
+                "name": "admin",
+                "display_name": "Administrator",
+                "description": "Full system access",
+                "permissions": list(permissions_map.keys()),
+            },
+        ]
 
-    # Level 2: Regions
-    west_coast = EntityModel(
-        name="west_coast",
-        display_name="West Coast",
-        slug="west-coast",
-        entity_class="structural",
-        entity_type="region",
-        parent_entity=diverse_platform,
-        description="West Coast regional operations",
-        status="active",
-    )
-    await west_coast.insert()
-    print(f"   ✓ Created {west_coast.name} (Region)")
+        roles_map = {}
+        for role_data in roles_data:
+            role = Role(
+                name=role_data["name"],
+                display_name=role_data["display_name"],
+                description=role_data["description"],
+                is_system_role=True,
+                is_global=True,
+            )
+            session.add(role)
+            await session.flush()
 
-    # Update closure table for West Coast
-    await EntityClosureModel(
-        ancestor_id=str(diverse_platform.id), descendant_id=str(west_coast.id), depth=1
-    ).insert()
-    await EntityClosureModel(
-        ancestor_id=str(west_coast.id), descendant_id=str(west_coast.id), depth=0
-    ).insert()
+            # Add permissions via junction table
+            for perm_name in role_data["permissions"]:
+                if perm_name in permissions_map:
+                    role_perm = RolePermission(
+                        role_id=role.id,
+                        permission_id=permissions_map[perm_name].id,
+                    )
+                    session.add(role_perm)
 
-    east_coast = EntityModel(
-        name="east_coast",
-        display_name="East Coast",
-        slug="east-coast",
-        entity_class="structural",
-        entity_type="region",
-        parent_entity=diverse_platform,
-        description="East Coast regional operations",
-        status="active",
-    )
-    await east_coast.insert()
-    print(f"   ✓ Created {east_coast.name} (Region)")
+            roles_map[role_data["name"]] = role
 
-    # Update closure table for East Coast
-    await EntityClosureModel(
-        ancestor_id=str(diverse_platform.id), descendant_id=str(east_coast.id), depth=1
-    ).insert()
-    await EntityClosureModel(
-        ancestor_id=str(east_coast.id), descendant_id=str(east_coast.id), depth=0
-    ).insert()
+        await session.flush()
+        print(f"   Created {len(roles_map)} roles\n")
 
-    # Level 3: Offices (West Coast)
-    la_office = EntityModel(
-        name="los_angeles",
-        display_name="Los Angeles",
-        slug="los-angeles",
-        entity_class="structural",
-        entity_type="office",
-        parent_entity=west_coast,
-        description="Los Angeles office",
-        status="active",
-    )
-    await la_office.insert()
-    print(f"   ✓ Created {la_office.name} (Office)")
+        # Create entities (Organization -> Region -> Office -> Team)
+        print("Creating entity hierarchy...")
 
-    # Update closure table for LA Office
-    await EntityClosureModel(
-        ancestor_id=str(diverse_platform.id), descendant_id=str(la_office.id), depth=2
-    ).insert()
-    await EntityClosureModel(
-        ancestor_id=str(west_coast.id), descendant_id=str(la_office.id), depth=1
-    ).insert()
-    await EntityClosureModel(
-        ancestor_id=str(la_office.id), descendant_id=str(la_office.id), depth=0
-    ).insert()
+        # Helper to create closure table entries
+        async def create_closure_for_entity(entity, parent_entity=None):
+            """Create closure table entries for an entity."""
+            # Self-reference
+            self_closure = EntityClosure(
+                ancestor_id=entity.id,
+                descendant_id=entity.id,
+                depth=0,
+            )
+            session.add(self_closure)
 
-    seattle_office = EntityModel(
-        name="seattle",
-        display_name="Seattle",
-        slug="seattle",
-        entity_class="structural",
-        entity_type="office",
-        parent_entity=west_coast,
-        description="Seattle office",
-        status="active",
-    )
-    await seattle_office.insert()
-    print(f"   ✓ Created {seattle_office.name} (Office)")
+            # If has parent, copy parent's ancestors
+            if parent_entity:
+                stmt = select(EntityClosure).where(
+                    EntityClosure.descendant_id == parent_entity.id
+                )
+                result = await session.execute(stmt)
+                parent_closures = result.scalars().all()
 
-    # Update closure table for Seattle Office
-    await EntityClosureModel(
-        ancestor_id=str(diverse_platform.id),
-        descendant_id=str(seattle_office.id),
-        depth=2,
-    ).insert()
-    await EntityClosureModel(
-        ancestor_id=str(west_coast.id), descendant_id=str(seattle_office.id), depth=1
-    ).insert()
-    await EntityClosureModel(
-        ancestor_id=str(seattle_office.id),
-        descendant_id=str(seattle_office.id),
-        depth=0,
-    ).insert()
+                for pc in parent_closures:
+                    ancestor_closure = EntityClosure(
+                        ancestor_id=pc.ancestor_id,
+                        descendant_id=entity.id,
+                        depth=pc.depth + 1,
+                    )
+                    session.add(ancestor_closure)
 
-    # Level 3: Offices (East Coast)
-    ny_office = EntityModel(
-        name="new_york",
-        display_name="New York",
-        slug="new-york",
-        entity_class="structural",
-        entity_type="office",
-        parent_entity=east_coast,
-        description="New York office",
-        status="active",
-    )
-    await ny_office.insert()
-    print(f"   ✓ Created {ny_office.name} (Office)")
-
-    # Update closure table for NY Office
-    await EntityClosureModel(
-        ancestor_id=str(diverse_platform.id), descendant_id=str(ny_office.id), depth=2
-    ).insert()
-    await EntityClosureModel(
-        ancestor_id=str(east_coast.id), descendant_id=str(ny_office.id), depth=1
-    ).insert()
-    await EntityClosureModel(
-        ancestor_id=str(ny_office.id), descendant_id=str(ny_office.id), depth=0
-    ).insert()
-
-    boston_office = EntityModel(
-        name="boston",
-        display_name="Boston",
-        slug="boston",
-        entity_class="structural",
-        entity_type="office",
-        parent_entity=east_coast,
-        description="Boston office",
-        status="active",
-    )
-    await boston_office.insert()
-    print(f"   ✓ Created {boston_office.name} (Office)")
-
-    # Update closure table for Boston Office
-    await EntityClosureModel(
-        ancestor_id=str(diverse_platform.id),
-        descendant_id=str(boston_office.id),
-        depth=2,
-    ).insert()
-    await EntityClosureModel(
-        ancestor_id=str(east_coast.id), descendant_id=str(boston_office.id), depth=1
-    ).insert()
-    await EntityClosureModel(
-        ancestor_id=str(boston_office.id), descendant_id=str(boston_office.id), depth=0
-    ).insert()
-
-    # Level 4: Teams (LA Office)
-    luxury_team = EntityModel(
-        name="luxury_properties",
-        display_name="Luxury Properties",
-        slug="luxury-properties",
-        entity_class="structural",
-        entity_type="team",
-        parent_entity=la_office,
-        description="Luxury real estate team in LA",
-        status="active",
-    )
-    await luxury_team.insert()
-    print(f"   ✓ Created {luxury_team.name} (Team)")
-
-    # Update closure table for Luxury Team
-    await EntityClosureModel(
-        ancestor_id=str(diverse_platform.id), descendant_id=str(luxury_team.id), depth=3
-    ).insert()
-    await EntityClosureModel(
-        ancestor_id=str(west_coast.id), descendant_id=str(luxury_team.id), depth=2
-    ).insert()
-    await EntityClosureModel(
-        ancestor_id=str(la_office.id), descendant_id=str(luxury_team.id), depth=1
-    ).insert()
-    await EntityClosureModel(
-        ancestor_id=str(luxury_team.id), descendant_id=str(luxury_team.id), depth=0
-    ).insert()
-
-    commercial_team_la = EntityModel(
-        name="commercial_la",
-        display_name="Commercial LA",
-        slug="commercial-la",
-        entity_class="structural",
-        entity_type="team",
-        parent_entity=la_office,
-        description="Commercial real estate team in LA",
-        status="active",
-    )
-    await commercial_team_la.insert()
-    print(f"   ✓ Created {commercial_team_la.name} (Team)")
-
-    # Update closure table
-    await EntityClosureModel(
-        ancestor_id=str(diverse_platform.id),
-        descendant_id=str(commercial_team_la.id),
-        depth=3,
-    ).insert()
-    await EntityClosureModel(
-        ancestor_id=str(west_coast.id),
-        descendant_id=str(commercial_team_la.id),
-        depth=2,
-    ).insert()
-    await EntityClosureModel(
-        ancestor_id=str(la_office.id), descendant_id=str(commercial_team_la.id), depth=1
-    ).insert()
-    await EntityClosureModel(
-        ancestor_id=str(commercial_team_la.id),
-        descendant_id=str(commercial_team_la.id),
-        depth=0,
-    ).insert()
-
-    print(f"\n   Total: 9 entities across 4 levels\n")
-
-    # Create roles
-    print("🎭 Creating roles (6 total)...")
-    roles_data = [
-        {
-            "name": "platform_admin",
-            "display_name": "Platform Admin",
-            "description": "Full platform access",
-            "permissions": [p.name for p in permissions],  # All permissions
-        },
-        {
-            "name": "regional_manager",
-            "display_name": "Regional Manager",
-            "description": "Manage entire region with tree permissions",
-            "permissions": [
-                "user:read",
-                "user:manage_tree",
-                "entity:read_tree",
-                "entity:create",
-                "entity:update",
-                "lead:read_tree",
-                "lead:manage_tree",
-                "lead:assign",
-                "apikey:read",
-            ],
-        },
-        {
-            "name": "office_manager",
-            "display_name": "Office Manager",
-            "description": "Manage office and all teams below",
-            "permissions": [
-                "user:read",
-                "user:manage",
-                "entity:read_tree",
-                "entity:update",
-                "lead:read_tree",
-                "lead:manage_tree",
-                "lead:assign",
-            ],
-        },
-        {
-            "name": "team_lead",
-            "display_name": "Team Lead",
-            "description": "Manage team members and leads",
-            "permissions": [
-                "user:read",
-                "entity:read",
-                "lead:read",
-                "lead:create",
-                "lead:update",
-                "lead:delete",
-                "lead:assign",
-            ],
-        },
-        {
-            "name": "agent",
-            "display_name": "Agent",
-            "description": "Create and manage own leads",
-            "permissions": [
-                "user:read",
-                "entity:read",
-                "lead:read",
-                "lead:create",
-                "lead:update_own",
-            ],
-        },
-        {
-            "name": "viewer",
-            "display_name": "Viewer",
-            "description": "Read-only access",
-            "permissions": [
-                "user:read",
-                "entity:read",
-                "lead:read",
-            ],
-        },
-    ]
-
-    roles_map = {}
-    for role_data in roles_data:
-        role = RoleModel(
-            name=role_data["name"],
-            display_name=role_data["display_name"],
-            description=role_data["description"],
-            permissions=role_data["permissions"],
-            is_system_role=True,
-            is_global=False,  # EnterpriseRBAC roles are entity-scoped
-        )
-        await role.insert()
-        roles_map[role_data["name"]] = role
-
-    print(f"   Created {len(roles_map)} roles\n")
-
-    # Create test users with entity memberships
-    print("👥 Creating test users (6 total)...")
-    users_data = [
-        {
-            "key": "platform_admin",
-            "email": "admin@diverse.com",
-            "password": "Admin123!!",
-            "first_name": "Platform",
-            "last_name": "Admin",
-            "role": "platform_admin",
-            "entity": diverse_platform,
-            "is_superuser": True,
-        },
-        {
-            "key": "regional_manager",
-            "email": "west.manager@diverse.com",
-            "password": "Test123!!",
-            "first_name": "West Coast",
-            "last_name": "Manager",
-            "role": "regional_manager",
-            "entity": west_coast,
-            "is_superuser": False,
-        },
-        {
-            "key": "office_manager",
-            "email": "la.manager@diverse.com",
-            "password": "Test123!!",
-            "first_name": "Los Angeles",
-            "last_name": "Manager",
-            "role": "office_manager",
-            "entity": la_office,
-            "is_superuser": False,
-        },
-        {
-            "key": "team_lead",
-            "email": "luxury.lead@diverse.com",
-            "password": "Test123!!",
-            "first_name": "Luxury",
-            "last_name": "Team Lead",
-            "role": "team_lead",
-            "entity": luxury_team,
-            "is_superuser": False,
-        },
-        {
-            "key": "luxury_agent",
-            "email": "agent.luxury@diverse.com",
-            "password": "Test123!!",
-            "first_name": "Luxury",
-            "last_name": "Agent",
-            "role": "agent",
-            "entity": luxury_team,
-            "is_superuser": False,
-        },
-        {
-            "key": "commercial_agent",
-            "email": "agent.commercial@diverse.com",
-            "password": "Test123!!",
-            "first_name": "Commercial",
-            "last_name": "Agent",
-            "role": "agent",
-            "entity": commercial_team_la,
-            "is_superuser": False,
-        },
-    ]
-
-    users_map = {}
-    for user_data in users_data:
-        # Create user
-        user = UserModel(
-            email=user_data["email"],
-            hashed_password=hash_password(user_data["password"]),
-            first_name=user_data["first_name"],
-            last_name=user_data["last_name"],
-            is_superuser=user_data["is_superuser"],
+        # Organization (root)
+        org = Entity(
+            name="acme_realty",
+            display_name="ACME Realty",
+            slug="acme-realty",
+            description="ACME Real Estate Corporation",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+            parent_id=None,
+            depth=0,
+            path="/acme-realty",
             status="active",
-            can_login=True,
         )
-        await user.insert()
-        users_map[user_data["key"]] = user
+        session.add(org)
+        await session.flush()
+        await create_closure_for_entity(org)
 
-        # Create entity membership with role
-        role = roles_map[user_data["role"]]
-        membership = EntityMembershipModel(
-            user=user,
-            entity=user_data["entity"],
-            roles=[role],  # EnterpriseRBAC supports multiple roles
+        # Regions
+        west_coast = Entity(
+            name="west_coast",
+            display_name="West Coast Region",
+            slug="west-coast",
+            description="West Coast operations",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="region",
+            parent_id=org.id,
+            depth=1,
+            path="/acme-realty/west-coast",
             status="active",
-            joined_at=datetime.now(UTC),
         )
-        await membership.insert()
+        session.add(west_coast)
+        await session.flush()
+        await create_closure_for_entity(west_coast, org)
 
-    print(f"   Created {len(users_data)} test users with entity memberships\n")
-
-    # Create sample leads
-    print("📋 Creating sample leads...")
-    leads_data = [
-        {
-            "first_name": "John",
-            "last_name": "Smith",
-            "email": "john.smith@example.com",
-            "phone": "+1 (555) 123-4567",
-            "lead_type": "buyer",
-            "property_type": "Luxury Villa",
-            "budget": 5000000,
-            "status": "new",
-            "source": "Website",
-            "entity": luxury_team,
-            "created_by": users_map["luxury_agent"],
-        },
-        {
-            "first_name": "Sarah",
-            "last_name": "Johnson",
-            "email": "sarah.j@example.com",
-            "phone": "+1 (555) 234-5678",
-            "lead_type": "buyer",
-            "property_type": "Penthouse",
-            "budget": 3500000,
-            "status": "contacted",
-            "source": "Referral",
-            "entity": luxury_team,
-            "created_by": users_map["luxury_agent"],
-        },
-        {
-            "first_name": "Michael",
-            "last_name": "Brown",
-            "email": "m.brown@company.com",
-            "phone": "+1 (555) 345-6789",
-            "lead_type": "buyer",
-            "property_type": "Office Space",
-            "budget": 2000000,
-            "status": "new",
-            "source": "Zillow",
-            "entity": commercial_team_la,
-            "created_by": users_map["commercial_agent"],
-        },
-    ]
-
-    for lead_data in leads_data:
-        lead = Lead(
-            first_name=lead_data["first_name"],
-            last_name=lead_data["last_name"],
-            email=lead_data["email"],
-            phone=lead_data["phone"],
-            lead_type=lead_data["lead_type"],
-            property_type=lead_data["property_type"],
-            budget=lead_data["budget"],
-            status=lead_data["status"],
-            source=lead_data["source"],
-            entity_id=str(lead_data["entity"].id),
-            created_by=str(lead_data["created_by"].id),
-            created_at=datetime.now(UTC),
+        east_coast = Entity(
+            name="east_coast",
+            display_name="East Coast Region",
+            slug="east-coast",
+            description="East Coast operations",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="region",
+            parent_id=org.id,
+            depth=1,
+            path="/acme-realty/east-coast",
+            status="active",
         )
-        await lead.insert()
+        session.add(east_coast)
+        await session.flush()
+        await create_closure_for_entity(east_coast, org)
 
-    print(f"   Created {len(leads_data)} sample leads\n")
+        # Offices
+        sf_office = Entity(
+            name="sf_office",
+            display_name="San Francisco Office",
+            slug="sf-office",
+            description="San Francisco branch office",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="office",
+            parent_id=west_coast.id,
+            depth=2,
+            path="/acme-realty/west-coast/sf-office",
+            status="active",
+        )
+        session.add(sf_office)
+        await session.flush()
+        await create_closure_for_entity(sf_office, west_coast)
 
-    # Print summary
-    print("=" * 70)
-    print("✅ EnterpriseRBAC Test Environment Reset Complete!")
-    print("=" * 70)
+        la_office = Entity(
+            name="la_office",
+            display_name="Los Angeles Office",
+            slug="la-office",
+            description="Los Angeles branch office",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="office",
+            parent_id=west_coast.id,
+            depth=2,
+            path="/acme-realty/west-coast/la-office",
+            status="active",
+        )
+        session.add(la_office)
+        await session.flush()
+        await create_closure_for_entity(la_office, west_coast)
 
-    print("\n🏢 Entity Hierarchy:\n")
-    print("   Diverse Platform (Organization)")
-    print("   ├── West Coast (Region)")
-    print("   │   ├── Los Angeles (Office)")
-    print("   │   │   ├── Luxury Properties (Team)")
-    print("   │   │   └── Commercial LA (Team)")
-    print("   │   └── Seattle (Office)")
-    print("   └── East Coast (Region)")
-    print("       ├── New York (Office)")
-    print("       └── Boston (Office)")
+        nyc_office = Entity(
+            name="nyc_office",
+            display_name="New York City Office",
+            slug="nyc-office",
+            description="NYC branch office",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="office",
+            parent_id=east_coast.id,
+            depth=2,
+            path="/acme-realty/east-coast/nyc-office",
+            status="active",
+        )
+        session.add(nyc_office)
+        await session.flush()
+        await create_closure_for_entity(nyc_office, east_coast)
 
-    print("\n📋 Test User Credentials:\n")
+        # Teams (ACCESS_GROUP entities)
+        sf_residential = Entity(
+            name="sf_residential",
+            display_name="SF Residential Team",
+            slug="sf-residential",
+            description="San Francisco residential real estate team",
+            entity_class=EntityClass.ACCESS_GROUP,
+            entity_type="team",
+            parent_id=sf_office.id,
+            depth=3,
+            path="/acme-realty/west-coast/sf-office/sf-residential",
+            status="active",
+        )
+        session.add(sf_residential)
+        await session.flush()
+        await create_closure_for_entity(sf_residential, sf_office)
+
+        sf_commercial = Entity(
+            name="sf_commercial",
+            display_name="SF Commercial Team",
+            slug="sf-commercial",
+            description="San Francisco commercial real estate team",
+            entity_class=EntityClass.ACCESS_GROUP,
+            entity_type="team",
+            parent_id=sf_office.id,
+            depth=3,
+            path="/acme-realty/west-coast/sf-office/sf-commercial",
+            status="active",
+        )
+        session.add(sf_commercial)
+        await session.flush()
+        await create_closure_for_entity(sf_commercial, sf_office)
+
+        await session.flush()
+        print("   Created entity hierarchy:")
+        print("   - ACME Realty (organization)")
+        print("     - West Coast Region")
+        print("       - San Francisco Office")
+        print("         - SF Residential Team")
+        print("         - SF Commercial Team")
+        print("       - Los Angeles Office")
+        print("     - East Coast Region")
+        print("       - New York City Office\n")
+
+        entities_map = {
+            "org": org,
+            "west_coast": west_coast,
+            "east_coast": east_coast,
+            "sf_office": sf_office,
+            "la_office": la_office,
+            "nyc_office": nyc_office,
+            "sf_residential": sf_residential,
+            "sf_commercial": sf_commercial,
+        }
+
+        # Create config for password hashing
+        config = AuthConfig(secret_key="test-secret-key")
+
+        # Create test users with role assignments
+        print("Creating test users...")
+        users_data = [
+            {
+                "email": "admin@acme.com",
+                "password": "Test123!!",
+                "first_name": "System",
+                "last_name": "Admin",
+                "role": "admin",
+                "is_superuser": True,
+                "entity_memberships": [("org", "admin")],
+            },
+            {
+                "email": "manager@sf.acme.com",
+                "password": "Test123!!",
+                "first_name": "Sarah",
+                "last_name": "Manager",
+                "role": "office_manager",
+                "is_superuser": False,
+                "entity_memberships": [("sf_office", "office_manager")],
+            },
+            {
+                "email": "lead@sf.acme.com",
+                "password": "Test123!!",
+                "first_name": "Tom",
+                "last_name": "TeamLead",
+                "role": "team_lead",
+                "is_superuser": False,
+                "entity_memberships": [("sf_residential", "team_lead")],
+            },
+            {
+                "email": "agent@sf.acme.com",
+                "password": "Test123!!",
+                "first_name": "Jane",
+                "last_name": "Agent",
+                "role": "agent",
+                "is_superuser": False,
+                "entity_memberships": [("sf_residential", "agent")],
+            },
+        ]
+
+        users_map = {}
+        for user_data in users_data:
+            # Create user
+            user = User(
+                email=user_data["email"],
+                hashed_password=generate_password_hash(user_data["password"], config),
+                first_name=user_data["first_name"],
+                last_name=user_data["last_name"],
+                is_superuser=user_data["is_superuser"],
+                status=UserStatus.ACTIVE,
+                email_verified=True,
+            )
+            session.add(user)
+            await session.flush()
+            users_map[user_data["email"]] = user
+
+            # Create global role assignment
+            role = roles_map[user_data["role"]]
+            membership = UserRoleMembership(
+                user_id=user.id,
+                role_id=role.id,
+                status=MembershipStatus.ACTIVE,
+                assigned_at=datetime.now(timezone.utc),
+            )
+            session.add(membership)
+
+            # Create entity memberships
+            for entity_key, role_name in user_data["entity_memberships"]:
+                entity = entities_map[entity_key]
+                role = roles_map[role_name]
+
+                entity_membership = EntityMembership(
+                    user_id=user.id,
+                    entity_id=entity.id,
+                    status=MembershipStatus.ACTIVE,
+                    joined_at=datetime.now(timezone.utc),
+                )
+                session.add(entity_membership)
+                await session.flush()
+
+                # Add role to membership
+                membership_role = EntityMembershipRole(
+                    membership_id=entity_membership.id,
+                    role_id=role.id,
+                )
+                session.add(membership_role)
+
+        await session.commit()
+        print(f"   Created {len(users_data)} test users with entity memberships\n")
+
+    # Close engine
+    await engine.dispose()
+
+    # Print credentials
+    print("=" * 60)
+    print("Test Environment Reset Complete!")
+    print("=" * 60)
+    print("\nTest User Credentials:\n")
+
     for user_data in users_data:
-        role_display = roles_map[user_data["role"]].display_name
-        entity_name = user_data["entity"].name
-        print(f"   {user_data['first_name']} {user_data['last_name']} ({role_display})")
+        print(f"   {user_data['first_name']} {user_data['last_name']} ({user_data['role']})")
         print(f"   Email:    {user_data['email']}")
         print(f"   Password: {user_data['password']}")
-        print(f"   Entity:   {entity_name}")
+        print(f"   Entities: {[e[0] for e in user_data['entity_memberships']]}")
         print()
 
-    print("🌐 Application URLs:")
+    print("URLs:")
     print(f"   Backend:  http://localhost:8004")
     print(f"   API Docs: http://localhost:8004/docs")
     print(f"   Admin UI: http://localhost:3000")
-
-    print("\n💡 Next Steps:")
-    print("   1. Start backend: docker-compose up enterprise-rbac")
-    print("   2. Start admin UI: cd auth-ui && bun dev")
-    print("   3. Login with any test user above")
-    print("   4. Explore entity hierarchy and tree permissions")
-
-    print("\n" + "=" * 70)
+    print("\n" + "=" * 60)
 
 
 if __name__ == "__main__":

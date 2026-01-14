@@ -3,10 +3,16 @@ Membership Service
 
 Manages entity memberships for EnterpriseRBAC.
 Handles user-entity-role relationships with multiple roles per membership.
+Uses SQLAlchemy for PostgreSQL backend.
 """
 
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Tuple
+from uuid import UUID
+
+from sqlalchemy import select, func, and_, delete as sql_delete
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
@@ -16,14 +22,15 @@ from outlabs_auth.core.exceptions import (
     RoleNotFoundError,
     UserNotFoundError,
 )
-from outlabs_auth.models.entity import EntityModel
-from outlabs_auth.models.membership import EntityMembershipModel
-from outlabs_auth.models.membership_status import MembershipStatus
-from outlabs_auth.models.role import RoleModel
-from outlabs_auth.models.user import UserModel
+from outlabs_auth.models.sql.entity import Entity
+from outlabs_auth.models.sql.entity_membership import EntityMembership, EntityMembershipRole
+from outlabs_auth.models.sql.enums import MembershipStatus
+from outlabs_auth.models.sql.role import Role
+from outlabs_auth.models.sql.user import User
+from outlabs_auth.services.base import BaseService
 
 
-class MembershipService:
+class MembershipService(BaseService[EntityMembership]):
     """
     Service for entity membership management.
 
@@ -41,86 +48,84 @@ class MembershipService:
         Args:
             config: Authentication configuration
         """
+        super().__init__(EntityMembership)
         self.config = config
 
     async def add_member(
         self,
-        entity_id: str,
-        user_id: str,
-        role_ids: List[str],
-        joined_by: Optional[str] = None,
+        session: AsyncSession,
+        entity_id: UUID,
+        user_id: UUID,
+        role_ids: List[UUID],
+        joined_by_id: Optional[UUID] = None,
         valid_from: Optional[datetime] = None,
         valid_until: Optional[datetime] = None,
-    ) -> EntityMembershipModel:
+    ) -> EntityMembership:
         """
         Add user to entity with role(s).
 
         Creates new membership or updates existing one.
 
         Args:
+            session: Database session
             entity_id: Entity ID
             user_id: User ID
             role_ids: List of role IDs to assign
-            joined_by: Optional user ID who added the member
+            joined_by_id: Optional user ID who added the member
             valid_from: Optional start date for membership
             valid_until: Optional end date for membership
 
         Returns:
-            EntityMembershipModel: Created or updated membership
+            EntityMembership: Created or updated membership
 
         Raises:
             EntityNotFoundError: If entity not found
             UserNotFoundError: If user not found
             RoleNotFoundError: If role not found
             InvalidInputError: If max_members limit exceeded
-
-        Example:
-            >>> membership = await membership_service.add_member(
-            ...     entity_id=dept_id,
-            ...     user_id=user_id,
-            ...     role_ids=[developer_role_id, team_lead_role_id]
-            ... )
         """
         # Validate entity exists
-        entity = await EntityModel.get(entity_id)
+        entity = await session.get(Entity, entity_id)
         if not entity:
             raise EntityNotFoundError(
-                message="Entity not found", details={"entity_id": entity_id}
+                message="Entity not found", details={"entity_id": str(entity_id)}
             )
 
         # Validate user exists
-        user = await UserModel.get(user_id)
+        user = await session.get(User, user_id)
         if not user:
             raise UserNotFoundError(
-                message="User not found", details={"user_id": user_id}
+                message="User not found", details={"user_id": str(user_id)}
             )
 
         # Validate roles exist
         roles = []
         for role_id in role_ids:
-            role = await RoleModel.get(role_id)
+            role = await session.get(Role, role_id)
             if not role:
                 raise RoleNotFoundError(
-                    message=f"Role not found", details={"role_id": role_id}
+                    message="Role not found", details={"role_id": str(role_id)}
                 )
             roles.append(role)
 
         # Check if membership already exists
-        existing = await EntityMembershipModel.find_one(
-            EntityMembershipModel.user.id == user.id,
-            EntityMembershipModel.entity.id == entity.id,
+        existing = await self.get_one(
+            session,
+            EntityMembership.user_id == user_id,
+            EntityMembership.entity_id == entity_id,
+            options=[selectinload(EntityMembership.roles)],
         )
 
         # Check max_members limit only for NEW memberships
         if not existing and entity.max_members:
             current_members = await self.get_entity_members_count(
-                entity_id, active_only=True
+                session, entity_id, active_only=True
             )
             if current_members >= entity.max_members:
                 raise InvalidInputError(
                     message=f"Entity has reached maximum members limit ({entity.max_members})",
                     details={
-                        "entity_id": entity_id,
+                        "entity_id": str(entity_id),
                         "max_members": entity.max_members,
                         "current_members": current_members,
                     },
@@ -128,245 +133,252 @@ class MembershipService:
 
         if existing:
             # Update existing membership
-            existing.roles = roles
             existing.status = MembershipStatus.ACTIVE
             existing.valid_from = valid_from
             existing.valid_until = valid_until
             existing.updated_at = datetime.now(timezone.utc)
-            await existing.save()
+
+            # Update roles via junction table
+            # First, clear existing roles
+            stmt = sql_delete(EntityMembershipRole).where(
+                EntityMembershipRole.membership_id == existing.id
+            )
+            await session.execute(stmt)
+
+            # Add new roles
+            for role in roles:
+                role_link = EntityMembershipRole(
+                    membership_id=existing.id,
+                    role_id=role.id,
+                )
+                session.add(role_link)
+
+            await session.flush()
+            await session.refresh(existing, ["roles"])
             return existing
 
         # Create new membership
-        joined_by_user = None
-        if joined_by:
-            joined_by_user = await UserModel.get(joined_by)
-
-        membership = EntityMembershipModel(
-            user=user,
-            entity=entity,
-            roles=roles,
-            joined_by=joined_by_user,
+        membership = EntityMembership(
+            user_id=user_id,
+            entity_id=entity_id,
+            joined_by_id=joined_by_id,
             valid_from=valid_from,
             valid_until=valid_until,
             tenant_id=entity.tenant_id,
+            status=MembershipStatus.ACTIVE,
         )
 
-        await membership.save()
+        session.add(membership)
+        await session.flush()
+
+        # Add roles via junction table
+        for role in roles:
+            role_link = EntityMembershipRole(
+                membership_id=membership.id,
+                role_id=role.id,
+            )
+            session.add(role_link)
+
+        await session.flush()
+        await session.refresh(membership, ["roles"])
         return membership
 
     async def remove_member(
-        self, entity_id: str, user_id: str, revoked_by: Optional[str] = None
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        user_id: UUID,
+        revoked_by_id: Optional[UUID] = None,
+        reason: Optional[str] = None,
     ) -> bool:
         """
         Remove user from entity (soft delete by setting status=REVOKED).
 
         Args:
+            session: Database session
             entity_id: Entity ID
             user_id: User ID
-            revoked_by: Optional user ID who is revoking the membership
+            revoked_by_id: Optional user ID who is revoking the membership
+            reason: Optional revocation reason
 
         Returns:
             bool: True if membership removed
 
         Raises:
             MembershipNotFoundError: If membership not found
-
-        Example:
-            >>> await membership_service.remove_member(entity_id, user_id, current_user_id)
         """
-        # Fetch user and entity to get ObjectIds for query
-        user = await UserModel.get(user_id)
-        if not user:
-            raise UserNotFoundError(
-                message="User not found", details={"user_id": user_id}
-            )
-
-        entity = await EntityModel.get(entity_id)
-        if not entity:
-            raise EntityNotFoundError(
-                message="Entity not found", details={"entity_id": entity_id}
-            )
-
         # Find membership
-        membership = await EntityMembershipModel.find_one(
-            EntityMembershipModel.user.id == user.id,
-            EntityMembershipModel.entity.id == entity.id,
+        membership = await self.get_one(
+            session,
+            EntityMembership.user_id == user_id,
+            EntityMembership.entity_id == entity_id,
         )
 
         if not membership:
             raise MembershipNotFoundError(
                 message="Membership not found",
-                details={"entity_id": entity_id, "user_id": user_id},
+                details={"entity_id": str(entity_id), "user_id": str(user_id)},
             )
 
         # Soft delete - set status to REVOKED with audit trail
         membership.status = MembershipStatus.REVOKED
         membership.revoked_at = datetime.now(timezone.utc)
-        if revoked_by:
-            revoked_by_user = await UserModel.get(revoked_by)
-            if revoked_by_user:
-                membership.revoked_by = revoked_by_user
+        membership.revoked_by_id = revoked_by_id
+        membership.revocation_reason = reason
         membership.updated_at = datetime.now(timezone.utc)
-        await membership.save()
 
+        await session.flush()
         return True
 
     async def update_member_roles(
-        self, entity_id: str, user_id: str, role_ids: List[str]
-    ) -> EntityMembershipModel:
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        user_id: UUID,
+        role_ids: List[UUID],
+    ) -> EntityMembership:
         """
         Update user's roles in entity.
 
         Args:
+            session: Database session
             entity_id: Entity ID
             user_id: User ID
             role_ids: New list of role IDs
 
         Returns:
-            EntityMembershipModel: Updated membership
+            EntityMembership: Updated membership
 
         Raises:
             MembershipNotFoundError: If membership not found
             RoleNotFoundError: If role not found
-
-        Example:
-            >>> membership = await membership_service.update_member_roles(
-            ...     entity_id,
-            ...     user_id,
-            ...     [new_role_id1, new_role_id2]
-            ... )
         """
-        # Fetch user and entity to get ObjectIds for query
-        user = await UserModel.get(user_id)
-        if not user:
-            raise UserNotFoundError(
-                message="User not found", details={"user_id": user_id}
-            )
-
-        entity = await EntityModel.get(entity_id)
-        if not entity:
-            raise EntityNotFoundError(
-                message="Entity not found", details={"entity_id": entity_id}
-            )
-
-        # Find membership using ObjectIds
-        membership = await EntityMembershipModel.find_one(
-            EntityMembershipModel.user.id == user.id,
-            EntityMembershipModel.entity.id == entity.id,
+        # Find membership
+        membership = await self.get_one(
+            session,
+            EntityMembership.user_id == user_id,
+            EntityMembership.entity_id == entity_id,
+            options=[selectinload(EntityMembership.roles)],
         )
 
         if not membership:
             raise MembershipNotFoundError(
                 message="Membership not found",
-                details={"entity_id": entity_id, "user_id": user_id},
+                details={"entity_id": str(entity_id), "user_id": str(user_id)},
             )
 
-        # Validate and fetch roles
+        # Validate roles exist
         roles = []
         for role_id in role_ids:
-            role = await RoleModel.get(role_id)
+            role = await session.get(Role, role_id)
             if not role:
                 raise RoleNotFoundError(
-                    message=f"Role not found", details={"role_id": role_id}
+                    message="Role not found", details={"role_id": str(role_id)}
                 )
             roles.append(role)
 
-        # Update roles
-        membership.roles = roles
+        # Clear existing roles
+        stmt = sql_delete(EntityMembershipRole).where(
+            EntityMembershipRole.membership_id == membership.id
+        )
+        await session.execute(stmt)
+
+        # Add new roles
+        for role in roles:
+            role_link = EntityMembershipRole(
+                membership_id=membership.id,
+                role_id=role.id,
+            )
+            session.add(role_link)
+
         membership.updated_at = datetime.now(timezone.utc)
-        await membership.save()
+        await session.flush()
+        await session.refresh(membership, ["roles"])
 
         return membership
 
     async def get_entity_members(
-        self, entity_id: str, page: int = 1, limit: int = 50, active_only: bool = True
-    ) -> tuple[List[EntityMembershipModel], int]:
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        page: int = 1,
+        limit: int = 50,
+        active_only: bool = True,
+    ) -> Tuple[List[EntityMembership], int]:
         """
         Get members of entity with pagination.
 
         Args:
+            session: Database session
             entity_id: Entity ID
             page: Page number (1-indexed)
             limit: Results per page
             active_only: Only return active memberships
 
         Returns:
-            tuple[List[EntityMembershipModel], int]: (memberships, total_count)
-
-        Example:
-            >>> members, total = await membership_service.get_entity_members(
-            ...     entity_id,
-            ...     page=1,
-            ...     limit=20
-            ... )
+            Tuple[List[EntityMembership], int]: (memberships, total_count)
         """
-        # Fetch entity to get ObjectId
-        entity = await EntityModel.get(entity_id)
-        if not entity:
-            return [], 0  # Entity not found, so no members
-
-        # Build query
-        query_conditions = [EntityMembershipModel.entity.id == entity.id]
+        # Build filters
+        filters = [EntityMembership.entity_id == entity_id]
         if active_only:
-            query_conditions.append(
-                EntityMembershipModel.status == MembershipStatus.ACTIVE
-            )
+            filters.append(EntityMembership.status == MembershipStatus.ACTIVE)
 
         # Get total count
-        total_count = await EntityMembershipModel.find(*query_conditions).count()
+        count_stmt = select(func.count()).select_from(EntityMembership).where(*filters)
+        count_result = await session.execute(count_stmt)
+        total_count = count_result.scalar() or 0
 
-        # Get paginated results
+        # Get paginated results with roles eager loaded
         skip = (page - 1) * limit
-        memberships = (
-            await EntityMembershipModel.find(*query_conditions)
-            .skip(skip)
+        stmt = (
+            select(EntityMembership)
+            .where(*filters)
+            .options(selectinload(EntityMembership.roles))
+            .offset(skip)
             .limit(limit)
-            .to_list()
         )
+        result = await session.execute(stmt)
+        memberships = list(result.scalars().all())
 
         return memberships, total_count
 
     async def get_entity_members_count(
-        self, entity_id: str, active_only: bool = True
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        active_only: bool = True,
     ) -> int:
         """
         Get count of entity members.
 
         Args:
+            session: Database session
             entity_id: Entity ID
             active_only: Only count active memberships
 
         Returns:
             int: Member count
-
-        Example:
-            >>> count = await membership_service.get_entity_members_count(entity_id)
         """
-        # Fetch entity to get ObjectId
-        entity = await EntityModel.get(entity_id)
-        if not entity:
-            return 0  # Entity not found, so no members
-
-        query_conditions = [EntityMembershipModel.entity.id == entity.id]
+        filters = [EntityMembership.entity_id == entity_id]
         if active_only:
-            query_conditions.append(
-                EntityMembershipModel.status == MembershipStatus.ACTIVE
-            )
+            filters.append(EntityMembership.status == MembershipStatus.ACTIVE)
 
-        return await EntityMembershipModel.find(*query_conditions).count()
+        return await self.count(session, *filters)
 
     async def get_user_entities(
         self,
-        user_id: str,
+        session: AsyncSession,
+        user_id: UUID,
         page: int = 1,
         limit: int = 50,
         entity_type: Optional[str] = None,
         active_only: bool = True,
-    ) -> tuple[List[EntityMembershipModel], int]:
+    ) -> Tuple[List[EntityMembership], int]:
         """
         Get entities user belongs to with pagination.
 
         Args:
+            session: Database session
             user_id: User ID
             page: Page number (1-indexed)
             limit: Results per page
@@ -374,118 +386,265 @@ class MembershipService:
             active_only: Only return active memberships
 
         Returns:
-            tuple[List[EntityMembershipModel], int]: (memberships, total_count)
-
-        Example:
-            >>> memberships, total = await membership_service.get_user_entities(
-            ...     user_id,
-            ...     entity_type="department"
-            ... )
+            Tuple[List[EntityMembership], int]: (memberships, total_count)
         """
-        # Fetch user to get ObjectId
-        user = await UserModel.get(user_id)
-        if not user:
-            return [], 0  # User not found, so no entities
-
-        # Build query
-        query_conditions = [EntityMembershipModel.user.id == user.id]
+        # Build base query with join to Entity for filtering
+        filters = [EntityMembership.user_id == user_id]
         if active_only:
-            query_conditions.append(
-                EntityMembershipModel.status == MembershipStatus.ACTIVE
+            filters.append(EntityMembership.status == MembershipStatus.ACTIVE)
+
+        # If filtering by entity_type, join with Entity table
+        if entity_type:
+            # Get count with join
+            count_stmt = (
+                select(func.count())
+                .select_from(EntityMembership)
+                .join(Entity, EntityMembership.entity_id == Entity.id)
+                .where(*filters, Entity.entity_type == entity_type.lower())
+            )
+            count_result = await session.execute(count_stmt)
+            total_count = count_result.scalar() or 0
+
+            # Get paginated results
+            skip = (page - 1) * limit
+            stmt = (
+                select(EntityMembership)
+                .join(Entity, EntityMembership.entity_id == Entity.id)
+                .where(*filters, Entity.entity_type == entity_type.lower())
+                .options(
+                    selectinload(EntityMembership.roles),
+                    selectinload(EntityMembership.entity),
+                )
+                .offset(skip)
+                .limit(limit)
+            )
+        else:
+            # Get count without entity_type filter
+            count_stmt = select(func.count()).select_from(EntityMembership).where(*filters)
+            count_result = await session.execute(count_stmt)
+            total_count = count_result.scalar() or 0
+
+            # Get paginated results
+            skip = (page - 1) * limit
+            stmt = (
+                select(EntityMembership)
+                .where(*filters)
+                .options(
+                    selectinload(EntityMembership.roles),
+                    selectinload(EntityMembership.entity),
+                )
+                .offset(skip)
+                .limit(limit)
             )
 
-        # Note: entity_type filtering requires fetching entities
-        # For performance, we'll filter after query if needed
-
-        # Get total count
-        all_memberships = await EntityMembershipModel.find(*query_conditions).to_list()
-
-        # Filter by entity_type if provided
-        if entity_type:
-            filtered_memberships = []
-            for membership in all_memberships:
-                entity = (
-                    await membership.entity.fetch()
-                    if hasattr(membership.entity, "fetch")
-                    else membership.entity
-                )
-                if entity and entity.entity_type == entity_type.lower():
-                    filtered_memberships.append(membership)
-            all_memberships = filtered_memberships
-
-        total_count = len(all_memberships)
-
-        # Apply pagination
-        skip = (page - 1) * limit
-        memberships = all_memberships[skip : skip + limit]
+        result = await session.execute(stmt)
+        memberships = list(result.scalars().all())
 
         return memberships, total_count
 
+    async def get_user_memberships_with_entities(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        active_only: bool = True,
+    ) -> List[EntityMembership]:
+        """
+        Get all memberships for a user with entity and roles loaded.
+
+        Args:
+            session: Database session
+            user_id: User ID
+            active_only: Only return active memberships
+
+        Returns:
+            List[EntityMembership]: User's memberships with entities loaded
+        """
+        filters = [EntityMembership.user_id == user_id]
+        if active_only:
+            filters.append(EntityMembership.status == MembershipStatus.ACTIVE)
+
+        stmt = (
+            select(EntityMembership)
+            .where(*filters)
+            .options(
+                selectinload(EntityMembership.entity),
+                selectinload(EntityMembership.roles),
+            )
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
     async def get_member(
-        self, entity_id: str, user_id: str
-    ) -> Optional[EntityMembershipModel]:
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        user_id: UUID,
+    ) -> Optional[EntityMembership]:
         """
         Get specific membership.
 
         Args:
+            session: Database session
             entity_id: Entity ID
             user_id: User ID
 
         Returns:
-            EntityMembershipModel or None: Membership if found
-
-        Example:
-            >>> membership = await membership_service.get_member(entity_id, user_id)
+            EntityMembership or None: Membership if found
         """
-        # Fetch user and entity to get ObjectIds for query
-        user = await UserModel.get(user_id)
-        if not user:
-            return None
-
-        entity = await EntityModel.get(entity_id)
-        if not entity:
-            return None
-
-        return await EntityMembershipModel.find_one(
-            EntityMembershipModel.user.id == user.id,
-            EntityMembershipModel.entity.id == entity.id,
+        return await self.get_one(
+            session,
+            EntityMembership.user_id == user_id,
+            EntityMembership.entity_id == entity_id,
+            options=[selectinload(EntityMembership.roles)],
         )
 
     async def is_member(
-        self, entity_id: str, user_id: str, active_only: bool = True
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        user_id: UUID,
+        active_only: bool = True,
     ) -> bool:
         """
         Check if user is member of entity.
 
         Args:
+            session: Database session
             entity_id: Entity ID
             user_id: User ID
             active_only: Only check active memberships
 
         Returns:
             bool: True if user is member
-
-        Example:
-            >>> is_member = await membership_service.is_member(entity_id, user_id)
         """
-        # Fetch user and entity to get ObjectIds for query
-        user = await UserModel.get(user_id)
-        if not user:
-            return False
-
-        entity = await EntityModel.get(entity_id)
-        if not entity:
-            return False
-
-        query_conditions = [
-            EntityMembershipModel.user.id == user.id,
-            EntityMembershipModel.entity.id == entity.id,
+        filters = [
+            EntityMembership.user_id == user_id,
+            EntityMembership.entity_id == entity_id,
         ]
 
         if active_only:
-            query_conditions.append(
-                EntityMembershipModel.status == MembershipStatus.ACTIVE
+            filters.append(EntityMembership.status == MembershipStatus.ACTIVE)
+
+        return await self.exists(session, *filters)
+
+    async def get_memberships_for_entities(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        entity_ids: List[UUID],
+        active_only: bool = True,
+    ) -> List[EntityMembership]:
+        """
+        Get memberships for a user in multiple entities.
+
+        Useful for permission checking across entity hierarchy.
+
+        Args:
+            session: Database session
+            user_id: User ID
+            entity_ids: List of entity IDs to check
+            active_only: Only return active memberships
+
+        Returns:
+            List[EntityMembership]: Memberships with roles loaded
+        """
+        if not entity_ids:
+            return []
+
+        filters = [
+            EntityMembership.user_id == user_id,
+            EntityMembership.entity_id.in_(entity_ids),
+        ]
+
+        if active_only:
+            filters.append(EntityMembership.status == MembershipStatus.ACTIVE)
+
+        stmt = (
+            select(EntityMembership)
+            .where(*filters)
+            .options(selectinload(EntityMembership.roles))
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def suspend_membership(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        user_id: UUID,
+        reason: Optional[str] = None,
+    ) -> EntityMembership:
+        """
+        Suspend a membership (can be reactivated later).
+
+        Args:
+            session: Database session
+            entity_id: Entity ID
+            user_id: User ID
+            reason: Optional suspension reason
+
+        Returns:
+            EntityMembership: Suspended membership
+
+        Raises:
+            MembershipNotFoundError: If membership not found
+        """
+        membership = await self.get_one(
+            session,
+            EntityMembership.user_id == user_id,
+            EntityMembership.entity_id == entity_id,
+        )
+
+        if not membership:
+            raise MembershipNotFoundError(
+                message="Membership not found",
+                details={"entity_id": str(entity_id), "user_id": str(user_id)},
             )
 
-        membership = await EntityMembershipModel.find_one(*query_conditions)
-        return membership is not None
+        membership.status = MembershipStatus.SUSPENDED
+        membership.revocation_reason = reason
+        membership.updated_at = datetime.now(timezone.utc)
+
+        await session.flush()
+        return membership
+
+    async def reactivate_membership(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        user_id: UUID,
+    ) -> EntityMembership:
+        """
+        Reactivate a suspended membership.
+
+        Args:
+            session: Database session
+            entity_id: Entity ID
+            user_id: User ID
+
+        Returns:
+            EntityMembership: Reactivated membership
+
+        Raises:
+            MembershipNotFoundError: If membership not found
+        """
+        membership = await self.get_one(
+            session,
+            EntityMembership.user_id == user_id,
+            EntityMembership.entity_id == entity_id,
+        )
+
+        if not membership:
+            raise MembershipNotFoundError(
+                message="Membership not found",
+                details={"entity_id": str(entity_id), "user_id": str(user_id)},
+            )
+
+        membership.status = MembershipStatus.ACTIVE
+        membership.revocation_reason = None
+        membership.revoked_at = None
+        membership.revoked_by_id = None
+        membership.updated_at = datetime.now(timezone.utc)
+
+        await session.flush()
+        return membership

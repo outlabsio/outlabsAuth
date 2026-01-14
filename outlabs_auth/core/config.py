@@ -12,6 +12,20 @@ class AuthConfig(BaseModel):
     This configuration is shared by SimpleRBAC and EnterpriseRBAC.
     """
 
+    # Database Settings (PostgreSQL)
+    database_url: Optional[str] = Field(
+        default=None,
+        description="PostgreSQL connection URL (e.g., postgresql+asyncpg://user:pass@localhost:5432/dbname)"
+    )
+    auto_migrate: bool = Field(
+        default=False,
+        description="Automatically run database migrations on startup"
+    )
+    echo_sql: bool = Field(
+        default=False,
+        description="Echo SQL statements to stdout (for debugging)"
+    )
+
     # JWT Settings
     secret_key: str = Field(..., description="Secret key for JWT signing")
     algorithm: str = Field(default="HS256", description="JWT algorithm")

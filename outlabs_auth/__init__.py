@@ -90,6 +90,23 @@ from outlabs_auth.models.sql import (
     ACTIVITY_MODELS,
 )
 
+# Core Auth Classes
+from outlabs_auth.core.auth import OutlabsAuth
+from outlabs_auth.core.config import AuthConfig
+
+# Presets
+from outlabs_auth.presets import SimpleRBAC, EnterpriseRBAC
+
+# Services
+from outlabs_auth.services import (
+    BaseService,
+    UserService,
+    RoleService,
+    PermissionService,
+    AuthService,
+    TokenPair,
+)
+
 # Exception classes
 from outlabs_auth.core.exceptions import (
     OutlabsAuthException,
@@ -106,6 +123,22 @@ from outlabs_auth.core.exceptions import (
 __all__ = [
     # Version
     "__version__",
+
+    # Core Auth Classes
+    "OutlabsAuth",
+    "AuthConfig",
+
+    # Presets
+    "SimpleRBAC",
+    "EnterpriseRBAC",
+
+    # Services
+    "BaseService",
+    "UserService",
+    "RoleService",
+    "PermissionService",
+    "AuthService",
+    "TokenPair",
 
     # Database
     "DatabaseConfig",

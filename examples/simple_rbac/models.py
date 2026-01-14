@@ -2,15 +2,18 @@
 Blog Domain Models - SimpleRBAC Example
 
 Demonstrates domain-specific models for a blog application.
-Uses Beanie ODM for MongoDB integration.
+Uses SQLModel for PostgreSQL integration.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Literal, Optional
-from beanie import Document
-from pydantic import Field
+from uuid import UUID, uuid4
+
+from sqlalchemy import Column, Index, Text
+from sqlalchemy.dialects.postgresql import ARRAY, UUID as PG_UUID, TIMESTAMP
+from sqlmodel import Field, SQLModel
 
 
-class BlogPost(Document):
+class BlogPost(SQLModel, table=True):
     """
     A blog post in the system.
 
@@ -21,32 +24,41 @@ class BlogPost(Document):
     - Admins can update/delete any post
     """
 
-    title: str = Field(..., min_length=1, max_length=200)
-    content: str = Field(..., min_length=1)
-    author_id: str = Field(..., description="User ID who created the post")
+    __tablename__ = "blog_posts"
+    __table_args__ = (
+        Index("ix_blog_posts_author_id", "author_id"),
+        Index("ix_blog_posts_status", "status"),
+        Index("ix_blog_posts_status_created", "status", "created_at"),
+    )
 
-    status: Literal["draft", "published", "archived"] = "draft"
-    tags: List[str] = Field(default_factory=list)
+    id: UUID = Field(
+        default_factory=uuid4,
+        sa_type=PG_UUID(as_uuid=True),
+        primary_key=True,
+    )
+    title: str = Field(max_length=200)
+    content: str = Field(sa_column=Column(Text, nullable=False))
+    author_id: UUID = Field(sa_type=PG_UUID(as_uuid=True))
+
+    status: str = Field(default="draft", max_length=20)  # draft, published, archived
+    tags: List[str] = Field(default_factory=list, sa_column=Column(ARRAY(Text)))
 
     # Metadata
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
-    view_count: int = 0
-
-    class Settings:
-        name = "blog_posts"
-        indexes = [
-            "author_id",
-            "status",
-            [("status", 1), ("created_at", -1)],  # For listing published posts
-            "tags",
-        ]
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False),
+    )
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False),
+    )
+    view_count: int = Field(default=0)
 
     def increment_views(self):
         """Increment view count"""
         self.view_count += 1
 
-    def can_be_edited_by(self, user_id: str, user_permissions: List[str]) -> bool:
+    def can_be_edited_by(self, user_id: UUID, user_permissions: List[str]) -> bool:
         """Check if user can edit this post"""
         # Admin can edit any post
         if "post:update" in user_permissions or "post:delete" in user_permissions:
@@ -59,7 +71,7 @@ class BlogPost(Document):
         return False
 
 
-class Comment(Document):
+class Comment(SQLModel, table=True):
     """
     A comment on a blog post.
 
@@ -69,23 +81,33 @@ class Comment(Document):
     - Admins can delete any comment
     """
 
-    post_id: str = Field(..., description="Blog post ID")
-    author_id: str = Field(..., description="User ID who created the comment")
-    content: str = Field(..., min_length=1, max_length=1000)
+    __tablename__ = "comments"
+    __table_args__ = (
+        Index("ix_comments_post_id", "post_id"),
+        Index("ix_comments_author_id", "author_id"),
+        Index("ix_comments_post_created", "post_id", "created_at"),
+    )
+
+    id: UUID = Field(
+        default_factory=uuid4,
+        sa_type=PG_UUID(as_uuid=True),
+        primary_key=True,
+    )
+    post_id: UUID = Field(sa_type=PG_UUID(as_uuid=True))
+    author_id: UUID = Field(sa_type=PG_UUID(as_uuid=True))
+    content: str = Field(max_length=1000)
 
     # Metadata
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False),
+    )
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False),
+    )
 
-    class Settings:
-        name = "comments"
-        indexes = [
-            "post_id",
-            "author_id",
-            [("post_id", 1), ("created_at", 1)],  # For listing comments on a post
-        ]
-
-    def can_be_deleted_by(self, user_id: str, user_permissions: List[str]) -> bool:
+    def can_be_deleted_by(self, user_id: UUID, user_permissions: List[str]) -> bool:
         """Check if user can delete this comment"""
         # Admin can delete any comment
         if "comment:delete" in user_permissions:

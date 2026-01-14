@@ -3,23 +3,31 @@ Entity Service
 
 Manages entity hierarchy and operations for EnterpriseRBAC.
 Handles entity CRUD, hierarchy validation, and closure table maintenance.
+Uses SQLAlchemy for PostgreSQL backend.
 """
 
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from uuid import UUID
+
+from sqlalchemy import select, update, and_, or_, delete as sql_delete
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
     EntityNotFoundError,
     InvalidInputError,
 )
-from outlabs_auth.models.closure import EntityClosureModel
-from outlabs_auth.models.entity import EntityClass, EntityModel
-from outlabs_auth.models.membership import EntityMembershipModel
+from outlabs_auth.models.sql.entity import Entity
+from outlabs_auth.models.sql.closure import EntityClosure
+from outlabs_auth.models.sql.entity_membership import EntityMembership
+from outlabs_auth.models.sql.enums import EntityClass, MembershipStatus
+from outlabs_auth.services.base import BaseService
 
 
-class EntityService:
+class EntityService(BaseService[Entity]):
     """
     Service for entity hierarchy management.
 
@@ -41,26 +49,30 @@ class EntityService:
             config: Authentication configuration
             redis_client: Optional Redis client for caching
         """
+        super().__init__(Entity)
         self.config = config
         self.max_depth = getattr(config, "max_entity_depth", 10)
         self.redis_client = redis_client
 
     async def create_entity(
         self,
+        session: AsyncSession,
         name: str,
         display_name: str,
         entity_class: EntityClass,
         entity_type: str,
-        parent_id: Optional[str] = None,
+        parent_id: Optional[UUID] = None,
         description: Optional[str] = None,
         slug: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        tenant_id: Optional[UUID] = None,
         **kwargs,
-    ) -> EntityModel:
+    ) -> Entity:
         """
         Create a new entity with hierarchy validation and closure table maintenance.
 
         Args:
+            session: Database session
             name: System name (lowercase, underscores)
             display_name: User-friendly name
             entity_class: STRUCTURAL or ACCESS_GROUP
@@ -69,42 +81,43 @@ class EntityService:
             description: Optional description
             slug: Optional URL-friendly identifier (auto-generated if not provided)
             metadata: Optional metadata dict
+            tenant_id: Optional tenant ID for multi-tenancy
             **kwargs: Additional fields (status, valid_from, valid_until, etc.)
 
         Returns:
-            EntityModel: Created entity
+            Entity: Created entity
 
         Raises:
             EntityNotFoundError: If parent entity not found
             InvalidInputError: If hierarchy validation fails or entity with same slug exists
-
-        Example:
-            >>> entity = await entity_service.create_entity(
-            ...     name="engineering",
-            ...     display_name="Engineering Department",
-            ...     entity_class=EntityClass.STRUCTURAL,
-            ...     entity_type="department",
-            ...     parent_id=org_id
-            ... )
         """
         # Validate and fetch parent if provided
         parent_entity = None
+        parent_depth = -1
+        parent_path = None
+
         if parent_id:
-            parent_entity = await EntityModel.get(parent_id)
+            parent_entity = await self.get_by_id(session, parent_id)
             if not parent_entity:
                 raise EntityNotFoundError(
-                    message="Parent entity not found", details={"parent_id": parent_id}
+                    message="Parent entity not found", details={"parent_id": str(parent_id)}
                 )
 
             # Validate hierarchy rules
-            await self._validate_hierarchy(parent_entity, entity_class, entity_type)
+            await self._validate_hierarchy(session, parent_entity, entity_class, entity_type)
+            parent_depth = parent_entity.depth
+            parent_path = parent_entity.path
 
         # Generate slug if not provided
         if not slug:
             slug = self._generate_slug(name)
 
-        # Check for duplicate slug
-        existing = await EntityModel.find_one(EntityModel.slug == slug)
+        # Check for duplicate slug (within tenant)
+        existing = await self.get_one(
+            session,
+            Entity.slug == slug,
+            Entity.tenant_id == tenant_id if tenant_id else True,
+        )
         if existing:
             raise InvalidInputError(
                 message=f"Entity with slug '{slug}' already exists",
@@ -112,85 +125,90 @@ class EntityService:
             )
 
         # Create entity
-        entity = EntityModel(
+        entity = Entity(
             name=name.lower(),
             display_name=display_name,
             slug=slug,
             description=description,
             entity_class=entity_class,
             entity_type=entity_type.lower(),
-            parent_entity=parent_entity,
-            metadata=metadata or {},
+            parent_id=parent_id,
+            depth=parent_depth + 1,
+            tenant_id=tenant_id,
             **kwargs,
         )
 
-        await entity.save()
+        # Set materialized path
+        entity.update_path(parent_path)
+
+        # Save entity
+        session.add(entity)
+        await session.flush()
+        await session.refresh(entity)
 
         # Maintain closure table
-        await self._create_closure_records(entity)
+        await self._create_closure_records(session, entity)
 
         return entity
 
-    async def get_entity(self, entity_id: str) -> EntityModel:
+    async def get_entity(self, session: AsyncSession, entity_id: UUID) -> Entity:
         """
         Get entity by ID.
 
         Args:
+            session: Database session
             entity_id: Entity ID
 
         Returns:
-            EntityModel: Entity
+            Entity: Entity
 
         Raises:
             EntityNotFoundError: If entity not found
-
-        Example:
-            >>> entity = await entity_service.get_entity(entity_id)
         """
-        entity = await EntityModel.get(entity_id)
+        entity = await self.get_by_id(session, entity_id)
         if not entity:
             raise EntityNotFoundError(
-                message="Entity not found", details={"entity_id": entity_id}
+                message="Entity not found", details={"entity_id": str(entity_id)}
             )
         return entity
 
-    async def get_entity_by_slug(self, slug: str) -> Optional[EntityModel]:
+    async def get_entity_by_slug(
+        self, session: AsyncSession, slug: str, tenant_id: Optional[UUID] = None
+    ) -> Optional[Entity]:
         """
         Get entity by slug.
 
         Args:
+            session: Database session
             slug: Entity slug
+            tenant_id: Optional tenant ID
 
         Returns:
-            EntityModel or None: Entity if found
-
-        Example:
-            >>> entity = await entity_service.get_entity_by_slug("engineering-dept")
+            Entity or None: Entity if found
         """
-        return await EntityModel.find_one(EntityModel.slug == slug)
+        filters = [Entity.slug == slug]
+        if tenant_id:
+            filters.append(Entity.tenant_id == tenant_id)
+        return await self.get_one(session, *filters)
 
-    async def update_entity(self, entity_id: str, **updates) -> EntityModel:
+    async def update_entity(
+        self, session: AsyncSession, entity_id: UUID, **updates
+    ) -> Entity:
         """
         Update entity.
 
         Args:
+            session: Database session
             entity_id: Entity ID
             **updates: Fields to update
 
         Returns:
-            EntityModel: Updated entity
+            Entity: Updated entity
 
         Raises:
             EntityNotFoundError: If entity not found
-
-        Example:
-            >>> entity = await entity_service.update_entity(
-            ...     entity_id,
-            ...     display_name="New Name",
-            ...     description="Updated description"
-            ... )
         """
-        entity = await self.get_entity(entity_id)
+        entity = await self.get_entity(session, entity_id)
 
         # Update fields
         for field, value in updates.items():
@@ -198,15 +216,19 @@ class EntityService:
                 setattr(entity, field, value)
 
         entity.updated_at = datetime.now(timezone.utc)
-        await entity.save()
+        await session.flush()
+        await session.refresh(entity)
 
         return entity
 
-    async def delete_entity(self, entity_id: str, cascade: bool = False) -> bool:
+    async def delete_entity(
+        self, session: AsyncSession, entity_id: UUID, cascade: bool = False
+    ) -> bool:
         """
         Delete entity (soft delete by setting status to 'archived').
 
         Args:
+            session: Database session
             entity_id: Entity ID
             cascade: Whether to cascade delete children
 
@@ -216,49 +238,52 @@ class EntityService:
         Raises:
             EntityNotFoundError: If entity not found
             InvalidInputError: If entity has children and cascade=False
-
-        Example:
-            >>> await entity_service.delete_entity(entity_id, cascade=True)
         """
-        entity = await self.get_entity(entity_id)
+        entity = await self.get_entity(session, entity_id)
 
         # Check for children
-        children_count = await EntityModel.find(
-            EntityModel.parent_entity.id == entity.id, EntityModel.status == "active"
-        ).count()
+        children_count = await self.count(
+            session,
+            Entity.parent_id == entity.id,
+            Entity.status == "active",
+        )
 
         if children_count > 0 and not cascade:
             raise InvalidInputError(
                 message="Cannot delete entity with children. Use cascade=True to delete all children.",
-                details={"entity_id": entity_id, "children_count": children_count},
+                details={"entity_id": str(entity_id), "children_count": children_count},
             )
 
         if cascade:
             # Recursively delete children
-            children = await EntityModel.find(
-                EntityModel.parent_entity.id == entity.id,
-                EntityModel.status == "active",
-            ).to_list()
+            children = await self.get_many(
+                session,
+                Entity.parent_id == entity.id,
+                Entity.status == "active",
+            )
 
             for child in children:
-                await self.delete_entity(str(child.id), cascade=True)
+                await self.delete_entity(session, child.id, cascade=True)
 
         # Soft delete
         entity.status = "archived"
         entity.updated_at = datetime.now(timezone.utc)
-        await entity.save()
+        await session.flush()
 
         # Delete closure records
-        await self._delete_closure_records(entity)
+        await self._delete_closure_records(session, entity)
 
         # Archive memberships
-        await EntityMembershipModel.find(
-            EntityMembershipModel.entity.id == entity.id
-        ).update_many({"$set": {"is_active": False}})
+        stmt = (
+            update(EntityMembership)
+            .where(EntityMembership.entity_id == entity.id)
+            .values(status=MembershipStatus.REVOKED)
+        )
+        await session.execute(stmt)
 
         return True
 
-    async def get_entity_path(self, entity_id: str) -> List[EntityModel]:
+    async def get_entity_path(self, session: AsyncSession, entity_id: UUID) -> List[Entity]:
         """
         Get path from root to entity (ancestors in order).
 
@@ -266,48 +291,46 @@ class EntityService:
         Cached in Redis if enabled.
 
         Args:
+            session: Database session
             entity_id: Entity ID
 
         Returns:
-            List[EntityModel]: Path from root to entity
-
-        Example:
-            >>> path = await entity_service.get_entity_path(team_id)
-            >>> # Returns: [Platform, Org, Dept, Team]
+            List[Entity]: Path from root to entity
         """
         # Try Redis cache first (if enabled)
         if self.redis_client and self.redis_client.is_available:
-            cache_key = self.redis_client.make_entity_path_key(entity_id)
+            cache_key = self.redis_client.make_entity_path_key(str(entity_id))
             cached = await self.redis_client.get(cache_key)
             if cached is not None:
-                # Reconstruct entity models from cached data
+                # For cached data, we need to fetch fresh entities by ID
+                entity_ids = [UUID(e["id"]) for e in cached]
                 entities = []
-                for entity_data in cached:
-                    entity = EntityModel(**entity_data)
-                    entities.append(entity)
+                for eid in entity_ids:
+                    entity = await self.get_by_id(session, eid)
+                    if entity:
+                        entities.append(entity)
                 return entities
 
         # Get all ancestors from closure table (sorted from root to entity)
-        closures = (
-            await EntityClosureModel.find(EntityClosureModel.descendant_id == entity_id)
-            .sort([("depth", -1)])
-            .to_list()
-        )  # Sort by depth DESC (root first)
+        stmt = (
+            select(EntityClosure)
+            .where(EntityClosure.descendant_id == entity_id)
+            .order_by(EntityClosure.depth.desc())  # Root first (highest depth)
+        )
+        result = await session.execute(stmt)
+        closures = result.scalars().all()
 
         # Fetch entities
-        entity_ids = [closure.ancestor_id for closure in closures]
         entities = []
-
-        for eid in entity_ids:
-            entity = await EntityModel.get(eid)
+        for closure in closures:
+            entity = await self.get_by_id(session, closure.ancestor_id)
             if entity:
                 entities.append(entity)
 
         # Cache result (if Redis enabled)
         if self.redis_client and self.redis_client.is_available and entities:
-            cache_key = self.redis_client.make_entity_path_key(entity_id)
-            # Serialize entities for caching
-            cache_data = [entity.model_dump(mode="json") for entity in entities]
+            cache_key = self.redis_client.make_entity_path_key(str(entity_id))
+            cache_data = [{"id": str(e.id)} for e in entities]
             await self.redis_client.set(
                 cache_key, cache_data, ttl=self.config.cache_entity_ttl
             )
@@ -315,8 +338,8 @@ class EntityService:
         return entities
 
     async def get_descendants(
-        self, entity_id: str, entity_type: Optional[str] = None
-    ) -> List[EntityModel]:
+        self, session: AsyncSession, entity_id: UUID, entity_type: Optional[str] = None
+    ) -> List[Entity]:
         """
         Get all descendant entities.
 
@@ -324,46 +347,46 @@ class EntityService:
         Cached in Redis if enabled.
 
         Args:
+            session: Database session
             entity_id: Entity ID
             entity_type: Optional filter by entity_type
 
         Returns:
-            List[EntityModel]: All descendants
-
-        Example:
-            >>> descendants = await entity_service.get_descendants(org_id)
-            >>> # Returns all entities under the organization
+            List[Entity]: All descendants
         """
         # Try Redis cache first (if enabled and no entity_type filter)
         if self.redis_client and self.redis_client.is_available and not entity_type:
-            cache_key = self.redis_client.make_entity_descendants_key(entity_id)
+            cache_key = self.redis_client.make_entity_descendants_key(str(entity_id))
             cached = await self.redis_client.get(cache_key)
             if cached is not None:
-                # Reconstruct entity models from cached data
+                entity_ids = [UUID(e["id"]) for e in cached]
                 entities = []
-                for entity_data in cached:
-                    entity = EntityModel(**entity_data)
-                    entities.append(entity)
+                for eid in entity_ids:
+                    entity = await self.get_by_id(session, eid)
+                    if entity:
+                        entities.append(entity)
                 return entities
 
         # Get all descendants from closure table (excluding self)
-        closures = await EntityClosureModel.find(
-            EntityClosureModel.ancestor_id == entity_id, EntityClosureModel.depth > 0
-        ).to_list()
+        stmt = (
+            select(EntityClosure.descendant_id)
+            .where(
+                EntityClosure.ancestor_id == entity_id,
+                EntityClosure.depth > 0,
+            )
+        )
+        result = await session.execute(stmt)
+        descendant_ids = [row[0] for row in result.all()]
 
-        # Fetch entities
-        from bson import ObjectId
+        if not descendant_ids:
+            return []
 
-        # Convert string IDs to ObjectIds for querying
-        entity_ids = [ObjectId(closure.descendant_id) for closure in closures]
-
-        # Build query
+        # Fetch entities with optional type filter
+        filters = [Entity.id.in_(descendant_ids)]
         if entity_type:
-            entities = await EntityModel.find(
-                {"_id": {"$in": entity_ids}, "entity_type": entity_type.lower()}
-            ).to_list()
-        else:
-            entities = await EntityModel.find({"_id": {"$in": entity_ids}}).to_list()
+            filters.append(Entity.entity_type == entity_type.lower())
+
+        entities = await self.get_many(session, *filters, limit=10000)
 
         # Cache result (if Redis enabled and no entity_type filter)
         if (
@@ -372,38 +395,36 @@ class EntityService:
             and not entity_type
             and entities
         ):
-            cache_key = self.redis_client.make_entity_descendants_key(entity_id)
-            # Serialize entities for caching
-            cache_data = [entity.model_dump(mode="json") for entity in entities]
+            cache_key = self.redis_client.make_entity_descendants_key(str(entity_id))
+            cache_data = [{"id": str(e.id)} for e in entities]
             await self.redis_client.set(
                 cache_key, cache_data, ttl=self.config.cache_entity_ttl
             )
 
         return entities
 
-    async def get_children(self, entity_id: str) -> List[EntityModel]:
+    async def get_children(self, session: AsyncSession, entity_id: UUID) -> List[Entity]:
         """
         Get direct children of entity.
 
         Args:
+            session: Database session
             entity_id: Entity ID
 
         Returns:
-            List[EntityModel]: Direct children
-
-        Example:
-            >>> children = await entity_service.get_children(dept_id)
+            List[Entity]: Direct children
         """
-        from bson import ObjectId
-
-        # Query by parent_entity.$id (DBRef syntax)
-        return await EntityModel.find(
-            {"parent_entity.$id": ObjectId(entity_id), "status": "active"}
-        ).to_list()
+        return await self.get_many(
+            session,
+            Entity.parent_id == entity_id,
+            Entity.status == "active",
+            limit=1000,
+        )
 
     async def get_suggested_entity_types(
         self,
-        parent_id: Optional[str] = None,
+        session: AsyncSession,
+        parent_id: Optional[UUID] = None,
         entity_class: Optional[EntityClass] = None,
     ) -> Dict[str, Any]:
         """
@@ -413,54 +434,29 @@ class EntityService:
         that already exist at the same hierarchy level.
 
         Args:
+            session: Database session
             parent_id: Parent entity ID (None for root level)
             entity_class: Filter by entity class (optional)
 
         Returns:
-            Dict with suggestions, parent info, and total count:
-            {
-                "suggestions": [
-                    {
-                        "entity_type": "brokerage",
-                        "count": 5,
-                        "examples": ["RE/MAX Downtown", "Century 21 West", ...]
-                    },
-                    ...
-                ],
-                "parent_entity": {...} or None,
-                "total_children": 17
-            }
-
-        Example:
-            >>> # Get suggestions for creating entity under RE/MAX California
-            >>> suggestions = await entity_service.get_suggested_entity_types(
-            ...     parent_id=remax_california_id
-            ... )
-            >>> # Returns: [{"entity_type": "brokerage", "count": 15, ...}, ...]
+            Dict with suggestions, parent info, and total count
         """
-        # Build query for siblings (same parent)
-        query = {}
+        # Build filters
+        filters = [Entity.status == "active"]
 
         if parent_id:
-            # Find entities with this parent
-            parent_entity = await self.get_entity(parent_id)
-            query["parent_entity.$id"] = parent_id
+            filters.append(Entity.parent_id == parent_id)
         else:
-            # Find root-level entities (no parent)
-            query["parent_entity"] = None
+            filters.append(Entity.parent_id.is_(None))
 
-        # Filter by entity_class if provided
         if entity_class:
-            query["entity_class"] = entity_class.value
-
-        # Filter only active entities
-        query["status"] = "active"
+            filters.append(Entity.entity_class == entity_class)
 
         # Query all siblings
-        entities = await EntityModel.find(query).to_list()
+        entities = await self.get_many(session, *filters, limit=10000)
 
         # Group by entity_type
-        type_counts = {}
+        type_counts: Dict[str, Dict[str, Any]] = {}
         for entity in entities:
             entity_type = entity.entity_type
 
@@ -485,13 +481,13 @@ class EntityService:
         # Get parent entity info if provided
         parent_entity_data = None
         if parent_id:
-            parent_entity = await self.get_entity(parent_id)
+            parent_entity = await self.get_entity(session, parent_id)
             parent_entity_data = {
                 "id": str(parent_entity.id),
                 "name": parent_entity.name,
                 "display_name": parent_entity.display_name,
                 "entity_type": parent_entity.entity_type,
-                "entity_class": parent_entity.entity_class.value,
+                "entity_class": parent_entity.entity_class.value if hasattr(parent_entity.entity_class, 'value') else parent_entity.entity_class,
             }
 
         return {
@@ -502,7 +498,7 @@ class EntityService:
 
     # Closure table maintenance
 
-    async def _create_closure_records(self, entity: EntityModel) -> None:
+    async def _create_closure_records(self, session: AsyncSession, entity: Entity) -> None:
         """
         Create closure table records for new entity.
 
@@ -511,54 +507,65 @@ class EntityService:
         - References to all ancestors (inherited from parent)
 
         Args:
+            session: Database session
             entity: Newly created entity
         """
         # Create self-reference
-        await EntityClosureModel(
-            ancestor_id=str(entity.id),
-            descendant_id=str(entity.id),
+        self_closure = EntityClosure(
+            ancestor_id=entity.id,
+            descendant_id=entity.id,
             depth=0,
             tenant_id=entity.tenant_id,
-        ).insert()
+        )
+        session.add(self_closure)
 
         # If has parent, copy parent's ancestors and add parent
-        if entity.parent_entity:
-            parent_id = str(entity.parent_entity.id)
-
+        if entity.parent_id:
             # Get all ancestors of parent
-            parent_closures = await EntityClosureModel.find(
-                EntityClosureModel.descendant_id == parent_id
-            ).to_list()
+            stmt = select(EntityClosure).where(
+                EntityClosure.descendant_id == entity.parent_id
+            )
+            result = await session.execute(stmt)
+            parent_closures = result.scalars().all()
 
             # Create closure records for all ancestors
             for closure in parent_closures:
-                await EntityClosureModel(
+                ancestor_closure = EntityClosure(
                     ancestor_id=closure.ancestor_id,
-                    descendant_id=str(entity.id),
+                    descendant_id=entity.id,
                     depth=closure.depth + 1,
                     tenant_id=entity.tenant_id,
-                ).insert()
+                )
+                session.add(ancestor_closure)
 
-    async def _delete_closure_records(self, entity: EntityModel) -> None:
+        await session.flush()
+
+    async def _delete_closure_records(self, session: AsyncSession, entity: Entity) -> None:
         """
         Delete closure table records for entity.
 
         Deletes all records where entity is ancestor or descendant.
 
         Args:
+            session: Database session
             entity: Entity being deleted
         """
-        entity_id = str(entity.id)
-
-        # Delete records where entity is ancestor or descendant
-        await EntityClosureModel.find(
-            {"$or": [{"ancestor_id": entity_id}, {"descendant_id": entity_id}]}
-        ).delete()
+        stmt = sql_delete(EntityClosure).where(
+            or_(
+                EntityClosure.ancestor_id == entity.id,
+                EntityClosure.descendant_id == entity.id,
+            )
+        )
+        await session.execute(stmt)
 
     # Validation helpers
 
     async def _validate_hierarchy(
-        self, parent: EntityModel, child_class: EntityClass, child_type: str
+        self,
+        session: AsyncSession,
+        parent: Entity,
+        child_class: EntityClass,
+        child_type: str,
     ) -> None:
         """
         Validate entity hierarchy rules.
@@ -569,6 +576,7 @@ class EntityService:
         - Allowed child types (if configured)
 
         Args:
+            session: Database session
             parent: Parent entity
             child_class: Child entity class
             child_type: Child entity type
@@ -584,13 +592,13 @@ class EntityService:
             raise InvalidInputError(
                 message="Access groups cannot have structural entities as children",
                 details={
-                    "parent_class": parent.entity_class,
-                    "child_class": child_class,
+                    "parent_class": parent.entity_class.value if hasattr(parent.entity_class, 'value') else str(parent.entity_class),
+                    "child_class": child_class.value if hasattr(child_class, 'value') else str(child_class),
                 },
             )
 
         # Rule 2: Check depth limit
-        path = await self.get_entity_path(str(parent.id))
+        path = await self.get_entity_path(session, parent.id)
         if len(path) >= self.max_depth:
             raise InvalidInputError(
                 message=f"Maximum hierarchy depth ({self.max_depth}) reached",
@@ -598,16 +606,16 @@ class EntityService:
             )
 
         # Rule 3: Check allowed child types (if configured)
-        if parent.allowed_child_types and child_type.lower() not in [
-            t.lower() for t in parent.allowed_child_types
-        ]:
-            raise InvalidInputError(
-                message=f"Entity type '{child_type}' not allowed as child of '{parent.entity_type}'",
-                details={
-                    "allowed_types": parent.allowed_child_types,
-                    "requested_type": child_type,
-                },
-            )
+        # Note: allowed_child_types is not in current SQL model, so skip if not present
+        if hasattr(parent, 'allowed_child_types') and parent.allowed_child_types:
+            if child_type.lower() not in [t.lower() for t in parent.allowed_child_types]:
+                raise InvalidInputError(
+                    message=f"Entity type '{child_type}' not allowed as child of '{parent.entity_type}'",
+                    details={
+                        "allowed_types": parent.allowed_child_types,
+                        "requested_type": child_type,
+                    },
+                )
 
     def _generate_slug(self, name: str) -> str:
         """
@@ -618,10 +626,6 @@ class EntityService:
 
         Returns:
             str: URL-friendly slug
-
-        Example:
-            >>> self._generate_slug("Engineering Department")
-            'engineering-department'
         """
         # Convert to lowercase and replace special chars with hyphens
         slug = re.sub(r"[^a-z0-9-]", "-", name.lower())
@@ -632,7 +636,7 @@ class EntityService:
 
     # Cache Management Methods
 
-    async def invalidate_entity_cache(self, entity_id: str) -> int:
+    async def invalidate_entity_cache(self, entity_id: UUID) -> int:
         """
         Invalidate cache entries for a specific entity.
 
@@ -646,47 +650,43 @@ class EntityService:
 
         Returns:
             int: Number of cache keys deleted
-
-        Example:
-            >>> deleted = await entity_service.invalidate_entity_cache(entity_id)
         """
         if not self.redis_client or not self.redis_client.is_available:
             return 0
 
         deleted = 0
+        entity_id_str = str(entity_id)
 
         # Invalidate path cache for this entity
-        path_key = self.redis_client.make_entity_path_key(entity_id)
+        path_key = self.redis_client.make_entity_path_key(entity_id_str)
         if await self.redis_client.delete(path_key):
             deleted += 1
 
         # Invalidate descendants cache for this entity
-        descendants_key = self.redis_client.make_entity_descendants_key(entity_id)
+        descendants_key = self.redis_client.make_entity_descendants_key(entity_id_str)
         if await self.redis_client.delete(descendants_key):
             deleted += 1
 
         # Publish invalidation event
         if deleted > 0:
             await self.redis_client.publish(
-                self.config.redis_invalidation_channel, f"entity:{entity_id}:hierarchy"
+                self.config.redis_invalidation_channel, f"entity:{entity_id_str}:hierarchy"
             )
 
         return deleted
 
-    async def invalidate_entity_tree_cache(self, entity_id: str) -> int:
+    async def invalidate_entity_tree_cache(self, session: AsyncSession, entity_id: UUID) -> int:
         """
         Invalidate cache for entity and all ancestors/descendants.
 
         Use this when hierarchy changes affect multiple entities.
 
         Args:
+            session: Database session
             entity_id: Root entity ID
 
         Returns:
             int: Number of cache keys deleted
-
-        Example:
-            >>> deleted = await entity_service.invalidate_entity_tree_cache(entity_id)
         """
         if not self.redis_client or not self.redis_client.is_available:
             return 0
@@ -694,15 +694,18 @@ class EntityService:
         deleted = 0
 
         # Get all ancestors and descendants
-        path = await self.get_entity_path(entity_id)
-        descendants = await self.get_descendants(entity_id)
+        path = await self.get_entity_path(session, entity_id)
+        descendants = await self.get_descendants(session, entity_id)
+        current_entity = await self.get_by_id(session, entity_id)
 
         # Invalidate cache for all related entities
-        all_entities = path + descendants + [await EntityModel.get(entity_id)]
+        all_entities = path + descendants
+        if current_entity:
+            all_entities.append(current_entity)
 
         for entity in all_entities:
             if entity:
-                deleted += await self.invalidate_entity_cache(str(entity.id))
+                deleted += await self.invalidate_entity_cache(entity.id)
 
         return deleted
 
@@ -714,9 +717,6 @@ class EntityService:
 
         Returns:
             int: Number of cache keys deleted
-
-        Example:
-            >>> deleted = await entity_service.invalidate_all_entity_cache()
         """
         if not self.redis_client or not self.redis_client.is_available:
             return 0
@@ -731,3 +731,61 @@ class EntityService:
             )
 
         return deleted
+
+    # Helper methods for ancestor/descendant checks
+
+    async def is_ancestor_of(
+        self, session: AsyncSession, ancestor_id: UUID, descendant_id: UUID
+    ) -> bool:
+        """
+        Check if one entity is an ancestor of another.
+
+        Args:
+            session: Database session
+            ancestor_id: Potential ancestor entity ID
+            descendant_id: Potential descendant entity ID
+
+        Returns:
+            bool: True if ancestor_id is an ancestor of descendant_id
+        """
+        stmt = select(EntityClosure).where(
+            EntityClosure.ancestor_id == ancestor_id,
+            EntityClosure.descendant_id == descendant_id,
+            EntityClosure.depth > 0,  # Exclude self-reference
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
+    async def get_ancestors(
+        self, session: AsyncSession, entity_id: UUID, include_self: bool = False
+    ) -> List[Entity]:
+        """
+        Get all ancestor entities.
+
+        Args:
+            session: Database session
+            entity_id: Entity ID
+            include_self: Whether to include the entity itself
+
+        Returns:
+            List[Entity]: Ancestors ordered from immediate parent to root
+        """
+        min_depth = 0 if include_self else 1
+        stmt = (
+            select(EntityClosure.ancestor_id, EntityClosure.depth)
+            .where(
+                EntityClosure.descendant_id == entity_id,
+                EntityClosure.depth >= min_depth,
+            )
+            .order_by(EntityClosure.depth.asc())  # Parent first
+        )
+        result = await session.execute(stmt)
+        rows = result.all()
+
+        entities = []
+        for ancestor_id, _ in rows:
+            entity = await self.get_by_id(session, ancestor_id)
+            if entity:
+                entities.append(entity)
+
+        return entities

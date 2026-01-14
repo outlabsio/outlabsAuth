@@ -8,9 +8,9 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlmodel import SQLModel, Field
 from sqlalchemy import event
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID, TIMESTAMP
+from sqlmodel import SQLModel, Field
 
 
 class BaseModel(SQLModel):
@@ -44,12 +44,14 @@ class BaseModel(SQLModel):
 
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
+        sa_type=TIMESTAMP(timezone=True),
         nullable=False,
         description="Timestamp when record was created (UTC)",
     )
 
     updated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
+        sa_type=TIMESTAMP(timezone=True),
         nullable=False,
         description="Timestamp when record was last updated (UTC)",
     )
