@@ -22,35 +22,34 @@ sys.path.insert(0, str(project_root))
 
 from datetime import datetime, timezone
 
-from sqlalchemy import text, select
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+# Import domain models
+from models import Lead, LeadNote
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlmodel import SQLModel
 
 from outlabs_auth import (
-    User,
-    Role,
-    Permission,
-    UserRoleMembership,
-    MembershipStatus,
-    UserStatus,
     Entity,
     EntityClosure,
     EntityMembership,
+    MembershipStatus,
+    Permission,
+    Role,
+    User,
+    UserRoleMembership,
+    UserStatus,
 )
-from outlabs_auth.models.sql.role import RolePermission
+from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.models.sql.entity_membership import EntityMembershipRole
 from outlabs_auth.models.sql.enums import EntityClass
+from outlabs_auth.models.sql.role import RolePermission
 from outlabs_auth.utils.password import generate_password_hash
-from outlabs_auth.core.config import AuthConfig
-
-# Import domain models
-from models import Lead, LeadNote
 
 # Configuration
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac"
+    "postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac",
 )
 
 
@@ -62,9 +61,7 @@ async def reset_database():
     engine = create_async_engine(DATABASE_URL, echo=False)
 
     # Create session factory
-    async_session = sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     # Create all tables
     print("Creating tables...")
@@ -81,7 +78,7 @@ async def reset_database():
         tables_to_clear = [
             "entity_membership_roles",
             "entity_memberships",
-            "entity_closures",
+            "entity_closure",
             "user_role_memberships",
             "role_permissions",
             "lead_notes",
@@ -104,37 +101,167 @@ async def reset_database():
         print("Creating permissions...")
         permissions_data = [
             # User permissions
-            {"name": "user:read", "display_name": "User Read", "resource": "user", "action": "read"},
-            {"name": "user:read_tree", "display_name": "User Read Tree", "resource": "user", "action": "read_tree"},
-            {"name": "user:create", "display_name": "User Create", "resource": "user", "action": "create"},
-            {"name": "user:update", "display_name": "User Update", "resource": "user", "action": "update"},
-            {"name": "user:delete", "display_name": "User Delete", "resource": "user", "action": "delete"},
-            {"name": "user:manage", "display_name": "User Manage", "resource": "user", "action": "manage"},
+            {
+                "name": "user:read",
+                "display_name": "User Read",
+                "resource": "user",
+                "action": "read",
+            },
+            {
+                "name": "user:read_tree",
+                "display_name": "User Read Tree",
+                "resource": "user",
+                "action": "read_tree",
+            },
+            {
+                "name": "user:create",
+                "display_name": "User Create",
+                "resource": "user",
+                "action": "create",
+            },
+            {
+                "name": "user:update",
+                "display_name": "User Update",
+                "resource": "user",
+                "action": "update",
+            },
+            {
+                "name": "user:delete",
+                "display_name": "User Delete",
+                "resource": "user",
+                "action": "delete",
+            },
+            {
+                "name": "user:manage",
+                "display_name": "User Manage",
+                "resource": "user",
+                "action": "manage",
+            },
             # Role permissions
-            {"name": "role:read", "display_name": "Role Read", "resource": "role", "action": "read"},
-            {"name": "role:create", "display_name": "Role Create", "resource": "role", "action": "create"},
-            {"name": "role:update", "display_name": "Role Update", "resource": "role", "action": "update"},
-            {"name": "role:delete", "display_name": "Role Delete", "resource": "role", "action": "delete"},
+            {
+                "name": "role:read",
+                "display_name": "Role Read",
+                "resource": "role",
+                "action": "read",
+            },
+            {
+                "name": "role:create",
+                "display_name": "Role Create",
+                "resource": "role",
+                "action": "create",
+            },
+            {
+                "name": "role:update",
+                "display_name": "Role Update",
+                "resource": "role",
+                "action": "update",
+            },
+            {
+                "name": "role:delete",
+                "display_name": "Role Delete",
+                "resource": "role",
+                "action": "delete",
+            },
             # Permission permissions
-            {"name": "permission:read", "display_name": "Permission Read", "resource": "permission", "action": "read"},
-            {"name": "permission:create", "display_name": "Permission Create", "resource": "permission", "action": "create"},
-            {"name": "permission:update", "display_name": "Permission Update", "resource": "permission", "action": "update"},
+            {
+                "name": "permission:read",
+                "display_name": "Permission Read",
+                "resource": "permission",
+                "action": "read",
+            },
+            {
+                "name": "permission:create",
+                "display_name": "Permission Create",
+                "resource": "permission",
+                "action": "create",
+            },
+            {
+                "name": "permission:update",
+                "display_name": "Permission Update",
+                "resource": "permission",
+                "action": "update",
+            },
             # Entity permissions
-            {"name": "entity:read", "display_name": "Entity Read", "resource": "entity", "action": "read"},
-            {"name": "entity:read_tree", "display_name": "Entity Read Tree", "resource": "entity", "action": "read_tree"},
-            {"name": "entity:create", "display_name": "Entity Create", "resource": "entity", "action": "create"},
-            {"name": "entity:update", "display_name": "Entity Update", "resource": "entity", "action": "update"},
-            {"name": "entity:delete", "display_name": "Entity Delete", "resource": "entity", "action": "delete"},
+            {
+                "name": "entity:read",
+                "display_name": "Entity Read",
+                "resource": "entity",
+                "action": "read",
+            },
+            {
+                "name": "entity:read_tree",
+                "display_name": "Entity Read Tree",
+                "resource": "entity",
+                "action": "read_tree",
+            },
+            {
+                "name": "entity:create",
+                "display_name": "Entity Create",
+                "resource": "entity",
+                "action": "create",
+            },
+            {
+                "name": "entity:update",
+                "display_name": "Entity Update",
+                "resource": "entity",
+                "action": "update",
+            },
+            {
+                "name": "entity:delete",
+                "display_name": "Entity Delete",
+                "resource": "entity",
+                "action": "delete",
+            },
             # Lead permissions
-            {"name": "lead:read", "display_name": "Lead Read", "resource": "lead", "action": "read"},
-            {"name": "lead:read_tree", "display_name": "Lead Read Tree", "resource": "lead", "action": "read_tree"},
-            {"name": "lead:create", "display_name": "Lead Create", "resource": "lead", "action": "create"},
-            {"name": "lead:update", "display_name": "Lead Update", "resource": "lead", "action": "update"},
-            {"name": "lead:delete", "display_name": "Lead Delete", "resource": "lead", "action": "delete"},
+            {
+                "name": "lead:read",
+                "display_name": "Lead Read",
+                "resource": "lead",
+                "action": "read",
+            },
+            {
+                "name": "lead:read_tree",
+                "display_name": "Lead Read Tree",
+                "resource": "lead",
+                "action": "read_tree",
+            },
+            {
+                "name": "lead:create",
+                "display_name": "Lead Create",
+                "resource": "lead",
+                "action": "create",
+            },
+            {
+                "name": "lead:update",
+                "display_name": "Lead Update",
+                "resource": "lead",
+                "action": "update",
+            },
+            {
+                "name": "lead:delete",
+                "display_name": "Lead Delete",
+                "resource": "lead",
+                "action": "delete",
+            },
             # API Key permissions
-            {"name": "apikey:read", "display_name": "API Key Read", "resource": "apikey", "action": "read"},
-            {"name": "apikey:create", "display_name": "API Key Create", "resource": "apikey", "action": "create"},
-            {"name": "apikey:revoke", "display_name": "API Key Revoke", "resource": "apikey", "action": "revoke"},
+            {
+                "name": "apikey:read",
+                "display_name": "API Key Read",
+                "resource": "apikey",
+                "action": "read",
+            },
+            {
+                "name": "apikey:create",
+                "display_name": "API Key Create",
+                "resource": "apikey",
+                "action": "create",
+            },
+            {
+                "name": "apikey:revoke",
+                "display_name": "API Key Revoke",
+                "resource": "apikey",
+                "action": "revoke",
+            },
         ]
 
         permissions_map = {}
@@ -519,7 +646,9 @@ async def reset_database():
     print("\nTest User Credentials:\n")
 
     for user_data in users_data:
-        print(f"   {user_data['first_name']} {user_data['last_name']} ({user_data['role']})")
+        print(
+            f"   {user_data['first_name']} {user_data['last_name']} ({user_data['role']})"
+        )
         print(f"   Email:    {user_data['email']}")
         print(f"   Password: {user_data['password']}")
         print(f"   Entities: {[e[0] for e in user_data['entity_memberships']]}")

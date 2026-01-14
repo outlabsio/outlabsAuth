@@ -8,6 +8,7 @@ OpenAPI/Swagger.
 
 from inspect import Parameter, Signature
 from typing import Any, Callable, Optional, Sequence
+from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
 from makefun import with_signature
@@ -103,6 +104,22 @@ class AuthDeps:
     ) -> Callable:
         signature = self._get_dependency_signature()
 
+        def _parse_entity_context_id(request: Request) -> Optional[UUID]:
+            raw = (
+                request.path_params.get("entity_id")
+                or request.query_params.get("entity_id")
+                or request.headers.get("X-Entity-Context")
+            )
+            if not raw:
+                return None
+            try:
+                return raw if isinstance(raw, UUID) else UUID(str(raw))
+            except Exception:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid entity context ID",
+                )
+
         @with_signature(signature)
         async def dependency(
             request: Request,
@@ -131,16 +148,31 @@ class AuthDeps:
                     detail="User ID not found in auth result",
                 )
 
+            try:
+                user_id_uuid = (
+                    user_id if isinstance(user_id, UUID) else UUID(str(user_id))
+                )
+            except Exception:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid user ID in auth result",
+                )
+
             if session is None:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Database session not configured for auth dependencies",
                 )
 
+            entity_id = _parse_entity_context_id(request)
+
             if require_all:
                 for perm in permissions:
                     has_perm = await permission_service.check_permission(
-                        session, user_id=user_id, permission=perm
+                        session,
+                        user_id=user_id_uuid,
+                        permission=perm,
+                        entity_id=entity_id,
                     )
                     if not has_perm:
                         raise HTTPException(
@@ -151,7 +183,10 @@ class AuthDeps:
                 has_any = False
                 for perm in permissions:
                     if await permission_service.check_permission(
-                        session, user_id=user_id, permission=perm
+                        session,
+                        user_id=user_id_uuid,
+                        permission=perm,
+                        entity_id=entity_id,
                     ):
                         has_any = True
                         break

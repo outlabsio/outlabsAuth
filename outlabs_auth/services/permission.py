@@ -21,6 +21,8 @@ from outlabs_auth.core.exceptions import (
     PermissionNotFoundError,
     UserNotFoundError,
 )
+from outlabs_auth.models.sql.closure import EntityClosure
+from outlabs_auth.models.sql.entity_membership import EntityMembership
 from outlabs_auth.models.sql.enums import MembershipStatus
 from outlabs_auth.models.sql.permission import (
     Permission,
@@ -70,6 +72,7 @@ class PermissionService(BaseService[Permission]):
         session: AsyncSession,
         user_id: UUID,
         permission: str,
+        entity_id: Optional[UUID] = None,
     ) -> bool:
         """
         Check if user has a specific permission.
@@ -78,6 +81,7 @@ class PermissionService(BaseService[Permission]):
             session: Database session
             user_id: User UUID
             permission: Permission name (e.g., "user:create")
+            entity_id: Optional entity context for EnterpriseRBAC
 
         Returns:
             True if user has permission, False otherwise
@@ -105,40 +109,175 @@ class PermissionService(BaseService[Permission]):
             )
             return True
 
-        # Get all user permissions
-        user_permissions = await self.get_user_permissions(session, user_id)
+        # Get global (non-entity scoped) permissions
+        user_permissions = set(await self.get_user_permissions(session, user_id))
 
-        # Check exact match
-        if permission in user_permissions:
+        # Global checks
+        if self._permission_set_allows(permission, user_permissions):
             self._log_permission_check(
-                user_id, permission, "granted", start_time, "exact_match"
+                user_id, permission, "granted", start_time, "global_match"
             )
             return True
 
-        # Check wildcard permissions
-        resource, action = (
-            permission.split(":") if ":" in permission else (permission, "*")
-        )
-
-        # Check resource wildcard (e.g., "user:*")
-        resource_wildcard = f"{resource}:*"
-        if resource_wildcard in user_permissions:
-            self._log_permission_check(
-                user_id, permission, "granted", start_time, "wildcard_match"
-            )
-            return True
-
-        # Check full wildcard (e.g., "*:*")
-        if "*:*" in user_permissions:
-            self._log_permission_check(
-                user_id, permission, "granted", start_time, "full_wildcard"
-            )
-            return True
+        # Optional EnterpriseRBAC check in an entity context
+        if entity_id is not None:
+            if await self._check_permission_in_entity(
+                session=session,
+                user_id=user_id,
+                permission=permission,
+                entity_id=entity_id,
+            ):
+                self._log_permission_check(
+                    user_id, permission, "granted", start_time, "entity_match"
+                )
+                return True
 
         # Permission denied
         self._log_permission_check(
             user_id, permission, "denied", start_time, "no_permission"
         )
+        return False
+
+    # =========================================================================
+    # EnterpriseRBAC: entity context + tree permissions
+    # =========================================================================
+
+    @staticmethod
+    def _parse_permission_name(name: str) -> Tuple[str, str, Optional[str]]:
+        """
+        Parse `resource:action[_scope]` into (resource, action, scope).
+
+        Scope is the last underscore segment when it's one of: tree, all, own.
+        """
+        if ":" not in name:
+            return name, "*", None
+
+        resource, action_part = name.split(":", 1)
+        if "_" not in action_part:
+            return resource, action_part, None
+
+        action_base, maybe_scope = action_part.rsplit("_", 1)
+        if maybe_scope in ("tree", "all", "own"):
+            return resource, action_base, maybe_scope
+        return resource, action_part, None
+
+    @classmethod
+    def _permission_set_allows(cls, required: str, granted: Set[str]) -> bool:
+        """
+        Check whether a set of permission *names* grants a required permission name.
+
+        Rules:
+        - `*:*` grants everything.
+        - Exact match grants.
+        - `resource:*` grants all actions/scopes for that resource.
+        - `_all` scope is treated as a superset of non-scoped and `_tree`.
+        - `_tree` is treated as a superset of non-scoped (within entity hierarchy rules).
+        """
+        if "*:*" in granted or required in granted:
+            return True
+
+        resource, action, scope = cls._parse_permission_name(required)
+        if f"{resource}:*" in granted:
+            return True
+
+        base = f"{resource}:{action}"
+        all_variant = f"{base}_all"
+
+        # `_all` is always a superset
+        if all_variant in granted:
+            return True
+
+        # `_tree` is a superset of the base (non-scoped) permission
+        if scope is None:
+            tree_variant = f"{base}_tree"
+            if tree_variant in granted:
+                return True
+
+        return False
+
+    @classmethod
+    def _permission_set_allows_from_ancestor(
+        cls, required: str, granted: Set[str]
+    ) -> bool:
+        """
+        Like `_permission_set_allows`, but for permissions inherited from ancestors.
+
+        Only `_tree`/`_all` (or `*:*`) permissions propagate to descendants.
+        """
+        if "*:*" in granted:
+            return True
+
+        resource, action, scope = cls._parse_permission_name(required)
+        base = f"{resource}:{action}"
+
+        if scope == "all":
+            return f"{base}_all" in granted
+
+        if scope == "tree":
+            return f"{base}_tree" in granted or f"{base}_all" in granted
+
+        # Non-scoped permission required: need `_tree` or `_all` upstream.
+        return f"{base}_tree" in granted or f"{base}_all" in granted
+
+    async def _check_permission_in_entity(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        permission: str,
+        entity_id: UUID,
+    ) -> bool:
+        """
+        EnterpriseRBAC permission evaluation:
+        - direct permissions via membership roles on the target entity
+        - inherited tree permissions via membership roles on ancestor entities (closure table)
+        """
+        # Resolve ancestors (including self) via closure table.
+        ancestors_stmt = select(EntityClosure.ancestor_id, EntityClosure.depth).where(
+            EntityClosure.descendant_id == entity_id
+        )
+        ancestors_result = await session.execute(ancestors_stmt)
+        ancestor_rows = ancestors_result.all()
+        if not ancestor_rows:
+            return False
+
+        depth_by_ancestor: Dict[UUID, int] = {row[0]: row[1] for row in ancestor_rows}
+        ancestor_ids = list(depth_by_ancestor.keys())
+
+        # Load memberships in any ancestor entity with roles+permissions.
+        memberships_stmt = (
+            select(EntityMembership)
+            .options(
+                selectinload(EntityMembership.roles).selectinload(Role.permissions)
+            )
+            .where(
+                EntityMembership.user_id == user_id,
+                EntityMembership.entity_id.in_(ancestor_ids),
+                EntityMembership.status == MembershipStatus.ACTIVE,
+            )
+        )
+        memberships_result = await session.execute(memberships_stmt)
+        memberships = memberships_result.scalars().all()
+
+        for membership in memberships:
+            if not membership.can_grant_permissions():
+                continue
+
+            membership_depth = depth_by_ancestor.get(membership.entity_id)
+            if membership_depth is None:
+                continue
+
+            granted: Set[str] = set()
+            for role in membership.roles:
+                if role and role.permissions:
+                    granted.update(p.name for p in role.permissions)
+
+            if membership_depth == 0:
+                if self._permission_set_allows(permission, granted):
+                    return True
+            else:
+                if self._permission_set_allows_from_ancestor(permission, granted):
+                    return True
+
         return False
 
     def _log_permission_check(
