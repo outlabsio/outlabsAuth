@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-from outlabs_auth.models.api_key import APIKeyStatus
+from outlabs_auth.models.sql.enums import APIKeyStatus
 
 
 class ApiKeyCreateRequest(BaseModel):

@@ -4,9 +4,10 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional, List
 from bson import ObjectId
 
-from outlabs_auth.models.user import UserModel, UserStatus
-from outlabs_auth.models.social_account import SocialAccount
-from outlabs_auth.models.oauth_state import OAuthState
+from outlabs_auth.models.sql.user import User
+from outlabs_auth.models.sql.enums import UserStatus
+from outlabs_auth.models.sql.social_account import SocialAccount
+from outlabs_auth.models.sql.oauth_state import OAuthState
 from outlabs_auth.oauth.provider import OAuthProvider
 from outlabs_auth.oauth.models import OAuthCallbackResult
 from outlabs_auth.oauth.exceptions import (
@@ -251,14 +252,14 @@ class OAuthService:
         
         if existing_social:
             # Already linked - return existing user
-            user = await UserModel.get(existing_social.user_id)
+            user = await User.get(existing_social.user_id)
             await existing_social.set({SocialAccount.last_used_at: datetime.utcnow()})
             return user, existing_social, False
         
         # Try to find user by email (for auto-linking)
         user = None
         if user_info.email_verified:
-            user = await UserModel.find_one(UserModel.email == user_info.email)
+            user = await User.find_one(User.email == user_info.email)
         
         if user:
             # Auto-link to existing user (email verified by provider)
@@ -328,7 +329,7 @@ class OAuthService:
             Tuple of (user, social_account, is_new_user=False)
         """
         # Get user
-        user = await UserModel.get(user_id)
+        user = await User.get(user_id)
         if not user or user.status != UserStatus.ACTIVE:
             raise ValueError("User not found or not active")
         
@@ -421,7 +422,7 @@ class OAuthService:
         Raises:
             CannotUnlinkLastMethodError: If this is the last auth method
         """
-        user = await UserModel.get(ObjectId(user_id))
+        user = await User.get(ObjectId(user_id))
         if not user:
             raise ValueError("User not found")
         

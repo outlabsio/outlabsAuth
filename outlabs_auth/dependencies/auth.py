@@ -6,7 +6,7 @@ Provides easy-to-use dependency helpers for protecting routes.
 from typing import Optional, List
 from fastapi import Depends, Header, HTTPException
 
-from outlabs_auth.models.user import UserModel
+from outlabs_auth.models.sql.user import User
 from outlabs_auth.core.auth import OutlabsAuth
 from outlabs_auth.core.exceptions import (
     TokenInvalidError,
@@ -30,13 +30,13 @@ class AuthDeps:
         >>> deps = AuthDeps(auth)
         >>>
         >>> @app.get("/protected")
-        >>> async def protected_route(user: UserModel = Depends(deps.authenticated())):
+        >>> async def protected_route(user: User = Depends(deps.authenticated())):
         ...     return {"user_id": str(user.id), "email": user.email}
         >>>
         >>> @app.delete("/users/{user_id}")
         >>> async def delete_user(
         ...     user_id: str,
-        ...     user: UserModel = Depends(deps.requires("user:delete"))
+        ...     user: User = Depends(deps.requires("user:delete"))
         ... ):
         ...     return await auth.user_service.delete_user(user_id)
     """
@@ -59,13 +59,13 @@ class AuthDeps:
 
         Example:
             >>> @app.get("/me")
-            >>> async def get_me(user: UserModel = Depends(deps.authenticated())):
+            >>> async def get_me(user: User = Depends(deps.authenticated())):
             ...     return user
 
         """
         async def get_current_user(
             authorization: Optional[str] = Header(None)
-        ) -> UserModel:
+        ) -> User:
             if not authorization:
                 raise HTTPException(
                     status_code=401,
@@ -121,14 +121,14 @@ class AuthDeps:
             >>> @app.post("/users")
             >>> async def create_user(
             ...     data: UserCreate,
-            ...     user: UserModel = Depends(deps.requires("user:create"))
+            ...     user: User = Depends(deps.requires("user:create"))
             ... ):
             ...     return await auth.user_service.create_user(**data.dict())
 
         """
         async def check_permissions(
-            user: UserModel = Depends(self.authenticated())
-        ) -> UserModel:
+            user: User = Depends(self.authenticated())
+        ) -> User:
             # Superusers always pass
             if user.is_superuser:
                 return user
@@ -169,15 +169,15 @@ class AuthDeps:
             >>> async def update_user(
             ...     user_id: str,
             ...     data: UserUpdate,
-            ...     user: UserModel = Depends(
+            ...     user: User = Depends(
             ...         deps.requires_any("user:update", "admin:all")
             ...     )
             ... ):
             ...     return await auth.user_service.update_user(user_id, **data.dict())
         """
         async def check_any_permission(
-            user: UserModel = Depends(self.authenticated())
-        ) -> UserModel:
+            user: User = Depends(self.authenticated())
+        ) -> User:
             # Superusers always pass
             if user.is_superuser:
                 return user
@@ -207,7 +207,7 @@ class AuthDeps:
         Example:
             >>> @app.get("/public-or-private")
             >>> async def flexible_route(
-            ...     user: Optional[UserModel] = Depends(deps.optional_auth())
+            ...     user: Optional[User] = Depends(deps.optional_auth())
             ... ):
             ...     if user:
             ...         return {"message": f"Hello {user.email}"}
@@ -215,7 +215,7 @@ class AuthDeps:
         """
         async def get_optional_user(
             authorization: Optional[str] = Header(None)
-        ) -> Optional[UserModel]:
+        ) -> Optional[User]:
             if not authorization:
                 return None
 
@@ -243,13 +243,13 @@ class AuthDeps:
 
         Example:
             >>> @app.post("/admin/reset-database")
-            >>> async def reset_db(user: UserModel = Depends(deps.superuser())):
+            >>> async def reset_db(user: User = Depends(deps.superuser())):
             ...     # Only superusers can access
             ...     pass
         """
         async def check_superuser(
-            user: UserModel = Depends(self.authenticated())
-        ) -> UserModel:
+            user: User = Depends(self.authenticated())
+        ) -> User:
             if not user.is_superuser:
                 raise HTTPException(
                     status_code=403,

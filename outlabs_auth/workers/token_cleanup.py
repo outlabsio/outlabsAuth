@@ -17,7 +17,7 @@ from datetime import datetime, timezone, timedelta
 import logging
 from typing import Dict
 
-from outlabs_auth.models.token import RefreshTokenModel
+from outlabs_auth.models.sql.token import RefreshToken
 
 logger = logging.getLogger(__name__)
 
@@ -58,16 +58,16 @@ async def cleanup_expired_refresh_tokens(
 
     try:
         # Delete expired tokens (past their expires_at date)
-        expired_result = await RefreshTokenModel.find(
-            RefreshTokenModel.expires_at < now
+        expired_result = await RefreshToken.find(
+            RefreshToken.expires_at < now
         ).delete()
         expired_count = expired_result.deleted_count if expired_result else 0
 
         # Delete old revoked tokens (revoked > retention days ago)
         retention_cutoff = now - timedelta(days=revoked_retention_days)
-        revoked_result = await RefreshTokenModel.find(
-            RefreshTokenModel.is_revoked == True,
-            RefreshTokenModel.revoked_at < retention_cutoff
+        revoked_result = await RefreshToken.find(
+            RefreshToken.is_revoked == True,
+            RefreshToken.revoked_at < retention_cutoff
         ).delete()
         revoked_count = revoked_result.deleted_count if revoked_result else 0
 
@@ -119,7 +119,7 @@ async def cleanup_expired_oauth_states(
         ... )
     """
     try:
-        from outlabs_auth.models.oauth_state import OAuthState
+        from outlabs_auth.models.sql.oauth_state import OAuthState
 
         cutoff = datetime.now(timezone.utc) - timedelta(hours=retention_hours)
 

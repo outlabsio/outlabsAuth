@@ -3,7 +3,7 @@
 from typing import Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
-from outlabs_auth.models.membership_status import MembershipStatus
+from outlabs_auth.models.sql.enums import MembershipStatus
 
 
 class UserRoleMembershipResponse(BaseModel):

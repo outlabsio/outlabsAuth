@@ -5,7 +5,9 @@ Provides complete CRUD endpoints for permission management.
 """
 
 from typing import Any, Optional, List
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
 from outlabs_auth.schemas.common import PaginatedResponse
@@ -204,13 +206,14 @@ def get_permissions_router(
     )
     async def get_permission(
         permission_id: str,
-        auth_result = Depends(auth.deps.require_permission("permission:read"))
+        auth_result = Depends(auth.deps.require_permission("permission:read")),
+        session: AsyncSession = Depends(auth.get_session)
     ):
         """Get permission details by ID."""
         try:
-            from outlabs_auth.models.permission import PermissionModel
-
-            permission = await PermissionModel.get(permission_id)
+            permission = await auth.permission_service.get_permission_by_id(
+                session, UUID(permission_id), load_tags=True
+            )
             if not permission:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -227,8 +230,8 @@ def get_permissions_router(
                 scope=permission.scope,
                 is_system=permission.is_system,
                 is_active=permission.is_active,
-                tags=permission.tags or [],
-                metadata=permission.metadata or {}
+                tags=[tag.name for tag in permission.tags] if permission.tags else [],
+                metadata={}
             )
         except HTTPException:
             raise
@@ -247,42 +250,18 @@ def get_permissions_router(
     async def update_permission(
         permission_id: str,
         data: PermissionUpdateRequest,
-        auth_result = Depends(auth.deps.require_permission("permission:update"))
+        auth_result = Depends(auth.deps.require_permission("permission:update")),
+        session: AsyncSession = Depends(auth.get_session)
     ):
         """Update permission details."""
         try:
-            from outlabs_auth.models.permission import PermissionModel
-
-            permission = await PermissionModel.get(permission_id)
-            if not permission:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Permission not found"
-                )
-
-            # System permissions have restrictions (cannot change name)
-            if permission.is_system:
-                # Only allow updating description, tags, and metadata for system permissions
-                if data.is_active is not None and not data.is_active:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Cannot deactivate system permissions"
-                    )
-
-            # Update fields if provided
-            if data.display_name is not None:
-                permission.display_name = data.display_name
-            if data.description is not None:
-                permission.description = data.description
-            if data.is_active is not None:
-                permission.is_active = data.is_active
-            if data.tags is not None:
-                permission.tags = data.tags
-            if data.metadata is not None:
-                permission.metadata = data.metadata
-
-            # Save changes
-            await permission.save()
+            permission = await auth.permission_service.update_permission(
+                session,
+                UUID(permission_id),
+                display_name=data.display_name,
+                description=data.description,
+            )
+            await session.commit()
 
             # Log update
             if auth.observability:
@@ -302,12 +281,13 @@ def get_permissions_router(
                 scope=permission.scope,
                 is_system=permission.is_system,
                 is_active=permission.is_active,
-                tags=permission.tags or [],
-                metadata=permission.metadata or {}
+                tags=[],
+                metadata={}
             )
         except HTTPException:
             raise
         except Exception as e:
+            await session.rollback()
             if auth.observability:
                 auth.observability.logger.error(
                     "permission_update_error",

@@ -9,8 +9,8 @@ from typing import Optional, Dict, Any
 from datetime import datetime, date, timezone, timedelta
 from redis.asyncio import Redis
 
-from outlabs_auth.models.activity_metric import ActivityMetric
-from outlabs_auth.models.user import UserModel
+from outlabs_auth.models.sql.activity_metric import ActivityMetric
+from outlabs_auth.models.sql.user import User
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class ActivityTracker:
         Args:
             redis_client: Redis client instance
             enabled: Enable activity tracking (default: True)
-            update_user_model: Update UserModel.last_activity (default: True)
+            update_user_model: Update User.last_activity (default: True)
             store_user_ids: Store user IDs in ActivityMetric for cohort analysis (default: False)
         """
         self.redis = redis_client
@@ -171,7 +171,7 @@ class ActivityTracker:
         Sync Redis activity data to MongoDB (run periodically by background worker).
 
         Creates ActivityMetric snapshots for historical analysis.
-        Optionally updates UserModel.last_activity (batched).
+        Optionally updates User.last_activity (batched).
 
         Returns:
             Statistics about the sync operation:
@@ -179,7 +179,7 @@ class ActivityTracker:
                 "daily": 1247,      # Users synced for daily metric
                 "monthly": 45892,   # Users synced for monthly metric
                 "quarterly": 128453,# Users synced for quarterly metric
-                "users_updated": 1247,  # UserModel records updated
+                "users_updated": 1247,  # User records updated
                 "errors": 0         # Number of errors encountered
             }
         """
@@ -223,7 +223,7 @@ class ActivityTracker:
                 stats_key="quarterly"
             )
 
-            # 4. Update UserModel.last_activity (batched)
+            # 4. Update User.last_activity (batched)
             if self.update_user_model and stats["daily"] > 0:
                 users_updated = await self._batch_update_last_activity()
                 stats["users_updated"] = users_updated
@@ -307,7 +307,7 @@ class ActivityTracker:
 
     async def _batch_update_last_activity(self) -> int:
         """
-        Batch update UserModel.last_activity from Redis timestamps.
+        Batch update User.last_activity from Redis timestamps.
 
         Returns:
             Number of users updated
@@ -372,7 +372,7 @@ class ActivityTracker:
         for user_id, timestamp in batch:
             try:
                 # Find and update user
-                user = await UserModel.find_one(UserModel.id == user_id)
+                user = await User.find_one(User.id == user_id)
                 if user:
                     user.last_activity = timestamp
                     await user.save()

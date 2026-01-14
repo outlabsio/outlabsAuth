@@ -7,6 +7,7 @@ Provides ready-to-use user management routes (DD-041).
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.exceptions import UserAlreadyExistsError
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
@@ -730,6 +731,7 @@ def get_users_router(
                 auth.deps.require_permission("user:read"),
             )
         ),
+        session: AsyncSession = Depends(auth.get_session),
     ):
         """
         Get all effective permissions for a user with source information.
@@ -737,50 +739,50 @@ def get_users_router(
         Returns detailed permission objects with information about which role granted each permission.
         """
         try:
+            from uuid import UUID
+
             # Validate user exists
-            user = await auth.user_service.get_user_by_id(user_id)
+            user = await auth.user_service.get_user_by_id(session, UUID(user_id))
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
                 )
 
             # Get user's roles
-            roles = await auth.role_service.get_user_roles(user_id=user_id)
-
-            # Get all permission objects from database
-            from outlabs_auth.models.permission import PermissionModel
+            roles = await auth.role_service.get_user_roles(session, user_id=UUID(user_id))
 
             # Collect permissions with their sources
             permission_sources = []
             seen_permissions = set()
 
             for role in roles:
-                for perm_name in role.permissions:
-                    if perm_name not in seen_permissions:
-                        # Fetch the actual permission object
-                        perm = await PermissionModel.find_one({"name": perm_name})
-                        if perm:
-                            permission_sources.append(
-                                UserPermissionSource(
-                                    permission=PermissionResponse(
-                                        id=str(perm.id),
-                                        name=perm.name,
-                                        display_name=perm.display_name,
-                                        description=perm.description,
-                                        resource=perm.resource,
-                                        action=perm.action,
-                                        scope=perm.scope,
-                                        is_system=perm.is_system,
-                                        is_active=perm.is_active,
-                                        tags=perm.tags or [],
-                                        metadata=perm.metadata or {},
-                                    ),
-                                    source="role",
-                                    source_id=str(role.id),
-                                    source_name=role.name,
-                                )
+                # Get permissions for this role
+                role_permissions = await auth.permission_service.get_permissions_for_role(
+                    session, role.id
+                )
+                for perm in role_permissions:
+                    if perm.name not in seen_permissions:
+                        permission_sources.append(
+                            UserPermissionSource(
+                                permission=PermissionResponse(
+                                    id=str(perm.id),
+                                    name=perm.name,
+                                    display_name=perm.display_name,
+                                    description=perm.description,
+                                    resource=perm.resource,
+                                    action=perm.action,
+                                    scope=perm.scope,
+                                    is_system=perm.is_system,
+                                    is_active=perm.is_active,
+                                    tags=[],
+                                    metadata={},
+                                ),
+                                source="role",
+                                source_id=str(role.id),
+                                source_name=role.name,
                             )
-                            seen_permissions.add(perm_name)
+                        )
+                        seen_permissions.add(perm.name)
 
             # Sort by permission name
             permission_sources.sort(key=lambda x: x.permission.name)

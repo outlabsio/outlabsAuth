@@ -8,7 +8,8 @@ from datetime import datetime
 from typing import Any, Dict, Optional, List
 from dateutil import parser as date_parser
 
-from outlabs_auth.models.condition import Condition, ConditionGroup, ConditionOperator
+from outlabs_auth.models.sql.condition import Condition, ConditionGroup
+from outlabs_auth.models.sql.enums import ConditionOperator
 
 
 class PolicyEvaluationEngine:
