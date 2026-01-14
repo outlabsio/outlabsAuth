@@ -1,6 +1,6 @@
 # OutlabsAuth Library - Design Decisions Log
 
-**Version**: 1.4
+**Version**: 2.0
 **Date**: 2025-01-14
 **Purpose**: Document key architectural decisions and trade-offs
 
@@ -173,7 +173,7 @@ Three preset classes that build on each other:
 ## DD-004: Database Support (MongoDB First)
 
 **Date**: 2025-01-14
-**Status**: Accepted
+**Status**: ~~Accepted~~ **SUPERSEDED by DD-049**
 **Deciders**: Core team
 **Context**: Need to choose primary database, possibly support others
 
@@ -195,8 +195,10 @@ Three preset classes that build on each other:
    - Pros: Ship faster, can add PostgreSQL in v1.1
    - Cons: Delayed PostgreSQL support
 
-### Decision
+### Decision (Original - Superseded)
 MongoDB primary, PostgreSQL in future version.
+
+**UPDATE 2025-01-14**: This decision has been superseded by DD-049. The library now uses PostgreSQL as the primary (and only) database.
 
 **Reasoning**:
 - Team expertise in MongoDB
@@ -3045,14 +3047,78 @@ auth = SimpleRBAC(
 
 ---
 
+## DD-049: PostgreSQL as Primary Database
+
+**Date**: 2025-01-14
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Need a robust, production-ready database with strong SQL support for hierarchical queries
+
+### Options Considered
+
+1. **Keep MongoDB with Beanie**
+   - Pros: Already implemented, document flexibility
+   - Cons: Closure table queries less efficient, harder to reason about relationships
+
+2. **PostgreSQL with SQLAlchemy/SQLModel**
+   - Pros: ACID compliance, native recursive CTE support, mature ecosystem, better for hierarchical data
+   - Cons: Migration effort required, different query patterns
+
+3. **Support Both**
+   - Pros: Maximum flexibility
+   - Cons: Double maintenance, abstraction complexity, testing burden
+
+### Decision
+Migrate fully to PostgreSQL with SQLAlchemy async and SQLModel.
+
+**Implementation**:
+```python
+from outlabs_auth import SimpleRBAC
+
+auth = SimpleRBAC(
+    database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
+    secret_key="your-secret-key"
+)
+await auth.initialize()
+```
+
+**Reasoning**:
+- PostgreSQL excels at hierarchical data with closure table pattern
+- SQLAlchemy async provides mature, production-ready ORM
+- SQLModel simplifies model definitions with Pydantic integration
+- Better tooling for migrations (Alembic)
+- ACID compliance for authentication data
+- Recursive CTEs for tree queries if needed
+- Industry standard for enterprise applications
+
+### Consequences
+- **Positive**: Better performance for tree queries, ACID compliance, mature ecosystem, industry standard
+- **Negative**: Migration effort required, MongoDB users need to migrate
+- **Neutral**: Different query patterns to learn
+
+### Migration Details
+All services migrated from Beanie to SQLAlchemy async:
+- `auth.py` - User authentication
+- `user.py` - User management
+- `role.py` - Role management
+- `permission.py` - Permission management
+- `entity.py` - Entity hierarchy with closure table
+- `membership.py` - User-entity memberships
+- `api_key.py` - API key management
+
+### Related Decisions
+- DD-004 (MongoDB First - SUPERSEDED by this decision)
+- DD-036 (Closure table for tree permissions)
+
+---
+
 ## Questions Still Open
 
 Track questions that need decisions:
 
 ### Q-001: PostgreSQL Support in v1.0?
-**Status**: Open
-**Proposed Decision**: Defer to v1.1
-**Needs Decision By**: End of Week 1
+**Status**: ~~Open~~ **RESOLVED** (DD-049)
+**Resolution**: PostgreSQL is now the primary and only database.
 
 ### Q-002: Multi-Tenant in v1.0 or v1.1?
 **Status**: Open
@@ -3078,12 +3144,14 @@ Track questions that need decisions:
 | 2025-01-14 | DD-038 through DD-046 | All Accepted (FastAPI-Users Inspired Patterns) |
 | 2025-01-14 | DD-047 | Accepted (UserRoleMembership for SimpleRBAC) |
 | 2025-01-26 | DD-048 | Accepted (Redis Configuration Simplification) |
+| 2025-01-14 | **DD-049** | **Accepted (PostgreSQL as Primary Database)** |
 | 2025-01-14 | DD-003 | Superseded by DD-015 |
+| 2025-01-14 | DD-004 | **Superseded by DD-049** |
 | 2025-01-26 | DD-028 | **CORRECTED** - Changed from argon2id to SHA-256 for API keys; made refresh token rotation optional |
 | 2025-01-26 | DD-031 | Superseded by DD-028 (corrected) |
 | 2025-01-14 | DD-030 | Superseded by DD-035 |
 
 ---
 
-**Last Updated**: 2025-01-26 (DD-028 corrected: SHA-256 for API keys, optional refresh rotation; DD-048 added: Redis config simplification; DD-031 superseded)
-**Next Review**: End of Phase 1 (Week 2)
+**Last Updated**: 2025-01-14 (DD-049 added: PostgreSQL as primary database, DD-004 superseded)
+**Next Review**: After testing all examples

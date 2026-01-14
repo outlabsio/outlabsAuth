@@ -1,8 +1,9 @@
 # OutlabsAuth Library - Technical Architecture
 
-**Version**: 1.4
+**Version**: 2.0
 **Date**: 2025-01-14
-**Status**: Design Phase
+**Status**: PostgreSQL Migration Complete
+**Database**: PostgreSQL with SQLAlchemy/SQLModel (async)
 
 ---
 
@@ -38,8 +39,8 @@ OutlabsAuth (Single Core Implementation)
 - **Zero migration complexity**: Switching from Simple → Enterprise is just changing the class name
 
 **Simple vs Enterprise Decision**: Do you have departments/teams/hierarchy?
-- **NO** → `SimpleRBAC(database=db)` - disables entity hierarchy
-- **YES** → `EnterpriseRBAC(database=db)` - enables entity hierarchy + optional advanced features
+- **NO** → `SimpleRBAC(database_url=url, secret_key=key)` - disables entity hierarchy
+- **YES** → `EnterpriseRBAC(database_url=url, secret_key=key)` - enables entity hierarchy + optional advanced features
 
 ---
 
@@ -52,16 +53,19 @@ outlabs_auth/
 │   ├── __init__.py
 │   ├── base.py                 # Base OutlabsAuth class
 │   ├── config.py               # Configuration management
+│   ├── engine.py               # SQLAlchemy async engine
 │   └── exceptions.py           # Custom exceptions
 ├── models/
 │   ├── __init__.py
-│   ├── base.py                 # BaseDocument
-│   ├── user.py                 # UserModel
-│   ├── role.py                 # RoleModel
-│   ├── permission.py           # PermissionModel
-│   ├── entity.py               # EntityModel
-│   ├── membership.py           # EntityMembershipModel
-│   └── token.py                # RefreshTokenModel
+│   └── sql/                    # PostgreSQL models (SQLModel)
+│       ├── base.py             # Base SQL model
+│       ├── user.py             # User model
+│       ├── role.py             # Role model
+│       ├── permission.py       # Permission model
+│       ├── entity.py           # Entity model (EnterpriseRBAC)
+│       ├── entity_closure.py   # Closure table for tree queries
+│       ├── entity_membership.py # User-entity memberships
+│       └── api_key.py          # API key model
 ├── services/
 │   ├── __init__.py
 │   ├── auth.py                 # AuthService
@@ -124,7 +128,8 @@ class OutlabsAuth:
 
     def __init__(
         self,
-        database: Any,
+        database_url: str,  # PostgreSQL connection string
+        secret_key: str,    # JWT signing key
         # Feature flags
         enable_entity_hierarchy: bool = False,
         enable_context_aware_roles: bool = False,
@@ -134,15 +139,12 @@ class OutlabsAuth:
         enable_audit_log: bool = False,
         # Optional dependencies
         redis_url: Optional[str] = None,
-        notification_handler: Optional[NotificationHandler] = None,
-        # Customization
-        user_model: Type[UserModel] = UserModel,
-        role_model: Type[RoleModel] = RoleModel,
-        permission_model: Type[PermissionModel] = PermissionModel,
-        entity_model: Type[EntityModel] = EntityModel,
+        redis_enabled: bool = False,
+        notification_service: Optional[NotificationService] = None,
         **kwargs
     ):
-        self.database = database
+        self.database_url = database_url
+        self.secret_key = secret_key
 
         # Configuration
         self.config = AuthConfig(
@@ -203,19 +205,16 @@ class OutlabsAuth:
         return await self.auth_service.get_current_user(token)
 
     async def initialize(self):
-        """Initialize database collections/indexes"""
-        await init_beanie(
-            database=self.database,
-            document_models=[
-                self.user_model,
-                self.role_model,
-                self.permission_model,
-                RefreshTokenModel,
-                APIKeyModel,
-                *([self.entity_model, EntityMembershipModel, EntityClosureModel]
-                  if self.config.enable_entity_hierarchy else [])
-            ]
-        )
+        """Initialize database engine and create tables"""
+        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+        from sqlmodel import SQLModel
+
+        self.engine = create_async_engine(self.database_url, echo=False)
+        self.async_session = async_sessionmaker(self.engine, expire_on_commit=False)
+
+        # Create tables
+        async with self.engine.begin() as conn:
+            await conn.run_sync(SQLModel.metadata.create_all)
 ```
 
 ### Wrapper 1: SimpleRBAC
@@ -229,9 +228,10 @@ class SimpleRBAC(OutlabsAuth):
     Thin wrapper that disables entity hierarchy.
     """
 
-    def __init__(self, database: AsyncIOMotorClient, **kwargs):
+    def __init__(self, database_url: str, secret_key: str, **kwargs):
         super().__init__(
-            database,
+            database_url=database_url,
+            secret_key=secret_key,
             enable_entity_hierarchy=False,  # Force flat structure
             enable_context_aware_roles=False,
             enable_abac=False,
@@ -252,25 +252,36 @@ class SimpleRBAC(OutlabsAuth):
 
 **Example Usage**:
 ```python
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Depends
+from sqlmodel import SQLModel
 from outlabs_auth import SimpleRBAC
-from outlabs_auth.dependencies import AuthDeps
 
-app = FastAPI()
-auth = SimpleRBAC(database=mongo_client)
-deps = AuthDeps(auth)
+DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/mydb"
+SECRET_KEY = "your-secret-key"
+auth: SimpleRBAC = None
 
-# Initialize database
-await auth.initialize()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global auth
+    auth = SimpleRBAC(database_url=DATABASE_URL, secret_key=SECRET_KEY)
+    await auth.initialize()
+    async with auth.engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+    yield
+    await auth.shutdown()
+
+app = FastAPI(lifespan=lifespan)
 
 # Use in routes
 @app.get("/users/me")
-async def get_me(ctx: AuthContext = Depends(deps.require_auth())):
-    return ctx.metadata.get("user")
+async def get_me(user = Depends(lambda: auth.deps.authenticated())):
+    return {"id": str(user.id), "email": user.email}
 
 @app.delete("/users/{user_id}")
 async def delete_user(
     user_id: str,
-    ctx: AuthContext = Depends(deps.require_permission("user:delete"))
+    _ = Depends(lambda: auth.deps.require_permission("user:delete"))
 ):
     return await auth.user_service.delete_user(user_id)
 ```
@@ -298,13 +309,15 @@ class EnterpriseRBAC(OutlabsAuth):
 
     def __init__(
         self,
-        database: AsyncIOMotorClient,
+        database_url: str,
+        secret_key: str,
         enable_context_aware_roles: bool = False,
         enable_abac: bool = False,
         **kwargs
     ):
         super().__init__(
-            database,
+            database_url=database_url,
+            secret_key=secret_key,
             enable_entity_hierarchy=True,  # Force entity hierarchy ON
             enable_context_aware_roles=enable_context_aware_roles,
             enable_abac=enable_abac,
@@ -332,11 +345,13 @@ class EnterpriseRBAC(OutlabsAuth):
 **Example - Basic Configuration** (entity hierarchy only):
 ```python
 from outlabs_auth import EnterpriseRBAC
-from outlabs_auth.dependencies import AuthDeps
+
+DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/mydb"
+SECRET_KEY = "your-secret-key"
 
 # Minimal configuration - just entity hierarchy
-auth = EnterpriseRBAC(database=mongo_client)
-deps = AuthDeps(auth)
+auth = EnterpriseRBAC(database_url=DATABASE_URL, secret_key=SECRET_KEY)
+await auth.initialize()
 
 # Create entity hierarchy
 org = await auth.entity_service.create_entity(
@@ -372,13 +387,17 @@ async def update_entity(
 ```python
 from outlabs_auth import EnterpriseRBAC
 
+DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/mydb"
+SECRET_KEY = "your-secret-key"
+
 # Full configuration with all optional features
 auth = EnterpriseRBAC(
-    database=mongo_client,
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
     redis_url="redis://localhost:6379",
+    redis_enabled=True,
     enable_context_aware_roles=True,  # Opt-in
     enable_abac=True,                 # Opt-in
-    enable_caching=True,              # Opt-in (requires Redis)
     multi_tenant=True,                # Opt-in
     enable_audit_log=True             # Opt-in
 )
@@ -2278,17 +2297,22 @@ tests/examples/test_enterprise_app.py
 ### Test Fixtures
 ```python
 @pytest.fixture
-async def mongo_db():
+async def test_db():
     """Test database connection"""
-    client = motor.motor_asyncio.AsyncIOMotorClient("mongodb://localhost:27017")
-    db = client["test_outlabs_auth"]
-    yield db
-    await client.drop_database("test_outlabs_auth")
+    from sqlalchemy.ext.asyncio import create_async_engine
+    engine = create_async_engine(
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/test_outlabs_auth"
+    )
+    yield engine
+    await engine.dispose()
 
 @pytest.fixture
-async def simple_auth(mongo_db):
+async def simple_auth(test_db):
     """SimpleRBAC instance for testing"""
-    auth = SimpleRBAC(database=mongo_db)
+    auth = SimpleRBAC(
+        database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/test_outlabs_auth",
+        secret_key="test-secret-key"
+    )
     await auth.initialize()
     return auth
 
@@ -2383,5 +2407,5 @@ role_permissions:{role_id}              # TTL: 15 minutes
 
 ---
 
-**Last Updated**: 2025-01-14 (Unified architecture: single core with wrappers, closure table, Redis patterns, JWT service tokens)
-**Next Review**: After Phase 1 prototype
+**Last Updated**: 2025-01-14 (PostgreSQL migration complete, SQLAlchemy async, closure table for tree queries)
+**Next Review**: After testing all examples

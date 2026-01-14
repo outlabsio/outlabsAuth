@@ -2,26 +2,24 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**IMPORTANT**: This project is undergoing a major architectural change from a centralized API service to a FastAPI library. Always check `docs/` for the current vision and implementation plan.
-
 ## Project Overview
 
-**OutlabsAuth** is being redesigned as a **FastAPI library** that can be installed via pip (`pip install outlabs-auth`) and integrated directly into applications. This replaces the previous centralized API service approach.
+**OutlabsAuth** is a **FastAPI library** for authentication and authorization that can be installed via pip (`pip install outlabs-auth`) and integrated directly into applications.
 
-**Inspired by FastAPI-Users**: We've adopted many excellent patterns from [FastAPI-Users](https://github.com/fastapi-users/fastapi-users) including lifecycle hooks, router factories, and transport/strategy patterns (see DD-038 to DD-046).
+**Database**: PostgreSQL with SQLAlchemy/SQLModel (async)
 
-### What Changed
-- **From**: Standalone FastAPI service with multi-platform isolation
-- **To**: Python library with single-tenant per application
+**Inspired by FastAPI-Users**: We've adopted many excellent patterns from [FastAPI-Users](https://github.com/fastapi-users/fastapi-users) including lifecycle hooks, router factories, and transport/strategy patterns.
 
-### What Stayed (Core OutlabsAuth Features)
+### Core Features
 - ✅ Entity hierarchy (STRUCTURAL + ACCESS_GROUP)
 - ✅ Tree permissions (hierarchical access control)
 - ✅ Context-aware roles
 - ✅ Flexible entity types
 - ✅ Hybrid authorization (RBAC + ReBAC + ABAC)
+- ✅ PostgreSQL with SQLAlchemy async
+- ✅ Closure table for O(1) tree queries
 
-### What We Borrowed from FastAPI-Users
+### Patterns from FastAPI-Users
 - ✅ Lifecycle hooks (on_after_register, on_after_login, etc.)
 - ✅ Router factory pattern
 - ✅ Transport/Strategy pattern
@@ -30,16 +28,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current Project Status
 
-**Branch**: `library-redesign`
-**Status**: In Progress - Phases 1-2 Complete, Phase 1.5 Complete, Phase 3+ Pending
-**Version**: 1.5 (SimpleRBAC Complete + Enhanced Membership System)
+**Branch**: `postgres-migration`
+**Status**: PostgreSQL migration complete, all examples working
+**Version**: 2.0 (PostgreSQL + SQLAlchemy)
 
 **Progress**:
-- ✅ Phase 1 Complete (Core foundation + SimpleRBAC)
-- ✅ Phase 2 Complete (API Keys + Multi-source Auth + Testing)
-- ✅ Phase 1.5 Complete (Beyond Plan: MembershipStatus, User Status, Activity Tracking, Observability)
-- ✅ Frontend Integration Verified (SimpleRBAC login working)
-- ⏸️ Phase 3+ Pending (EnterpriseRBAC - planned after observability implementation)
+- ✅ Core services migrated to SQLAlchemy
+- ✅ All examples using PostgreSQL
+- ✅ Entity hierarchy with closure table
+- ✅ SimpleRBAC and EnterpriseRBAC presets working
 
 **PROJECT MANAGEMENT**: We use [IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md) as the primary project management tool. All phase tracking, status updates, and task breakdowns are maintained in the roadmap. Always update the roadmap when completing phases or tasks.
 
@@ -86,7 +83,8 @@ The library has a **single `OutlabsAuth` core implementation** with thin conveni
 from outlabs_auth import OutlabsAuth
 
 auth = OutlabsAuth(
-    database=mongo_client,
+    database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
+    secret_key="your-secret-key",
     enable_entity_hierarchy=True,      # Feature flags
     enable_context_aware_roles=True,
     enable_abac=True,
@@ -100,7 +98,10 @@ auth = OutlabsAuth(
 1. **SimpleRBAC** - Thin wrapper (5-10 LOC) for flat RBAC
    ```python
    from outlabs_auth import SimpleRBAC
-   auth = SimpleRBAC(database=db)
+   auth = SimpleRBAC(
+       database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
+       secret_key="your-secret-key"
+   )
    # Flat structure: users → roles → permissions
    ```
 
@@ -108,7 +109,8 @@ auth = OutlabsAuth(
    ```python
    from outlabs_auth import EnterpriseRBAC
    auth = EnterpriseRBAC(
-       database=db,
+       database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
+       secret_key="your-secret-key",
        enable_context_aware_roles=True,  # Optional features
        enable_abac=True
    )
@@ -121,39 +123,44 @@ auth = OutlabsAuth(
 
 ## Local Development Infrastructure
 
-**IMPORTANT**: All local development uses these containers:
+**IMPORTANT**: All local development uses PostgreSQL and Redis containers:
 
 ```bash
 # Check running containers
 docker ps
 
 # You should see:
-# - outlabs-mongodb (mongo:8) - Host port 27018 → Container port 27017
+# - postgres (postgres:16) - Host port 5432 → Container port 5432
 # - outlabs-redis (redis:latest) - Host port 6380 → Container port 6379
-# - local-redis (redis:latest) - Host port 6379 → Container port 6379 (legacy)
 
-# If they're not running, start them:
-docker start outlabs-mongodb outlabs-redis
+# If PostgreSQL is not running, start it:
+docker run -d --name postgres -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16
+
+# If Redis is not running, start it:
+docker run -d --name outlabs-redis -p 6380:6379 redis:latest
 ```
 
 ### Port Reference
 
 **SimpleRBAC Example** (`examples/simple_rbac/`):
 - Backend API: `http://localhost:8003`
-- MongoDB: `mongodb://localhost:27018` (database: `blog_simple_rbac`)
+- PostgreSQL: `postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac`
 - Redis: `redis://localhost:6380`
 - Admin UI: `http://localhost:3000` (when running `auth-ui`)
 
 **EnterpriseRBAC Example** (`examples/enterprise_rbac/`):
-- Backend API: `http://localhost:8004` (when implemented)
-- MongoDB: `mongodb://localhost:27018` (database: `realestate_enterprise_rbac`)
+- Backend API: `http://localhost:8004`
+- PostgreSQL: `postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac`
 - Redis: `redis://localhost:6380`
+
+**Notifications Example** (`examples/notifications/`):
+- Backend API: `http://localhost:8005`
+- PostgreSQL: `postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_notifications`
 
 **Connection Strings**:
 ```bash
 # SimpleRBAC example startup
-MONGODB_URL="mongodb://localhost:27018" \
-DATABASE_NAME="blog_simple_rbac" \
+DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac" \
 SECRET_KEY="simple-rbac-secret-key-change-in-production" \
 REDIS_URL="redis://localhost:6380" \
 uv run uvicorn main:app --port 8003 --reload
@@ -227,8 +234,7 @@ python reset_test_env.py
 
 **Configuration:**
 Uses environment variables (can override):
-- `MONGODB_URL` (default: `mongodb://localhost:27018`)
-- `DATABASE_NAME` (default: `blog_simple_rbac`)
+- `DATABASE_URL` (default: `postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac`)
 
 **Important:** This script is designed for development/testing only. Never run in production!
 
@@ -282,12 +288,14 @@ outlabsAuth/
 ├── outlabs_auth/                   # 📦 THE LIBRARY PACKAGE
 │   ├── __init__.py
 │   ├── core/                       # Base OutlabsAuth class
-│   ├── models/                     # Beanie ODM models
-│   ├── services/                   # Business logic services
+│   ├── models/                     # SQLModel/SQLAlchemy models
+│   │   └── sql/                    # PostgreSQL models (User, Role, Entity, etc.)
+│   ├── services/                   # Business logic services (SQLAlchemy async)
 │   ├── presets/                    # SimpleRBAC, EnterpriseRBAC
 │   ├── dependencies/               # FastAPI dependency injection
 │   ├── middleware/                 # Auth middleware
 │   ├── utils/                      # JWT, password hashing, etc.
+│   ├── routers/                    # FastAPI router factories
 │   └── schemas/                    # Pydantic request/response schemas
 │
 ├── examples/                       # 📁 Example applications
@@ -375,26 +383,44 @@ Following **IMPLEMENTATION_ROADMAP.md**:
 ## FastAPI Integration Example
 
 ```python
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends
+from sqlmodel import SQLModel
 from outlabs_auth import SimpleRBAC
-from outlabs_auth.dependencies import AuthDeps
 
-app = FastAPI()
-auth = SimpleRBAC(database=mongo_client)
-deps = AuthDeps(auth)
+DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/mydb"
+SECRET_KEY = "your-secret-key"
 
-# Initialize database
-await auth.initialize()
+# Global auth instance
+auth: SimpleRBAC = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global auth
+    # Initialize auth
+    auth = SimpleRBAC(database_url=DATABASE_URL, secret_key=SECRET_KEY)
+    await auth.initialize()
+
+    # Create tables
+    async with auth.engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+
+    yield
+
+    # Shutdown
+    await auth.shutdown()
+
+app = FastAPI(lifespan=lifespan)
 
 # Use in routes
 @app.get("/users/me")
-async def get_me(ctx = Depends(deps.require_auth())):
-    return ctx.metadata.get("user")
+async def get_me(user = Depends(lambda: auth.deps.authenticated())):
+    return {"id": str(user.id), "email": user.email}
 
 @app.delete("/users/{user_id}")
 async def delete_user(
     user_id: str,
-    ctx = Depends(deps.require_permission("user:delete"))
+    _ = Depends(lambda: auth.deps.require_permission("user:delete"))
 ):
     return await auth.user_service.delete_user(user_id)
 ```
@@ -443,7 +469,7 @@ All 37 design decisions documented in **DESIGN_DECISIONS.md**:
 - **DD-031**: Superseded by corrected DD-028
 
 ### Core Decisions
-- **DD-001**: MongoDB with Beanie ODM
+- **DD-001**: ~~MongoDB with Beanie ODM~~ → **DD-049**: PostgreSQL with SQLAlchemy/SQLModel
 - **DD-002**: FastAPI native (not framework-agnostic)
 - **DD-003**: Two presets (Simple, Enterprise)
 - **DD-005**: Entity hierarchy always in Enterprise
@@ -497,9 +523,17 @@ This allows the UI to **hide/show features** based on backend capabilities.
 
 ### Testing with Examples
 ```bash
+# First, ensure PostgreSQL is running
+docker run -d --name postgres -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16
+
+# Create databases for examples
+docker exec postgres psql -U postgres -c "CREATE DATABASE blog_simple_rbac;"
+docker exec postgres psql -U postgres -c "CREATE DATABASE realestate_enterprise_rbac;"
+docker exec postgres psql -U postgres -c "CREATE DATABASE outlabs_auth_notifications;"
+
 # Terminal 1: Run SimpleRBAC example
 cd examples/simple_rbac
-docker compose up -d  # MongoDB + Redis
+python reset_test_env.py  # Create test data
 uv run uvicorn main:app --port 8003 --reload
 
 # Terminal 2: Run admin UI
@@ -507,7 +541,7 @@ cd auth-ui
 bun run dev
 
 # Login at http://localhost:3000
-# system@outlabs.io / Asd123$$
+# admin@test.com / Test123!!
 ```
 
 ### Full Documentation
@@ -546,5 +580,5 @@ See **`docs/AUTH_UI.md`** for complete architecture, stores, API integration, an
 ---
 
 **Last Updated**: 2025-01-14
-**Status**: Starting Phase 1 - Core Foundation
+**Status**: PostgreSQL migration complete - All examples working
 **Branch**: library-redesign

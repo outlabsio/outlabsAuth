@@ -4,59 +4,70 @@
 
 ## Overview
 
-OutlabsAuth uses **MongoDB** with **Beanie ODM** (Object-Document Mapper) for data persistence. All models inherit from `BaseDocument` which provides common fields and functionality.
+OutlabsAuth uses **PostgreSQL** with **SQLAlchemy/SQLModel** (async) for data persistence. All models inherit from `SQLModel` with common fields and functionality.
 
-**Database**: MongoDB 4.4+
-**ODM**: Beanie (Pydantic + Motor)
-**Collections**: 13 core collections
+**Database**: PostgreSQL 14+
+**ORM**: SQLAlchemy async + SQLModel
+**Tables**: 13 core tables
 
 ---
 
 ## Model Hierarchy
 
 ```
-BaseDocument (abstract)
-├─ UserModel
-├─ RoleModel
-├─ PermissionModel
-├─ RefreshTokenModel
-├─ APIKeyModel
+SQLModel (base)
+├─ User
+├─ Role
+├─ Permission
+├─ RolePermission (junction)
+├─ RefreshToken
+├─ APIKey
+├─ APIKeyScope (junction)
 ├─ SocialAccount
-├─ OAuthState
-├─ EntityModel (EnterpriseRBAC)
-├─ EntityMembershipModel (EnterpriseRBAC)
-├─ EntityClosureModel (EnterpriseRBAC)
-├─ Condition (embedded)
-└─ ConditionGroup (embedded)
+├─ Entity (EnterpriseRBAC)
+├─ EntityMembership (EnterpriseRBAC)
+├─ EntityMembershipRole (junction)
+├─ EntityClosure (EnterpriseRBAC)
+└─ UserRoleMembership (SimpleRBAC)
 ```
 
 ---
 
-## BaseDocument
+## Base Model
 
-**Abstract base class** for all documents with common fields.
+**SQLModel base** for all tables with common patterns.
 
 ```python
-class BaseDocument(Document):
-    """Base class for all Beanie documents."""
+from uuid import uuid4
+from datetime import datetime, timezone
+from sqlmodel import SQLModel, Field
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID, TIMESTAMP
+from sqlalchemy import Column
 
-    id: Optional[PydanticObjectId] = Field(default=None, alias="_id")
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+class User(SQLModel, table=True):
+    """Example of SQLModel table definition."""
 
-    # Multi-tenant support (optional)
-    tenant_id: Optional[str] = None
+    __tablename__ = "users"
 
-    class Settings:
-        use_state_management = True  # Track dirty fields
-        validate_on_save = True  # Validate before saving
+    id: UUID = Field(
+        default_factory=uuid4,
+        sa_type=PG_UUID(as_uuid=True),
+        primary_key=True
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False)
+    )
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False)
+    )
 ```
 
-**Inherited Fields**:
-- `id` - MongoDB ObjectId (auto-generated)
-- `created_at` - Timestamp when document was created
-- `updated_at` - Timestamp when document was last modified
-- `tenant_id` - Optional tenant ID for multi-tenant applications
+**Common Fields**:
+- `id` - UUID primary key (auto-generated)
+- `created_at` - Timestamp when record was created (with timezone)
+- `updated_at` - Timestamp when record was last modified (with timezone)
 
 ---
 
@@ -1036,43 +1047,29 @@ class ActivityMetric(Document):
 
 ## Database Initialization
 
-### Setup with Beanie
+### Setup with SQLAlchemy/SQLModel
 
 ```python
-from motor.motor_asyncio import AsyncIOMotorClient
-from beanie import init_beanie
-from outlabs_auth.models import (
-    UserModel,
-    RoleModel,
-    PermissionModel,
-    RefreshTokenModel,
-    APIKeyModel,
-    SocialAccount,
-    EntityModel,  # EnterpriseRBAC
-    EntityMembershipModel,  # EnterpriseRBAC
-    EntityClosureModel  # EnterpriseRBAC
-)
+from contextlib import asynccontextmanager
+from sqlmodel import SQLModel
+from outlabs_auth import SimpleRBAC  # or EnterpriseRBAC
 
-# Connect to MongoDB
-mongo_client = AsyncIOMotorClient("mongodb://localhost:27017")
-db = mongo_client["your_database"]
+DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/mydb"
+SECRET_KEY = "your-secret-key"
 
-# Initialize Beanie with models
-await init_beanie(
-    database=db,
-    document_models=[
-        UserModel,
-        RoleModel,
-        PermissionModel,
-        RefreshTokenModel,
-        APIKeyModel,
-        SocialAccount,
-        # EnterpriseRBAC models
-        EntityModel,
-        EntityMembershipModel,
-        EntityClosureModel
-    ]
-)
+@asynccontextmanager
+async def lifespan(app):
+    # Initialize auth
+    auth = SimpleRBAC(database_url=DATABASE_URL, secret_key=SECRET_KEY)
+    await auth.initialize()
+
+    # Create all tables
+    async with auth.engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+
+    yield
+
+    await auth.shutdown()
 ```
 
 ### Initialize with OutlabsAuth
@@ -1080,8 +1077,11 @@ await init_beanie(
 ```python
 from outlabs_auth import SimpleRBAC  # or EnterpriseRBAC
 
-auth = SimpleRBAC(database=db)
-await auth.initialize()  # Automatically initializes all models
+auth = SimpleRBAC(
+    database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
+    secret_key="your-secret-key"
+)
+await auth.initialize()  # Creates engine and session factory
 ```
 
 ---
@@ -1177,8 +1177,8 @@ async with await mongo_client.start_session() as session:
 - ✅ **Condition** - ABAC condition (embedded)
 - ✅ **ConditionGroup** - Condition groups with AND/OR
 
-**Database**: MongoDB with Beanie ODM
-**Collections**: 5-10 depending on preset
+**Database**: PostgreSQL with SQLAlchemy/SQLModel (async)
+**Tables**: 5-12 depending on preset
 **Indexes**: 25+ for optimal query performance
 
 ---
@@ -1194,12 +1194,12 @@ async with await mongo_client.start_session() as session:
 
 ## Further Reading
 
-### MongoDB & Beanie
-- [MongoDB Documentation](https://docs.mongodb.com/)
-- [Beanie ODM](https://beanie-odm.dev/)
-- [Motor Async Driver](https://motor.readthedocs.io/)
+### PostgreSQL & SQLAlchemy
+- [PostgreSQL Documentation](https://www.postgresql.org/docs/)
+- [SQLAlchemy Documentation](https://docs.sqlalchemy.org/)
+- [SQLModel Documentation](https://sqlmodel.tiangolo.com/)
 
 ### Data Modeling
-- [MongoDB Schema Design Patterns](https://www.mongodb.com/blog/post/building-with-patterns-a-summary)
+- [PostgreSQL Schema Design Best Practices](https://www.postgresql.org/docs/current/ddl.html)
 - [Closure Table Pattern](https://www.slideshare.net/billkarwin/models-for-hierarchical-data)
 - [Pydantic Documentation](https://docs.pydantic.dev/)

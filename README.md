@@ -4,7 +4,7 @@
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
-[![MongoDB](https://img.shields.io/badge/MongoDB-4.4+-green.svg)](https://www.mongodb.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-blue.svg)](https://www.postgresql.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
@@ -44,16 +44,26 @@ pip install outlabs-auth
 ### Simple RBAC Example
 
 ```python
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends
+from sqlmodel import SQLModel
 from outlabs_auth import SimpleRBAC
-from outlabs_auth.dependencies import AuthDeps
 
-app = FastAPI()
-auth = SimpleRBAC(database=mongo_client)
-deps = AuthDeps(auth)
+DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/mydb"
+SECRET_KEY = "your-secret-key"
+auth: SimpleRBAC = None
 
-# Initialize database
-await auth.initialize()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global auth
+    auth = SimpleRBAC(database_url=DATABASE_URL, secret_key=SECRET_KEY)
+    await auth.initialize()
+    async with auth.engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+    yield
+    await auth.shutdown()
+
+app = FastAPI(lifespan=lifespan)
 
 # Assign role to user (uses UserRoleMembership table)
 await auth.role_service.assign_role(
@@ -64,14 +74,14 @@ await auth.role_service.assign_role(
 
 # Protected route
 @app.get("/users/me")
-async def get_me(ctx = Depends(deps.require_auth())):
-    return ctx.metadata.get("user")
+async def get_me(user = Depends(lambda: auth.deps.authenticated())):
+    return {"id": str(user.id), "email": user.email}
 
 # Permission-protected route
 @app.delete("/users/{user_id}")
 async def delete_user(
     user_id: str,
-    ctx = Depends(deps.require_permission("user:delete"))
+    _ = Depends(lambda: auth.deps.require_permission("user:delete"))
 ):
     await auth.user_service.delete_user(user_id)
     return {"success": True}
@@ -84,9 +94,13 @@ async def delete_user(
 ```python
 from outlabs_auth import EnterpriseRBAC
 
+DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/mydb"
+SECRET_KEY = "your-secret-key"
+
 # Enable entity hierarchy + optional features
 auth = EnterpriseRBAC(
-    database=mongo_client,
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
     enable_context_aware_roles=True,  # Permissions adapt by entity type
     enable_abac=True,                 # Attribute-based conditions
     redis_enabled=True,               # Enable Redis features
@@ -333,16 +347,16 @@ Implementation-specific documentation (9 files):
 
 ## Development Status
 
-**Current Version**: 1.5 (SimpleRBAC Complete + Enhanced Membership System)
+**Current Version**: 2.0 (PostgreSQL + SQLAlchemy Migration Complete)
 **Branch**: `library-redesign`
-**Status**: Phases 1-2 Complete, Phase 1.5 Complete (Beyond Plan), Phase 3+ Pending
+**Status**: PostgreSQL migration complete, all examples working
 
 ### Progress Summary
 
-✅ **Phase 1 Complete** - Core foundation + SimpleRBAC
-✅ **Phase 2 Complete** - API Keys + Multi-source Auth + Testing
-✅ **Phase 1.5 Complete** - MembershipStatus Enum, User Status System, Activity Tracking, Observability Docs
-⏸️ **Phase 3+ Pending** - EnterpriseRBAC Entity System (planned after observability implementation)
+✅ **PostgreSQL Migration Complete** - All services migrated to SQLAlchemy async
+✅ **All Examples Working** - SimpleRBAC, EnterpriseRBAC, Notifications
+✅ **Entity Hierarchy** - Closure table for O(1) tree queries
+✅ **API Keys, Multi-source Auth, Rate Limiting** - Fully functional
 
 **See [IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md) for detailed progress, implementation status, and phase breakdowns.**
 
@@ -368,7 +382,7 @@ Implementation-specific documentation (9 files):
 
 - Python 3.12+
 - FastAPI 0.100+
-- MongoDB 4.4+ (with transaction support)
+- PostgreSQL 14+ (with asyncpg driver)
 - Redis 6+ (optional, for caching)
 
 ## License

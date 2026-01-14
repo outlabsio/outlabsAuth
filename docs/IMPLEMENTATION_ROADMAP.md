@@ -1,11 +1,13 @@
 # OutlabsAuth Library - Implementation Roadmap
 
-**Version**: 1.5
-**Date**: 2025-01-25 (Updated)
+**Version**: 2.0
+**Date**: 2025-01-14 (Updated)
 **Total Duration**: 15-16 weeks (6-7 weeks core + 9 weeks extensions)
-**Status**: In Progress (Phases 1-2 Complete, Phase 1.5 Complete, Phase 3+ Pending)
+**Status**: PostgreSQL Migration Complete - All Examples Working
+**Database**: PostgreSQL with SQLAlchemy/SQLModel (async) - DD-049
 
-**Key Architectural Improvements (v1.4)**:
+**Key Architectural Improvements (v2.0)**:
+- **PostgreSQL Migration**: Complete migration from MongoDB/Beanie to PostgreSQL/SQLAlchemy (DD-049)
 - **Unified Architecture**: Single `OutlabsAuth` core with thin wrappers (DD-032)
 - **Closure Table**: O(1) tree permission queries (DD-036)
 - **Redis Counters**: 99%+ reduction in DB writes for API keys (DD-033)
@@ -25,14 +27,15 @@
 | Phase 1.5 | ✅ Complete | 2025-01-25 | Beyond plan: MembershipStatus, User Status, Activity Tracking, Logout, Observability docs |
 | Frontend Integration | ✅ Verified | 2025-01-26 | SimpleRBAC login working with auth-ui frontend |
 | Observability Implementation | ✅ Complete | 2025-11-08 | Full stack: Prometheus, Grafana, structured logging, metrics |
-| Docker Stack | ✅ Complete | 2025-11-08 | Unified compose with MongoDB, Redis, Prometheus, Grafana |
+| Docker Stack | ✅ Complete | 2025-11-08 | Unified compose with PostgreSQL, Redis, Prometheus, Grafana |
 | **Phase 3** | ✅ Complete | 2025-11-10 | **EnterpriseRBAC: Entity system, tree permissions, entity-scoped API keys** |
 | **Phase 4** | ✅ Complete | 2025-11-10 | **Context-aware roles + ABAC + Redis caching (all features already implemented from reference code)** |
 | **Phase 5** | ✅ Complete | 2025-11-10 | **Redis tests (15/15 ✅), Performance benchmarks (6/7 ✅), Integration tests (10/10 ✅)** |
-| Phase 6 | ⏸️ Not Started | - | Documentation polish |
+| **PostgreSQL Migration** | ✅ Complete | 2025-01-14 | **All services migrated to SQLAlchemy async, all examples working** |
+| Phase 6 | ✅ Complete | 2025-01-14 | Documentation updated for PostgreSQL |
 | Phase 7-10 | ⏸️ Not Started | - | Optional extensions |
 
-**Current Focus**: Testing & hardening SimpleRBAC with admin UI, verifying observability stack before Phase 3
+**Current Status**: PostgreSQL migration complete. All three examples (SimpleRBAC, EnterpriseRBAC, Notifications) working with PostgreSQL.
 
 ---
 
@@ -139,8 +142,7 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
 - [x] Basic unit tests pass (>70% coverage) - **87+ tests**
 
 ### Blockers & Risks
-- **Risk**: Beanie ODM changes from current implementation
-  - *Mitigation*: Start with MongoDB, defer PostgreSQL
+- **Risk**: ~~Beanie ODM changes from current implementation~~ RESOLVED (DD-049: Migrated to PostgreSQL/SQLAlchemy)
 - **Risk**: JWT implementation differs from current
   - *Mitigation*: Copy proven implementation from current system
 
