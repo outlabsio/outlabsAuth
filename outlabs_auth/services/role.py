@@ -159,6 +159,7 @@ class RoleService(BaseService[Role]):
         role_id: UUID,
         display_name: Optional[str] = None,
         description: Optional[str] = None,
+        is_global: Optional[bool] = None,
     ) -> Role:
         """
         Update role.
@@ -194,6 +195,9 @@ class RoleService(BaseService[Role]):
 
         if description is not None:
             role.description = description
+
+        if is_global is not None:
+            role.is_global = is_global
 
         await self.update(session, role)
         return role

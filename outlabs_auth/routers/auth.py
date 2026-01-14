@@ -68,6 +68,9 @@ def get_auth_router(
     # Create observability dependency (no auth required for public endpoints)
     get_obs = get_observability_dependency(auth.observability)
 
+    def _status_value(status_val: Any) -> str:
+        return status_val.value if hasattr(status_val, "value") else str(status_val)
+
     @router.get(
         "/config",
         response_model=AuthConfigResponse,
@@ -136,7 +139,15 @@ def get_auth_router(
                 last_name=data.last_name,
             )
             obs.log_event("user_registered", user_id=str(user.id), email=data.email)
-            return user
+            return UserResponse(
+                id=str(user.id),
+                email=user.email,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                status=_status_value(user.status),
+                email_verified=user.email_verified,
+                is_superuser=user.is_superuser,
+            )
         except HTTPException:
             raise
         except Exception as e:

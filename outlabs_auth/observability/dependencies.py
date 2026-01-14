@@ -198,6 +198,24 @@ class ObservabilityContext:
             **extra,
         )
 
+    def log_event(self, event: str, **fields: Any) -> None:
+        """
+        Log a structured event with request context.
+
+        Safe no-op when observability is disabled.
+        """
+        if not self.observability or not self.observability.logger:
+            return
+
+        self.observability.logger.info(
+            event,
+            endpoint=self.endpoint,
+            method=self.method,
+            user_id=self.user_id,
+            request_id=self.correlation_id,
+            **fields,
+        )
+
 
 def get_observability_dependency(observability_service: Optional[ObservabilityService]):
     """

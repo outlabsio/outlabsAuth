@@ -208,14 +208,16 @@ def get_roles_router(
                 permission_names=update_dict["permissions"],
             )
 
+        permission_names = await auth.role_service.get_role_permission_names(
+            session, role.id
+        )
+
         return RoleResponse(
             id=str(role.id),
             name=role.name,
             display_name=role.display_name,
             description=role.description,
-            permissions=role.get_permission_names()
-            if hasattr(role, "permissions")
-            else [],
+            permissions=permission_names,
             entity_type_permissions=None,
             is_system_role=role.is_system_role,
             is_global=role.is_global,

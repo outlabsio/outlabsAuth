@@ -255,7 +255,15 @@ def get_users_router(
             )
             obs.log_event("user_updated", user_id=obs.user_id)
             await auth.user_service.on_after_update(user, update_dict, None)
-            return user
+            return UserResponse(
+                id=str(user.id),
+                email=user.email,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                status=_get_status_value(user.status),
+                email_verified=user.email_verified,
+                is_superuser=user.is_superuser,
+            )
         except HTTPException:
             raise
         except Exception as e:
