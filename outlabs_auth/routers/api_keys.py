@@ -268,11 +268,39 @@ def get_api_keys_router(
                 status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
             )
 
-        # TODO: Implement rotate_api_key in service
-        # For now, manually rotate: create new with same settings, revoke old
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="API key rotation not yet implemented",
+        # Create new key with same settings
+        new_key, full_key = await auth.api_key_service.create_api_key(
+            session=session,
+            owner_id=api_key.owner_id,
+            name=f"{api_key.name} (rotated)",
+            scopes=api_key.scopes or [],
+            prefix_type=api_key.prefix[:7] if api_key.prefix else "sk_live",
+            ip_whitelist=api_key.ip_whitelist,
+            rate_limit_per_minute=api_key.rate_limit_per_minute,
+            expires_in_days=None,  # Keep same expiry policy - new key starts fresh
+            description=api_key.description,
+            entity_ids=api_key.entity_ids,
+        )
+
+        # Revoke old key
+        await auth.api_key_service.revoke_api_key(session, key_id)
+
+        return ApiKeyCreateResponse(
+            id=str(new_key.id),
+            prefix=new_key.prefix,
+            name=new_key.name,
+            scopes=new_key.scopes or [],
+            ip_whitelist=new_key.ip_whitelist,
+            rate_limit_per_minute=new_key.rate_limit_per_minute,
+            status=new_key.status,
+            usage_count=new_key.usage_count,
+            created_at=new_key.created_at,
+            expires_at=new_key.expires_at,
+            last_used_at=new_key.last_used_at,
+            description=new_key.description,
+            entity_ids=new_key.entity_ids,
+            owner_id=str(new_key.owner_id) if new_key.owner_id else None,
+            api_key=full_key,
         )
 
     return router

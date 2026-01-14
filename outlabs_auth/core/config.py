@@ -3,6 +3,7 @@ Configuration classes for OutlabsAuth library
 """
 
 from typing import Optional
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -188,7 +189,6 @@ class EnterpriseConfig(AuthConfig):
     allow_access_groups: bool = Field(
         default=True, description="Allow ACCESS_GROUP entities"
     )
-    allow_access_groups: bool = Field(default=True, description="Allow ACCESS_GROUP entities")
 
     # Optional Features (opt-in)
     # enable_context_aware_roles: bool - inherited from AuthConfig

@@ -5,6 +5,7 @@ Manages model registration based on feature flags (SimpleRBAC vs EnterpriseRBAC)
 """
 
 from typing import List, Type
+
 from sqlmodel import SQLModel
 
 
@@ -98,38 +99,35 @@ class ModelRegistry:
         Note:
             Models are imported lazily to avoid circular import issues.
             This method should be called after all models are defined.
-        """
-        # Lazy import to avoid circular dependencies
-        # Models will be in outlabs_auth/models/sql/
-        # For now, return empty list until models are implemented
-        # TODO: Implement after Phase 2 (Model Migration)
 
+            In practice, models self-register with SQLModel.metadata when
+            imported. The OutlabsAuth class imports models during __init__,
+            so calling SQLModel.metadata.create_all() works without needing
+            this method. This method exists for explicit control if needed.
+        """
         models: List[Type[SQLModel]] = []
 
         # Core models (always included)
-        # from outlabs_auth.models.sql.user import User
-        # from outlabs_auth.models.sql.role import Role
-        # from outlabs_auth.models.sql.permission import Permission
-        # from outlabs_auth.models.sql.token import RefreshToken
-        # from outlabs_auth.models.sql.api_key import APIKey
-        # from outlabs_auth.models.sql.social_account import SocialAccount
-        # from outlabs_auth.models.sql.oauth_state import OAuthState
-        # from outlabs_auth.models.sql.activity_metric import ActivityMetric
-        # models.extend([User, Role, Permission, RefreshToken, APIKey,
-        #                SocialAccount, OAuthState, ActivityMetric])
+        from outlabs_auth.models.sql.api_key import APIKey
+        from outlabs_auth.models.sql.permission import Permission
+        from outlabs_auth.models.sql.role import Role
+        from outlabs_auth.models.sql.token import RefreshToken
+        from outlabs_auth.models.sql.user import User
 
-        # if enable_entity_hierarchy:
-        #     # EnterpriseRBAC models
-        #     from outlabs_auth.models.sql.entity import Entity
-        #     from outlabs_auth.models.sql.entity_membership import (
-        #         EntityMembership, EntityMembershipRole
-        #     )
-        #     from outlabs_auth.models.sql.closure import EntityClosure
-        #     models.extend([Entity, EntityMembership, EntityMembershipRole, EntityClosure])
-        # else:
-        #     # SimpleRBAC models
-        #     from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
-        #     models.append(UserRoleMembership)
+        models.extend([User, Role, Permission, RefreshToken, APIKey])
+
+        if enable_entity_hierarchy:
+            # EnterpriseRBAC models
+            from outlabs_auth.models.sql.closure import EntityClosure
+            from outlabs_auth.models.sql.entity import Entity
+            from outlabs_auth.models.sql.entity_membership import EntityMembership
+
+            models.extend([Entity, EntityMembership, EntityClosure])
+        else:
+            # SimpleRBAC models
+            from outlabs_auth.models.sql.membership import UserRoleMembership
+
+            models.append(UserRoleMembership)
 
         return models
 
@@ -180,12 +178,14 @@ class ModelRegistry:
         ]
 
         if enable_entity_hierarchy:
-            tables.extend([
-                "entities",
-                "entity_memberships",
-                "entity_membership_roles",
-                "entity_closure",
-            ])
+            tables.extend(
+                [
+                    "entities",
+                    "entity_memberships",
+                    "entity_membership_roles",
+                    "entity_closure",
+                ]
+            )
         else:
             tables.append("user_role_memberships")
 

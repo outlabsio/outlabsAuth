@@ -5,13 +5,13 @@ Provides ready-to-use entity hierarchy management routes for EnterpriseRBAC.
 Uses SQLAlchemy for PostgreSQL backend.
 """
 
-from typing import Any, Generic, List, Optional, TypeVar
+from typing import Any, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.entity import (
     EntityCreateRequest,
     EntityMoveRequest,
@@ -19,19 +19,6 @@ from outlabs_auth.schemas.entity import (
     EntityUpdateRequest,
     MemberResponse,
 )
-
-# Generic paginated response
-T = TypeVar("T")
-
-
-class PaginatedResponse(BaseModel, Generic[T]):
-    """Paginated response wrapper"""
-
-    items: List[T]
-    total: int
-    page: int
-    limit: int
-    pages: int
 
 
 def _entity_to_response(entity: Any) -> EntityResponse:
