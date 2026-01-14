@@ -43,7 +43,7 @@ from outlabs_auth import (
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.models.sql.entity_membership import EntityMembershipRole
 from outlabs_auth.models.sql.enums import EntityClass
-from outlabs_auth.models.sql.role import RolePermission
+from outlabs_auth.models.sql.role import RoleCondition, RolePermission
 from outlabs_auth.utils.password import generate_password_hash
 
 # Configuration
@@ -635,6 +635,29 @@ async def reset_database():
 
         await session.commit()
         print(f"   Created {len(users_data)} test users with entity memberships\n")
+
+        # --------------------------------------------------------------------
+        # ABAC demo conditions
+        # --------------------------------------------------------------------
+        # Demonstrates ABAC is wired into permission checks. The example app also
+        # enables ABAC and accepts X-Resource-Context for resource.* attributes.
+        print("Adding ABAC demo conditions...")
+        agent_role = roles_map.get("agent")
+        if agent_role:
+            session.add(
+                RoleCondition(
+                    role_id=agent_role.id,
+                    attribute="resource.lead_status",
+                    operator="equals",
+                    value="draft",
+                    value_type="string",
+                    description="Agents can only act on draft leads (demo ABAC)",
+                )
+            )
+            await session.commit()
+            print("   Added RoleCondition: agent -> resource.lead_status == draft\n")
+        else:
+            print("   Skipped ABAC demo condition (agent role not found)\n")
 
     # Close engine
     await engine.dispose()

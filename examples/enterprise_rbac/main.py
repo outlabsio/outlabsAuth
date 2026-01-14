@@ -48,7 +48,6 @@ from outlabs_auth.services.user import UserService
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac"
     "postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac",
 )
 SECRET_KEY = os.getenv(
@@ -217,6 +216,7 @@ async def lifespan(app: FastAPI):
         redis_client=redis_client,
         redis_url=REDIS_URL if redis_client else None,
         enable_caching=redis_client is not None,
+        enable_abac=True,
         observability_config=obs_config,
     )
 
@@ -233,7 +233,12 @@ async def lifespan(app: FastAPI):
     print("Custom user service with password reset hooks enabled")
 
     # Install observability middleware, exception handlers, and /metrics (if enabled)
-    auth.instrument_fastapi(app, debug=(env != "production"), include_metrics=True)
+    auth.instrument_fastapi(
+        app,
+        debug=(env != "production"),
+        include_metrics=True,
+        include_resource_context=True,
+    )
 
     # Include standard OutlabsAuth routers with /v1 prefix
     print("Including API routers...")
@@ -327,7 +332,7 @@ def _lead_to_response(lead: Lead) -> LeadResponse:
 async def create_lead(
     data: LeadCreateRequest,
     auth_result=Depends(lambda: get_auth().deps.require_permission("lead:create")),
-    session: AsyncSession = Depends(lambda: get_auth().get_session),
+    session: AsyncSession = Depends(lambda: get_auth().uow),
 ):
     """
     Create a new lead.
@@ -369,7 +374,7 @@ async def list_leads(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     auth_result=Depends(lambda: get_auth().deps.require_permission("lead:read")),
-    session: AsyncSession = Depends(lambda: get_auth().get_session),
+    session: AsyncSession = Depends(lambda: get_auth().uow),
 ):
     """
     List leads.
@@ -422,7 +427,7 @@ async def list_leads(
 async def get_lead(
     lead_id: str,
     auth_result=Depends(lambda: get_auth().deps.require_permission("lead:read")),
-    session: AsyncSession = Depends(lambda: get_auth().get_session),
+    session: AsyncSession = Depends(lambda: get_auth().uow),
 ):
     """
     Get lead details.
@@ -448,7 +453,7 @@ async def update_lead(
     lead_id: str,
     data: LeadUpdateRequest,
     auth_result=Depends(lambda: get_auth().deps.require_permission("lead:update")),
-    session: AsyncSession = Depends(lambda: get_auth().get_session),
+    session: AsyncSession = Depends(lambda: get_auth().uow),
 ):
     """
     Update lead.
@@ -485,7 +490,7 @@ async def update_lead(
 async def delete_lead(
     lead_id: str,
     auth_result=Depends(lambda: get_auth().deps.require_permission("lead:delete")),
-    session: AsyncSession = Depends(lambda: get_auth().get_session),
+    session: AsyncSession = Depends(lambda: get_auth().uow),
 ):
     """
     Delete lead.

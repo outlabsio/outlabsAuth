@@ -15,6 +15,7 @@ Environment:
 """
 
 import asyncio
+import json
 import os
 from typing import Any
 
@@ -112,6 +113,27 @@ async def main() -> None:
 
         # Cleanup: archive the entity
         await _request(client, "DELETE", f"/entities/{child_id}")
+
+        # ABAC smoke: try to create a lead with a resource context that satisfies
+        # the seeded demo condition (resource.lead_status == "draft").
+        # This only validates that the server accepts X-Resource-Context and that
+        # ABAC is evaluated somewhere in the hot path.
+        headers = {"X-Resource-Context": json.dumps({"lead_status": "draft"})}
+        await _request(
+            client,
+            "POST",
+            "/leads",
+            json={
+                "entity_id": parent_id,
+                "first_name": "Smoke",
+                "last_name": "Lead",
+                "email": "smoke.lead@example.com",
+                "phone": "+15555550123",
+                "lead_type": "buyer",
+                "status": "draft",
+            },
+            headers=headers,
+        )
 
 
 if __name__ == "__main__":
