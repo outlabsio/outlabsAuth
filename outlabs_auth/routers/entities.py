@@ -105,7 +105,7 @@ def get_entities_router(
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
         limit: int = Query(100, ge=1, le=1000, description="Items per page"),
         auth_result=Depends(auth.deps.require_auth()),
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
     ):
         """List all entities with optional filtering and pagination."""
         try:
@@ -174,7 +174,7 @@ def get_entities_router(
     async def create_entity(
         data: EntityCreateRequest,
         auth_result=Depends(auth.deps.require_permission("entity:create")),
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
     ):
         """Create a new entity in the hierarchy."""
         try:
@@ -200,10 +200,8 @@ def get_entities_router(
                 else None,
                 status=data.status or "active",
             )
-            await session.commit()
             return _entity_to_response(entity)
         except Exception as e:
-            await session.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     @router.get(
@@ -215,7 +213,7 @@ def get_entities_router(
     async def get_entity(
         entity_id: str,
         auth_result=Depends(auth.deps.require_permission("entity:read")),
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
     ):
         """Get entity details by ID."""
         try:
@@ -242,7 +240,7 @@ def get_entities_router(
         entity_id: str,
         data: EntityUpdateRequest,
         auth_result=Depends(auth.deps.require_permission("entity:update")),
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
     ):
         """Update entity details."""
         try:
@@ -252,10 +250,8 @@ def get_entities_router(
                 entity_id=UUID(entity_id),
                 **updates,
             )
-            await session.commit()
             return _entity_to_response(entity)
         except Exception as e:
-            await session.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     @router.delete(
@@ -268,7 +264,7 @@ def get_entities_router(
         entity_id: str,
         cascade: bool = Query(False, description="Cascade delete children"),
         auth_result=Depends(auth.deps.require_permission("entity:delete")),
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
     ):
         """Delete an entity from the hierarchy."""
         try:
@@ -277,9 +273,7 @@ def get_entities_router(
                 entity_id=UUID(entity_id),
                 cascade=cascade,
             )
-            await session.commit()
         except Exception as e:
-            await session.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         return None
 
@@ -292,7 +286,7 @@ def get_entities_router(
     async def get_children(
         entity_id: str,
         auth_result=Depends(auth.deps.require_permission("entity:read")),
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
     ):
         """Get all direct children of an entity."""
         try:
@@ -313,7 +307,7 @@ def get_entities_router(
         entity_id: str,
         entity_type: Optional[str] = Query(None, description="Filter by entity type"),
         auth_result=Depends(auth.deps.require_permission("entity:read")),
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
     ):
         """Get all descendant entities (entire subtree)."""
         try:
@@ -337,7 +331,7 @@ def get_entities_router(
     async def get_entity_path(
         entity_id: str,
         auth_result=Depends(auth.deps.require_permission("entity:read")),
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
     ):
         """Get the path from root to this entity."""
         try:
@@ -359,7 +353,7 @@ def get_entities_router(
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=100),
         auth_result=Depends(auth.deps.require_permission("entity:read")),
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
     ):
         """Get all members of an entity."""
         try:

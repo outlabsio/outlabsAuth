@@ -417,7 +417,7 @@ class OutlabsAuth:
             entity_service=self.entity_service,
             membership_service=self.membership_service,
             activity_tracker=self.activity_tracker,
-            get_session=self.session,  # Shared FastAPI session dependency
+            get_session=self.uow,  # Shared per-request unit-of-work
         )
 
     def get_session(self) -> AsyncSession:
@@ -456,6 +456,31 @@ class OutlabsAuth:
         async with self._session_factory() as session:
             try:
                 yield session
+            except Exception:
+                await session.rollback()
+                raise
+
+    async def uow(self) -> AsyncGenerator[AsyncSession, None]:
+        """
+        FastAPI dependency that yields a database session and commits on success.
+
+        This implements a simple "unit of work" per-request:
+        - on success: commit
+        - on error: rollback
+        - always: close session
+
+        Use this for request handlers that perform writes, and wire auth/permission
+        dependencies to it so the whole request shares a single session.
+        """
+        if self._session_factory is None:
+            raise ConfigurationError(
+                "Database not initialized. Call await auth.initialize() first."
+            )
+
+        async with self._session_factory() as session:
+            try:
+                yield session
+                await session.commit()
             except Exception:
                 await session.rollback()
                 raise

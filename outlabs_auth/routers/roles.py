@@ -65,7 +65,7 @@ def get_roles_router(
         is_global: Optional[bool] = Query(
             None, description="Filter by global/non-global roles"
         ),
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
                 auth.observability,
@@ -122,7 +122,7 @@ def get_roles_router(
     )
     async def create_role(
         data: RoleCreateRequest,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("role:create")),
     ):
         """Create a new role."""
@@ -135,7 +135,6 @@ def get_roles_router(
                 permission_names=data.permissions,
                 is_global=data.is_global,
             )
-            await session.commit()
 
             permission_names = await auth.role_service.get_role_permission_names(
                 session, role.id
@@ -159,7 +158,6 @@ def get_roles_router(
                     error=str(e),
                     error_type=type(e).__name__,
                 )
-            await session.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     @router.get(
@@ -170,7 +168,7 @@ def get_roles_router(
     )
     async def get_role(
         role_id: str,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("role:read")),
     ):
         """Get role details by ID."""
@@ -209,7 +207,7 @@ def get_roles_router(
     async def update_role(
         role_id: str,
         data: RoleUpdateRequest,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("role:update")),
     ):
         """Update role details."""
@@ -231,7 +229,6 @@ def get_roles_router(
                     permission_names=update_dict["permissions"],
                 )
 
-            await session.commit()
             return RoleResponse(
                 id=str(role.id),
                 name=role.name,
@@ -256,7 +253,6 @@ def get_roles_router(
                     error=str(e),
                     error_type=type(e).__name__,
                 )
-            await session.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     @router.delete(
@@ -267,7 +263,7 @@ def get_roles_router(
     )
     async def delete_role(
         role_id: str,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("role:delete")),
     ):
         """Delete a role."""
@@ -277,9 +273,7 @@ def get_roles_router(
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="Role not found"
                 )
-            await session.commit()
         except Exception as e:
-            await session.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         return None
 
@@ -292,7 +286,7 @@ def get_roles_router(
     async def add_permissions(
         role_id: str,
         permissions: List[str],
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("role:update")),
     ):
         """Add permissions to a role."""
@@ -302,7 +296,6 @@ def get_roles_router(
                 role_id=UUID(role_id),
                 permission_names=permissions,
             )
-            await session.commit()
             return RoleResponse(
                 id=str(role.id),
                 name=role.name,
@@ -315,7 +308,6 @@ def get_roles_router(
                 assignable_at_types=[],
             )
         except Exception as e:
-            await session.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     @router.delete(
@@ -327,7 +319,7 @@ def get_roles_router(
     async def remove_permissions(
         role_id: str,
         permissions: List[str],
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("role:update")),
     ):
         """Remove permissions from a role."""
@@ -337,7 +329,6 @@ def get_roles_router(
                 role_id=UUID(role_id),
                 permission_names=permissions,
             )
-            await session.commit()
             return RoleResponse(
                 id=str(role.id),
                 name=role.name,
@@ -350,7 +341,6 @@ def get_roles_router(
                 assignable_at_types=[],
             )
         except Exception as e:
-            await session.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     return router

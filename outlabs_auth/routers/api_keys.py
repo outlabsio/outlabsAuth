@@ -80,7 +80,7 @@ def get_api_keys_router(
         description="List all API keys for the authenticated user",
     )
     async def list_api_keys(
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_auth()),
     ):
         """List all API keys for the current user."""
@@ -104,7 +104,7 @@ def get_api_keys_router(
     )
     async def create_api_key(
         data: ApiKeyCreateRequest,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_auth()),
     ):
         """
@@ -140,7 +140,6 @@ def get_api_keys_router(
                 description=data.description,
                 entity_id=entity_id,
             )
-            await session.commit()
 
             api_key_response = await _to_response(session, api_key_model)
             return ApiKeyCreateResponse(
@@ -148,7 +147,6 @@ def get_api_keys_router(
             )
 
         except Exception as e:
-            await session.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     @router.get(
@@ -159,7 +157,7 @@ def get_api_keys_router(
     )
     async def get_api_key(
         key_id: str,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_auth()),
     ):
         """Get API key details (without the secret key)."""
@@ -195,7 +193,7 @@ def get_api_keys_router(
     async def update_api_key(
         key_id: str,
         data: ApiKeyUpdateRequest,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_auth()),
     ):
         """Update API key settings."""
@@ -224,7 +222,6 @@ def get_api_keys_router(
             updated_key = await auth.api_key_service.update_api_key(
                 session, key_id=UUID(key_id), **updates
             )
-            await session.commit()
 
             if not updated_key:
                 raise HTTPException(
@@ -235,7 +232,6 @@ def get_api_keys_router(
         except HTTPException:
             raise
         except Exception as e:
-            await session.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     @router.delete(
@@ -246,7 +242,7 @@ def get_api_keys_router(
     )
     async def delete_api_key(
         key_id: str,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_auth()),
     ):
         """
@@ -264,12 +260,10 @@ def get_api_keys_router(
 
             # Delete (revoke)
             await auth.api_key_service.revoke_api_key(session, UUID(key_id))
-            await session.commit()
 
         except HTTPException:
             raise
         except Exception as e:
-            await session.rollback()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
         return None
@@ -282,7 +276,7 @@ def get_api_keys_router(
     )
     async def rotate_api_key(
         key_id: str,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_auth()),
     ):
         """

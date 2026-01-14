@@ -66,7 +66,7 @@ def get_permissions_router(
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
         limit: int = Query(100, ge=1, le=1000, description="Results per page"),
         resource: Optional[str] = Query(None, description="Filter by resource type"),
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
                 auth.observability,
@@ -122,7 +122,7 @@ def get_permissions_router(
     )
     async def create_permission(
         data: PermissionCreateRequest,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:create")),
     ):
         """Create a new permission."""
@@ -158,7 +158,6 @@ def get_permissions_router(
                 is_active=data.is_active,
                 tags=data.tags,
             )
-            await session.commit()
 
             permission = await auth.permission_service.get_permission_by_id(
                 session, permission.id, load_tags=True
@@ -185,7 +184,6 @@ def get_permissions_router(
         except HTTPException:
             raise
         except Exception as e:
-            await session.rollback()
             # Log error with observability
             if auth.observability:
                 auth.observability.logger.error(
@@ -202,7 +200,7 @@ def get_permissions_router(
     async def get_permission(
         permission_id: str,
         auth_result=Depends(auth.deps.require_permission("permission:read")),
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
     ):
         """Get permission details by ID."""
         try:
@@ -244,7 +242,7 @@ def get_permissions_router(
         permission_id: str,
         data: PermissionUpdateRequest,
         auth_result=Depends(auth.deps.require_permission("permission:update")),
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
     ):
         """Update permission details."""
         try:
@@ -256,7 +254,6 @@ def get_permissions_router(
                 is_active=data.is_active,
                 tags=data.tags,
             )
-            await session.commit()
 
             permission = await auth.permission_service.get_permission_by_id(
                 session, UUID(permission_id), load_tags=True
@@ -291,7 +288,6 @@ def get_permissions_router(
         except HTTPException:
             raise
         except Exception as e:
-            await session.rollback()
             if auth.observability:
                 auth.observability.logger.error(
                     "permission_update_error", error=str(e), permission_id=permission_id
@@ -306,7 +302,7 @@ def get_permissions_router(
     )
     async def delete_permission(
         permission_id: str,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:delete")),
     ):
         """Delete permission by ID."""
@@ -319,7 +315,6 @@ def get_permissions_router(
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="Permission not found"
                 )
-            await session.commit()
 
             # Log deletion
             if auth.observability:
@@ -331,7 +326,6 @@ def get_permissions_router(
         except HTTPException:
             raise
         except Exception as e:
-            await session.rollback()
             if auth.observability:
                 auth.observability.logger.error(
                     "permission_delete_error", error=str(e), permission_id=permission_id
@@ -346,7 +340,7 @@ def get_permissions_router(
     )
     async def get_my_permissions(
         entity_id: Optional[str] = None,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_auth()),
     ):
         """
@@ -372,7 +366,7 @@ def get_permissions_router(
     )
     async def check_permissions(
         data: PermissionCheckRequest,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:check")),
     ):
         """Check if a user has specific permissions."""
@@ -413,7 +407,7 @@ def get_permissions_router(
     async def get_user_permissions(
         user_id: str,
         entity_id: Optional[str] = None,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:read")),
     ):
         """Get all permissions for a user, optionally in a specific entity context."""

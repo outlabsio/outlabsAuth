@@ -119,7 +119,7 @@ def get_auth_router(
     )
     async def register(
         data: RegisterRequest,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(get_obs),
     ):
         """
@@ -135,13 +135,11 @@ def get_auth_router(
                 first_name=data.first_name,
                 last_name=data.last_name,
             )
-            await session.commit()
             obs.log_event("user_registered", user_id=str(user.id), email=data.email)
             return user
         except HTTPException:
             raise
         except Exception as e:
-            await session.rollback()
             obs.log_500_error(e, email=data.email)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -156,7 +154,7 @@ def get_auth_router(
     )
     async def login(
         data: LoginRequest,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(get_obs),
     ):
         """
@@ -169,7 +167,6 @@ def get_auth_router(
             user, tokens = await auth.auth_service.login(
                 session, email=data.email, password=data.password
             )
-            await session.commit()
 
             # Check verification requirement
             if requires_verification:
@@ -206,7 +203,7 @@ def get_auth_router(
     )
     async def refresh(
         data: RefreshRequest,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(get_obs),
     ):
         """Refresh access token using refresh token."""
@@ -214,7 +211,6 @@ def get_auth_router(
             tokens = await auth.auth_service.refresh_access_token(
                 session, data.refresh_token
             )
-            await session.commit()
             return RefreshResponse(
                 access_token=tokens.access_token,
                 refresh_token=tokens.refresh_token,
@@ -238,7 +234,7 @@ def get_auth_router(
     )
     async def logout(
         data: Optional[LogoutRequest] = None,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_auth()),
     ):
         """
@@ -295,7 +291,6 @@ def get_auth_router(
                         f"blacklist:jwt:{jti}", "revoked", ttl=remaining_ttl
                     )
 
-        await session.commit()
         return None
 
     @router.post(
@@ -306,7 +301,7 @@ def get_auth_router(
     )
     async def forgot_password(
         data: ForgotPasswordRequest,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
     ):
         """
         Request password reset.
@@ -340,7 +335,6 @@ def get_auth_router(
 
             # Generate reset token
             token = await auth.auth_service.generate_reset_token(session, user)
-            await session.commit()
 
             # Trigger hook (should send email)
             await auth.user_service.on_after_forgot_password(user, token)
@@ -362,7 +356,7 @@ def get_auth_router(
     )
     async def reset_password(
         data: ResetPasswordRequest,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(get_obs),
     ):
         """
@@ -375,7 +369,6 @@ def get_auth_router(
             user = await auth.auth_service.reset_password(
                 session, token=data.token, new_password=data.new_password
             )
-            await session.commit()
 
             # Trigger hook
             await auth.user_service.on_after_reset_password(user)

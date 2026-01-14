@@ -81,7 +81,7 @@ def get_users_router(
     )
     async def create_user(
         data: UserCreateRequest,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
                 auth.observability,
@@ -106,7 +106,6 @@ def get_users_router(
                 last_name=data.last_name,
                 is_superuser=data.is_superuser,
             )
-            await session.commit()
 
             # Trigger on_after_register hook
             await auth.user_service.on_after_register(user, None)
@@ -155,7 +154,7 @@ def get_users_router(
         search: Optional[str] = Query(
             None, description="Search by email, first name, or last name"
         ),
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
                 auth.observability,
@@ -244,7 +243,7 @@ def get_users_router(
     )
     async def update_me(
         data: UserUpdateRequest,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
                 auth.observability,
@@ -266,14 +265,12 @@ def get_users_router(
                 first_name=update_dict.get("first_name"),
                 last_name=update_dict.get("last_name"),
             )
-            await session.commit()
             obs.log_event("user_updated", user_id=obs.user_id)
             await auth.user_service.on_after_update(user, update_dict, None)
             return user
         except HTTPException:
             raise
         except Exception as e:
-            await session.rollback()
             obs.log_500_error(e)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -288,7 +285,7 @@ def get_users_router(
     )
     async def change_password(
         data: ChangePasswordRequest,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
                 auth.observability,
@@ -308,7 +305,6 @@ def get_users_router(
                 current_password=data.current_password,
                 new_password=data.new_password,
             )
-            await session.commit()
 
             # Log password change
             if auth.observability:
@@ -319,7 +315,6 @@ def get_users_router(
         except HTTPException:
             raise
         except Exception as e:
-            await session.rollback()
             obs.log_500_error(e)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -336,7 +331,7 @@ def get_users_router(
     )
     async def get_user(
         user_id: str,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
                 auth.observability,
@@ -379,7 +374,7 @@ def get_users_router(
     async def update_user(
         user_id: str,
         data: UserUpdateRequest,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
                 auth.observability,
@@ -401,7 +396,6 @@ def get_users_router(
                 first_name=update_data.get("first_name"),
                 last_name=update_data.get("last_name"),
             )
-            await session.commit()
             await auth.user_service.on_after_update(user, update_data, None)
             # TODO: Add proper observability logging for user updates
             return UserResponse(
@@ -416,7 +410,6 @@ def get_users_router(
         except HTTPException:
             raise
         except Exception as e:
-            await session.rollback()
             obs.log_500_error(e, target_user_id=user_id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -432,7 +425,7 @@ def get_users_router(
     async def admin_reset_password(
         user_id: str,
         data: AdminResetPasswordRequest,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
                 auth.observability,
@@ -455,7 +448,6 @@ def get_users_router(
                 user_id=UUID(user_id),
                 new_password=data.new_password,
             )
-            await session.commit()
 
             # Log admin password reset
             if auth.observability:
@@ -466,7 +458,6 @@ def get_users_router(
         except HTTPException:
             raise
         except Exception as e:
-            await session.rollback()
             obs.log_500_error(e, target_user_id=user_id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -483,7 +474,7 @@ def get_users_router(
     )
     async def delete_user(
         user_id: str,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
                 auth.observability,
@@ -509,7 +500,6 @@ def get_users_router(
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
                 )
-            await session.commit()
             await auth.user_service.on_after_delete(user, None)
 
             # Log event
@@ -520,7 +510,6 @@ def get_users_router(
         except HTTPException:
             raise
         except Exception as e:
-            await session.rollback()
             obs.log_500_error(e, target_user_id=user_id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -544,7 +533,7 @@ def get_users_router(
         include_inactive: bool = Query(
             False, description="Include inactive memberships"
         ),
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
                 auth.observability,
@@ -595,7 +584,7 @@ def get_users_router(
     async def assign_role_to_user_endpoint(
         user_id: str,
         data: AssignRoleRequest,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
                 auth.observability,
@@ -632,7 +621,6 @@ def get_users_router(
                 valid_from=data.valid_from,
                 valid_until=data.valid_until,
             )
-            await session.commit()
 
             # Log event
             if auth.observability:
@@ -665,7 +653,6 @@ def get_users_router(
         except HTTPException:
             raise
         except Exception as e:
-            await session.rollback()
             obs.log_500_error(e, target_user_id=user_id, role_id=data.role_id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -681,7 +668,7 @@ def get_users_router(
     async def remove_role_from_user_endpoint(
         user_id: str,
         role_id: str,
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
                 auth.observability,
@@ -709,8 +696,6 @@ def get_users_router(
                 role_id=UUID(role_id),
                 revoked_by_id=UUID(obs.user_id),
             )
-            if success:
-                await session.commit()
 
             if not success:
                 raise HTTPException(
@@ -732,7 +717,6 @@ def get_users_router(
         except HTTPException:
             raise
         except Exception as e:
-            await session.rollback()
             obs.log_500_error(e, target_user_id=user_id, role_id=role_id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -753,7 +737,7 @@ def get_users_router(
                 auth.deps.require_permission("user:read"),
             )
         ),
-        session: AsyncSession = Depends(auth.session),
+        session: AsyncSession = Depends(auth.uow),
     ):
         """
         Get all effective permissions for a user with source information.
