@@ -104,6 +104,20 @@ class AuthDeps:
     ) -> Callable:
         signature = self._get_dependency_signature()
 
+        def _parse_uuid(raw: Any, *, detail: str) -> UUID:
+            if raw is None or raw == "":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=detail,
+                )
+            try:
+                return raw if isinstance(raw, UUID) else UUID(str(raw))
+            except Exception:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=detail,
+                )
+
         def _parse_entity_context_id(request: Request) -> Optional[UUID]:
             raw = (
                 request.path_params.get("entity_id")
@@ -112,13 +126,7 @@ class AuthDeps:
             )
             if not raw:
                 return None
-            try:
-                return raw if isinstance(raw, UUID) else UUID(str(raw))
-            except Exception:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Invalid entity context ID",
-                )
+            return _parse_uuid(raw, detail="Invalid entity context ID")
 
         @with_signature(signature)
         async def dependency(
@@ -196,6 +204,209 @@ class AuthDeps:
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="Insufficient permissions",
                     )
+
+            return auth_result
+
+        return dependency
+
+    def require_entity_permission(
+        self, permission: str, entity_id_param: str = "entity_id"
+    ) -> Callable:
+        """
+        Require a permission in a specific entity context.
+
+        Entity ID is sourced in order from:
+        - path param `entity_id_param`
+        - query param `entity_id_param`
+        - `X-Entity-Context` header (only when `entity_id_param == "entity_id"`)
+        """
+        signature = self._get_dependency_signature()
+
+        def _parse_uuid(raw: Any, *, detail: str) -> UUID:
+            if raw is None or raw == "":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=detail
+                )
+            try:
+                return raw if isinstance(raw, UUID) else UUID(str(raw))
+            except Exception:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=detail
+                )
+
+        @with_signature(signature)
+        async def dependency(
+            request: Request,
+            session: Optional[AsyncSession] = None,
+            *args: Any,
+            **kwargs: Any,
+        ) -> dict:
+            auth_result = await self.require_auth()(
+                request=request, session=session, *args, **kwargs
+            )
+            if not auth_result:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+
+            permission_service = self.services.get("permission_service")
+            if not permission_service:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Permission service not configured",
+                )
+
+            user_id = auth_result.get("user_id")
+            if not user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="User ID not found in auth result",
+                )
+
+            try:
+                user_id_uuid = (
+                    user_id if isinstance(user_id, UUID) else UUID(str(user_id))
+                )
+            except Exception:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid user ID in auth result",
+                )
+
+            if session is None:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Database session not configured for auth dependencies",
+                )
+
+            raw_entity_id = request.path_params.get(
+                entity_id_param
+            ) or request.query_params.get(entity_id_param)
+            if raw_entity_id is None and entity_id_param == "entity_id":
+                raw_entity_id = request.headers.get("X-Entity-Context")
+
+            entity_id = _parse_uuid(raw_entity_id, detail="Entity ID is required")
+
+            has_perm = await permission_service.check_permission(
+                session,
+                user_id=user_id_uuid,
+                permission=permission,
+                entity_id=entity_id,
+            )
+            if not has_perm:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Insufficient permissions",
+                )
+
+            return auth_result
+
+        return dependency
+
+    def require_tree_permission(
+        self,
+        permission: str,
+        entity_id_field: str,
+        *,
+        source: str = "path",
+    ) -> Callable:
+        """
+        Require a permission in a *target* entity context, allowing inheritance
+        from ancestors via `*_tree` / `*_all` permissions.
+
+        `entity_id_field` indicates where to read the target entity ID from:
+        - `source="path"`: `request.path_params[entity_id_field]`
+        - `source="query"`: `request.query_params[entity_id_field]`
+        - `source="header"`: `request.headers[entity_id_field]`
+        - `source="body"`: JSON body field `entity_id_field`
+
+        If `source="body"` and the field is absent/null, this falls back to a
+        global permission check (useful for root-level creates).
+        """
+        if source not in ("path", "query", "header", "body"):
+            raise ValueError("source must be one of: path, query, header, body")
+
+        signature = self._get_dependency_signature()
+
+        def _parse_uuid_optional(raw: Any, *, invalid_detail: str) -> Optional[UUID]:
+            if raw is None or raw == "":
+                return None
+            try:
+                return raw if isinstance(raw, UUID) else UUID(str(raw))
+            except Exception:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=invalid_detail,
+                )
+
+        @with_signature(signature)
+        async def dependency(
+            request: Request,
+            session: Optional[AsyncSession] = None,
+            *args: Any,
+            **kwargs: Any,
+        ) -> dict:
+            auth_result = await self.require_auth()(
+                request=request, session=session, *args, **kwargs
+            )
+            if not auth_result:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+
+            permission_service = self.services.get("permission_service")
+            if not permission_service:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Permission service not configured",
+                )
+
+            user_id = auth_result.get("user_id")
+            if not user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="User ID not found in auth result",
+                )
+
+            try:
+                user_id_uuid = (
+                    user_id if isinstance(user_id, UUID) else UUID(str(user_id))
+                )
+            except Exception:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid user ID in auth result",
+                )
+
+            if session is None:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Database session not configured for auth dependencies",
+                )
+
+            raw_entity_id: Any = None
+            if source == "path":
+                raw_entity_id = request.path_params.get(entity_id_field)
+            elif source == "query":
+                raw_entity_id = request.query_params.get(entity_id_field)
+            elif source == "header":
+                raw_entity_id = request.headers.get(entity_id_field)
+            else:
+                body = await request.json()
+                if isinstance(body, dict):
+                    raw_entity_id = body.get(entity_id_field)
+
+            entity_id = _parse_uuid_optional(
+                raw_entity_id, invalid_detail=f"Invalid {entity_id_field}"
+            )
+
+            has_perm = await permission_service.check_permission(
+                session,
+                user_id=user_id_uuid,
+                permission=permission,
+                entity_id=entity_id,
+            )
+            if not has_perm:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Insufficient permissions",
+                )
 
             return auth_result
 

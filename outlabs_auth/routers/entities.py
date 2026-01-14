@@ -165,7 +165,11 @@ def get_entities_router(
     )
     async def create_entity(
         data: EntityCreateRequest,
-        auth_result=Depends(auth.deps.require_permission("entity:create")),
+        auth_result=Depends(
+            auth.require_tree_permission(
+                "entity:create", "parent_entity_id", source="body"
+            )
+        ),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Create a new entity in the hierarchy."""

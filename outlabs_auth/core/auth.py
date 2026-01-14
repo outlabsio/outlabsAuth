@@ -565,6 +565,31 @@ class OutlabsAuth:
             )
         return self._deps
 
+    # ---------------------------------------------------------------------
+    # FastAPI dependency convenience wrappers (documented API)
+    # ---------------------------------------------------------------------
+
+    def require_permission(self, *permissions: str, require_all: bool = False):
+        return self.deps.require_permission(*permissions, require_all=require_all)
+
+    def require_entity_permission(
+        self, permission: str, entity_id_param: str = "entity_id"
+    ):
+        return self.deps.require_entity_permission(
+            permission, entity_id_param=entity_id_param
+        )
+
+    def require_tree_permission(
+        self,
+        permission: str,
+        entity_id_field: str,
+        *,
+        source: str = "path",
+    ):
+        return self.deps.require_tree_permission(
+            permission, entity_id_field, source=source
+        )
+
     @property
     def is_enterprise(self) -> bool:
         """Check if entity hierarchy is enabled (EnterpriseRBAC mode)."""

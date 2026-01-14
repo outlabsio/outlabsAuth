@@ -95,7 +95,11 @@ def get_memberships_router(
     async def add_member(
         data: MembershipCreateRequest,
         session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_permission("membership:create")),
+        auth_result=Depends(
+            auth.require_tree_permission(
+                "membership:create", "entity_id", source="body"
+            )
+        ),
     ):
         """Add a user to an entity with specific roles."""
         membership = await auth.membership_service.add_member(
