@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, insert, or_, select, update
 from sqlalchemy import delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -222,6 +222,174 @@ class EntityService(BaseService[Entity]):
         await session.flush()
         await session.refresh(entity)
 
+        return entity
+
+    async def move_entity(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        new_parent_id: Optional[UUID],
+    ) -> Entity:
+        """
+        Move (re-parent) an entity to a new parent.
+
+        This updates:
+        - `entities.parent_id`
+        - `entities.depth` and materialized `entities.path` for the entire subtree
+        - `entity_closure` rows so ancestor/descendant queries stay correct
+
+        Args:
+            session: Database session
+            entity_id: Entity being moved (root of subtree)
+            new_parent_id: New parent entity ID, or None to move to root
+
+        Raises:
+            EntityNotFoundError: If entity or new parent does not exist
+            InvalidInputError: If move would create a cycle or violates hierarchy rules
+        """
+        entity = await self.get_entity(session, entity_id)
+
+        if new_parent_id == entity.parent_id:
+            return entity
+
+        if new_parent_id == entity.id:
+            raise InvalidInputError(
+                message="Entity cannot be its own parent",
+                details={"entity_id": str(entity_id)},
+            )
+
+        new_parent: Optional[Entity] = None
+        if new_parent_id is not None:
+            new_parent = await self.get_by_id(session, new_parent_id)
+            if not new_parent:
+                raise EntityNotFoundError(
+                    message="Parent entity not found",
+                    details={"parent_id": str(new_parent_id)},
+                )
+
+            # Prevent cycles: cannot move under own descendant.
+            if await self.is_ancestor_of(
+                session, ancestor_id=entity.id, descendant_id=new_parent.id
+            ):
+                raise InvalidInputError(
+                    message="Cannot move entity under its own descendant",
+                    details={
+                        "entity_id": str(entity_id),
+                        "new_parent_id": str(new_parent_id),
+                    },
+                )
+
+            # Validate hierarchy rules as if `entity` were created under new_parent.
+            await self._validate_hierarchy(
+                session,
+                parent=new_parent,
+                child_class=entity.entity_class,
+                child_type=entity.entity_type,
+            )
+
+        # Fetch subtree (descendants including self) and their depths-from-root via closure.
+        subtree_stmt = (
+            select(Entity, EntityClosure.depth)
+            .join(EntityClosure, EntityClosure.descendant_id == Entity.id)
+            .where(EntityClosure.ancestor_id == entity.id)
+            .order_by(EntityClosure.depth.asc())
+        )
+        subtree_result = await session.execute(subtree_stmt)
+        subtree_rows = subtree_result.all()
+        if not subtree_rows:
+            raise InvalidInputError(
+                message="Closure table missing subtree records for entity",
+                details={"entity_id": str(entity_id)},
+            )
+
+        subtree_depth_by_id: dict[UUID, int] = {
+            row[0].id: row[1] for row in subtree_rows
+        }
+        subtree_entities: list[Entity] = [row[0] for row in subtree_rows]
+        subtree_ids = list(subtree_depth_by_id.keys())
+
+        # Determine old/new root path prefixes for safe path rebuild.
+        old_root_path = (entity.path or "").strip() or None
+        if old_root_path and not old_root_path.endswith("/"):
+            old_root_path = old_root_path + "/"
+
+        new_parent_path = (
+            (new_parent.path if new_parent else None) if new_parent_id else None
+        )
+        if new_parent_path and not new_parent_path.endswith("/"):
+            new_parent_path = new_parent_path + "/"
+
+        new_root_path = (
+            f"/{entity.slug}/"
+            if not new_parent_path
+            else f"{new_parent_path}{entity.slug}/"
+        )
+
+        # Update entity parent pointer early (so fallbacks can read it if needed).
+        entity.parent_id = new_parent_id
+
+        # Update depth + path for entire subtree.
+        new_root_depth = (new_parent.depth + 1) if new_parent else 0
+        entities_by_id: dict[UUID, Entity] = {e.id: e for e in subtree_entities}
+
+        for node in subtree_entities:
+            rel_depth = subtree_depth_by_id.get(node.id, 0)
+            node.depth = new_root_depth + rel_depth
+
+            # Fast path: prefix replacement when old paths are consistent.
+            if old_root_path and node.path and node.path.startswith(old_root_path):
+                suffix = node.path[len(old_root_path) :]
+                node.path = f"{new_root_path}{suffix}"
+                continue
+
+            # Fallback: rebuild from (updated) parent pointers in depth order.
+            if node.id == entity.id:
+                node.path = new_root_path
+                continue
+
+            parent = entities_by_id.get(node.parent_id) if node.parent_id else None
+            parent_path = parent.path if parent else None
+            node.update_path(parent_path)
+
+        await session.flush()
+
+        # Closure maintenance:
+        # 1) Remove links from old ancestors (outside subtree) to moved subtree.
+        delete_stmt = sql_delete(EntityClosure).where(
+            EntityClosure.descendant_id.in_(subtree_ids),
+            EntityClosure.ancestor_id.notin_(subtree_ids),
+        )
+        await session.execute(delete_stmt)
+
+        # 2) Insert links from new ancestors (outside subtree) to moved subtree.
+        if new_parent is not None:
+            ancestors_stmt = select(
+                EntityClosure.ancestor_id, EntityClosure.depth
+            ).where(EntityClosure.descendant_id == new_parent.id)
+            ancestors_result = await session.execute(ancestors_stmt)
+            ancestor_rows = ancestors_result.all()  # (ancestor_id, depth_to_parent)
+
+            rows_to_insert: list[dict[str, object]] = []
+            for ancestor_id, depth_to_parent in ancestor_rows:
+                for descendant_id, depth_from_root in subtree_depth_by_id.items():
+                    rows_to_insert.append(
+                        {
+                            "ancestor_id": ancestor_id,
+                            "descendant_id": descendant_id,
+                            "depth": int(depth_to_parent) + 1 + int(depth_from_root),
+                            "tenant_id": entity.tenant_id,
+                        }
+                    )
+
+            if rows_to_insert:
+                await session.execute(insert(EntityClosure).values(rows_to_insert))
+
+        await session.flush()
+
+        # Invalidate caches affected by this move.
+        await self.invalidate_entity_tree_cache(session, entity.id)
+
+        await session.refresh(entity)
         return entity
 
     async def delete_entity(
