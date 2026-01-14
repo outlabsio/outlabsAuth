@@ -6,6 +6,7 @@ import pytest_asyncio
 from fastapi import FastAPI
 
 from outlabs_auth import OutlabsAuth
+from outlabs_auth.middleware import ResourceContextMiddleware
 from outlabs_auth.models.sql.role import RoleCondition
 from outlabs_auth.routers import get_permissions_router
 from outlabs_auth.services.role import RoleService
@@ -26,6 +27,7 @@ async def auth(test_engine) -> OutlabsAuth:
 @pytest_asyncio.fixture
 async def app(auth: OutlabsAuth) -> FastAPI:
     app = FastAPI()
+    app.add_middleware(ResourceContextMiddleware)
     app.include_router(get_permissions_router(auth, prefix="/v1/permissions"))
     return app
 
@@ -156,3 +158,61 @@ async def test_abac_role_condition_allows_when_env_matches(
         headers={"Authorization": f"Bearer {user_token}"},
     )
     assert r.status_code == 201, r.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_abac_resource_context_from_header(
+    auth: OutlabsAuth, client: httpx.AsyncClient, user_token: str
+):
+    async with auth.get_session() as session:
+        role = await auth.role_service.get_role_by_name(session, "abac_tester")
+        assert role is not None
+        await session.execute(
+            RoleCondition.__table__.delete().where(RoleCondition.role_id == role.id)
+        )
+        session.add(
+            RoleCondition(
+                role_id=role.id,
+                attribute="resource.status",
+                operator="equals",
+                value="draft",
+                value_type="string",
+            )
+        )
+        await session.commit()
+
+    # Missing/incorrect resource context should deny.
+    denied = await client.post(
+        "/v1/permissions/",
+        json={
+            "name": f"demo:{uuid.uuid4().hex[:6]}",
+            "display_name": "Demo",
+            "description": "demo",
+            "is_system": False,
+            "is_active": True,
+            "tags": [],
+        },
+        headers={
+            "Authorization": f"Bearer {user_token}",
+            "X-Resource-Context": '{"status":"published"}',
+        },
+    )
+    assert denied.status_code == 403, denied.text
+
+    allowed = await client.post(
+        "/v1/permissions/",
+        json={
+            "name": f"demo:{uuid.uuid4().hex[:6]}",
+            "display_name": "Demo",
+            "description": "demo",
+            "is_system": False,
+            "is_active": True,
+            "tags": [],
+        },
+        headers={
+            "Authorization": f"Bearer {user_token}",
+            "X-Resource-Context": '{"status":"draft"}',
+        },
+    )
+    assert allowed.status_code == 201, allowed.text

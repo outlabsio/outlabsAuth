@@ -4,10 +4,13 @@ Strategy classes define HOW authentication credentials are validated.
 Transport/Strategy separation pattern from FastAPI-Users (DD-038).
 """
 
+import logging
 from datetime import datetime, timedelta
 from typing import Any, Optional, Protocol
 
 from jose import JWTError, jwt
+
+logger = logging.getLogger(__name__)
 
 
 class Strategy(Protocol):
@@ -64,7 +67,11 @@ class JWTStrategy:
         self.redis_client = redis_client
 
     async def authenticate(
-        self, credentials: str, user_service: Any = None, session: Any = None, **kwargs: Any
+        self,
+        credentials: str,
+        user_service: Any = None,
+        session: Any = None,
+        **kwargs: Any,
     ) -> Optional[dict]:
         """
         Validate JWT token and return user data.
@@ -80,8 +87,7 @@ class JWTStrategy:
         """
         try:
             # Decode and validate JWT
-            print(f"[JWT] Decoding token...")
-            print(f"[JWT] Audience: {self.audience}")
+            logger.debug("jwt_decode_start", extra={"audience": self.audience})
             payload = jwt.decode(
                 credentials,
                 self.secret,
@@ -89,7 +95,7 @@ class JWTStrategy:
                 audience=self.audience,
                 options={"verify_exp": self.verify_exp},
             )
-            print(f"[JWT] Token decoded successfully. User ID: {payload.get('sub')}")
+            logger.debug("jwt_decode_success", extra={"user_id": payload.get("sub")})
 
             # Check Redis blacklist if available (for immediate logout)
             jti = payload.get("jti")
@@ -102,21 +108,25 @@ class JWTStrategy:
                         f"blacklist:jwt:{jti}"
                     )
                     if is_blacklisted:
-                        print(f"[JWT] Token {jti} is blacklisted")
+                        logger.info("jwt_blacklisted", extra={"jti": jti})
                         return None
 
             # Extract user ID from payload
             user_id = payload.get("sub")
             if not user_id:
-                print("[JWT] No user_id in token")
+                logger.warning("jwt_missing_sub")
                 return None
 
             # Fetch user from database (requires session for PostgreSQL)
             if user_service and session:
-                print(f"[JWT] Fetching user {user_id} from database...")
+                logger.debug("jwt_fetch_user_start", extra={"user_id": user_id})
                 user = await user_service.get_user_by_id(session, user_id)
-                print(
-                    f"[JWT] User found: {user is not None}, Can auth: {user.can_authenticate() if user else 'N/A'}"
+                logger.debug(
+                    "jwt_fetch_user_done",
+                    extra={
+                        "user_found": user is not None,
+                        "can_authenticate": user.can_authenticate() if user else None,
+                    },
                 )
                 if user and user.can_authenticate():
                     return {
@@ -127,20 +137,20 @@ class JWTStrategy:
                         "jti": jti,  # Include JTI for logout
                     }
             elif user_service:
-                print("[JWT] No session provided for database query")
+                logger.warning("jwt_missing_db_session")
             else:
-                print("[JWT] No user_service provided")
+                logger.warning("jwt_missing_user_service")
 
             return None
 
         except jwt.ExpiredSignatureError:
-            print("[JWT] Token expired")
+            logger.info("jwt_expired")
             return None
         except JWTError as e:
-            print(f"[JWT] JWT Error: {e}")
+            logger.info("jwt_invalid", extra={"error": str(e)})
             return None
         except Exception as e:
-            print(f"[JWT] Other error: {e}")
+            logger.exception("jwt_auth_error", extra={"error": str(e)})
             return None
 
 

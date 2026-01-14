@@ -701,6 +701,7 @@ class OutlabsAuth:
         *,
         debug: bool = False,
         include_metrics: bool = True,
+        include_resource_context: bool = True,
     ) -> None:
         """
         Install OutlabsAuth observability + error handling onto a FastAPI app.
@@ -722,3 +723,8 @@ class OutlabsAuth:
             app.add_middleware(CorrelationIDMiddleware, obs_service=self.observability)
             if include_metrics:
                 app.include_router(create_metrics_router(self.observability))
+
+        if include_resource_context:
+            from outlabs_auth.middleware import ResourceContextMiddleware
+
+            app.add_middleware(ResourceContextMiddleware)
