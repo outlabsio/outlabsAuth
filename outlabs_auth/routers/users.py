@@ -655,7 +655,7 @@ def get_users_router(
         """
         try:
             # Validate user exists
-            user = await auth.user_service.get_user_by_id(session, UUID(user_id))
+            user = await auth.user_service.get_user_by_id(session, user_id)
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
