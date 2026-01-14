@@ -146,3 +146,152 @@ async def test_create_entity_requires_tree_permission_in_parent(
             headers={"Authorization": f"Bearer {token_base}"},
         )
         assert r_forbidden.status_code == 403, r_forbidden.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_move_entity_requires_update_on_entity_and_create_tree_on_new_parent(
+    enterprise_app: FastAPI, enterprise_auth: EnterpriseRBAC
+):
+    async with enterprise_auth.get_session() as session:
+        # Seed permissions
+        for name in (
+            "entity:create",
+            "entity:create_tree",
+            "entity:update",
+            "entity:update_tree",
+        ):
+            await enterprise_auth.permission_service.create_permission(
+                session=session,
+                name=name,
+                display_name=name,
+                description=name,
+                is_system=True,
+            )
+
+        # Roles:
+        # - mover: can update entities (tree required by deps when entity_id context exists)
+        # - parent_creator: can create under a parent (tree)
+        mover_role = await enterprise_auth.role_service.create_role(
+            session=session,
+            name="mover",
+            display_name="mover",
+            permission_names=["entity:update_tree"],
+            is_global=False,
+        )
+        parent_creator_role = await enterprise_auth.role_service.create_role(
+            session=session,
+            name="parent_creator",
+            display_name="parent_creator",
+            permission_names=["entity:create_tree"],
+            is_global=False,
+        )
+
+        user = await enterprise_auth.user_service.create_user(
+            session=session,
+            email="mover@example.com",
+            password="TestPass123!",
+            first_name="Mover",
+            last_name="User",
+        )
+
+        # Seed entity hierarchy:
+        # old_root -> node -> leaf
+        # new_root
+        old_root = await enterprise_auth.entity_service.create_entity(
+            session=session,
+            name="old_root",
+            display_name="Old Root",
+            slug="old-root",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="root",
+        )
+        node = await enterprise_auth.entity_service.create_entity(
+            session=session,
+            name="node",
+            display_name="Node",
+            slug="node",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="node",
+            parent_id=old_root.id,
+        )
+        leaf = await enterprise_auth.entity_service.create_entity(
+            session=session,
+            name="leaf",
+            display_name="Leaf",
+            slug="leaf",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="leaf",
+            parent_id=node.id,
+        )
+        new_root = await enterprise_auth.entity_service.create_entity(
+            session=session,
+            name="new_root",
+            display_name="New Root",
+            slug="new-root",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="root",
+        )
+
+        membership_service = MembershipService(enterprise_auth.config)
+        # Must be able to update the moved entity (node context)
+        await membership_service.add_member(
+            session=session,
+            entity_id=node.id,
+            user_id=user.id,
+            role_ids=[mover_role.id],
+        )
+        # Must be able to create under the target parent (new_root context)
+        await membership_service.add_member(
+            session=session,
+            entity_id=new_root.id,
+            user_id=user.id,
+            role_ids=[parent_creator_role.id],
+        )
+
+        await session.commit()
+
+        token = await _bearer_token(enterprise_auth, str(user.id))
+
+    transport = httpx.ASGITransport(app=enterprise_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # Move node under new_root
+        r = await client.post(
+            f"/entities/{node.id}/move",
+            json={"new_parent_id": str(new_root.id)},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        moved = r.json()
+        assert moved["parent_entity_id"] == str(new_root.id)
+
+    # Verify closure/path/depth after move using the service directly.
+    async with enterprise_auth.get_session() as session:
+        node_fresh = await enterprise_auth.entity_service.get_entity(session, node.id)
+        leaf_fresh = await enterprise_auth.entity_service.get_entity(session, leaf.id)
+        old_root_fresh = await enterprise_auth.entity_service.get_entity(
+            session, old_root.id
+        )
+        new_root_fresh = await enterprise_auth.entity_service.get_entity(
+            session, new_root.id
+        )
+
+        assert node_fresh.parent_id == new_root_fresh.id
+        assert node_fresh.depth == new_root_fresh.depth + 1
+        assert leaf_fresh.depth == node_fresh.depth + 1
+
+        assert node_fresh.path == f"{new_root_fresh.path}{node_fresh.slug}/"
+        assert leaf_fresh.path == f"{node_fresh.path}{leaf_fresh.slug}/"
+
+        assert await enterprise_auth.entity_service.is_ancestor_of(
+            session, new_root_fresh.id, node_fresh.id
+        )
+        assert await enterprise_auth.entity_service.is_ancestor_of(
+            session, new_root_fresh.id, leaf_fresh.id
+        )
+        assert not await enterprise_auth.entity_service.is_ancestor_of(
+            session, old_root_fresh.id, node_fresh.id
+        )
+        assert not await enterprise_auth.entity_service.is_ancestor_of(
+            session, old_root_fresh.id, leaf_fresh.id
+        )
