@@ -17,107 +17,107 @@ __author__ = "Outlabs"
 __license__ = "MIT"
 
 # Database infrastructure
+# Core Auth Classes
+from outlabs_auth.core.auth import OutlabsAuth
+from outlabs_auth.core.config import AuthConfig
+
+# Exception classes
+from outlabs_auth.core.exceptions import (
+    AuthenticationError,
+    AuthorizationError,
+    ConfigurationError,
+    InvalidCredentialsError,
+    OutlabsAuthException,
+    PermissionDeniedError,
+    TokenExpiredError,
+    TokenInvalidError,
+    UserNotFoundError,
+)
 from outlabs_auth.database import (
+    BaseModel,
     DatabaseConfig,
+    DatabasePresets,
+    ModelRegistry,
     create_engine,
     create_session_factory,
-    DatabasePresets,
-    BaseModel,
-    ModelRegistry,
+)
+from outlabs_auth.fastapi import register_exception_handlers
+
+# Model groups for convenience
+from outlabs_auth.models.sql import (
+    ACTIVITY_MODELS,
+    ALL_MODELS,
+    API_KEY_MODELS,
+    CORE_MODELS,
+    ENTERPRISE_RBAC_MODELS,
+    OAUTH_MODELS,
+    SIMPLE_RBAC_MODELS,
 )
 
-# SQL Models - Enums
-from outlabs_auth.models.sql.enums import (
-    UserStatus,
-    MembershipStatus,
-    EntityClass,
-    APIKeyStatus,
-    ConditionOperator,
-)
-
-# SQL Models - Core
-from outlabs_auth.models.sql.user import User
-from outlabs_auth.models.sql.permission import (
-    Permission,
-    PermissionTag,
-    PermissionTagLink,
-    PermissionCondition,
-)
-from outlabs_auth.models.sql.token import RefreshToken
-from outlabs_auth.models.sql.role import (
-    Role,
-    RolePermission,
-    RoleCondition,
-    RoleEntityTypePermission,
-    ConditionGroup,
-)
-from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
-
-# SQL Models - EnterpriseRBAC
-from outlabs_auth.models.sql.entity import Entity
-from outlabs_auth.models.sql.closure import EntityClosure
-from outlabs_auth.models.sql.entity_membership import (
-    EntityMembership,
-    EntityMembershipRole,
+# SQL Models - Activity
+from outlabs_auth.models.sql.activity_metric import (
+    ActivityMetric,
+    LoginHistory,
+    UserActivity,
 )
 
 # SQL Models - API Keys
 from outlabs_auth.models.sql.api_key import (
     APIKey,
-    APIKeyScope,
     APIKeyIPWhitelist,
+    APIKeyScope,
+)
+from outlabs_auth.models.sql.closure import EntityClosure
+
+# SQL Models - EnterpriseRBAC
+from outlabs_auth.models.sql.entity import Entity
+from outlabs_auth.models.sql.entity_membership import (
+    EntityMembership,
+    EntityMembershipRole,
+)
+
+# SQL Models - Enums
+from outlabs_auth.models.sql.enums import (
+    APIKeyStatus,
+    ConditionOperator,
+    EntityClass,
+    MembershipStatus,
+    UserStatus,
+)
+from outlabs_auth.models.sql.oauth_state import OAuthState
+from outlabs_auth.models.sql.permission import (
+    Permission,
+    PermissionCondition,
+    PermissionTag,
+    PermissionTagLink,
+)
+from outlabs_auth.models.sql.role import (
+    ConditionGroup,
+    Role,
+    RoleCondition,
+    RoleEntityTypePermission,
+    RolePermission,
 )
 
 # SQL Models - OAuth
 from outlabs_auth.models.sql.social_account import SocialAccount
-from outlabs_auth.models.sql.oauth_state import OAuthState
+from outlabs_auth.models.sql.token import RefreshToken
 
-# SQL Models - Activity
-from outlabs_auth.models.sql.activity_metric import (
-    ActivityMetric,
-    UserActivity,
-    LoginHistory,
-)
-
-# Model groups for convenience
-from outlabs_auth.models.sql import (
-    ALL_MODELS,
-    CORE_MODELS,
-    SIMPLE_RBAC_MODELS,
-    ENTERPRISE_RBAC_MODELS,
-    API_KEY_MODELS,
-    OAUTH_MODELS,
-    ACTIVITY_MODELS,
-)
-
-# Core Auth Classes
-from outlabs_auth.core.auth import OutlabsAuth
-from outlabs_auth.core.config import AuthConfig
+# SQL Models - Core
+from outlabs_auth.models.sql.user import User
+from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
 
 # Presets
-from outlabs_auth.presets import SimpleRBAC, EnterpriseRBAC
+from outlabs_auth.presets import EnterpriseRBAC, SimpleRBAC
 
 # Services
 from outlabs_auth.services import (
-    BaseService,
-    UserService,
-    RoleService,
-    PermissionService,
     AuthService,
+    BaseService,
+    PermissionService,
+    RoleService,
     TokenPair,
-)
-
-# Exception classes
-from outlabs_auth.core.exceptions import (
-    OutlabsAuthException,
-    AuthenticationError,
-    AuthorizationError,
-    InvalidCredentialsError,
-    TokenExpiredError,
-    TokenInvalidError,
-    PermissionDeniedError,
-    UserNotFoundError,
-    ConfigurationError,
+    UserService,
 )
 
 __all__ = [
@@ -127,11 +127,10 @@ __all__ = [
     # Core Auth Classes
     "OutlabsAuth",
     "AuthConfig",
-
+    "register_exception_handlers",
     # Presets
     "SimpleRBAC",
     "EnterpriseRBAC",
-
     # Services
     "BaseService",
     "UserService",
@@ -139,7 +138,6 @@ __all__ = [
     "PermissionService",
     "AuthService",
     "TokenPair",
-
     # Database
     "DatabaseConfig",
     "create_engine",
@@ -147,14 +145,12 @@ __all__ = [
     "DatabasePresets",
     "BaseModel",
     "ModelRegistry",
-
     # Enums
     "UserStatus",
     "MembershipStatus",
     "EntityClass",
     "APIKeyStatus",
     "ConditionOperator",
-
     # Core Models
     "User",
     "Permission",
@@ -168,27 +164,22 @@ __all__ = [
     "RoleEntityTypePermission",
     "ConditionGroup",
     "UserRoleMembership",
-
     # EnterpriseRBAC Models
     "Entity",
     "EntityClosure",
     "EntityMembership",
     "EntityMembershipRole",
-
     # API Key Models
     "APIKey",
     "APIKeyScope",
     "APIKeyIPWhitelist",
-
     # OAuth Models
     "SocialAccount",
     "OAuthState",
-
     # Activity Models
     "ActivityMetric",
     "UserActivity",
     "LoginHistory",
-
     # Model Groups
     "ALL_MODELS",
     "CORE_MODELS",
@@ -197,8 +188,6 @@ __all__ = [
     "API_KEY_MODELS",
     "OAUTH_MODELS",
     "ACTIVITY_MODELS",
-
-    # Exceptions
     "OutlabsAuthException",
     "AuthenticationError",
     "AuthorizationError",

@@ -10,7 +10,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from outlabs_auth.core.exceptions import UserAlreadyExistsError
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.permission import PermissionResponse, UserPermissionSource
@@ -128,19 +127,11 @@ def get_users_router(
                 email_verified=user.email_verified,
                 is_superuser=user.is_superuser,
             )
-        except UserAlreadyExistsError as e:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=str(e),
-            )
         except HTTPException:
             raise
         except Exception as e:
             obs.log_500_error(e, email=data.email)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create user",
-            )
+            raise
 
     @router.get(
         "/",
@@ -209,10 +200,7 @@ def get_users_router(
 
         except Exception as e:
             obs.log_500_error(e, page=page, limit=limit, search=search)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to list users",
-            )
+            raise
 
     @router.get(
         "/me",
@@ -272,10 +260,7 @@ def get_users_router(
             raise
         except Exception as e:
             obs.log_500_error(e)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to update user profile",
-            )
+            raise
 
     @router.post(
         "/me/change-password",
@@ -316,10 +301,7 @@ def get_users_router(
             raise
         except Exception as e:
             obs.log_500_error(e)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to change password",
-            )
+            raise
 
         return None
 
@@ -330,7 +312,7 @@ def get_users_router(
         description="Get any user's profile (requires user:read permission)",
     )
     async def get_user(
-        user_id: str,
+        user_id: UUID,
         session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
@@ -341,7 +323,7 @@ def get_users_router(
     ):
         """Get user by ID (admin only)."""
         try:
-            user = await auth.user_service.get_user_by_id(session, UUID(user_id))
+            user = await auth.user_service.get_user_by_id(session, user_id)
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
@@ -359,11 +341,8 @@ def get_users_router(
         except HTTPException:
             raise
         except Exception as e:
-            obs.log_500_error(e, target_user_id=user_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to get user",
-            )
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
 
     @router.patch(
         "/{user_id}",
@@ -372,7 +351,7 @@ def get_users_router(
         description="Update any user's profile (requires user:update permission)",
     )
     async def update_user(
-        user_id: str,
+        user_id: UUID,
         data: UserUpdateRequest,
         session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
@@ -391,7 +370,7 @@ def get_users_router(
             update_data = data.model_dump(exclude_unset=True)
             user = await auth.user_service.update_user_fields(
                 session,
-                user_id=UUID(user_id),
+                user_id=user_id,
                 email=update_data.get("email"),
                 first_name=update_data.get("first_name"),
                 last_name=update_data.get("last_name"),
@@ -410,11 +389,8 @@ def get_users_router(
         except HTTPException:
             raise
         except Exception as e:
-            obs.log_500_error(e, target_user_id=user_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to update user",
-            )
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
 
     @router.patch(
         "/{user_id}/password",
@@ -423,7 +399,7 @@ def get_users_router(
         description="Reset user password without requiring current password (requires user:update permission)",
     )
     async def admin_reset_password(
-        user_id: str,
+        user_id: UUID,
         data: AdminResetPasswordRequest,
         session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
@@ -445,7 +421,7 @@ def get_users_router(
             # Change user password using user service
             await auth.user_service.change_password(
                 session,
-                user_id=UUID(user_id),
+                user_id=user_id,
                 new_password=data.new_password,
             )
 
@@ -458,11 +434,8 @@ def get_users_router(
         except HTTPException:
             raise
         except Exception as e:
-            obs.log_500_error(e, target_user_id=user_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to reset user password",
-            )
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
 
         return None
 
@@ -473,7 +446,7 @@ def get_users_router(
         description="Delete user account (requires user:delete permission)",
     )
     async def delete_user(
-        user_id: str,
+        user_id: UUID,
         session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
@@ -488,14 +461,14 @@ def get_users_router(
         Triggers on_before_delete and on_after_delete hooks.
         """
         try:
-            user = await auth.user_service.get_user_by_id(session, UUID(user_id))
+            user = await auth.user_service.get_user_by_id(session, user_id)
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
                 )
 
             await auth.user_service.on_before_delete(user, None)
-            deleted = await auth.user_service.delete_user(session, UUID(user_id))
+            deleted = await auth.user_service.delete_user(session, user_id)
             if not deleted:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
@@ -510,11 +483,8 @@ def get_users_router(
         except HTTPException:
             raise
         except Exception as e:
-            obs.log_500_error(e, target_user_id=user_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to delete user",
-            )
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
 
         return None
 
@@ -529,7 +499,7 @@ def get_users_router(
         description="Get all roles assigned to a user (requires user:read permission)",
     )
     async def get_user_roles(
-        user_id: str,
+        user_id: UUID,
         include_inactive: bool = Query(
             False, description="Include inactive memberships"
         ),
@@ -548,7 +518,7 @@ def get_users_router(
         """
         try:
             # Validate user exists
-            user = await auth.user_service.get_user_by_id(session, UUID(user_id))
+            user = await auth.user_service.get_user_by_id(session, user_id)
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
@@ -556,7 +526,7 @@ def get_users_router(
 
             # Get roles using role service
             roles = await auth.role_service.get_user_roles(
-                session, user_id=UUID(user_id), include_inactive=include_inactive
+                session, user_id=user_id, include_inactive=include_inactive
             )
 
             # Convert to response schema
@@ -568,11 +538,8 @@ def get_users_router(
         except HTTPException:
             raise
         except Exception as e:
-            obs.log_500_error(e, target_user_id=user_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to get user roles",
-            )
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
 
     @router.post(
         "/{user_id}/roles",
@@ -582,7 +549,7 @@ def get_users_router(
         description="Assign a role to a user (requires user:update permission)",
     )
     async def assign_role_to_user_endpoint(
-        user_id: str,
+        user_id: UUID,
         data: AssignRoleRequest,
         session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
@@ -599,7 +566,7 @@ def get_users_router(
         """
         try:
             # Validate user exists
-            user = await auth.user_service.get_user_by_id(session, UUID(user_id))
+            user = await auth.user_service.get_user_by_id(session, user_id)
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
@@ -615,7 +582,7 @@ def get_users_router(
             # Assign role
             membership = await auth.role_service.assign_role_to_user(
                 session,
-                user_id=UUID(user_id),
+                user_id=user_id,
                 role_id=UUID(data.role_id),
                 assigned_by_id=UUID(obs.user_id),
                 valid_from=data.valid_from,
@@ -653,11 +620,8 @@ def get_users_router(
         except HTTPException:
             raise
         except Exception as e:
-            obs.log_500_error(e, target_user_id=user_id, role_id=data.role_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to assign role",
-            )
+            obs.log_500_error(e, target_user_id=str(user_id), role_id=data.role_id)
+            raise
 
     @router.delete(
         "/{user_id}/roles/{role_id}",
@@ -666,8 +630,8 @@ def get_users_router(
         description="Revoke a role from a user (requires user:update permission)",
     )
     async def remove_role_from_user_endpoint(
-        user_id: str,
-        role_id: str,
+        user_id: UUID,
+        role_id: UUID,
         session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
@@ -692,8 +656,8 @@ def get_users_router(
             # Revoke role
             success = await auth.role_service.revoke_role_from_user(
                 session,
-                user_id=UUID(user_id),
-                role_id=UUID(role_id),
+                user_id=user_id,
+                role_id=role_id,
                 revoked_by_id=UUID(obs.user_id),
             )
 
@@ -707,8 +671,8 @@ def get_users_router(
             if auth.observability:
                 auth.observability.logger.info(
                     "role_revoked",
-                    user_id=user_id,
-                    role_id=role_id,
+                    user_id=str(user_id),
+                    role_id=str(role_id),
                     revoked_by=obs.user_id,
                 )
 
@@ -717,11 +681,8 @@ def get_users_router(
         except HTTPException:
             raise
         except Exception as e:
-            obs.log_500_error(e, target_user_id=user_id, role_id=role_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to remove role",
-            )
+            obs.log_500_error(e, target_user_id=str(user_id), role_id=str(role_id))
+            raise
 
     @router.get(
         "/{user_id}/permissions",
@@ -730,7 +691,7 @@ def get_users_router(
         description="Get all effective permissions for a user with source information (requires user:read permission)",
     )
     async def get_user_permissions(
-        user_id: str,
+        user_id: UUID,
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
                 auth.observability,
@@ -746,16 +707,14 @@ def get_users_router(
         """
         try:
             # Validate user exists
-            user = await auth.user_service.get_user_by_id(session, UUID(user_id))
+            user = await auth.user_service.get_user_by_id(session, user_id)
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
                 )
 
             # Get user's roles
-            roles = await auth.role_service.get_user_roles(
-                session, user_id=UUID(user_id)
-            )
+            roles = await auth.role_service.get_user_roles(session, user_id=user_id)
 
             # Collect permissions with their sources
             permission_sources = []
@@ -800,10 +759,7 @@ def get_users_router(
         except HTTPException:
             raise
         except Exception as e:
-            obs.log_500_error(e, target_user_id=user_id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to get user permissions",
-            )
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
 
     return router

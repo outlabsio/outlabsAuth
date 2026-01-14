@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from outlabs_auth.models.sql.enums import APIKeyStatus
 
@@ -23,7 +23,8 @@ class ApiKeyCreateRequest(BaseModel):
     )
     rate_limit_per_minute: int = Field(default=60, description="Rate limit per minute")
     expires_in_days: Optional[int] = Field(
-        default=None, description="Days until expiration (service converts to expires_at)"
+        default=None,
+        description="Days until expiration (service converts to expires_at)",
     )
     description: Optional[str] = Field(
         default=None, description="Optional key description"
@@ -51,8 +52,7 @@ class ApiKeyResponse(BaseModel):
     entity_ids: Optional[List[str]] = None
     owner_id: Optional[str] = None  # String representation of owner ID
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ApiKeyCreateResponse(ApiKeyResponse):

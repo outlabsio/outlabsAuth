@@ -141,10 +141,7 @@ def get_auth_router(
             raise
         except Exception as e:
             obs.log_500_error(e, email=data.email)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to register user",
-            )
+            raise
 
     @router.post(
         "/login",
@@ -190,10 +187,7 @@ def get_auth_router(
             raise
         except Exception as e:
             obs.log_500_error(e, email=data.email)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Login failed",
-            )
+            raise
 
     @router.post(
         "/refresh",
@@ -221,10 +215,7 @@ def get_auth_router(
             raise
         except Exception as e:
             obs.log_500_error(e)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Token refresh failed",
-            )
+            raise
 
     @router.post(
         "/logout",
@@ -378,10 +369,7 @@ def get_auth_router(
             raise
         except Exception as e:
             obs.log_500_error(e)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Password reset failed",
-            )
+            raise
 
         return None
 

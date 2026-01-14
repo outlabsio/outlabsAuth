@@ -101,68 +101,60 @@ def get_entities_router(
         entity_type: Optional[str] = Query(
             None, description="Filter by type (organization/department/team/etc)"
         ),
-        parent_id: Optional[str] = Query(None, description="Filter by parent entity"),
+        parent_id: Optional[UUID] = Query(None, description="Filter by parent entity"),
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
         limit: int = Query(100, ge=1, le=1000, description="Items per page"),
         auth_result=Depends(auth.deps.require_auth()),
         session: AsyncSession = Depends(auth.uow),
     ):
         """List all entities with optional filtering and pagination."""
-        try:
-            from sqlalchemy import func, select
+        from sqlalchemy import func, select
 
-            from outlabs_auth.models.sql.entity import Entity
-            from outlabs_auth.models.sql.enums import EntityClass
+        from outlabs_auth.models.sql.entity import Entity
+        from outlabs_auth.models.sql.enums import EntityClass
 
-            # Build query filters
-            filters = [Entity.status == "active"]
+        # Build query filters
+        filters = [Entity.status == "active"]
 
-            if entity_class:
-                try:
-                    ec = EntityClass(entity_class.upper())
-                    filters.append(Entity.entity_class == ec)
-                except ValueError:
-                    filters.append(Entity.entity_class == entity_class)
+        if entity_class:
+            try:
+                ec = EntityClass(entity_class.upper())
+                filters.append(Entity.entity_class == ec)
+            except ValueError:
+                filters.append(Entity.entity_class == entity_class)
 
-            if entity_type:
-                filters.append(Entity.entity_type == entity_type.lower())
+        if entity_type:
+            filters.append(Entity.entity_type == entity_type.lower())
 
-            if parent_id:
-                filters.append(Entity.parent_id == UUID(parent_id))
+        if parent_id:
+            filters.append(Entity.parent_id == parent_id)
 
-            # Get total count
-            count_stmt = select(func.count()).select_from(Entity).where(*filters)
-            count_result = await session.execute(count_stmt)
-            total = count_result.scalar() or 0
+        # Get total count
+        count_stmt = select(func.count()).select_from(Entity).where(*filters)
+        count_result = await session.execute(count_stmt)
+        total = count_result.scalar() or 0
 
-            # Calculate pagination
-            skip = (page - 1) * limit
-            pages = (total + limit - 1) // limit if total > 0 else 0
+        # Calculate pagination
+        skip = (page - 1) * limit
+        pages = (total + limit - 1) // limit if total > 0 else 0
 
-            # Get paginated results
-            stmt = (
-                select(Entity)
-                .where(*filters)
-                .order_by(Entity.name)
-                .offset(skip)
-                .limit(limit)
-            )
-            result = await session.execute(stmt)
-            entities = result.scalars().all()
+        # Get paginated results
+        stmt = (
+            select(Entity)
+            .where(*filters)
+            .order_by(Entity.name)
+            .offset(skip)
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        entities = result.scalars().all()
 
-            # Convert to response format
-            items = [_entity_to_response(entity) for entity in entities]
+        # Convert to response format
+        items = [_entity_to_response(entity) for entity in entities]
 
-            return PaginatedResponse(
-                items=items, total=total, page=page, limit=limit, pages=pages
-            )
-        except Exception as e:
-            import traceback
-
-            error_detail = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error_detail
-            )
+        return PaginatedResponse(
+            items=items, total=total, page=page, limit=limit, pages=pages
+        )
 
     @router.post(
         "/",
@@ -177,32 +169,27 @@ def get_entities_router(
         session: AsyncSession = Depends(auth.uow),
     ):
         """Create a new entity in the hierarchy."""
-        try:
-            from outlabs_auth.models.sql.enums import EntityClass
+        from outlabs_auth.models.sql.enums import EntityClass
 
-            # Parse entity class
-            entity_class = (
-                EntityClass(data.entity_class.upper())
-                if isinstance(data.entity_class, str)
-                else data.entity_class
-            )
+        # Parse entity class
+        entity_class = (
+            EntityClass(data.entity_class.upper())
+            if isinstance(data.entity_class, str)
+            else data.entity_class
+        )
 
-            entity = await auth.entity_service.create_entity(
-                session=session,
-                name=data.name,
-                display_name=data.display_name,
-                slug=data.slug,
-                description=data.description,
-                entity_class=entity_class,
-                entity_type=data.entity_type,
-                parent_id=UUID(data.parent_entity_id)
-                if data.parent_entity_id
-                else None,
-                status=data.status or "active",
-            )
-            return _entity_to_response(entity)
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        entity = await auth.entity_service.create_entity(
+            session=session,
+            name=data.name,
+            display_name=data.display_name,
+            slug=data.slug,
+            description=data.description,
+            entity_class=entity_class,
+            entity_type=data.entity_type,
+            parent_id=UUID(data.parent_entity_id) if data.parent_entity_id else None,
+            status=data.status or "active",
+        )
+        return _entity_to_response(entity)
 
     @router.get(
         "/{entity_id}",
@@ -211,24 +198,17 @@ def get_entities_router(
         description="Get entity details by ID",
     )
     async def get_entity(
-        entity_id: str,
+        entity_id: UUID,
         auth_result=Depends(auth.deps.require_permission("entity:read")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Get entity details by ID."""
-        try:
-            entity = await auth.entity_service.get_entity(session, UUID(entity_id))
-            if not entity:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found"
-                )
-            return _entity_to_response(entity)
-        except HTTPException:
-            raise
-        except Exception as e:
+        entity = await auth.entity_service.get_entity(session, entity_id)
+        if not entity:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+                status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found"
             )
+        return _entity_to_response(entity)
 
     @router.patch(
         "/{entity_id}",
@@ -237,22 +217,19 @@ def get_entities_router(
         description="Update entity details (requires entity:update permission)",
     )
     async def update_entity(
-        entity_id: str,
+        entity_id: UUID,
         data: EntityUpdateRequest,
         auth_result=Depends(auth.deps.require_permission("entity:update")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Update entity details."""
-        try:
-            updates = data.model_dump(exclude_unset=True)
-            entity = await auth.entity_service.update_entity(
-                session=session,
-                entity_id=UUID(entity_id),
-                **updates,
-            )
-            return _entity_to_response(entity)
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        updates = data.model_dump(exclude_unset=True)
+        entity = await auth.entity_service.update_entity(
+            session=session,
+            entity_id=entity_id,
+            **updates,
+        )
+        return _entity_to_response(entity)
 
     @router.delete(
         "/{entity_id}",
@@ -261,20 +238,17 @@ def get_entities_router(
         description="Delete entity (requires entity:delete permission)",
     )
     async def delete_entity(
-        entity_id: str,
+        entity_id: UUID,
         cascade: bool = Query(False, description="Cascade delete children"),
         auth_result=Depends(auth.deps.require_permission("entity:delete")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Delete an entity from the hierarchy."""
-        try:
-            await auth.entity_service.delete_entity(
-                session=session,
-                entity_id=UUID(entity_id),
-                cascade=cascade,
-            )
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        await auth.entity_service.delete_entity(
+            session=session,
+            entity_id=entity_id,
+            cascade=cascade,
+        )
         return None
 
     @router.get(
@@ -284,18 +258,13 @@ def get_entities_router(
         description="Get direct children of an entity",
     )
     async def get_children(
-        entity_id: str,
+        entity_id: UUID,
         auth_result=Depends(auth.deps.require_permission("entity:read")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Get all direct children of an entity."""
-        try:
-            children = await auth.entity_service.get_children(session, UUID(entity_id))
-            return [_entity_to_response(child) for child in children]
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
-            )
+        children = await auth.entity_service.get_children(session, entity_id)
+        return [_entity_to_response(child) for child in children]
 
     @router.get(
         "/{entity_id}/descendants",
@@ -304,23 +273,18 @@ def get_entities_router(
         description="Get all descendants of an entity (entire subtree)",
     )
     async def get_descendants(
-        entity_id: str,
+        entity_id: UUID,
         entity_type: Optional[str] = Query(None, description="Filter by entity type"),
         auth_result=Depends(auth.deps.require_permission("entity:read")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Get all descendant entities (entire subtree)."""
-        try:
-            descendants = await auth.entity_service.get_descendants(
-                session=session,
-                entity_id=UUID(entity_id),
-                entity_type=entity_type,
-            )
-            return [_entity_to_response(desc) for desc in descendants]
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
-            )
+        descendants = await auth.entity_service.get_descendants(
+            session=session,
+            entity_id=entity_id,
+            entity_type=entity_type,
+        )
+        return [_entity_to_response(desc) for desc in descendants]
 
     @router.get(
         "/{entity_id}/path",
@@ -329,18 +293,13 @@ def get_entities_router(
         description="Get entity path from root to this entity",
     )
     async def get_entity_path(
-        entity_id: str,
+        entity_id: UUID,
         auth_result=Depends(auth.deps.require_permission("entity:read")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Get the path from root to this entity."""
-        try:
-            path = await auth.entity_service.get_entity_path(session, UUID(entity_id))
-            return [_entity_to_response(entity) for entity in path]
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
-            )
+        path = await auth.entity_service.get_entity_path(session, entity_id)
+        return [_entity_to_response(entity) for entity in path]
 
     @router.get(
         "/{entity_id}/members",
@@ -349,56 +308,47 @@ def get_entities_router(
         description="Get all members of an entity",
     )
     async def get_entity_members(
-        entity_id: str,
+        entity_id: UUID,
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=100),
         auth_result=Depends(auth.deps.require_permission("entity:read")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Get all members of an entity."""
-        try:
-            from sqlalchemy.orm import selectinload
+        from outlabs_auth.models.sql.user import User
 
-            from outlabs_auth.models.sql.entity_membership import EntityMembership
-            from outlabs_auth.models.sql.user import User
+        # Get memberships with pagination
+        memberships, total = await auth.membership_service.get_entity_members(
+            session=session,
+            entity_id=entity_id,
+            page=page,
+            limit=limit,
+        )
 
-            # Get memberships with pagination
-            memberships, total = await auth.membership_service.get_entity_members(
-                session=session,
-                entity_id=UUID(entity_id),
-                page=page,
-                limit=limit,
-            )
-
-            # Build member responses
-            members = []
-            for membership in memberships:
-                # Get user
-                user = await session.get(User, membership.user_id)
-                if user:
-                    members.append(
-                        MemberResponse(
-                            user_id=str(user.id),
-                            email=user.email,
-                            first_name=user.first_name,
-                            last_name=user.last_name,
-                            role_ids=[str(role.id) for role in membership.roles],
-                            role_names=[role.name for role in membership.roles],
-                        )
+        # Build member responses
+        members = []
+        for membership in memberships:
+            user = await session.get(User, membership.user_id)
+            if user:
+                members.append(
+                    MemberResponse(
+                        user_id=str(user.id),
+                        email=user.email,
+                        first_name=user.first_name,
+                        last_name=user.last_name,
+                        role_ids=[str(role.id) for role in membership.roles],
+                        role_names=[role.name for role in membership.roles],
                     )
+                )
 
-            pages = (total + limit - 1) // limit if total > 0 else 0
+        pages = (total + limit - 1) // limit if total > 0 else 0
 
-            return PaginatedResponse(
-                items=members,
-                total=total,
-                page=page,
-                limit=limit,
-                pages=pages,
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
-            )
+        return PaginatedResponse(
+            items=members,
+            total=total,
+            page=page,
+            limit=limit,
+            pages=pages,
+        )
 
     return router

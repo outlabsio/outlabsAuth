@@ -5,8 +5,10 @@ Provides entity membership management routes for EnterpriseRBAC.
 """
 
 from typing import Any, List, Optional
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.schemas.membership import (
     MembershipCreateRequest,
@@ -54,61 +56,34 @@ def get_memberships_router(
         summary="Get my memberships",
         description="Get all entity memberships for the authenticated user",
     )
-    async def get_my_memberships(auth_result=Depends(auth.deps.require_auth())):
+    async def get_my_memberships(
+        auth_result=Depends(auth.deps.require_auth()),
+        session: AsyncSession = Depends(auth.uow),
+    ):
         """
         Get all entity memberships for the currently authenticated user.
 
         This endpoint is used for context switching in the admin UI.
         Users can always see their own memberships without special permissions.
 
-        For SimpleRBAC (which doesn't have entity memberships), returns empty list.
+        If membership service is not configured, returns empty list.
         """
-        try:
-            # SimpleRBAC doesn't have membership_service (no entity hierarchy)
-            # Return empty list for SimpleRBAC compatibility
-            if (
-                not hasattr(auth, "membership_service")
-                or auth.membership_service is None
-            ):
-                return []
+        if not getattr(auth, "membership_service", None):
+            return []
 
-            user_id = auth_result["user_id"]
-            memberships, _ = await auth.membership_service.get_user_entities(user_id)
-
-            # Build response with fetched Link objects
-            result = []
-            for m in memberships:
-                # Fetch Link objects if not already fetched
-                entity = (
-                    await m.entity.fetch() if hasattr(m.entity, "fetch") else m.entity
-                )
-                user = await m.user.fetch() if hasattr(m.user, "fetch") else m.user
-
-                # Fetch roles (list of Link objects)
-                role_ids = []
-                for role in m.roles:
-                    if hasattr(role, "fetch"):
-                        fetched_role = await role.fetch()
-                        role_ids.append(str(fetched_role.id))
-                    elif hasattr(role, "id"):
-                        role_ids.append(str(role.id))
-                    else:
-                        role_ids.append(str(role))
-
-                result.append(
-                    MembershipResponse(
-                        id=str(m.id),
-                        entity_id=str(entity.id),
-                        user_id=str(user.id),
-                        role_ids=role_ids,
-                    )
-                )
-
-            return result
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        user_id = UUID(auth_result["user_id"])
+        memberships, _ = await auth.membership_service.get_user_entities(
+            session=session, user_id=user_id, page=1, limit=100
+        )
+        return [
+            MembershipResponse(
+                id=str(m.id),
+                entity_id=str(m.entity_id),
+                user_id=str(m.user_id),
+                role_ids=[str(r.id) for r in m.roles],
             )
+            for m in memberships
+        ]
 
     @router.post(
         "/",
@@ -119,16 +94,22 @@ def get_memberships_router(
     )
     async def add_member(
         data: MembershipCreateRequest,
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("membership:create")),
     ):
         """Add a user to an entity with specific roles."""
-        try:
-            membership = await auth.membership_service.add_member(
-                entity_id=data.entity_id, user_id=data.user_id, role_ids=data.role_ids
-            )
-            return MembershipResponse(**membership.model_dump())
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        membership = await auth.membership_service.add_member(
+            session=session,
+            entity_id=UUID(data.entity_id),
+            user_id=UUID(data.user_id),
+            role_ids=[UUID(rid) for rid in data.role_ids],
+        )
+        return MembershipResponse(
+            id=str(membership.id),
+            entity_id=str(membership.entity_id),
+            user_id=str(membership.user_id),
+            role_ids=[str(r.id) for r in membership.roles],
+        )
 
     @router.get(
         "/entity/{entity_id}",
@@ -137,17 +118,25 @@ def get_memberships_router(
         description="Get all members of an entity (requires membership:read permission)",
     )
     async def get_entity_members(
-        entity_id: str,
+        entity_id: UUID,
+        page: int = Query(1, ge=1),
+        limit: int = Query(50, ge=1, le=100),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("membership:read")),
     ):
         """Get all members of an entity."""
-        try:
-            memberships = await auth.membership_service.get_entity_members(entity_id)
-            return [MembershipResponse(**m.model_dump()) for m in memberships]
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        memberships, _ = await auth.membership_service.get_entity_members(
+            session=session, entity_id=entity_id, page=page, limit=limit
+        )
+        return [
+            MembershipResponse(
+                id=str(m.id),
+                entity_id=str(m.entity_id),
+                user_id=str(m.user_id),
+                role_ids=[str(r.id) for r in m.roles],
             )
+            for m in memberships
+        ]
 
     @router.get(
         "/user/{user_id}",
@@ -156,17 +145,25 @@ def get_memberships_router(
         description="Get all entity memberships for a user (requires membership:read permission)",
     )
     async def get_user_memberships(
-        user_id: str,
+        user_id: UUID,
+        page: int = Query(1, ge=1),
+        limit: int = Query(50, ge=1, le=100),
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("membership:read")),
     ):
         """Get all entity memberships for a user."""
-        try:
-            memberships = await auth.membership_service.get_user_entities(user_id)
-            return [MembershipResponse(**m.model_dump()) for m in memberships]
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        memberships, _ = await auth.membership_service.get_user_entities(
+            session=session, user_id=user_id, page=page, limit=limit
+        )
+        return [
+            MembershipResponse(
+                id=str(m.id),
+                entity_id=str(m.entity_id),
+                user_id=str(m.user_id),
+                role_ids=[str(r.id) for r in m.roles],
             )
+            for m in memberships
+        ]
 
     @router.patch(
         "/{entity_id}/{user_id}",
@@ -175,19 +172,25 @@ def get_memberships_router(
         description="Update user's roles in an entity (requires membership:update permission)",
     )
     async def update_member_roles(
-        entity_id: str,
-        user_id: str,
+        entity_id: UUID,
+        user_id: UUID,
         data: MembershipUpdateRequest,
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("membership:update")),
     ):
         """Update a user's roles in an entity."""
-        try:
-            membership = await auth.membership_service.update_member_roles(
-                entity_id=entity_id, user_id=user_id, role_ids=data.role_ids
-            )
-            return MembershipResponse(**membership.model_dump())
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        membership = await auth.membership_service.update_member_roles(
+            session=session,
+            entity_id=entity_id,
+            user_id=user_id,
+            role_ids=[UUID(rid) for rid in data.role_ids],
+        )
+        return MembershipResponse(
+            id=str(membership.id),
+            entity_id=str(membership.entity_id),
+            user_id=str(membership.user_id),
+            role_ids=[str(r.id) for r in membership.roles],
+        )
 
     @router.delete(
         "/{entity_id}/{user_id}",
@@ -196,17 +199,15 @@ def get_memberships_router(
         description="Remove user from entity (requires membership:delete permission)",
     )
     async def remove_member(
-        entity_id: str,
-        user_id: str,
+        entity_id: UUID,
+        user_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("membership:delete")),
     ):
         """Remove a user from an entity."""
-        try:
-            await auth.membership_service.remove_member(
-                entity_id=entity_id, user_id=user_id
-            )
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        await auth.membership_service.remove_member(
+            session=session, entity_id=entity_id, user_id=user_id
+        )
         return None
 
     return router

@@ -1,9 +1,11 @@
 """Tests for JWT OAuth state tokens (DD-042)."""
 
-import pytest
+from datetime import datetime, timedelta, timezone
+
 import jwt
-from datetime import datetime, timedelta
-from outlabs_auth.oauth.state import generate_state_token, decode_state_token
+import pytest
+
+from outlabs_auth.oauth.state import decode_state_token, generate_state_token
 
 
 class TestOAuthStateTokens:
@@ -19,7 +21,9 @@ class TestOAuthStateTokens:
         assert len(token) > 20  # JWT tokens are long
 
         # Decode to verify structure
-        decoded = jwt.decode(token, secret, algorithms=["HS256"], audience="outlabs-auth:oauth-state")
+        decoded = jwt.decode(
+            token, secret, algorithms=["HS256"], audience="outlabs-auth:oauth-state"
+        )
         assert "aud" in decoded
         assert decoded["aud"] == "outlabs-auth:oauth-state"
         assert "exp" in decoded
@@ -33,22 +37,23 @@ class TestOAuthStateTokens:
         token = generate_state_token({"sub": user_id}, secret)
 
         # Decode and verify user_id is embedded
-        decoded = jwt.decode(token, secret, algorithms=["HS256"], audience="outlabs-auth:oauth-state")
+        decoded = jwt.decode(
+            token, secret, algorithms=["HS256"], audience="outlabs-auth:oauth-state"
+        )
         assert decoded["sub"] == user_id
         assert decoded["aud"] == "outlabs-auth:oauth-state"
 
     def test_generate_state_token_with_custom_data(self):
         """Test generating state token with custom redirect data."""
         secret = "test_secret"
-        data = {
-            "redirect_uri": "/dashboard",
-            "custom_field": "custom_value"
-        }
+        data = {"redirect_uri": "/dashboard", "custom_field": "custom_value"}
 
         token = generate_state_token(data, secret)
 
         # Decode and verify custom data
-        decoded = jwt.decode(token, secret, algorithms=["HS256"], audience="outlabs-auth:oauth-state")
+        decoded = jwt.decode(
+            token, secret, algorithms=["HS256"], audience="outlabs-auth:oauth-state"
+        )
         assert decoded["redirect_uri"] == "/dashboard"
         assert decoded["custom_field"] == "custom_value"
 
@@ -92,7 +97,7 @@ class TestOAuthStateTokens:
         # Create token with wrong audience manually
         payload = {
             "aud": "wrong-audience",
-            "exp": datetime.utcnow() + timedelta(seconds=600)
+            "exp": datetime.now(timezone.utc) + timedelta(seconds=600),
         }
         token = jwt.encode(payload, secret, algorithm="HS256")
 
@@ -107,7 +112,9 @@ class TestOAuthStateTokens:
         # Generate token with 5 minute lifetime
         token = generate_state_token({}, secret, lifetime_seconds=300)
 
-        decoded = jwt.decode(token, secret, algorithms=["HS256"], audience="outlabs-auth:oauth-state")
+        decoded = jwt.decode(
+            token, secret, algorithms=["HS256"], audience="outlabs-auth:oauth-state"
+        )
 
         # Verify token has exp and iat claims
         assert "exp" in decoded

@@ -1,11 +1,12 @@
 """Role request/response schemas."""
 
-from typing import Optional, List, Dict
-from pydantic import BaseModel, Field
+from typing import Dict, List, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RoleResponse(BaseModel):
-    """Role response schema (safe to expose)."""
+
     id: str
     name: str
     display_name: str
@@ -16,12 +17,12 @@ class RoleResponse(BaseModel):
     is_global: bool = False
     assignable_at_types: List[str] = Field(default_factory=list)
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RoleCreateRequest(BaseModel):
     """Role creation request schema."""
+
     name: str = Field(..., min_length=1, max_length=100)
     display_name: str = Field(..., min_length=1, max_length=200)
     description: Optional[str] = Field(None, max_length=500)
@@ -32,6 +33,8 @@ class RoleCreateRequest(BaseModel):
 
 
 class RoleUpdateRequest(BaseModel):
+    """Role update request schema."""
+
     """Role update request schema."""
     display_name: Optional[str] = Field(None, min_length=1, max_length=200)
     description: Optional[str] = None

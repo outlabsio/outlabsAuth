@@ -5,7 +5,8 @@ Request/response schemas for OAuth authentication endpoints.
 """
 
 from typing import Optional
-from pydantic import BaseModel, Field
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class OAuthAuthorizeResponse(BaseModel):
@@ -63,8 +64,8 @@ class SocialAccountResponse(BaseModel):
         default=None, description="Last time this account was used for login (ISO 8601)"
     )
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "provider": "google",
                 "provider_user_id": "1234567890",
@@ -76,3 +77,4 @@ class SocialAccountResponse(BaseModel):
                 "last_used_at": "2025-01-20T14:22:00Z",
             }
         }
+    )

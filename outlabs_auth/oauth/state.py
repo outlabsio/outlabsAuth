@@ -12,9 +12,10 @@ Key advantages:
 - Tamper-proof (JWT signature)
 """
 
-from typing import Dict, Any, Optional, Union
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Optional, Union
+
 import jwt
-from datetime import datetime, timedelta
 
 STATE_TOKEN_AUDIENCE = "outlabs-auth:oauth-state"
 
@@ -23,7 +24,7 @@ def generate_state_token(
     data: Optional[Dict[str, Any]] = None,
     secret: Union[str, bytes] = None,
     lifetime_seconds: int = 600,  # 10 minutes
-    algorithm: str = "HS256"
+    algorithm: str = "HS256",
 ) -> str:
     """
     Generate a signed JWT token for OAuth state (CSRF protection).
@@ -63,12 +64,14 @@ def generate_state_token(
     payload = data.copy() if data else {}
 
     # Add standard JWT claims
-    now = datetime.utcnow()
-    payload.update({
-        "aud": STATE_TOKEN_AUDIENCE,  # Audience claim (prevents token reuse)
-        "iat": now,  # Issued at
-        "exp": now + timedelta(seconds=lifetime_seconds),  # Expiration
-    })
+    now = datetime.now(timezone.utc)
+    payload.update(
+        {
+            "aud": STATE_TOKEN_AUDIENCE,  # Audience claim (prevents token reuse)
+            "iat": now,  # Issued at
+            "exp": now + timedelta(seconds=lifetime_seconds),  # Expiration
+        }
+    )
 
     # Sign the token
     token = jwt.encode(payload, secret, algorithm=algorithm)
@@ -77,9 +80,7 @@ def generate_state_token(
 
 
 def decode_state_token(
-    token: str,
-    secret: Union[str, bytes] = None,
-    algorithms: list[str] = None
+    token: str, secret: Union[str, bytes] = None, algorithms: list[str] = None
 ) -> Dict[str, Any]:
     """
     Decode and validate an OAuth state JWT token.
@@ -142,7 +143,7 @@ def decode_state_token(
                 "require_iat": True,  # Require issued at
                 "verify_exp": True,  # Verify not expired
                 "verify_aud": True,  # Verify audience
-            }
+            },
         )
         return payload
     except jwt.ExpiredSignatureError:

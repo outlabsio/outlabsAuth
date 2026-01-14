@@ -108,10 +108,7 @@ def get_roles_router(
             raise
         except Exception as e:
             obs.log_500_error(e, page=page, limit=limit, is_global=is_global)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to list roles",
-            )
+            raise
 
     @router.post(
         "/",
@@ -126,39 +123,29 @@ def get_roles_router(
         auth_result=Depends(auth.deps.require_permission("role:create")),
     ):
         """Create a new role."""
-        try:
-            role = await auth.role_service.create_role(
-                session,
-                name=data.name,
-                display_name=data.display_name,
-                description=data.description,
-                permission_names=data.permissions,
-                is_global=data.is_global,
-            )
+        role = await auth.role_service.create_role(
+            session,
+            name=data.name,
+            display_name=data.display_name,
+            description=data.description,
+            permission_names=data.permissions,
+            is_global=data.is_global,
+        )
 
-            permission_names = await auth.role_service.get_role_permission_names(
-                session, role.id
-            )
-            return RoleResponse(
-                id=str(role.id),
-                name=role.name,
-                display_name=role.display_name,
-                description=role.description,
-                permissions=permission_names,
-                entity_type_permissions=None,
-                is_system_role=role.is_system_role,
-                is_global=role.is_global,
-                assignable_at_types=[],
-            )
-        except Exception as e:
-            # Log error with observability
-            if auth.observability:
-                auth.observability.logger.error(
-                    "role_create_error",
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        permission_names = await auth.role_service.get_role_permission_names(
+            session, role.id
+        )
+        return RoleResponse(
+            id=str(role.id),
+            name=role.name,
+            display_name=role.display_name,
+            description=role.description,
+            permissions=permission_names,
+            entity_type_permissions=None,
+            is_system_role=role.is_system_role,
+            is_global=role.is_global,
+            assignable_at_types=[],
+        )
 
     @router.get(
         "/{role_id}",
@@ -167,36 +154,29 @@ def get_roles_router(
         description="Get role details by ID",
     )
     async def get_role(
-        role_id: str,
+        role_id: UUID,
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("role:read")),
     ):
         """Get role details by ID."""
-        try:
-            role = await auth.role_service.get_role_by_id(
-                session, UUID(role_id), load_permissions=True
-            )
-            if not role:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="Role not found"
-                )
-            return RoleResponse(
-                id=str(role.id),
-                name=role.name,
-                display_name=role.display_name,
-                description=role.description,
-                permissions=role.get_permission_names(),
-                entity_type_permissions=None,
-                is_system_role=role.is_system_role,
-                is_global=role.is_global,
-                assignable_at_types=[],
-            )
-        except HTTPException:
-            raise
-        except Exception as e:
+        role = await auth.role_service.get_role_by_id(
+            session, role_id, load_permissions=True
+        )
+        if not role:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+                status_code=status.HTTP_404_NOT_FOUND, detail="Role not found"
             )
+        return RoleResponse(
+            id=str(role.id),
+            name=role.name,
+            display_name=role.display_name,
+            description=role.description,
+            permissions=role.get_permission_names(),
+            entity_type_permissions=None,
+            is_system_role=role.is_system_role,
+            is_global=role.is_global,
+            assignable_at_types=[],
+        )
 
     @router.patch(
         "/{role_id}",
@@ -205,55 +185,42 @@ def get_roles_router(
         description="Update role details (requires role:update permission)",
     )
     async def update_role(
-        role_id: str,
+        role_id: UUID,
         data: RoleUpdateRequest,
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("role:update")),
     ):
         """Update role details."""
-        try:
-            update_dict = data.model_dump(exclude_unset=True)
+        update_dict = data.model_dump(exclude_unset=True)
 
-            role = await auth.role_service.update_role(
+        role = await auth.role_service.update_role(
+            session,
+            role_id=role_id,
+            display_name=update_dict.get("display_name"),
+            description=update_dict.get("description"),
+            is_global=update_dict.get("is_global"),
+        )
+
+        if "permissions" in update_dict and update_dict["permissions"] is not None:
+            role = await auth.role_service.set_permissions_by_name(
                 session,
-                role_id=UUID(role_id),
-                display_name=update_dict.get("display_name"),
-                description=update_dict.get("description"),
-                is_global=update_dict.get("is_global"),
+                role_id=role_id,
+                permission_names=update_dict["permissions"],
             )
 
-            if "permissions" in update_dict and update_dict["permissions"] is not None:
-                role = await auth.role_service.set_permissions_by_name(
-                    session,
-                    role_id=UUID(role_id),
-                    permission_names=update_dict["permissions"],
-                )
-
-            return RoleResponse(
-                id=str(role.id),
-                name=role.name,
-                display_name=role.display_name,
-                description=role.description,
-                permissions=role.get_permission_names()
-                if hasattr(role, "permissions")
-                else [],
-                entity_type_permissions=None,
-                is_system_role=role.is_system_role,
-                is_global=role.is_global,
-                assignable_at_types=[],
-            )
-        except HTTPException:
-            raise
-        except Exception as e:
-            # Log error with observability
-            if auth.observability:
-                auth.observability.logger.error(
-                    "role_update_error",
-                    role_id=role_id,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        return RoleResponse(
+            id=str(role.id),
+            name=role.name,
+            display_name=role.display_name,
+            description=role.description,
+            permissions=role.get_permission_names()
+            if hasattr(role, "permissions")
+            else [],
+            entity_type_permissions=None,
+            is_system_role=role.is_system_role,
+            is_global=role.is_global,
+            assignable_at_types=[],
+        )
 
     @router.delete(
         "/{role_id}",
@@ -262,19 +229,16 @@ def get_roles_router(
         description="Delete role (requires role:delete permission)",
     )
     async def delete_role(
-        role_id: str,
+        role_id: UUID,
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("role:delete")),
     ):
         """Delete a role."""
-        try:
-            deleted = await auth.role_service.delete_role(session, UUID(role_id))
-            if not deleted:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="Role not found"
-                )
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        deleted = await auth.role_service.delete_role(session, role_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Role not found"
+            )
         return None
 
     @router.post(
@@ -284,31 +248,28 @@ def get_roles_router(
         description="Add permissions to role (requires role:update permission)",
     )
     async def add_permissions(
-        role_id: str,
+        role_id: UUID,
         permissions: List[str],
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("role:update")),
     ):
         """Add permissions to a role."""
-        try:
-            role = await auth.role_service.add_permissions_by_name(
-                session,
-                role_id=UUID(role_id),
-                permission_names=permissions,
-            )
-            return RoleResponse(
-                id=str(role.id),
-                name=role.name,
-                display_name=role.display_name,
-                description=role.description,
-                permissions=role.get_permission_names(),
-                entity_type_permissions=None,
-                is_system_role=role.is_system_role,
-                is_global=role.is_global,
-                assignable_at_types=[],
-            )
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        role = await auth.role_service.add_permissions_by_name(
+            session,
+            role_id=role_id,
+            permission_names=permissions,
+        )
+        return RoleResponse(
+            id=str(role.id),
+            name=role.name,
+            display_name=role.display_name,
+            description=role.description,
+            permissions=role.get_permission_names(),
+            entity_type_permissions=None,
+            is_system_role=role.is_system_role,
+            is_global=role.is_global,
+            assignable_at_types=[],
+        )
 
     @router.delete(
         "/{role_id}/permissions",
@@ -317,30 +278,27 @@ def get_roles_router(
         description="Remove permissions from role (requires role:update permission)",
     )
     async def remove_permissions(
-        role_id: str,
+        role_id: UUID,
         permissions: List[str],
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("role:update")),
     ):
         """Remove permissions from a role."""
-        try:
-            role = await auth.role_service.remove_permissions_by_name(
-                session,
-                role_id=UUID(role_id),
-                permission_names=permissions,
-            )
-            return RoleResponse(
-                id=str(role.id),
-                name=role.name,
-                display_name=role.display_name,
-                description=role.description,
-                permissions=role.get_permission_names(),
-                entity_type_permissions=None,
-                is_system_role=role.is_system_role,
-                is_global=role.is_global,
-                assignable_at_types=[],
-            )
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        role = await auth.role_service.remove_permissions_by_name(
+            session,
+            role_id=role_id,
+            permission_names=permissions,
+        )
+        return RoleResponse(
+            id=str(role.id),
+            name=role.name,
+            display_name=role.display_name,
+            description=role.description,
+            permissions=role.get_permission_names(),
+            entity_type_permissions=None,
+            is_system_role=role.is_system_role,
+            is_global=role.is_global,
+            assignable_at_types=[],
+        )
 
     return router

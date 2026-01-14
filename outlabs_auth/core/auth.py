@@ -10,6 +10,7 @@ import asyncio
 from typing import Any, AsyncGenerator, Dict, Optional, Type
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from starlette.requests import Request
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import ConfigurationError
@@ -460,17 +461,18 @@ class OutlabsAuth:
                 await session.rollback()
                 raise
 
-    async def uow(self) -> AsyncGenerator[AsyncSession, None]:
+    async def uow(self, request: Request) -> AsyncGenerator[AsyncSession, None]:
         """
-        FastAPI dependency that yields a database session and commits on success.
+        FastAPI dependency that yields a database session and commits on success for
+        write HTTP methods.
 
         This implements a simple "unit of work" per-request:
-        - on success: commit
+        - on success: commit for write methods (POST/PUT/PATCH/DELETE), else rollback
         - on error: rollback
         - always: close session
 
-        Use this for request handlers that perform writes, and wire auth/permission
-        dependencies to it so the whole request shares a single session.
+        Use this for request handlers and wire auth/permission dependencies to it
+        so the whole request shares a single session.
         """
         if self._session_factory is None:
             raise ConfigurationError(
@@ -480,7 +482,10 @@ class OutlabsAuth:
         async with self._session_factory() as session:
             try:
                 yield session
-                await session.commit()
+                if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+                    await session.commit()
+                else:
+                    await session.rollback()
             except Exception:
                 await session.rollback()
                 raise

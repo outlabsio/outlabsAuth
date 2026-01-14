@@ -8,9 +8,11 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
+from pydantic import ConfigDict
 from sqlalchemy import event
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID, TIMESTAMP
-from sqlmodel import SQLModel, Field
+from sqlalchemy.dialects.postgresql import TIMESTAMP
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlmodel import Field, SQLModel
 
 
 class BaseModel(SQLModel):
@@ -65,12 +67,10 @@ class BaseModel(SQLModel):
     # Note: tenant_id is NOT indexed here. Each table defines its own
     # tenant_id index in __table_args__ for proper naming.
 
-    class Config:
-        """Pydantic/SQLModel configuration."""
-        # Allow arbitrary types (needed for some PostgreSQL types)
-        arbitrary_types_allowed = True
-        # Use enum values instead of names
-        use_enum_values = True
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        use_enum_values=True,
+    )
 
 
 def update_timestamp_on_save(mapper, connection, target):

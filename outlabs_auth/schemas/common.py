@@ -1,9 +1,10 @@
 """Common schemas shared across the library."""
 
-from typing import Generic, TypeVar, List
-from pydantic import BaseModel, Field
+from typing import Generic, List, TypeVar
 
-T = TypeVar('T')
+from pydantic import BaseModel, ConfigDict, Field
+
+T = TypeVar("T")
 
 
 class PaginatedResponse(BaseModel, Generic[T]):
@@ -26,11 +27,11 @@ class PaginatedResponse(BaseModel, Generic[T]):
             )
         ```
     """
+
     items: List[T] = Field(description="List of items for the current page")
     total: int = Field(description="Total number of items across all pages")
     page: int = Field(description="Current page number (1-indexed)")
     limit: int = Field(description="Number of items per page")
     pages: int = Field(description="Total number of pages")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

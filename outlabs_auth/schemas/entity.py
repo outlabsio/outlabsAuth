@@ -1,12 +1,14 @@
 """Entity request/response schemas."""
 
-from typing import Optional, List, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class EntityResponse(BaseModel):
     """Entity response schema (safe to expose)."""
+
     id: str
     name: str
     display_name: str
@@ -24,12 +26,12 @@ class EntityResponse(BaseModel):
     allowed_child_types: List[str] = Field(default_factory=list)
     max_members: Optional[int] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class EntityCreateRequest(BaseModel):
     """Entity creation request schema."""
+
     name: str = Field(..., min_length=1, max_length=100)
     display_name: str = Field(..., min_length=1, max_length=200)
     slug: str = Field(..., min_length=1, max_length=100)
@@ -49,6 +51,7 @@ class EntityCreateRequest(BaseModel):
 
 class EntityUpdateRequest(BaseModel):
     """Entity update request schema."""
+
     display_name: Optional[str] = Field(None, min_length=1, max_length=200)
     description: Optional[str] = None
     status: Optional[str] = Field(None, pattern="^(active|inactive|archived)$")
@@ -63,6 +66,7 @@ class EntityUpdateRequest(BaseModel):
 
 class MemberResponse(BaseModel):
     """Entity member response schema."""
+
     user_id: str
     email: str
     first_name: Optional[str] = None
@@ -70,5 +74,4 @@ class MemberResponse(BaseModel):
     role_ids: List[str] = Field(default_factory=list)
     role_names: List[str] = Field(default_factory=list)
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
