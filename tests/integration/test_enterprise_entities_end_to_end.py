@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from outlabs_auth import EnterpriseRBAC
 from outlabs_auth.models.sql.enums import EntityClass
 from outlabs_auth.routers.entities import get_entities_router
+from outlabs_auth.routers.memberships import get_memberships_router
 from outlabs_auth.services.membership import MembershipService
 from outlabs_auth.utils.jwt import create_access_token
 
@@ -25,6 +26,7 @@ async def enterprise_auth(test_engine) -> EnterpriseRBAC:
 async def enterprise_app(enterprise_auth: EnterpriseRBAC) -> FastAPI:
     app = FastAPI()
     app.include_router(get_entities_router(enterprise_auth, prefix="/entities"))
+    app.include_router(get_memberships_router(enterprise_auth, prefix="/memberships"))
     return app
 
 
@@ -295,3 +297,121 @@ async def test_move_entity_requires_update_on_entity_and_create_tree_on_new_pare
         assert not await enterprise_auth.entity_service.is_ancestor_of(
             session, old_root_fresh.id, leaf_fresh.id
         )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_add_member_requires_membership_create_tree_in_target_context(
+    enterprise_app: FastAPI, enterprise_auth: EnterpriseRBAC
+):
+    async with enterprise_auth.get_session() as session:
+        # Seed permissions
+        for name in ("membership:create", "membership:create_tree"):
+            await enterprise_auth.permission_service.create_permission(
+                session=session,
+                name=name,
+                display_name=name,
+                description=name,
+                is_system=True,
+            )
+
+        # Create roles
+        membership_tree_role = await enterprise_auth.role_service.create_role(
+            session=session,
+            name="membership_tree",
+            display_name="membership_tree",
+            permission_names=["membership:create_tree"],
+            is_global=False,
+        )
+        membership_base_role = await enterprise_auth.role_service.create_role(
+            session=session,
+            name="membership_base",
+            display_name="membership_base",
+            permission_names=["membership:create"],
+            is_global=False,
+        )
+
+        # Create users
+        admin_tree = await enterprise_auth.user_service.create_user(
+            session=session,
+            email="member-tree@example.com",
+            password="TestPass123!",
+            first_name="Member",
+            last_name="Tree",
+        )
+        admin_base = await enterprise_auth.user_service.create_user(
+            session=session,
+            email="member-base@example.com",
+            password="TestPass123!",
+            first_name="Member",
+            last_name="Base",
+        )
+        target_user = await enterprise_auth.user_service.create_user(
+            session=session,
+            email="target@example.com",
+            password="TestPass123!",
+            first_name="Target",
+            last_name="User",
+        )
+
+        # Entity hierarchy: org -> team
+        org = await enterprise_auth.entity_service.create_entity(
+            session=session,
+            name="org_membership",
+            display_name="Org",
+            slug="org-membership",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
+        team = await enterprise_auth.entity_service.create_entity(
+            session=session,
+            name="team_membership",
+            display_name="Team",
+            slug="team-membership",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="team",
+            parent_id=org.id,
+        )
+
+        membership_service = MembershipService(enterprise_auth.config)
+        await membership_service.add_member(
+            session=session,
+            entity_id=org.id,
+            user_id=admin_tree.id,
+            role_ids=[membership_tree_role.id],
+        )
+        await membership_service.add_member(
+            session=session,
+            entity_id=org.id,
+            user_id=admin_base.id,
+            role_ids=[membership_base_role.id],
+        )
+
+        await session.commit()
+
+        token_tree = await _bearer_token(enterprise_auth, str(admin_tree.id))
+        token_base = await _bearer_token(enterprise_auth, str(admin_base.id))
+
+    transport = httpx.ASGITransport(app=enterprise_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        payload = {
+            "entity_id": str(team.id),
+            "user_id": str(target_user.id),
+            "role_ids": [],
+        }
+
+        r_ok = await client.post(
+            "/memberships/",
+            json=payload,
+            headers={"Authorization": f"Bearer {token_tree}"},
+        )
+        assert r_ok.status_code == 201, r_ok.text
+
+        # Base permission should not cascade to descendants.
+        payload["user_id"] = payload["user_id"]  # explicit, same payload structure
+        r_forbidden = await client.post(
+            "/memberships/",
+            json=payload,
+            headers={"Authorization": f"Bearer {token_base}"},
+        )
+        assert r_forbidden.status_code == 403, r_forbidden.text
