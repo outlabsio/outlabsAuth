@@ -22,19 +22,15 @@ from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
+from models import Lead, LeadNote
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import SQLModel
 
-from models import Lead, LeadNote
-
 from outlabs_auth import EnterpriseRBAC
 from outlabs_auth.models.sql.user import User
-from outlabs_auth.observability import (
-    ObservabilityPresets,
-    create_metrics_router,
-)
+from outlabs_auth.observability import ObservabilityPresets
 from outlabs_auth.routers import (
     get_api_keys_router,
     get_auth_router,
@@ -53,6 +49,7 @@ from outlabs_auth.services.user import UserService
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac"
+    "postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac",
 )
 SECRET_KEY = os.getenv(
     "SECRET_KEY", "enterprise-rbac-secret-change-in-production-please"
@@ -235,6 +232,9 @@ async def lifespan(app: FastAPI):
     auth.user_service = RealEstateUserService(config=auth.config)
     print("Custom user service with password reset hooks enabled")
 
+    # Install observability middleware, exception handlers, and /metrics (if enabled)
+    auth.instrument_fastapi(app, debug=(env != "production"), include_metrics=True)
+
     # Include standard OutlabsAuth routers with /v1 prefix
     print("Including API routers...")
     app.include_router(get_auth_router(auth, prefix="/v1/auth"))
@@ -245,12 +245,11 @@ async def lifespan(app: FastAPI):
     app.include_router(get_entities_router(auth, prefix="/v1/entities"))
     app.include_router(get_memberships_router(auth, prefix="/v1/memberships"))
 
-    # Include observability metrics endpoint
-    app.include_router(create_metrics_router(auth.observability))
-
     print("Routers included (including /metrics for Prometheus)")
     print("Real Estate API (EnterpriseRBAC) started successfully")
-    print(f"Database: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else DATABASE_URL}")
+    print(
+        f"Database: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else DATABASE_URL}"
+    )
     print(f"API: http://localhost:8004")
     print(f"Docs: http://localhost:8004/docs")
 
@@ -542,19 +541,43 @@ async def get_auth_config():
         "available_permissions": [
             # User permissions
             {"value": "user:read", "label": "User Read", "category": "Users"},
-            {"value": "user:read_tree", "label": "User Read (Tree)", "category": "Users"},
+            {
+                "value": "user:read_tree",
+                "label": "User Read (Tree)",
+                "category": "Users",
+            },
             {"value": "user:create", "label": "User Create", "category": "Users"},
             {"value": "user:update", "label": "User Update", "category": "Users"},
             {"value": "user:delete", "label": "User Delete", "category": "Users"},
             # Entity permissions
             {"value": "entity:read", "label": "Entity Read", "category": "Entities"},
-            {"value": "entity:read_tree", "label": "Entity Read (Tree)", "category": "Entities"},
-            {"value": "entity:create", "label": "Entity Create", "category": "Entities"},
-            {"value": "entity:update", "label": "Entity Update", "category": "Entities"},
-            {"value": "entity:delete", "label": "Entity Delete", "category": "Entities"},
+            {
+                "value": "entity:read_tree",
+                "label": "Entity Read (Tree)",
+                "category": "Entities",
+            },
+            {
+                "value": "entity:create",
+                "label": "Entity Create",
+                "category": "Entities",
+            },
+            {
+                "value": "entity:update",
+                "label": "Entity Update",
+                "category": "Entities",
+            },
+            {
+                "value": "entity:delete",
+                "label": "Entity Delete",
+                "category": "Entities",
+            },
             # Lead permissions
             {"value": "lead:read", "label": "Lead Read", "category": "Leads"},
-            {"value": "lead:read_tree", "label": "Lead Read (Tree)", "category": "Leads"},
+            {
+                "value": "lead:read_tree",
+                "label": "Lead Read (Tree)",
+                "category": "Leads",
+            },
             {"value": "lead:create", "label": "Lead Create", "category": "Leads"},
             {"value": "lead:update", "label": "Lead Update", "category": "Leads"},
             {"value": "lead:delete", "label": "Lead Delete", "category": "Leads"},
@@ -564,14 +587,38 @@ async def get_auth_config():
             {"value": "role:update", "label": "Role Update", "category": "Roles"},
             {"value": "role:delete", "label": "Role Delete", "category": "Roles"},
             # Permission permissions
-            {"value": "permission:read", "label": "Permission Read", "category": "Permissions"},
-            {"value": "permission:create", "label": "Permission Create", "category": "Permissions"},
-            {"value": "permission:update", "label": "Permission Update", "category": "Permissions"},
-            {"value": "permission:delete", "label": "Permission Delete", "category": "Permissions"},
+            {
+                "value": "permission:read",
+                "label": "Permission Read",
+                "category": "Permissions",
+            },
+            {
+                "value": "permission:create",
+                "label": "Permission Create",
+                "category": "Permissions",
+            },
+            {
+                "value": "permission:update",
+                "label": "Permission Update",
+                "category": "Permissions",
+            },
+            {
+                "value": "permission:delete",
+                "label": "Permission Delete",
+                "category": "Permissions",
+            },
             # API Key permissions
             {"value": "api_key:read", "label": "API Key Read", "category": "API Keys"},
-            {"value": "api_key:create", "label": "API Key Create", "category": "API Keys"},
-            {"value": "api_key:revoke", "label": "API Key Revoke", "category": "API Keys"},
+            {
+                "value": "api_key:create",
+                "label": "API Key Create",
+                "category": "API Keys",
+            },
+            {
+                "value": "api_key:revoke",
+                "label": "API Key Revoke",
+                "category": "API Keys",
+            },
         ],
     }
 

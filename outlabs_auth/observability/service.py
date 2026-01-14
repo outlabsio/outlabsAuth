@@ -12,6 +12,9 @@ from typing import Any, Dict, Optional
 
 import structlog
 from prometheus_client import Counter, Gauge, Histogram
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from .config import LogsFormat, LogsLevel, ObservabilityConfig, PermissionCheckLogging
 
@@ -60,6 +63,8 @@ class ObservabilityService:
 
         # Prometheus metrics (will be initialized in initialize())
         self.metrics: Dict[str, Any] = {}
+        self._sqlalchemy_instrumented: bool = False
+        self._sqlalchemy_engine_id: Optional[int] = None
 
     async def initialize(self) -> None:
         """
@@ -99,6 +104,64 @@ class ObservabilityService:
                 pass
 
         self.logger.info("observability_shutdown")
+
+    def instrument_sqlalchemy(self, engine: Optional[AsyncEngine]) -> None:
+        """
+        Instrument SQLAlchemy engine to emit `db_query` logs/metrics.
+
+        Uses SQLAlchemy cursor events to time query execution (DBAPI-level).
+        """
+        if not engine or not self.config.log_db_queries:
+            return
+
+        if self._sqlalchemy_instrumented and self._sqlalchemy_engine_id == id(engine):
+            return
+
+        sync_engine: Engine = engine.sync_engine
+
+        import time
+
+        def before_cursor_execute(
+            conn,
+            cursor,
+            statement,
+            parameters,
+            context,
+            executemany,
+        ):
+            conn.info.setdefault("outlabs_auth_query_start_time", []).append(
+                time.perf_counter()
+            )
+
+        def after_cursor_execute(
+            conn,
+            cursor,
+            statement,
+            parameters,
+            context,
+            executemany,
+        ):
+            start_stack = conn.info.get("outlabs_auth_query_start_time")
+            start = start_stack.pop() if start_stack else None
+            if start is None:
+                return
+
+            duration_ms = (time.perf_counter() - start) * 1000.0
+            operation = (statement or "").lstrip().split(" ", 1)[0].lower() or "unknown"
+
+            # Avoid logging parameters; they may contain secrets/PII.
+            self.log_db_query(
+                operation=operation,
+                duration_ms=duration_ms,
+                collection=None,
+                executemany=bool(executemany),
+            )
+
+        event.listen(sync_engine, "before_cursor_execute", before_cursor_execute)
+        event.listen(sync_engine, "after_cursor_execute", after_cursor_execute)
+
+        self._sqlalchemy_instrumented = True
+        self._sqlalchemy_engine_id = id(engine)
 
     def _configure_structlog(self) -> None:
         """Configure structlog for structured logging."""

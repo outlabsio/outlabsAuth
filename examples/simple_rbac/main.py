@@ -21,14 +21,14 @@ from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from models import BlogPost, Comment
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import SQLModel
 
-from models import BlogPost, Comment
 from outlabs_auth import SimpleRBAC, User
-from outlabs_auth.database import create_engine, create_session_factory, DatabaseConfig
+from outlabs_auth.database import DatabaseConfig, create_engine, create_session_factory
 
 # ============================================================================
 # Configuration
@@ -36,7 +36,7 @@ from outlabs_auth.database import create_engine, create_session_factory, Databas
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac"
+    "postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac",
 )
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production-please")
 REDIS_URL = os.getenv("REDIS_URL", None)
@@ -138,6 +138,9 @@ async def lifespan(app: FastAPI):
 
     await auth.initialize()
     print("✅ OutlabsAuth initialized")
+
+    # Install centralized exception handlers (and observability if configured)
+    auth.instrument_fastapi(app, debug=True, include_metrics=True)
 
     # Create blog-specific tables if they don't exist
     print("📝 Creating blog tables...")
@@ -372,7 +375,12 @@ class UserResponse(BaseModel):
         from_attributes = True
 
 
-@app.post("/v1/auth/login", response_model=TokenResponse, tags=["Auth"], summary="Login with email/password")
+@app.post(
+    "/v1/auth/login",
+    response_model=TokenResponse,
+    tags=["Auth"],
+    summary="Login with email/password",
+)
 async def login(
     data: LoginRequest,
     request: Request,
@@ -411,7 +419,12 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
-@app.post("/v1/auth/refresh", response_model=TokenResponse, tags=["Auth"], summary="Refresh access token")
+@app.post(
+    "/v1/auth/refresh",
+    response_model=TokenResponse,
+    tags=["Auth"],
+    summary="Refresh access token",
+)
 async def refresh_token(
     data: RefreshRequest,
     session: AsyncSession = Depends(get_session),
@@ -469,7 +482,12 @@ async def logout(
     return {"message": "Logged out successfully"}
 
 
-@app.get("/v1/auth/me", response_model=UserResponse, tags=["Auth"], summary="Get current user")
+@app.get(
+    "/v1/auth/me",
+    response_model=UserResponse,
+    tags=["Auth"],
+    summary="Get current user",
+)
 async def get_me(
     authorization: str = Header(..., alias="Authorization"),
     session: AsyncSession = Depends(get_session),
@@ -483,7 +501,9 @@ async def get_me(
     if authorization.startswith("Bearer "):
         token = authorization[7:]
     else:
-        raise HTTPException(status_code=401, detail="Invalid authorization header format")
+        raise HTTPException(
+            status_code=401, detail="Invalid authorization header format"
+        )
 
     # Verify token and get user
     user = await auth_instance.auth_service.get_current_user(
@@ -558,7 +578,9 @@ async def create_post(
 
 @app.get("/posts", response_model=dict, tags=["Posts"], summary="List blog posts")
 async def list_posts(
-    post_status: Optional[str] = Query(None, alias="status", description="Filter by status"),
+    post_status: Optional[str] = Query(
+        None, alias="status", description="Filter by status"
+    ),
     author_id: Optional[str] = Query(None, description="Filter by author"),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
@@ -583,6 +605,7 @@ async def list_posts(
 
     # Count total
     from sqlalchemy import func
+
     count_stmt = select(func.count()).select_from(BlogPost).where(*filters)
     total_result = await session.execute(count_stmt)
     total = total_result.scalar() or 0
@@ -909,12 +932,28 @@ async def get_auth_config():
             {"value": "role:update", "label": "Role Update", "category": "Roles"},
             {"value": "role:delete", "label": "Role Delete", "category": "Roles"},
             # Permission permissions
-            {"value": "permission:read", "label": "Permission Read", "category": "Permissions"},
-            {"value": "permission:create", "label": "Permission Create", "category": "Permissions"},
+            {
+                "value": "permission:read",
+                "label": "Permission Read",
+                "category": "Permissions",
+            },
+            {
+                "value": "permission:create",
+                "label": "Permission Create",
+                "category": "Permissions",
+            },
             # API Key permissions
             {"value": "api_key:read", "label": "API Key Read", "category": "API Keys"},
-            {"value": "api_key:create", "label": "API Key Create", "category": "API Keys"},
-            {"value": "api_key:revoke", "label": "API Key Revoke", "category": "API Keys"},
+            {
+                "value": "api_key:create",
+                "label": "API Key Create",
+                "category": "API Keys",
+            },
+            {
+                "value": "api_key:revoke",
+                "label": "API Key Revoke",
+                "category": "API Keys",
+            },
             # Blog-specific permissions
             {"value": "post:read", "label": "Post Read", "category": "Blog"},
             {"value": "post:create", "label": "Post Create", "category": "Blog"},

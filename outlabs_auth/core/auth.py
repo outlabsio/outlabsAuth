@@ -9,6 +9,7 @@ All features are controlled by configuration flags.
 import asyncio
 from typing import Any, AsyncGenerator, Dict, Optional, Type
 
+from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from starlette.requests import Request
 
@@ -261,6 +262,7 @@ class OutlabsAuth:
 
             self.observability = ObservabilityService(self.observability_config)
             await self.observability.initialize()
+            self.observability.instrument_sqlalchemy(self._engine)
 
         # Initialize services
         await self._init_services()
@@ -323,9 +325,13 @@ class OutlabsAuth:
 
         # Entity and membership services for EnterpriseRBAC
         if self.config.enable_entity_hierarchy:
-            # TODO: Implement EntityService and MembershipService for PostgreSQL
-            self.entity_service = None
-            self.membership_service = None
+            from outlabs_auth.services.entity import EntityService
+            from outlabs_auth.services.membership import MembershipService
+
+            self.entity_service = EntityService(
+                self.config, redis_client=self.redis_client
+            )
+            self.membership_service = MembershipService(self.config)
 
         # API Key service
         self.api_key_service = APIKeyService(
@@ -657,6 +663,37 @@ class OutlabsAuth:
         if self.redis_client:
             await self.redis_client.disconnect()
 
+        if self.observability:
+            await self.observability.shutdown()
+
         # Close database engine
         if self._engine:
             await self._engine.dispose()
+
+    def instrument_fastapi(
+        self,
+        app: FastAPI,
+        *,
+        debug: bool = False,
+        include_metrics: bool = True,
+    ) -> None:
+        """
+        Install OutlabsAuth observability + error handling onto a FastAPI app.
+
+        - Correlation ID middleware (if observability enabled)
+        - Centralized exception handlers (uses observability for logging)
+        - /metrics endpoint (if enabled and include_metrics=True)
+        """
+        from outlabs_auth.fastapi import register_exception_handlers
+
+        register_exception_handlers(app, debug=debug, observability=self.observability)
+
+        if self.observability:
+            from outlabs_auth.observability import (
+                CorrelationIDMiddleware,
+                create_metrics_router,
+            )
+
+            app.add_middleware(CorrelationIDMiddleware, obs_service=self.observability)
+            if include_metrics:
+                app.include_router(create_metrics_router(self.observability))

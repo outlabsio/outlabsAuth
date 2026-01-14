@@ -42,7 +42,7 @@ class ObservabilityContext:
     def __init__(
         self,
         request: Request,
-        observability: ObservabilityService,
+        observability: Optional[ObservabilityService],
         user_id: Optional[str] = None,
     ):
         """
@@ -60,7 +60,9 @@ class ObservabilityContext:
         # Extract request context
         self.endpoint = request.url.path
         self.method = request.method
-        self.correlation_id = observability.get_correlation_id()
+        self.correlation_id = (
+            observability.get_correlation_id() if observability else None
+        )
 
         # Store request in context var for global access
         current_request_var.set(request)
@@ -90,6 +92,9 @@ class ObservabilityContext:
                 raise HTTPException(500, detail=str(e))
             ```
         """
+        if not self.observability:
+            return
+
         self.observability.log_500_error(
             endpoint=self.endpoint,
             error_class=type(exception).__name__,
@@ -126,6 +131,9 @@ class ObservabilityContext:
                 raise
             ```
         """
+        if not self.observability:
+            return
+
         self.observability.log_router_error(
             router=router,
             endpoint=self.endpoint,
@@ -151,6 +159,9 @@ class ObservabilityContext:
             error_message: Error message
             **extra: Additional context fields
         """
+        if not self.observability:
+            return
+
         self.observability.log_error(
             event=event,
             error_type="CustomError",
@@ -175,6 +186,9 @@ class ObservabilityContext:
             context: Additional context (e.g., "database query failed")
             **extra: Additional fields
         """
+        if not self.observability:
+            return
+
         self.observability.log_exception(
             exception=exception,
             context=f"{self.endpoint}.{context}",
@@ -185,7 +199,7 @@ class ObservabilityContext:
         )
 
 
-def get_observability_dependency(observability_service: ObservabilityService):
+def get_observability_dependency(observability_service: Optional[ObservabilityService]):
     """
     Create a FastAPI dependency that provides ObservabilityContext.
 
@@ -233,7 +247,7 @@ def get_observability_dependency(observability_service: ObservabilityService):
 
 
 def get_observability_with_auth(
-    observability_service: ObservabilityService,
+    observability_service: Optional[ObservabilityService],
     auth_dependency: Any,
 ):
     """
@@ -313,7 +327,7 @@ class ObservabilityDeps:
 
     def __init__(
         self,
-        observability: ObservabilityService,
+        observability: Optional[ObservabilityService],
         auth_deps: Optional[Any] = None,
     ):
         """
