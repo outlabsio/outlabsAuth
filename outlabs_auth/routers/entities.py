@@ -178,7 +178,7 @@ def get_entities_router(
 
         # Parse entity class
         entity_class = (
-            EntityClass(data.entity_class.upper())
+            EntityClass(data.entity_class)
             if isinstance(data.entity_class, str)
             else data.entity_class
         )
@@ -259,7 +259,7 @@ def get_entities_router(
             has_create = await auth.permission_service.check_permission(
                 session,
                 user_id=user_id,
-                permission="entity:create",
+                permission="entity:create_tree",
                 entity_id=new_parent_id,
             )
             if not has_create:

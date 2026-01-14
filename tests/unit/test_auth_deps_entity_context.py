@@ -91,7 +91,7 @@ async def test_require_tree_permission_reads_entity_id_from_body(test_session):
     assert permission_service.calls == [
         {
             "user_id": UUID(str(user_id)),
-            "permission": "entity:create",
+            "permission": "entity:create_tree",
             "entity_id": UUID(str(entity_id)),
         }
     ]

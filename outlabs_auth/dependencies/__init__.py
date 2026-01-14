@@ -318,6 +318,9 @@ class AuthDeps:
         - `source="header"`: `request.headers[entity_id_field]`
         - `source="body"`: JSON body field `entity_id_field`
 
+        This helper enforces tree semantics by requiring the `*_tree` variant
+        when an entity context is present (e.g. `entity:create` -> `entity:create_tree`).
+
         If `source="body"` and the field is absent/null, this falls back to a
         global permission check (useful for root-level creates).
         """
@@ -325,6 +328,18 @@ class AuthDeps:
             raise ValueError("source must be one of: path, query, header, body")
 
         signature = self._get_dependency_signature()
+
+        def _tree_required_permission(base: str) -> str:
+            if base in ("*:*", "*"):
+                return base
+            if ":" not in base:
+                return base
+            resource, action = base.split(":", 1)
+            if action == "*":
+                return base
+            if action.endswith(("_tree", "_all", "_own")):
+                return base
+            return f"{resource}:{action}_tree"
 
         def _parse_uuid_optional(raw: Any, *, invalid_detail: str) -> Optional[UUID]:
             if raw is None or raw == "":
@@ -396,10 +411,16 @@ class AuthDeps:
                 raw_entity_id, invalid_detail=f"Invalid {entity_id_field}"
             )
 
+            required_permission = (
+                _tree_required_permission(permission)
+                if entity_id is not None
+                else permission
+            )
+
             has_perm = await permission_service.check_permission(
                 session,
                 user_id=user_id_uuid,
-                permission=permission,
+                permission=required_permission,
                 entity_id=entity_id,
             )
             if not has_perm:

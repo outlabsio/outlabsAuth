@@ -23,6 +23,7 @@ from outlabs_auth.core.exceptions import (
     RoleNotFoundError,
     UserNotFoundError,
 )
+from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.entity_membership import (
     EntityMembership,
     EntityMembershipRole,
