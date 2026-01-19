@@ -77,7 +77,9 @@ def get_auth_router(
         summary="Get auth configuration",
         description="Returns preset type and enabled features (used by admin UIs)",
     )
-    async def get_config():
+    async def get_config(
+        session: AsyncSession = Depends(auth.uow),
+    ):
         """
         Get OutlabsAuth configuration.
 
@@ -103,9 +105,11 @@ def get_auth_router(
             "activity_tracking": True,  # Always available
         }
 
-        # Get available permissions from permission service
-        # For now, return empty list - this will be populated when we have permission enumeration
-        available_permissions = []
+        # Get available permissions from database
+        permissions, _ = await auth.permission_service.list_permissions(
+            session, page=1, limit=1000, is_active=True
+        )
+        available_permissions = [p.name for p in permissions]
 
         return AuthConfigResponse(
             preset=preset_name,
