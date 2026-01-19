@@ -80,8 +80,9 @@ export const usePermissionsStore = defineStore('permissions', () => {
       state.isLoading = true
       state.error = null
 
-      const permissions = await authStore.apiCall<Permission[]>('/v1/permissions')
-      state.availablePermissions = permissions
+      // Fetch with high limit to get all permissions
+      const response = await authStore.apiCall<{ items: Permission[], total: number }>('/v1/permissions/?limit=1000')
+      state.availablePermissions = response.items
     } catch (error: any) {
       state.error = error.message || 'Failed to fetch permissions'
       console.error('Failed to fetch permissions:', error)

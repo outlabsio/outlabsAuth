@@ -181,13 +181,30 @@
 // Stores
 const authStore = useAuthStore();
 const contextStore = useContextStore();
+const usersStore = useUsersStore();
+const rolesStore = useRolesStore();
+const entitiesStore = useEntitiesStore();
 
-// State
-const stats = ref({
-    users: 0,
-    roles: 0,
-    entities: 0,
-});
+// Computed stats from stores
+const stats = computed(() => ({
+    users: usersStore.pagination.total,
+    roles: rolesStore.pagination.total,
+    entities: entitiesStore.pagination?.total || 0,
+}));
+
+// Methods
+const fetchStats = async () => {
+    try {
+        // Fetch counts from each store
+        await Promise.all([
+            usersStore.fetchUsers({}, { page: 1, limit: 1 }),
+            rolesStore.fetchRoles({}, { page: 1, limit: 1 }),
+            authStore.isEnterpriseRBAC ? entitiesStore.fetchEntities({}, { page: 1, limit: 1 }) : Promise.resolve(),
+        ]);
+    } catch (error) {
+        console.error("Failed to fetch stats:", error);
+    }
+};
 
 // Watch for context changes
 watch(
@@ -196,24 +213,6 @@ watch(
         fetchStats();
     },
 );
-
-// Methods
-const fetchStats = async () => {
-    try {
-        // Fetch stats from API
-        // This is a placeholder - implement based on your API
-        const response = await authStore.apiCall<any>("/v1/stats/dashboard");
-        stats.value = response;
-    } catch (error) {
-        console.error("Failed to fetch stats:", error);
-        // Set placeholder data for demo
-        stats.value = {
-            users: 12,
-            roles: 5,
-            entities: 3,
-        };
-    }
-};
 
 // Initialize
 onMounted(async () => {

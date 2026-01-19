@@ -317,7 +317,7 @@ export const useAuthStore = defineStore("auth", () => {
    * Fetch current user
    */
   const fetchCurrentUser = async (): Promise<void> => {
-    // Real API call
+    // Real API call - use /v1/users/me (not /v1/auth/me)
     const user = await apiCall<User>("/v1/users/me");
     if (user) {
       // Enrich user with computed fields

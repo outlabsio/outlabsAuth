@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from models import BlogPost, Comment
 from pydantic import BaseModel, Field
@@ -29,6 +29,13 @@ from sqlmodel import SQLModel
 
 from outlabs_auth import SimpleRBAC, User
 from outlabs_auth.database import DatabaseConfig, create_engine, create_session_factory
+from outlabs_auth.routers import (
+    get_auth_router,
+    get_users_router,
+    get_roles_router,
+    get_permissions_router,
+    get_api_keys_router,
+)
 
 # ============================================================================
 # Configuration
@@ -139,6 +146,10 @@ async def lifespan(app: FastAPI):
     await auth.initialize()
     print("✅ OutlabsAuth initialized")
 
+    # Include library routers for user/role/permission management
+    include_auth_routers(app, auth)
+    print("✅ Library routers included")
+
     # Install centralized exception handlers (and observability if configured)
     auth.instrument_fastapi(app, debug=True, include_metrics=True)
 
@@ -180,6 +191,36 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ============================================================================
+# Include Library Routers (after auth is initialized via lifespan)
+# ============================================================================
+# Note: These are added dynamically in lifespan since they need the auth instance
+
+
+def include_auth_routers(app: FastAPI, auth_instance: SimpleRBAC):
+    """Include all OutlabsAuth library routers"""
+    # Auth routes (login, register, logout, refresh, config, me)
+    app.include_router(
+        get_auth_router(auth_instance, prefix="/v1/auth", tags=["Auth"])
+    )
+    # User management routes
+    app.include_router(
+        get_users_router(auth_instance, prefix="/v1/users", tags=["Users"])
+    )
+    # Role management routes
+    app.include_router(
+        get_roles_router(auth_instance, prefix="/v1/roles", tags=["Roles"])
+    )
+    # Permission management routes
+    app.include_router(
+        get_permissions_router(auth_instance, prefix="/v1/permissions", tags=["Permissions"])
+    )
+    # API Key management routes
+    app.include_router(
+        get_api_keys_router(auth_instance, prefix="/v1/api-keys", tags=["API Keys"])
+    )
 
 
 # ============================================================================
@@ -336,191 +377,6 @@ async def create_default_roles():
                 )
 
         await session.commit()
-
-
-# ============================================================================
-# Authentication Routes
-# ============================================================================
-
-
-class LoginRequest(BaseModel):
-    """Login request"""
-
-    email: str
-    password: str
-
-
-class TokenResponse(BaseModel):
-    """Token response"""
-
-    access_token: str
-    refresh_token: str
-    token_type: str = "bearer"
-    expires_in: int
-
-
-class UserResponse(BaseModel):
-    """User response"""
-
-    id: str
-    email: str
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    status: str
-    email_verified: bool
-    is_superuser: bool
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-@app.post(
-    "/v1/auth/login",
-    response_model=TokenResponse,
-    tags=["Auth"],
-    summary="Login with email/password",
-)
-async def login(
-    data: LoginRequest,
-    request: Request,
-    session: AsyncSession = Depends(get_session),
-):
-    """
-    Authenticate user with email and password.
-
-    Returns access and refresh tokens on success.
-    """
-    auth_instance = get_auth()
-
-    # Get IP and user agent
-    ip_address = request.client.host if request.client else None
-    user_agent = request.headers.get("user-agent")
-
-    user, token_pair = await auth_instance.auth_service.login(
-        session=session,
-        email=data.email,
-        password=data.password,
-        ip_address=ip_address,
-        user_agent=user_agent,
-    )
-
-    return TokenResponse(
-        access_token=token_pair.access_token,
-        refresh_token=token_pair.refresh_token,
-        token_type=token_pair.token_type,
-        expires_in=token_pair.expires_in,
-    )
-
-
-class RefreshRequest(BaseModel):
-    """Refresh token request"""
-
-    refresh_token: str
-
-
-@app.post(
-    "/v1/auth/refresh",
-    response_model=TokenResponse,
-    tags=["Auth"],
-    summary="Refresh access token",
-)
-async def refresh_token(
-    data: RefreshRequest,
-    session: AsyncSession = Depends(get_session),
-):
-    """
-    Get new access token using refresh token.
-    """
-    auth_instance = get_auth()
-
-    token_pair = await auth_instance.auth_service.refresh(
-        session=session,
-        refresh_token=data.refresh_token,
-    )
-
-    return TokenResponse(
-        access_token=token_pair.access_token,
-        refresh_token=token_pair.refresh_token,
-        token_type=token_pair.token_type,
-        expires_in=token_pair.expires_in,
-    )
-
-
-@app.post("/v1/auth/logout", tags=["Auth"], summary="Logout user")
-async def logout(
-    authorization: Optional[str] = None,
-    session: AsyncSession = Depends(get_session),
-):
-    """
-    Logout user by revoking all their refresh tokens.
-    """
-    auth_instance = get_auth()
-
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    # Extract token from Authorization header
-    if authorization.startswith("Bearer "):
-        token = authorization[7:]
-    else:
-        token = authorization
-
-    # Verify token to get user ID
-    payload = await auth_instance.auth_service.verify_access_token(token)
-    if not payload or "sub" not in payload:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    user_id = UUID(payload["sub"])
-
-    # Revoke all refresh tokens for this user
-    await auth_instance.auth_service.logout(
-        session=session,
-        user_id=user_id,
-    )
-
-    return {"message": "Logged out successfully"}
-
-
-@app.get(
-    "/v1/auth/me",
-    response_model=UserResponse,
-    tags=["Auth"],
-    summary="Get current user",
-)
-async def get_me(
-    authorization: str = Header(..., alias="Authorization"),
-    session: AsyncSession = Depends(get_session),
-):
-    """
-    Get currently authenticated user's profile.
-    """
-    auth_instance = get_auth()
-
-    # Extract token from Authorization header
-    if authorization.startswith("Bearer "):
-        token = authorization[7:]
-    else:
-        raise HTTPException(
-            status_code=401, detail="Invalid authorization header format"
-        )
-
-    # Verify token and get user
-    user = await auth_instance.auth_service.get_current_user(
-        session=session,
-        access_token=token,
-    )
-
-    return UserResponse(
-        id=str(user.id),
-        email=user.email,
-        first_name=user.first_name,
-        last_name=user.last_name,
-        status=user.status.value if hasattr(user.status, "value") else str(user.status),
-        email_verified=user.email_verified,
-        is_superuser=user.is_superuser,
-        created_at=user.created_at,
-    )
 
 
 # ============================================================================
@@ -898,70 +754,6 @@ async def health_check():
         "preset": "SimpleRBAC",
         "database": "PostgreSQL",
         "docs": "/docs",
-    }
-
-
-@app.get("/v1/auth/config", tags=["Auth"], summary="Get auth configuration")
-async def get_auth_config():
-    """
-    Get authentication system configuration
-
-    Returns preset type, feature flags, and available permissions.
-    """
-    return {
-        "preset": "SimpleRBAC",
-        "database": "PostgreSQL",
-        "features": {
-            "entity_hierarchy": False,
-            "context_aware_roles": False,
-            "abac": False,
-            "tree_permissions": False,
-            "api_keys": True,
-            "user_status": True,
-            "activity_tracking": True,
-        },
-        "available_permissions": [
-            # User permissions
-            {"value": "user:read", "label": "User Read", "category": "Users"},
-            {"value": "user:create", "label": "User Create", "category": "Users"},
-            {"value": "user:update", "label": "User Update", "category": "Users"},
-            {"value": "user:delete", "label": "User Delete", "category": "Users"},
-            # Role permissions
-            {"value": "role:read", "label": "Role Read", "category": "Roles"},
-            {"value": "role:create", "label": "Role Create", "category": "Roles"},
-            {"value": "role:update", "label": "Role Update", "category": "Roles"},
-            {"value": "role:delete", "label": "Role Delete", "category": "Roles"},
-            # Permission permissions
-            {
-                "value": "permission:read",
-                "label": "Permission Read",
-                "category": "Permissions",
-            },
-            {
-                "value": "permission:create",
-                "label": "Permission Create",
-                "category": "Permissions",
-            },
-            # API Key permissions
-            {"value": "api_key:read", "label": "API Key Read", "category": "API Keys"},
-            {
-                "value": "api_key:create",
-                "label": "API Key Create",
-                "category": "API Keys",
-            },
-            {
-                "value": "api_key:revoke",
-                "label": "API Key Revoke",
-                "category": "API Keys",
-            },
-            # Blog-specific permissions
-            {"value": "post:read", "label": "Post Read", "category": "Blog"},
-            {"value": "post:create", "label": "Post Create", "category": "Blog"},
-            {"value": "post:update", "label": "Post Update", "category": "Blog"},
-            {"value": "post:delete", "label": "Post Delete", "category": "Blog"},
-            {"value": "comment:create", "label": "Comment Create", "category": "Blog"},
-            {"value": "comment:delete", "label": "Comment Delete", "category": "Blog"},
-        ],
     }
 
 
