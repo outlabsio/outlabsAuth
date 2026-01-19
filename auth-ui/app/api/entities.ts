@@ -37,7 +37,7 @@ export function createEntitiesAPI() {
       });
 
       return client.call<PaginatedResponse<Entity>>(
-        `/v1/entities${queryString}`,
+        `/v1/entities/${queryString}`,
       );
     },
 
@@ -59,7 +59,7 @@ export function createEntitiesAPI() {
      * Create new entity
      */
     async createEntity(data: CreateEntityData): Promise<Entity> {
-      return client.call<Entity>("/v1/entities", {
+      return client.call<Entity>("/v1/entities/", {
         method: "POST",
         body: JSON.stringify(data),
       });

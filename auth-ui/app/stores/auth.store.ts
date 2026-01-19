@@ -352,18 +352,23 @@ export const useAuthStore = defineStore("auth", () => {
 
       const configData = await response.json();
 
-      // Transform available_permissions from string[] to PermissionOption[]
-      // Backend returns: ["user:read", "user:create", ...]
-      // Frontend expects: [{value: "user:read", label: "Read", category: "user"}, ...]
+      // Transform available_permissions to PermissionOption[]
+      // Backend may return strings: ["user:read", ...] or objects: [{value, label, category}, ...]
       const transformedPermissions = (
         configData.available_permissions || []
-      ).map((perm: string) => {
-        const [resource, action] = perm.split(":");
+      ).map((perm: string | { value: string; label: string; category: string }) => {
+        // If already an object, use it as-is
+        if (typeof perm === "object" && perm.value) {
+          return perm;
+        }
+        // If string, transform it
+        const permStr = perm as string;
+        const [resource, action] = permStr.split(":");
         return {
-          value: perm,
+          value: permStr,
           label: action
             ? action.charAt(0).toUpperCase() + action.slice(1)
-            : perm,
+            : permStr,
           category: resource || "other",
           description: `${action || "access"} ${resource || "resource"}`,
         };

@@ -82,7 +82,7 @@ export const useUsersStore = defineStore("users", () => {
         queryParams.append("sort_order", params.sort_order);
 
       const response = await authStore.apiCall<PaginatedResponse<User>>(
-        `/v1/users?${queryParams.toString()}`,
+        `/v1/users/?${queryParams.toString()}`,
       );
 
       state.users = response.items;
@@ -128,7 +128,7 @@ export const useUsersStore = defineStore("users", () => {
       state.isLoading = true;
       state.error = null;
 
-      const user = await authStore.apiCall<User>("/v1/users", {
+      const user = await authStore.apiCall<User>("/v1/users/", {
         method: "POST",
         body: JSON.stringify(data),
       });

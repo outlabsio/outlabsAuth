@@ -66,7 +66,7 @@ export const useRolesStore = defineStore('roles', () => {
       if (params.sort_order) queryParams.append('sort_order', params.sort_order)
 
       const response = await authStore.apiCall<PaginatedResponse<Role>>(
-        `/v1/roles?${queryParams.toString()}`
+        `/v1/roles/?${queryParams.toString()}`
       )
 
       state.roles = response.items

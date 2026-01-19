@@ -3,6 +3,7 @@ import type { TableColumn } from "@nuxt/ui";
 import type { Entity } from "~/types/entity";
 import { useQuery } from "@pinia/colada";
 import { entitiesQueries, useDeleteEntityMutation } from "~/queries/entities";
+import { UButton } from "#components";
 
 const search = ref("");
 const showCreateModal = ref(false);
@@ -16,22 +17,12 @@ const filters = computed(() => {
     return f;
 });
 
-// Query entities with Pinia Colada (auto-fetches and auto-refetches when search changes)
-console.log("🔍 Setting up entities query with filters:", filters.value);
+// Query entities with Pinia Colada
 const queryOptions = entitiesQueries.list(filters.value, {
     page: 1,
     limit: 100,
 });
-console.log("🔍 Query options:", queryOptions);
 const { data: entitiesData, isLoading, error } = useQuery(queryOptions);
-console.log(
-    "🔍 Query result - data:",
-    entitiesData,
-    "isLoading:",
-    isLoading,
-    "error:",
-    error,
-);
 
 // Mutations
 const { mutate: deleteEntity } = useDeleteEntityMutation();
@@ -169,7 +160,7 @@ const columns: TableColumn<Entity>[] = [
                 </div>
             </UCard>
 
-            <UTable v-else :columns="columns" :rows="entitiesData?.items || []">
+            <UTable v-else :columns="columns" :data="entitiesData?.items || []">
                 <template #empty>
                     <div
                         class="flex flex-col items-center justify-center py-12 gap-4"

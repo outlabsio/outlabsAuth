@@ -135,7 +135,7 @@ export const useEntitiesStore = defineStore("entities", () => {
         queryParams.append("sort_order", params.sort_order);
 
       const response = await authStore.apiCall<PaginatedResponse<Entity>>(
-        `/v1/entities?${queryParams.toString()}`,
+        `/v1/entities/?${queryParams.toString()}`,
       );
 
       state.entities = response.items;
@@ -227,7 +227,7 @@ export const useEntitiesStore = defineStore("entities", () => {
       state.isLoading = true;
       state.error = null;
 
-      const entity = await authStore.apiCall<Entity>("/v1/entities", {
+      const entity = await authStore.apiCall<Entity>("/v1/entities/", {
         method: "POST",
         body: JSON.stringify(data),
       });

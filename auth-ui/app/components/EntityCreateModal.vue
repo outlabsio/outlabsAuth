@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import type { EntityClass } from "~/types/entity";
+import { useCreateEntityMutation } from "~/queries/entities";
 
 const open = defineModel<boolean>("open", { default: false });
 
 const entitiesStore = useEntitiesStore();
-const toast = useToast();
+const { mutateAsync: createEntity, isPending } = useCreateEntityMutation();
 
 // Form state
 const state = reactive({
@@ -17,15 +18,20 @@ const state = reactive({
     parent_entity_id: undefined as string | undefined,
 });
 
-// Auto-generate slug from name
+// Auto-generate slug and display_name from name
 watch(
     () => state.name,
     (newName) => {
-        if (newName && !state.slug) {
-            state.slug = newName
-                .toLowerCase()
-                .replace(/\s+/g, "-")
-                .replace(/[^a-z0-9-]/g, "");
+        if (newName) {
+            // Auto-set display_name to match name
+            state.display_name = newName;
+            // Auto-generate slug if not already set
+            if (!state.slug) {
+                state.slug = newName
+                    .toLowerCase()
+                    .replace(/\s+/g, "-")
+                    .replace(/[^a-z0-9-]/g, "");
+            }
         }
     },
 );
@@ -59,46 +65,26 @@ const parentOptions = computed(() => [
 ]);
 
 // Submit handler
-const isSubmitting = ref(false);
 const showEntityHelp = ref(false);
 
 async function handleSubmit() {
-    isSubmitting.value = true;
     try {
-        const success = await entitiesStore.createEntity(state);
+        await createEntity(state);
 
-        if (success) {
-            toast.add({
-                title: "Entity created",
-                description: `${state.name} has been created successfully.`,
-                color: "success",
-            });
-
-            // Close modal and reset form
-            open.value = false;
-            Object.assign(state, {
-                name: "",
-                slug: "",
-                description: "",
-                entity_class: "structural",
-                entity_type: "",
-                parent_entity_id: undefined,
-            });
-        } else {
-            toast.add({
-                title: "Error",
-                description: "Failed to create entity. Please try again.",
-                color: "error",
-            });
-        }
-    } catch (error: any) {
-        toast.add({
-            title: "Error",
-            description: error.message || "Failed to create entity",
-            color: "error",
+        // Close modal and reset form (mutation handles toast)
+        open.value = false;
+        Object.assign(state, {
+            name: "",
+            display_name: "",
+            slug: "",
+            description: "",
+            entity_class: "structural",
+            entity_type: "",
+            parent_entity_id: undefined,
         });
-    } finally {
-        isSubmitting.value = false;
+    } catch (error: any) {
+        // Error toast is handled by mutation's onError
+        console.error("Failed to create entity:", error);
     }
 }
 </script>
@@ -594,12 +580,12 @@ async function handleSubmit() {
                         color="neutral"
                         variant="outline"
                         @click="open = false"
-                        :disabled="isSubmitting"
+                        :disabled="isPending"
                     />
                     <UButton
                         label="Create Entity"
                         icon="i-lucide-plus"
-                        :loading="isSubmitting"
+                        :loading="isPending"
                         @click="handleSubmit"
                     />
                 </div>

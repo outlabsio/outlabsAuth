@@ -46,7 +46,7 @@ export function createPermissionsAPI() {
         page: number
         limit: number
         pages: number
-      }>('/v1/permissions?page=1&limit=1000')
+      }>('/v1/permissions/?page=1&limit=1000')
       return response.items
     },
 
