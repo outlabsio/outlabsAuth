@@ -1,53 +1,49 @@
-# OutlabsAuth Complete Development Stack
+# OutlabsAuth Infrastructure Services
 #
-# This stack includes everything you need for local development and testing:
-# - MongoDB (database) - port 27018 (to avoid conflict with local MongoDB)
-# - Redis (caching, activity tracking) - port 6380 (to avoid conflict with local Redis)
-# - Prometheus (metrics collection) - port 9090
-# - Grafana (metrics visualization) - port 3011 (to avoid conflict with admin UI on 3000)
-# - SimpleRBAC Example (Blog API) - port 8003
-# - EnterpriseRBAC Example (Real Estate API) - port 8004
+# This provides PostgreSQL and Redis for local development.
+# Examples are run directly via UV (not Docker).
 #
 # Usage:
-#   docker compose up -d                    # Start all services
-#   docker compose up -d mongodb redis      # Start only infra
-#   docker compose up -d simple-rbac        # Start SimpleRBAC example
-#   docker compose up -d enterprise-rbac    # Start EnterpriseRBAC example
-#   docker compose logs -f simple-rbac      # View SimpleRBAC logs
-#   docker compose logs -f enterprise-rbac  # View EnterpriseRBAC logs
-#   docker compose down                     # Stop all services
-#   docker compose down -v                  # Stop and remove volumes
+#   docker compose up -d              # Start PostgreSQL + Redis
+#   docker compose down               # Stop services
+#   docker compose down -v            # Stop and remove volumes
+#
+# Running Examples (after starting infrastructure):
+#   cd examples/simple_rbac
+#   python reset_test_env.py          # Create test data
+#   uv run uvicorn main:app --port 8003 --reload
+#
+# For Observability (optional):
+#   docker compose -f docker-compose.observability.yml up -d
+#   # Access Grafana at http://localhost:3011
 
 services:
-  # ============================================================================
-  # Infrastructure Services
-  # ============================================================================
-
-  # MongoDB - Shared database for all examples
-  # Using port 27018 to avoid conflict with local dev MongoDB
-  mongodb:
-    image: mongo:8
-    container_name: outlabs-mongodb
+  # PostgreSQL - Primary database
+  postgres:
+    image: postgres:16
+    container_name: outlabs-postgres
     ports:
-      - "27018:27017"
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
     volumes:
-      - mongodb-data:/data/db
+      - postgres-data:/var/lib/postgresql/data
     networks:
       - outlabs
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Redis - Shared cache and activity tracking
-  # Using port 6380 to avoid conflict with local dev Redis
+  # Redis - Caching and activity tracking
   redis:
     image: redis:latest
     container_name: outlabs-redis
     ports:
-      - "6380:6379"
+      - "6379:6379"
     volumes:
       - redis-data:/data
     networks:
@@ -59,175 +55,13 @@ services:
       timeout: 5s
       retries: 5
 
-  # ============================================================================
-  # Observability Stack
-  # ============================================================================
-
-  # Prometheus - Metrics collection from example apps
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: outlabs-prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus-data:/prometheus
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
-      - "--web.console.templates=/usr/share/prometheus/consoles"
-    networks:
-      - outlabs
-    restart: unless-stopped
-    depends_on:
-      - simple-rbac
-
-  # Grafana - Metrics visualization and dashboards
-  grafana:
-    image: grafana/grafana:latest
-    container_name: outlabs-grafana
-    ports:
-      - "3011:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_SERVER_ROOT_URL=http://localhost:3011
-      - GF_FEATURE_TOGGLES_ENABLE=tempoSearch,tempoBackendSearch
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./docker/grafana/provisioning:/etc/grafana/provisioning
-      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards
-    networks:
-      - outlabs
-    restart: unless-stopped
-    depends_on:
-      - prometheus
-      - loki
-      - tempo
-
-  # Loki - Log aggregation (like Elasticsearch for logs, but lighter)
-  loki:
-    image: grafana/loki:latest
-    container_name: outlabs-loki
-    ports:
-      - "3100:3100"
-    command: -config.file=/etc/loki/local-config.yaml
-    volumes:
-      - loki-data:/loki
-    networks:
-      - outlabs
-    restart: unless-stopped
-
-  # Promtail - Log shipper (sends logs from containers to Loki)
-  promtail:
-    image: grafana/promtail:latest
-    container_name: outlabs-promtail
-    volumes:
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./docker/promtail/promtail-config.yml:/etc/promtail/config.yml
-    command: -config.file=/etc/promtail/config.yml
-    networks:
-      - outlabs
-    restart: unless-stopped
-    depends_on:
-      - loki
-
-  # Tempo - Distributed tracing (for request tracing across services)
-  tempo:
-    image: grafana/tempo:latest
-    container_name: outlabs-tempo
-    user: "0:0" # Run as root to avoid permission issues in development
-    ports:
-      - "3200:3200" # Tempo HTTP
-      - "4317:4317" # OTLP gRPC
-      - "4318:4318" # OTLP HTTP
-    command: ["-config.file=/etc/tempo.yaml"]
-    volumes:
-      - ./docker/tempo/tempo.yaml:/etc/tempo.yaml
-      - tempo-data:/var/tempo
-    networks:
-      - outlabs
-    restart: unless-stopped
-
-  # ============================================================================
-  # Example Applications
-  # ============================================================================
-
-  # SimpleRBAC Example - Blog API with Observability (port 8003)
-  simple-rbac:
-    build:
-      context: .
-      dockerfile: examples/simple_rbac/Dockerfile
-    container_name: outlabs-simple-rbac
-    ports:
-      - "8003:8003"
-    environment:
-      - MONGODB_URL=mongodb://mongodb:27017
-      - DATABASE_NAME=blog_simple_rbac
-      - REDIS_URL=redis://redis:6379
-      - SECRET_KEY=simple-rbac-secret-key-change-in-production
-      - ENV=development # development = text logs, production = JSON logs
-    volumes:
-      - ./outlabs_auth:/app/outlabs_auth # Mount source for hot reload
-      - ./examples/simple_rbac:/app/examples/simple_rbac
-    networks:
-      - outlabs
-    restart: unless-stopped
-    depends_on:
-      mongodb:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    command: >
-      sh -c "cd /app/examples/simple_rbac &&
-             uvicorn main:app --host 0.0.0.0 --port 8003 --reload"
-
-  # EnterpriseRBAC Example - Real Estate API with Entity Hierarchy (port 8004)
-  enterprise-rbac:
-    build:
-      context: .
-      dockerfile: examples/enterprise_rbac/Dockerfile
-    container_name: outlabs-enterprise-rbac
-    ports:
-      - "8004:8004"
-    environment:
-      - MONGODB_URL=mongodb://mongodb:27017
-      - DATABASE_NAME=realestate_enterprise_rbac
-      - REDIS_URL=redis://redis:6379
-      - SECRET_KEY=enterprise-rbac-secret-change-in-production-please
-      - ENV=development # development = text logs, production = JSON logs
-    volumes:
-      - ./outlabs_auth:/app/outlabs_auth # Mount source for hot reload
-      - ./examples/enterprise_rbac:/app/examples/enterprise_rbac
-    networks:
-      - outlabs
-    restart: unless-stopped
-    depends_on:
-      mongodb:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    command: >
-      sh -c "cd /app/examples/enterprise_rbac &&
-             uvicorn main:app --host 0.0.0.0 --port 8004 --reload"
-
 networks:
   outlabs:
     driver: bridge
     name: outlabs-network
 
 volumes:
-  mongodb-data:
-    name: outlabs-mongodb-data
+  postgres-data:
+    name: outlabs-postgres-data
   redis-data:
     name: outlabs-redis-data
-  prometheus-data:
-    name: outlabs-prometheus-data
-  grafana-data:
-    name: outlabs-grafana-data
-  loki-data:
-    name: outlabs-loki-data
-  tempo-data:
-    name: outlabs-tempo-data
