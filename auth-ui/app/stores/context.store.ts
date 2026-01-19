@@ -107,12 +107,26 @@ export const useContextStore = defineStore("context", () => {
   /**
    * Fetch available entities for current user
    * Gets entities where user has any membership
+   * Only applicable in EnterpriseRBAC mode
    */
   const fetchAvailableEntities = async (): Promise<void> => {
+    // Skip in SimpleRBAC mode - no entity hierarchy
+    if (authStore.isSimpleRBAC) {
+      // In SimpleRBAC, superusers get system context, others get nothing
+      if (authStore.currentUser?.is_superuser) {
+        state.availableEntities = [SYSTEM_CONTEXT];
+        state.selectedEntity = SYSTEM_CONTEXT;
+      } else {
+        state.availableEntities = [];
+        state.selectedEntity = null;
+      }
+      return;
+    }
+
     try {
       state.isLoading = true;
 
-      // Get user's memberships to determine available entities
+      // Get user's memberships to determine available entities (EnterpriseRBAC only)
       const memberships = await authStore.apiCall<any>("/v1/memberships/me");
 
       // Handle SimpleRBAC (returns array) vs EnterpriseRBAC (returns object with items)
