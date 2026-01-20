@@ -7,7 +7,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-blue.svg)](https://www.postgresql.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> **v1.0.0** - SimpleRBAC is production-ready. EnterpriseRBAC (hierarchical permissions) is in beta.
+> **v2.0** - PostgreSQL migration complete. SimpleRBAC and EnterpriseRBAC both working with full observability support.
 
 ## Overview
 
@@ -34,6 +34,7 @@ OutlabsAuth is a comprehensive authentication and authorization library for Fast
 - **FastAPI Native**: Designed specifically for FastAPI with dependency injection
 - **Production Ready**: Redis caching, Pub/Sub invalidation, comprehensive security
 - **Extensible**: Override services, add custom hooks, create custom transports
+- **Observability**: Prometheus metrics, structured logging, correlation IDs
 
 ## Quick Start
 
@@ -349,7 +350,7 @@ Implementation-specific documentation (9 files):
 
 ## Development Status
 
-**Current Version**: 1.0.0
+**Current Version**: 2.0
 **Database**: PostgreSQL (via SQLAlchemy async)
 
 ### Production Status
@@ -357,37 +358,32 @@ Implementation-specific documentation (9 files):
 | Preset | Status | Notes |
 |--------|--------|-------|
 | **SimpleRBAC** | ✅ Production Ready | Flat RBAC, JWT auth, API keys, rate limiting |
-| **EnterpriseRBAC** | ⚠️ Beta | Entity hierarchy works, some services need migration |
+| **EnterpriseRBAC** | ✅ Production Ready | Entity hierarchy, tree permissions, closure table |
 
 ### What's Working
 
 ✅ **SimpleRBAC** - Full authentication and flat RBAC
+✅ **EnterpriseRBAC** - Entity hierarchy with tree permissions
 ✅ **JWT Authentication** - Access + refresh tokens
 ✅ **API Key Authentication** - SHA-256 hashing, rate limiting, IP whitelisting
 ✅ **User Management** - CRUD, status, password reset
 ✅ **Role & Permission System** - Assignment, checking, audit trails
-✅ **PostgreSQL** - All core services use SQLAlchemy async
-✅ **72 Unit Tests Passing** - Core functionality verified
-
-### What's In Progress (EnterpriseRBAC)
-
-⚠️ Entity hierarchy services need migration to PostgreSQL
-⚠️ Tree permissions (closure table) - designed but needs testing
-⚠️ Context-aware roles - designed but needs testing
+✅ **PostgreSQL** - All services use SQLAlchemy async
+✅ **Observability** - Prometheus metrics, structured logging
+✅ **104 Unit Tests Passing** - Core functionality verified
 
 ## Roadmap
 
-### v1.0 (Current)
+### v2.0 (Current)
 - ✅ SimpleRBAC production-ready
+- ✅ EnterpriseRBAC production-ready
 - ✅ JWT + API key authentication
-- ✅ PostgreSQL support
+- ✅ PostgreSQL with SQLAlchemy async
+- ✅ Entity hierarchy with closure table
+- ✅ Tree permissions
+- ✅ Observability (Prometheus + structured logging)
 
-### v1.1 (Planned)
-- EnterpriseRBAC production-ready
-- Entity hierarchy with closure table
-- Tree permissions
-
-### v1.2+ (Future)
+### v2.1+ (Future)
 - OAuth/social login (Google, Facebook, Apple)
 - Passwordless auth (magic links, OTP)
 - MFA/TOTP
