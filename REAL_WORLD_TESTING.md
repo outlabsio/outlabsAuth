@@ -25,7 +25,7 @@ Start the EnterpriseRBAC example and seed it:
 ```bash
 cd examples/enterprise_rbac
 uv run python reset_test_env.py
-uv run uvicorn main:app --reload --port 8004
+uv run uvicorn main:app --reload --port 8000
 ```
 
 In another terminal, run the smoke script (hits `/v1/*` endpoints):
@@ -43,7 +43,7 @@ uv run python scripts/run_enterprise_example_smoke.py
 ```
 
 Config:
-- `BASE_URL` (default `http://localhost:8004/v1`)
+- `BASE_URL` (default `http://localhost:8000/v1`)
 - `EMAIL` / `PASSWORD` (default seeded admin `admin@acme.com` / `Test123!!`)
 
 ## 3) Add coverage for remaining “enterprise” paths
