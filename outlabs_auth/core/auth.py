@@ -332,9 +332,14 @@ class OutlabsAuth:
             from outlabs_auth.services.membership import MembershipService
 
             self.entity_service = EntityService(
-                self.config, redis_client=self.redis_client
+                self.config,
+                redis_client=self.redis_client,
+                observability=self.observability,
             )
-            self.membership_service = MembershipService(self.config)
+            self.membership_service = MembershipService(
+                self.config,
+                observability=self.observability,
+            )
 
         # API Key service
         self.api_key_service = APIKeyService(
@@ -361,6 +366,7 @@ class OutlabsAuth:
                 enabled=True,
                 update_user_model=self.config.activity_update_user_model,
                 store_user_ids=self.config.activity_store_user_ids,
+                observability=self.observability,
             )
             self.auth_service.activity_tracker = self.activity_tracker
 

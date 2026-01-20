@@ -7,9 +7,13 @@ Uses SQLAlchemy for PostgreSQL backend.
 """
 
 import re
+import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from outlabs_auth.observability import ObservabilityService
 
 from sqlalchemy import and_, insert, or_, select, update
 from sqlalchemy import delete as sql_delete
@@ -41,7 +45,10 @@ class EntityService(BaseService[Entity]):
     """
 
     def __init__(
-        self, config: AuthConfig, redis_client: Optional["RedisClient"] = None
+        self,
+        config: AuthConfig,
+        redis_client: Optional["RedisClient"] = None,
+        observability: Optional["ObservabilityService"] = None,
     ):
         """
         Initialize EntityService.
@@ -49,11 +56,13 @@ class EntityService(BaseService[Entity]):
         Args:
             config: Authentication configuration
             redis_client: Optional Redis client for caching
+            observability: Optional observability service for metrics/logging
         """
         super().__init__(Entity)
         self.config = config
         self.max_depth = getattr(config, "max_entity_depth", 10)
         self.redis_client = redis_client
+        self.observability = observability
 
     async def create_entity(
         self,
@@ -92,6 +101,8 @@ class EntityService(BaseService[Entity]):
             EntityNotFoundError: If parent entity not found
             InvalidInputError: If hierarchy validation fails or entity with same slug exists
         """
+        start_time = time.perf_counter()
+
         # Validate and fetch parent if provided
         parent_entity = None
         parent_depth = -1
@@ -153,6 +164,17 @@ class EntityService(BaseService[Entity]):
         # Maintain closure table
         await self._create_closure_records(session, entity)
 
+        # Log observability
+        if self.observability:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            self.observability.log_entity_operation(
+                operation="create",
+                entity_id=str(entity.id),
+                entity_type=entity_type,
+                duration_ms=duration_ms,
+                parent_id=str(parent_id) if parent_id else None,
+            )
+
         return entity
 
     async def get_entity(self, session: AsyncSession, entity_id: UUID) -> Entity:
@@ -212,6 +234,8 @@ class EntityService(BaseService[Entity]):
         Raises:
             EntityNotFoundError: If entity not found
         """
+        start_time = time.perf_counter()
+
         entity = await self.get_entity(session, entity_id)
 
         # Update fields
@@ -221,6 +245,16 @@ class EntityService(BaseService[Entity]):
 
         await session.flush()
         await session.refresh(entity)
+
+        # Log observability
+        if self.observability:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            self.observability.log_entity_operation(
+                operation="update",
+                entity_id=str(entity.id),
+                entity_type=entity.entity_type,
+                duration_ms=duration_ms,
+            )
 
         return entity
 
@@ -247,6 +281,8 @@ class EntityService(BaseService[Entity]):
             EntityNotFoundError: If entity or new parent does not exist
             InvalidInputError: If move would create a cycle or violates hierarchy rules
         """
+        start_time = time.perf_counter()
+
         entity = await self.get_entity(session, entity_id)
 
         if new_parent_id == entity.parent_id:
@@ -390,6 +426,18 @@ class EntityService(BaseService[Entity]):
         await self.invalidate_entity_tree_cache(session, entity.id)
 
         await session.refresh(entity)
+
+        # Log observability
+        if self.observability:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            self.observability.log_entity_operation(
+                operation="move",
+                entity_id=str(entity.id),
+                entity_type=entity.entity_type,
+                duration_ms=duration_ms,
+                parent_id=str(new_parent_id) if new_parent_id else None,
+            )
+
         return entity
 
     async def delete_entity(
@@ -410,6 +458,8 @@ class EntityService(BaseService[Entity]):
             EntityNotFoundError: If entity not found
             InvalidInputError: If entity has children and cascade=False
         """
+        start_time = time.perf_counter()
+
         entity = await self.get_entity(session, entity_id)
 
         # Check for children
@@ -450,6 +500,17 @@ class EntityService(BaseService[Entity]):
             .values(status=MembershipStatus.REVOKED)
         )
         await session.execute(stmt)
+
+        # Log observability
+        if self.observability:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            self.observability.log_entity_operation(
+                operation="delete",
+                entity_id=str(entity_id),
+                entity_type=entity.entity_type,
+                duration_ms=duration_ms,
+                cascade=cascade,
+            )
 
         return True
 

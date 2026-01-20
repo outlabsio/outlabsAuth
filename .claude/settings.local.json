@@ -68,7 +68,16 @@
       "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJkMmJkMjBjZC1mYWJhLTQ4ODgtODFjMC0xMzFkNDVjZjk4MTgiLCJleHAiOjE3Njg0MzY1OTgsImlhdCI6MTc2ODQwNzc5OCwidHlwZSI6ImFjY2VzcyIsImF1ZCI6Im91dGxhYnMtYXV0aCIsImp0aSI6IlZWWXZrWUgydnhQN3pqOURxNHlycmcifQ.g8pQercqlCz7X6Dws5DsXq8vjCNCuMC4jKE9X54gg-M\" curl -s http://localhost:8004/v1/users/me -H \"Authorization: Bearer $TOKEN\")",
       "mcp__acp__Bash",
       "mcp__acp__Edit",
-      "mcp__acp__Write"
+      "mcp__acp__Write",
+      "Bash(docker exec:*)",
+      "Bash(lsof:*)",
+      "Bash(DATABASE_URL=\"postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac\" SECRET_KEY=\"simple-rbac-secret-key-change-in-production\" REDIS_URL=\"redis://localhost:6379\" uv run uvicorn:*)",
+      "Bash(DATABASE_URL=\"postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac\" uv run python:*)",
+      "Bash(bun run dev)",
+      "Bash(curl:*)",
+      "WebFetch(domain:localhost)",
+      "Bash(DATABASE_URL=\"postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac\" SECRET_KEY=\"enterprise-rbac-secret-key-change-in-production\" REDIS_URL=\"redis://localhost:6379\" uv run uvicorn:*)",
+      "Bash(xargs kill:*)"
     ],
     "deny": [],
     "ask": []

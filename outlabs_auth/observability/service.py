@@ -8,7 +8,7 @@ import asyncio
 import socket
 from contextvars import ContextVar
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import structlog
 from prometheus_client import Counter, Gauge, Histogram
@@ -368,6 +368,80 @@ class ObservabilityService:
             "outlabs_auth_service_errors_total",
             "Total service-level errors",
             ["service", "operation"],
+        )
+
+        # Entity operations metrics
+        self.metrics["entity_operations_total"] = Counter(
+            "outlabs_auth_entity_operations_total",
+            "Entity operations",
+            ["operation"],
+        )
+
+        self.metrics["entity_operation_duration"] = Histogram(
+            "outlabs_auth_entity_operation_duration_seconds",
+            "Entity operation duration in seconds",
+            ["operation"],
+            buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
+        )
+
+        # Membership operations metrics
+        self.metrics["membership_operations_total"] = Counter(
+            "outlabs_auth_membership_operations_total",
+            "Membership operations",
+            ["operation"],
+        )
+
+        self.metrics["membership_operation_duration"] = Histogram(
+            "outlabs_auth_membership_operation_duration_seconds",
+            "Membership operation duration in seconds",
+            ["operation"],
+            buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0],
+        )
+
+        # Activity tracking metrics
+        self.metrics["activity_track_total"] = Counter(
+            "outlabs_auth_activity_track_total",
+            "Activity tracking operations",
+            ["period"],
+        )
+
+        self.metrics["activity_sync_duration"] = Histogram(
+            "outlabs_auth_activity_sync_duration_seconds",
+            "Activity sync duration in seconds",
+            buckets=[0.1, 0.5, 1.0, 2.5, 5.0, 10.0],
+        )
+
+        self.metrics["activity_sync_records"] = Counter(
+            "outlabs_auth_activity_sync_records_total",
+            "Activity records synced",
+            ["metric_type"],
+        )
+
+        # Redis operations metrics
+        self.metrics["redis_operation_duration"] = Histogram(
+            "outlabs_auth_redis_operation_duration_seconds",
+            "Redis operation duration in seconds",
+            ["operation"],
+            buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1],
+        )
+
+        self.metrics["redis_errors_total"] = Counter(
+            "outlabs_auth_redis_errors_total",
+            "Redis operation errors",
+            ["operation"],
+        )
+
+        # Notification events metrics
+        self.metrics["notification_events_total"] = Counter(
+            "outlabs_auth_notification_events_total",
+            "Notification events emitted",
+            ["event_type"],
+        )
+
+        self.metrics["notification_delivery_failures"] = Counter(
+            "outlabs_auth_notification_delivery_failures_total",
+            "Notification delivery failures",
+            ["channel", "event_type"],
         )
 
     async def _log_worker(self) -> None:
@@ -1116,4 +1190,254 @@ class ObservabilityService:
         )
         self._increment_counter(
             "errors_total", {"error_type": error_type, "location": context}
+        )
+
+    # Public API - Entity Operations
+
+    def log_entity_operation(
+        self,
+        operation: str,
+        entity_id: str,
+        entity_type: str,
+        duration_ms: Optional[float] = None,
+        parent_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log entity operation (create, update, delete, move).
+
+        Args:
+            operation: Operation type (create, update, delete, move)
+            entity_id: Entity ID
+            entity_type: Entity type
+            duration_ms: Operation duration in milliseconds
+            parent_id: Parent entity ID (for create/move)
+            user_id: User who performed the operation
+            **extra: Additional context
+        """
+        self._emit_log(
+            "info",
+            f"entity_{operation}",
+            entity_id=entity_id,
+            entity_type=entity_type,
+            duration_ms=duration_ms,
+            parent_id=parent_id,
+            user_id=user_id,
+            **extra,
+        )
+        self._increment_counter("entity_operations_total", {"operation": operation})
+        if duration_ms is not None:
+            self._observe_histogram(
+                "entity_operation_duration",
+                duration_ms / 1000.0,
+                {"operation": operation},
+            )
+
+    # Public API - Membership Operations
+
+    def log_membership_operation(
+        self,
+        operation: str,
+        user_id: str,
+        entity_id: str,
+        duration_ms: Optional[float] = None,
+        roles: Optional[List[str]] = None,
+        status: Optional[str] = None,
+        performed_by: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log membership operation (add, remove, update, suspend, reactivate).
+
+        Args:
+            operation: Operation type
+            user_id: User being added/removed
+            entity_id: Entity ID
+            duration_ms: Operation duration
+            roles: Roles assigned (for add/update)
+            status: Membership status (for status changes)
+            performed_by: User who performed the operation
+            **extra: Additional context
+        """
+        self._emit_log(
+            "info",
+            f"membership_{operation}",
+            user_id=user_id,
+            entity_id=entity_id,
+            duration_ms=duration_ms,
+            roles=roles,
+            status=status,
+            performed_by=performed_by,
+            **extra,
+        )
+        self._increment_counter("membership_operations_total", {"operation": operation})
+        if duration_ms is not None:
+            self._observe_histogram(
+                "membership_operation_duration",
+                duration_ms / 1000.0,
+                {"operation": operation},
+            )
+
+    # Public API - Activity Tracking
+
+    def log_activity_tracked(
+        self,
+        user_id: str,
+        period: str,
+        **extra: Any,
+    ) -> None:
+        """
+        Log user activity tracking.
+
+        Args:
+            user_id: User ID
+            period: Period type (daily, monthly, quarterly)
+            **extra: Additional context
+        """
+        self._emit_log(
+            "debug",
+            "activity_tracked",
+            user_id=user_id,
+            period=period,
+            **extra,
+        )
+        self._increment_counter("activity_track_total", {"period": period})
+
+    def log_activity_sync(
+        self,
+        duration_ms: float,
+        records_synced: int,
+        metric_types: Optional[Dict[str, int]] = None,
+        errors: int = 0,
+        **extra: Any,
+    ) -> None:
+        """
+        Log activity sync to database.
+
+        Args:
+            duration_ms: Sync duration in milliseconds
+            records_synced: Total records synced
+            metric_types: Breakdown by metric type (dau, mau, qau)
+            errors: Number of errors during sync
+            **extra: Additional context
+        """
+        level = "info" if errors == 0 else "warning"
+        self._emit_log(
+            level,
+            "activity_sync_complete",
+            duration_ms=duration_ms,
+            records_synced=records_synced,
+            metric_types=metric_types,
+            errors=errors,
+            **extra,
+        )
+        self._observe_histogram("activity_sync_duration", duration_ms / 1000.0)
+        if metric_types:
+            for metric_type, count in metric_types.items():
+                self._increment_counter(
+                    "activity_sync_records", {"metric_type": metric_type}, value=count
+                )
+
+    # Public API - Redis Operations
+
+    def log_redis_operation(
+        self,
+        operation: str,
+        duration_ms: float,
+        success: bool = True,
+        key: Optional[str] = None,
+        error: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log Redis operation with timing.
+
+        Args:
+            operation: Operation type (get, set, delete, sadd, etc.)
+            duration_ms: Operation duration in milliseconds
+            success: Whether operation succeeded
+            key: Redis key (optional, may be redacted)
+            error: Error message if failed
+            **extra: Additional context
+        """
+        if not success:
+            self._emit_log(
+                "warning",
+                "redis_operation_failed",
+                operation=operation,
+                duration_ms=duration_ms,
+                error=error,
+                **extra,
+            )
+            self._increment_counter("redis_errors_total", {"operation": operation})
+        else:
+            # Only log at debug level to avoid noise
+            self._emit_log(
+                "debug",
+                "redis_operation",
+                operation=operation,
+                duration_ms=duration_ms,
+                **extra,
+            )
+
+        self._observe_histogram(
+            "redis_operation_duration", duration_ms / 1000.0, {"operation": operation}
+        )
+
+    # Public API - Notification Events
+
+    def log_notification_event(
+        self,
+        event_type: str,
+        channels_count: int = 0,
+        user_id: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        Log notification event emission.
+
+        Args:
+            event_type: Event type (user.login, user.created, etc.)
+            channels_count: Number of channels notified
+            user_id: Related user ID
+            **extra: Additional context
+        """
+        self._emit_log(
+            "info",
+            "notification_event_emitted",
+            event_type=event_type,
+            channels_count=channels_count,
+            user_id=user_id,
+            **extra,
+        )
+        self._increment_counter("notification_events_total", {"event_type": event_type})
+
+    def log_notification_delivery_failure(
+        self,
+        event_type: str,
+        channel: str,
+        error: str,
+        **extra: Any,
+    ) -> None:
+        """
+        Log notification delivery failure.
+
+        Args:
+            event_type: Event type
+            channel: Channel that failed
+            error: Error message
+            **extra: Additional context
+        """
+        self._emit_log(
+            "error",
+            "notification_delivery_failed",
+            event_type=event_type,
+            channel=channel,
+            error=error,
+            **extra,
+        )
+        self._increment_counter(
+            "notification_delivery_failures",
+            {"channel": channel, "event_type": event_type},
         )

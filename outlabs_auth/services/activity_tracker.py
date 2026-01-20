@@ -6,9 +6,13 @@ Background worker syncs to PostgreSQL for historical analytics.
 """
 
 import logging
+import time
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from outlabs_auth.observability import ObservabilityService
 
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
@@ -41,6 +45,7 @@ class ActivityTracker:
         enabled: bool = True,
         update_user_model: bool = True,
         store_user_ids: bool = False,
+        observability: Optional["ObservabilityService"] = None,
     ):
         """
         Initialize ActivityTracker.
@@ -50,11 +55,13 @@ class ActivityTracker:
             enabled: Enable activity tracking (default: True)
             update_user_model: Update User.last_activity (default: True)
             store_user_ids: Store user IDs in ActivityMetric for cohort analysis (default: False)
+            observability: Optional observability service for metrics/logging
         """
         self.redis = redis_client
         self.enabled = enabled
         self.update_user_model = update_user_model
         self.store_user_ids = store_user_ids
+        self.observability = observability
 
     async def track_activity(self, user_id: str) -> None:
         """
@@ -97,6 +104,16 @@ class ActivityTracker:
             # Update last_activity timestamp in Redis
             last_activity_key = f"last_activity:{user_id}"
             await self.redis.set_raw(last_activity_key, now.isoformat(), ttl=7 * 86400)
+
+            # Emit observability metrics
+            if self.observability:
+                self.observability.log_activity_tracked(user_id=user_id, period="daily")
+                self.observability.log_activity_tracked(
+                    user_id=user_id, period="monthly"
+                )
+                self.observability.log_activity_tracked(
+                    user_id=user_id, period="quarterly"
+                )
 
             logger.debug(f"Tracked activity for user {user_id}")
 
@@ -183,6 +200,8 @@ class ActivityTracker:
                 "errors": 0         # Number of errors encountered
             }
         """
+        start_time = time.perf_counter()
+
         stats = {
             "daily": 0,
             "monthly": 0,
@@ -234,6 +253,22 @@ class ActivityTracker:
             # 5. Cleanup old ActivityMetric records
             await self._cleanup_old_metrics(session)
 
+            # Log observability
+            if self.observability:
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                self.observability.log_activity_sync(
+                    duration_ms=duration_ms,
+                    records_synced=stats["daily"]
+                    + stats["monthly"]
+                    + stats["quarterly"],
+                    metric_types={
+                        "dau": stats["daily"],
+                        "mau": stats["monthly"],
+                        "qau": stats["quarterly"],
+                    },
+                    errors=stats["errors"],
+                )
+
             logger.info(
                 f"Activity sync completed: "
                 f"DAU={stats['daily']}, MAU={stats['monthly']}, QAU={stats['quarterly']}, "
@@ -243,6 +278,15 @@ class ActivityTracker:
         except Exception as e:
             logger.error(f"Error syncing activity metrics: {e}", exc_info=True)
             stats["errors"] += 1
+
+            # Log observability for error case
+            if self.observability:
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                self.observability.log_activity_sync(
+                    duration_ms=duration_ms,
+                    records_synced=0,
+                    errors=1,
+                )
 
         return stats
 

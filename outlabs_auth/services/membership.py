@@ -6,9 +6,13 @@ Handles user-entity-role relationships with multiple roles per membership.
 Uses SQLAlchemy for PostgreSQL backend.
 """
 
+import time
 from datetime import datetime, timezone
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from outlabs_auth.observability import ObservabilityService
 
 from sqlalchemy import and_, func, select, update
 from sqlalchemy import delete as sql_delete
@@ -45,15 +49,21 @@ class MembershipService(BaseService[EntityMembership]):
     - Member listing and filtering
     """
 
-    def __init__(self, config: AuthConfig):
+    def __init__(
+        self,
+        config: AuthConfig,
+        observability: Optional["ObservabilityService"] = None,
+    ):
         """
         Initialize MembershipService.
 
         Args:
             config: Authentication configuration
+            observability: Optional observability service for metrics/logging
         """
         super().__init__(EntityMembership)
         self.config = config
+        self.observability = observability
 
     async def add_member(
         self,
@@ -88,6 +98,8 @@ class MembershipService(BaseService[EntityMembership]):
             RoleNotFoundError: If role not found
             InvalidInputError: If max_members limit exceeded
         """
+        start_time = time.perf_counter()
+
         # Validate entity exists
         entity = await session.get(Entity, entity_id)
         if not entity:
@@ -158,6 +170,19 @@ class MembershipService(BaseService[EntityMembership]):
 
             await session.flush()
             await session.refresh(existing, ["roles"])
+
+            # Log observability for update
+            if self.observability:
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                self.observability.log_membership_operation(
+                    operation="update",
+                    user_id=str(user_id),
+                    entity_id=str(entity_id),
+                    duration_ms=duration_ms,
+                    roles=[str(r) for r in role_ids],
+                    performed_by=str(joined_by_id) if joined_by_id else None,
+                )
+
             return existing
 
         # Create new membership
@@ -184,6 +209,19 @@ class MembershipService(BaseService[EntityMembership]):
 
         await session.flush()
         await session.refresh(membership, ["roles"])
+
+        # Log observability for add
+        if self.observability:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            self.observability.log_membership_operation(
+                operation="add",
+                user_id=str(user_id),
+                entity_id=str(entity_id),
+                duration_ms=duration_ms,
+                roles=[str(r) for r in role_ids],
+                performed_by=str(joined_by_id) if joined_by_id else None,
+            )
+
         return membership
 
     async def remove_member(
@@ -210,6 +248,8 @@ class MembershipService(BaseService[EntityMembership]):
         Raises:
             MembershipNotFoundError: If membership not found
         """
+        start_time = time.perf_counter()
+
         # Find membership
         membership = await self.get_one(
             session,
@@ -236,6 +276,18 @@ class MembershipService(BaseService[EntityMembership]):
         )
 
         await session.flush()
+
+        # Log observability
+        if self.observability:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            self.observability.log_membership_operation(
+                operation="remove",
+                user_id=str(user_id),
+                entity_id=str(entity_id),
+                duration_ms=duration_ms,
+                performed_by=str(revoked_by_id) if revoked_by_id else None,
+            )
+
         return True
 
     async def update_member_roles(
@@ -603,6 +655,8 @@ class MembershipService(BaseService[EntityMembership]):
         Raises:
             MembershipNotFoundError: If membership not found
         """
+        start_time = time.perf_counter()
+
         membership = await self.get_one(
             session,
             EntityMembership.user_id == user_id,
@@ -619,6 +673,18 @@ class MembershipService(BaseService[EntityMembership]):
         membership.revocation_reason = reason
 
         await session.flush()
+
+        # Log observability
+        if self.observability:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            self.observability.log_membership_operation(
+                operation="suspend",
+                user_id=str(user_id),
+                entity_id=str(entity_id),
+                duration_ms=duration_ms,
+                status="suspended",
+            )
+
         return membership
 
     async def reactivate_membership(
@@ -641,6 +707,8 @@ class MembershipService(BaseService[EntityMembership]):
         Raises:
             MembershipNotFoundError: If membership not found
         """
+        start_time = time.perf_counter()
+
         membership = await self.get_one(
             session,
             EntityMembership.user_id == user_id,
@@ -659,4 +727,16 @@ class MembershipService(BaseService[EntityMembership]):
         membership.revoked_by_id = None
 
         await session.flush()
+
+        # Log observability
+        if self.observability:
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            self.observability.log_membership_operation(
+                operation="reactivate",
+                user_id=str(user_id),
+                entity_id=str(entity_id),
+                duration_ms=duration_ms,
+                status="active",
+            )
+
         return membership

@@ -7,6 +7,14 @@ import { UButton } from "#components";
 
 const search = ref("");
 const showCreateModal = ref(false);
+const showEditModal = ref(false);
+const selectedEntityId = ref<string | null>(null);
+
+// Open edit modal
+function openEditModal(entityId: string) {
+    selectedEntityId.value = entityId;
+    showEditModal.value = true;
+}
 
 // Reactive filters for query
 const filters = computed(() => {
@@ -68,7 +76,7 @@ const columns: TableColumn<Entity>[] = [
                     color: "neutral",
                     variant: "ghost",
                     size: "xs",
-                    onClick: () => console.log("Edit entity:", row.original.id),
+                    onClick: () => openEditModal(row.original.id),
                 }),
                 h(UButton, {
                     icon: "i-lucide-trash-2",
@@ -191,4 +199,11 @@ const columns: TableColumn<Entity>[] = [
 
     <!-- Create Entity Modal -->
     <EntityCreateModal v-model:open="showCreateModal" />
+
+    <!-- Edit Entity Modal -->
+    <EntityUpdateModal
+        v-if="selectedEntityId"
+        v-model:open="showEditModal"
+        :entity-id="selectedEntityId"
+    />
 </template>
