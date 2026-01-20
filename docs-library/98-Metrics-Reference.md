@@ -868,6 +868,231 @@ histogram_quantile(0.95, sum by (collection, le) (rate(outlabs_auth_db_query_dur
 
 ---
 
+## Entity Operations Metrics
+
+### outlabs_auth_entity_operations_total
+
+**Type:** Counter
+**Description:** Total number of entity operations (create, update, move, delete)
+
+**Labels:**
+- `operation` - Operation type
+  - `create` - Entity created
+  - `update` - Entity updated
+  - `move` - Entity moved in hierarchy
+  - `delete` - Entity deleted
+
+**Example Queries:**
+
+```promql
+# Entity operation rate
+rate(outlabs_auth_entity_operations_total[5m])
+
+# Operations by type
+sum by (operation) (rate(outlabs_auth_entity_operations_total[5m]))
+
+# Entity creations per hour
+sum(increase(outlabs_auth_entity_operations_total{operation="create"}[1h]))
+```
+
+---
+
+### outlabs_auth_entity_operation_duration_seconds
+
+**Type:** Histogram
+**Description:** Time taken for entity operations (in seconds)
+
+**Labels:**
+- `operation` - Operation type (create, update, move, delete)
+
+**Buckets:** `[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0]`
+
+**Example Queries:**
+
+```promql
+# P95 entity operation latency
+histogram_quantile(0.95, rate(outlabs_auth_entity_operation_duration_seconds_bucket[5m]))
+
+# P95 move operation latency (hierarchy operations are slower)
+histogram_quantile(0.95, rate(outlabs_auth_entity_operation_duration_seconds_bucket{operation="move"}[5m]))
+```
+
+---
+
+## Membership Operations Metrics
+
+### outlabs_auth_membership_operations_total
+
+**Type:** Counter
+**Description:** Total number of membership operations
+
+**Labels:**
+- `operation` - Operation type
+  - `add` - Member added to entity
+  - `remove` - Member removed from entity
+  - `suspend` - Membership suspended
+  - `reactivate` - Membership reactivated
+
+**Example Queries:**
+
+```promql
+# Membership changes rate
+rate(outlabs_auth_membership_operations_total[5m])
+
+# Membership additions per hour
+sum(increase(outlabs_auth_membership_operations_total{operation="add"}[1h]))
+
+# Suspensions (potential security events)
+rate(outlabs_auth_membership_operations_total{operation="suspend"}[5m])
+```
+
+---
+
+### outlabs_auth_membership_operation_duration_seconds
+
+**Type:** Histogram
+**Description:** Time taken for membership operations (in seconds)
+
+**Labels:**
+- `operation` - Operation type (add, remove, suspend, reactivate)
+
+**Buckets:** `[0.01, 0.05, 0.1, 0.25, 0.5, 1.0]`
+
+**Example Queries:**
+
+```promql
+# P95 membership operation latency
+histogram_quantile(0.95, rate(outlabs_auth_membership_operation_duration_seconds_bucket[5m]))
+```
+
+---
+
+## Activity Tracking Metrics
+
+### outlabs_auth_activity_track_total
+
+**Type:** Counter
+**Description:** Activity tracking operations by period type
+
+**Labels:**
+- `period` - Period type
+  - `daily` - Daily active user tracking (DAU)
+  - `monthly` - Monthly active user tracking (MAU)
+  - `quarterly` - Quarterly active user tracking (QAU)
+
+**Example Queries:**
+
+```promql
+# Activity tracking rate
+rate(outlabs_auth_activity_track_total[5m])
+
+# Daily activity tracking events
+rate(outlabs_auth_activity_track_total{period="daily"}[5m])
+```
+
+---
+
+### outlabs_auth_activity_sync_duration_seconds
+
+**Type:** Histogram
+**Description:** Duration of activity sync operations to database (in seconds)
+
+**Labels:** None
+
+**Buckets:** `[0.1, 0.5, 1.0, 2.5, 5.0, 10.0]`
+
+**Example Queries:**
+
+```promql
+# P95 activity sync duration
+histogram_quantile(0.95, rate(outlabs_auth_activity_sync_duration_seconds_bucket[5m]))
+```
+
+---
+
+### outlabs_auth_activity_sync_records_total
+
+**Type:** Counter
+**Description:** Number of activity records synced to database
+
+**Labels:**
+- `metric_type` - Type of metric synced (daily, monthly, quarterly)
+
+**Example Queries:**
+
+```promql
+# Records synced per sync operation
+rate(outlabs_auth_activity_sync_records_total[5m])
+```
+
+---
+
+## Notification Metrics
+
+### outlabs_auth_notification_events_total
+
+**Type:** Counter
+**Description:** Total notification events emitted
+
+**Labels:**
+- `event_type` - Type of notification event
+  - `user_registered` - User registration notification
+  - `user_verified` - Email verification notification
+  - `password_reset` - Password reset notification
+  - `login_success` - Login notification
+  - `permission_denied` - Permission denial notification
+  - etc.
+
+**Example Queries:**
+
+```promql
+# Notification rate
+rate(outlabs_auth_notification_events_total[5m])
+
+# Notifications by type
+sum by (event_type) (rate(outlabs_auth_notification_events_total[5m]))
+
+# User registrations per hour
+sum(increase(outlabs_auth_notification_events_total{event_type="user_registered"}[1h]))
+```
+
+---
+
+### outlabs_auth_notification_delivery_failures_total
+
+**Type:** Counter
+**Description:** Total notification delivery failures
+
+**Labels:**
+- `channel` - Delivery channel (email, webhook, pubsub)
+- `event_type` - Type of notification that failed
+
+**Example Queries:**
+
+```promql
+# Delivery failure rate
+rate(outlabs_auth_notification_delivery_failures_total[5m])
+
+# Failures by channel
+sum by (channel) (rate(outlabs_auth_notification_delivery_failures_total[5m]))
+```
+
+**Recommended Alerts:**
+
+```yaml
+# High notification failure rate
+- alert: NotificationDeliveryFailures
+  expr: rate(outlabs_auth_notification_delivery_failures_total[5m]) > 0.5
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Notification delivery failures"
+    description: "{{ $value }} notification failures per second on {{ $labels.channel }}"
+```
+
+---
+
 ## Example Grafana Dashboard Queries
 
 ### Authentication Dashboard
@@ -928,5 +1153,5 @@ sum(increase(outlabs_auth_api_key_validations_total{status="invalid"}[1h]))
 
 ---
 
-**Last Updated:** 2025-01-24
+**Last Updated:** 2025-01-20
 **Related:** [97-Observability.md](97-Observability.md), [99-Log-Events-Reference.md](99-Log-Events-Reference.md)

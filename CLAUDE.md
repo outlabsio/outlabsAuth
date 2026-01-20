@@ -18,6 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - ✅ Hybrid authorization (RBAC + ReBAC + ABAC)
 - ✅ PostgreSQL with SQLAlchemy async
 - ✅ Closure table for O(1) tree queries
+- ✅ Observability (Prometheus metrics + structured logging)
 
 ### Patterns from FastAPI-Users
 - ✅ Lifecycle hooks (on_after_register, on_after_login, etc.)
@@ -28,7 +29,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current Project Status
 
-**Branch**: `postgres-migration`
+**Branch**: `main`
 **Status**: PostgreSQL migration complete, all examples working
 **Version**: 2.0 (PostgreSQL + SQLAlchemy)
 
@@ -37,6 +38,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - ✅ All examples using PostgreSQL
 - ✅ Entity hierarchy with closure table
 - ✅ SimpleRBAC and EnterpriseRBAC presets working
+- ✅ Observability instrumentation complete (all services)
 
 **PROJECT MANAGEMENT**: We use [IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md) as the primary project management tool. All phase tracking, status updates, and task breakdowns are maintained in the roadmap. Always update the roadmap when completing phases or tasks.
 
@@ -294,6 +296,7 @@ outlabsAuth/
 │   ├── presets/                    # SimpleRBAC, EnterpriseRBAC
 │   ├── dependencies/               # FastAPI dependency injection
 │   ├── middleware/                 # Auth middleware
+│   ├── observability/              # Prometheus metrics + structured logging
 │   ├── utils/                      # JWT, password hashing, etc.
 │   ├── routers/                    # FastAPI router factories
 │   └── schemas/                    # Pydantic request/response schemas
@@ -337,6 +340,39 @@ outlabsAuth/
 - **Redis Counters** (DD-033): 99%+ reduction in DB writes for API keys
 - **Redis Pub/Sub** (DD-037): <100ms cache invalidation across instances
 - **Unified AuthDeps** (DD-035): Single dependency injection class
+
+### Observability System
+- **Prometheus Metrics**: 30+ metrics for auth, permissions, entities, memberships, activity
+- **Structured Logging**: JSON logs via structlog with correlation IDs
+- **Instrumented Services**: AuthService, PermissionService, EntityService, MembershipService, ActivityTracker, NotificationService
+- **Configuration**: `ObservabilityConfig` with presets for dev/staging/production
+- **Integration**: Grafana dashboards, Prometheus scraping, Loki log aggregation
+
+```python
+from outlabs_auth.observability import ObservabilityConfig, ObservabilityPresets
+
+# Use a preset
+obs_config = ObservabilityPresets.development()  # or .staging() or .production()
+
+# Or customize
+obs_config = ObservabilityConfig(
+    enable_metrics=True,
+    logs_format="json",
+    logs_level="INFO",
+    log_permission_checks="failures_only",
+)
+
+auth = OutlabsAuth(
+    database_url="...",
+    secret_key="...",
+    observability_config=obs_config,
+)
+
+# Instrument FastAPI app (adds /metrics endpoint, correlation ID middleware)
+auth.instrument_fastapi(app)
+```
+
+**Documentation**: See `docs-library/97-Observability.md`, `98-Metrics-Reference.md`, `99-Log-Events-Reference.md`
 
 ## Reference Code (`_reference/`)
 

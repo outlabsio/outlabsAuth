@@ -855,6 +855,225 @@ jq 'select(.event == "service_error" and .error_type == "DatabaseError")' app.lo
 
 ---
 
+## Entity Events
+
+### entity_operation
+
+**Level:** INFO
+**When:** Entity created, updated, moved, or deleted
+**Frequency:** Per entity operation (moderate volume in EnterpriseRBAC)
+
+**Fields:**
+- `operation` (string) - Operation type: `create`, `update`, `move`, `delete`
+- `entity_id` (string) - Entity ID
+- `entity_type` (string) - Entity type (e.g., `department`, `team`, `project`)
+- `duration_ms` (float, optional) - Operation duration
+- `parent_id` (string, optional) - Parent entity ID (for create/move)
+- `old_parent_id` (string, optional) - Previous parent ID (for move)
+- `changes` (object, optional) - Changed fields (for update)
+
+**Example:**
+```json
+{
+  "timestamp": "2025-01-20T10:30:00.123Z",
+  "level": "info",
+  "event": "entity_operation",
+  "correlation_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "service": "outlabs_auth",
+  "operation": "create",
+  "entity_id": "ent_abc123",
+  "entity_type": "department",
+  "parent_id": "ent_root",
+  "duration_ms": 45.2
+}
+```
+
+**Search Examples:**
+```bash
+# All entity operations
+jq 'select(.event == "entity_operation")' app.log
+
+# Entity hierarchy changes (moves)
+jq 'select(.event == "entity_operation" and .operation == "move")' app.log
+
+# Operations on specific entity
+jq 'select(.event == "entity_operation" and .entity_id == "ent_abc123")' app.log
+```
+
+---
+
+## Membership Events
+
+### membership_operation
+
+**Level:** INFO
+**When:** Membership added, removed, suspended, or reactivated
+**Frequency:** Per membership change (moderate volume in EnterpriseRBAC)
+
+**Fields:**
+- `operation` (string) - Operation type: `add`, `remove`, `suspend`, `reactivate`
+- `user_id` (string) - User being added/removed
+- `entity_id` (string) - Entity membership is for
+- `roles` (array, optional) - Role names assigned (for add)
+- `reason` (string, optional) - Reason for suspension
+- `duration_ms` (float, optional) - Operation duration
+
+**Example:**
+```json
+{
+  "timestamp": "2025-01-20T10:35:00.456Z",
+  "level": "info",
+  "event": "membership_operation",
+  "correlation_id": "b2c3d4e5-f6a7-8901-bcde-f23456789012",
+  "service": "outlabs_auth",
+  "operation": "add",
+  "user_id": "usr_xyz789",
+  "entity_id": "ent_abc123",
+  "roles": ["editor", "viewer"],
+  "duration_ms": 32.1
+}
+```
+
+**Search Examples:**
+```bash
+# All membership changes for a user
+jq 'select(.event == "membership_operation" and .user_id == "usr_xyz789")' app.log
+
+# Membership suspensions (security events)
+jq 'select(.event == "membership_operation" and .operation == "suspend")' app.log
+
+# Memberships added to specific entity
+jq 'select(.event == "membership_operation" and .entity_id == "ent_abc123" and .operation == "add")' app.log
+```
+
+---
+
+## Activity Events
+
+### activity_tracked
+
+**Level:** DEBUG
+**When:** User activity tracked for DAU/MAU/QAU metrics
+**Frequency:** Per user activity (high volume, typically DEBUG level)
+
+**Fields:**
+- `user_id` (string) - User ID
+- `period` (string) - Period type: `daily`, `monthly`, `quarterly`
+
+**Example:**
+```json
+{
+  "timestamp": "2025-01-20T10:40:00.789Z",
+  "level": "debug",
+  "event": "activity_tracked",
+  "correlation_id": "c3d4e5f6-a7b8-9012-cdef-34567890abcd",
+  "service": "outlabs_auth",
+  "user_id": "usr_xyz789",
+  "period": "daily"
+}
+```
+
+---
+
+### activity_sync
+
+**Level:** INFO
+**When:** Activity metrics synced from Redis to database
+**Frequency:** Per sync interval (low volume, typically every few minutes)
+
+**Fields:**
+- `duration_ms` (float) - Sync operation duration
+- `records_synced` (int) - Total records synced
+- `daily_count` (int) - Daily active users synced
+- `monthly_count` (int) - Monthly active users synced
+- `quarterly_count` (int) - Quarterly active users synced
+
+**Example:**
+```json
+{
+  "timestamp": "2025-01-20T10:45:00.123Z",
+  "level": "info",
+  "event": "activity_sync",
+  "correlation_id": "d4e5f6a7-b8c9-0123-def4-567890abcdef",
+  "service": "outlabs_auth",
+  "duration_ms": 150.5,
+  "records_synced": 42,
+  "daily_count": 25,
+  "monthly_count": 15,
+  "quarterly_count": 2
+}
+```
+
+---
+
+## Notification Events
+
+### notification_event
+
+**Level:** INFO
+**When:** Notification event emitted
+**Frequency:** Per notification (moderate volume)
+
+**Fields:**
+- `event_type` (string) - Notification event type (e.g., `user_registered`, `password_reset`)
+- `channels_count` (int) - Number of channels notified
+- `user_id` (string, optional) - Related user ID
+
+**Example:**
+```json
+{
+  "timestamp": "2025-01-20T10:50:00.456Z",
+  "level": "info",
+  "event": "notification_event",
+  "correlation_id": "e5f6a7b8-c9d0-1234-ef56-7890abcdef12",
+  "service": "outlabs_auth",
+  "event_type": "user_registered",
+  "channels_count": 3,
+  "user_id": "usr_new123"
+}
+```
+
+---
+
+### notification_delivery_failure
+
+**Level:** WARNING
+**When:** Notification delivery to a channel fails
+**Frequency:** Per failed delivery (should be low)
+
+**Fields:**
+- `event_type` (string) - Original event type
+- `channel` (string) - Failed channel (e.g., `email`, `webhook`, `pubsub`)
+- `error` (string) - Error message
+
+**Example:**
+```json
+{
+  "timestamp": "2025-01-20T10:51:00.789Z",
+  "level": "warning",
+  "event": "notification_delivery_failure",
+  "correlation_id": "f6a7b8c9-d0e1-2345-f678-90abcdef1234",
+  "service": "outlabs_auth",
+  "event_type": "user_registered",
+  "channel": "email",
+  "error": "SMTP connection timeout"
+}
+```
+
+**Search Examples:**
+```bash
+# All notification failures
+jq 'select(.event == "notification_delivery_failure")' app.log
+
+# Failures by channel
+jq 'select(.event == "notification_delivery_failure") | .channel' app.log | sort | uniq -c
+
+# Email delivery failures
+jq 'select(.event == "notification_delivery_failure" and .channel == "email")' app.log
+```
+
+---
+
 ## Filtering & Searching
 
 ### Common jq Patterns
@@ -892,5 +1111,5 @@ jq 'select(.duration_ms > 100)' app.log
 
 ---
 
-**Last Updated:** 2025-01-24
+**Last Updated:** 2025-01-20
 **Related:** [97-Observability.md](97-Observability.md), [98-Metrics-Reference.md](98-Metrics-Reference.md)
