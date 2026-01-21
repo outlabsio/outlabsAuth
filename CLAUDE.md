@@ -392,6 +392,47 @@ auth.instrument_fastapi(app)
 
 **Documentation**: See `docs-library/97-Observability.md`, `98-Metrics-Reference.md`, `99-Log-Events-Reference.md`
 
+### Portable Observability Stack
+
+The `observability/` folder contains a **portable, per-project observability stack** that can be copied to any project:
+
+```
+observability/
+├── docker-compose.yml          # Parameterized compose file
+├── .env.example                # Configuration template
+├── setup.sh                    # Setup script (generates configs)
+├── test.sh                     # Test script
+├── README.md                   # Deployment guide
+├── EXTENDING.md                # Guide for adding custom metrics
+├── prometheus/
+│   └── prometheus.yml.template # Template with ${VAR} placeholders
+├── grafana/
+│   ├── provisioning/           # Auto-provisioning configs
+│   └── dashboards/             # Pre-built dashboards
+├── promtail/
+│   └── promtail.yml.template   # Log collection template
+└── tempo/
+    └── tempo.yml               # Tracing config
+```
+
+**Quick Start** (for development):
+```bash
+cd observability
+cp .env.example .env        # Create config (customize if needed)
+./setup.sh                  # Generate configs from templates
+docker compose up -d        # Start stack
+# Grafana: http://localhost:3011 (admin/admin)
+```
+
+**For New Projects**: Copy the entire `observability/` folder to your project and customize `.env` with your project name and ports.
+
+**Key Environment Variables**:
+- `PROJECT_NAME` - Prefix for container names (default: outlabs)
+- `API_PORT` - Your FastAPI app port (default: 8000)
+- `GRAFANA_PORT` - Grafana UI port (default: 3011)
+
+See `observability/EXTENDING.md` for adding custom metrics and dashboards.
+
 ## Reference Code (`_reference/`)
 
 The `_reference/` directory contains well-designed code from the old centralized API:
