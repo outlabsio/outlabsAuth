@@ -212,6 +212,43 @@ const groups = computed(() => {
                     tooltip
                     class="mt-auto"
                 />
+
+                <!-- Mode Indicator -->
+                <div
+                    v-if="!collapsed && authStore.state.isConfigLoaded"
+                    class="px-3 py-2 mt-2 border-t border-default"
+                >
+                    <div class="flex items-center gap-2 text-xs text-muted">
+                        <UIcon
+                            :name="
+                                authStore.isEnterpriseRBAC
+                                    ? 'i-lucide-building-2'
+                                    : 'i-lucide-box'
+                            "
+                            class="w-3 h-3"
+                        />
+                        <span>{{
+                            authStore.state.config?.preset || "Unknown"
+                        }}</span>
+                    </div>
+                </div>
+                <div
+                    v-else-if="collapsed && authStore.state.isConfigLoaded"
+                    class="flex justify-center py-2 mt-2 border-t border-default"
+                >
+                    <UTooltip
+                        :text="authStore.state.config?.preset || 'Unknown'"
+                    >
+                        <UIcon
+                            :name="
+                                authStore.isEnterpriseRBAC
+                                    ? 'i-lucide-building-2'
+                                    : 'i-lucide-box'
+                            "
+                            class="w-4 h-4 text-muted"
+                        />
+                    </UTooltip>
+                </div>
             </template>
 
             <template #footer="{ collapsed }">
@@ -221,6 +258,8 @@ const groups = computed(() => {
 
         <UDashboardSearch :groups="groups" />
 
-        <slot />
+        <UDashboardPanel class="flex-1 flex flex-col overflow-hidden">
+            <slot />
+        </UDashboardPanel>
     </UDashboardGroup>
 </template>

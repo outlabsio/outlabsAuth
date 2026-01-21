@@ -21,6 +21,14 @@ export interface UserPermissionSource {
   source_name?: string; // Name of the role if source is 'role'
 }
 
+// Entity membership response from backend
+export interface MembershipResponse {
+  id: string;
+  entity_id: string;
+  user_id: string;
+  role_ids: string[];
+}
+
 export const useUserStore = defineStore("user", () => {
   const authStore = useAuthStore();
 
@@ -35,10 +43,14 @@ export const useUserStore = defineStore("user", () => {
     // User's effective permissions (from roles + direct)
     userPermissions: [] as UserPermissionSource[],
 
+    // User's entity memberships (EnterpriseRBAC only)
+    userMemberships: [] as MembershipResponse[],
+
     // Loading states
     isLoadingUser: false,
     isLoadingRoles: false,
     isLoadingPermissions: false,
+    isLoadingMemberships: false,
 
     // Error handling
     error: null as string | null,
@@ -48,10 +60,15 @@ export const useUserStore = defineStore("user", () => {
   const currentUser = computed(() => state.currentUser);
   const userRoles = computed(() => state.userRoles);
   const userPermissions = computed(() => state.userPermissions);
+  const userMemberships = computed(() => state.userMemberships);
   const isLoading = computed(
     () =>
-      state.isLoadingUser || state.isLoadingRoles || state.isLoadingPermissions,
+      state.isLoadingUser ||
+      state.isLoadingRoles ||
+      state.isLoadingPermissions ||
+      state.isLoadingMemberships,
   );
+  const isLoadingMemberships = computed(() => state.isLoadingMemberships);
   const error = computed(() => state.error);
 
   /**
@@ -312,6 +329,122 @@ export const useUserStore = defineStore("user", () => {
     }
   };
 
+  // ========================
+  // Entity Membership Methods (EnterpriseRBAC only)
+  // ========================
+
+  /**
+   * Fetch user's entity memberships
+   * Only available in EnterpriseRBAC mode
+   */
+  const fetchUserMemberships = async (
+    userId: string,
+  ): Promise<MembershipResponse[]> => {
+    try {
+      state.isLoadingMemberships = true;
+      state.error = null;
+
+      const memberships = await authStore.apiCall<MembershipResponse[]>(
+        `/v1/memberships/user/${userId}`,
+      );
+
+      state.userMemberships = memberships;
+      return memberships;
+    } catch (error: any) {
+      state.error = error.message || "Failed to fetch user memberships";
+      console.error("[user.store] Failed to fetch user memberships:", error);
+      return [];
+    } finally {
+      state.isLoadingMemberships = false;
+    }
+  };
+
+  /**
+   * Add user to an entity
+   * Creates a membership with empty roles (roles assigned separately)
+   */
+  const addToEntity = async (
+    userId: string,
+    entityId: string,
+  ): Promise<boolean> => {
+    try {
+      state.error = null;
+
+      await authStore.apiCall("/v1/memberships/", {
+        method: "POST",
+        body: {
+          user_id: userId,
+          entity_id: entityId,
+          role_ids: [],
+        },
+      });
+
+      // Refresh memberships
+      await fetchUserMemberships(userId);
+
+      const toast = useToast();
+      toast.add({
+        title: "Added to entity",
+        description: "User has been added to the entity successfully",
+        color: "success",
+      });
+
+      return true;
+    } catch (error: any) {
+      state.error = error.message || "Failed to add user to entity";
+      console.error("[user.store] Failed to add user to entity:", error);
+
+      const toast = useToast();
+      toast.add({
+        title: "Error adding to entity",
+        description: state.error,
+        color: "error",
+      });
+
+      return false;
+    }
+  };
+
+  /**
+   * Remove user from an entity
+   */
+  const removeFromEntity = async (
+    userId: string,
+    entityId: string,
+  ): Promise<boolean> => {
+    try {
+      state.error = null;
+
+      await authStore.apiCall(`/v1/memberships/${entityId}/${userId}`, {
+        method: "DELETE",
+      });
+
+      // Refresh memberships
+      await fetchUserMemberships(userId);
+
+      const toast = useToast();
+      toast.add({
+        title: "Removed from entity",
+        description: "User has been removed from the entity successfully",
+        color: "success",
+      });
+
+      return true;
+    } catch (error: any) {
+      state.error = error.message || "Failed to remove user from entity";
+      console.error("[user.store] Failed to remove user from entity:", error);
+
+      const toast = useToast();
+      toast.add({
+        title: "Error removing from entity",
+        description: state.error,
+        color: "error",
+      });
+
+      return false;
+    }
+  };
+
   /**
    * Clear current user and reset state
    */
@@ -319,6 +452,7 @@ export const useUserStore = defineStore("user", () => {
     state.currentUser = null;
     state.userRoles = [];
     state.userPermissions = [];
+    state.userMemberships = [];
     state.error = null;
   };
 
@@ -337,7 +471,9 @@ export const useUserStore = defineStore("user", () => {
     currentUser,
     userRoles,
     userPermissions,
+    userMemberships,
     isLoading,
+    isLoadingMemberships,
     error,
 
     // Actions
@@ -350,5 +486,10 @@ export const useUserStore = defineStore("user", () => {
     changePassword,
     clearUser,
     clearError,
+
+    // Entity membership actions (EnterpriseRBAC)
+    fetchUserMemberships,
+    addToEntity,
+    removeFromEntity,
   };
 });
