@@ -105,8 +105,8 @@ function getEntityClassColor(
 
 <template>
     <div class="flex flex-col gap-6">
-        <!-- Header -->
-        <div class="flex items-center justify-between">
+        <!-- Header with Add Entity -->
+        <div class="flex items-center justify-between gap-4">
             <div>
                 <h3 class="text-lg font-semibold text-foreground">
                     Entity Memberships
@@ -115,12 +115,32 @@ function getEntityClassColor(
                     Entities this user belongs to
                 </p>
             </div>
-            <UBadge color="primary" variant="subtle">
-                {{ enrichedMemberships.length }}
-                {{
-                    enrichedMemberships.length === 1 ? "entity" : "entities"
-                }}
-            </UBadge>
+            <div v-if="isLoadingEntities" class="flex items-center">
+                <UIcon
+                    name="i-lucide-loader-2"
+                    class="w-5 h-5 animate-spin text-primary"
+                />
+            </div>
+            <div v-else-if="availableEntities.length > 0" class="flex gap-2">
+                <USelect
+                    v-model="selectedEntityId"
+                    :items="
+                        availableEntities.map((e) => ({
+                            label: e.display_name || e.name,
+                            value: e.id,
+                        }))
+                    "
+                    value-key="value"
+                    placeholder="Select entity..."
+                    class="w-48"
+                />
+                <UButton
+                    icon="i-lucide-plus"
+                    label="Add"
+                    @click="handleAddToEntity"
+                    :disabled="!selectedEntityId"
+                />
+            </div>
         </div>
 
         <!-- Current Memberships List -->
@@ -223,55 +243,6 @@ function getEntityClassColor(
                     />
                 </div>
             </UCard>
-        </div>
-
-        <!-- Add to Entity Section -->
-        <div class="border-t border-default pt-6">
-            <h4 class="text-sm font-semibold text-foreground mb-3">
-                Add to Entity
-            </h4>
-
-            <div v-if="isLoadingEntities" class="text-center py-4">
-                <UIcon
-                    name="i-lucide-loader-2"
-                    class="w-5 h-5 animate-spin text-primary"
-                />
-            </div>
-
-            <div
-                v-else-if="availableEntities.length === 0"
-                class="text-center py-4"
-            >
-                <p class="text-sm text-muted">
-                    User is already a member of all available entities
-                </p>
-            </div>
-
-            <div v-else class="flex gap-2">
-                <USelect
-                    v-model="selectedEntityId"
-                    :items="
-                        availableEntities.map((e) => ({
-                            label: `${e.display_name || e.name} (${e.entity_type})`,
-                            value: e.id,
-                        }))
-                    "
-                    value-key="value"
-                    placeholder="Select an entity"
-                    class="flex-1"
-                />
-                <UButton
-                    icon="i-lucide-plus"
-                    label="Add"
-                    @click="handleAddToEntity"
-                    :disabled="!selectedEntityId"
-                />
-            </div>
-
-            <p class="text-xs text-muted mt-2">
-                Adding to an entity creates a membership. Roles within the
-                entity can be assigned separately.
-            </p>
         </div>
     </div>
 </template>
