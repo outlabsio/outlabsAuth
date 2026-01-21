@@ -20,6 +20,7 @@ SERVICES = [
 ]
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+OBSERVABILITY_DIR = os.path.join(ROOT, "observability")
 
 CONFIGS = {
     "simple": {
@@ -48,25 +49,56 @@ CONFIGS = {
         "env": {},
     },
     "obs": {
-        "cwd": ROOT,
-        "cmd": [
-            "docker",
-            "compose",
-            "-f",
-            "docker-compose.observability.yml",
-            "up",
-            "-d",
-        ],
+        "cwd": OBSERVABILITY_DIR,
+        "cmd": ["docker", "compose", "up", "-d"],
         "env": {},
         "background": True,
+        "setup_required": True,
     },
     "obs-stop": {
-        "cwd": ROOT,
-        "cmd": ["docker", "compose", "-f", "docker-compose.observability.yml", "down"],
+        "cwd": OBSERVABILITY_DIR,
+        "cmd": ["docker", "compose", "down"],
         "env": {},
         "background": True,
     },
 }
+
+
+def setup_observability(api_port=None):
+    """Ensure observability stack is configured before starting."""
+    env_file = os.path.join(OBSERVABILITY_DIR, ".env")
+    prometheus_config = os.path.join(OBSERVABILITY_DIR, "prometheus", "prometheus.yml")
+
+    # Check if .env exists, create from example if not
+    if not os.path.exists(env_file):
+        example_file = os.path.join(OBSERVABILITY_DIR, ".env.example")
+        if os.path.exists(example_file):
+            print("  Creating observability/.env from .env.example...")
+            with open(example_file) as f:
+                content = f.read()
+            # Update API_PORT if we know it
+            if api_port:
+                content = content.replace("API_PORT=8000", f"API_PORT={api_port}")
+            with open(env_file, "w") as f:
+                f.write(content)
+
+    # Update API_PORT in .env if we have one
+    if api_port and os.path.exists(env_file):
+        with open(env_file) as f:
+            content = f.read()
+        # Update API_PORT line
+        import re
+
+        new_content = re.sub(r"API_PORT=\d+", f"API_PORT={api_port}", content)
+        if new_content != content:
+            with open(env_file, "w") as f:
+                f.write(new_content)
+            print(f"  Updated observability API_PORT to {api_port}")
+
+    # Run setup.sh if prometheus.yml doesn't exist
+    if not os.path.exists(prometheus_config):
+        print("  Running observability setup...")
+        subprocess.run(["./setup.sh"], cwd=OBSERVABILITY_DIR, check=True)
 
 
 def main():
@@ -85,21 +117,26 @@ def main():
     background = [s for s in selected if CONFIGS[s].get("background")]
     foreground = [s for s in selected if not CONFIGS[s].get("background")]
 
-    # Run background tasks first
-    for svc in background:
-        cfg = CONFIGS[svc]
-        print(f"\n→ Running {svc}...")
-        subprocess.run(cfg["cmd"], cwd=cfg["cwd"], env={**os.environ, **cfg["env"]})
-
-    if not foreground:
-        return
-
-    # Determine API port for UI (prefer simple over enterprise if both selected)
+    # Determine API port (prefer simple over enterprise if both selected)
     api_port = None
     if "simple" in foreground:
         api_port = CONFIGS["simple"]["port"]
     elif "enterprise" in foreground:
         api_port = CONFIGS["enterprise"]["port"]
+
+    # Run background tasks first
+    for svc in background:
+        cfg = CONFIGS[svc]
+        print(f"\n→ Running {svc}...")
+
+        # Setup observability if needed
+        if cfg.get("setup_required"):
+            setup_observability(api_port)
+
+        subprocess.run(cfg["cmd"], cwd=cfg["cwd"], env={**os.environ, **cfg["env"]})
+
+    if not foreground:
+        return
 
     # Start foreground services
     processes = []

@@ -1,0 +1,133 @@
+# OutlabsAuth Observability Stack
+#
+# A portable observability stack for any project using OutlabsAuth.
+# Configure via .env file (see .env.example)
+#
+# Quick Start:
+#   1. cp .env.example .env
+#   2. Edit .env with your project settings
+#   3. ./setup.sh
+#   4. docker compose up -d
+#
+# Access:
+#   - Grafana:    http://localhost:${GRAFANA_PORT:-3011} (admin / ${GRAFANA_ADMIN_PASSWORD:-admin})
+#   - Prometheus: http://localhost:${PROMETHEUS_PORT:-9090}
+#   - Loki:       http://localhost:${LOKI_PORT:-3100}
+#   - Tempo:      http://localhost:${TEMPO_PORT:-3200}
+
+services:
+  # ============================================================================
+  # Metrics Collection
+  # ============================================================================
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ${PROJECT_NAME:-outlabs}-prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    networks:
+      - observability
+    restart: unless-stopped
+
+  # ============================================================================
+  # Visualization
+  # ============================================================================
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ${PROJECT_NAME:-outlabs}-grafana
+    ports:
+      - "${GRAFANA_PORT:-3011}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:${GRAFANA_PORT:-3011}
+      - GF_FEATURE_TOGGLES_ENABLE=tempoSearch,tempoBackendSearch
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/outlabs-auth.json
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - observability
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+
+  # ============================================================================
+  # Log Aggregation
+  # ============================================================================
+
+  loki:
+    image: grafana/loki:latest
+    container_name: ${PROJECT_NAME:-outlabs}-loki
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-data:/loki
+    networks:
+      - observability
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: ${PROJECT_NAME:-outlabs}-promtail
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./promtail/promtail.yml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - observability
+    restart: unless-stopped
+    depends_on:
+      - loki
+
+  # ============================================================================
+  # Distributed Tracing
+  # ============================================================================
+
+  tempo:
+    image: grafana/tempo:latest
+    container_name: ${PROJECT_NAME:-outlabs}-tempo
+    user: "0:0"
+    ports:
+      - "${TEMPO_PORT:-3200}:3200"   # Tempo HTTP API
+      - "${TEMPO_OTLP_GRPC_PORT:-4317}:4317"  # OTLP gRPC
+      - "${TEMPO_OTLP_HTTP_PORT:-4318}:4318"  # OTLP HTTP
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo/tempo.yml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    networks:
+      - observability
+    restart: unless-stopped
+
+networks:
+  observability:
+    driver: bridge
+    name: ${PROJECT_NAME:-outlabs}-observability
+
+volumes:
+  prometheus-data:
+    name: ${PROJECT_NAME:-outlabs}-prometheus-data
+  grafana-data:
+    name: ${PROJECT_NAME:-outlabs}-grafana-data
+  loki-data:
+    name: ${PROJECT_NAME:-outlabs}-loki-data
+  tempo-data:
+    name: ${PROJECT_NAME:-outlabs}-tempo-data

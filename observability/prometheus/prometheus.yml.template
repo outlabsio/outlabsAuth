@@ -1,0 +1,54 @@
+# Prometheus Configuration
+# Generated from prometheus.yml.template by setup.sh
+#
+# Scrapes metrics from your OutlabsAuth-powered API
+
+global:
+  scrape_interval: ${PROMETHEUS_SCRAPE_INTERVAL}
+  evaluation_interval: ${PROMETHEUS_SCRAPE_INTERVAL}
+
+  # Add project/environment labels to all metrics
+  external_labels:
+    project: "${PROJECT_NAME}"
+    environment: "${ENVIRONMENT}"
+
+scrape_configs:
+  # Your main API
+  - job_name: "${PROJECT_NAME}-api"
+    static_configs:
+      - targets: ["${API_HOST}:${API_PORT}"]
+        labels:
+          app: "${PROJECT_NAME}"
+          service: "api"
+    scrape_interval: ${PROMETHEUS_SCRAPE_INTERVAL}
+    metrics_path: "${API_METRICS_PATH}"
+
+  # Prometheus self-monitoring (optional but useful)
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          app: "${PROJECT_NAME}"
+          service: "prometheus"
+
+# =============================================================================
+# Add Additional Scrape Targets Below
+# =============================================================================
+# Example: Add a worker service
+#
+#   - job_name: "${PROJECT_NAME}-worker"
+#     static_configs:
+#       - targets: ["${API_HOST}:8001"]
+#         labels:
+#           app: "${PROJECT_NAME}"
+#           service: "worker"
+#     metrics_path: "/metrics"
+#
+# Example: Add a second API
+#
+#   - job_name: "${PROJECT_NAME}-admin-api"
+#     static_configs:
+#       - targets: ["${API_HOST}:8002"]
+#         labels:
+#           app: "${PROJECT_NAME}"
+#           service: "admin-api"

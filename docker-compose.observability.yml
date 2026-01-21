@@ -1,4 +1,29 @@
-# OutlabsAuth Observability Stack
+# =============================================================================
+# DEPRECATED - Use observability/ folder instead
+# =============================================================================
+#
+# This file is kept for backwards compatibility but is no longer maintained.
+#
+# The new portable observability stack is in the observability/ folder:
+#
+#   cd observability
+#   cp .env.example .env
+#   ./setup.sh
+#   docker compose up -d
+#
+# Or use the start script:
+#
+#   uv run start.py
+#   # Select "obs" to start observability
+#
+# The new stack is:
+#   - Parameterized via .env file
+#   - Portable (copy to any project)
+#   - Auto-configured for your API port
+#
+# =============================================================================
+# LEGACY CONFIG BELOW (for backwards compatibility)
+# =============================================================================
 #
 # This stack provides observability tooling for local development.
 # It's separate from the main docker-compose.yml to keep things simple.
@@ -113,9 +138,9 @@ services:
     container_name: outlabs-tempo
     user: "0:0"
     ports:
-      - "3200:3200"  # Tempo HTTP API
-      - "4317:4317"  # OTLP gRPC
-      - "4318:4318"  # OTLP HTTP
+      - "3200:3200" # Tempo HTTP API
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
     command: ["-config.file=/etc/tempo.yaml"]
     volumes:
       - ./docker/tempo/tempo.yaml:/etc/tempo.yaml

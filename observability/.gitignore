@@ -1,0 +1,6 @@
+# Environment file (contains local settings)
+.env
+
+# Generated config files (recreated by setup.sh)
+prometheus/prometheus.yml
+promtail/promtail.yml
