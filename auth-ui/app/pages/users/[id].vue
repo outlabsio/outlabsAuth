@@ -31,24 +31,47 @@ watch(
 const user = computed(() => userStore.currentUser);
 const isLoading = computed(() => userStore.isLoading);
 
-// Tab navigation
+// Tab items with values for route sync
+const tabItems = computed(() => [
+    {
+        label: "Basic Info",
+        icon: "i-lucide-user",
+        value: "info",
+    },
+    {
+        label: "Roles",
+        icon: "i-lucide-shield",
+        value: "roles",
+    },
+    {
+        label: "Permissions",
+        icon: "i-lucide-lock",
+        value: "permissions",
+    },
+    {
+        label: "Activity",
+        icon: "i-lucide-activity",
+        value: "activity",
+    },
+]);
+
+// Tab navigation synced with route
 const currentTab = computed({
     get: () => {
-        // Map route path to tab index
         const path = route.path;
-        if (path.endsWith("/roles")) return 1;
-        if (path.endsWith("/permissions")) return 2;
-        if (path.endsWith("/activity")) return 3;
-        return 0; // Basic info (index)
+        if (path.endsWith("/roles")) return "roles";
+        if (path.endsWith("/permissions")) return "permissions";
+        if (path.endsWith("/activity")) return "activity";
+        return "info";
     },
-    set: (index: number) => {
-        const tabs = [
-            `/users/${userId.value}`,
-            `/users/${userId.value}/roles`,
-            `/users/${userId.value}/permissions`,
-            `/users/${userId.value}/activity`,
-        ];
-        navigateTo(tabs[index]);
+    set: (value: string) => {
+        const routes: Record<string, string> = {
+            info: `/users/${userId.value}`,
+            roles: `/users/${userId.value}/roles`,
+            permissions: `/users/${userId.value}/permissions`,
+            activity: `/users/${userId.value}/activity`,
+        };
+        navigateTo(routes[value]);
     },
 });
 
@@ -68,16 +91,6 @@ const statusColor = computed(() => {
             return "neutral";
     }
 });
-
-// Password reset modal
-const showPasswordResetModal = ref(false);
-
-const handlePasswordResetSuccess = async () => {
-    // Refresh user data after password reset
-    if (userId.value) {
-        await userStore.fetchUser(userId.value);
-    }
-};
 
 // Cleanup on unmount
 onUnmounted(() => {
@@ -158,13 +171,6 @@ onUnmounted(() => {
                     <!-- Actions -->
                     <div class="flex gap-2">
                         <UButton
-                            icon="i-lucide-key"
-                            label="Reset Password"
-                            variant="outline"
-                            color="primary"
-                            @click="showPasswordResetModal = true"
-                        />
-                        <UButton
                             icon="i-lucide-arrow-left"
                             label="Back to Users"
                             variant="outline"
@@ -178,29 +184,10 @@ onUnmounted(() => {
             <!-- Tab Navigation -->
             <UTabs
                 v-model="currentTab"
-                :items="[
-                    {
-                        label: 'Basic Info',
-                        icon: 'i-lucide-user',
-                        to: `/users/${userId}`,
-                    },
-                    {
-                        label: 'Roles',
-                        icon: 'i-lucide-shield',
-                        to: `/users/${userId}/roles`,
-                    },
-                    {
-                        label: 'Permissions',
-                        icon: 'i-lucide-lock',
-                        to: `/users/${userId}/permissions`,
-                    },
-                    {
-                        label: 'Activity',
-                        icon: 'i-lucide-activity',
-                        to: `/users/${userId}/activity`,
-                    },
-                ]"
-                class="mb-6"
+                :items="tabItems"
+                :content="false"
+                variant="link"
+                color="primary"
             />
 
             <!-- Tab Content (nested route outlet) -->
@@ -230,11 +217,4 @@ onUnmounted(() => {
             </div>
         </div>
     </div>
-
-    <!-- Password Reset Modal -->
-    <UserPasswordResetModal
-        v-model="showPasswordResetModal"
-        :user="user"
-        @success="handlePasswordResetSuccess"
-    />
 </template>

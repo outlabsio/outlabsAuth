@@ -515,6 +515,38 @@ class ObservabilityService:
         else:
             metric.set(value)
 
+    def _increment_gauge(
+        self,
+        metric_name: str,
+        value: float = 1.0,
+        labels: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """Increment a Prometheus gauge value."""
+        if not self.config.enable_metrics or metric_name not in self.metrics:
+            return
+
+        metric = self.metrics[metric_name]
+        if labels:
+            metric.labels(**labels).inc(value)
+        else:
+            metric.inc(value)
+
+    def _decrement_gauge(
+        self,
+        metric_name: str,
+        value: float = 1.0,
+        labels: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """Decrement a Prometheus gauge value."""
+        if not self.config.enable_metrics or metric_name not in self.metrics:
+            return
+
+        metric = self.metrics[metric_name]
+        if labels:
+            metric.labels(**labels).dec(value)
+        else:
+            metric.dec(value)
+
     # Public API - Authentication Events
 
     def log_login_success(
@@ -543,6 +575,8 @@ class ObservabilityService:
         self._observe_histogram(
             "login_duration", duration_ms / 1000.0, {"method": method}
         )
+        # Increment active sessions gauge
+        self._increment_gauge("active_sessions")
 
     def log_login_failed(
         self,
@@ -606,6 +640,8 @@ class ObservabilityService:
             **extra,
         )
         self._observe_histogram("session_duration", session_duration_seconds)
+        # Decrement active sessions gauge
+        self._decrement_gauge("active_sessions")
 
     # Public API - Authorization Events
 

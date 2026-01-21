@@ -172,6 +172,23 @@ These containers are shared across all examples and development work.
 
 ## Essential Commands
 
+### Quick Start (Interactive Service Launcher)
+
+The easiest way to start development services:
+
+```bash
+uv run start.py
+```
+
+This opens an interactive menu where you can select multiple services to start:
+- **simple** - SimpleRBAC API (port 8000)
+- **enterprise** - EnterpriseRBAC API (port 8000)
+- **ui** - Admin UI (port 3000)
+- **obs** - Start observability stack (Grafana, Prometheus, Loki)
+- **obs-stop** - Stop observability stack
+
+Use arrow keys to navigate, space to toggle, enter to confirm. Multiple services run concurrently with Ctrl+C to stop all.
+
 ### Setup
 ```bash
 # Install dependencies
@@ -314,6 +331,7 @@ outlabsAuth/
 │   ├── unit/
 │   └── integration/
 │
+├── start.py                        # 🚀 Interactive service launcher
 ├── pyproject.toml                  # Package configuration
 ├── README.md                       # Library README
 └── CLAUDE.md                       # This file - Claude Code guidance

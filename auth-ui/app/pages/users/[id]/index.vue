@@ -12,6 +12,7 @@ const props = defineProps<{
 }>();
 
 const userStore = useUserStore();
+const authStore = useAuthStore();
 const toast = useToast();
 
 // Form state
@@ -46,10 +47,10 @@ const { mutate: updateUser, isPending: isSubmitting } = useUpdateUserMutation();
 // Password change modal
 const showPasswordModal = ref(false);
 const passwordState = reactive({
-    currentPassword: "",
     newPassword: "",
     confirmPassword: "",
 });
+const isChangingPassword = ref(false);
 
 // Status options
 const statusOptions = [
@@ -98,7 +99,7 @@ async function handleSubmit() {
     await userStore.fetchUser(props.user.id);
 }
 
-// Password change handler
+// Password change handler (admin reset - no current password needed)
 async function handlePasswordChange() {
     if (passwordState.newPassword !== passwordState.confirmPassword) {
         toast.add({
@@ -118,18 +119,35 @@ async function handlePasswordChange() {
         return;
     }
 
-    const success = await userStore.changePassword(
-        props.user.id,
-        passwordState.currentPassword,
-        passwordState.newPassword,
-    );
+    isChangingPassword.value = true;
 
-    if (success) {
+    try {
+        // Admin password reset endpoint (no current password required)
+        await authStore.apiCall(`/v1/users/${props.user.id}/password`, {
+            method: "PATCH",
+            body: {
+                new_password: passwordState.newPassword,
+            },
+        });
+
+        toast.add({
+            title: "Password updated",
+            description: "User's password has been changed successfully",
+            color: "success",
+        });
+
         // Reset form and close modal
-        passwordState.currentPassword = "";
         passwordState.newPassword = "";
         passwordState.confirmPassword = "";
         showPasswordModal.value = false;
+    } catch (error: any) {
+        toast.add({
+            title: "Failed to change password",
+            description: error.message || "An error occurred",
+            color: "error",
+        });
+    } finally {
+        isChangingPassword.value = false;
     }
 }
 </script>
@@ -267,12 +285,12 @@ async function handlePasswordChange() {
                             Password
                         </p>
                         <p class="text-xs text-muted mt-1">
-                            Change user's password
+                            Reset user's password (admin)
                         </p>
                     </div>
                     <UButton
                         icon="i-lucide-key"
-                        label="Change Password"
+                        label="Reset Password"
                         variant="outline"
                         @click="showPasswordModal = true"
                         :disabled="isSubmitting"
@@ -348,69 +366,63 @@ async function handlePasswordChange() {
         </form>
     </UCard>
 
-    <!-- Password Change Modal -->
+    <!-- Password Reset Modal -->
     <UModal
         v-model:open="showPasswordModal"
-        title="Change Password"
-        description="Update the user's password"
+        title="Reset Password"
+        description="Set a new password for this user"
+        :ui="{ footer: 'justify-end' }"
     >
+        <!-- Hidden trigger - modal controlled via v-model:open -->
+        <span />
+
         <template #body>
             <form @submit.prevent="handlePasswordChange" class="space-y-4">
-                <div>
-                    <label
-                        class="text-sm font-medium text-foreground mb-1.5 block"
-                        >Current Password</label
-                    >
-                    <UInput
-                        v-model="passwordState.currentPassword"
-                        type="password"
-                        placeholder="Enter current password"
-                    />
-                </div>
-
-                <div>
-                    <label
-                        class="text-sm font-medium text-foreground mb-1.5 block"
-                        >New Password</label
-                    >
+                <UFormField label="New Password" name="newPassword" required>
                     <UInput
                         v-model="passwordState.newPassword"
                         type="password"
                         placeholder="Enter new password"
+                        class="w-full"
+                        :disabled="isChangingPassword"
                     />
-                    <p class="mt-1.5 text-xs text-muted">
-                        Minimum 8 characters
-                    </p>
-                </div>
+                    <template #hint>
+                        <span class="text-xs text-muted"
+                            >Minimum 8 characters</span
+                        >
+                    </template>
+                </UFormField>
 
-                <div>
-                    <label
-                        class="text-sm font-medium text-foreground mb-1.5 block"
-                        >Confirm New Password</label
-                    >
+                <UFormField
+                    label="Confirm Password"
+                    name="confirmPassword"
+                    required
+                >
                     <UInput
                         v-model="passwordState.confirmPassword"
                         type="password"
                         placeholder="Confirm new password"
+                        class="w-full"
+                        :disabled="isChangingPassword"
                     />
-                </div>
+                </UFormField>
             </form>
         </template>
 
-        <template #footer>
-            <div class="flex justify-end gap-2">
-                <UButton
-                    label="Cancel"
-                    color="neutral"
-                    variant="outline"
-                    @click="showPasswordModal = false"
-                />
-                <UButton
-                    label="Change Password"
-                    icon="i-lucide-key"
-                    @click="handlePasswordChange"
-                />
-            </div>
+        <template #footer="{ close }">
+            <UButton
+                label="Cancel"
+                color="neutral"
+                variant="outline"
+                @click="close"
+                :disabled="isChangingPassword"
+            />
+            <UButton
+                label="Reset Password"
+                icon="i-lucide-key"
+                @click="handlePasswordChange"
+                :loading="isChangingPassword"
+            />
         </template>
     </UModal>
 </template>

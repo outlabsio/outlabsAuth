@@ -44,6 +44,20 @@ OutlabsAuth is a comprehensive authentication and authorization library for Fast
 pip install outlabs-auth
 ```
 
+### Development Setup
+
+For local development, use the interactive service launcher:
+
+```bash
+uv run start.py
+```
+
+Select services with arrow keys, space to toggle, enter to start:
+- **simple** - SimpleRBAC API (port 8000)
+- **enterprise** - EnterpriseRBAC API (port 8000)
+- **ui** - Admin UI (port 3000)
+- **obs** - Observability stack (Grafana, Prometheus, Loki)
+
 ### Simple RBAC Example
 
 ```python
