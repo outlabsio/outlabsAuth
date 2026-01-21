@@ -15,8 +15,10 @@ SERVICES = [
     {"name": "simple      - SimpleRBAC API (port 8003)", "value": "simple"},
     {"name": "enterprise  - EnterpriseRBAC API (port 8004)", "value": "enterprise"},
     {"name": "ui          - Admin UI (port 3000)", "value": "ui"},
-    {"name": "obs         - Start observability stack", "value": "obs"},
-    {"name": "obs-stop    - Stop observability stack", "value": "obs-stop"},
+    {
+        "name": "obs         - Observability stack (Grafana, Prometheus, Loki)",
+        "value": "obs",
+    },
 ]
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -54,12 +56,6 @@ CONFIGS = {
         "env": {},
         "background": True,
         "setup_required": True,
-    },
-    "obs-stop": {
-        "cwd": OBSERVABILITY_DIR,
-        "cmd": ["docker", "compose", "down"],
-        "env": {},
-        "background": True,
     },
 }
 
@@ -158,11 +154,13 @@ def main():
         print("  Press Ctrl+C to stop all\n")
 
         def shutdown(sig, frame):
-            print("\n\nShutting down...")
+            print("\n\nStopping services...")
             for name, p in processes:
+                print(f"  Stopping {name}...")
                 p.terminate()
             for name, p in processes:
                 p.wait()
+            print("All services stopped.")
             sys.exit(0)
 
         signal.signal(signal.SIGINT, shutdown)
