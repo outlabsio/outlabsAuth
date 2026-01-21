@@ -104,28 +104,27 @@ function getEntityClassColor(
 </script>
 
 <template>
-    <UCard>
-        <template #header>
-            <div class="flex items-center justify-between">
-                <div>
-                    <h3 class="text-lg font-semibold text-foreground">
-                        Entity Memberships
-                    </h3>
-                    <p class="text-sm text-muted">
-                        Entities this user belongs to
-                    </p>
-                </div>
-                <UBadge color="primary" variant="subtle">
-                    {{ enrichedMemberships.length }}
-                    {{
-                        enrichedMemberships.length === 1 ? "entity" : "entities"
-                    }}
-                </UBadge>
+    <div class="flex flex-col gap-6">
+        <!-- Header -->
+        <div class="flex items-center justify-between">
+            <div>
+                <h3 class="text-lg font-semibold text-foreground">
+                    Entity Memberships
+                </h3>
+                <p class="text-sm text-muted">
+                    Entities this user belongs to
+                </p>
             </div>
-        </template>
+            <UBadge color="primary" variant="subtle">
+                {{ enrichedMemberships.length }}
+                {{
+                    enrichedMemberships.length === 1 ? "entity" : "entities"
+                }}
+            </UBadge>
+        </div>
 
         <!-- Current Memberships List -->
-        <div class="space-y-3 mb-6">
+        <div class="space-y-3">
             <div v-if="isLoadingMemberships" class="text-center py-8">
                 <UIcon
                     name="i-lucide-loader-2"
@@ -227,7 +226,7 @@ function getEntityClassColor(
         </div>
 
         <!-- Add to Entity Section -->
-        <div class="border-t border-border pt-6">
+        <div class="border-t border-default pt-6">
             <h4 class="text-sm font-semibold text-foreground mb-3">
                 Add to Entity
             </h4>
@@ -274,5 +273,5 @@ function getEntityClassColor(
                 entity can be assigned separately.
             </p>
         </div>
-    </UCard>
+    </div>
 </template>

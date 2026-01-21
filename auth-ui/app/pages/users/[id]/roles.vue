@@ -86,26 +86,25 @@ function formatDate(date: string) {
 </script>
 
 <template>
-    <UCard>
-        <template #header>
-            <div class="flex items-center justify-between">
-                <div>
-                    <h3 class="text-lg font-semibold text-foreground">
-                        Role Assignments
-                    </h3>
-                    <p class="text-sm text-muted">
-                        Manage global roles for this user
-                    </p>
-                </div>
-                <UBadge color="primary" variant="subtle">
-                    {{ userRoles.length }}
-                    {{ userRoles.length === 1 ? "role" : "roles" }}
-                </UBadge>
+    <div class="flex flex-col gap-6">
+        <!-- Header -->
+        <div class="flex items-center justify-between">
+            <div>
+                <h3 class="text-lg font-semibold text-foreground">
+                    Role Assignments
+                </h3>
+                <p class="text-sm text-muted">
+                    Manage global roles for this user
+                </p>
             </div>
-        </template>
+            <UBadge color="primary" variant="subtle">
+                {{ userRoles.length }}
+                {{ userRoles.length === 1 ? "role" : "roles" }}
+            </UBadge>
+        </div>
 
         <!-- Current Roles List -->
-        <div class="space-y-3 mb-6">
+        <div class="space-y-3">
             <div v-if="userStore.isLoadingRoles" class="text-center py-8">
                 <UIcon
                     name="i-lucide-loader-2"
@@ -197,7 +196,7 @@ function formatDate(date: string) {
         </div>
 
         <!-- Add Role Section -->
-        <div class="border-t border-border pt-6">
+        <div class="border-t border-default pt-6">
             <h4 class="text-sm font-semibold text-foreground mb-3">Add Role</h4>
 
             <div v-if="isLoadingRoles" class="text-center py-4">
@@ -242,5 +241,5 @@ function formatDate(date: string) {
                 role
             </p>
         </div>
-    </UCard>
+    </div>
 </template>
