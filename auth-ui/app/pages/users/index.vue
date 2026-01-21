@@ -327,10 +327,11 @@ const columns: TableColumn<User>[] = [
             </UDashboardNavbar>
         </template>
 
-        <template #body>
-            <!-- Filters -->
+        <!-- Default slot for edge-to-edge table -->
+        <div class="flex flex-col flex-1 min-h-0">
+            <!-- Toolbar -->
             <div
-                class="flex flex-wrap items-center justify-between gap-1.5 mb-4"
+                class="flex flex-wrap items-center justify-between gap-1.5 px-4 py-3 border-b border-default"
             >
                 <UInput
                     v-model="search"
@@ -365,25 +366,19 @@ const columns: TableColumn<User>[] = [
                 v-model:column-visibility="columnVisibility"
                 v-model:row-selection="rowSelection"
                 v-model:pagination="pagination"
+                sticky
                 :pagination-options="{
                     getPaginationRowModel: getPaginationRowModel(),
                 }"
-                class="shrink-0"
+                class="flex-1"
                 :data="usersData?.items || []"
                 :columns="columns"
                 :loading="isLoading"
-                :ui="{
-                    base: 'table-fixed border-separate border-spacing-0',
-                    thead: '[&>tr]:bg-elevated/50 [&>tr]:after:content-none',
-                    tbody: '[&>tr]:last:[&>td]:border-b-0',
-                    th: 'py-2 first:rounded-l-lg last:rounded-r-lg border-y border-default first:border-l last:border-r',
-                    td: 'border-b border-default',
-                }"
             />
 
             <!-- Pagination -->
             <div
-                class="flex items-center justify-between gap-3 border-t border-default pt-4 mt-auto"
+                class="flex items-center justify-between gap-3 px-4 py-3 border-t border-default"
             >
                 <div class="text-sm text-muted">
                     Showing {{ usersData?.items?.length || 0 }} of
@@ -406,7 +401,7 @@ const columns: TableColumn<User>[] = [
                     />
                 </div>
             </div>
-        </template>
+        </div>
     </UDashboardPanel>
 
     <!-- Create User Modal -->

@@ -175,18 +175,20 @@ const filteredPermissions = computed(() => {
           />
         </template>
       </UDashboardNavbar>
+    </template>
 
-      <UDashboardToolbar>
-        <template #left>
-          <UInput
-            v-model="search"
-            icon="i-lucide-search"
-            placeholder="Search permissions..."
-            class="w-64"
-          />
-        </template>
+    <!-- Default slot for edge-to-edge table -->
+    <div class="flex flex-col flex-1 min-h-0">
+      <!-- Toolbar -->
+      <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-default">
+        <UInput
+          v-model="search"
+          icon="i-lucide-search"
+          placeholder="Search permissions..."
+          class="w-64"
+        />
 
-        <template #right>
+        <div class="flex items-center gap-2">
           <UButton
             icon="i-lucide-filter"
             color="neutral"
@@ -199,26 +201,25 @@ const filteredPermissions = computed(() => {
             variant="ghost"
             label="Export"
           />
-        </template>
-      </UDashboardToolbar>
-    </template>
-
-    <template #body>
-      <UCard v-if="isLoading">
-        <div class="flex items-center justify-center py-12">
-          <UIcon name="i-lucide-loader-2" class="w-8 h-8 animate-spin text-primary" />
         </div>
-      </UCard>
+      </div>
 
-      <UCard v-else-if="error">
-        <div class="flex flex-col items-center justify-center py-12 gap-4">
-          <UIcon name="i-lucide-alert-circle" class="w-12 h-12 text-error" />
-          <p class="text-error">{{ error }}</p>
-        </div>
-      </UCard>
+      <!-- Loading State -->
+      <div v-if="isLoading" class="flex-1 flex items-center justify-center">
+        <UIcon name="i-lucide-loader-2" class="w-8 h-8 animate-spin text-primary" />
+      </div>
 
+      <!-- Error State -->
+      <div v-else-if="error" class="flex-1 flex flex-col items-center justify-center gap-4">
+        <UIcon name="i-lucide-alert-circle" class="w-12 h-12 text-error" />
+        <p class="text-error">{{ error }}</p>
+      </div>
+
+      <!-- Table -->
       <UTable
         v-else
+        sticky
+        class="flex-1"
         :columns="columns"
         :data="filteredPermissions"
       >
@@ -235,7 +236,7 @@ const filteredPermissions = computed(() => {
           </div>
         </template>
       </UTable>
-    </template>
+    </div>
   </UDashboardPanel>
 
   <!-- Create Permission Modal -->

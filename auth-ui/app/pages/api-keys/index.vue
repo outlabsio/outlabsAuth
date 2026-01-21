@@ -332,9 +332,80 @@ const stats = computed(() => {
                     />
                 </template>
             </UDashboardNavbar>
+        </template>
 
-            <UDashboardToolbar>
-                <template #left>
+        <!-- Default slot for edge-to-edge table -->
+        <div class="flex flex-col flex-1 min-h-0">
+            <!-- Stats Cards -->
+            <div
+                class="grid grid-cols-1 md:grid-cols-4 gap-4 px-4 py-4 border-b border-default"
+            >
+                <UCard>
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm text-muted">Total Keys</p>
+                            <p class="text-2xl font-bold mt-1">
+                                {{ stats.total }}
+                            </p>
+                        </div>
+                        <UIcon
+                            name="i-lucide-key"
+                            class="w-8 h-8 text-primary"
+                        />
+                    </div>
+                </UCard>
+
+                <UCard>
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm text-muted">Active</p>
+                            <p class="text-2xl font-bold mt-1 text-green-600">
+                                {{ stats.active }}
+                            </p>
+                        </div>
+                        <UIcon
+                            name="i-lucide-check-circle"
+                            class="w-8 h-8 text-green-500"
+                        />
+                    </div>
+                </UCard>
+
+                <UCard>
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm text-muted">Revoked</p>
+                            <p class="text-2xl font-bold mt-1 text-red-600">
+                                {{ stats.revoked }}
+                            </p>
+                        </div>
+                        <UIcon
+                            name="i-lucide-ban"
+                            class="w-8 h-8 text-red-500"
+                        />
+                    </div>
+                </UCard>
+
+                <UCard>
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm text-muted">Expired</p>
+                            <p class="text-2xl font-bold mt-1 text-neutral-600">
+                                {{ stats.expired }}
+                            </p>
+                        </div>
+                        <UIcon
+                            name="i-lucide-clock"
+                            class="w-8 h-8 text-neutral-500"
+                        />
+                    </div>
+                </UCard>
+            </div>
+
+            <!-- Toolbar -->
+            <div
+                class="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-default"
+            >
+                <div class="flex items-center gap-2">
                     <UInput
                         v-model="search"
                         icon="i-lucide-search"
@@ -402,84 +473,20 @@ const stats = computed(() => {
                             @click="statusFilter = 'expired'"
                         />
                     </div>
-                </template>
+                </div>
 
-                <template #right>
-                    <UButton
-                        icon="i-lucide-download"
-                        color="neutral"
-                        variant="ghost"
-                        label="Export"
-                    />
-                </template>
-            </UDashboardToolbar>
-        </template>
-
-        <template #body>
-            <!-- Stats Cards -->
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <UCard>
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-sm text-muted">Total Keys</p>
-                            <p class="text-2xl font-bold mt-1">
-                                {{ stats.total }}
-                            </p>
-                        </div>
-                        <UIcon
-                            name="i-lucide-key"
-                            class="w-8 h-8 text-primary"
-                        />
-                    </div>
-                </UCard>
-
-                <UCard>
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-sm text-muted">Active</p>
-                            <p class="text-2xl font-bold mt-1 text-green-600">
-                                {{ stats.active }}
-                            </p>
-                        </div>
-                        <UIcon
-                            name="i-lucide-check-circle"
-                            class="w-8 h-8 text-green-500"
-                        />
-                    </div>
-                </UCard>
-
-                <UCard>
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-sm text-muted">Revoked</p>
-                            <p class="text-2xl font-bold mt-1 text-red-600">
-                                {{ stats.revoked }}
-                            </p>
-                        </div>
-                        <UIcon
-                            name="i-lucide-ban"
-                            class="w-8 h-8 text-red-500"
-                        />
-                    </div>
-                </UCard>
-
-                <UCard>
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-sm text-muted">Expired</p>
-                            <p class="text-2xl font-bold mt-1 text-neutral-600">
-                                {{ stats.expired }}
-                            </p>
-                        </div>
-                        <UIcon
-                            name="i-lucide-clock"
-                            class="w-8 h-8 text-neutral-500"
-                        />
-                    </div>
-                </UCard>
+                <UButton
+                    icon="i-lucide-download"
+                    color="neutral"
+                    variant="ghost"
+                    label="Export"
+                />
             </div>
 
+            <!-- Table -->
             <UTable
+                sticky
+                class="flex-1"
                 :columns="columns"
                 :data="filteredKeys"
                 :loading="isLoading"
@@ -497,11 +504,12 @@ const stats = computed(() => {
                             icon="i-lucide-plus"
                             label="Create your first API key"
                             variant="outline"
+                            @click="showCreateModal = true"
                         />
                     </div>
                 </template>
             </UTable>
-        </template>
+        </div>
     </UDashboardPanel>
 
     <!-- Create API Key Modal -->
