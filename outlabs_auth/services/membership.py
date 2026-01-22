@@ -27,6 +27,7 @@ from outlabs_auth.core.exceptions import (
     RoleNotFoundError,
     UserNotFoundError,
 )
+from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.entity_membership import (
     EntityMembership,
@@ -123,6 +124,42 @@ class MembershipService(BaseService[EntityMembership]):
                     message="Role not found", details={"role_id": str(role_id)}
                 )
             roles.append(role)
+
+        # Get the root entity for this entity using closure table
+        root_entity_id = await self._get_root_entity_id(session, entity_id)
+
+        # Validate/set user's root_entity_id
+        if user.root_entity_id is None:
+            # First membership - set user's root entity
+            user.root_entity_id = root_entity_id
+            await session.flush()
+        elif user.root_entity_id != root_entity_id:
+            # User already belongs to a different organization
+            raise InvalidInputError(
+                message="User belongs to a different organization",
+                details={
+                    "user_id": str(user_id),
+                    "user_root_entity_id": str(user.root_entity_id),
+                    "entity_root_entity_id": str(root_entity_id),
+                },
+            )
+
+        # Validate each role is available for this entity
+        for role in roles:
+            if not await self._is_role_available_for_entity(
+                session, role, entity_id, root_entity_id
+            ):
+                raise InvalidInputError(
+                    message=f"Role '{role.name}' is not available for this entity",
+                    details={
+                        "role_id": str(role.id),
+                        "role_name": role.name,
+                        "entity_id": str(entity_id),
+                        "role_root_entity_id": str(role.root_entity_id)
+                        if role.root_entity_id
+                        else None,
+                    },
+                )
 
         # Check if membership already exists
         existing = await self.get_one(
@@ -740,3 +777,69 @@ class MembershipService(BaseService[EntityMembership]):
             )
 
         return membership
+
+    # =========================================================================
+    # Helper Methods for Root Entity Validation
+    # =========================================================================
+
+    async def _get_root_entity_id(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+    ) -> UUID:
+        """
+        Get the root entity ID for a given entity.
+
+        Uses the closure table to find the root ancestor (highest depth).
+
+        Args:
+            session: Database session
+            entity_id: Entity ID
+
+        Returns:
+            UUID: Root entity ID
+        """
+        # The root has the highest depth value in the closure table for this descendant
+        stmt = (
+            select(EntityClosure.ancestor_id)
+            .where(EntityClosure.descendant_id == entity_id)
+            .order_by(EntityClosure.depth.desc())
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        row = result.first()
+        return row[0] if row else entity_id
+
+    async def _is_role_available_for_entity(
+        self,
+        session: AsyncSession,
+        role: Role,
+        entity_id: UUID,
+        root_entity_id: UUID,
+    ) -> bool:
+        """
+        Check if a role can be assigned within an entity's hierarchy.
+
+        A role is available if:
+        - It's a global system-wide role (is_global=True and root_entity_id=NULL)
+        - Its root_entity_id matches the entity's root ancestor
+
+        Args:
+            session: Database session
+            role: Role to check
+            entity_id: Entity where role would be assigned
+            root_entity_id: Pre-computed root entity ID for the entity
+
+        Returns:
+            bool: True if role can be used in this entity's hierarchy
+        """
+        # Global system-wide roles are available everywhere
+        if role.is_global and role.root_entity_id is None:
+            return True
+
+        # If role has a root_entity_id, it must match the entity's root
+        if role.root_entity_id:
+            return role.root_entity_id == root_entity_id
+
+        # Role with no root_entity_id and is_global=False is orphaned/unusable
+        return False

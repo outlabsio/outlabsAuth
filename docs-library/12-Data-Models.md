@@ -98,6 +98,12 @@ class UserModel(BaseDocument):
     first_name: Optional[str] = None  # Optional display name
     last_name: Optional[str] = None   # Optional display name
 
+    # Organization Binding (EnterpriseRBAC) - See DD-050
+    root_entity_id: Optional[UUID] = None  # Root entity this user belongs to
+    # NULL for superusers or unassigned users
+    # Set automatically on first membership assignment
+    # Users can only belong to ONE root entity (organization)
+
     # Status
     status: UserStatus = UserStatus.ACTIVE
     suspended_until: Optional[datetime] = None  # Auto-expiry for SUSPENDED status
@@ -231,13 +237,16 @@ class RoleModel(BaseDocument):
     entity_type_permissions: Optional[Dict[str, List[str]]] = None
     # Example: {"department": ["user:manage_tree"], "team": ["user:read"]}
 
-    # Entity scope (EnterpriseRBAC)
-    entity: Optional[Link["EntityModel"]] = None
+    # Root Entity Scope (EnterpriseRBAC) - See DD-050
+    root_entity_id: Optional[UUID] = None  # Root entity that owns this role
+    # NULL + is_global=True = available everywhere (system-wide role)
+    # NULL + is_global=False = legacy role (treated as global)
+    # Set = only available within this root entity's hierarchy
     assignable_at_types: List[str] = Field(default_factory=list)
 
     # Role configuration
     is_system_role: bool = False  # Cannot be modified
-    is_global: bool = False  # Can be assigned anywhere
+    is_global: bool = False  # Can be assigned anywhere (when root_entity_id is NULL)
 
     # ABAC conditions (optional)
     conditions: List[Condition] = Field(default_factory=list)
@@ -786,6 +795,121 @@ is_ancestor = await EntityClosureModel.find_one(
 ```
 
 **See**: [[53-Closure-Table]] for closure table pattern.
+
+---
+
+## Critical: Entity Hierarchy Design (DD-050)
+
+> **⚠️ IMPORTANT**: This section describes a critical architectural constraint that affects how you should structure your entity hierarchy in EnterpriseRBAC.
+
+### The Constraint
+
+**Users can only belong to ONE root entity (organization).** When a user is added as a member to any entity, they are automatically bound to that entity's root (the top-level entity with `parent_id = NULL`). Subsequent membership additions to entities under a *different* root will be **rejected**.
+
+### Why This Matters
+
+If you create multiple root entities expecting users to work across them, you will encounter errors like:
+
+```
+InvalidInputError: User belongs to a different organization
+```
+
+### Correct vs Incorrect Hierarchy Design
+
+```
+❌ WRONG - Multiple root entities (users can't belong to both):
+
+├── ACME Realty (root, parent_id=NULL)
+│   ├── Sales Team
+│   └── Marketing Team
+│
+└── Keller Williams (root, parent_id=NULL)    
+    ├── West Branch
+    └── East Branch
+
+# Problem: A user in ACME Realty CANNOT be added to Keller Williams
+```
+
+```
+✅ CORRECT - Single root with child organizations:
+
+└── Platform (root, parent_id=NULL)           # The "umbrella" entity
+    │
+    ├── ACME Realty (child organization)
+    │   ├── Sales Team
+    │   └── Marketing Team
+    │
+    ├── Keller Williams (child organization)
+    │   ├── West Branch
+    │   └── East Branch
+    │
+    └── Internal Teams (child organization)
+        ├── Engineering
+        └── Support
+
+# Solution: All entities share the same root, so users can have
+# memberships in ACME Realty AND Keller Williams AND Internal Teams
+```
+
+### When to Use Each Pattern
+
+| Pattern | Use Case | Example |
+|---------|----------|---------|
+| **Multiple root entities** | Completely separate organizations that should NEVER share users | Different companies using the same SaaS platform as isolated tenants |
+| **Single root with children** | Related organizations where users might need access to multiple | A platform with multiple clients, a franchise with multiple locations, a company with multiple divisions |
+
+### Role Scoping with Root Entities
+
+Roles can be scoped to specific root entities:
+
+```python
+# Global role - available everywhere
+admin_role = await role_service.create_role(
+    session=session,
+    name="admin",
+    display_name="Administrator",
+    permission_names=["*"],
+    is_global=True,  # Available in ALL organizations
+    root_entity_id=None,
+)
+
+# Organization-scoped role - only available in ACME hierarchy
+acme_agent_role = await role_service.create_role(
+    session=session,
+    name="agent",
+    display_name="Real Estate Agent",
+    permission_names=["listing:*", "client:read"],
+    is_global=False,
+    root_entity_id=acme_realty.id,  # Only for ACME Realty
+)
+
+# When assigning roles to memberships, only roles scoped to that
+# organization (or global roles) will be accepted
+```
+
+### Querying Available Roles
+
+Use the `for_entity_id` parameter to get roles available for a specific entity:
+
+```python
+# API: Get roles available for a specific entity
+GET /v1/roles/?for_entity_id={entity_id}
+
+# Returns:
+# - Global roles (is_global=True, root_entity_id=NULL)
+# - Roles scoped to the entity's root organization
+```
+
+### Migration Considerations
+
+If you have an existing deployment with multiple root entities and need to restructure:
+
+1. Create a new umbrella root entity
+2. Update existing "root" entities to have the new umbrella as their parent
+3. Update closure table entries
+4. Users' `root_entity_id` will need to be updated to the new umbrella
+
+**See**: DD-050 in `docs/DESIGN_DECISIONS.md` for the full design rationale.
 
 ---
 

@@ -106,6 +106,9 @@ def get_users_router(
                 first_name=data.first_name,
                 last_name=data.last_name,
                 is_superuser=data.is_superuser,
+                root_entity_id=UUID(data.root_entity_id)
+                if data.root_entity_id
+                else None,
             )
 
             # Trigger on_after_register hook
@@ -120,6 +123,11 @@ def get_users_router(
                     created_by=obs.user_id,
                 )
 
+            # Get root entity name for convenience
+            root_entity_name = None
+            if user.root_entity_id and user.root_entity:
+                root_entity_name = user.root_entity.display_name
+
             return UserResponse(
                 id=str(user.id),
                 email=user.email,
@@ -128,6 +136,10 @@ def get_users_router(
                 status=_get_status_value(user.status),
                 email_verified=user.email_verified,
                 is_superuser=user.is_superuser,
+                root_entity_id=str(user.root_entity_id)
+                if user.root_entity_id
+                else None,
+                root_entity_name=root_entity_name,
             )
         except HTTPException:
             raise

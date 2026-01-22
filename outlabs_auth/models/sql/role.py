@@ -8,20 +8,21 @@ Role-based access control with proper normalization.
 """
 
 from datetime import datetime, timezone
-from typing import List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional
 from uuid import UUID
 
-from sqlmodel import Field, Relationship, SQLModel
-from sqlalchemy import Column, Index, ForeignKey, String, Boolean, Text
+from sqlalchemy import Boolean, Column, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlmodel import Field, Relationship, SQLModel
 
 from outlabs_auth.database.base import BaseModel
+
 from .enums import ConditionOperator
 
 if TYPE_CHECKING:
     from .entity import Entity
-    from .user_role_membership import UserRoleMembership
     from .permission import Permission
+    from .user_role_membership import UserRoleMembership
 
 
 # === Junction Table: Role ↔ Permission ===
@@ -34,6 +35,7 @@ class RolePermission(SQLModel, table=True):
 
     Table: role_permissions
     """
+
     __tablename__ = "role_permissions"
     __table_args__ = (
         Index("ix_role_permissions_role_id", "role_id"),
@@ -68,6 +70,7 @@ class RoleCondition(BaseModel, table=True):
 
     Table: role_conditions
     """
+
     __tablename__ = "role_conditions"
     __table_args__ = (
         Index("ix_role_conditions_role_id", "role_id"),
@@ -133,6 +136,7 @@ class RoleEntityTypePermission(BaseModel, table=True):
 
     Table: role_entity_type_permissions
     """
+
     __tablename__ = "role_entity_type_permissions"
     __table_args__ = (
         Index("ix_retp_role_id", "role_id"),
@@ -174,6 +178,7 @@ class ConditionGroup(BaseModel, table=True):
 
     Table: condition_groups
     """
+
     __tablename__ = "condition_groups"
     __table_args__ = (
         Index("ix_condition_groups_role_id", "role_id"),
@@ -232,12 +237,13 @@ class Role(BaseModel, table=True):
 
     Table: roles
     """
+
     __tablename__ = "roles"
     __table_args__ = (
         Index("ix_roles_name", "name"),
         Index("ix_roles_name_tenant", "name", "tenant_id"),
         Index("ix_roles_is_global", "is_global"),
-        Index("ix_roles_entity_id", "entity_id"),
+        Index("ix_roles_root_entity_id", "root_entity_id"),
     )
 
     # === Identity ===
@@ -254,15 +260,15 @@ class Role(BaseModel, table=True):
         sa_column=Column(String(1000), nullable=True),
     )
 
-    # === Entity Scope (EnterpriseRBAC) ===
-    entity_id: Optional[UUID] = Field(
+    # === Root Entity Scope (EnterpriseRBAC) ===
+    root_entity_id: Optional[UUID] = Field(
         default=None,
         sa_column=Column(
             PG_UUID(as_uuid=True),
             ForeignKey("entities.id", ondelete="SET NULL"),
             nullable=True,
         ),
-        description="Scope role to specific entity (EnterpriseRBAC)",
+        description="Root entity (organization) that owns this role. NULL = system-wide role available everywhere.",
     )
 
     # === Configuration ===
@@ -278,7 +284,7 @@ class Role(BaseModel, table=True):
     )
 
     # === Relationships ===
-    entity: Optional["Entity"] = Relationship(back_populates="scoped_roles")
+    root_entity: Optional["Entity"] = Relationship(back_populates="scoped_roles")
     user_memberships: List["UserRoleMembership"] = Relationship(back_populates="role")
 
     # Permissions via junction table

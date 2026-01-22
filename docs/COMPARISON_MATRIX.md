@@ -70,6 +70,11 @@ Start here: Do you need organizational hierarchy (departments/teams)?
 | Multiple roles per user | ❌ | ✅ |
 | Entity memberships | ❌ | ✅ |
 | Access groups | ❌ | ✅ |
+| **Role Scoping (DD-050)** |
+| Role scoping to root entities | ❌ | ✅ |
+| Organization-isolated roles | ❌ | ✅ |
+| Global system-wide roles | ✅ | ✅ |
+| Cross-org membership prevention | ❌ | ✅ |
 | **Optional Features (Feature Flags)** |
 | Context-aware roles | ❌ | ⭕ `enable_context_aware_roles=True` |
 | ABAC conditions | ❌ | ⭕ `enable_abac=True` |

@@ -63,20 +63,20 @@ async def test_create_entity_requires_tree_permission_in_parent(
             ["entity:create", "entity:create_tree", "entity:read"],
         )
 
-        # Seed roles
+        # Seed roles (global so they can be used across any entity)
         creator_tree_role = await enterprise_auth.role_service.create_role(
             session=session,
             name="creator_tree",
             display_name="creator_tree",
             permission_names=["entity:create_tree"],
-            is_global=False,
+            is_global=True,
         )
         creator_base_role = await enterprise_auth.role_service.create_role(
             session=session,
             name="creator_base",
             display_name="creator_base",
             permission_names=["entity:create"],
-            is_global=False,
+            is_global=True,
         )
 
         # Seed users
@@ -176,7 +176,7 @@ async def test_move_entity_requires_update_on_entity_and_create_tree_on_new_pare
             ],
         )
 
-        # Roles:
+        # Roles (global so they can be used across any entity):
         # - mover: can update entities (tree required by deps when entity_id context exists)
         # - parent_creator: can create under a parent (tree)
         mover_role = await enterprise_auth.role_service.create_role(
@@ -184,14 +184,14 @@ async def test_move_entity_requires_update_on_entity_and_create_tree_on_new_pare
             name="mover",
             display_name="mover",
             permission_names=["entity:update_tree"],
-            is_global=False,
+            is_global=True,
         )
         parent_creator_role = await enterprise_auth.role_service.create_role(
             session=session,
             name="parent_creator",
             display_name="parent_creator",
             permission_names=["entity:create_tree"],
-            is_global=False,
+            is_global=True,
         )
 
         user = await enterprise_auth.user_service.create_user(
@@ -202,16 +202,25 @@ async def test_move_entity_requires_update_on_entity_and_create_tree_on_new_pare
             last_name="User",
         )
 
-        # Seed entity hierarchy:
-        # old_root -> node -> leaf
-        # new_root
-        old_root = await enterprise_auth.entity_service.create_entity(
+        # Seed entity hierarchy (all under one root organization):
+        # root -> old_branch -> node -> leaf
+        #      -> new_branch (target for move)
+        root = await enterprise_auth.entity_service.create_entity(
             session=session,
-            name="old_root",
-            display_name="Old Root",
-            slug="old-root",
+            name="root",
+            display_name="Root",
+            slug="root",
             entity_class=EntityClass.STRUCTURAL,
-            entity_type="root",
+            entity_type="organization",
+        )
+        old_branch = await enterprise_auth.entity_service.create_entity(
+            session=session,
+            name="old_branch",
+            display_name="Old Branch",
+            slug="old-branch",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="department",
+            parent_id=root.id,
         )
         node = await enterprise_auth.entity_service.create_entity(
             session=session,
@@ -219,8 +228,8 @@ async def test_move_entity_requires_update_on_entity_and_create_tree_on_new_pare
             display_name="Node",
             slug="node",
             entity_class=EntityClass.STRUCTURAL,
-            entity_type="node",
-            parent_id=old_root.id,
+            entity_type="team",
+            parent_id=old_branch.id,
         )
         leaf = await enterprise_auth.entity_service.create_entity(
             session=session,
@@ -228,16 +237,17 @@ async def test_move_entity_requires_update_on_entity_and_create_tree_on_new_pare
             display_name="Leaf",
             slug="leaf",
             entity_class=EntityClass.STRUCTURAL,
-            entity_type="leaf",
+            entity_type="project",
             parent_id=node.id,
         )
-        new_root = await enterprise_auth.entity_service.create_entity(
+        new_branch = await enterprise_auth.entity_service.create_entity(
             session=session,
-            name="new_root",
-            display_name="New Root",
-            slug="new-root",
+            name="new_branch",
+            display_name="New Branch",
+            slug="new-branch",
             entity_class=EntityClass.STRUCTURAL,
-            entity_type="root",
+            entity_type="department",
+            parent_id=root.id,
         )
 
         membership_service = MembershipService(enterprise_auth.config)
@@ -248,10 +258,10 @@ async def test_move_entity_requires_update_on_entity_and_create_tree_on_new_pare
             user_id=user.id,
             role_ids=[mover_role.id],
         )
-        # Must be able to create under the target parent (new_root context)
+        # Must be able to create under the target parent (new_branch context)
         await membership_service.add_member(
             session=session,
-            entity_id=new_root.id,
+            entity_id=new_branch.id,
             user_id=user.id,
             role_ids=[parent_creator_role.id],
         )
@@ -262,45 +272,45 @@ async def test_move_entity_requires_update_on_entity_and_create_tree_on_new_pare
 
     transport = httpx.ASGITransport(app=enterprise_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        # Move node under new_root
+        # Move node under new_branch
         r = await client.post(
             f"/entities/{node.id}/move",
-            json={"new_parent_id": str(new_root.id)},
+            json={"new_parent_id": str(new_branch.id)},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert r.status_code == 200, r.text
         moved = r.json()
-        assert moved["parent_entity_id"] == str(new_root.id)
+        assert moved["parent_entity_id"] == str(new_branch.id)
 
     # Verify closure/path/depth after move using the service directly.
     async with enterprise_auth.get_session() as session:
         node_fresh = await enterprise_auth.entity_service.get_entity(session, node.id)
         leaf_fresh = await enterprise_auth.entity_service.get_entity(session, leaf.id)
-        old_root_fresh = await enterprise_auth.entity_service.get_entity(
-            session, old_root.id
+        old_branch_fresh = await enterprise_auth.entity_service.get_entity(
+            session, old_branch.id
         )
-        new_root_fresh = await enterprise_auth.entity_service.get_entity(
-            session, new_root.id
+        new_branch_fresh = await enterprise_auth.entity_service.get_entity(
+            session, new_branch.id
         )
 
-        assert node_fresh.parent_id == new_root_fresh.id
-        assert node_fresh.depth == new_root_fresh.depth + 1
+        assert node_fresh.parent_id == new_branch_fresh.id
+        assert node_fresh.depth == new_branch_fresh.depth + 1
         assert leaf_fresh.depth == node_fresh.depth + 1
 
-        assert node_fresh.path == f"{new_root_fresh.path}{node_fresh.slug}/"
+        assert node_fresh.path == f"{new_branch_fresh.path}{node_fresh.slug}/"
         assert leaf_fresh.path == f"{node_fresh.path}{leaf_fresh.slug}/"
 
         assert await enterprise_auth.entity_service.is_ancestor_of(
-            session, new_root_fresh.id, node_fresh.id
+            session, new_branch_fresh.id, node_fresh.id
         )
         assert await enterprise_auth.entity_service.is_ancestor_of(
-            session, new_root_fresh.id, leaf_fresh.id
+            session, new_branch_fresh.id, leaf_fresh.id
         )
         assert not await enterprise_auth.entity_service.is_ancestor_of(
-            session, old_root_fresh.id, node_fresh.id
+            session, old_branch_fresh.id, node_fresh.id
         )
         assert not await enterprise_auth.entity_service.is_ancestor_of(
-            session, old_root_fresh.id, leaf_fresh.id
+            session, old_branch_fresh.id, leaf_fresh.id
         )
 
 
@@ -317,20 +327,20 @@ async def test_add_member_requires_membership_create_tree_in_target_context(
             ["membership:create", "membership:create_tree"],
         )
 
-        # Create roles
+        # Create roles (global so they can be used across any entity)
         membership_tree_role = await enterprise_auth.role_service.create_role(
             session=session,
             name="membership_tree",
             display_name="membership_tree",
             permission_names=["membership:create_tree"],
-            is_global=False,
+            is_global=True,
         )
         membership_base_role = await enterprise_auth.role_service.create_role(
             session=session,
             name="membership_base",
             display_name="membership_base",
             permission_names=["membership:create"],
-            is_global=False,
+            is_global=True,
         )
 
         # Create users
@@ -436,14 +446,14 @@ async def test_descendants_requires_entity_read_tree(
             name="entity_read_tree",
             display_name="entity_read_tree",
             permission_names=["entity:read_tree"],
-            is_global=False,
+            is_global=True,
         )
         read_base_role = await enterprise_auth.role_service.create_role(
             session=session,
             name="entity_read_base",
             display_name="entity_read_base",
             permission_names=["entity:read"],
-            is_global=False,
+            is_global=True,
         )
 
         user_tree = await enterprise_auth.user_service.create_user(
@@ -532,14 +542,14 @@ async def test_entity_members_requires_membership_read_tree(
             name="membership_read_tree",
             display_name="membership_read_tree",
             permission_names=["membership:read_tree"],
-            is_global=False,
+            is_global=True,
         )
         membership_read_base_role = await enterprise_auth.role_service.create_role(
             session=session,
             name="membership_read_base",
             display_name="membership_read_base",
             permission_names=["membership:read"],
-            is_global=False,
+            is_global=True,
         )
 
         admin_tree = await enterprise_auth.user_service.create_user(

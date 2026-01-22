@@ -5,21 +5,33 @@ Core user authentication and profile model - properly normalized.
 """
 
 from datetime import datetime, timezone
-from typing import List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional
 from uuid import UUID
 
-from sqlmodel import Field, Relationship, SQLModel
-from sqlalchemy import Column, Index, UniqueConstraint, String, Boolean, Integer, DateTime
-from sqlalchemy.dialects.postgresql import ARRAY, UUID as PG_UUID
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlmodel import Field, Relationship
 
 from outlabs_auth.database.base import BaseModel
+
 from .enums import UserStatus
 
 if TYPE_CHECKING:
-    from .token import RefreshToken
     from .api_key import APIKey
-    from .user_role_membership import UserRoleMembership
+    from .entity import Entity
     from .social_account import SocialAccount
+    from .token import RefreshToken
+    from .user_role_membership import UserRoleMembership
 
 
 class User(BaseModel, table=True):
@@ -34,12 +46,25 @@ class User(BaseModel, table=True):
 
     Table: users
     """
+
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("email", "tenant_id", name="uq_users_email_tenant"),
         Index("ix_users_email", "email"),
         Index("ix_users_status", "status"),
         Index("ix_users_tenant_id", "tenant_id"),
+        Index("ix_users_root_entity_id", "root_entity_id"),
+    )
+
+    # === Organization Binding (EnterpriseRBAC) ===
+    root_entity_id: Optional[UUID] = Field(
+        default=None,
+        sa_column=Column(
+            PG_UUID(as_uuid=True),
+            ForeignKey("entities.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+        description="Root entity (organization) this user belongs to. NULL for superusers or unassigned users.",
     )
 
     # === Authentication ===
@@ -179,6 +204,10 @@ class User(BaseModel, table=True):
     social_accounts: List["SocialAccount"] = Relationship(
         back_populates="user",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+    root_entity: Optional["Entity"] = Relationship(
+        back_populates="users",
+        sa_relationship_kwargs={"foreign_keys": "[User.root_entity_id]"},
     )
 
     # === Properties ===

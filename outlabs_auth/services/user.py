@@ -14,10 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
+    EntityNotFoundError,
     InvalidCredentialsError,
+    InvalidInputError,
     UserAlreadyExistsError,
     UserNotFoundError,
 )
+from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.enums import UserStatus
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.services.base import BaseService
@@ -138,6 +141,7 @@ class UserService(BaseService[User]):
         last_name: Optional[str] = None,
         is_superuser: bool = False,
         tenant_id: Optional[str] = None,
+        root_entity_id: Optional[UUID] = None,
     ) -> User:
         """
         Create a new user.
@@ -150,12 +154,16 @@ class UserService(BaseService[User]):
             last_name: Optional last name
             is_superuser: Whether user has superuser privileges
             tenant_id: Optional tenant ID for multi-tenant mode
+            root_entity_id: Optional root entity ID to assign user to an organization.
+                           Must be a root entity (parent_id is NULL).
 
         Returns:
             User: Created user
 
         Raises:
             UserAlreadyExistsError: If email already exists
+            EntityNotFoundError: If root_entity_id doesn't exist
+            InvalidInputError: If root_entity_id is not a root entity
         """
         # Validate and normalize email
         email = validate_email(email)
@@ -177,6 +185,24 @@ class UserService(BaseService[User]):
         # Hash password (with validation)
         hashed_password = generate_password_hash(password, self.config)
 
+        # Validate root_entity_id if provided
+        if root_entity_id:
+            entity = await session.get(Entity, root_entity_id)
+            if not entity:
+                raise EntityNotFoundError(
+                    message="Root entity not found",
+                    details={"root_entity_id": str(root_entity_id)},
+                )
+            if entity.parent_id is not None:
+                raise InvalidInputError(
+                    message="User can only be assigned to root entities (entities with no parent)",
+                    details={
+                        "root_entity_id": str(root_entity_id),
+                        "entity_name": entity.name,
+                        "parent_id": str(entity.parent_id),
+                    },
+                )
+
         # Create user
         user = User(
             email=email,
@@ -186,6 +212,7 @@ class UserService(BaseService[User]):
             status=UserStatus.ACTIVE,
             is_superuser=is_superuser,
             tenant_id=tenant_id,
+            root_entity_id=root_entity_id,
         )
 
         await self.create(session, user)

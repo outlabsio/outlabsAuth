@@ -3112,6 +3112,70 @@ All services migrated from Beanie to SQLAlchemy async:
 
 ---
 
+## DD-050: Role Scoping to Root Entities
+
+**Date**: 2026-01-22
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Different organizations need isolated role sets. A brokerage's "Agent" role should be separate from another brokerage's "Agent" role.
+
+### Options Considered
+
+1. **Role scoping by entity type**
+   - Pros: Simple to implement, roles tied to types like "brokerage", "team"
+   - Cons: Entity types are freeform strings, drift risk, doesn't match organizational boundaries
+
+2. **Role scoping by entity hierarchy (root entities)**
+   - Pros: Natural organizational boundaries, clear ownership, prevents cross-org confusion
+   - Cons: Users can only belong to one organization, requires "umbrella" entity for multi-org scenarios
+
+3. **Role categories/namespaces**
+   - Pros: Flexible grouping
+   - Cons: Another concept to manage, doesn't enforce organizational isolation
+
+### Decision
+Scope roles to root entities (top-level organizations with `parent_id = NULL`).
+
+**Implementation**:
+- Added `root_entity_id` to User model (nullable, for superusers/unassigned users)
+- Renamed `entity_id` to `root_entity_id` on Role model
+- Roles with `root_entity_id = NULL` and `is_global = TRUE` are available everywhere
+- Roles with `root_entity_id` set are only available within that organization's hierarchy
+- Users are bound to ONE root entity on first membership assignment
+- Cross-organization membership is prevented at the service layer
+
+### Consequences
+- **Positive**: Clear organizational isolation, roles don't leak across organizations
+- **Positive**: Superusers and system accounts can exist without root_entity_id
+- **Negative**: Users cannot belong to multiple top-level organizations
+- **Neutral**: Requires "umbrella" entity pattern for multi-domain deployments
+
+### Critical Architecture Constraint
+
+**IMPORTANT**: If you need users to operate across what would naturally be separate organizations (e.g., a consultant working with multiple brokerages), you MUST structure your entity hierarchy with a single root entity:
+
+```
+❌ WRONG - Multiple root entities (users can't belong to both):
+├── ACME Realty (root)          # User can belong here
+└── Keller Williams (root)      # OR here, but NOT both
+
+✅ CORRECT - Single root with child organizations:
+└── Platform (root)             # The "umbrella" entity
+    ├── ACME Realty (child)     # User can have membership here
+    ├── Keller Williams (child) # AND here (same root organization)
+    └── Internal Teams (child)  # AND here
+```
+
+**When to use each pattern**:
+- **Multiple root entities**: Completely separate organizations that should never share users (e.g., different companies using the same software)
+- **Single root with children**: Related organizations where users might need access to multiple (e.g., a platform with multiple clients, a franchise with multiple locations)
+
+### Related Decisions
+- DD-005 (Entity hierarchy in EnterpriseRBAC)
+- DD-036 (Closure table for O(1) tree queries)
+
+---
+
 ## Questions Still Open
 
 Track questions that need decisions:
@@ -3150,8 +3214,9 @@ Track questions that need decisions:
 | 2025-01-26 | DD-028 | **CORRECTED** - Changed from argon2id to SHA-256 for API keys; made refresh token rotation optional |
 | 2025-01-26 | DD-031 | Superseded by DD-028 (corrected) |
 | 2025-01-14 | DD-030 | Superseded by DD-035 |
+| 2026-01-22 | **DD-050** | **Accepted (Role Scoping to Root Entities)** |
 
 ---
 
-**Last Updated**: 2025-01-14 (DD-049 added: PostgreSQL as primary database, DD-004 superseded)
+**Last Updated**: 2026-01-22 (DD-050 added: Role scoping to root entities for organizational isolation)
 **Next Review**: After testing all examples

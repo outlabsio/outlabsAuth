@@ -5,19 +5,29 @@ Organizational hierarchy entities - companies, departments, teams, projects.
 """
 
 from datetime import datetime, timezone
-from typing import List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional
 from uuid import UUID
 
-from sqlmodel import Field, Relationship, SQLModel
-from sqlalchemy import Column, Index, UniqueConstraint, ForeignKey, String, Integer, DateTime
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlmodel import Field, Relationship
 
 from outlabs_auth.database.base import BaseModel
+
 from .enums import EntityClass
 
 if TYPE_CHECKING:
-    from .role import Role
     from .entity_membership import EntityMembership
+    from .role import Role
+    from .user import User
 
 
 class Entity(BaseModel, table=True):
@@ -29,6 +39,7 @@ class Entity(BaseModel, table=True):
 
     Table: entities
     """
+
     __tablename__ = "entities"
     __table_args__ = (
         UniqueConstraint("slug", "tenant_id", name="uq_entities_slug_tenant"),
@@ -127,10 +138,14 @@ class Entity(BaseModel, table=True):
         back_populates="parent",
         sa_relationship_kwargs={"foreign_keys": "[Entity.parent_id]"},
     )
-    scoped_roles: List["Role"] = Relationship(back_populates="entity")
+    scoped_roles: List["Role"] = Relationship(back_populates="root_entity")
     memberships: List["EntityMembership"] = Relationship(
         back_populates="entity",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+    users: List["User"] = Relationship(
+        back_populates="root_entity",
+        sa_relationship_kwargs={"foreign_keys": "[User.root_entity_id]"},
     )
 
     # === Properties ===

@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class RoleResponse(BaseModel):
+    """Role response schema."""
 
     id: str
     name: str
@@ -15,6 +16,14 @@ class RoleResponse(BaseModel):
     entity_type_permissions: Optional[Dict[str, List[str]]] = None
     is_system_role: bool = False
     is_global: bool = False
+    root_entity_id: Optional[str] = Field(
+        None,
+        description="Root entity (organization) that owns this role. NULL for system-wide roles.",
+    )
+    root_entity_name: Optional[str] = Field(
+        None,
+        description="Display name of the root entity (for convenience).",
+    )
     assignable_at_types: List[str] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
@@ -28,7 +37,14 @@ class RoleCreateRequest(BaseModel):
     description: Optional[str] = Field(None, max_length=500)
     permissions: List[str] = Field(default_factory=list)
     entity_type_permissions: Optional[Dict[str, List[str]]] = None
-    is_global: bool = False
+    is_global: bool = Field(
+        default=True,
+        description="If True with no root_entity_id, role is available system-wide.",
+    )
+    root_entity_id: Optional[str] = Field(
+        None,
+        description="Root entity (organization) that owns this role. Must be a root entity. Omit for system-wide roles.",
+    )
     assignable_at_types: List[str] = Field(default_factory=list)
 
 

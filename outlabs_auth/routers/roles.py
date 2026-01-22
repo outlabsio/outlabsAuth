@@ -77,6 +77,13 @@ def get_roles_router(
         is_global: Optional[bool] = Query(
             None, description="Filter by global/non-global roles"
         ),
+        root_entity_id: Optional[UUID] = Query(
+            None, description="Filter by root entity that owns the role"
+        ),
+        for_entity_id: Optional[UUID] = Query(
+            None,
+            description="Get roles available for this entity (includes global + scoped to entity's root)",
+        ),
         session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
@@ -87,9 +94,19 @@ def get_roles_router(
     ):
         """List all roles with pagination and optional filtering."""
         try:
-            roles, total = await auth.role_service.list_roles(
-                session, page=page, limit=limit, is_global=is_global
-            )
+            # If for_entity_id is provided, use the special method
+            if for_entity_id:
+                roles, total = await auth.role_service.get_roles_for_entity(
+                    session, entity_id=for_entity_id, page=page, limit=limit
+                )
+            else:
+                roles, total = await auth.role_service.list_roles(
+                    session,
+                    page=page,
+                    limit=limit,
+                    is_global=is_global,
+                    root_entity_id=root_entity_id,
+                )
 
             # Calculate total pages
             pages = (total + limit - 1) // limit if total > 0 else 0
@@ -99,6 +116,11 @@ def get_roles_router(
                 permission_names = await auth.role_service.get_role_permission_names(
                     session, role.id
                 )
+                # Get root entity name for convenience
+                root_entity_name = None
+                if role.root_entity_id and role.root_entity:
+                    root_entity_name = role.root_entity.display_name
+
                 items.append(
                     RoleResponse(
                         id=str(role.id),
@@ -109,6 +131,10 @@ def get_roles_router(
                         entity_type_permissions=None,
                         is_system_role=role.is_system_role,
                         is_global=role.is_global,
+                        root_entity_id=str(role.root_entity_id)
+                        if role.root_entity_id
+                        else None,
+                        root_entity_name=root_entity_name,
                         assignable_at_types=[],
                     )
                 )
@@ -142,11 +168,18 @@ def get_roles_router(
             description=data.description,
             permission_names=data.permissions,
             is_global=data.is_global,
+            root_entity_id=UUID(data.root_entity_id) if data.root_entity_id else None,
         )
 
         permission_names = await auth.role_service.get_role_permission_names(
             session, role.id
         )
+
+        # Get root entity name for convenience
+        root_entity_name = None
+        if role.root_entity_id and role.root_entity:
+            root_entity_name = role.root_entity.display_name
+
         return RoleResponse(
             id=str(role.id),
             name=role.name,
@@ -156,6 +189,8 @@ def get_roles_router(
             entity_type_permissions=None,
             is_system_role=role.is_system_role,
             is_global=role.is_global,
+            root_entity_id=str(role.root_entity_id) if role.root_entity_id else None,
+            root_entity_name=root_entity_name,
             assignable_at_types=[],
         )
 
@@ -178,6 +213,12 @@ def get_roles_router(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Role not found"
             )
+
+        # Get root entity name for convenience
+        root_entity_name = None
+        if role.root_entity_id and role.root_entity:
+            root_entity_name = role.root_entity.display_name
+
         return RoleResponse(
             id=str(role.id),
             name=role.name,
@@ -187,6 +228,8 @@ def get_roles_router(
             entity_type_permissions=None,
             is_system_role=role.is_system_role,
             is_global=role.is_global,
+            root_entity_id=str(role.root_entity_id) if role.root_entity_id else None,
+            root_entity_name=root_entity_name,
             assignable_at_types=[],
         )
 
@@ -224,6 +267,11 @@ def get_roles_router(
             session, role.id
         )
 
+        # Get root entity name for convenience
+        root_entity_name = None
+        if role.root_entity_id and role.root_entity:
+            root_entity_name = role.root_entity.display_name
+
         return RoleResponse(
             id=str(role.id),
             name=role.name,
@@ -233,6 +281,8 @@ def get_roles_router(
             entity_type_permissions=None,
             is_system_role=role.is_system_role,
             is_global=role.is_global,
+            root_entity_id=str(role.root_entity_id) if role.root_entity_id else None,
+            root_entity_name=root_entity_name,
             assignable_at_types=[],
         )
 

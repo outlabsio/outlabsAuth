@@ -8,17 +8,20 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
+from sqlalchemy import and_, or_, select
 from sqlalchemy import delete as sql_delete
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
+    EntityNotFoundError,
     InvalidInputError,
     RoleNotFoundError,
     UserNotFoundError,
 )
+from outlabs_auth.models.sql.closure import EntityClosure
+from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.enums import MembershipStatus
 from outlabs_auth.models.sql.permission import Permission
 from outlabs_auth.models.sql.role import Role, RolePermission
@@ -59,7 +62,7 @@ class RoleService(BaseService[Role]):
         permission_names: Optional[List[str]] = None,
         is_global: bool = True,
         is_system_role: bool = False,
-        entity_id: Optional[UUID] = None,
+        root_entity_id: Optional[UUID] = None,
         tenant_id: Optional[str] = None,
     ) -> Role:
         """
@@ -71,16 +74,19 @@ class RoleService(BaseService[Role]):
             display_name: Human-readable role name
             description: Optional role description
             permission_names: List of permission names to assign
-            is_global: Whether role can be assigned anywhere
+            is_global: Whether role can be assigned anywhere in hierarchy
             is_system_role: Whether this is a protected system role
-            entity_id: Optional entity ID to scope role (EnterpriseRBAC)
+            root_entity_id: Optional root entity ID that owns this role (EnterpriseRBAC).
+                           If set, role is only available within that organization's hierarchy.
+                           Must be a root entity (parent_id is NULL).
             tenant_id: Optional tenant ID
 
         Returns:
             Role: Created role
 
         Raises:
-            InvalidInputError: If role name already exists
+            InvalidInputError: If role name already exists or root_entity_id is not a root entity
+            EntityNotFoundError: If root_entity_id doesn't exist
         """
         # Validate and normalize
         name = validate_slug(name, "name")
@@ -94,6 +100,24 @@ class RoleService(BaseService[Role]):
                 details={"name": name},
             )
 
+        # Validate root_entity_id if provided
+        if root_entity_id:
+            entity = await session.get(Entity, root_entity_id)
+            if not entity:
+                raise EntityNotFoundError(
+                    message="Root entity not found",
+                    details={"root_entity_id": str(root_entity_id)},
+                )
+            if entity.parent_id is not None:
+                raise InvalidInputError(
+                    message="Role can only be scoped to root entities (entities with no parent)",
+                    details={
+                        "root_entity_id": str(root_entity_id),
+                        "entity_name": entity.name,
+                        "parent_id": str(entity.parent_id),
+                    },
+                )
+
         # Create role
         role = Role(
             name=name,
@@ -101,7 +125,7 @@ class RoleService(BaseService[Role]):
             description=description,
             is_global=is_global,
             is_system_role=is_system_role,
-            entity_id=entity_id,
+            root_entity_id=root_entity_id,
             tenant_id=tenant_id,
         )
 
@@ -239,6 +263,7 @@ class RoleService(BaseService[Role]):
         page: int = 1,
         limit: int = 20,
         is_global: Optional[bool] = None,
+        root_entity_id: Optional[UUID] = None,
         tenant_id: Optional[str] = None,
     ) -> Tuple[List[Role], int]:
         """
@@ -249,6 +274,7 @@ class RoleService(BaseService[Role]):
             page: Page number (1-indexed)
             limit: Results per page
             is_global: Filter by global flag
+            root_entity_id: Filter by root entity that owns the role
             tenant_id: Filter by tenant
 
         Returns:
@@ -257,6 +283,8 @@ class RoleService(BaseService[Role]):
         filters = []
         if is_global is not None:
             filters.append(Role.is_global == is_global)
+        if root_entity_id is not None:
+            filters.append(Role.root_entity_id == root_entity_id)
         if tenant_id:
             filters.append(Role.tenant_id == tenant_id)
 
@@ -272,6 +300,111 @@ class RoleService(BaseService[Role]):
         )
 
         return roles, total_count
+
+    async def get_roles_for_entity(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        page: int = 1,
+        limit: int = 50,
+        include_global: bool = True,
+    ) -> Tuple[List[Role], int]:
+        """
+        Get roles available for a specific entity.
+
+        Returns roles that can be assigned within this entity's hierarchy:
+        - Global system-wide roles (is_global=True and root_entity_id=NULL)
+        - Roles scoped to this entity's root ancestor
+
+        Args:
+            session: Database session
+            entity_id: Entity to find available roles for
+            page: Page number (1-indexed)
+            limit: Results per page
+            include_global: Whether to include system-wide global roles
+
+        Returns:
+            Tuple of (roles, total_count)
+        """
+        # Step 1: Find the root entity for this entity using closure table
+        # The root has the highest depth value in the closure table for this descendant
+        root_stmt = (
+            select(EntityClosure.ancestor_id)
+            .where(EntityClosure.descendant_id == entity_id)
+            .order_by(EntityClosure.depth.desc())
+            .limit(1)
+        )
+        root_result = await session.execute(root_stmt)
+        root_row = root_result.first()
+        root_id = root_row[0] if root_row else entity_id
+
+        # Step 2: Build filter for available roles
+        if include_global:
+            # Global roles: is_global=True AND root_entity_id IS NULL
+            # OR scoped roles: root_entity_id matches our root
+            role_filter = or_(
+                and_(Role.is_global == True, Role.root_entity_id.is_(None)),
+                Role.root_entity_id == root_id,
+            )
+        else:
+            # Only roles scoped to our root
+            role_filter = Role.root_entity_id == root_id
+
+        # Step 3: Count and fetch
+        count_stmt = select(Role).where(role_filter)
+        count_result = await session.execute(count_stmt)
+        total_count = len(count_result.all())
+
+        skip = (page - 1) * limit
+        stmt = (
+            select(Role)
+            .where(role_filter)
+            .order_by(Role.name)
+            .offset(skip)
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        roles = list(result.scalars().all())
+
+        return roles, total_count
+
+    async def is_role_available_for_entity(
+        self,
+        session: AsyncSession,
+        role: Role,
+        entity_id: UUID,
+    ) -> bool:
+        """
+        Check if a role can be assigned within an entity's hierarchy.
+
+        A role is available if:
+        - It's a global system-wide role (is_global=True and root_entity_id=NULL)
+        - Its root_entity_id matches the entity's root ancestor
+
+        Args:
+            session: Database session
+            role: Role to check
+            entity_id: Entity where role would be assigned
+
+        Returns:
+            bool: True if role can be used in this entity's hierarchy
+        """
+        # Global system-wide roles are available everywhere
+        if role.is_global and role.root_entity_id is None:
+            return True
+
+        # If role has a root_entity_id, check if entity is in that hierarchy
+        if role.root_entity_id:
+            # Use closure table to check if role's root is an ancestor of entity
+            stmt = select(EntityClosure).where(
+                EntityClosure.ancestor_id == role.root_entity_id,
+                EntityClosure.descendant_id == entity_id,
+            )
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none() is not None
+
+        # Role with no root_entity_id and is_global=False is orphaned/unusable
+        return False
 
     # =========================================================================
     # Permission Management (by permission name convenience)

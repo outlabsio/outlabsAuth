@@ -19,6 +19,14 @@ class UserResponse(BaseModel):
     status: str  # UserStatus enum value
     email_verified: bool = False
     is_superuser: bool = False
+    root_entity_id: Optional[str] = Field(
+        None,
+        description="Root entity (organization) this user belongs to.",
+    )
+    root_entity_name: Optional[str] = Field(
+        None,
+        description="Display name of the root entity (for convenience).",
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -44,6 +52,10 @@ class UserCreateRequest(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     is_superuser: bool = Field(default=False)
+    root_entity_id: Optional[str] = Field(
+        None,
+        description="Root entity (organization) to assign user to. Must be a root entity.",
+    )
 
 
 class ChangePasswordRequest(BaseModel):
