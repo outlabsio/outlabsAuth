@@ -8,6 +8,8 @@ import {
     membershipsQueries,
     useRemoveMemberMutation,
 } from "~/queries/memberships";
+import { rolesQueries, useDeleteRoleMutation } from "~/queries/roles";
+import type { Role } from "~/types/role";
 import { UButton, UBadge } from "#components";
 
 // Resolve components for use in cell renderers
@@ -20,9 +22,14 @@ const treeSearch = ref("");
 const showCreateModal = ref(false);
 const showEditModal = ref(false);
 const showAddMemberModal = ref(false);
+const showEditMemberRolesModal = ref(false);
+const showCreateEntityRoleModal = ref(false);
+const showEditRoleModal = ref(false);
 const editEntityId = ref<string | null>(null);
+const editRoleId = ref<string | null>(null);
 const selectedTreeEntityId = ref<string | undefined>(undefined);
-const activeTab = ref("children"); // "children" | "members"
+const activeTab = ref("children"); // "children" | "members" | "roles"
+const editingMember = ref<EntityMember | null>(null);
 
 // Query all entities
 const { data: entitiesData, isLoading } = useQuery(
@@ -39,12 +46,52 @@ const { data: membersData, isLoading: isMembersLoading } = useQuery({
     ),
 });
 
+// Query entity roles (only when entity selected and roles tab active)
+const { data: entityRolesData, isLoading: isRolesLoading } = useQuery({
+    ...rolesQueries.list(
+        { for_entity_id: selectedTreeEntityId.value || "" },
+        { limit: 100 },
+    ),
+    enabled: computed(
+        () => !!selectedTreeEntityId.value && activeTab.value === "roles",
+    ),
+});
+
 // Mutations
 const { mutate: deleteEntity } = useDeleteEntityMutation();
 const { mutate: removeMember } = useRemoveMemberMutation();
+const { mutate: deleteRole } = useDeleteRoleMutation();
 
 // Entity members list
 const entityMembers = computed(() => membersData.value || []);
+
+// Entity roles grouped by type
+const entityRoles = computed(() => entityRolesData.value?.items || []);
+
+const rolesByType = computed(() => {
+    const roles = entityRoles.value;
+    const grouped = {
+        entityLocal: [] as Role[],
+        inherited: [] as Role[],
+        global: [] as Role[],
+    };
+
+    for (const role of roles) {
+        if (role.is_global) {
+            grouped.global.push(role);
+        } else if (role.scope_entity_id === selectedTreeEntityId.value) {
+            grouped.entityLocal.push(role);
+        } else if (role.scope_entity_id) {
+            // Entity-local from an ancestor (inherited)
+            grouped.inherited.push(role);
+        } else {
+            // Org-scoped (root_entity_id set but no scope_entity_id)
+            grouped.global.push(role);
+        }
+    }
+
+    return grouped;
+});
 
 // Get all entities as flat array
 const allEntities = computed(() => entitiesData.value?.items || []);
@@ -266,6 +313,26 @@ function onTreeSelect(e: any) {
     }
 }
 
+// Open edit member roles modal
+function openEditMemberRolesModal(member: EntityMember) {
+    editingMember.value = member;
+    showEditMemberRolesModal.value = true;
+}
+
+// Open edit role modal
+function openEditRoleModal(roleId: string) {
+    editRoleId.value = roleId;
+    showEditRoleModal.value = true;
+}
+
+// Get scope badge for roles
+function getRoleScopeBadge(role: Role): { color: string; label: string } {
+    if (role.is_global) return { color: "info", label: "Global" };
+    if (role.scope === "entity_only")
+        return { color: "warning", label: "This entity only" };
+    return { color: "success", label: "Hierarchy" };
+}
+
 // Table columns
 const columns: TableColumn<Entity>[] = [
     {
@@ -407,19 +474,31 @@ const memberColumns: TableColumn<EntityMember>[] = [
         cell: ({ row }) =>
             h(
                 "div",
-                { class: "flex flex-wrap gap-1" },
+                { class: "flex flex-wrap gap-1 items-center" },
                 row.original.roles.length > 0
-                    ? row.original.roles.map((role) =>
-                          h(
-                              UBadgeResolved,
-                              {
-                                  color: "primary",
-                                  variant: "subtle",
-                                  size: "xs",
-                              },
-                              () => role.display_name || role.name,
+                    ? [
+                          ...row.original.roles.slice(0, 3).map((role) =>
+                              h(
+                                  UBadgeResolved,
+                                  {
+                                      color: "primary",
+                                      variant: "subtle",
+                                      size: "xs",
+                                  },
+                                  () => role.display_name || role.name,
+                              ),
                           ),
-                      )
+                          row.original.roles.length > 3 &&
+                              h(
+                                  UBadgeResolved,
+                                  {
+                                      color: "neutral",
+                                      variant: "subtle",
+                                      size: "xs",
+                                  },
+                                  () => `+${row.original.roles.length - 3}`,
+                              ),
+                      ].filter(Boolean)
                     : h("span", { class: "text-muted text-sm" }, "No roles"),
             ),
     },
@@ -456,6 +535,14 @@ const memberColumns: TableColumn<EntityMember>[] = [
         cell: ({ row }) =>
             h("div", { class: "flex items-center gap-1" }, [
                 h(UButtonResolved, {
+                    icon: "i-lucide-shield",
+                    color: "neutral",
+                    variant: "ghost",
+                    size: "xs",
+                    title: "Edit roles",
+                    onClick: () => openEditMemberRolesModal(row.original),
+                }),
+                h(UButtonResolved, {
                     icon: "i-lucide-trash-2",
                     color: "error",
                     variant: "ghost",
@@ -482,6 +569,7 @@ const memberColumns: TableColumn<EntityMember>[] = [
 const tabItems = [
     { label: "Children", value: "children", icon: "i-lucide-folder-tree" },
     { label: "Members", value: "members", icon: "i-lucide-users" },
+    { label: "Roles", value: "roles", icon: "i-lucide-shield" },
 ];
 </script>
 
@@ -582,6 +670,13 @@ const tabItems = [
                             label="Add Member"
                             color="primary"
                             @click="showAddMemberModal = true"
+                        />
+                        <UButton
+                            v-else-if="activeTab === 'roles'"
+                            icon="i-lucide-shield-plus"
+                            label="Create Role"
+                            color="primary"
+                            @click="showCreateEntityRoleModal = true"
                         />
                     </template>
                 </UDashboardNavbar>
@@ -718,6 +813,16 @@ const tabItems = [
                                 color="neutral"
                                 variant="subtle"
                             />
+                            <UBadge
+                                v-if="
+                                    tab.value === 'roles' &&
+                                    rolesByType.entityLocal.length > 0
+                                "
+                                :label="String(rolesByType.entityLocal.length)"
+                                size="xs"
+                                color="neutral"
+                                variant="subtle"
+                            />
                         </button>
                     </div>
                 </div>
@@ -791,6 +896,307 @@ const tabItems = [
                         </div>
                     </template>
                 </UTable>
+
+                <!-- Roles Tab Content -->
+                <div
+                    v-else-if="activeTab === 'roles'"
+                    class="flex-1 overflow-y-auto p-4 space-y-6"
+                >
+                    <!-- Loading State -->
+                    <div
+                        v-if="isRolesLoading"
+                        class="flex items-center justify-center py-12"
+                    >
+                        <UIcon
+                            name="i-lucide-loader-2"
+                            class="w-8 h-8 animate-spin text-primary"
+                        />
+                    </div>
+
+                    <template v-else>
+                        <!-- Entity-Local Roles -->
+                        <div>
+                            <div class="flex items-center justify-between mb-3">
+                                <h4
+                                    class="text-sm font-semibold flex items-center gap-2"
+                                >
+                                    <UIcon
+                                        name="i-lucide-map-pin"
+                                        class="w-4 h-4"
+                                    />
+                                    Roles at
+                                    {{
+                                        selectedEntity?.display_name ||
+                                        selectedEntity?.name
+                                    }}
+                                </h4>
+                                <UButton
+                                    icon="i-lucide-plus"
+                                    label="Add Role"
+                                    size="xs"
+                                    variant="outline"
+                                    @click="showCreateEntityRoleModal = true"
+                                />
+                            </div>
+                            <div
+                                v-if="rolesByType.entityLocal.length > 0"
+                                class="space-y-2"
+                            >
+                                <div
+                                    v-for="role in rolesByType.entityLocal"
+                                    :key="role.id"
+                                    class="flex items-center justify-between p-3 rounded-lg border border-default bg-default/50"
+                                >
+                                    <div class="flex items-center gap-3">
+                                        <div
+                                            class="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center"
+                                        >
+                                            <UIcon
+                                                name="i-lucide-shield"
+                                                class="w-4 h-4 text-primary"
+                                            />
+                                        </div>
+                                        <div>
+                                            <p class="font-medium text-sm">
+                                                {{
+                                                    role.display_name ||
+                                                    role.name
+                                                }}
+                                            </p>
+                                            <p
+                                                v-if="role.description"
+                                                class="text-xs text-muted"
+                                            >
+                                                {{ role.description }}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-center gap-2">
+                                        <UBadge
+                                            v-if="role.is_auto_assigned"
+                                            color="primary"
+                                            variant="subtle"
+                                            size="xs"
+                                        >
+                                            Auto-assigned
+                                        </UBadge>
+                                        <UBadge
+                                            :color="
+                                                getRoleScopeBadge(role).color
+                                            "
+                                            variant="subtle"
+                                            size="xs"
+                                        >
+                                            {{ getRoleScopeBadge(role).label }}
+                                        </UBadge>
+                                        <UBadge
+                                            color="neutral"
+                                            variant="subtle"
+                                            size="xs"
+                                        >
+                                            {{ role.permissions?.length || 0 }}
+                                            perms
+                                        </UBadge>
+                                        <UButton
+                                            icon="i-lucide-pencil"
+                                            color="neutral"
+                                            variant="ghost"
+                                            size="xs"
+                                            @click="openEditRoleModal(role.id)"
+                                        />
+                                        <UButton
+                                            icon="i-lucide-trash-2"
+                                            color="error"
+                                            variant="ghost"
+                                            size="xs"
+                                            @click="
+                                                () => {
+                                                    if (
+                                                        confirm(
+                                                            `Delete role '${role.display_name || role.name}'?`,
+                                                        )
+                                                    ) {
+                                                        deleteRole(role.id);
+                                                    }
+                                                }
+                                            "
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                            <div
+                                v-else
+                                class="text-center py-8 border border-dashed border-default rounded-lg"
+                            >
+                                <UIcon
+                                    name="i-lucide-shield-off"
+                                    class="w-8 h-8 text-muted mx-auto mb-2"
+                                />
+                                <p class="text-sm text-muted">
+                                    No roles defined at this entity
+                                </p>
+                                <UButton
+                                    icon="i-lucide-plus"
+                                    label="Create first role"
+                                    size="xs"
+                                    variant="link"
+                                    class="mt-2"
+                                    @click="showCreateEntityRoleModal = true"
+                                />
+                            </div>
+                        </div>
+
+                        <!-- Inherited Roles -->
+                        <div v-if="rolesByType.inherited.length > 0">
+                            <h4
+                                class="text-sm font-semibold flex items-center gap-2 mb-3"
+                            >
+                                <UIcon
+                                    name="i-lucide-git-branch"
+                                    class="w-4 h-4"
+                                />
+                                Inherited Roles
+                                <UTooltip
+                                    text="Roles from parent entities with hierarchy scope"
+                                >
+                                    <UIcon
+                                        name="i-lucide-info"
+                                        class="w-3.5 h-3.5 text-muted"
+                                    />
+                                </UTooltip>
+                            </h4>
+                            <div class="space-y-2">
+                                <div
+                                    v-for="role in rolesByType.inherited"
+                                    :key="role.id"
+                                    class="flex items-center justify-between p-3 rounded-lg border border-default bg-muted/20"
+                                >
+                                    <div class="flex items-center gap-3">
+                                        <div
+                                            class="w-8 h-8 rounded-lg bg-success/10 flex items-center justify-center"
+                                        >
+                                            <UIcon
+                                                name="i-lucide-shield"
+                                                class="w-4 h-4 text-success"
+                                            />
+                                        </div>
+                                        <div>
+                                            <p class="font-medium text-sm">
+                                                {{
+                                                    role.display_name ||
+                                                    role.name
+                                                }}
+                                            </p>
+                                            <p class="text-xs text-muted">
+                                                from
+                                                {{
+                                                    role.scope_entity_name ||
+                                                    "parent entity"
+                                                }}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-center gap-2">
+                                        <UBadge
+                                            color="success"
+                                            variant="subtle"
+                                            size="xs"
+                                        >
+                                            Hierarchy
+                                        </UBadge>
+                                        <UBadge
+                                            color="neutral"
+                                            variant="subtle"
+                                            size="xs"
+                                        >
+                                            {{ role.permissions?.length || 0 }}
+                                            perms
+                                        </UBadge>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Global Roles -->
+                        <div v-if="rolesByType.global.length > 0">
+                            <h4
+                                class="text-sm font-semibold flex items-center gap-2 mb-3"
+                            >
+                                <UIcon name="i-lucide-globe" class="w-4 h-4" />
+                                Global Roles
+                            </h4>
+                            <div class="space-y-2">
+                                <div
+                                    v-for="role in rolesByType.global"
+                                    :key="role.id"
+                                    class="flex items-center justify-between p-3 rounded-lg border border-default bg-muted/20"
+                                >
+                                    <div class="flex items-center gap-3">
+                                        <div
+                                            class="w-8 h-8 rounded-lg bg-info/10 flex items-center justify-center"
+                                        >
+                                            <UIcon
+                                                name="i-lucide-shield"
+                                                class="w-4 h-4 text-info"
+                                            />
+                                        </div>
+                                        <div>
+                                            <p class="font-medium text-sm">
+                                                {{
+                                                    role.display_name ||
+                                                    role.name
+                                                }}
+                                            </p>
+                                            <p
+                                                v-if="role.description"
+                                                class="text-xs text-muted"
+                                            >
+                                                {{ role.description }}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-center gap-2">
+                                        <UBadge
+                                            color="info"
+                                            variant="subtle"
+                                            size="xs"
+                                        >
+                                            Global
+                                        </UBadge>
+                                        <UBadge
+                                            color="neutral"
+                                            variant="subtle"
+                                            size="xs"
+                                        >
+                                            {{ role.permissions?.length || 0 }}
+                                            perms
+                                        </UBadge>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Empty State (no roles at all) -->
+                        <div
+                            v-if="entityRoles.length === 0"
+                            class="flex flex-col items-center justify-center py-12 gap-4"
+                        >
+                            <UIcon
+                                name="i-lucide-shield-off"
+                                class="w-12 h-12 text-muted"
+                            />
+                            <p class="text-muted">
+                                No roles available for this entity
+                            </p>
+                            <UButton
+                                icon="i-lucide-plus"
+                                label="Create first role"
+                                variant="outline"
+                                @click="showCreateEntityRoleModal = true"
+                            />
+                        </div>
+                    </template>
+                </div>
             </div>
         </UDashboardPanel>
     </div>
@@ -813,5 +1219,30 @@ const tabItems = [
         v-if="selectedTreeEntityId"
         v-model:open="showAddMemberModal"
         :entity-id="selectedTreeEntityId"
+    />
+
+    <!-- Edit Member Roles Modal -->
+    <MemberRoleEditModal
+        v-if="selectedTreeEntityId && editingMember"
+        v-model:open="showEditMemberRolesModal"
+        :entity-id="selectedTreeEntityId"
+        :member="editingMember"
+    />
+
+    <!-- Create Entity Role Modal -->
+    <EntityRoleCreateModal
+        v-if="selectedTreeEntityId"
+        v-model:open="showCreateEntityRoleModal"
+        :entity-id="selectedTreeEntityId"
+        :entity-name="
+            selectedEntity?.display_name || selectedEntity?.name || ''
+        "
+    />
+
+    <!-- Edit Role Modal (reuse existing) -->
+    <RoleUpdateModal
+        v-if="editRoleId"
+        v-model:open="showEditRoleModal"
+        :role-id="editRoleId"
     />
 </template>
