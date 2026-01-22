@@ -11,10 +11,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.schemas.membership import (
+    EntityMemberResponse,
     MembershipCreateRequest,
     MembershipResponse,
     MembershipUpdateRequest,
 )
+from outlabs_auth.schemas.role import RoleSummary
 
 
 def get_memberships_router(
@@ -140,6 +142,47 @@ def get_memberships_router(
                 entity_id=str(m.entity_id),
                 user_id=str(m.user_id),
                 role_ids=[str(r.id) for r in m.roles],
+            )
+            for m in memberships
+        ]
+
+    @router.get(
+        "/entity/{entity_id}/details",
+        response_model=List[EntityMemberResponse],
+        summary="Get entity members with details",
+        description="Get all members of an entity with user details and roles (requires membership:read permission)",
+    )
+    async def get_entity_members_with_details(
+        entity_id: UUID,
+        page: int = Query(1, ge=1),
+        limit: int = Query(50, ge=1, le=100),
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(
+            auth.require_tree_permission("membership:read", "entity_id", source="path")
+        ),
+    ):
+        """Get all members of an entity with user details and role information."""
+        memberships, _ = await auth.membership_service.get_entity_members_with_users(
+            session=session, entity_id=entity_id, page=page, limit=limit
+        )
+        return [
+            EntityMemberResponse(
+                id=str(m.id),
+                user_id=str(m.user_id),
+                user_email=m.user.email if m.user else "",
+                user_first_name=m.user.first_name if m.user else None,
+                user_last_name=m.user.last_name if m.user else None,
+                user_status=m.user.status.value if m.user else "unknown",
+                roles=[
+                    RoleSummary(
+                        id=str(r.id),
+                        name=r.name,
+                        display_name=r.display_name,
+                    )
+                    for r in m.roles
+                ],
+                status=m.status.value,
+                joined_at=m.valid_from or m.created_at,
             )
             for m in memberships
         ]

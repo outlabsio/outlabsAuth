@@ -1,8 +1,13 @@
 <script setup lang="ts">
 import type { TableColumn, TreeItem, BreadcrumbItem } from "@nuxt/ui";
 import type { Entity, EntityClass } from "~/types/entity";
+import type { EntityMember } from "~/types/membership";
 import { useQuery } from "@pinia/colada";
 import { entitiesQueries, useDeleteEntityMutation } from "~/queries/entities";
+import {
+    membershipsQueries,
+    useRemoveMemberMutation,
+} from "~/queries/memberships";
 import { UButton, UBadge } from "#components";
 
 // Resolve components for use in cell renderers
@@ -14,16 +19,32 @@ const UIcon = resolveComponent("UIcon");
 const treeSearch = ref("");
 const showCreateModal = ref(false);
 const showEditModal = ref(false);
+const showAddMemberModal = ref(false);
 const editEntityId = ref<string | null>(null);
 const selectedTreeEntityId = ref<string | undefined>(undefined);
+const activeTab = ref("children"); // "children" | "members"
 
 // Query all entities
 const { data: entitiesData, isLoading } = useQuery(
     entitiesQueries.list({}, { page: 1, limit: 500 }),
 );
 
+// Query entity members (only when entity selected and members tab active)
+const { data: membersData, isLoading: isMembersLoading } = useQuery({
+    ...membershipsQueries.entityMembersWithDetails(
+        selectedTreeEntityId.value || "",
+    ),
+    enabled: computed(
+        () => !!selectedTreeEntityId.value && activeTab.value === "members",
+    ),
+});
+
 // Mutations
 const { mutate: deleteEntity } = useDeleteEntityMutation();
+const { mutate: removeMember } = useRemoveMemberMutation();
+
+// Entity members list
+const entityMembers = computed(() => membersData.value || []);
 
 // Get all entities as flat array
 const allEntities = computed(() => entitiesData.value?.items || []);
@@ -358,6 +379,110 @@ const columns: TableColumn<Entity>[] = [
 
 // Create child entity with pre-filled parent
 const createParentId = computed(() => selectedTreeEntityId.value || undefined);
+
+// Members table columns
+const memberColumns: TableColumn<EntityMember>[] = [
+    {
+        accessorKey: "user_email",
+        header: "User",
+        cell: ({ row }) =>
+            h("div", { class: "flex flex-col gap-0.5" }, [
+                h(
+                    "span",
+                    { class: "font-medium" },
+                    row.original.user_first_name && row.original.user_last_name
+                        ? `${row.original.user_first_name} ${row.original.user_last_name}`
+                        : row.original.user_email,
+                ),
+                h(
+                    "span",
+                    { class: "text-xs text-muted" },
+                    row.original.user_email,
+                ),
+            ]),
+    },
+    {
+        accessorKey: "roles",
+        header: "Roles",
+        cell: ({ row }) =>
+            h(
+                "div",
+                { class: "flex flex-wrap gap-1" },
+                row.original.roles.length > 0
+                    ? row.original.roles.map((role) =>
+                          h(
+                              UBadgeResolved,
+                              {
+                                  color: "primary",
+                                  variant: "subtle",
+                                  size: "xs",
+                              },
+                              () => role.display_name || role.name,
+                          ),
+                      )
+                    : h("span", { class: "text-muted text-sm" }, "No roles"),
+            ),
+    },
+    {
+        accessorKey: "status",
+        header: "Status",
+        cell: ({ row }) =>
+            h(
+                UBadgeResolved,
+                {
+                    color:
+                        row.original.status === "active"
+                            ? "success"
+                            : "warning",
+                    variant: "subtle",
+                    size: "xs",
+                },
+                () => row.original.status,
+            ),
+    },
+    {
+        accessorKey: "joined_at",
+        header: "Joined",
+        cell: ({ row }) =>
+            h(
+                "span",
+                { class: "text-sm text-muted" },
+                new Date(row.original.joined_at).toLocaleDateString(),
+            ),
+    },
+    {
+        id: "actions",
+        header: "Actions",
+        cell: ({ row }) =>
+            h("div", { class: "flex items-center gap-1" }, [
+                h(UButtonResolved, {
+                    icon: "i-lucide-trash-2",
+                    color: "error",
+                    variant: "ghost",
+                    size: "xs",
+                    title: "Remove member",
+                    onClick: async () => {
+                        if (
+                            confirm(
+                                `Remove ${row.original.user_email} from this entity?`,
+                            )
+                        ) {
+                            await removeMember({
+                                entityId: selectedTreeEntityId.value!,
+                                userId: row.original.user_id,
+                            });
+                        }
+                    },
+                }),
+            ]),
+    },
+];
+
+// Tab items
+const tabItems = [
+    { label: "Children", value: "children", icon: "i-lucide-folder-tree" },
+    { label: "Members", value: "members", icon: "i-lucide-users" },
+];
 </script>
 
 <template>
@@ -443,12 +568,20 @@ const createParentId = computed(() => selectedTreeEntityId.value || undefined);
                 >
                     <template #right>
                         <UButton
+                            v-if="!selectedEntity || activeTab === 'children'"
                             icon="i-lucide-plus"
                             :label="
                                 selectedEntity ? 'Add Child' : 'Create Entity'
                             "
                             color="primary"
                             @click="showCreateModal = true"
+                        />
+                        <UButton
+                            v-else-if="activeTab === 'members'"
+                            icon="i-lucide-user-plus"
+                            label="Add Member"
+                            color="primary"
+                            @click="showAddMemberModal = true"
                         />
                     </template>
                 </UDashboardNavbar>
@@ -546,8 +679,52 @@ const createParentId = computed(() => selectedTreeEntityId.value || undefined);
                     </p>
                 </div>
 
+                <!-- Tabs (when entity selected) -->
+                <div
+                    v-if="selectedEntity"
+                    class="px-4 py-2 border-b border-default"
+                >
+                    <div class="flex gap-4">
+                        <button
+                            v-for="tab in tabItems"
+                            :key="tab.value"
+                            class="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-md transition-colors"
+                            :class="
+                                activeTab === tab.value
+                                    ? 'bg-primary/10 text-primary'
+                                    : 'text-muted hover:text-default hover:bg-muted/50'
+                            "
+                            @click="activeTab = tab.value"
+                        >
+                            <UIcon :name="tab.icon" class="w-4 h-4" />
+                            {{ tab.label }}
+                            <UBadge
+                                v-if="
+                                    tab.value === 'children' &&
+                                    childEntities.length > 0
+                                "
+                                :label="String(childEntities.length)"
+                                size="xs"
+                                color="neutral"
+                                variant="subtle"
+                            />
+                            <UBadge
+                                v-if="
+                                    tab.value === 'members' &&
+                                    entityMembers.length > 0
+                                "
+                                :label="String(entityMembers.length)"
+                                size="xs"
+                                color="neutral"
+                                variant="subtle"
+                            />
+                        </button>
+                    </div>
+                </div>
+
                 <!-- Children Table -->
                 <UTable
+                    v-if="!selectedEntity || activeTab === 'children'"
                     sticky
                     class="flex-1"
                     :columns="columns"
@@ -586,6 +763,34 @@ const createParentId = computed(() => selectedTreeEntityId.value || undefined);
                         </div>
                     </template>
                 </UTable>
+
+                <!-- Members Table -->
+                <UTable
+                    v-else-if="activeTab === 'members'"
+                    sticky
+                    class="flex-1"
+                    :columns="memberColumns"
+                    :data="entityMembers"
+                    :loading="isMembersLoading"
+                >
+                    <template #empty>
+                        <div
+                            class="flex flex-col items-center justify-center py-12 gap-4"
+                        >
+                            <UIcon
+                                name="i-lucide-users"
+                                class="w-12 h-12 text-muted"
+                            />
+                            <p class="text-muted">No members yet</p>
+                            <UButton
+                                icon="i-lucide-user-plus"
+                                label="Add first member"
+                                variant="outline"
+                                @click="showAddMemberModal = true"
+                            />
+                        </div>
+                    </template>
+                </UTable>
             </div>
         </UDashboardPanel>
     </div>
@@ -601,5 +806,12 @@ const createParentId = computed(() => selectedTreeEntityId.value || undefined);
         v-if="editEntityId"
         v-model:open="showEditModal"
         :entity-id="editEntityId"
+    />
+
+    <!-- Add Member Modal -->
+    <EntityMemberAddModal
+        v-if="selectedTreeEntityId"
+        v-model:open="showAddMemberModal"
+        :entity-id="selectedTreeEntityId"
     />
 </template>

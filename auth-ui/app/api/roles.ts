@@ -3,13 +3,13 @@
  * API functions for role management
  */
 
-import type { Role, CreateRoleData, UpdateRoleData } from '~/types/role'
-import type { PaginationParams, PaginatedResponse } from '~/types/api'
-import type { RoleFilters } from '~/stores/roles.store'
-import { createAPIClient } from './client'
+import type { Role, CreateRoleData, UpdateRoleData } from "~/types/role";
+import type { PaginationParams, PaginatedResponse } from "~/types/api";
+import type { RoleFilters } from "~/stores/roles.store";
+import { createAPIClient } from "./client";
 
 export function createRolesAPI() {
-  const client = createAPIClient()
+  const client = createAPIClient();
 
   return {
     /**
@@ -17,37 +17,38 @@ export function createRolesAPI() {
      */
     async fetchRoles(
       filters: RoleFilters = {},
-      params: PaginationParams = {}
+      params: PaginationParams = {},
     ): Promise<PaginatedResponse<Role>> {
       const queryString = client.buildQueryString({
         search: filters.search,
         is_global: filters.is_global,
         entity_id: filters.entity_id,
         entity_type: filters.entity_type,
+        for_entity_id: filters.for_entity_id,
         page: params.page,
         limit: params.limit,
         sort_by: params.sort_by,
-        sort_order: params.sort_order
-      })
+        sort_order: params.sort_order,
+      });
 
-      return client.call<PaginatedResponse<Role>>(`/v1/roles/${queryString}`)
+      return client.call<PaginatedResponse<Role>>(`/v1/roles/${queryString}`);
     },
 
     /**
      * Fetch single role by ID
      */
     async fetchRole(roleId: string): Promise<Role> {
-      return client.call<Role>(`/v1/roles/${roleId}`)
+      return client.call<Role>(`/v1/roles/${roleId}`);
     },
 
     /**
      * Create new role
      */
     async createRole(data: CreateRoleData): Promise<Role> {
-      return client.call<Role>('/v1/roles', {
-        method: 'POST',
-        body: JSON.stringify(data)
-      })
+      return client.call<Role>("/v1/roles", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
     },
 
     /**
@@ -55,9 +56,9 @@ export function createRolesAPI() {
      */
     async updateRole(roleId: string, data: UpdateRoleData): Promise<Role> {
       return client.call<Role>(`/v1/roles/${roleId}`, {
-        method: 'PATCH',
-        body: JSON.stringify(data)
-      })
+        method: "PATCH",
+        body: JSON.stringify(data),
+      });
     },
 
     /**
@@ -65,28 +66,34 @@ export function createRolesAPI() {
      */
     async deleteRole(roleId: string): Promise<void> {
       return client.call<void>(`/v1/roles/${roleId}`, {
-        method: 'DELETE'
-      })
+        method: "DELETE",
+      });
     },
 
     /**
      * Assign permissions to role
      */
-    async assignPermissions(roleId: string, permissions: string[]): Promise<void> {
+    async assignPermissions(
+      roleId: string,
+      permissions: string[],
+    ): Promise<void> {
       return client.call<void>(`/v1/roles/${roleId}/permissions`, {
-        method: 'POST',
-        body: JSON.stringify({ permissions })
-      })
+        method: "POST",
+        body: JSON.stringify({ permissions }),
+      });
     },
 
     /**
      * Remove permissions from role
      */
-    async removePermissions(roleId: string, permissions: string[]): Promise<void> {
+    async removePermissions(
+      roleId: string,
+      permissions: string[],
+    ): Promise<void> {
       return client.call<void>(`/v1/roles/${roleId}/permissions`, {
-        method: 'DELETE',
-        body: JSON.stringify({ permissions })
-      })
-    }
-  }
+        method: "DELETE",
+        body: JSON.stringify({ permissions }),
+      });
+    },
+  };
 }

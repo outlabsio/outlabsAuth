@@ -159,7 +159,10 @@ class Entity(BaseModel, table=True):
         back_populates="parent",
         sa_relationship_kwargs={"foreign_keys": "[Entity.parent_id]"},
     )
-    scoped_roles: List["Role"] = Relationship(back_populates="root_entity")
+    scoped_roles: List["Role"] = Relationship(
+        back_populates="root_entity",
+        sa_relationship_kwargs={"foreign_keys": "Role.root_entity_id"},
+    )
     memberships: List["EntityMembership"] = Relationship(
         back_populates="entity",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"},

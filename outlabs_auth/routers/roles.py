@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from outlabs_auth.models.sql.enums import RoleScope
 from outlabs_auth.models.sql.role import ConditionGroup, RoleCondition
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
 from outlabs_auth.schemas.abac import (
@@ -27,8 +28,45 @@ from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.role import (
     RoleCreateRequest,
     RoleResponse,
+    RoleScopeEnum,
     RoleUpdateRequest,
 )
+
+
+def _build_role_response(role, permission_names: List[str]) -> RoleResponse:
+    """Build a RoleResponse from a Role model with permissions."""
+    # Get root entity name
+    root_entity_name = None
+    if role.root_entity_id and role.root_entity:
+        root_entity_name = role.root_entity.display_name
+
+    # Get scope entity name
+    scope_entity_name = None
+    if role.scope_entity_id and role.scope_entity:
+        scope_entity_name = role.scope_entity.display_name
+
+    # Map RoleScope enum to schema enum
+    scope_value = RoleScopeEnum.HIERARCHY
+    if role.scope == RoleScope.ENTITY_ONLY:
+        scope_value = RoleScopeEnum.ENTITY_ONLY
+
+    return RoleResponse(
+        id=str(role.id),
+        name=role.name,
+        display_name=role.display_name,
+        description=role.description,
+        permissions=permission_names,
+        entity_type_permissions=None,
+        is_system_role=role.is_system_role,
+        is_global=role.is_global,
+        root_entity_id=str(role.root_entity_id) if role.root_entity_id else None,
+        root_entity_name=root_entity_name,
+        scope_entity_id=str(role.scope_entity_id) if role.scope_entity_id else None,
+        scope_entity_name=scope_entity_name,
+        scope=scope_value,
+        is_auto_assigned=role.is_auto_assigned,
+        assignable_at_types=[],
+    )
 
 
 def get_roles_router(
@@ -116,28 +154,7 @@ def get_roles_router(
                 permission_names = await auth.role_service.get_role_permission_names(
                     session, role.id
                 )
-                # Get root entity name for convenience
-                root_entity_name = None
-                if role.root_entity_id and role.root_entity:
-                    root_entity_name = role.root_entity.display_name
-
-                items.append(
-                    RoleResponse(
-                        id=str(role.id),
-                        name=role.name,
-                        display_name=role.display_name,
-                        description=role.description,
-                        permissions=permission_names,
-                        entity_type_permissions=None,
-                        is_system_role=role.is_system_role,
-                        is_global=role.is_global,
-                        root_entity_id=str(role.root_entity_id)
-                        if role.root_entity_id
-                        else None,
-                        root_entity_name=root_entity_name,
-                        assignable_at_types=[],
-                    )
-                )
+                items.append(_build_role_response(role, permission_names))
 
             return PaginatedResponse(
                 items=items, total=total, page=page, limit=limit, pages=pages
@@ -161,6 +178,11 @@ def get_roles_router(
         auth_result=Depends(auth.deps.require_permission("role:create")),
     ):
         """Create a new role."""
+        # Map schema scope enum to model enum
+        scope = RoleScope.HIERARCHY
+        if data.scope == RoleScopeEnum.ENTITY_ONLY:
+            scope = RoleScope.ENTITY_ONLY
+
         role = await auth.role_service.create_role(
             session,
             name=data.name,
@@ -169,30 +191,18 @@ def get_roles_router(
             permission_names=data.permissions,
             is_global=data.is_global,
             root_entity_id=UUID(data.root_entity_id) if data.root_entity_id else None,
+            scope_entity_id=UUID(data.scope_entity_id)
+            if data.scope_entity_id
+            else None,
+            scope=scope,
+            is_auto_assigned=data.is_auto_assigned,
         )
 
         permission_names = await auth.role_service.get_role_permission_names(
             session, role.id
         )
 
-        # Get root entity name for convenience
-        root_entity_name = None
-        if role.root_entity_id and role.root_entity:
-            root_entity_name = role.root_entity.display_name
-
-        return RoleResponse(
-            id=str(role.id),
-            name=role.name,
-            display_name=role.display_name,
-            description=role.description,
-            permissions=permission_names,
-            entity_type_permissions=None,
-            is_system_role=role.is_system_role,
-            is_global=role.is_global,
-            root_entity_id=str(role.root_entity_id) if role.root_entity_id else None,
-            root_entity_name=root_entity_name,
-            assignable_at_types=[],
-        )
+        return _build_role_response(role, permission_names)
 
     @router.get(
         "/{role_id}",
@@ -214,24 +224,7 @@ def get_roles_router(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Role not found"
             )
 
-        # Get root entity name for convenience
-        root_entity_name = None
-        if role.root_entity_id and role.root_entity:
-            root_entity_name = role.root_entity.display_name
-
-        return RoleResponse(
-            id=str(role.id),
-            name=role.name,
-            display_name=role.display_name,
-            description=role.description,
-            permissions=role.get_permission_names(),
-            entity_type_permissions=None,
-            is_system_role=role.is_system_role,
-            is_global=role.is_global,
-            root_entity_id=str(role.root_entity_id) if role.root_entity_id else None,
-            root_entity_name=root_entity_name,
-            assignable_at_types=[],
-        )
+        return _build_role_response(role, role.get_permission_names())
 
     @router.patch(
         "/{role_id}",
@@ -248,12 +241,23 @@ def get_roles_router(
         """Update role details."""
         update_dict = data.model_dump(exclude_unset=True)
 
+        # Map schema scope enum to model enum if provided
+        scope = None
+        if "scope" in update_dict and update_dict["scope"] is not None:
+            scope = (
+                RoleScope.ENTITY_ONLY
+                if update_dict["scope"] == RoleScopeEnum.ENTITY_ONLY
+                else RoleScope.HIERARCHY
+            )
+
         role = await auth.role_service.update_role(
             session,
             role_id=role_id,
             display_name=update_dict.get("display_name"),
             description=update_dict.get("description"),
             is_global=update_dict.get("is_global"),
+            scope=scope,
+            is_auto_assigned=update_dict.get("is_auto_assigned"),
         )
 
         if "permissions" in update_dict and update_dict["permissions"] is not None:
@@ -267,24 +271,7 @@ def get_roles_router(
             session, role.id
         )
 
-        # Get root entity name for convenience
-        root_entity_name = None
-        if role.root_entity_id and role.root_entity:
-            root_entity_name = role.root_entity.display_name
-
-        return RoleResponse(
-            id=str(role.id),
-            name=role.name,
-            display_name=role.display_name,
-            description=role.description,
-            permissions=permission_names,
-            entity_type_permissions=None,
-            is_system_role=role.is_system_role,
-            is_global=role.is_global,
-            root_entity_id=str(role.root_entity_id) if role.root_entity_id else None,
-            root_entity_name=root_entity_name,
-            assignable_at_types=[],
-        )
+        return _build_role_response(role, permission_names)
 
     @router.delete(
         "/{role_id}",
@@ -323,17 +310,7 @@ def get_roles_router(
             role_id=role_id,
             permission_names=permissions,
         )
-        return RoleResponse(
-            id=str(role.id),
-            name=role.name,
-            display_name=role.display_name,
-            description=role.description,
-            permissions=role.get_permission_names(),
-            entity_type_permissions=None,
-            is_system_role=role.is_system_role,
-            is_global=role.is_global,
-            assignable_at_types=[],
-        )
+        return _build_role_response(role, role.get_permission_names())
 
     @router.delete(
         "/{role_id}/permissions",
@@ -353,17 +330,7 @@ def get_roles_router(
             role_id=role_id,
             permission_names=permissions,
         )
-        return RoleResponse(
-            id=str(role.id),
-            name=role.name,
-            display_name=role.display_name,
-            description=role.description,
-            permissions=role.get_permission_names(),
-            entity_type_permissions=None,
-            is_system_role=role.is_system_role,
-            is_global=role.is_global,
-            assignable_at_types=[],
-        )
+        return _build_role_response(role, role.get_permission_names())
 
     # ---------------------------------------------------------------------
     # ABAC: Role condition groups + conditions

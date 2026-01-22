@@ -40,6 +40,9 @@ onMounted(async () => {
     await configStore.fetchEntityTypeConfig();
 });
 
+// Track if user has manually edited the slug
+const slugManuallyEdited = ref(false);
+
 // Auto-generate slug and display_name from name
 watch(
     () => state.name,
@@ -47,8 +50,8 @@ watch(
         if (newName) {
             // Auto-set display_name to match name
             state.display_name = newName;
-            // Auto-generate slug if not already set
-            if (!state.slug) {
+            // Auto-generate slug unless user has manually edited it
+            if (!slugManuallyEdited.value) {
                 state.slug = newName
                     .toLowerCase()
                     .replace(/\s+/g, "-")
@@ -57,6 +60,11 @@ watch(
         }
     },
 );
+
+// Mark slug as manually edited when user types in it directly
+const onSlugInput = () => {
+    slugManuallyEdited.value = true;
+};
 
 // Set parent entity when modal opens with a parent context
 // Also refetch entities to get latest allowed_child_types
@@ -202,6 +210,17 @@ const parentOptions = computed(() => {
     ];
 });
 
+// Form validation
+const isFormValid = computed(() => {
+    return (
+        state.name.trim() !== "" &&
+        state.display_name.trim() !== "" &&
+        state.slug.trim() !== "" &&
+        state.entity_class !== "" &&
+        state.entity_type !== ""
+    );
+});
+
 // Submit handler
 const showEntityHelp = ref(false);
 
@@ -236,6 +255,7 @@ async function handleSubmit() {
             allowed_child_types: [],
         });
         newChildType.value = "";
+        slugManuallyEdited.value = false;
     } catch (error: any) {
         // Error toast is handled by mutation's onError
         console.error("Failed to create entity:", error);
@@ -366,6 +386,7 @@ async function handleSubmit() {
                                 v-model="state.slug"
                                 placeholder="engineering-department"
                                 icon="i-lucide-link"
+                                @input="onSlugInput"
                             />
                             <p class="text-xs text-muted">
                                 URL-friendly identifier
@@ -845,6 +866,7 @@ async function handleSubmit() {
                         label="Create Entity"
                         icon="i-lucide-plus"
                         :loading="isPending"
+                        :disabled="!isFormValid || isPending"
                         @click="handleSubmit"
                     />
                 </div>

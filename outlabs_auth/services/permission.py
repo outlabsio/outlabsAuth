@@ -23,7 +23,7 @@ from outlabs_auth.core.exceptions import (
 )
 from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.entity_membership import EntityMembership
-from outlabs_auth.models.sql.enums import MembershipStatus
+from outlabs_auth.models.sql.enums import MembershipStatus, RoleScope
 from outlabs_auth.models.sql.permission import (
     Permission,
     PermissionTag,
@@ -138,9 +138,17 @@ class PermissionService(BaseService[Permission]):
                 if isinstance(context["resource"], dict):
                     context["resource"].setdefault("entity_id", str(entity_id))
 
-        # Global checks
+        # DD-054: Permission Scope Enforcement
+        # When no entity_id is provided, only global/org-scoped roles should grant permissions.
+        # Entity-local roles (scope_entity_id set) are excluded from this check.
+        # When entity_id IS provided, we check entity context permissions below.
         if not abac_enabled:
-            user_permissions = set(await self.get_user_permissions(session, user_id))
+            # Use include_entity_local based on whether we have entity context
+            user_permissions = set(
+                await self.get_user_permissions(
+                    session, user_id, include_entity_local=(entity_id is not None)
+                )
+            )
             if self._permission_set_allows(permission, user_permissions):
                 self._log_permission_check(
                     user_id, permission, "granted", start_time, "global_match"
@@ -153,13 +161,15 @@ class PermissionService(BaseService[Permission]):
                 permission=permission,
                 context=context or {},
                 engine=engine,
+                include_entity_local=(entity_id is not None),
             ):
                 self._log_permission_check(
                     user_id, permission, "granted", start_time, "global_match_abac"
                 )
                 return True
 
-        # Optional EnterpriseRBAC check in an entity context
+        # EnterpriseRBAC check in an entity context
+        # This checks permissions via entity memberships (EntityMembership)
         if entity_id is not None:
             if await self._check_permission_in_entity(
                 session=session,
@@ -274,6 +284,7 @@ class PermissionService(BaseService[Permission]):
         EnterpriseRBAC permission evaluation:
         - direct permissions via membership roles on the target entity
         - inherited tree permissions via membership roles on ancestor entities (closure table)
+        - respects entity-local role scope (entity_only vs hierarchy)
         """
         # Resolve ancestors (including self) via closure table.
         ancestors_stmt = select(EntityClosure.ancestor_id, EntityClosure.depth).where(
@@ -311,15 +322,25 @@ class PermissionService(BaseService[Permission]):
             if membership_depth is None:
                 continue
 
+            # membership_depth == 0 means membership is at target entity (direct)
+            # membership_depth > 0 means membership is at an ancestor (inherited)
+            is_direct_membership = membership_depth == 0
+
             for role in membership.roles:
                 if not role:
+                    continue
+
+                # Check if entity-local role scope allows granting at this entity
+                if not self._role_can_grant_at_entity(
+                    role, membership.entity_id, entity_id, is_direct_membership
+                ):
                     continue
 
                 granted = set(p.name for p in (role.permissions or []))
 
                 is_match = (
                     self._permission_set_allows(permission, granted)
-                    if membership_depth == 0
+                    if is_direct_membership
                     else self._permission_set_allows_from_ancestor(permission, granted)
                 )
                 if not is_match:
@@ -339,6 +360,46 @@ class PermissionService(BaseService[Permission]):
 
         return False
 
+    @staticmethod
+    def _role_can_grant_at_entity(
+        role: Role,
+        membership_entity_id: UUID,
+        target_entity_id: UUID,
+        is_direct_membership: bool,
+    ) -> bool:
+        """
+        Check if a role can grant permissions at the target entity.
+
+        For entity-local roles:
+        - scope=entity_only: Only grants at the scope_entity (membership must be at target)
+        - scope=hierarchy: Grants at scope_entity and all descendants
+
+        Non-entity-local roles (scope_entity_id=None) follow normal inheritance.
+
+        Args:
+            role: Role to check
+            membership_entity_id: Entity where the membership exists
+            target_entity_id: Entity where permission is being checked
+            is_direct_membership: True if membership is at target entity
+
+        Returns:
+            bool: True if role can grant permissions at target entity
+        """
+        # Non-entity-local roles follow normal inheritance rules
+        if role.scope_entity_id is None:
+            return True
+
+        # Entity-local role with scope=entity_only only grants at scope_entity
+        if role.scope == RoleScope.ENTITY_ONLY:
+            # The role only grants permissions at membership_entity_id
+            # This is valid only when checking permission at that same entity
+            return is_direct_membership and membership_entity_id == target_entity_id
+
+        # Entity-local role with scope=hierarchy grants at scope_entity and descendants
+        # Since the membership is in an ancestor of target, and the role's scope_entity
+        # is an ancestor (or same) as the membership entity, the permission cascades.
+        return True
+
     async def _check_permission_via_user_roles_with_abac(
         self,
         *,
@@ -347,7 +408,22 @@ class PermissionService(BaseService[Permission]):
         permission: str,
         context: Dict[str, Any],
         engine: PolicyEvaluationEngine,
+        include_entity_local: bool = True,
     ) -> bool:
+        """
+        Check permission via user roles with ABAC evaluation.
+
+        Args:
+            session: Database session
+            user_id: User UUID
+            permission: Permission name to check
+            context: ABAC evaluation context
+            engine: Policy evaluation engine
+            include_entity_local: If False, exclude entity-local roles (DD-054)
+
+        Returns:
+            True if permission granted, False otherwise
+        """
         stmt = (
             select(UserRoleMembership)
             .options(
@@ -368,6 +444,10 @@ class PermissionService(BaseService[Permission]):
 
             role = membership.role
             if not role:
+                continue
+
+            # DD-054: Filter out entity-local roles when include_entity_local=False
+            if not include_entity_local and role.scope_entity_id is not None:
                 continue
 
             granted = set(p.name for p in (role.permissions or []))
@@ -472,6 +552,7 @@ class PermissionService(BaseService[Permission]):
         self,
         session: AsyncSession,
         user_id: UUID,
+        include_entity_local: bool = True,
     ) -> List[str]:
         """
         Get all permissions for a user.
@@ -481,6 +562,9 @@ class PermissionService(BaseService[Permission]):
         Args:
             session: Database session
             user_id: User UUID
+            include_entity_local: If False, exclude permissions from entity-local roles
+                (roles where scope_entity_id is set). Defaults to True for backwards
+                compatibility. Set to False when checking permissions without entity context.
 
         Returns:
             List of permission names
@@ -525,12 +609,50 @@ class PermissionService(BaseService[Permission]):
                 continue
 
             role = membership.role
-            if role and role.permissions:
+            if not role:
+                continue
+
+            # DD-054: Filter out entity-local roles when include_entity_local=False
+            # Entity-local roles have scope_entity_id set and should only grant
+            # permissions when checked within an entity context.
+            if not include_entity_local and role.scope_entity_id is not None:
+                continue
+
+            if role.permissions:
                 # Extract permission names
                 for perm in role.permissions:
                     all_permissions.add(perm.name)
 
         return list(all_permissions)
+
+    async def _get_global_role_permissions(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+    ) -> Set[str]:
+        """
+        Get permissions from global and org-scoped roles only.
+
+        This excludes entity-local roles (where scope_entity_id is set).
+        Used when checking permissions without an entity context.
+
+        DD-054: Permission Scope Enforcement
+        - Global roles (is_global=true): Always included
+        - Org-scoped roles (root_entity_id set, scope_entity_id=NULL): Always included
+        - Entity-local roles (scope_entity_id set): EXCLUDED
+
+        Args:
+            session: Database session
+            user_id: User UUID
+
+        Returns:
+            Set of permission names from global/org-scoped roles
+        """
+        # Use the existing method with include_entity_local=False
+        permissions = await self.get_user_permissions(
+            session, user_id, include_entity_local=False
+        )
+        return set(permissions)
 
     async def require_permission(
         self,

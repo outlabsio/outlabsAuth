@@ -33,7 +33,7 @@ from outlabs_auth.models.sql.entity_membership import (
     EntityMembership,
     EntityMembershipRole,
 )
-from outlabs_auth.models.sql.enums import MembershipStatus
+from outlabs_auth.models.sql.enums import MembershipStatus, RoleScope
 from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.services.base import BaseService
@@ -71,24 +71,27 @@ class MembershipService(BaseService[EntityMembership]):
         session: AsyncSession,
         entity_id: UUID,
         user_id: UUID,
-        role_ids: List[UUID],
+        role_ids: Optional[List[UUID]] = None,
         joined_by_id: Optional[UUID] = None,
         valid_from: Optional[datetime] = None,
         valid_until: Optional[datetime] = None,
+        skip_auto_assign: bool = False,
     ) -> EntityMembership:
         """
         Add user to entity with role(s).
 
         Creates new membership or updates existing one.
+        Automatically includes auto-assigned roles for the entity.
 
         Args:
             session: Database session
             entity_id: Entity ID
             user_id: User ID
-            role_ids: List of role IDs to assign
+            role_ids: List of role IDs to assign (optional, auto-assigned roles always included)
             joined_by_id: Optional user ID who added the member
             valid_from: Optional start date for membership
             valid_until: Optional end date for membership
+            skip_auto_assign: If True, don't auto-assign roles (used for retroactive assignment)
 
         Returns:
             EntityMembership: Created or updated membership
@@ -100,6 +103,7 @@ class MembershipService(BaseService[EntityMembership]):
             InvalidInputError: If max_members limit exceeded
         """
         start_time = time.perf_counter()
+        role_ids = role_ids or []
 
         # Validate entity exists
         entity = await session.get(Entity, entity_id)
@@ -115,7 +119,7 @@ class MembershipService(BaseService[EntityMembership]):
                 message="User not found", details={"user_id": str(user_id)}
             )
 
-        # Validate roles exist
+        # Validate explicitly requested roles exist
         roles = []
         for role_id in role_ids:
             role = await session.get(Role, role_id)
@@ -143,6 +147,18 @@ class MembershipService(BaseService[EntityMembership]):
                     "entity_root_entity_id": str(root_entity_id),
                 },
             )
+
+        # Get auto-assigned roles for this entity (unless skipped)
+        if not skip_auto_assign:
+            auto_roles = await self._get_auto_assigned_roles_for_entity(
+                session, entity_id
+            )
+            # Merge auto-assigned roles with explicitly requested roles (avoiding duplicates)
+            auto_role_ids = {r.id for r in auto_roles}
+            explicit_role_ids = {r.id for r in roles}
+            for auto_role in auto_roles:
+                if auto_role.id not in explicit_role_ids:
+                    roles.append(auto_role)
 
         # Validate each role is available for this entity
         for role in roles:
@@ -435,6 +451,54 @@ class MembershipService(BaseService[EntityMembership]):
             select(EntityMembership)
             .where(*filters)
             .options(selectinload(EntityMembership.roles))
+            .offset(skip)
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        memberships = list(result.scalars().all())
+
+        return memberships, total_count
+
+    async def get_entity_members_with_users(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        page: int = 1,
+        limit: int = 50,
+        active_only: bool = True,
+    ) -> Tuple[List[EntityMembership], int]:
+        """
+        Get members of entity with user details and roles eager loaded.
+
+        Args:
+            session: Database session
+            entity_id: Entity ID
+            page: Page number (1-indexed)
+            limit: Results per page
+            active_only: Only return active memberships
+
+        Returns:
+            Tuple[List[EntityMembership], int]: (memberships with user+roles, total_count)
+        """
+        # Build filters
+        filters = [EntityMembership.entity_id == entity_id]
+        if active_only:
+            filters.append(EntityMembership.status == MembershipStatus.ACTIVE)
+
+        # Get total count
+        count_stmt = select(func.count()).select_from(EntityMembership).where(*filters)
+        count_result = await session.execute(count_stmt)
+        total_count = count_result.scalar() or 0
+
+        # Get paginated results with user AND roles eager loaded
+        skip = (page - 1) * limit
+        stmt = (
+            select(EntityMembership)
+            .where(*filters)
+            .options(
+                selectinload(EntityMembership.roles),
+                selectinload(EntityMembership.user),
+            )
             .offset(skip)
             .limit(limit)
         )
@@ -818,11 +882,13 @@ class MembershipService(BaseService[EntityMembership]):
         root_entity_id: UUID,
     ) -> bool:
         """
-        Check if a role can be assigned within an entity's hierarchy.
+        Check if a role can be assigned within an entity's context.
 
-        A role is available if:
-        - It's a global system-wide role (is_global=True and root_entity_id=NULL)
-        - Its root_entity_id matches the entity's root ancestor
+        A role is available at entity X if:
+        1. System-wide global: is_global=True AND root_entity_id=NULL AND scope_entity_id=NULL
+        2. Org-scoped: root_entity_id matches X's root AND scope_entity_id=NULL
+        3. Entity-local (hierarchy): scope_entity_id is X or an ancestor AND scope=hierarchy
+        4. Entity-local (entity_only): scope_entity_id = X AND scope=entity_only
 
         Args:
             session: Database session
@@ -831,15 +897,175 @@ class MembershipService(BaseService[EntityMembership]):
             root_entity_id: Pre-computed root entity ID for the entity
 
         Returns:
-            bool: True if role can be used in this entity's hierarchy
+            bool: True if role can be used in this entity's context
         """
-        # Global system-wide roles are available everywhere
-        if role.is_global and role.root_entity_id is None:
+        # 1. Global system-wide roles are available everywhere
+        if (
+            role.is_global
+            and role.root_entity_id is None
+            and role.scope_entity_id is None
+        ):
             return True
 
-        # If role has a root_entity_id, it must match the entity's root
-        if role.root_entity_id:
+        # 2. Org-scoped roles (not entity-local)
+        if role.root_entity_id and role.scope_entity_id is None:
             return role.root_entity_id == root_entity_id
+
+        # 3 & 4. Entity-local roles
+        if role.scope_entity_id:
+            # First check org scope
+            if role.root_entity_id and role.root_entity_id != root_entity_id:
+                return False
+
+            if role.scope == RoleScope.HIERARCHY:
+                # Hierarchy scope: available if scope_entity is this entity or an ancestor
+                # Get ancestors of entity_id
+                ancestors_stmt = select(EntityClosure.ancestor_id).where(
+                    EntityClosure.descendant_id == entity_id
+                )
+                ancestors_result = await session.execute(ancestors_stmt)
+                ancestor_ids = {row[0] for row in ancestors_result.all()}
+                return role.scope_entity_id in ancestor_ids
+            else:
+                # Entity-only scope: available only at the exact scope entity
+                return role.scope_entity_id == entity_id
 
         # Role with no root_entity_id and is_global=False is orphaned/unusable
         return False
+
+    async def _get_auto_assigned_roles_for_entity(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+    ) -> List[Role]:
+        """
+        Get roles that should be auto-assigned to members of an entity.
+
+        Returns auto-assigned roles where:
+        - scope_entity_id matches entity_id AND scope=entity_only
+        - OR scope_entity_id is an ancestor AND scope=hierarchy
+
+        Args:
+            session: Database session
+            entity_id: Entity to get auto-assigned roles for
+
+        Returns:
+            List of Role objects that should be auto-assigned
+        """
+        # Get all ancestors (including self)
+        ancestors_stmt = select(EntityClosure.ancestor_id).where(
+            EntityClosure.descendant_id == entity_id
+        )
+        ancestors_result = await session.execute(ancestors_stmt)
+        ancestor_ids = [row[0] for row in ancestors_result.all()]
+
+        if not ancestor_ids:
+            return []
+
+        # Find auto-assigned roles:
+        # 1. Entity-only roles defined at THIS entity
+        # 2. Hierarchy roles defined at any ancestor (including self)
+        from sqlalchemy import and_, or_
+
+        role_filter = and_(
+            Role.is_auto_assigned == True,
+            or_(
+                # Entity-only auto-assigned for this specific entity
+                and_(
+                    Role.scope_entity_id == entity_id,
+                    Role.scope == RoleScope.ENTITY_ONLY,
+                ),
+                # Hierarchy auto-assigned from any ancestor
+                and_(
+                    Role.scope_entity_id.in_(ancestor_ids),
+                    Role.scope == RoleScope.HIERARCHY,
+                ),
+            ),
+        )
+
+        stmt = select(Role).where(role_filter).order_by(Role.name)
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def apply_auto_assigned_role(
+        self,
+        session: AsyncSession,
+        role_id: UUID,
+    ) -> int:
+        """
+        Retroactively apply an auto-assigned role to all existing members within scope.
+
+        Called when a role's is_auto_assigned is set to True.
+
+        Args:
+            session: Database session
+            role_id: Role ID to apply
+
+        Returns:
+            int: Number of memberships updated
+
+        Raises:
+            RoleNotFoundError: If role not found
+            InvalidInputError: If role is not auto-assigned or has no scope_entity_id
+        """
+        # Get the role
+        role = await session.get(Role, role_id)
+        if not role:
+            raise RoleNotFoundError(
+                message="Role not found",
+                details={"role_id": str(role_id)},
+            )
+
+        if not role.is_auto_assigned:
+            raise InvalidInputError(
+                message="Role is not marked as auto-assigned",
+                details={"role_id": str(role_id), "is_auto_assigned": False},
+            )
+
+        if not role.scope_entity_id:
+            raise InvalidInputError(
+                message="Auto-assigned roles must have a scope_entity_id",
+                details={"role_id": str(role_id)},
+            )
+
+        # Determine which entities' members should get this role
+        if role.scope == RoleScope.ENTITY_ONLY:
+            # Only members of the scope entity itself
+            target_entity_ids = [role.scope_entity_id]
+        else:
+            # Members of scope entity AND all descendants
+            descendants_stmt = select(EntityClosure.descendant_id).where(
+                EntityClosure.ancestor_id == role.scope_entity_id
+            )
+            descendants_result = await session.execute(descendants_stmt)
+            target_entity_ids = [row[0] for row in descendants_result.all()]
+
+        if not target_entity_ids:
+            return 0
+
+        # Get all active memberships in target entities
+        memberships_stmt = (
+            select(EntityMembership)
+            .options(selectinload(EntityMembership.roles))
+            .where(
+                EntityMembership.entity_id.in_(target_entity_ids),
+                EntityMembership.status == MembershipStatus.ACTIVE,
+            )
+        )
+        memberships_result = await session.execute(memberships_stmt)
+        memberships = list(memberships_result.scalars().all())
+
+        # Add role to memberships that don't already have it
+        updated_count = 0
+        for membership in memberships:
+            existing_role_ids = {r.id for r in membership.roles}
+            if role_id not in existing_role_ids:
+                role_link = EntityMembershipRole(
+                    membership_id=membership.id,
+                    role_id=role_id,
+                )
+                session.add(role_link)
+                updated_count += 1
+
+        await session.flush()
+        return updated_count

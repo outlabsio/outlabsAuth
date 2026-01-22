@@ -5,8 +5,6 @@ Public exports for all Pydantic request/response schemas.
 """
 
 # Common schemas
-from outlabs_auth.schemas.common import PaginatedResponse
-
 # API Key schemas
 from outlabs_auth.schemas.api_key import (
     ApiKeyCreateRequest,
@@ -26,6 +24,7 @@ from outlabs_auth.schemas.auth import (
     RegisterRequest,
     ResetPasswordRequest,
 )
+from outlabs_auth.schemas.common import PaginatedResponse
 
 # Entity schemas (EnterpriseRBAC)
 from outlabs_auth.schemas.entity import (
@@ -36,6 +35,7 @@ from outlabs_auth.schemas.entity import (
 
 # EntityMembership schemas (EnterpriseRBAC)
 from outlabs_auth.schemas.membership import (
+    EntityMemberResponse,
     MembershipCreateRequest,
     MembershipResponse,
     MembershipUpdateRequest,
@@ -58,6 +58,8 @@ from outlabs_auth.schemas.permission import (
 from outlabs_auth.schemas.role import (
     RoleCreateRequest,
     RoleResponse,
+    RoleScopeEnum,
+    RoleSummary,
     RoleUpdateRequest,
 )
 

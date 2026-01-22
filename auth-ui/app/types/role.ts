@@ -3,6 +3,20 @@
  * Based on OutlabsAuth library role system - matches backend RoleResponse schema
  */
 
+/**
+ * Role scope enum - controls where permissions apply and auto-assignment scope.
+ */
+export type RoleScope = "entity_only" | "hierarchy";
+
+/**
+ * Role summary for embedding in other responses (e.g., membership details).
+ */
+export interface RoleSummary {
+  id: string;
+  name: string;
+  display_name: string;
+}
+
 export interface Role {
   id: string;
   name: string;
@@ -16,6 +30,11 @@ export interface Role {
   // Root entity scoping (EnterpriseRBAC)
   root_entity_id?: string;
   root_entity_name?: string;
+  // Entity-local role fields (DD-053)
+  scope_entity_id?: string;
+  scope_entity_name?: string;
+  scope: RoleScope;
+  is_auto_assigned: boolean;
 }
 
 export interface CreateRoleData {
@@ -28,6 +47,10 @@ export interface CreateRoleData {
   assignable_at_types?: string[];
   // Root entity scoping (EnterpriseRBAC)
   root_entity_id?: string;
+  // Entity-local role fields (DD-053)
+  scope_entity_id?: string;
+  scope?: RoleScope;
+  is_auto_assigned?: boolean;
 }
 
 export interface UpdateRoleData {
@@ -37,6 +60,9 @@ export interface UpdateRoleData {
   entity_type_permissions?: Record<string, string[]>;
   is_global?: boolean;
   assignable_at_types?: string[];
+  // Entity-local role fields (DD-053)
+  scope?: RoleScope;
+  is_auto_assigned?: boolean;
 }
 
 export interface Permission {

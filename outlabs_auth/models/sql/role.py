@@ -17,7 +17,7 @@ from sqlmodel import Field, Relationship, SQLModel
 
 from outlabs_auth.database.base import BaseModel
 
-from .enums import ConditionOperator
+from .enums import ConditionOperator, RoleScope
 
 if TYPE_CHECKING:
     from .entity import Entity
@@ -244,6 +244,8 @@ class Role(BaseModel, table=True):
         Index("ix_roles_name_tenant", "name", "tenant_id"),
         Index("ix_roles_is_global", "is_global"),
         Index("ix_roles_root_entity_id", "root_entity_id"),
+        Index("ix_roles_scope_entity_id", "scope_entity_id"),
+        Index("ix_roles_is_auto_assigned", "is_auto_assigned"),
     )
 
     # === Identity ===
@@ -283,8 +285,35 @@ class Role(BaseModel, table=True):
         description="Global roles can be assigned anywhere in hierarchy",
     )
 
+    # === Entity-Local Role Configuration (DD-053) ===
+    scope_entity_id: Optional[UUID] = Field(
+        default=None,
+        sa_column=Column(
+            PG_UUID(as_uuid=True),
+            ForeignKey("entities.id", ondelete="CASCADE"),
+            nullable=True,
+        ),
+        description="Entity where this role is defined. NULL = root/system-level role.",
+    )
+    scope: RoleScope = Field(
+        default=RoleScope.HIERARCHY,
+        sa_column=Column(String(20), nullable=False, default="hierarchy"),
+        description="Controls where permissions apply and auto-assignment scope: entity_only or hierarchy.",
+    )
+    is_auto_assigned: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, default=False),
+        description="If true, automatically assigned to all members within scope (retroactive).",
+    )
+
     # === Relationships ===
-    root_entity: Optional["Entity"] = Relationship(back_populates="scoped_roles")
+    root_entity: Optional["Entity"] = Relationship(
+        back_populates="scoped_roles",
+        sa_relationship_kwargs={"foreign_keys": "[Role.root_entity_id]"},
+    )
+    scope_entity: Optional["Entity"] = Relationship(
+        sa_relationship_kwargs={"foreign_keys": "[Role.scope_entity_id]"},
+    )
     user_memberships: List["UserRoleMembership"] = Relationship(back_populates="role")
 
     # Permissions via junction table
@@ -312,3 +341,15 @@ class Role(BaseModel, table=True):
     def has_conditions(self) -> bool:
         """Check if role has ABAC conditions."""
         return len(self.conditions) > 0
+
+    def is_entity_local(self) -> bool:
+        """Check if this is an entity-local role (has scope_entity_id)."""
+        return self.scope_entity_id is not None
+
+    def is_hierarchy_scoped(self) -> bool:
+        """Check if role permissions cascade to descendants."""
+        return self.scope == RoleScope.HIERARCHY
+
+    def is_entity_only_scoped(self) -> bool:
+        """Check if role permissions are limited to the scope entity only."""
+        return self.scope == RoleScope.ENTITY_ONLY

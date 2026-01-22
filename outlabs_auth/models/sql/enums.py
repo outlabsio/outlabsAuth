@@ -9,10 +9,11 @@ from enum import Enum
 
 class UserStatus(str, Enum):
     """User account status."""
+
     ACTIVE = "active"
     SUSPENDED = "suspended"  # Temporary suspension (can be auto-lifted)
-    BANNED = "banned"        # Permanent ban (manual lift required)
-    DELETED = "deleted"      # Soft-deleted (for GDPR compliance)
+    BANNED = "banned"  # Permanent ban (manual lift required)
+    DELETED = "deleted"  # Soft-deleted (for GDPR compliance)
 
 
 class MembershipStatus(str, Enum):
@@ -22,12 +23,13 @@ class MembershipStatus(str, Enum):
     Only ACTIVE grants permissions. All other states block permissions
     while preserving audit trail.
     """
-    ACTIVE = "active"        # Currently active, grants permissions
+
+    ACTIVE = "active"  # Currently active, grants permissions
     SUSPENDED = "suspended"  # Paused (e.g., on leave), no permissions
-    REVOKED = "revoked"      # Manually removed, no permissions
-    EXPIRED = "expired"      # Auto-expired via valid_until
-    PENDING = "pending"      # Awaiting approval (future use)
-    REJECTED = "rejected"    # Approval denied (future use)
+    REVOKED = "revoked"  # Manually removed, no permissions
+    EXPIRED = "expired"  # Auto-expired via valid_until
+    PENDING = "pending"  # Awaiting approval (future use)
+    REJECTED = "rejected"  # Approval denied (future use)
 
     def can_grant_permissions(self) -> bool:
         """Check if this status allows granting permissions."""
@@ -55,16 +57,32 @@ class EntityClass(str, Enum):
     - STRUCTURAL: Organizational units (company, department, team)
     - ACCESS_GROUP: Permission groupings (project, resource pool)
     """
+
     STRUCTURAL = "structural"
     ACCESS_GROUP = "access_group"
 
 
 class APIKeyStatus(str, Enum):
     """API key lifecycle status."""
+
     ACTIVE = "active"
     SUSPENDED = "suspended"  # Temporarily disabled
-    REVOKED = "revoked"      # Permanently disabled
-    EXPIRED = "expired"      # Past expiration date
+    REVOKED = "revoked"  # Permanently disabled
+    EXPIRED = "expired"  # Past expiration date
+
+
+class RoleScope(str, Enum):
+    """
+    Scope of an entity-local role.
+
+    Controls BOTH where the role's permissions apply AND where auto-assignment happens.
+
+    - ENTITY_ONLY: Role permissions and auto-assignment apply only at the scope_entity
+    - HIERARCHY: Role permissions and auto-assignment apply at scope_entity AND all descendants
+    """
+
+    ENTITY_ONLY = "entity_only"  # Valid only at the defining entity
+    HIERARCHY = "hierarchy"  # Valid at defining entity + all descendants
 
 
 class ConditionOperator(str, Enum):
@@ -73,6 +91,7 @@ class ConditionOperator(str, Enum):
 
     Used in Condition objects stored as JSONB in roles/permissions.
     """
+
     # Equality
     EQUALS = "equals"
     NOT_EQUALS = "not_equals"

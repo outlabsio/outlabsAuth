@@ -3350,6 +3350,235 @@ Implement **add-only mode** in the UI for now. Removal will be added later when 
 
 ---
 
+## DD-053: Entity-Local Roles with Scope Control
+
+**Date**: 2026-01-22
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Users need roles that are defined at specific entities (not just organization root), with control over whether permissions cascade to child entities and whether roles are auto-assigned to members.
+
+### Problem Statement
+The existing role system has limitations:
+1. Roles can only be created at the organization (root entity) level
+2. No concept of entity-specific roles for teams/departments
+3. No auto-assignment when users join an entity
+4. No scope control (entity-only vs cascading to children)
+
+### Requirements
+1. **Entity-defined roles**: Allow roles to be created at any entity level
+2. **Scope options**: Control whether role permissions apply only at the defining entity or cascade to descendants
+3. **Auto-assignment**: Some roles should be automatically assigned when a user joins an entity
+4. **Retroactive auto-assignment**: When a role becomes auto-assigned, existing members should receive it
+
+### Decision
+Extend the existing `Role` model with 3 new fields rather than creating a separate table:
+
+```python
+class RoleScope(str, Enum):
+    ENTITY_ONLY = "entity_only"   # Permissions + auto-assign only at scope_entity
+    HIERARCHY = "hierarchy"        # Permissions + auto-assign at scope_entity + all descendants
+
+class Role(BaseModel, table=True):
+    # EXISTING FIELDS (unchanged):
+    root_entity_id: Optional[UUID]  # Organization that owns this role
+    is_global: bool                  # Available everywhere in hierarchy
+    is_system_role: bool             # Protected from modification
+    
+    # NEW FIELDS:
+    scope_entity_id: Optional[UUID]  # Entity where this role is defined (NULL = root/system level)
+    scope: RoleScope = HIERARCHY     # Controls BOTH permissions AND auto-assignment scope
+    is_auto_assigned: bool = False   # Auto-assign to members within scope
+```
+
+### Behavior Matrix
+
+| `scope` | `is_auto_assigned` | Permissions Apply To | Auto-Assigned To |
+|---------|-------------------|---------------------|------------------|
+| `entity_only` | `false` | scope_entity only | Nobody (manual) |
+| `entity_only` | `true` | scope_entity only | All members of scope_entity |
+| `hierarchy` | `false` | scope_entity + descendants | Nobody (manual) |
+| `hierarchy` | `true` | scope_entity + descendants | All members of scope_entity + descendants |
+
+### Role Availability Rules
+A role is available for assignment at entity X if:
+1. **System-wide**: `is_global=true` AND `root_entity_id=NULL`
+2. **Org-scoped**: `root_entity_id` matches X's root AND `scope_entity_id=NULL`
+3. **Entity-local (hierarchy)**: `scope_entity_id` is X or an ancestor AND `scope=hierarchy`
+4. **Entity-local (entity_only)**: `scope_entity_id = X` AND `scope=entity_only`
+
+### Implementation Details
+
+**Backend Changes**:
+- `outlabs_auth/models/sql/enums.py` - Added `RoleScope` enum
+- `outlabs_auth/models/sql/role.py` - Added 3 new fields with FK to entities
+- `outlabs_auth/services/role.py` - Updated `get_roles_for_entity()`, `create_role()`, `update_role()`
+- `outlabs_auth/services/membership.py` - Added auto-assignment in `add_member()`, `apply_auto_assigned_role()`
+- `outlabs_auth/services/permission.py` - Updated scope checking in `_check_permission_in_entity()`
+- `outlabs_auth/schemas/role.py` - Added new fields to request/response schemas
+- `outlabs_auth/schemas/membership.py` - Added `EntityMemberResponse` with user details
+- `outlabs_auth/routers/roles.py` - Updated to handle new fields
+- `outlabs_auth/routers/memberships.py` - Added `/entity/{id}/details` endpoint
+
+**Frontend Changes**:
+- `auth-ui/app/types/role.ts` - Added `RoleScope`, `RoleSummary` types
+- `auth-ui/app/types/membership.ts` - New file with `EntityMember` type
+- `auth-ui/app/api/memberships.ts` - New API functions
+- `auth-ui/app/queries/memberships.ts` - New query definitions
+- `auth-ui/app/pages/entities/index.vue` - Added "Members" tab with member list
+- `auth-ui/app/components/EntityMemberAddModal.vue` - New modal for adding members
+
+**Migration**: New columns with safe defaults (`scope_entity_id=NULL`, `scope=hierarchy`, `is_auto_assigned=false`)
+
+### Example Scenario
+```
+Marketing Team (entity)
+├── Auto-assigned roles (scope=hierarchy, is_auto_assigned=true):
+│   - "marketing-viewer" → Everyone in Marketing + all child entities gets this
+├── Auto-assigned roles (scope=entity_only, is_auto_assigned=true):
+│   - "marketing-member" → Only direct Marketing members get this
+├── Selectable roles (is_auto_assigned=false):
+│   - "marketing-manager" (scope=hierarchy) → Manual, permissions cascade
+│   - "content-approver" (scope=entity_only) → Manual, permissions don't cascade
+└── Children:
+    ├── Social Media Sub-team
+    └── Content Sub-team
+```
+
+### Consequences
+- **Positive**: Teams can define their own roles without admin intervention
+- **Positive**: Auto-assignment reduces manual role management
+- **Positive**: Scope control allows fine-grained permission boundaries
+- **Positive**: Retroactive auto-assignment ensures consistency
+- **Negative**: Increased complexity in role availability logic
+- **Neutral**: Role names are unique per `scope_entity_id` (allows "member" role in multiple entities)
+
+### Related Decisions
+- DD-050 (Role scoping to root entities) - This extends that concept further
+- DD-036 (Closure table) - Used for efficient ancestor/descendant queries
+
+---
+
+## DD-054: Permission Scope Enforcement
+
+**Date**: 2026-01-22
+**Status**: Accepted
+**Category**: Security / Permission System
+
+**Context**: After implementing entity-local roles (DD-053), a permission scope leakage issue was discovered where entity-local roles grant permissions globally when no entity context is provided.
+
+### Problem Statement
+
+When `check_permission(user_id, "permission")` is called WITHOUT an `entity_id`:
+- Permissions from ALL roles were aggregated (global + entity-local)
+- Entity-local roles (with `scope_entity_id` set) granted their permissions globally
+- This violated the intended scope - a role "scoped to Marketing" shouldn't grant system-wide permissions
+
+**Example of Broken Behavior (Before Fix)**:
+```python
+# Setup:
+# - Role "team-admin" at Marketing (scope_entity_id=marketing_id, scope=entity_only)
+# - Role has "user:create" permission
+# - User has "team-admin" role via UserRoleMembership
+
+check_permission(user_id, "user:create")  # No entity_id
+# → Returned TRUE (WRONG - role is entity-scoped!)
+
+check_permission(user_id, "user:create", entity_id=marketing_id)
+# → Returned TRUE (CORRECT - checked in entity context)
+```
+
+### Decision: Role-Based Filtering
+
+The ROLE's scope determines when its permissions apply, not the permission itself.
+
+**Behavior Matrix**:
+
+| Role Type | `entity_id` provided? | Permissions granted? |
+|-----------|----------------------|---------------------|
+| Global role (`is_global=true`) | No | ✅ Yes |
+| Global role (`is_global=true`) | Yes | ✅ Yes |
+| Org-scoped role (`root_entity_id` set, `scope_entity_id=NULL`) | No | ✅ Yes |
+| Org-scoped role | Yes | ✅ Yes (if entity in org) |
+| Entity-local role (`scope_entity_id` set) | No | ❌ No |
+| Entity-local role | Yes | ✅ Yes (if scope matches) |
+
+**Mental Model for Developers**:
+- **Global role** → permissions work everywhere
+- **Org-scoped role** → permissions work globally within the org
+- **Entity-local role** → permissions only work in entity context
+
+### Implementation
+
+**`outlabs_auth/services/permission.py`**:
+
+1. **Added `include_entity_local` parameter to `get_user_permissions()`**:
+   ```python
+   async def get_user_permissions(
+       self,
+       session: AsyncSession,
+       user_id: UUID,
+       include_entity_local: bool = True,  # NEW
+   ) -> List[str]:
+   ```
+   When `False`, excludes permissions from entity-local roles.
+
+2. **Added `_get_global_role_permissions()` helper**:
+   Returns only permissions from global and org-scoped roles (excludes entity-local).
+
+3. **Modified `check_permission()`**:
+   - When `entity_id is None`: Uses `include_entity_local=False` to exclude entity-local roles
+   - When `entity_id is provided`: Uses `include_entity_local=True` (full check)
+
+4. **Updated `_check_permission_via_user_roles_with_abac()`**:
+   Added `include_entity_local` parameter for ABAC path consistency.
+
+**`outlabs_auth/dependencies/__init__.py`**:
+- Already correctly extracts `entity_id` from request (path params, query params, or `X-Entity-Context` header)
+- Passes `None` when no entity context found, triggering the new filtering behavior
+
+### Test Coverage
+
+New test file: `tests/unit/services/test_permission_scope.py` (12 tests)
+
+1. Global role grants permission without entity context ✅
+2. Global role grants permission with entity context ✅
+3. Entity-local role DENIES permission without entity context ✅
+4. Entity-local role GRANTS permission with matching entity context ✅
+5. Entity-local role DENIES permission with wrong entity context ✅
+6. Entity-local role (scope=hierarchy) grants in descendant entity ✅
+7. Entity-local role (scope=entity_only) denies in descendant entity ✅
+8. Org-scoped role grants without entity context ✅
+9. Mixed roles: only global applies without context ✅
+10. Mixed roles: both apply with entity context ✅
+11. Superuser bypasses all scope checks ✅
+12. `get_user_permissions(include_entity_local=False)` filters correctly ✅
+
+### Migration / Breaking Change Notes
+
+This is a **potentially breaking change** for code that:
+1. Uses entity-local roles but checks permissions without entity context
+2. Relies on the previous "leaked" behavior
+
+**Mitigation**:
+- If you need a permission to work globally, assign it to a global role
+- If you need entity-scoped permissions, ensure you pass `entity_id` to permission checks
+- Use `require_entity_permission()` for endpoints that require entity context
+
+### Consequences
+
+- **Positive**: Fixes security hole where entity-scoped permissions leaked globally
+- **Positive**: Behavior now matches developer mental model
+- **Positive**: No schema changes required (purely behavioral fix)
+- **Positive**: Backwards compatible for global roles (SimpleRBAC unaffected)
+- **Negative**: May break code relying on leaked permissions (intentional fix)
+
+### Related Decisions
+
+- DD-053 (Entity-Local Roles) - Introduced entity-local roles that this decision fixes
+- DD-035 (Unified AuthDeps) - Provides the entity context extraction logic
+
+---
+
 ## Questions Still Open
 
 Track questions that need decisions:
@@ -3390,8 +3619,11 @@ Track questions that need decisions:
 | 2025-01-14 | DD-030 | Superseded by DD-035 |
 | 2026-01-22 | **DD-050** | **Accepted (Role Scoping to Root Entities)** |
 | 2026-01-22 | **DD-051** | **Accepted (System Configuration for Entity Types)** |
+| 2026-01-22 | **DD-052** | **Accepted (Entity Type Configuration CRUD Operations)** |
+| 2026-01-22 | **DD-053** | **Accepted (Entity-Local Roles with Scope Control)** |
+| 2026-01-22 | **DD-054** | **Accepted (Permission Scope Enforcement)** |
 
 ---
 
-**Last Updated**: 2026-01-22 (DD-051 added: System configuration for flexible entity type vocabularies)
+**Last Updated**: 2026-01-22 (DD-054 added: Permission scope enforcement to fix entity-local role permission leakage)
 **Next Review**: After testing all examples
