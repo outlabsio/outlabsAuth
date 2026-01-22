@@ -10,62 +10,69 @@ This module exports all database models organized by feature:
 - API Keys: APIKey, APIKeyScope, APIKeyIPWhitelist
 - OAuth: SocialAccount, OAuthState
 - Activity: ActivityMetric, UserActivity, LoginHistory
+- System Configuration: SystemConfig
 """
 
 # === Enums ===
-from .enums import (
-    UserStatus,
-    MembershipStatus,
-    EntityClass,
-    APIKeyStatus,
-    ConditionOperator,
-)
-
-# === Core Models ===
-from .user import User
-from .permission import (
-    Permission,
-    PermissionTag,
-    PermissionTagLink,
-    PermissionCondition,
-)
-from .token import RefreshToken
-
-# === SimpleRBAC Models ===
-from .role import (
-    Role,
-    RolePermission,
-    RoleCondition,
-    RoleEntityTypePermission,
-    ConditionGroup,
-)
-from .user_role_membership import UserRoleMembership
-
-# === EnterpriseRBAC Models ===
-from .entity import Entity
-from .closure import EntityClosure
-from .entity_membership import (
-    EntityMembership,
-    EntityMembershipRole,
+# === Activity Models ===
+from .activity_metric import (
+    ActivityMetric,
+    LoginHistory,
+    UserActivity,
 )
 
 # === API Key Models ===
 from .api_key import (
     APIKey,
-    APIKeyScope,
     APIKeyIPWhitelist,
+    APIKeyScope,
+)
+from .closure import EntityClosure
+
+# === EnterpriseRBAC Models ===
+from .entity import Entity
+from .entity_membership import (
+    EntityMembership,
+    EntityMembershipRole,
+)
+from .enums import (
+    APIKeyStatus,
+    ConditionOperator,
+    EntityClass,
+    MembershipStatus,
+    UserStatus,
+)
+from .oauth_state import OAuthState
+from .permission import (
+    Permission,
+    PermissionCondition,
+    PermissionTag,
+    PermissionTagLink,
+)
+
+# === SimpleRBAC Models ===
+from .role import (
+    ConditionGroup,
+    Role,
+    RoleCondition,
+    RoleEntityTypePermission,
+    RolePermission,
 )
 
 # === OAuth Models ===
 from .social_account import SocialAccount
-from .oauth_state import OAuthState
 
-# === Activity Models ===
-from .activity_metric import (
-    ActivityMetric,
-    UserActivity,
-    LoginHistory,
+# === System Configuration ===
+from .system_config import (
+    DEFAULT_ENTITY_TYPE_CONFIG,
+    ConfigKeys,
+    SystemConfig,
 )
+from .token import RefreshToken
+
+# === Core Models ===
+from .user import User
+from .user_role_membership import UserRoleMembership
 
 # === All Models (for Alembic) ===
 __all__ = [
@@ -105,6 +112,10 @@ __all__ = [
     "ActivityMetric",
     "UserActivity",
     "LoginHistory",
+    # System Configuration
+    "SystemConfig",
+    "ConfigKeys",
+    "DEFAULT_ENTITY_TYPE_CONFIG",
 ]
 
 # === Model Groups (for feature-based loading) ===
@@ -150,12 +161,17 @@ ACTIVITY_MODELS = [
     LoginHistory,
 ]
 
+SYSTEM_CONFIG_MODELS = [
+    SystemConfig,
+]
+
 # All models for creating tables
 ALL_MODELS = (
-    CORE_MODELS +
-    SIMPLE_RBAC_MODELS +
-    ENTERPRISE_RBAC_MODELS +
-    API_KEY_MODELS +
-    OAUTH_MODELS +
-    ACTIVITY_MODELS
+    CORE_MODELS
+    + SIMPLE_RBAC_MODELS
+    + ENTERPRISE_RBAC_MODELS
+    + API_KEY_MODELS
+    + OAUTH_MODELS
+    + ACTIVITY_MODELS
+    + SYSTEM_CONFIG_MODELS
 )

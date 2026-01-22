@@ -75,6 +75,11 @@ Start here: Do you need organizational hierarchy (departments/teams)?
 | Organization-isolated roles | ❌ | ✅ |
 | Global system-wide roles | ✅ | ✅ |
 | Cross-org membership prevention | ❌ | ✅ |
+| **Entity Type Configuration (DD-051)** |
+| Configurable root entity types | ❌ | ✅ |
+| Per-organization child type customization | ❌ | ✅ |
+| System-wide type defaults | ❌ | ✅ |
+| UI for entity type settings | ❌ | ✅ (superuser only) |
 | **Optional Features (Feature Flags)** |
 | Context-aware roles | ❌ | ⭕ `enable_context_aware_roles=True` |
 | ABAC conditions | ❌ | ⭕ `enable_abac=True` |
@@ -882,5 +887,5 @@ manager_role = await auth.role_service.create_role(
 
 ---
 
-**Last Updated**: 2025-01-14 (v1.4 - Architectural improvements: unified architecture with thin wrappers, closure table for O(1) queries, Redis patterns, JWT service tokens, unified AuthDeps)
+**Last Updated**: 2026-01-22 (DD-050 role scoping, DD-051 entity type configuration with frontend UI)
 **Next Review**: After Phase 1 implementation

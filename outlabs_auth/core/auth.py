@@ -196,6 +196,7 @@ class OutlabsAuth:
         self.service_token_service = None
         self.entity_service = None
         self.membership_service = None
+        self.config_service = None
         self.cache_service = None
         self.activity_tracker = None
 
@@ -274,6 +275,12 @@ class OutlabsAuth:
         if self.redis_client:
             await self.redis_client.connect()
 
+        # Seed default configuration for EnterpriseRBAC
+        if self.config.enable_entity_hierarchy and self.config_service:
+            async with self.get_session() as session:
+                await self.config_service.seed_defaults(session)
+                await session.commit()
+
         # Initialize authentication backends
         self._init_backends()
 
@@ -326,15 +333,18 @@ class OutlabsAuth:
 
             self.redis_client = RedisClient(self.config)
 
-        # Entity and membership services for EnterpriseRBAC
+        # Entity, membership, and config services for EnterpriseRBAC
         if self.config.enable_entity_hierarchy:
+            from outlabs_auth.services.config import ConfigService
             from outlabs_auth.services.entity import EntityService
             from outlabs_auth.services.membership import MembershipService
 
+            self.config_service = ConfigService()
             self.entity_service = EntityService(
                 self.config,
                 redis_client=self.redis_client,
                 observability=self.observability,
+                config_service=self.config_service,
             )
             self.membership_service = MembershipService(
                 self.config,

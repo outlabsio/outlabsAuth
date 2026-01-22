@@ -14,6 +14,7 @@ from uuid import UUID
 
 if TYPE_CHECKING:
     from outlabs_auth.observability import ObservabilityService
+    from outlabs_auth.services.config import ConfigService
 
 from sqlalchemy import and_, insert, or_, select, update
 from sqlalchemy import delete as sql_delete
@@ -49,6 +50,7 @@ class EntityService(BaseService[Entity]):
         config: AuthConfig,
         redis_client: Optional["RedisClient"] = None,
         observability: Optional["ObservabilityService"] = None,
+        config_service: Optional["ConfigService"] = None,
     ):
         """
         Initialize EntityService.
@@ -57,12 +59,14 @@ class EntityService(BaseService[Entity]):
             config: Authentication configuration
             redis_client: Optional Redis client for caching
             observability: Optional observability service for metrics/logging
+            config_service: Optional config service for entity type configuration
         """
         super().__init__(Entity)
         self.config = config
         self.max_depth = getattr(config, "max_entity_depth", 10)
         self.redis_client = redis_client
         self.observability = observability
+        self.config_service = config_service
 
     async def create_entity(
         self,
@@ -811,7 +815,7 @@ class EntityService(BaseService[Entity]):
         Rules:
         - ACCESS_GROUP cannot have STRUCTURAL children
         - Maximum depth must not be exceeded
-        - Allowed child types (if configured)
+        - Allowed child types (from root entity config or system defaults)
 
         Args:
             session: Database session
@@ -847,19 +851,88 @@ class EntityService(BaseService[Entity]):
                 details={"current_depth": len(path), "max_depth": self.max_depth},
             )
 
-        # Rule 3: Check allowed child types (if configured)
-        # Note: allowed_child_types is not in current SQL model, so skip if not present
-        if hasattr(parent, "allowed_child_types") and parent.allowed_child_types:
-            if child_type.lower() not in [
-                t.lower() for t in parent.allowed_child_types
-            ]:
+        # Rule 3: Check allowed child types
+        # Priority: parent's allowed_child_types > root entity's allowed_child_types > system defaults
+        allowed_types = await self._get_allowed_child_types(
+            session, parent, child_class
+        )
+
+        if allowed_types:
+            if child_type.lower() not in [t.lower() for t in allowed_types]:
                 raise InvalidInputError(
                     message=f"Entity type '{child_type}' not allowed as child of '{parent.entity_type}'",
                     details={
-                        "allowed_types": parent.allowed_child_types,
+                        "allowed_types": allowed_types,
                         "requested_type": child_type,
                     },
                 )
+
+    async def _get_allowed_child_types(
+        self,
+        session: AsyncSession,
+        parent: Entity,
+        child_class: EntityClass,
+    ) -> list[str]:
+        """
+        Get allowed child types for a parent entity.
+
+        Priority:
+        1. Parent entity's allowed_child_types (if configured)
+        2. Root entity's allowed_child_types (if configured)
+        3. System defaults from ConfigService
+
+        Args:
+            session: Database session
+            parent: Parent entity
+            child_class: Child entity class (structural or access_group)
+
+        Returns:
+            List of allowed entity type strings
+        """
+        # Check if parent has explicit allowed_child_types
+        if hasattr(parent, "allowed_child_types") and parent.allowed_child_types:
+            return parent.allowed_child_types
+
+        # Get root entity to check its allowed_child_types
+        root_entity = await self._get_root_entity(session, parent)
+        if (
+            root_entity
+            and hasattr(root_entity, "allowed_child_types")
+            and root_entity.allowed_child_types
+        ):
+            return root_entity.allowed_child_types
+
+        # No restrictions if neither parent nor root has explicit allowed_child_types
+        # System defaults are suggestions for the UI, not hard enforcement
+        # This allows flexibility while still providing guidance in the frontend
+        return []
+
+    async def _get_root_entity(
+        self,
+        session: AsyncSession,
+        entity: Entity,
+    ) -> Optional[Entity]:
+        """
+        Get the root entity (top of hierarchy) for a given entity.
+
+        Args:
+            session: Database session
+            entity: Entity to find root for
+
+        Returns:
+            Root entity (entity with no parent) or None
+        """
+        if entity.parent_id is None:
+            # This entity is already a root
+            return entity
+
+        # Use closure table to find the root (ancestor with depth = max depth from this entity)
+        path = await self.get_entity_path(session, entity.id)
+        if path:
+            # First entity in path is the root
+            return path[0]
+
+        return None
 
     def _generate_slug(self, name: str) -> str:
         """

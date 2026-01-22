@@ -73,6 +73,43 @@ const links = computed(() => {
         mainLinks.splice(rolesIndex + 1, 0, ...enterpriseLinks);
     }
 
+    // Build settings children
+    const settingsChildren = [
+        {
+            label: "General",
+            to: "/settings",
+            exact: true,
+            onSelect: () => {
+                open.value = false;
+            },
+        },
+        {
+            label: "Profile",
+            to: "/settings/profile",
+            onSelect: () => {
+                open.value = false;
+            },
+        },
+        {
+            label: "Security",
+            to: "/settings/security",
+            onSelect: () => {
+                open.value = false;
+            },
+        },
+    ];
+
+    // Add Entity Types settings for superusers in EnterpriseRBAC mode
+    if (authStore.isEnterpriseRBAC && authStore.currentUser?.is_superuser) {
+        settingsChildren.push({
+            label: "Entity Types",
+            to: "/settings/entity-types",
+            onSelect: () => {
+                open.value = false;
+            },
+        });
+    }
+
     return [
         [...mainLinks],
         [
@@ -82,30 +119,7 @@ const links = computed(() => {
                 icon: "i-lucide-settings",
                 defaultOpen: false,
                 type: "trigger",
-                children: [
-                    {
-                        label: "General",
-                        to: "/settings",
-                        exact: true,
-                        onSelect: () => {
-                            open.value = false;
-                        },
-                    },
-                    {
-                        label: "Profile",
-                        to: "/settings/profile",
-                        onSelect: () => {
-                            open.value = false;
-                        },
-                    },
-                    {
-                        label: "Security",
-                        to: "/settings/security",
-                        onSelect: () => {
-                            open.value = false;
-                        },
-                    },
-                ],
+                children: settingsChildren,
             },
         ],
         [

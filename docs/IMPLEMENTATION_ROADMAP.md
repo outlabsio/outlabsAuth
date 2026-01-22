@@ -33,9 +33,13 @@
 | **Phase 5** | ✅ Complete | 2025-11-10 | **Redis tests (15/15 ✅), Performance benchmarks (6/7 ✅), Integration tests (10/10 ✅)** |
 | **PostgreSQL Migration** | ✅ Complete | 2025-01-14 | **All services migrated to SQLAlchemy async, all examples working** |
 | Phase 6 | ✅ Complete | 2025-01-14 | Documentation updated for PostgreSQL |
+| **Role Scoping (DD-050)** | ✅ Complete | 2026-01-22 | **Role scoping to root entities, user organization binding** |
+| **Entity Type Config (DD-051)** | ✅ Complete | 2026-01-22 | **SystemConfig model, ConfigService, config router, frontend UI** |
+| **Frontend: Role Scoping UI** | ✅ Complete | 2026-01-22 | **Role create/edit with scope, roles list filtering by scope** |
+| **Frontend: Entity Type Settings** | ✅ Complete | 2026-01-22 | **System settings page for entity type configuration** |
 | Phase 7-10 | ⏸️ Not Started | - | Optional extensions |
 
-**Current Status**: PostgreSQL migration complete. All three examples (SimpleRBAC, EnterpriseRBAC, Notifications) working with PostgreSQL.
+**Current Status**: Entity type configuration and role scoping complete. All backend and frontend features implemented for DD-050 and DD-051.
 
 ---
 

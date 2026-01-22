@@ -3176,6 +3176,105 @@ Scope roles to root entities (top-level organizations with `parent_id = NULL`).
 
 ---
 
+## DD-051: System Configuration for Entity Types
+
+**Date**: 2026-01-22
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: Different deployments need different entity type vocabularies. Hardcoding "organization" as the only root type limits flexibility.
+
+### Options Considered
+
+1. **Hardcoded entity types**
+   - Pros: Simplest implementation, no configuration needed
+   - Cons: Forces specific vocabulary ("organization"), cannot adapt to different domains
+
+2. **Config file/environment variables**
+   - Pros: Simple to implement, no database changes
+   - Cons: Requires code deployment to change, not UI-editable
+
+3. **Database-stored configuration with UI**
+   - Pros: Runtime configurable, UI-editable by superusers, flexible per deployment
+   - Cons: Additional model and service, migration required
+
+### Decision
+Store entity type configuration in database with a SystemConfig model.
+
+**Implementation**:
+
+1. **SystemConfig Model** (`outlabs_auth/models/sql/system_config.py`):
+```python
+class SystemConfig(SQLModel, table=True):
+    __tablename__ = "system_config"
+    
+    key: str = Field(sa_column=Column(String(100), primary_key=True))
+    value: str = Field(sa_column=Column(Text, nullable=False))  # JSON encoded
+    description: Optional[str] = None
+    updated_at: datetime
+    updated_by_id: Optional[UUID] = None
+```
+
+2. **ConfigService** (`outlabs_auth/services/config.py`):
+   - `get_entity_type_config()` - Returns allowed root types and default child types
+   - `set_entity_type_config()` - Updates configuration (superuser only)
+   - `seed_defaults()` - Seeds default configuration on first run
+
+3. **Config Router** (`outlabs_auth/routers/config.py`):
+   - `GET /v1/config/entity-types` - Public, returns current configuration
+   - `PUT /v1/config/entity-types` - Superuser only, updates configuration
+
+4. **Default Configuration**:
+```python
+DEFAULT_ENTITY_TYPE_CONFIG = {
+    "allowed_root_types": ["organization"],  # Backward compatible
+    "default_child_types": {
+        "structural": ["department", "team", "branch"],
+        "access_group": ["permission_group", "admin_group"],
+    },
+}
+```
+
+5. **Entity Model Extension** (`outlabs_auth/models/sql/entity.py`):
+```python
+# Added to Entity model for per-root-entity customization
+allowed_child_types: List[str] = Field(default_factory=list)
+allowed_child_classes: List[str] = Field(default_factory=list)
+```
+
+**Use Cases**:
+
+| Platform Type | Allowed Root Types | Example Child Types |
+|---------------|-------------------|---------------------|
+| Real Estate | `brokerage`, `solo_agent`, `internal_team` | `branch`, `team`, `agent` |
+| Corporate | `organization`, `division` | `department`, `team`, `project` |
+| Franchise | `franchise`, `independent_location` | `region`, `store` |
+| Default | `organization` | `department`, `team`, `branch` |
+
+**Reasoning**:
+- Database storage allows runtime configuration without code deployment
+- UI configuration empowers platform admins without developer involvement
+- Per-root-entity customization allows each organization to define their own vocabulary
+- Default configuration maintains backward compatibility
+
+### Consequences
+- **Positive**: Flexible vocabulary per deployment, UI-configurable, empowers admins
+- **Positive**: Per-root-entity child type customization
+- **Negative**: Additional database table and migration
+- **Neutral**: Requires superuser access to configure
+
+### Frontend Integration
+- New settings page at `/settings/entity-types` (superuser only)
+- EntityCreateModal fetches config for dynamic type options
+- Root entities can configure their own `allowed_child_types`
+- Child entity creation uses parent/root's allowed types
+
+### Related Decisions
+- DD-050 (Role scoping to root entities)
+- DD-005 (Entity hierarchy in EnterpriseRBAC)
+- DD-049 (PostgreSQL as primary database)
+
+---
+
 ## Questions Still Open
 
 Track questions that need decisions:
@@ -3215,8 +3314,9 @@ Track questions that need decisions:
 | 2025-01-26 | DD-031 | Superseded by DD-028 (corrected) |
 | 2025-01-14 | DD-030 | Superseded by DD-035 |
 | 2026-01-22 | **DD-050** | **Accepted (Role Scoping to Root Entities)** |
+| 2026-01-22 | **DD-051** | **Accepted (System Configuration for Entity Types)** |
 
 ---
 
-**Last Updated**: 2026-01-22 (DD-050 added: Role scoping to root entities for organizational isolation)
+**Last Updated**: 2026-01-22 (DD-051 added: System configuration for flexible entity type vocabularies)
 **Next Review**: After testing all examples

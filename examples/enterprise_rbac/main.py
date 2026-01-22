@@ -35,6 +35,7 @@ from outlabs_auth.observability import ObservabilityPresets
 from outlabs_auth.routers import (
     get_api_keys_router,
     get_auth_router,
+    get_config_router,
     get_entities_router,
     get_memberships_router,
     get_permissions_router,
@@ -250,6 +251,7 @@ async def lifespan(app: FastAPI):
     app.include_router(get_permissions_router(auth, prefix="/v1/permissions"))
     app.include_router(get_entities_router(auth, prefix="/v1/entities"))
     app.include_router(get_memberships_router(auth, prefix="/v1/memberships"))
+    app.include_router(get_config_router(auth, prefix="/v1/config"))
 
     print("Routers included (including /metrics for Prometheus)")
     print("Real Estate API (EnterpriseRBAC) started successfully")

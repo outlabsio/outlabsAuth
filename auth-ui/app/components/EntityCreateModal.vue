@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { EntityClass } from "~/types/entity";
+import type { EntityClass, Entity } from "~/types/entity";
 import { useQuery } from "@pinia/colada";
 import { entitiesQueries, useCreateEntityMutation } from "~/queries/entities";
 
@@ -8,6 +8,9 @@ const props = defineProps<{
 }>();
 
 const open = defineModel<boolean>("open", { default: false });
+
+// Stores
+const configStore = useConfigStore();
 
 // Fetch all entities for parent selection dropdown
 const { data: entitiesData } = useQuery(
@@ -25,6 +28,16 @@ const state = reactive({
     entity_class: "structural" as EntityClass,
     entity_type: "",
     parent_entity_id: undefined as string | undefined,
+    // For root entities: configure allowed child types
+    allowed_child_types: [] as string[],
+});
+
+// New child type input
+const newChildType = ref("");
+
+// Initialize config store
+onMounted(async () => {
+    await configStore.fetchEntityTypeConfig();
 });
 
 // Auto-generate slug and display_name from name
@@ -46,33 +59,106 @@ watch(
 );
 
 // Set parent entity when modal opens with a parent context
-watch(
-    open,
-    (isOpen) => {
-        if (isOpen && props.parentEntityId) {
-            state.parent_entity_id = props.parentEntityId;
-        }
-    },
-);
-
-// Entity type options
-const entityTypes = computed(() => {
-    if (state.entity_class === "structural") {
-        return [
-            { label: "Organization", value: "organization" },
-            { label: "Department", value: "department" },
-            { label: "Team", value: "team" },
-            { label: "Division", value: "division" },
-            { label: "Project", value: "project" },
-        ];
-    } else {
-        return [
-            { label: "Access Group", value: "access_group" },
-            { label: "Permission Group", value: "permission_group" },
-            { label: "Admin Group", value: "admin_group" },
-        ];
+watch(open, (isOpen) => {
+    if (isOpen && props.parentEntityId) {
+        state.parent_entity_id = props.parentEntityId;
     }
 });
+
+// Check if creating a root entity (no parent)
+const isRootEntity = computed(() => !state.parent_entity_id);
+
+// Get selected parent entity
+const selectedParentEntity = computed((): Entity | undefined => {
+    if (!state.parent_entity_id) return undefined;
+    return entitiesData.value?.items?.find(
+        (e) => e.id === state.parent_entity_id,
+    );
+});
+
+// Get root entity for current selection (for child type lookup)
+const rootEntity = computed((): Entity | undefined => {
+    if (isRootEntity.value) return undefined;
+
+    const entities = entitiesData.value?.items || [];
+    let current = selectedParentEntity.value;
+
+    // Walk up the tree to find root
+    while (current?.parent_entity_id) {
+        current = entities.find((e) => e.id === current?.parent_entity_id);
+    }
+
+    return current;
+});
+
+// Entity type options - dynamic based on context
+const entityTypes = computed(() => {
+    if (isRootEntity.value) {
+        // Root entity: use system-configured allowed root types
+        return configStore.allowedRootTypes.map((type) => ({
+            label: formatTypeName(type),
+            value: type,
+        }));
+    }
+
+    // Child entity: check root entity's allowed_child_types first
+    const root = rootEntity.value;
+    if (root?.allowed_child_types && root.allowed_child_types.length > 0) {
+        // Filter by entity class
+        const types = root.allowed_child_types;
+        return types.map((type) => ({
+            label: formatTypeName(type),
+            value: type,
+        }));
+    }
+
+    // Fallback to system defaults based on entity class
+    if (state.entity_class === "structural") {
+        return configStore.defaultStructuralChildTypes.map((type) => ({
+            label: formatTypeName(type),
+            value: type,
+        }));
+    } else {
+        return configStore.defaultAccessGroupChildTypes.map((type) => ({
+            label: formatTypeName(type),
+            value: type,
+        }));
+    }
+});
+
+// Default child type suggestions for root entities
+const childTypeSuggestions = computed(() => {
+    return [
+        ...configStore.defaultStructuralChildTypes,
+        ...configStore.defaultAccessGroupChildTypes,
+    ].filter((type) => !state.allowed_child_types.includes(type));
+});
+
+// Format type name for display
+const formatTypeName = (type: string): string => {
+    return type.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+};
+
+// Add child type
+const addChildType = () => {
+    const type = newChildType.value.trim().toLowerCase().replace(/\s+/g, "_");
+    if (type && !state.allowed_child_types.includes(type)) {
+        state.allowed_child_types.push(type);
+        newChildType.value = "";
+    }
+};
+
+const addSuggestedChildType = (type: string) => {
+    if (!state.allowed_child_types.includes(type)) {
+        state.allowed_child_types.push(type);
+    }
+};
+
+const removeChildType = (type: string) => {
+    state.allowed_child_types = state.allowed_child_types.filter(
+        (t) => t !== type,
+    );
+};
 
 // Build indented parent options showing hierarchy
 const parentOptions = computed(() => {
@@ -116,7 +202,21 @@ const showEntityHelp = ref(false);
 
 async function handleSubmit() {
     try {
-        await createEntity(state);
+        // Build payload - include allowed_child_types only for root entities
+        const payload = {
+            name: state.name,
+            display_name: state.display_name,
+            slug: state.slug,
+            description: state.description,
+            entity_class: state.entity_class,
+            entity_type: state.entity_type,
+            parent_entity_id: state.parent_entity_id,
+            ...(isRootEntity.value && state.allowed_child_types.length > 0
+                ? { allowed_child_types: state.allowed_child_types }
+                : {}),
+        };
+
+        await createEntity(payload);
 
         // Close modal and reset form (mutation handles toast)
         open.value = false;
@@ -128,7 +228,9 @@ async function handleSubmit() {
             entity_class: "structural",
             entity_type: "",
             parent_entity_id: undefined,
+            allowed_child_types: [],
         });
+        newChildType.value = "";
     } catch (error: any) {
         // Error toast is handled by mutation's onError
         console.error("Failed to create entity:", error);
@@ -367,6 +469,111 @@ async function handleSubmit() {
                                 :items="parentOptions"
                                 placeholder="None (Root Entity)"
                             />
+                        </div>
+
+                        <!-- Allowed Child Types (Root Entities Only) -->
+                        <div
+                            v-if="isRootEntity"
+                            class="space-y-3 pt-4 border-t border-default"
+                        >
+                            <label
+                                class="block text-sm font-medium flex items-center gap-1.5"
+                            >
+                                Allowed Child Types
+                                <UBadge color="info" variant="subtle" size="xs"
+                                    >Optional</UBadge
+                                >
+                                <UPopover>
+                                    <UButton
+                                        icon="i-lucide-help-circle"
+                                        color="neutral"
+                                        variant="ghost"
+                                        size="xs"
+                                        class="text-muted hover:text-highlighted"
+                                    />
+                                    <template #content>
+                                        <div class="p-4 max-w-xs space-y-2">
+                                            <h4 class="font-semibold text-sm">
+                                                Allowed Child Types
+                                            </h4>
+                                            <p class="text-sm text-muted">
+                                                Define what types of child
+                                                entities can be created under
+                                                this root entity.
+                                            </p>
+                                            <p class="text-sm text-muted">
+                                                Leave empty to use system
+                                                defaults.
+                                            </p>
+                                        </div>
+                                    </template>
+                                </UPopover>
+                            </label>
+
+                            <div class="flex flex-wrap gap-2">
+                                <UBadge
+                                    v-for="type in state.allowed_child_types"
+                                    :key="type"
+                                    color="primary"
+                                    variant="subtle"
+                                    class="pr-1"
+                                >
+                                    {{ formatTypeName(type) }}
+                                    <UButton
+                                        icon="i-lucide-x"
+                                        color="primary"
+                                        variant="ghost"
+                                        size="xs"
+                                        class="ml-1 -mr-1"
+                                        @click="removeChildType(type)"
+                                    />
+                                </UBadge>
+                                <UBadge
+                                    v-if="
+                                        state.allowed_child_types.length === 0
+                                    "
+                                    color="neutral"
+                                    variant="subtle"
+                                >
+                                    Using system defaults
+                                </UBadge>
+                            </div>
+
+                            <div class="flex gap-2">
+                                <UInput
+                                    v-model="newChildType"
+                                    placeholder="Add custom type..."
+                                    size="sm"
+                                    class="flex-1"
+                                    @keyup.enter="addChildType"
+                                />
+                                <UButton
+                                    icon="i-lucide-plus"
+                                    size="sm"
+                                    @click="addChildType"
+                                />
+                            </div>
+
+                            <div
+                                v-if="childTypeSuggestions.length > 0"
+                                class="flex flex-wrap gap-1"
+                            >
+                                <span class="text-xs text-muted mr-1"
+                                    >Suggestions:</span
+                                >
+                                <UButton
+                                    v-for="type in childTypeSuggestions.slice(
+                                        0,
+                                        5,
+                                    )"
+                                    :key="type"
+                                    :label="formatTypeName(type)"
+                                    size="xs"
+                                    color="neutral"
+                                    variant="ghost"
+                                    @click="addSuggestedChildType(type)"
+                                />
+                            </div>
                         </div>
                     </div>
                 </div>

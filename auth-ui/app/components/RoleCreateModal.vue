@@ -1,9 +1,19 @@
 <script setup lang="ts">
-import { useCreateRoleMutation } from '~/queries/roles'
+import { useCreateRoleMutation } from "~/queries/roles";
+import { useQuery } from "@pinia/colada";
+import { entitiesQueries } from "~/queries/entities";
 
 const open = defineModel<boolean>("open", { default: false });
 
 const authStore = useAuthStore();
+
+// Check if EnterpriseRBAC mode (for scope selection)
+const isEnterpriseRBAC = computed(() => authStore.isEnterpriseRBAC);
+
+// Fetch root entities for scope selection (EnterpriseRBAC only)
+const { data: entitiesData } = useQuery(
+    entitiesQueries.list({ root_only: true }, { page: 1, limit: 100 }),
+);
 
 // Get available permissions from auth config (dynamically loaded from backend)
 const availablePermissions = computed(() => authStore.availablePermissions);
@@ -20,14 +30,37 @@ const permissionsByCategory = computed(() => {
     return grouped;
 });
 
+// Root entity options for scope selection
+const rootEntityOptions = computed(() => {
+    const entities = entitiesData.value?.items || [];
+    return entities.map((e) => ({
+        label: e.display_name || e.name,
+        value: e.id,
+    }));
+});
+
 // Form state
 const state = reactive({
     name: "",
     display_name: "",
     description: "",
     permissions: [] as string[],
-    is_global: true, // SimpleRBAC roles are always global
+    is_global: true,
+    // EnterpriseRBAC scope
+    scope_type: "global" as "global" | "organization",
+    root_entity_id: undefined as string | undefined,
 });
+
+// Sync scope_type with is_global
+watch(
+    () => state.scope_type,
+    (scopeType) => {
+        state.is_global = scopeType === "global";
+        if (scopeType === "global") {
+            state.root_entity_id = undefined;
+        }
+    },
+);
 
 // Auto-generate name from display_name
 watch(
@@ -74,12 +107,28 @@ function toggleCategory(category: string) {
 const showPermissionsHelp = ref(false);
 
 // Mutation for creating roles
-const { mutate: createRole, isLoading: isSubmitting } = useCreateRoleMutation()
+const { mutate: createRole, isLoading: isSubmitting } = useCreateRoleMutation();
 
 async function handleSubmit() {
     try {
-        console.log('🚀 [RoleCreateModal] Submitting role with payload:', JSON.stringify(state, null, 2))
-        await createRole(state)
+        // Build payload
+        const payload = {
+            name: state.name,
+            display_name: state.display_name,
+            description: state.description,
+            permissions: state.permissions,
+            is_global: state.is_global,
+            // Include root_entity_id only for organization-scoped roles
+            ...(state.scope_type === "organization" && state.root_entity_id
+                ? { root_entity_id: state.root_entity_id }
+                : {}),
+        };
+
+        console.log(
+            "🚀 [RoleCreateModal] Submitting role with payload:",
+            JSON.stringify(payload, null, 2),
+        );
+        await createRole(payload);
         // Close modal and reset form on success
         open.value = false;
         Object.assign(state, {
@@ -88,9 +137,11 @@ async function handleSubmit() {
             description: "",
             permissions: [],
             is_global: true,
+            scope_type: "global",
+            root_entity_id: undefined,
         });
     } catch (error) {
-        console.error('❌ [RoleCreateModal] Error creating role:', error)
+        console.error("❌ [RoleCreateModal] Error creating role:", error);
         // Error handling is done by the mutation
     }
 }
@@ -254,6 +305,145 @@ async function handleSubmit() {
                                 :rows="4"
                                 class="w-full"
                             />
+                        </div>
+                    </div>
+
+                    <!-- Role Scope (EnterpriseRBAC only) -->
+                    <div v-if="isEnterpriseRBAC" class="space-y-4">
+                        <h3
+                            class="text-lg font-semibold flex items-center gap-2"
+                        >
+                            <UIcon name="i-lucide-target" class="w-5 h-5" />
+                            Role Scope
+                            <UPopover>
+                                <UButton
+                                    icon="i-lucide-help-circle"
+                                    color="neutral"
+                                    variant="ghost"
+                                    size="xs"
+                                />
+                                <template #content>
+                                    <div class="p-4 max-w-sm space-y-2">
+                                        <h4 class="font-semibold text-sm">
+                                            Role Scope
+                                        </h4>
+                                        <p class="text-sm text-muted">
+                                            Determines where this role can be
+                                            assigned.
+                                        </p>
+                                        <div
+                                            class="space-y-2 mt-2 text-xs text-muted"
+                                        >
+                                            <div>
+                                                <p class="font-medium">
+                                                    Global
+                                                </p>
+                                                <p>
+                                                    Available system-wide, can
+                                                    be assigned in any
+                                                    organization.
+                                                </p>
+                                            </div>
+                                            <div>
+                                                <p class="font-medium">
+                                                    Organization-specific
+                                                </p>
+                                                <p>
+                                                    Only available within a
+                                                    specific organization's
+                                                    hierarchy.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+                            </UPopover>
+                        </h3>
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <UCard
+                                :class="[
+                                    'cursor-pointer transition-all border-2',
+                                    state.scope_type === 'global'
+                                        ? 'border-primary bg-primary/5'
+                                        : 'border-default hover:border-primary/50',
+                                ]"
+                                @click="state.scope_type = 'global'"
+                            >
+                                <div
+                                    class="flex flex-col items-center text-center space-y-2 p-2"
+                                >
+                                    <UIcon
+                                        name="i-lucide-globe"
+                                        class="w-8 h-8"
+                                        :class="
+                                            state.scope_type === 'global'
+                                                ? 'text-primary'
+                                                : 'text-muted'
+                                        "
+                                    />
+                                    <div>
+                                        <p class="font-semibold text-sm">
+                                            Global
+                                        </p>
+                                        <p class="text-xs text-muted">
+                                            System-wide
+                                        </p>
+                                    </div>
+                                </div>
+                            </UCard>
+
+                            <UCard
+                                :class="[
+                                    'cursor-pointer transition-all border-2',
+                                    state.scope_type === 'organization'
+                                        ? 'border-primary bg-primary/5'
+                                        : 'border-default hover:border-primary/50',
+                                ]"
+                                @click="state.scope_type = 'organization'"
+                            >
+                                <div
+                                    class="flex flex-col items-center text-center space-y-2 p-2"
+                                >
+                                    <UIcon
+                                        name="i-lucide-building-2"
+                                        class="w-8 h-8"
+                                        :class="
+                                            state.scope_type === 'organization'
+                                                ? 'text-primary'
+                                                : 'text-muted'
+                                        "
+                                    />
+                                    <div>
+                                        <p class="font-semibold text-sm">
+                                            Organization
+                                        </p>
+                                        <p class="text-xs text-muted">
+                                            Scoped to one org
+                                        </p>
+                                    </div>
+                                </div>
+                            </UCard>
+                        </div>
+
+                        <!-- Organization selector (when scope_type is 'organization') -->
+                        <div
+                            v-if="state.scope_type === 'organization'"
+                            class="space-y-2"
+                        >
+                            <label class="block text-sm font-medium">
+                                Select Organization
+                            </label>
+                            <USelect
+                                v-model="state.root_entity_id"
+                                :items="rootEntityOptions"
+                                placeholder="Choose an organization..."
+                                icon="i-lucide-building-2"
+                            />
+                            <p class="text-xs text-muted">
+                                This role will only be available within the
+                                selected organization's hierarchy.
+                            </p>
                         </div>
                     </div>
 

@@ -520,6 +520,52 @@ class AuthDeps:
 
         return dependency
 
+    def require_superuser(self) -> Callable:
+        """
+        Require authentication with superuser privileges.
+
+        This dependency checks that:
+        1. The user is authenticated
+        2. The user has is_superuser=True
+
+        Returns:
+            FastAPI dependency that returns auth_result dict if superuser
+
+        Raises:
+            HTTPException 401: If not authenticated
+            HTTPException 403: If authenticated but not superuser
+        """
+        signature = self._get_dependency_signature()
+
+        @with_signature(signature)
+        async def dependency(
+            request: Request,
+            session: Optional[AsyncSession] = None,
+            *args: Any,
+            **kwargs: Any,
+        ) -> dict:
+            auth_result = await self.require_auth()(
+                request=request, session=session, *args, **kwargs
+            )
+
+            if not auth_result:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Not authenticated",
+                )
+
+            # Check if user object exists and is superuser
+            user = auth_result.get("user")
+            if not user or not getattr(user, "is_superuser", False):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Superuser privileges required",
+                )
+
+            return auth_result
+
+        return dependency
+
     def _get_dependency_signature(self) -> Signature:
         parameters = [
             Parameter(

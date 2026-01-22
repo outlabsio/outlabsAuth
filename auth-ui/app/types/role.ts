@@ -13,6 +13,9 @@ export interface Role {
   is_system_role: boolean;
   is_global: boolean;
   assignable_at_types: string[];
+  // Root entity scoping (EnterpriseRBAC)
+  root_entity_id?: string;
+  root_entity_name?: string;
 }
 
 export interface CreateRoleData {
@@ -23,6 +26,8 @@ export interface CreateRoleData {
   entity_type_permissions?: Record<string, string[]>;
   is_global?: boolean;
   assignable_at_types?: string[];
+  // Root entity scoping (EnterpriseRBAC)
+  root_entity_id?: string;
 }
 
 export interface UpdateRoleData {

@@ -16,9 +16,10 @@ Create Date: 2026-01-22 00:01:00.000000+00:00
 
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "add_root_entity_scoping"
@@ -71,7 +72,6 @@ def downgrade() -> None:
     op.drop_index("ix_users_root_entity_id", table_name="users")
     op.drop_constraint("fk_users_root_entity_id", "users", type_="foreignkey")
     op.drop_column("users", "root_entity_id")
-    op.drop_column('users', 'root_entity_id')
 
     # Note: We don't revert the is_global changes as they're data-specific
     # and the original values are unknown

@@ -28,7 +28,8 @@ SQLModel (base)
 ├─ EntityMembership (EnterpriseRBAC)
 ├─ EntityMembershipRole (junction)
 ├─ EntityClosure (EnterpriseRBAC)
-└─ UserRoleMembership (SimpleRBAC)
+├─ UserRoleMembership (SimpleRBAC)
+└─ SystemConfig (EnterpriseRBAC)
 ```
 
 ---
@@ -596,11 +597,39 @@ class EntityModel(BaseDocument):
     # Metadata
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
-    # Configuration
-    allowed_child_classes: List[EntityClass] = Field(default_factory=list)
+    # Configuration (per-entity child type customization - DD-051)
     allowed_child_types: List[str] = Field(default_factory=list)
+    # If empty, uses system default child types from SystemConfig
+    # Root entities can customize their own allowed child types
+    
+    allowed_child_classes: List[str] = Field(default_factory=list)
+    # Entity classes allowed as children (e.g., ["structural", "access_group"])
+    
     max_members: Optional[int] = None
 ```
+
+**Child Type Configuration (DD-051)**:
+Root entities can define their own allowed child types, which override the system defaults:
+
+```python
+# Root entity with custom child types
+brokerage = Entity(
+    name="acme_realty",
+    display_name="ACME Realty",
+    entity_type="brokerage",
+    parent_id=None,  # Root entity
+    allowed_child_types=["branch", "team", "agent"],  # Custom for this brokerage
+)
+
+# Child entities under this root can only use these types
+branch = Entity(
+    name="downtown_branch",
+    parent_id=brokerage.id,
+    entity_type="branch",  # Must be in parent's allowed_child_types
+)
+```
+
+If `allowed_child_types` is empty on the root entity, the system defaults from SystemConfig are used.
 
 **Indexes**:
 ```python
@@ -795,6 +824,78 @@ is_ancestor = await EntityClosureModel.find_one(
 ```
 
 **See**: [[53-Closure-Table]] for closure table pattern.
+
+---
+
+### 10. SystemConfigModel
+
+**System configuration key-value store (EnterpriseRBAC).**
+
+```python
+class SystemConfig(SQLModel, table=True):
+    """System-wide configuration stored as key-value pairs."""
+    __tablename__ = "system_config"
+
+    # Primary key is the config key (e.g., "entity_types")
+    key: str = Field(sa_column=Column(String(100), primary_key=True))
+    
+    # JSON-encoded value
+    value: str = Field(sa_column=Column(Text, nullable=False))
+    
+    # Optional description for documentation
+    description: Optional[str] = Field(default=None, sa_column=Column(Text))
+    
+    # Audit fields
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False)
+    )
+    updated_by_id: Optional[UUID] = Field(
+        default=None,
+        sa_column=Column(PG_UUID(as_uuid=True), ForeignKey("users.id"))
+    )
+```
+
+**Configuration Keys**:
+```python
+class ConfigKeys:
+    ENTITY_TYPES = "entity_types"  # Allowed root/child entity types
+    FEATURE_FLAGS = "feature_flags"  # System feature flags (future)
+```
+
+**Default Entity Type Configuration**:
+```python
+DEFAULT_ENTITY_TYPE_CONFIG = {
+    "allowed_root_types": ["organization"],
+    "default_child_types": {
+        "structural": ["department", "team", "branch"],
+        "access_group": ["permission_group", "admin_group"],
+    },
+}
+```
+
+**Example**:
+```python
+# Get entity type configuration
+config = await config_service.get_entity_type_config(session)
+# Returns EntityTypeConfig with allowed_root_types and default_child_types
+
+# Update entity type configuration (superuser only)
+new_config = EntityTypeConfig(
+    allowed_root_types=["brokerage", "solo_agent", "internal_team"],
+    default_child_types=DefaultChildTypes(
+        structural=["branch", "team", "agent"],
+        access_group=["permission_group"],
+    )
+)
+await config_service.set_entity_type_config(session, new_config, updated_by_id=user.id)
+```
+
+**API Endpoints**:
+- `GET /v1/config/entity-types` - Get current configuration (public)
+- `PUT /v1/config/entity-types` - Update configuration (superuser only)
+
+**See**: DD-051 in `docs/DESIGN_DECISIONS.md` for the full design rationale.
 
 ---
 
@@ -1112,11 +1213,12 @@ class ActivityMetric(Document):
 | **entities** | ❌ | ✅ | Entity hierarchy |
 | **entity_memberships** | ❌ | ✅ | User memberships |
 | **entity_closure** | ❌ | ✅ | Closure table |
+| **system_config** | ❌ | ✅ | System configuration (DD-051) |
 | **activity_metrics** | ⚠️ Optional | ⚠️ Optional | DAU/MAU tracking (DD-049) |
 
 **Total Collections**:
 - SimpleRBAC: 5-8 collections (6-8 with activity tracking)
-- EnterpriseRBAC: 8-11 collections (9-11 with activity tracking)
+- EnterpriseRBAC: 9-12 collections (10-12 with activity tracking)
 
 ---
 

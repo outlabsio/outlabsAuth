@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlmodel import Field, Relationship
 
@@ -124,6 +125,26 @@ class Entity(BaseModel, table=True):
         default=None,
         sa_column=Column(Integer, nullable=True),
         description="Maximum child depth allowed (null = unlimited)",
+    )
+
+    # === Child Entity Configuration (for root entities) ===
+    allowed_child_types: List[str] = Field(
+        default_factory=list,
+        sa_column=Column(
+            ARRAY(String(50)),
+            nullable=False,
+            server_default="{}",
+        ),
+        description="Entity types allowed as children (for root entities). Empty = use system defaults.",
+    )
+    allowed_child_classes: List[str] = Field(
+        default_factory=list,
+        sa_column=Column(
+            ARRAY(String(20)),
+            nullable=False,
+            server_default="{}",
+        ),
+        description="Entity classes allowed as children (structural, access_group). Empty = all allowed.",
     )
 
     # === Relationships ===
