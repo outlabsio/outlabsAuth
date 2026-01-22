@@ -42,9 +42,9 @@ def _entity_to_response(entity: Any) -> EntityResponse:
         valid_from=entity.valid_from,
         valid_until=entity.valid_until,
         direct_permissions=[],  # Not used in current SQL model
-        metadata={},
-        allowed_child_classes=[],
-        allowed_child_types=[],
+        metadata={},  # Not used in current SQL model
+        allowed_child_classes=entity.allowed_child_classes or [],
+        allowed_child_types=entity.allowed_child_types or [],
         max_members=entity.max_members,
     )
 

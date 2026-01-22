@@ -13,7 +13,7 @@ const open = defineModel<boolean>("open", { default: false });
 const configStore = useConfigStore();
 
 // Fetch all entities for parent selection dropdown
-const { data: entitiesData } = useQuery(
+const { data: entitiesData, refetch: refetchEntities } = useQuery(
     entitiesQueries.list({}, { page: 1, limit: 500 }),
 );
 
@@ -59,9 +59,14 @@ watch(
 );
 
 // Set parent entity when modal opens with a parent context
-watch(open, (isOpen) => {
-    if (isOpen && props.parentEntityId) {
-        state.parent_entity_id = props.parentEntityId;
+// Also refetch entities to get latest allowed_child_types
+watch(open, async (isOpen) => {
+    if (isOpen) {
+        // Refetch to get latest entity data (including updated allowed_child_types)
+        await refetchEntities();
+        if (props.parentEntityId) {
+            state.parent_entity_id = props.parentEntityId;
+        }
     }
 });
 

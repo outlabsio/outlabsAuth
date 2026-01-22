@@ -3275,6 +3275,81 @@ allowed_child_classes: List[str] = Field(default_factory=list)
 
 ---
 
+## DD-052: Entity Type Configuration CRUD Operations
+
+**Date**: 2026-01-22
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: DD-051 added `allowed_child_types` and `allowed_child_classes` fields to entities, configurable at creation. Users need to edit these after creation, but removing types could orphan existing children.
+
+### Options Considered
+
+1. **Full CRUD (add and remove)**
+   - Pros: Complete flexibility
+   - Cons: Removing types could orphan existing children, backend has no validation
+
+2. **Add-only mode (no removal)**
+   - Pros: Safe - adding types never breaks existing entities
+   - Cons: Cannot remove types without backend changes
+
+3. **Full CRUD with backend validation**
+   - Pros: Safe and flexible
+   - Cons: Requires additional backend work, more complex
+
+### Decision
+Implement **add-only mode** in the UI for now. Removal will be added later when backend validation is implemented.
+
+**Implementation**:
+
+1. **EntityUpdateModal.vue** - Added child type configuration section:
+   - Only shown for root entities (no parent)
+   - Displays existing types as read-only badges (no remove button)
+   - Input field to add new types
+   - Suggestions from system defaults
+   - Help text explaining add-only limitation
+
+2. **Backend (unchanged)** - Already supports `allowed_child_types` in PATCH:
+   - `EntityUpdateRequest` includes `allowed_child_types` and `allowed_child_classes`
+   - No validation when types are removed (gap to address later)
+
+**Current State**:
+| Operation | UI Support | Backend Support | Notes |
+|-----------|-----------|-----------------|-------|
+| CREATE (set types) | Yes | Yes | Full support in EntityCreateModal |
+| READ (view types) | Yes | Yes | Displayed in entity details |
+| UPDATE (add types) | Yes | Yes | New in EntityUpdateModal |
+| UPDATE (remove types) | No | Yes* | *No validation - could orphan children |
+| DELETE | N/A | N/A | Types are strings, not records |
+
+**Reasoning**:
+- Adding types is always safe - it only expands options
+- Removing types is risky without validation - could leave existing children invalid
+- Better to ship safe functionality now, add removal later with proper safeguards
+
+### Consequences
+- **Positive**: Users can expand allowed child types after entity creation
+- **Positive**: No risk of accidentally orphaning children
+- **Negative**: Cannot remove types through UI (must use API directly or wait for backend validation)
+- **Neutral**: Clear UX messaging about add-only limitation
+
+### TODO: Future Enhancement
+1. Add backend validation in `EntityService.update_entity()`:
+   - When `allowed_child_types` changes, query existing children
+   - If children exist with types being removed, either:
+     - Reject the update with list of affected children
+     - Return warning and allow (soft constraint)
+     - Cascade: archive/reassign affected children
+2. Once backend validation exists:
+   - Enable removal in UI with confirmation dialog
+   - Show affected children count before removal
+   - Provide options for handling orphaned children
+
+### Related Decisions
+- DD-051 (System configuration for entity types)
+- DD-050 (Role scoping to root entities)
+
+---
+
 ## Questions Still Open
 
 Track questions that need decisions:
