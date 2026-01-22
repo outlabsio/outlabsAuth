@@ -140,6 +140,32 @@ const treeItems = computed(() => {
     return items;
 });
 
+// Helper to find tree item by ID (recursive search)
+function findTreeItemById(
+    items: EntityTreeItem[],
+    id: string,
+): EntityTreeItem | undefined {
+    for (const item of items) {
+        if (item.id === id) return item;
+        if (item.children) {
+            const found = findTreeItemById(item.children, id);
+            if (found) return found;
+        }
+    }
+    return undefined;
+}
+
+// Computed for tree v-model - converts between ID and item object
+const selectedTreeItem = computed({
+    get(): EntityTreeItem | undefined {
+        if (!selectedTreeEntityId.value) return undefined;
+        return findTreeItemById(treeItems.value, selectedTreeEntityId.value);
+    },
+    set(item: EntityTreeItem | undefined) {
+        selectedTreeEntityId.value = item?.id;
+    },
+});
+
 // Selected entity from tree
 const selectedEntity = computed(() => {
     if (!selectedTreeEntityId.value) return null;
@@ -156,11 +182,16 @@ const childEntities = computed(() => {
     );
 });
 
+// Extended breadcrumb item with entity ID for click handling
+interface EntityBreadcrumbItem extends BreadcrumbItem {
+    entityId?: string;
+}
+
 // Build breadcrumb path to selected entity
-const breadcrumbItems = computed((): BreadcrumbItem[] => {
+const breadcrumbItems = computed((): EntityBreadcrumbItem[] => {
     if (!selectedEntity.value) return [];
 
-    const path: BreadcrumbItem[] = [];
+    const path: EntityBreadcrumbItem[] = [];
     let current: Entity | undefined = selectedEntity.value;
 
     // Build path from selected entity to root
@@ -168,9 +199,7 @@ const breadcrumbItems = computed((): BreadcrumbItem[] => {
         path.unshift({
             label: current.display_name || current.name,
             icon: getEntityIcon(current.entity_class, current.entity_type),
-            onClick: () => {
-                selectedTreeEntityId.value = current?.id;
-            },
+            entityId: current.id,
         });
         if (current.parent_entity_id) {
             current = allEntities.value.find(
@@ -181,17 +210,20 @@ const breadcrumbItems = computed((): BreadcrumbItem[] => {
         }
     }
 
-    // Add root item
+    // Add root item (no entityId = go to root)
     path.unshift({
         label: "All Entities",
         icon: "i-lucide-home",
-        onClick: () => {
-            selectedTreeEntityId.value = undefined;
-        },
+        entityId: undefined,
     });
 
     return path;
 });
+
+// Handle breadcrumb click
+function onBreadcrumbClick(item: EntityBreadcrumbItem) {
+    selectedTreeEntityId.value = item.entityId;
+}
 
 // Open edit modal
 function openEditModal(entityId: string) {
@@ -202,6 +234,15 @@ function openEditModal(entityId: string) {
 // Navigate into entity (show children)
 function navigateToEntity(entityId: string) {
     selectedTreeEntityId.value = entityId;
+}
+
+// Handle tree selection - extract ID from the select event
+function onTreeSelect(e: any) {
+    // The event contains the item in e.detail or directly as the item
+    const item = e?.item || e;
+    if (item?.id) {
+        selectedTreeEntityId.value = item.id;
+    }
 }
 
 // Table columns
@@ -378,11 +419,12 @@ const createParentId = computed(() => selectedTreeEntityId.value || undefined);
                     </div>
                     <UTree
                         v-else
-                        v-model="selectedTreeEntityId"
+                        v-model="selectedTreeItem"
                         :items="treeItems"
                         :get-key="(item: EntityTreeItem) => item.id"
                         color="primary"
                         size="sm"
+                        @select="onTreeSelect"
                     />
                 </div>
             </div>
@@ -416,7 +458,27 @@ const createParentId = computed(() => selectedTreeEntityId.value || undefined);
                     v-if="breadcrumbItems.length > 1"
                     class="px-4 py-2 border-b border-default"
                 >
-                    <UBreadcrumb :items="breadcrumbItems" />
+                    <UBreadcrumb :items="breadcrumbItems">
+                        <template #item="{ item, index }">
+                            <button
+                                type="button"
+                                class="flex items-center gap-1.5 text-sm min-w-0 hover:text-default transition-colors"
+                                :class="
+                                    index === breadcrumbItems.length - 1
+                                        ? 'text-primary font-semibold'
+                                        : 'text-muted font-medium'
+                                "
+                                @click="onBreadcrumbClick(item)"
+                            >
+                                <UIcon
+                                    v-if="item.icon"
+                                    :name="item.icon"
+                                    class="shrink-0 size-5"
+                                />
+                                <span class="truncate">{{ item.label }}</span>
+                            </button>
+                        </template>
+                    </UBreadcrumb>
                 </div>
 
                 <!-- Entity Info Card (when entity selected) -->
