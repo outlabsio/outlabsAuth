@@ -33,17 +33,25 @@ from outlabs_auth.schemas.role import (
 )
 
 
-def _build_role_response(role, permission_names: List[str]) -> RoleResponse:
+async def _build_role_response(
+    session, role, permission_names: List[str]
+) -> RoleResponse:
     """Build a RoleResponse from a Role model with permissions."""
-    # Get root entity name
+    from outlabs_auth.models.sql import Entity
+
+    # Get root entity name (fetch from DB to avoid lazy loading issues)
     root_entity_name = None
-    if role.root_entity_id and role.root_entity:
-        root_entity_name = role.root_entity.display_name
+    if role.root_entity_id:
+        root_entity = await session.get(Entity, role.root_entity_id)
+        if root_entity:
+            root_entity_name = root_entity.display_name
 
     # Get scope entity name
     scope_entity_name = None
-    if role.scope_entity_id and role.scope_entity:
-        scope_entity_name = role.scope_entity.display_name
+    if role.scope_entity_id:
+        scope_entity = await session.get(Entity, role.scope_entity_id)
+        if scope_entity:
+            scope_entity_name = scope_entity.display_name
 
     # Map RoleScope enum to schema enum
     scope_value = RoleScopeEnum.HIERARCHY
@@ -154,7 +162,9 @@ def get_roles_router(
                 permission_names = await auth.role_service.get_role_permission_names(
                     session, role.id
                 )
-                items.append(_build_role_response(role, permission_names))
+                items.append(
+                    await _build_role_response(session, role, permission_names)
+                )
 
             return PaginatedResponse(
                 items=items, total=total, page=page, limit=limit, pages=pages
@@ -202,7 +212,7 @@ def get_roles_router(
             session, role.id
         )
 
-        return _build_role_response(role, permission_names)
+        return await _build_role_response(session, role, permission_names)
 
     @router.get(
         "/{role_id}",
@@ -224,7 +234,7 @@ def get_roles_router(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Role not found"
             )
 
-        return _build_role_response(role, role.get_permission_names())
+        return await _build_role_response(session, role, role.get_permission_names())
 
     @router.patch(
         "/{role_id}",
@@ -271,7 +281,7 @@ def get_roles_router(
             session, role.id
         )
 
-        return _build_role_response(role, permission_names)
+        return await _build_role_response(session, role, permission_names)
 
     @router.delete(
         "/{role_id}",
@@ -310,7 +320,7 @@ def get_roles_router(
             role_id=role_id,
             permission_names=permissions,
         )
-        return _build_role_response(role, role.get_permission_names())
+        return await _build_role_response(session, role, role.get_permission_names())
 
     @router.delete(
         "/{role_id}/permissions",
@@ -330,7 +340,7 @@ def get_roles_router(
             role_id=role_id,
             permission_names=permissions,
         )
-        return _build_role_response(role, role.get_permission_names())
+        return await _build_role_response(session, role, role.get_permission_names())
 
     # ---------------------------------------------------------------------
     # ABAC: Role condition groups + conditions

@@ -172,7 +172,11 @@ def get_memberships_router(
                 user_email=m.user.email if m.user else "",
                 user_first_name=m.user.first_name if m.user else None,
                 user_last_name=m.user.last_name if m.user else None,
-                user_status=m.user.status.value if m.user else "unknown",
+                user_status=(
+                    getattr(m.user.status, "value", m.user.status)
+                    if m.user
+                    else "unknown"
+                ),
                 roles=[
                     RoleSummary(
                         id=str(r.id),
@@ -181,7 +185,7 @@ def get_memberships_router(
                     )
                     for r in m.roles
                 ],
-                status=m.status.value,
+                status=getattr(m.status, "value", m.status),
                 joined_at=m.valid_from or m.created_at,
             )
             for m in memberships
