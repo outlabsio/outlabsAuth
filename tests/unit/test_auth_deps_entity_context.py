@@ -61,6 +61,48 @@ def _make_request(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_require_permission_ignores_entity_context_header_by_default(
+    test_session,
+):
+    user_id = uuid4()
+    entity_id = uuid4()
+
+    backend = AuthBackend(
+        name="test",
+        transport=HeaderTransport(header_name="X-Test-User"),
+        strategy=_TestStrategy(),
+    )
+
+    permission_service = _PermissionServiceStub(result=True)
+    deps = AuthDeps(
+        backends=[backend],
+        permission_service=permission_service,
+        get_session=lambda: None,
+    )
+
+    dep = deps.require_permission("entity:read")
+    request = _make_request(
+        "GET",
+        "/entities",
+        {},
+        headers={
+            "X-Test-User": str(user_id),
+            "X-Entity-Context": str(entity_id),
+        },
+    )
+
+    await dep(request=request, session=test_session)
+    assert permission_service.calls == [
+        {
+            "user_id": UUID(str(user_id)),
+            "permission": "entity:read",
+            "entity_id": None,
+        }
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_require_tree_permission_reads_entity_id_from_body(test_session):
     user_id = uuid4()
     entity_id = uuid4()

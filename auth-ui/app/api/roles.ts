@@ -19,12 +19,24 @@ export function createRolesAPI() {
       filters: RoleFilters = {},
       params: PaginationParams = {},
     ): Promise<PaginatedResponse<Role>> {
+      const forEntityId = filters.for_entity_id;
+
+      if (forEntityId) {
+        const entityQuery = client.buildQueryString({
+          page: params.page,
+          limit: params.limit,
+        });
+
+        return client.call<PaginatedResponse<Role>>(
+          `/v1/roles/entity/${forEntityId}${entityQuery}`
+        );
+      }
+
       const queryString = client.buildQueryString({
         search: filters.search,
         is_global: filters.is_global,
         entity_id: filters.entity_id,
         entity_type: filters.entity_type,
-        for_entity_id: filters.for_entity_id,
         page: params.page,
         limit: params.limit,
         sort_by: params.sort_by,

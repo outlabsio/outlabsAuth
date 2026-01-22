@@ -229,7 +229,9 @@ def get_memberships_router(
         user_id: UUID,
         data: MembershipUpdateRequest,
         session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_permission("membership:update")),
+        auth_result=Depends(
+            auth.require_tree_permission("membership:update", "entity_id", source="path")
+        ),
     ):
         """Update a user's roles in an entity."""
         membership = await auth.membership_service.update_member_roles(
@@ -255,7 +257,9 @@ def get_memberships_router(
         entity_id: UUID,
         user_id: UUID,
         session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_permission("membership:delete")),
+        auth_result=Depends(
+            auth.require_tree_permission("membership:delete", "entity_id", source="path")
+        ),
     ):
         """Remove a user from an entity."""
         await auth.membership_service.remove_member(

@@ -22,6 +22,8 @@ from fastapi import FastAPI
 
 from outlabs_auth import SimpleRBAC
 from outlabs_auth.fastapi import register_exception_handlers
+from outlabs_auth.models.sql.entity import Entity
+from outlabs_auth.models.sql.enums import EntityClass
 from outlabs_auth.routers import get_api_keys_router, get_auth_router, get_users_router
 from outlabs_auth.utils.jwt import create_access_token
 
@@ -37,9 +39,11 @@ async def auth_instance(test_engine) -> SimpleRBAC:
         engine=test_engine,
         secret_key="test-secret-key-do-not-use-in-production-12345678",
         access_token_expire_minutes=60,
+        enable_token_cleanup=False,
     )
     await auth.initialize()
-    return auth
+    yield auth
+    await auth.shutdown()
 
 
 @pytest_asyncio.fixture
@@ -462,6 +466,66 @@ async def test_service_verify_api_key(auth_instance: SimpleRBAC, admin_user: dic
         )
         assert verified_key is not None
         assert verified_key.id == key_model.id
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_service_verify_api_key_enforces_scope(
+    auth_instance: SimpleRBAC, admin_user: dict
+):
+    """Verify API key rejects missing required scope."""
+    async with auth_instance.get_session() as session:
+        full_key, _ = await auth_instance.api_key_service.create_api_key(
+            session,
+            owner_id=uuid.UUID(admin_user["id"]),
+            name=f"scoped-key-{uuid.uuid4().hex[:8]}",
+            scopes=["user:read"],
+        )
+        await session.commit()
+
+        verified_key, _ = await auth_instance.api_key_service.verify_api_key(
+            session, full_key, required_scope="user:write"
+        )
+        assert verified_key is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_service_verify_api_key_enforces_entity_access(
+    auth_instance: SimpleRBAC, admin_user: dict
+):
+    """Verify API key rejects access to non-matching entity."""
+    async with auth_instance.get_session() as session:
+        entity_a = Entity(
+            name="entity_a",
+            display_name="Entity A",
+            slug=f"entity-a-{uuid.uuid4().hex[:8]}",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
+        entity_b = Entity(
+            name="entity_b",
+            display_name="Entity B",
+            slug=f"entity-b-{uuid.uuid4().hex[:8]}",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
+        session.add(entity_a)
+        session.add(entity_b)
+        await session.flush()
+
+        full_key, _ = await auth_instance.api_key_service.create_api_key(
+            session,
+            owner_id=uuid.UUID(admin_user["id"]),
+            name=f"entity-key-{uuid.uuid4().hex[:8]}",
+            entity_id=entity_a.id,
+        )
+        await session.commit()
+
+        verified_key, _ = await auth_instance.api_key_service.verify_api_key(
+            session, full_key, entity_id=entity_b.id
+        )
+        assert verified_key is None
 
 
 @pytest.mark.integration

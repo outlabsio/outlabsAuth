@@ -92,7 +92,7 @@ def get_entities_router(
         parent_id: Optional[UUID] = Query(None, description="Filter by parent entity"),
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
         limit: int = Query(100, ge=1, le=1000, description="Items per page"),
-        auth_result=Depends(auth.deps.require_auth()),
+        auth_result=Depends(auth.deps.require_permission("entity:read")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """List all entities with optional filtering and pagination."""

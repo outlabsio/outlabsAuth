@@ -944,6 +944,15 @@ class RoleService(BaseService[Role]):
                 details={"role_id": str(role_id)},
             )
 
+        if role.scope_entity_id is not None:
+            raise InvalidInputError(
+                message="Entity-local roles cannot be assigned via SimpleRBAC",
+                details={
+                    "role_id": str(role_id),
+                    "scope_entity_id": str(role.scope_entity_id),
+                },
+            )
+
         # Check for existing active membership
         stmt = select(UserRoleMembership).where(
             UserRoleMembership.user_id == user_id,

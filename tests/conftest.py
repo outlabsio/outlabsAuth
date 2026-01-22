@@ -159,6 +159,7 @@ async def auth(test_secret_key: str) -> AsyncGenerator[SimpleRBAC, None]:
         secret_key=test_secret_key,
         access_token_expire_minutes=15,
         refresh_token_expire_days=30,
+        enable_token_cleanup=False,
         observability_config=obs_config,
     )
 

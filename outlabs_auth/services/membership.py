@@ -390,6 +390,23 @@ class MembershipService(BaseService[EntityMembership]):
                 )
             roles.append(role)
 
+        root_entity_id = await self._get_root_entity_id(session, entity_id)
+        for role in roles:
+            if not await self._is_role_available_for_entity(
+                session, role, entity_id, root_entity_id
+            ):
+                raise InvalidInputError(
+                    message=f"Role '{role.name}' is not available for this entity",
+                    details={
+                        "role_id": str(role.id),
+                        "role_name": role.name,
+                        "entity_id": str(entity_id),
+                        "role_root_entity_id": str(role.root_entity_id)
+                        if role.root_entity_id
+                        else None,
+                    },
+                )
+
         # Clear existing roles
         stmt = sql_delete(EntityMembershipRole).where(
             EntityMembershipRole.membership_id == membership.id

@@ -104,6 +104,7 @@ class AuthDeps:
         self,
         *permissions: str,
         require_all: bool = False,
+        allow_entity_context_header: bool = False,
         resource_context_provider: Optional[
             Callable[[Request, AsyncSession, dict], Any]
         ] = None,
@@ -128,8 +129,9 @@ class AuthDeps:
             raw = (
                 request.path_params.get("entity_id")
                 or request.query_params.get("entity_id")
-                or request.headers.get("X-Entity-Context")
             )
+            if not raw and allow_entity_context_header:
+                raw = request.headers.get("X-Entity-Context")
             if not raw:
                 return None
             return _parse_uuid(raw, detail="Invalid entity context ID")

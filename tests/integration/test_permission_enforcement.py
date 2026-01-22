@@ -21,7 +21,7 @@ from fastapi import FastAPI
 
 from outlabs_auth import EnterpriseRBAC
 from outlabs_auth.fastapi import register_exception_handlers
-from outlabs_auth.models.sql.enums import EntityClass, MembershipStatus
+from outlabs_auth.models.sql.enums import EntityClass, MembershipStatus, RoleScope
 from outlabs_auth.routers import (
     get_api_keys_router,
     get_auth_router,
@@ -46,9 +46,11 @@ async def auth_instance(test_engine) -> EnterpriseRBAC:
         secret_key="test-secret-key-do-not-use-in-production-12345678",
         access_token_expire_minutes=60,
         enable_abac=True,
+        enable_token_cleanup=False,
     )
     await auth.initialize()
-    return auth
+    yield auth
+    await auth.shutdown()
 
 
 @pytest_asyncio.fixture
@@ -156,6 +158,51 @@ async def user_with_read_permission(auth_instance: EnterpriseRBAC) -> dict:
         )
 
         # Assign role to user
+        await auth_instance.role_service.assign_role_to_user(session, user.id, role.id)
+
+        await session.commit()
+
+        token = create_access_token(
+            {"sub": str(user.id)},
+            secret_key=auth_instance.config.secret_key,
+            algorithm=auth_instance.config.algorithm,
+        )
+
+        return {
+            "id": str(user.id),
+            "email": user.email,
+            "token": token,
+            "role_id": str(role.id),
+        }
+
+
+@pytest_asyncio.fixture
+async def user_with_role_read_tree_permission(auth_instance: EnterpriseRBAC) -> dict:
+    """Create user with role:read_tree permission."""
+    async with auth_instance.get_session() as session:
+        perm = await auth_instance.permission_service.create_permission(
+            session,
+            name="role:read_tree",
+            display_name="Role Read Tree",
+            description="Can read roles in entity context",
+        )
+
+        role = await auth_instance.role_service.create_role(
+            session,
+            name="role_tree_reader",
+            display_name="Role Tree Reader",
+            description="Can read roles in entity context",
+        )
+        await auth_instance.role_service.add_permissions(session, role.id, [perm.id])
+
+        user = await auth_instance.user_service.create_user(
+            session=session,
+            email="role-tree-reader@example.com",
+            password="TestPass123!",
+            first_name="Role",
+            last_name="Reader",
+            is_superuser=False,
+        )
         await auth_instance.role_service.assign_role_to_user(session, user.id, role.id)
 
         await session.commit()
@@ -344,6 +391,96 @@ async def test_regular_user_cannot_create_role(
         },
     )
     assert resp.status_code == 403
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_regular_user_cannot_update_role_permissions(
+    client: httpx.AsyncClient, regular_user: dict, admin_user: dict
+):
+    """Test that regular user cannot update role permissions."""
+    create_resp = await client.post(
+        "/v1/roles/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "name": f"perm-update-{uuid.uuid4().hex[:8]}",
+            "display_name": "Perm Update Role",
+        },
+    )
+    role_id = create_resp.json()["id"]
+
+    resp = await client.post(
+        f"/v1/roles/{role_id}/permissions",
+        headers={"Authorization": f"Bearer {regular_user['token']}"},
+        json=["user:read"],
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_user_with_role_update_can_update_role_permissions(
+    client: httpx.AsyncClient, auth_instance: EnterpriseRBAC, admin_user: dict
+):
+    """Test that user with role:update can assign permissions to roles."""
+    async with auth_instance.get_session() as session:
+        perm = await auth_instance.permission_service.create_permission(
+            session,
+            name="role:update",
+            display_name="Role Update",
+            description="Can update roles",
+        )
+        role = await auth_instance.role_service.create_role(
+            session,
+            name="role_updater",
+            display_name="Role Updater",
+        )
+        await auth_instance.role_service.add_permissions(session, role.id, [perm.id])
+
+        user = await auth_instance.user_service.create_user(
+            session=session,
+            email="role-updater@example.com",
+            password="TestPass123!",
+            first_name="Role",
+            last_name="Updater",
+            is_superuser=False,
+        )
+        await auth_instance.role_service.assign_role_to_user(session, user.id, role.id)
+        await session.commit()
+
+        token = create_access_token(
+            {"sub": str(user.id)},
+            secret_key=auth_instance.config.secret_key,
+            algorithm=auth_instance.config.algorithm,
+        )
+
+    create_resp = await client.post(
+        "/v1/roles/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "name": f"perm-target-{uuid.uuid4().hex[:8]}",
+            "display_name": "Perm Target Role",
+        },
+    )
+    target_role_id = create_resp.json()["id"]
+
+    perm_create_resp = await client.post(
+        "/v1/permissions/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "name": f"custom:read_{uuid.uuid4().hex[:8]}",
+            "display_name": "Custom Read",
+            "description": "Custom read permission",
+        },
+    )
+    perm_name = perm_create_resp.json()["name"]
+
+    resp = await client.post(
+        f"/v1/roles/{target_role_id}/permissions",
+        headers={"Authorization": f"Bearer {token}"},
+        json=[perm_name],
+    )
+    assert resp.status_code == 200
 
 
 # ============================================================================
@@ -612,20 +749,14 @@ async def test_entity_list_returns_empty_for_regular_user(
 ):
     """Test that entity list returns empty for user without entity access.
 
-    Note: The entity list endpoint doesn't require entity:read permission -
-    it returns entities the user has access to (filtered). A user without
-    any entity memberships will see an empty list.
+    Note: The entity list endpoint requires entity:read permission. A user
+    without that permission should get a 403.
     """
     resp = await client.get(
         "/v1/entities/",
         headers={"Authorization": f"Bearer {regular_user['token']}"},
     )
-    # Endpoint returns 200 but filtered results based on access
-    assert resp.status_code == 200
-    # User without memberships sees empty list (paginated response)
-    data = resp.json()
-    assert data["items"] == []
-    assert data["total"] == 0
+    assert resp.status_code == 403
 
 
 @pytest.mark.integration
@@ -635,6 +766,451 @@ async def test_superuser_can_list_entities(client: httpx.AsyncClient, admin_user
     resp = await client.get(
         "/v1/entities/",
         headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert resp.status_code == 200
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_roles_for_entity_requires_tree_permission(
+    client: httpx.AsyncClient, user_with_read_permission: dict, entity_setup: dict
+):
+    """Test that /roles/entity/{entity_id} requires role:read_tree permission."""
+    resp = await client.get(
+        f"/v1/roles/entity/{entity_setup['parent_id']}",
+        headers={"Authorization": f"Bearer {user_with_read_permission['token']}"},
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_roles_for_entity_allows_tree_permission(
+    client: httpx.AsyncClient,
+    user_with_role_read_tree_permission: dict,
+    entity_setup: dict,
+):
+    """Test that role:read_tree allows listing roles for entity."""
+    resp = await client.get(
+        f"/v1/roles/entity/{entity_setup['parent_id']}",
+        headers={
+            "Authorization": f"Bearer {user_with_role_read_tree_permission['token']}"
+        },
+    )
+    assert resp.status_code == 200
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_entity_local_role_does_not_grant_global_role_list_with_header(
+    client: httpx.AsyncClient, auth_instance: EnterpriseRBAC, entity_setup: dict
+):
+    """Entity-local roles should not grant access to /roles/ even with header."""
+    async with auth_instance.get_session() as session:
+        perm = await auth_instance.permission_service.create_permission(
+            session,
+            name="role:read",
+            display_name="Role Read",
+            description="Can read roles",
+        )
+
+        role = await auth_instance.role_service.create_role(
+            session,
+            name="local_role_reader",
+            display_name="Local Role Reader",
+            scope_entity_id=uuid.UUID(entity_setup["parent_id"]),
+        )
+        await auth_instance.role_service.add_permissions(session, role.id, [perm.id])
+
+        user = await auth_instance.user_service.create_user(
+            session=session,
+            email="local-role-reader@example.com",
+            password="TestPass123!",
+            first_name="Local",
+            last_name="Reader",
+            is_superuser=False,
+        )
+        await auth_instance.membership_service.add_member(
+            session=session,
+            entity_id=uuid.UUID(entity_setup["parent_id"]),
+            user_id=user.id,
+            role_ids=[role.id],
+        )
+        await session.commit()
+
+        token = create_access_token(
+            {"sub": str(user.id)},
+            secret_key=auth_instance.config.secret_key,
+            algorithm=auth_instance.config.algorithm,
+        )
+
+    resp = await client.get(
+        "/v1/roles/",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "X-Entity-Context": entity_setup["parent_id"],
+        },
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_membership_update_rejects_cross_root_role(
+    client: httpx.AsyncClient, auth_instance: EnterpriseRBAC, admin_user: dict
+):
+    """Roles from other root entities should be rejected in membership updates."""
+    async with auth_instance.get_session() as session:
+        root_a = await auth_instance.entity_service.create_entity(
+            session,
+            name="root_a",
+            display_name="Root A",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
+        child_a = await auth_instance.entity_service.create_entity(
+            session,
+            name="child_a",
+            display_name="Child A",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="department",
+            parent_id=root_a.id,
+        )
+        root_b = await auth_instance.entity_service.create_entity(
+            session,
+            name="root_b",
+            display_name="Root B",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
+
+        role_a = await auth_instance.role_service.create_role(
+            session=session,
+            name="role_a",
+            display_name="Role A",
+            root_entity_id=root_a.id,
+            is_global=False,
+        )
+        role_b = await auth_instance.role_service.create_role(
+            session=session,
+            name="role_b",
+            display_name="Role B",
+            root_entity_id=root_b.id,
+            is_global=False,
+        )
+
+        user = await auth_instance.user_service.create_user(
+            session=session,
+            email="cross-root@example.com",
+            password="TestPass123!",
+            first_name="Cross",
+            last_name="Root",
+            is_superuser=False,
+        )
+        await auth_instance.membership_service.add_member(
+            session=session,
+            entity_id=child_a.id,
+            user_id=user.id,
+            role_ids=[role_a.id],
+        )
+        await session.commit()
+
+    resp = await client.patch(
+        f"/v1/memberships/{child_a.id}/{user.id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"role_ids": [str(role_b.id)]},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_membership_update_rejects_entity_only_role_from_ancestor(
+    client: httpx.AsyncClient, auth_instance: EnterpriseRBAC, admin_user: dict
+):
+    """Entity-only roles should not be assignable to descendant memberships."""
+    async with auth_instance.get_session() as session:
+        root = await auth_instance.entity_service.create_entity(
+            session,
+            name="root_entity_only",
+            display_name="Root Entity Only",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
+        parent = await auth_instance.entity_service.create_entity(
+            session,
+            name="parent_entity_only",
+            display_name="Parent Entity Only",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="department",
+            parent_id=root.id,
+        )
+        child = await auth_instance.entity_service.create_entity(
+            session,
+            name="child_entity_only",
+            display_name="Child Entity Only",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="team",
+            parent_id=parent.id,
+        )
+
+        base_role = await auth_instance.role_service.create_role(
+            session=session,
+            name="base_role",
+            display_name="Base Role",
+            root_entity_id=root.id,
+            is_global=False,
+        )
+        entity_only_role = await auth_instance.role_service.create_role(
+            session=session,
+            name="parent_entity_only_role",
+            display_name="Parent Entity Only Role",
+            scope_entity_id=parent.id,
+            scope=RoleScope.ENTITY_ONLY,
+        )
+
+        user = await auth_instance.user_service.create_user(
+            session=session,
+            email="entity-only@example.com",
+            password="TestPass123!",
+            first_name="Entity",
+            last_name="Only",
+            is_superuser=False,
+        )
+        await auth_instance.membership_service.add_member(
+            session=session,
+            entity_id=child.id,
+            user_id=user.id,
+            role_ids=[base_role.id],
+        )
+        await session.commit()
+
+    resp = await client.patch(
+        f"/v1/memberships/{child.id}/{user.id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"role_ids": [str(entity_only_role.id)]},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_tree_permission_required_for_descendant_membership_create(
+    client: httpx.AsyncClient, auth_instance: EnterpriseRBAC
+):
+    """Non-tree permission should not allow creating memberships in descendants."""
+    async with auth_instance.get_session() as session:
+        root = await auth_instance.entity_service.create_entity(
+            session,
+            name="root_tree_perm",
+            display_name="Root Tree Perm",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
+        child = await auth_instance.entity_service.create_entity(
+            session,
+            name="child_tree_perm",
+            display_name="Child Tree Perm",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="department",
+            parent_id=root.id,
+        )
+
+        perm = await auth_instance.permission_service.create_permission(
+            session,
+            name="membership:create",
+            display_name="Membership Create",
+            description="Create membership at entity only",
+        )
+        role = await auth_instance.role_service.create_role(
+            session=session,
+            name="membership_creator",
+            display_name="Membership Creator",
+            root_entity_id=root.id,
+            is_global=False,
+        )
+        await auth_instance.role_service.add_permissions(session, role.id, [perm.id])
+
+        actor = await auth_instance.user_service.create_user(
+            session=session,
+            email="actor@example.com",
+            password="TestPass123!",
+            first_name="Actor",
+            last_name="User",
+            is_superuser=False,
+        )
+        target = await auth_instance.user_service.create_user(
+            session=session,
+            email="target@example.com",
+            password="TestPass123!",
+            first_name="Target",
+            last_name="User",
+            is_superuser=False,
+        )
+        await auth_instance.membership_service.add_member(
+            session=session,
+            entity_id=root.id,
+            user_id=actor.id,
+            role_ids=[role.id],
+        )
+        await session.commit()
+
+        token = create_access_token(
+            {"sub": str(actor.id)},
+            secret_key=auth_instance.config.secret_key,
+            algorithm=auth_instance.config.algorithm,
+        )
+
+    resp = await client.post(
+        "/v1/memberships/",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"entity_id": str(child.id), "user_id": str(target.id), "role_ids": []},
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_tree_permission_allows_descendant_membership_create(
+    client: httpx.AsyncClient, auth_instance: EnterpriseRBAC
+):
+    """Tree permission should allow creating memberships in descendants."""
+    async with auth_instance.get_session() as session:
+        root = await auth_instance.entity_service.create_entity(
+            session,
+            name="root_tree_allow",
+            display_name="Root Tree Allow",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
+        child = await auth_instance.entity_service.create_entity(
+            session,
+            name="child_tree_allow",
+            display_name="Child Tree Allow",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="department",
+            parent_id=root.id,
+        )
+
+        perm = await auth_instance.permission_service.create_permission(
+            session,
+            name="membership:create_tree",
+            display_name="Membership Create Tree",
+            description="Create membership in descendant entities",
+        )
+        role = await auth_instance.role_service.create_role(
+            session=session,
+            name="membership_creator_tree",
+            display_name="Membership Creator Tree",
+            root_entity_id=root.id,
+            is_global=False,
+        )
+        await auth_instance.role_service.add_permissions(session, role.id, [perm.id])
+
+        actor = await auth_instance.user_service.create_user(
+            session=session,
+            email="actor-tree@example.com",
+            password="TestPass123!",
+            first_name="Actor",
+            last_name="Tree",
+            is_superuser=False,
+        )
+        target = await auth_instance.user_service.create_user(
+            session=session,
+            email="target-tree@example.com",
+            password="TestPass123!",
+            first_name="Target",
+            last_name="Tree",
+            is_superuser=False,
+        )
+        await auth_instance.membership_service.add_member(
+            session=session,
+            entity_id=root.id,
+            user_id=actor.id,
+            role_ids=[role.id],
+        )
+        await session.commit()
+
+        token = create_access_token(
+            {"sub": str(actor.id)},
+            secret_key=auth_instance.config.secret_key,
+            algorithm=auth_instance.config.algorithm,
+        )
+
+    resp = await client.post(
+        "/v1/memberships/",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"entity_id": str(child.id), "user_id": str(target.id), "role_ids": []},
+    )
+    assert resp.status_code == 201
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_membership_update_allows_hierarchy_role_from_ancestor(
+    client: httpx.AsyncClient, auth_instance: EnterpriseRBAC, admin_user: dict
+):
+    """Hierarchy-scoped roles from ancestors should be assignable to descendants."""
+    async with auth_instance.get_session() as session:
+        root = await auth_instance.entity_service.create_entity(
+            session,
+            name="root_hierarchy_role",
+            display_name="Root Hierarchy Role",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
+        parent = await auth_instance.entity_service.create_entity(
+            session,
+            name="parent_hierarchy_role",
+            display_name="Parent Hierarchy Role",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="department",
+            parent_id=root.id,
+        )
+        child = await auth_instance.entity_service.create_entity(
+            session,
+            name="child_hierarchy_role",
+            display_name="Child Hierarchy Role",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="team",
+            parent_id=parent.id,
+        )
+
+        base_role = await auth_instance.role_service.create_role(
+            session=session,
+            name="base_role_hierarchy",
+            display_name="Base Role Hierarchy",
+            root_entity_id=root.id,
+            is_global=False,
+        )
+        hierarchy_role = await auth_instance.role_service.create_role(
+            session=session,
+            name="parent_hierarchy_role_local",
+            display_name="Parent Hierarchy Role Local",
+            scope_entity_id=parent.id,
+            scope=RoleScope.HIERARCHY,
+        )
+
+        user = await auth_instance.user_service.create_user(
+            session=session,
+            email="hierarchy-role-user@example.com",
+            password="TestPass123!",
+            first_name="Hierarchy",
+            last_name="Role",
+            is_superuser=False,
+        )
+        await auth_instance.membership_service.add_member(
+            session=session,
+            entity_id=child.id,
+            user_id=user.id,
+            role_ids=[base_role.id],
+        )
+        await session.commit()
+
+    resp = await client.patch(
+        f"/v1/memberships/{child.id}/{user.id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"role_ids": [str(hierarchy_role.id)]},
     )
     assert resp.status_code == 200
 

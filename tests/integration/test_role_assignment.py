@@ -20,6 +20,8 @@ from fastapi import FastAPI
 
 from outlabs_auth import SimpleRBAC
 from outlabs_auth.fastapi import register_exception_handlers
+from outlabs_auth.models.sql.entity import Entity
+from outlabs_auth.models.sql.enums import EntityClass
 from outlabs_auth.routers import (
     get_auth_router,
     get_permissions_router,
@@ -40,9 +42,11 @@ async def auth_instance(test_engine) -> SimpleRBAC:
         engine=test_engine,
         secret_key="test-secret-key-do-not-use-in-production-12345678",
         access_token_expire_minutes=60,
+        enable_token_cleanup=False,
     )
     await auth.initialize()
-    return auth
+    yield auth
+    await auth.shutdown()
 
 
 @pytest_asyncio.fixture
@@ -623,3 +627,49 @@ async def test_regular_user_cannot_list_other_user_roles(
         headers={"Authorization": f"Bearer {regular_user['token']}"},
     )
     assert resp.status_code == 403
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_simple_rbac_rejects_entity_local_role_assignment(
+    client: httpx.AsyncClient, admin_user: dict, auth_instance: SimpleRBAC
+):
+    """Entity-local roles should not be assignable in SimpleRBAC."""
+    async with auth_instance.get_session() as session:
+        entity = Entity(
+            name="local_scope",
+            display_name="Local Scope",
+            slug=f"local-scope-{uuid.uuid4().hex[:8]}",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
+        session.add(entity)
+        await session.flush()
+
+        role = await auth_instance.role_service.create_role(
+            session=session,
+            name=f"local-role-{uuid.uuid4().hex[:8]}",
+            display_name="Local Role",
+            scope_entity_id=entity.id,
+        )
+        await session.commit()
+
+    user_resp = await client.post(
+        "/v1/users/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "email": f"user-{uuid.uuid4().hex[:8]}@example.com",
+            "password": "UserPass123!",
+            "first_name": "Local",
+            "last_name": "User",
+        },
+    )
+    assert user_resp.status_code == 201
+    user_id = user_resp.json()["id"]
+
+    assign_resp = await client.post(
+        f"/v1/users/{user_id}/roles",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"role_id": str(role.id)},
+    )
+    assert assign_resp.status_code == 422

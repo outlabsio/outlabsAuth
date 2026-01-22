@@ -126,10 +126,6 @@ def get_roles_router(
         root_entity_id: Optional[UUID] = Query(
             None, description="Filter by root entity that owns the role"
         ),
-        for_entity_id: Optional[UUID] = Query(
-            None,
-            description="Get roles available for this entity (includes global + scoped to entity's root)",
-        ),
         session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
@@ -140,19 +136,13 @@ def get_roles_router(
     ):
         """List all roles with pagination and optional filtering."""
         try:
-            # If for_entity_id is provided, use the special method
-            if for_entity_id:
-                roles, total = await auth.role_service.get_roles_for_entity(
-                    session, entity_id=for_entity_id, page=page, limit=limit
-                )
-            else:
-                roles, total = await auth.role_service.list_roles(
-                    session,
-                    page=page,
-                    limit=limit,
-                    is_global=is_global,
-                    root_entity_id=root_entity_id,
-                )
+            roles, total = await auth.role_service.list_roles(
+                session,
+                page=page,
+                limit=limit,
+                is_global=is_global,
+                root_entity_id=root_entity_id,
+            )
 
             # Calculate total pages
             pages = (total + limit - 1) // limit if total > 0 else 0
@@ -173,6 +163,52 @@ def get_roles_router(
             raise
         except Exception as e:
             obs.log_500_error(e, page=page, limit=limit, is_global=is_global)
+            raise
+
+    @router.get(
+        "/entity/{entity_id}",
+        response_model=PaginatedResponse[RoleResponse],
+        summary="List roles for entity",
+        description=(
+            "List roles available for a specific entity (requires role:read_tree permission)"
+        ),
+    )
+    async def list_roles_for_entity(
+        entity_id: UUID,
+        page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+        limit: int = Query(20, ge=1, le=100, description="Results per page"),
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.require_tree_permission("role:read", "entity_id", source="path"),
+            )
+        ),
+    ):
+        """List roles available for a specific entity."""
+        try:
+            roles, total = await auth.role_service.get_roles_for_entity(
+                session, entity_id=entity_id, page=page, limit=limit
+            )
+
+            pages = (total + limit - 1) // limit if total > 0 else 0
+
+            items: List[RoleResponse] = []
+            for role in roles:
+                permission_names = await auth.role_service.get_role_permission_names(
+                    session, role.id
+                )
+                items.append(
+                    await _build_role_response(session, role, permission_names)
+                )
+
+            return PaginatedResponse(
+                items=items, total=total, page=page, limit=limit, pages=pages
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, entity_id=str(entity_id), page=page, limit=limit)
             raise
 
     @router.post(

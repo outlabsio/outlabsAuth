@@ -990,15 +990,16 @@ acme_agent_role = await role_service.create_role(
 
 ### Querying Available Roles
 
-Use the `for_entity_id` parameter to get roles available for a specific entity:
+Use the entity-scoped roles endpoint to get roles available for a specific entity:
 
 ```python
 # API: Get roles available for a specific entity
-GET /v1/roles/?for_entity_id={entity_id}
+GET /v1/roles/entity/{entity_id}
 
 # Returns:
 # - Global roles (is_global=True, root_entity_id=NULL)
 # - Roles scoped to the entity's root organization
+# - Entity-local roles available in the entity context
 ```
 
 ### Migration Considerations

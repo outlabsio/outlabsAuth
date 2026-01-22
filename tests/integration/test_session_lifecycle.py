@@ -39,9 +39,11 @@ async def auth_instance(test_engine) -> SimpleRBAC:
         secret_key="test-secret-key-do-not-use-in-production-12345678",
         access_token_expire_minutes=15,
         refresh_token_expire_days=7,
+        enable_token_cleanup=False,
     )
     await auth.initialize()
-    return auth
+    yield auth
+    await auth.shutdown()
 
 
 @pytest_asyncio.fixture
