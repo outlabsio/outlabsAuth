@@ -9,6 +9,11 @@ const props = defineProps<{
 
 const open = defineModel<boolean>("open", { default: false });
 
+// Validate entityId is provided
+const isValidEntity = computed(
+    () => !!props.entityId && props.entityId.length > 0,
+);
+
 const authStore = useAuthStore();
 
 // Get available permissions from auth config (dynamically loaded from backend)
@@ -98,6 +103,14 @@ const { mutate: createRole, isLoading: isSubmitting } = useCreateRoleMutation();
 const showPermissionsHelp = ref(false);
 
 async function handleSubmit() {
+    // Validate entityId before submission
+    if (!isValidEntity.value) {
+        console.error(
+            "❌ [EntityRoleCreateModal] Cannot create role: entityId is missing",
+        );
+        return;
+    }
+
     try {
         // Build payload for entity-local role
         const payload = {
@@ -120,10 +133,7 @@ async function handleSubmit() {
         // Close modal on success
         open.value = false;
     } catch (error) {
-        console.error(
-            "❌ [EntityRoleCreateModal] Error creating role:",
-            error,
-        );
+        console.error("❌ [EntityRoleCreateModal] Error creating role:", error);
         // Error handling is done by the mutation
     }
 }
@@ -137,7 +147,25 @@ async function handleSubmit() {
         fullscreen
     >
         <template #body>
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full">
+            <!-- Error state when entityId is missing -->
+            <div
+                v-if="!isValidEntity"
+                class="flex flex-col items-center justify-center py-12 space-y-4"
+            >
+                <UIcon
+                    name="i-lucide-alert-triangle"
+                    class="w-16 h-16 text-error"
+                />
+                <h3 class="text-lg font-semibold">Missing Entity Context</h3>
+                <p class="text-muted text-center max-w-md">
+                    Cannot create an entity-local role without selecting an
+                    entity first. Please select an entity from the tree and try
+                    again.
+                </p>
+                <UButton label="Close" @click="open = false" />
+            </div>
+
+            <div v-else class="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full">
                 <!-- Left Column: Basic Info -->
                 <div class="space-y-6">
                     <!-- Entity Context Banner -->
@@ -192,9 +220,7 @@ async function handleSubmit() {
                                                     <ul
                                                         class="list-disc list-inside pl-2 space-y-0.5"
                                                     >
-                                                        <li>
-                                                            "Team Lead"
-                                                        </li>
+                                                        <li>"Team Lead"</li>
                                                         <li>
                                                             "Content Reviewer"
                                                         </li>
@@ -235,7 +261,9 @@ async function handleSubmit() {
                                                     Role Name (Identifier)
                                                 </h4>
                                                 <p class="text-sm text-muted">
-                                                    Technical identifier used in code and APIs. Must be unique, lowercase.
+                                                    Technical identifier used in
+                                                    code and APIs. Must be
+                                                    unique, lowercase.
                                                 </p>
                                                 <UAlert
                                                     icon="i-lucide-lightbulb"
@@ -293,7 +321,8 @@ async function handleSubmit() {
                                             Permission Scope
                                         </h4>
                                         <p class="text-sm text-muted">
-                                            Controls where this role's permissions apply.
+                                            Controls where this role's
+                                            permissions apply.
                                         </p>
                                         <div
                                             class="space-y-2 mt-2 text-xs text-muted"
@@ -303,7 +332,8 @@ async function handleSubmit() {
                                                     This Entity Only
                                                 </p>
                                                 <p>
-                                                    Permissions only work within this specific entity.
+                                                    Permissions only work within
+                                                    this specific entity.
                                                 </p>
                                             </div>
                                             <div>
@@ -311,7 +341,9 @@ async function handleSubmit() {
                                                     Entity + Children
                                                 </p>
                                                 <p>
-                                                    Permissions apply to this entity and all its descendants.
+                                                    Permissions apply to this
+                                                    entity and all its
+                                                    descendants.
                                                 </p>
                                             </div>
                                         </div>
@@ -425,7 +457,9 @@ async function handleSubmit() {
                                         Auto-assign to new members
                                     </p>
                                     <p class="text-xs text-muted">
-                                        When enabled, this role will automatically be assigned to anyone who joins this entity.
+                                        When enabled, this role will
+                                        automatically be assigned to anyone who
+                                        joins this entity.
                                     </p>
                                 </div>
                             </div>
@@ -570,9 +604,13 @@ async function handleSubmit() {
         </template>
 
         <template #footer>
-            <div class="flex items-center justify-between w-full">
+            <div
+                v-if="isValidEntity"
+                class="flex items-center justify-between w-full"
+            >
                 <div class="text-sm text-muted">
-                    Role will be scoped to <span class="font-medium">{{ entityName }}</span>
+                    Role will be scoped to
+                    <span class="font-medium">{{ entityName }}</span>
                 </div>
                 <div class="flex justify-end gap-2">
                     <UButton
@@ -647,7 +685,8 @@ async function handleSubmit() {
                 <div>
                     <h4 class="font-semibold mb-2">Entity-Local Roles</h4>
                     <p class="text-sm text-muted mb-3">
-                        Entity-local roles are scoped to a specific entity and its context.
+                        Entity-local roles are scoped to a specific entity and
+                        its context.
                     </p>
                     <div class="space-y-3 text-sm">
                         <div class="p-3 bg-elevated rounded-lg">
@@ -659,8 +698,9 @@ async function handleSubmit() {
                                 Entity-Only Scope
                             </p>
                             <p class="text-muted text-xs">
-                                Permissions only apply when the user is acting within this specific entity.
-                                They won't have these permissions in child entities.
+                                Permissions only apply when the user is acting
+                                within this specific entity. They won't have
+                                these permissions in child entities.
                             </p>
                         </div>
                         <div class="p-3 bg-elevated rounded-lg">
@@ -672,8 +712,10 @@ async function handleSubmit() {
                                 Hierarchy Scope
                             </p>
                             <p class="text-muted text-xs">
-                                Permissions apply in this entity AND all descendant entities.
-                                This is useful for roles like "Department Manager" who need access to sub-teams.
+                                Permissions apply in this entity AND all
+                                descendant entities. This is useful for roles
+                                like "Department Manager" who need access to
+                                sub-teams.
                             </p>
                         </div>
                     </div>
@@ -684,7 +726,8 @@ async function handleSubmit() {
                 <div>
                     <h4 class="font-semibold mb-2">Auto-Assignment</h4>
                     <p class="text-sm text-muted mb-3">
-                        When enabled, new members joining this entity automatically receive this role.
+                        When enabled, new members joining this entity
+                        automatically receive this role.
                     </p>
                     <UAlert
                         icon="i-lucide-lightbulb"
@@ -693,10 +736,21 @@ async function handleSubmit() {
                         title="Example Use Cases"
                     >
                         <template #description>
-                            <ul class="list-disc list-inside text-xs mt-1 space-y-1">
-                                <li>A "Team Member" role that all team members should have</li>
-                                <li>A "Basic Access" role for department defaults</li>
-                                <li>A "Viewer" role for read-only access to entity resources</li>
+                            <ul
+                                class="list-disc list-inside text-xs mt-1 space-y-1"
+                            >
+                                <li>
+                                    A "Team Member" role that all team members
+                                    should have
+                                </li>
+                                <li>
+                                    A "Basic Access" role for department
+                                    defaults
+                                </li>
+                                <li>
+                                    A "Viewer" role for read-only access to
+                                    entity resources
+                                </li>
                             </ul>
                         </template>
                     </UAlert>
@@ -713,7 +767,8 @@ async function handleSubmit() {
                                 class="w-4 h-4 mt-0.5 text-success"
                             />
                             <span
-                                >Use "Entity-Only" scope for roles specific to this level</span
+                                >Use "Entity-Only" scope for roles specific to
+                                this level</span
                             >
                         </div>
                         <div class="flex items-start gap-2">
@@ -722,7 +777,8 @@ async function handleSubmit() {
                                 class="w-4 h-4 mt-0.5 text-success"
                             />
                             <span
-                                >Use "Hierarchy" scope for management roles that oversee children</span
+                                >Use "Hierarchy" scope for management roles that
+                                oversee children</span
                             >
                         </div>
                         <div class="flex items-start gap-2">
@@ -731,7 +787,8 @@ async function handleSubmit() {
                                 class="w-4 h-4 mt-0.5 text-success"
                             />
                             <span
-                                >Be careful with auto-assigned roles - they affect all new members</span
+                                >Be careful with auto-assigned roles - they
+                                affect all new members</span
                             >
                         </div>
                         <div class="flex items-start gap-2">
@@ -740,7 +797,8 @@ async function handleSubmit() {
                                 class="w-4 h-4 mt-0.5 text-success"
                             />
                             <span
-                                >Grant minimum permissions needed (least privilege)</span
+                                >Grant minimum permissions needed (least
+                                privilege)</span
                             >
                         </div>
                     </div>
