@@ -160,7 +160,9 @@ const filteredPermissions = computed(() => {
 
 <template>
   <UDashboardPanel id="permissions">
-    <template #header>
+    <!-- Default slot for edge-to-edge table -->
+    <div class="flex flex-col flex-1 min-h-0">
+      <!-- Header -->
       <UDashboardNavbar title="Permissions">
         <template #leading>
           <UDashboardSidebarCollapse />
@@ -175,10 +177,7 @@ const filteredPermissions = computed(() => {
           />
         </template>
       </UDashboardNavbar>
-    </template>
 
-    <!-- Default slot for edge-to-edge table -->
-    <div class="flex flex-col flex-1 min-h-0">
       <!-- Toolbar -->
       <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-default">
         <UInput

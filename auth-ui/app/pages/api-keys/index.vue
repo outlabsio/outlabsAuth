@@ -317,7 +317,9 @@ const stats = computed(() => {
 
 <template>
     <UDashboardPanel id="api-keys">
-        <template #header>
+        <!-- Default slot for edge-to-edge table -->
+        <div class="flex flex-col flex-1 min-h-0">
+            <!-- Header -->
             <UDashboardNavbar title="API Keys">
                 <template #leading>
                     <UDashboardSidebarCollapse />
@@ -332,10 +334,7 @@ const stats = computed(() => {
                     />
                 </template>
             </UDashboardNavbar>
-        </template>
 
-        <!-- Default slot for edge-to-edge table -->
-        <div class="flex flex-col flex-1 min-h-0">
             <!-- Stats Cards -->
             <div
                 class="grid grid-cols-1 md:grid-cols-4 gap-4 px-4 py-4 border-b border-default"

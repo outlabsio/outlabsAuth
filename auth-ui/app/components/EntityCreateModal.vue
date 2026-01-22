@@ -1,10 +1,19 @@
 <script setup lang="ts">
 import type { EntityClass } from "~/types/entity";
-import { useCreateEntityMutation } from "~/queries/entities";
+import { useQuery } from "@pinia/colada";
+import { entitiesQueries, useCreateEntityMutation } from "~/queries/entities";
+
+const props = defineProps<{
+    parentEntityId?: string;
+}>();
 
 const open = defineModel<boolean>("open", { default: false });
 
-const entitiesStore = useEntitiesStore();
+// Fetch all entities for parent selection dropdown
+const { data: entitiesData } = useQuery(
+    entitiesQueries.list({}, { page: 1, limit: 500 }),
+);
+
 const { mutateAsync: createEntity, isPending } = useCreateEntityMutation();
 
 // Form state
@@ -36,6 +45,16 @@ watch(
     },
 );
 
+// Set parent entity when modal opens with a parent context
+watch(
+    open,
+    (isOpen) => {
+        if (isOpen && props.parentEntityId) {
+            state.parent_entity_id = props.parentEntityId;
+        }
+    },
+);
+
 // Entity type options
 const entityTypes = computed(() => {
     if (state.entity_class === "structural") {
@@ -55,14 +74,42 @@ const entityTypes = computed(() => {
     }
 });
 
-// Parent entity options (root entities only)
-const parentOptions = computed(() => [
-    { label: "None (Root Entity)", value: undefined },
-    ...entitiesStore.rootEntities.map((e) => ({
-        label: `${e.name} (${e.entity_type})`,
-        value: e.id,
-    })),
-]);
+// Build indented parent options showing hierarchy
+const parentOptions = computed(() => {
+    const entities = entitiesData.value?.items || [];
+
+    // Build a map for quick lookup
+    const entityMap = new Map(entities.map((e) => [e.id, e]));
+
+    // Calculate depth for each entity
+    const getDepth = (entityId: string | undefined, depth = 0): number => {
+        if (!entityId) return depth;
+        const entity = entityMap.get(entityId);
+        if (!entity?.parent_entity_id) return depth;
+        return getDepth(entity.parent_entity_id, depth + 1);
+    };
+
+    // Sort entities by hierarchy (parents before children)
+    const sortedEntities = [...entities].sort((a, b) => {
+        const depthA = getDepth(a.id);
+        const depthB = getDepth(b.id);
+        if (depthA !== depthB) return depthA - depthB;
+        return a.name.localeCompare(b.name);
+    });
+
+    return [
+        { label: "None (Root Entity)", value: undefined },
+        ...sortedEntities.map((e) => {
+            const depth = getDepth(e.id);
+            const indent = "  ".repeat(depth);
+            const prefix = depth > 0 ? "└─ " : "";
+            return {
+                label: `${indent}${prefix}${e.display_name || e.name} (${e.entity_type})`,
+                value: e.id,
+            };
+        }),
+    ];
+});
 
 // Submit handler
 const showEntityHelp = ref(false);

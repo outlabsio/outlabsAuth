@@ -310,7 +310,9 @@ const columns: TableColumn<User>[] = [
 
 <template>
     <UDashboardPanel id="users">
-        <template #header>
+        <!-- Default slot for edge-to-edge table -->
+        <div class="flex flex-col flex-1 min-h-0">
+            <!-- Header -->
             <UDashboardNavbar title="Users">
                 <template #leading>
                     <UDashboardSidebarCollapse />
@@ -325,10 +327,7 @@ const columns: TableColumn<User>[] = [
                     />
                 </template>
             </UDashboardNavbar>
-        </template>
 
-        <!-- Default slot for edge-to-edge table -->
-        <div class="flex flex-col flex-1 min-h-0">
             <!-- Toolbar -->
             <div
                 class="flex flex-wrap items-center justify-between gap-1.5 px-4 py-3 border-b border-default"

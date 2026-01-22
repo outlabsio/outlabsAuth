@@ -1,60 +1,267 @@
 <script setup lang="ts">
-import type { TableColumn } from "@nuxt/ui";
-import type { Entity } from "~/types/entity";
+import type { TableColumn, TreeItem, BreadcrumbItem } from "@nuxt/ui";
+import type { Entity, EntityClass } from "~/types/entity";
 import { useQuery } from "@pinia/colada";
 import { entitiesQueries, useDeleteEntityMutation } from "~/queries/entities";
-import { UButton } from "#components";
+import { UButton, UBadge } from "#components";
 
-const search = ref("");
+// Resolve components for use in cell renderers
+const UButtonResolved = resolveComponent("UButton");
+const UBadgeResolved = resolveComponent("UBadge");
+const UIcon = resolveComponent("UIcon");
+
+// State
+const treeSearch = ref("");
 const showCreateModal = ref(false);
 const showEditModal = ref(false);
-const selectedEntityId = ref<string | null>(null);
+const editEntityId = ref<string | null>(null);
+const selectedTreeEntityId = ref<string | undefined>(undefined);
 
-// Open edit modal
-function openEditModal(entityId: string) {
-    selectedEntityId.value = entityId;
-    showEditModal.value = true;
-}
-
-// Reactive filters for query
-const filters = computed(() => {
-    const f: any = {};
-    if (search.value) {
-        f.search = search.value;
-    }
-    return f;
-});
-
-// Query entities with Pinia Colada
-const queryOptions = entitiesQueries.list(filters.value, {
-    page: 1,
-    limit: 100,
-});
-const { data: entitiesData, isLoading, error } = useQuery(queryOptions);
+// Query all entities
+const { data: entitiesData, isLoading } = useQuery(
+    entitiesQueries.list({}, { page: 1, limit: 500 }),
+);
 
 // Mutations
 const { mutate: deleteEntity } = useDeleteEntityMutation();
+
+// Get all entities as flat array
+const allEntities = computed(() => entitiesData.value?.items || []);
+
+// Entity tree node type
+interface EntityTreeNode extends Entity {
+    children: EntityTreeNode[];
+    depth: number;
+}
+
+// Build tree from flat entity list
+function buildTree(
+    entities: Entity[],
+    parentEntityId?: string | null,
+    depth = 0,
+): EntityTreeNode[] {
+    return entities
+        .filter((e) => {
+            // Handle null vs undefined - API returns null, code uses undefined
+            if (!parentEntityId) {
+                return !e.parent_entity_id; // matches both null and undefined
+            }
+            return e.parent_entity_id === parentEntityId;
+        })
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((entity) => ({
+            ...entity,
+            depth,
+            children: buildTree(entities, entity.id, depth + 1),
+        }));
+}
+
+// Entity tree computed
+const entityTree = computed(() => buildTree(allEntities.value));
+
+// Icon mapping for entity types
+function getEntityIcon(entityClass: EntityClass, entityType: string): string {
+    const icons: Record<string, string> = {
+        organization: "i-lucide-building-2",
+        department: "i-lucide-layout-grid",
+        team: "i-lucide-users",
+        office: "i-lucide-map-pin",
+        region: "i-lucide-globe",
+        division: "i-lucide-git-branch",
+        project: "i-lucide-folder",
+        access_group: "i-lucide-shield",
+        permission_group: "i-lucide-lock",
+        admin_group: "i-lucide-user-cog",
+    };
+    return (
+        icons[entityType] ||
+        (entityClass === "structural" ? "i-lucide-building" : "i-lucide-users")
+    );
+}
+
+// Transform entity tree to UTree items
+interface EntityTreeItem extends TreeItem {
+    id: string;
+    entity: EntityTreeNode;
+    children?: EntityTreeItem[];
+}
+
+function entitiesToTreeItems(nodes: EntityTreeNode[]): EntityTreeItem[] {
+    return nodes.map((node) => ({
+        id: node.id,
+        label: node.display_name || node.name,
+        icon: getEntityIcon(node.entity_class, node.entity_type),
+        defaultExpanded: node.depth === 0,
+        entity: node,
+        children: node.children?.length
+            ? entitiesToTreeItems(node.children)
+            : undefined,
+    }));
+}
+
+// Tree items computed
+const treeItems = computed(() => {
+    const items = entitiesToTreeItems(entityTree.value);
+
+    // Filter by search if search is active
+    if (treeSearch.value) {
+        const searchLower = treeSearch.value.toLowerCase();
+        // For search, flatten and filter
+        const filterTree = (items: EntityTreeItem[]): EntityTreeItem[] => {
+            return items.reduce((acc: EntityTreeItem[], item) => {
+                const matches =
+                    item.entity.name.toLowerCase().includes(searchLower) ||
+                    item.entity.display_name
+                        ?.toLowerCase()
+                        .includes(searchLower) ||
+                    item.entity.entity_type.toLowerCase().includes(searchLower);
+
+                const filteredChildren = item.children
+                    ? filterTree(item.children)
+                    : [];
+
+                if (matches || filteredChildren.length > 0) {
+                    acc.push({
+                        ...item,
+                        defaultExpanded: true,
+                        children:
+                            filteredChildren.length > 0
+                                ? filteredChildren
+                                : item.children,
+                    });
+                }
+
+                return acc;
+            }, []);
+        };
+        return filterTree(items);
+    }
+
+    return items;
+});
+
+// Selected entity from tree
+const selectedEntity = computed(() => {
+    if (!selectedTreeEntityId.value) return null;
+    return allEntities.value.find((e) => e.id === selectedTreeEntityId.value);
+});
+
+// Children of selected entity (or root entities if none selected)
+const childEntities = computed(() => {
+    if (!selectedTreeEntityId.value) {
+        return allEntities.value.filter((e) => !e.parent_entity_id);
+    }
+    return allEntities.value.filter(
+        (e) => e.parent_entity_id === selectedTreeEntityId.value,
+    );
+});
+
+// Build breadcrumb path to selected entity
+const breadcrumbItems = computed((): BreadcrumbItem[] => {
+    if (!selectedEntity.value) return [];
+
+    const path: BreadcrumbItem[] = [];
+    let current: Entity | undefined = selectedEntity.value;
+
+    // Build path from selected entity to root
+    while (current) {
+        path.unshift({
+            label: current.display_name || current.name,
+            icon: getEntityIcon(current.entity_class, current.entity_type),
+            onClick: () => {
+                selectedTreeEntityId.value = current?.id;
+            },
+        });
+        if (current.parent_entity_id) {
+            current = allEntities.value.find(
+                (e) => e.id === current!.parent_entity_id,
+            );
+        } else {
+            break;
+        }
+    }
+
+    // Add root item
+    path.unshift({
+        label: "All Entities",
+        icon: "i-lucide-home",
+        onClick: () => {
+            selectedTreeEntityId.value = undefined;
+        },
+    });
+
+    return path;
+});
+
+// Open edit modal
+function openEditModal(entityId: string) {
+    editEntityId.value = entityId;
+    showEditModal.value = true;
+}
+
+// Navigate into entity (show children)
+function navigateToEntity(entityId: string) {
+    selectedTreeEntityId.value = entityId;
+}
 
 // Table columns
 const columns: TableColumn<Entity>[] = [
     {
         accessorKey: "name",
         header: "Entity",
-        cell: ({ row }) =>
-            h("div", { class: "flex flex-col gap-1" }, [
-                h("p", { class: "font-medium" }, row.original.name),
-                h(
-                    "p",
-                    { class: "text-sm text-muted" },
-                    row.original.entity_type,
-                ),
-            ]),
+        cell: ({ row }) => {
+            const hasChildren = allEntities.value.some(
+                (e) => e.parent_entity_id === row.original.id,
+            );
+            return h("div", { class: "flex items-center gap-3" }, [
+                h(UIcon, {
+                    name: getEntityIcon(
+                        row.original.entity_class,
+                        row.original.entity_type,
+                    ),
+                    class: "w-5 h-5 text-muted shrink-0",
+                }),
+                h("div", { class: "flex flex-col gap-0.5" }, [
+                    h(
+                        "button",
+                        {
+                            class: "font-medium text-left hover:text-primary transition-colors",
+                            onClick: () => navigateToEntity(row.original.id),
+                        },
+                        [
+                            row.original.display_name || row.original.name,
+                            hasChildren &&
+                                h(UIcon, {
+                                    name: "i-lucide-chevron-right",
+                                    class: "w-4 h-4 inline ml-1 text-muted",
+                                }),
+                        ],
+                    ),
+                    h(
+                        "p",
+                        { class: "text-xs text-muted" },
+                        row.original.entity_type,
+                    ),
+                ]),
+            ]);
+        },
     },
     {
         accessorKey: "entity_class",
         header: "Class",
         cell: ({ row }) =>
-            h("span", { class: "text-sm" }, row.original.entity_class),
+            h(
+                UBadgeResolved,
+                {
+                    color:
+                        row.original.entity_class === "structural"
+                            ? "primary"
+                            : "success",
+                    variant: "subtle",
+                    size: "xs",
+                },
+                () => row.original.entity_class,
+            ),
     },
     {
         accessorKey: "description",
@@ -62,7 +269,7 @@ const columns: TableColumn<Entity>[] = [
         cell: ({ row }) =>
             h(
                 "span",
-                { class: "text-sm text-muted truncate max-w-md" },
+                { class: "text-sm text-muted truncate max-w-xs block" },
                 row.original.description || "-",
             ),
     },
@@ -70,15 +277,23 @@ const columns: TableColumn<Entity>[] = [
         id: "actions",
         header: "Actions",
         cell: ({ row }) =>
-            h("div", { class: "flex items-center gap-2" }, [
-                h(UButton, {
+            h("div", { class: "flex items-center gap-1" }, [
+                h(UButtonResolved, {
+                    icon: "i-lucide-folder-open",
+                    color: "neutral",
+                    variant: "ghost",
+                    size: "xs",
+                    title: "View children",
+                    onClick: () => navigateToEntity(row.original.id),
+                }),
+                h(UButtonResolved, {
                     icon: "i-lucide-pencil",
                     color: "neutral",
                     variant: "ghost",
                     size: "xs",
                     onClick: () => openEditModal(row.original.id),
                 }),
-                h(UButton, {
+                h(UButtonResolved, {
                     icon: "i-lucide-trash-2",
                     color: "error",
                     variant: "ghost",
@@ -86,7 +301,7 @@ const columns: TableColumn<Entity>[] = [
                     onClick: async () => {
                         if (
                             confirm(
-                                `Are you sure you want to delete entity "${row.original.name}"?`,
+                                `Are you sure you want to delete "${row.original.display_name || row.original.name}"?`,
                             )
                         ) {
                             await deleteEntity({
@@ -99,124 +314,230 @@ const columns: TableColumn<Entity>[] = [
             ]),
     },
 ];
+
+// Create child entity with pre-filled parent
+const createParentId = computed(() => selectedTreeEntityId.value || undefined);
 </script>
 
 <template>
-    <UDashboardPanel id="entities">
-        <template #header>
-            <UDashboardNavbar title="Entities">
-                <template #leading>
-                    <UDashboardSidebarCollapse />
-                </template>
+    <div class="flex flex-1">
+        <!-- Left Panel: Tree Navigator -->
+        <UDashboardPanel
+            id="entity-tree"
+            resizable
+            :min-size="15"
+            :default-size="22"
+            :max-size="35"
+        >
+            <div class="flex flex-col flex-1 min-h-0">
+                <!-- Header -->
+                <UDashboardNavbar title="Hierarchy">
+                    <template #leading>
+                        <UDashboardSidebarCollapse />
+                    </template>
+                    <template #right>
+                        <UButton
+                            icon="i-lucide-plus"
+                            size="xs"
+                            variant="ghost"
+                            color="neutral"
+                            @click="showCreateModal = true"
+                        />
+                    </template>
+                </UDashboardNavbar>
 
-                <template #right>
-                    <UButton
-                        icon="i-lucide-plus"
-                        label="Create Entity"
+                <!-- Search -->
+                <div class="px-3 py-2 border-b border-default">
+                    <UInput
+                        v-model="treeSearch"
+                        icon="i-lucide-search"
+                        placeholder="Search..."
+                        size="sm"
+                    />
+                </div>
+
+                <!-- Loading State -->
+                <div
+                    v-if="isLoading"
+                    class="flex-1 flex items-center justify-center"
+                >
+                    <UIcon
+                        name="i-lucide-loader-2"
+                        class="w-6 h-6 animate-spin text-primary"
+                    />
+                </div>
+
+                <!-- Tree -->
+                <div v-else class="flex-1 overflow-y-auto">
+                    <div v-if="treeItems.length === 0" class="p-4 text-center">
+                        <UIcon
+                            name="i-lucide-folder-tree"
+                            class="w-8 h-8 text-muted mb-2"
+                        />
+                        <p class="text-sm text-muted">No entities yet</p>
+                    </div>
+                    <UTree
+                        v-else
+                        v-model="selectedTreeEntityId"
+                        :items="treeItems"
+                        :get-key="(item: EntityTreeItem) => item.id"
                         color="primary"
-                        @click="showCreateModal = true"
-                    />
-                </template>
-            </UDashboardNavbar>
-        </template>
-
-        <!-- Default slot for edge-to-edge table -->
-        <div class="flex flex-col flex-1 min-h-0">
-            <!-- Toolbar -->
-            <div
-                class="flex items-center justify-between gap-2 px-4 py-3 border-b border-default"
-            >
-                <UInput
-                    v-model="search"
-                    icon="i-lucide-search"
-                    placeholder="Search entities..."
-                    class="w-64"
-                />
-
-                <div class="flex items-center gap-2">
-                    <UButton
-                        icon="i-lucide-filter"
-                        color="neutral"
-                        variant="ghost"
-                        label="Filter"
-                    />
-                    <UButton
-                        icon="i-lucide-download"
-                        color="neutral"
-                        variant="ghost"
-                        label="Export"
+                        size="sm"
                     />
                 </div>
             </div>
+        </UDashboardPanel>
 
-            <!-- Loading State -->
-            <div v-if="isLoading" class="flex-1 flex items-center justify-center">
-                <UIcon
-                    name="i-lucide-loader-2"
-                    class="w-8 h-8 animate-spin text-primary"
-                />
-            </div>
-
-            <!-- Error State -->
-            <div
-                v-else-if="error"
-                class="flex-1 flex flex-col items-center justify-center gap-4"
-            >
-                <UIcon
-                    name="i-lucide-alert-circle"
-                    class="w-12 h-12 text-error"
-                />
-                <p class="text-error">{{ error }}</p>
-            </div>
-
-            <!-- Table -->
-            <UTable
-                v-else
-                sticky
-                class="flex-1"
-                :columns="columns"
-                :data="entitiesData?.items || []"
-            >
-                <template #empty>
-                    <div
-                        class="flex flex-col items-center justify-center py-12 gap-4"
-                    >
-                        <UIcon
-                            name="i-lucide-building"
-                            class="w-12 h-12 text-muted"
-                        />
-                        <p class="text-muted">No entities found</p>
+        <!-- Right Panel: Entity Content -->
+        <UDashboardPanel id="entity-content">
+            <div class="flex flex-col flex-1 min-h-0">
+                <!-- Header -->
+                <UDashboardNavbar
+                    :title="
+                        selectedEntity?.display_name ||
+                        selectedEntity?.name ||
+                        'All Entities'
+                    "
+                >
+                    <template #right>
                         <UButton
                             icon="i-lucide-plus"
-                            label="Create your first entity"
-                            variant="outline"
+                            :label="
+                                selectedEntity ? 'Add Child' : 'Create Entity'
+                            "
+                            color="primary"
                             @click="showCreateModal = true"
                         />
-                    </div>
-                </template>
-            </UTable>
+                    </template>
+                </UDashboardNavbar>
 
-            <!-- Pagination -->
-            <div
-                v-if="entitiesData && entitiesData.pages > 1"
-                class="px-4 py-3 border-t border-default"
-            >
-                <UPagination
-                    :model-value="entitiesData.page"
-                    :total="entitiesData.total"
-                    :page-size="entitiesData.limit"
-                />
+                <!-- Breadcrumb -->
+                <div
+                    v-if="breadcrumbItems.length > 1"
+                    class="px-4 py-2 border-b border-default"
+                >
+                    <UBreadcrumb :items="breadcrumbItems" />
+                </div>
+
+                <!-- Entity Info Card (when entity selected) -->
+                <div
+                    v-if="selectedEntity"
+                    class="px-4 py-3 border-b border-default bg-muted/30"
+                >
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-3">
+                            <div
+                                class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center"
+                            >
+                                <UIcon
+                                    :name="
+                                        getEntityIcon(
+                                            selectedEntity.entity_class,
+                                            selectedEntity.entity_type,
+                                        )
+                                    "
+                                    class="w-5 h-5 text-primary"
+                                />
+                            </div>
+                            <div>
+                                <p class="font-medium">
+                                    {{
+                                        selectedEntity.display_name ||
+                                        selectedEntity.name
+                                    }}
+                                </p>
+                                <div class="flex items-center gap-2 text-xs">
+                                    <UBadge
+                                        :color="
+                                            selectedEntity.entity_class ===
+                                            'structural'
+                                                ? 'primary'
+                                                : 'success'
+                                        "
+                                        variant="subtle"
+                                        size="xs"
+                                    >
+                                        {{ selectedEntity.entity_class }}
+                                    </UBadge>
+                                    <span class="text-muted">{{
+                                        selectedEntity.entity_type
+                                    }}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <UButton
+                                icon="i-lucide-pencil"
+                                label="Edit"
+                                variant="outline"
+                                color="neutral"
+                                size="sm"
+                                @click="openEditModal(selectedEntity.id)"
+                            />
+                        </div>
+                    </div>
+                    <p
+                        v-if="selectedEntity.description"
+                        class="text-sm text-muted mt-2"
+                    >
+                        {{ selectedEntity.description }}
+                    </p>
+                </div>
+
+                <!-- Children Table -->
+                <UTable
+                    sticky
+                    class="flex-1"
+                    :columns="columns"
+                    :data="childEntities"
+                    :loading="isLoading"
+                >
+                    <template #empty>
+                        <div
+                            class="flex flex-col items-center justify-center py-12 gap-4"
+                        >
+                            <UIcon
+                                :name="
+                                    selectedEntity
+                                        ? 'i-lucide-folder-open'
+                                        : 'i-lucide-building'
+                                "
+                                class="w-12 h-12 text-muted"
+                            />
+                            <p class="text-muted">
+                                {{
+                                    selectedEntity
+                                        ? "No child entities"
+                                        : "No entities yet"
+                                }}
+                            </p>
+                            <UButton
+                                icon="i-lucide-plus"
+                                :label="
+                                    selectedEntity
+                                        ? 'Create child entity'
+                                        : 'Create your first entity'
+                                "
+                                variant="outline"
+                                @click="showCreateModal = true"
+                            />
+                        </div>
+                    </template>
+                </UTable>
             </div>
-        </div>
-    </UDashboardPanel>
+        </UDashboardPanel>
+    </div>
 
     <!-- Create Entity Modal -->
-    <EntityCreateModal v-model:open="showCreateModal" />
+    <EntityCreateModal
+        v-model:open="showCreateModal"
+        :parent-entity-id="createParentId"
+    />
 
     <!-- Edit Entity Modal -->
     <EntityUpdateModal
-        v-if="selectedEntityId"
+        v-if="editEntityId"
         v-model:open="showEditModal"
-        :entity-id="selectedEntityId"
+        :entity-id="editEntityId"
     />
 </template>

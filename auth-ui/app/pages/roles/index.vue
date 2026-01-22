@@ -109,7 +109,9 @@ const columns: TableColumn<Role>[] = [
 
 <template>
   <UDashboardPanel id="roles">
-    <template #header>
+    <!-- Default slot for edge-to-edge table -->
+    <div class="flex flex-col flex-1 min-h-0">
+      <!-- Header -->
       <UDashboardNavbar title="Roles">
         <template #leading>
           <UDashboardSidebarCollapse />
@@ -124,10 +126,7 @@ const columns: TableColumn<Role>[] = [
           />
         </template>
       </UDashboardNavbar>
-    </template>
 
-    <!-- Default slot for edge-to-edge table -->
-    <div class="flex flex-col flex-1 min-h-0">
       <!-- Toolbar -->
       <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-default">
         <UInput
