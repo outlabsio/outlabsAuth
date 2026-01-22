@@ -1088,6 +1088,200 @@ services:
 
 ---
 
+## Entity-Centric Management (EnterpriseRBAC)
+
+**Status**: ✅ Implemented (January 2026)
+**Related Decisions**: DD-053, DD-054
+
+The Entities page (`/entities`) serves as the **central hub for managing everything in entity context** - members, roles, and their relationships. This reflects the fact that in EnterpriseRBAC, everything is scoped to entities.
+
+### Page Layout
+
+The entities page uses a **two-panel layout**:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ [Tree Navigator]  │ [Entity Content Panel]                      │
+│                   │                                              │
+│ ▼ Acme Corp       │ Marketing Department                   [Edit]│
+│   ▼ Marketing ◄── │ STRUCTURAL · department                     │
+│     Social        ├──────────────────────────────────────────────│
+│     Content       │ [Children] [Members] [Roles]                 │
+│   ▶ Engineering   │                                              │
+│   ▶ Sales         │ [Tab Content Area]                          │
+│                   │                                              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Left Panel**: Hierarchical tree navigator with search
+**Right Panel**: Selected entity details with tabbed content
+
+### Three Tabs
+
+#### 1. Children Tab
+- Shows child entities of the selected entity
+- Create new child entities
+- Navigate into child entities
+- Edit/delete child entities
+
+#### 2. Members Tab
+- View all members of the selected entity
+- Add new members
+- **Edit member roles** - Click the shield icon to edit which roles a member has
+- Remove members
+
+**Member Role Editing** (`MemberRoleEditModal.vue`):
+- Shows available roles for this entity (global + org-scoped + entity-local)
+- Groups roles by type (Entity-Local, Inherited, Global)
+- Multi-select to assign/unassign roles
+- Saves changes to membership
+
+#### 3. Roles Tab
+- View all roles available at this entity
+- Three role sections with visual distinction:
+
+```
+┌─ Roles at Marketing ────────────────────────────────────────┐
+│                                                       [+Add]│
+│ Name             Perms  Scope           Auto-assigned       │
+│ team-editor        5    This entity only    ✓               │
+│ content-approver   3    Hierarchy           ✗               │
+└─────────────────────────────────────────────────────────────┘
+
+┌─ Inherited Roles ───────────────────────────────────────────┐
+│ org-viewer (from Acme Corp)                    12 perms     │
+└─────────────────────────────────────────────────────────────┘
+
+┌─ Global Roles ──────────────────────────────────────────────┐
+│ basic-user                                      4 perms     │
+│ api-consumer                                    2 perms     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Entity-Local Roles** (Editable):
+- Roles defined at this specific entity (`scope_entity_id = this entity`)
+- Can create, edit, and delete these roles
+- Shows scope badge (entity_only vs hierarchy)
+- Shows auto-assigned badge if applicable
+
+**Inherited Roles** (Read-only):
+- Roles from ancestor entities with `scope=hierarchy`
+- Shows which ancestor entity defines them
+- Available for member assignment but not editable here
+
+**Global Roles** (Read-only):
+- System-wide roles available everywhere
+- Available for member assignment but not editable here
+
+### Entity Role Creation (`EntityRoleCreateModal.vue`)
+
+When creating a role from the Roles tab, the modal is pre-configured for entity context:
+
+```
+┌─ Create Entity Role ────────────────────────────────────────┐
+│                                                             │
+│ ℹ️ Role for: Marketing Department                           │
+│    This role will only be available within this entity.     │
+│                                                             │
+│ ┌─ Basic Information ─────────────────────────────────────┐ │
+│ │ Display Name: [Team Lead        ]                       │ │
+│ │ Name:         [team_lead        ] (auto-generated)      │ │
+│ │ Description:  [                 ]                       │ │
+│ └─────────────────────────────────────────────────────────┘ │
+│                                                             │
+│ ┌─ Permission Scope ──────────────────────────────────────┐ │
+│ │ ┌──────────────┐  ┌──────────────┐                      │ │
+│ │ │ This Entity  │  │   Entity +   │                      │ │
+│ │ │    Only      │  │   Children   │                      │ │
+│ │ └──────────────┘  └──────────────┘                      │ │
+│ │                                                         │ │
+│ │ ℹ️ Entity-Only: Permissions only work within this       │ │
+│ │    specific entity. Not in child entities.              │ │
+│ └─────────────────────────────────────────────────────────┘ │
+│                                                             │
+│ ┌─ Auto-Assignment ───────────────────────────────────────┐ │
+│ │ [Toggle] Auto-assign to new members                     │ │
+│ │                                                         │ │
+│ │ ⚠️ When enabled, new members joining this entity will   │ │
+│ │    automatically receive this role.                     │ │
+│ └─────────────────────────────────────────────────────────┘ │
+│                                                             │
+│ ┌─ Permissions ───────────────────────────────────────────┐ │
+│ │ [Grid of permission checkboxes by category]             │ │
+│ └─────────────────────────────────────────────────────────┘ │
+│                                                             │
+│                           [Cancel] [Create Role]            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Features**:
+- Entity context banner shows which entity the role is for
+- **Scope selector**: "This Entity Only" vs "Entity + Children"
+  - `entity_only`: Permissions only apply in this entity
+  - `hierarchy`: Permissions cascade to all descendants
+- **Auto-assignment toggle**: Automatically assign to new members
+- **Permission grid**: Same as global role creation
+
+### Permission Scope Enforcement (DD-054)
+
+Entity-local roles have **scope enforcement** - their permissions only apply in entity context:
+
+| Role Type | No Entity Context | With Entity Context |
+|-----------|------------------|---------------------|
+| Global | ✅ Permissions apply | ✅ Permissions apply |
+| Org-scoped | ✅ Permissions apply | ✅ Permissions apply |
+| Entity-local | ❌ Permissions denied | ✅ Permissions apply |
+
+This prevents entity-scoped permissions from "leaking" globally.
+
+### Components
+
+| Component | Purpose |
+|-----------|---------|
+| `MemberRoleEditModal.vue` | Edit which roles a member has at an entity |
+| `EntityRoleCreateModal.vue` | Create entity-local roles with scope options |
+| `EntityMemberAddModal.vue` | Add members to an entity |
+| `EntityCreateModal.vue` | Create new entities |
+| `EntityUpdateModal.vue` | Edit entity details |
+
+### User Flows
+
+**Flow 1: Edit Member Roles**
+```
+1. Navigate to entity in tree
+2. Click "Members" tab
+3. Find member in table
+4. Click shield icon (Edit roles)
+5. Toggle roles on/off
+6. Click "Save"
+→ Member roles updated
+```
+
+**Flow 2: Create Entity-Local Role**
+```
+1. Navigate to entity in tree
+2. Click "Roles" tab
+3. Click "Create Role" button
+4. Fill in name, description
+5. Select scope (entity_only or hierarchy)
+6. Toggle auto-assign if desired
+7. Select permissions
+8. Click "Create"
+→ Role appears in "Roles at [Entity]" section
+```
+
+**Flow 3: View Role Availability**
+```
+1. Navigate to entity in tree
+2. Click "Roles" tab
+3. See three sections:
+   - Entity-Local: Roles defined HERE (editable)
+   - Inherited: Roles from parent with hierarchy scope (read-only)
+   - Global: System-wide roles (read-only)
+```
+
+---
+
 ## Customization
 
 ### Theming

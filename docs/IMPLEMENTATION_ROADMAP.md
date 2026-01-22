@@ -2402,6 +2402,14 @@ Track changes to the roadmap:
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-01-22 | **Entity-centric management UI** | Added Roles tab to entities page, MemberRoleEditModal, EntityRoleCreateModal for entity-local role management (supports DD-053) |
+| 2026-01-22 | **DD-054: Permission scope enforcement** | Fixed entity-local role permissions leaking globally; permissions now require entity context for entity-scoped roles |
+| 2026-01-22 | **DD-053: Entity-local roles** | Added scope_entity_id, scope (entity_only/hierarchy), is_auto_assigned fields to Role model |
+| 2026-01-22 | **DD-052: Entity type config CRUD** | Added entity type configuration editing to EntityUpdateModal |
+| 2026-01-22 | **DD-051: System configuration** | Added SystemConfig, ConfigService, require_superuser to AuthDeps |
+| 2026-01-22 | **DD-050: Role scoping to root entities** | Roles can be scoped to specific root entities (organizations) |
+| 2026-01-22 | **Entity hierarchy tree view** | Two-panel layout with tree navigator and tabbed content |
+| 2026-01-22 | **Observability stack** | Added portable per-project observability with Grafana, Prometheus, Loki |
 | 2025-01-14 | **v1.4 Architectural improvements** | Unified architecture with thin wrappers (DD-032), closure table for O(1) queries (DD-036), Redis counters for API keys (DD-033), Redis Pub/Sub cache invalidation (DD-037), temporary locks instead of revocation (DD-028), JWT service tokens (DD-034), single AuthDeps class (DD-035) |
 | 2025-01-14 | **Added API key system to core v1.0** | Integrated API key authentication, multi-source auth, and dependency patterns into Phases 2, 3, and 6; API keys now core feature for service-to-service authentication |
 | 2025-01-14 | Added authentication extensions (Phases 7-10) | Integrated OAuth, passwordless auth, notifications, and advanced features into main roadmap; total timeline now 15-16 weeks (6-7 weeks core + 9 weeks extensions) |
@@ -2410,5 +2418,5 @@ Track changes to the roadmap:
 
 ---
 
-**Last Updated**: 2025-01-14 (v1.4 - Architectural improvements: unified architecture, closure table, Redis patterns, JWT service tokens)
+**Last Updated**: 2026-01-22 (DD-050 to DD-054 implemented, entity-centric management UI complete)
 **Next Review**: End of Week 2 (after Milestone 1)
