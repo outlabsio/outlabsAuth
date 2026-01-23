@@ -12,8 +12,8 @@ import sys
 import questionary
 
 SERVICES = [
-    {"name": "simple      - SimpleRBAC API (port 8003)", "value": "simple"},
-    {"name": "enterprise  - EnterpriseRBAC API (port 8004)", "value": "enterprise"},
+    {"name": "simple      - SimpleRBAC API (port 8000)", "value": "simple"},
+    {"name": "enterprise  - EnterpriseRBAC API (port 8000)", "value": "enterprise"},
     {"name": "ui          - Admin UI (port 3000)", "value": "ui"},
     {
         "name": "obs         - Observability stack (Grafana, Prometheus, Loki)",
@@ -21,29 +21,55 @@ SERVICES = [
     },
 ]
 
+
+def kill_port_range(start_port: int, end_port: int):
+    """Kill all processes using ports in the given range."""
+    killed = []
+    for port in range(start_port, end_port + 1):
+        try:
+            # Get PIDs using this port
+            result = subprocess.run(
+                ["lsof", "-ti", f":{port}"],
+                capture_output=True,
+                text=True,
+            )
+            if result.stdout.strip():
+                pids = result.stdout.strip().split("\n")
+                for pid in pids:
+                    if pid:
+                        try:
+                            os.kill(int(pid), signal.SIGKILL)
+                            killed.append((port, pid))
+                        except (ProcessLookupError, PermissionError):
+                            pass
+        except Exception:
+            pass
+    return killed
+
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 OBSERVABILITY_DIR = os.path.join(ROOT, "observability")
 
 CONFIGS = {
     "simple": {
         "cwd": os.path.join(ROOT, "examples", "simple_rbac"),
-        "cmd": ["uv", "run", "uvicorn", "main:app", "--port", "8003", "--reload"],
+        "cmd": ["uv", "run", "uvicorn", "main:app", "--port", "8000", "--reload"],
         "env": {
             "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac",
             "SECRET_KEY": "simple-rbac-secret-key-change-in-production",
             "REDIS_URL": "redis://localhost:6380",
         },
-        "port": 8003,
+        "port": 8000,
     },
     "enterprise": {
         "cwd": os.path.join(ROOT, "examples", "enterprise_rbac"),
-        "cmd": ["uv", "run", "uvicorn", "main:app", "--port", "8004", "--reload"],
+        "cmd": ["uv", "run", "uvicorn", "main:app", "--port", "8000", "--reload"],
         "env": {
             "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac",
             "SECRET_KEY": "enterprise-rbac-secret-key-change-in-production",
             "REDIS_URL": "redis://localhost:6380",
         },
-        "port": 8004,
+        "port": 8000,
     },
     "ui": {
         "cwd": os.path.join(ROOT, "auth-ui"),
@@ -133,6 +159,14 @@ def main():
 
     if not foreground:
         return
+
+    # Kill any processes on UI ports before starting
+    if "ui" in foreground:
+        killed = kill_port_range(3000, 3009)
+        if killed:
+            print(
+                f"\n→ Killed processes on ports: {', '.join(str(p) for p, _ in killed)}"
+            )
 
     # Start foreground services
     processes = []

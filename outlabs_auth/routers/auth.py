@@ -9,6 +9,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from outlabs_auth.core.exceptions import OutlabsAuthException
 from outlabs_auth.observability import (
     ObservabilityContext,
     get_observability_dependency,
@@ -154,6 +155,9 @@ def get_auth_router(
             )
         except HTTPException:
             raise
+        except OutlabsAuthException:
+            # Let the exception handler convert this to proper HTTP response
+            raise
         except Exception as e:
             obs.log_500_error(e, email=data.email)
             raise
@@ -200,6 +204,9 @@ def get_auth_router(
 
         except HTTPException:
             raise
+        except OutlabsAuthException:
+            # Let the exception handler convert this to proper HTTP response
+            raise
         except Exception as e:
             obs.log_500_error(e, email=data.email)
             raise
@@ -227,6 +234,9 @@ def get_auth_router(
                 expires_in=tokens.expires_in,
             )
         except HTTPException:
+            raise
+        except OutlabsAuthException:
+            # Let the exception handler convert this to proper HTTP response
             raise
         except Exception as e:
             obs.log_500_error(e)
@@ -381,6 +391,9 @@ def get_auth_router(
             obs.log_event("password_reset", user_id=str(user.id))
 
         except HTTPException:
+            raise
+        except OutlabsAuthException:
+            # Let the exception handler convert this to proper HTTP response
             raise
         except Exception as e:
             obs.log_500_error(e)
