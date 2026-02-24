@@ -14,13 +14,133 @@ Usage:
 
 import asyncio
 import os
+import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 import click
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel
+
+_SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def normalize_database_url(url: str) -> str:
+    """Normalize postgres URLs to asyncpg SQLAlchemy format."""
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgresql://") and "+asyncpg" not in url:
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return url
+
+
+def _resolve_alembic_ini() -> Path:
+    """
+    Resolve alembic.ini from package repository root first, then cwd.
+
+    Library consumers may call run_migrations() from another project that also has
+    an alembic.ini; we must prefer OutlabsAuth's migration config.
+    """
+    package_root = Path(__file__).resolve().parents[1]
+    bundled_alembic = package_root / "alembic.ini"
+    if bundled_alembic.exists():
+        return bundled_alembic
+
+    cwd_alembic = Path.cwd() / "alembic.ini"
+    if cwd_alembic.exists():
+        return cwd_alembic
+
+    raise FileNotFoundError(
+        "alembic.ini not found. Expected in current working directory or package root."
+    )
+
+
+def _validate_schema_name(schema: Optional[str]) -> Optional[str]:
+    """Validate schema identifier before using it in SQL or env context."""
+    if schema is None:
+        return None
+    normalized = schema.strip()
+    if not normalized:
+        return None
+    if not _SCHEMA_RE.fullmatch(normalized):
+        raise ValueError("Schema name must match [A-Za-z_][A-Za-z0-9_]*")
+    return normalized
+
+
+def _resolve_script_location(alembic_ini: Path) -> Optional[str]:
+    """
+    Resolve absolute Alembic script_location for OutlabsAuth migrations.
+
+    When called from another project, relative script_location values can break.
+    """
+    package_root = Path(__file__).resolve().parents[1]
+    package_scripts = package_root / "outlabs_auth" / "migrations"
+    if package_scripts.exists():
+        return str(package_scripts)
+
+    fallback_scripts = alembic_ini.parent / "outlabs_auth" / "migrations"
+    if fallback_scripts.exists():
+        return str(fallback_scripts)
+
+    return None
+
+
+async def run_migrations(
+    database_url: str,
+    revision: str = "head",
+    schema: Optional[str] = None,
+) -> None:
+    """
+    Run Alembic migrations asynchronously.
+
+    This helper is safe to call from running event loops because Alembic runs
+    in a background thread.
+    """
+    from alembic import command
+    from alembic.config import Config
+
+    normalized_url = normalize_database_url(database_url)
+    target_schema = _validate_schema_name(schema)
+
+    if target_schema:
+        engine = create_async_engine(normalized_url, echo=False)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{target_schema}"'))
+        finally:
+            await engine.dispose()
+
+    def _upgrade() -> None:
+        alembic_ini = _resolve_alembic_ini()
+        alembic_cfg = Config(str(alembic_ini))
+        alembic_cfg.set_main_option("sqlalchemy.url", normalized_url)
+        script_location = _resolve_script_location(alembic_ini)
+        if script_location:
+            alembic_cfg.set_main_option("script_location", script_location)
+
+        previous_database_url = os.environ.get("DATABASE_URL")
+        previous_schema = os.environ.get("OUTLABS_AUTH_SCHEMA")
+        try:
+            os.environ["DATABASE_URL"] = normalized_url
+            if target_schema:
+                os.environ["OUTLABS_AUTH_SCHEMA"] = target_schema
+            else:
+                os.environ.pop("OUTLABS_AUTH_SCHEMA", None)
+            command.upgrade(alembic_cfg, revision)
+        finally:
+            if previous_database_url is None:
+                os.environ.pop("DATABASE_URL", None)
+            else:
+                os.environ["DATABASE_URL"] = previous_database_url
+
+            if previous_schema is None:
+                os.environ.pop("OUTLABS_AUTH_SCHEMA", None)
+            else:
+                os.environ["OUTLABS_AUTH_SCHEMA"] = previous_schema
+
+    await asyncio.to_thread(_upgrade)
 
 
 def get_database_url() -> str:
@@ -31,13 +151,7 @@ def get_database_url() -> str:
         click.echo("Example: postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth", err=True)
         sys.exit(1)
 
-    # Normalize URL for asyncpg
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql+asyncpg://", 1)
-    elif url.startswith("postgresql://") and "+asyncpg" not in url:
-        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-
-    return url
+    return normalize_database_url(url)
 
 
 @click.group()

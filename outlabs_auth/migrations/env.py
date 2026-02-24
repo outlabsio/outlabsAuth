@@ -6,10 +6,11 @@ Async-aware migration environment for PostgreSQL with SQLModel.
 
 import asyncio
 import os
+import re
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import pool, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlmodel import SQLModel
@@ -26,6 +27,7 @@ if config.config_file_name is not None:
 
 # SQLModel metadata for autogenerate support
 target_metadata = SQLModel.metadata
+_SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def get_url() -> str:
@@ -42,6 +44,18 @@ def get_url() -> str:
     return config.get_main_option("sqlalchemy.url")
 
 
+def get_target_schema() -> str | None:
+    """Get optional schema target for running migrations."""
+    raw_schema = os.environ.get("OUTLABS_AUTH_SCHEMA", "").strip()
+    if not raw_schema:
+        return None
+    if not _SCHEMA_RE.fullmatch(raw_schema):
+        raise RuntimeError(
+            "OUTLABS_AUTH_SCHEMA must match [A-Za-z_][A-Za-z0-9_]*"
+        )
+    return raw_schema
+
+
 def run_migrations_offline() -> None:
     """
     Run migrations in 'offline' mode.
@@ -50,12 +64,18 @@ def run_migrations_offline() -> None:
     Calls to context.execute() emit the given string to the script output.
     """
     url = get_url()
-    context.configure(
+    schema = get_target_schema()
+    configure_kwargs = dict(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
+    if schema:
+        configure_kwargs["include_schemas"] = True
+        configure_kwargs["version_table_schema"] = schema
+
+    context.configure(**configure_kwargs)
 
     with context.begin_transaction():
         context.run_migrations()
@@ -63,12 +83,21 @@ def run_migrations_offline() -> None:
 
 def do_run_migrations(connection: Connection) -> None:
     """Run migrations with the given connection."""
-    context.configure(
+    schema = get_target_schema()
+    if schema:
+        connection.execute(text(f'SET search_path TO "{schema}", public'))
+
+    configure_kwargs = dict(
         connection=connection,
         target_metadata=target_metadata,
         compare_type=True,
         compare_server_default=True,
     )
+    if schema:
+        configure_kwargs["include_schemas"] = True
+        configure_kwargs["version_table_schema"] = schema
+
+    context.configure(**configure_kwargs)
 
     with context.begin_transaction():
         context.run_migrations()

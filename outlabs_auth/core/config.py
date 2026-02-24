@@ -19,6 +19,10 @@ class AuthConfig(BaseModel):
         default=None,
         description="PostgreSQL connection URL (e.g., postgresql+asyncpg://user:pass@localhost:5432/dbname)",
     )
+    database_schema: Optional[str] = Field(
+        default=None,
+        description="Optional PostgreSQL schema for auth tables and migrations",
+    )
     auto_migrate: bool = Field(default=False, description="Automatically run database migrations on startup")
     echo_sql: bool = Field(default=False, description="Echo SQL statements to stdout (for debugging)")
 

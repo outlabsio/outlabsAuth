@@ -47,6 +47,7 @@ class OutlabsAuth:
         database_url: Optional[str] = None,
         engine: Optional[AsyncEngine] = None,
         auto_migrate: bool = False,
+        database_schema: Optional[str] = None,
         echo_sql: bool = False,
         # Core configuration
         secret_key: str = "",
@@ -95,6 +96,7 @@ class OutlabsAuth:
             database_url: PostgreSQL connection URL (required if engine not provided)
             engine: Existing SQLAlchemy AsyncEngine (optional, takes precedence over database_url)
             auto_migrate: Run Alembic migrations on startup
+            database_schema: Optional PostgreSQL schema for auth tables/migrations
             echo_sql: Echo SQL statements for debugging
             secret_key: JWT signing key (REQUIRED)
             algorithm: JWT algorithm (default: HS256)
@@ -141,6 +143,7 @@ class OutlabsAuth:
         # Create configuration object
         self.config = AuthConfig(
             database_url=database_url,
+            database_schema=database_schema,
             auto_migrate=auto_migrate,
             echo_sql=echo_sql,
             secret_key=secret_key,
@@ -254,9 +257,16 @@ class OutlabsAuth:
 
         # Create engine if not provided
         if self._engine is None:
+            connect_args: Dict[str, Any] = {}
+            if self.config.database_schema:
+                connect_args["server_settings"] = {
+                    "search_path": f"{self.config.database_schema},public"
+                }
+
             db_config = DatabaseConfig(
                 database_url=self.config.database_url,
                 echo=self.config.echo_sql,
+                connect_args=connect_args,
             )
             self._engine = create_engine(db_config)
 
@@ -304,7 +314,10 @@ class OutlabsAuth:
         """Run Alembic migrations to head."""
         from outlabs_auth.cli import run_migrations
 
-        await run_migrations(self.config.database_url)
+        await run_migrations(
+            self.config.database_url,
+            schema=self.config.database_schema,
+        )
 
     async def _init_services(self):
         """Initialize all services based on configuration."""
