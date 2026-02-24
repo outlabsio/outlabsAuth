@@ -27,6 +27,7 @@ class SocialAccount(BaseModel, table=True):
 
     Table: social_accounts
     """
+
     __tablename__ = "social_accounts"
     __table_args__ = (
         UniqueConstraint("provider", "provider_user_id", name="uq_social_provider_user"),
@@ -117,15 +118,17 @@ class SocialAccount(BaseModel, table=True):
 
     def update_tokens(
         self,
-        access_token: str,
+        access_token: Optional[str] = None,
         refresh_token: Optional[str] = None,
         expires_at: Optional[datetime] = None,
     ) -> None:
         """Update OAuth tokens."""
-        self.access_token = access_token
-        if refresh_token:
+        if access_token is not None:
+            self.access_token = access_token
+        if refresh_token is not None:
             self.refresh_token = refresh_token
-        self.token_expires_at = expires_at
+        if expires_at is not None:
+            self.token_expires_at = expires_at
         self.token_refreshed_at = datetime.now(timezone.utc)
 
     def record_login(self) -> None:

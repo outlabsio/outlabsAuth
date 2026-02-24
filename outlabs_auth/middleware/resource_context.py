@@ -24,6 +24,7 @@ class ResourceContextMiddleware(BaseHTTPMiddleware):
       - This does not grant permissions. It only provides context for ABAC.
       - Invalid JSON returns 400.
       - Size is capped to avoid abuse.
+      - Header parsing is disabled by default; enable with trust_client_header=True.
     """
 
     def __init__(
@@ -32,12 +33,17 @@ class ResourceContextMiddleware(BaseHTTPMiddleware):
         *,
         header_name: str = "X-Resource-Context",
         max_bytes: int = 8_192,
+        trust_client_header: bool = False,
     ):
         super().__init__(app)
         self.header_name = header_name
         self.max_bytes = max_bytes
+        self.trust_client_header = trust_client_header
 
     async def dispatch(self, request: Request, call_next) -> Response:
+        if not self.trust_client_header:
+            return await call_next(request)
+
         raw: Optional[str] = request.headers.get(self.header_name)
         if raw:
             if len(raw.encode("utf-8")) > self.max_bytes:

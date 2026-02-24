@@ -59,6 +59,11 @@ const availableEntities = computed(() => {
 
 // Selected entity for adding
 const selectedEntityId = ref("");
+const showRemoveMembershipConfirm = ref(false);
+const membershipToRemove = ref<{ entityId: string; entityName: string } | null>(
+    null,
+);
+const isRemovingMembership = ref(false);
 
 // Add to entity handler
 async function handleAddToEntity() {
@@ -85,15 +90,41 @@ async function handleAddToEntity() {
 async function handleRemoveFromEntity(entityId: string) {
     const entity = entitiesMap.value.get(entityId);
     const entityName = entity?.display_name || entity?.name || "this entity";
+    membershipToRemove.value = { entityId, entityName };
+    showRemoveMembershipConfirm.value = true;
+}
 
-    const confirmed = confirm(
-        `Are you sure you want to remove this user from "${entityName}"?`,
-    );
+function resetRemoveMembershipConfirm() {
+    if (isRemovingMembership.value) {
+        return;
+    }
+    showRemoveMembershipConfirm.value = false;
+    membershipToRemove.value = null;
+}
 
-    if (confirmed) {
-        await userStore.removeFromEntity(props.user.id, entityId);
+async function confirmRemoveMembership() {
+    if (!membershipToRemove.value) {
+        return;
+    }
+
+    isRemovingMembership.value = true;
+    try {
+        await userStore.removeFromEntity(
+            props.user.id,
+            membershipToRemove.value.entityId,
+        );
+        showRemoveMembershipConfirm.value = false;
+        membershipToRemove.value = null;
+    } finally {
+        isRemovingMembership.value = false;
     }
 }
+
+watch(showRemoveMembershipConfirm, (isOpen) => {
+    if (!isOpen && !isRemovingMembership.value) {
+        membershipToRemove.value = null;
+    }
+});
 
 // Format entity class for badge display
 function getEntityClassColor(
@@ -245,4 +276,19 @@ function getEntityClassColor(
             </UCard>
         </div>
     </div>
+
+    <ConfirmActionModal
+        v-model:open="showRemoveMembershipConfirm"
+        title="Remove membership?"
+        :description="
+            membershipToRemove
+                ? `This will remove the user from '${membershipToRemove.entityName}'.`
+                : 'This will remove this membership from the user.'
+        "
+        confirm-label="Remove membership"
+        confirm-color="warning"
+        :loading="isRemovingMembership"
+        @confirm="confirmRemoveMembership"
+        @cancel="resetRemoveMembershipConfirm"
+    />
 </template>

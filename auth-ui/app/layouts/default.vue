@@ -11,7 +11,7 @@ const baseLinks = [
     {
         label: "Dashboard",
         icon: "i-lucide-layout-dashboard",
-        to: "/",
+        to: "/dashboard",
         exact: true,
         onSelect: () => {
             open.value = false;
@@ -126,13 +126,13 @@ const links = computed(() => {
             {
                 label: "Documentation",
                 icon: "i-lucide-book-open",
-                to: "https://github.com/yourusername/outlabsauth",
+                to: "https://github.com/outlabs/outlabs-auth/tree/main/docs",
                 target: "_blank",
             },
             {
                 label: "Help & Support",
                 icon: "i-lucide-help-circle",
-                to: "https://github.com/yourusername/outlabsauth/issues",
+                to: "https://github.com/outlabs/outlabs-auth/discussions",
                 target: "_blank",
             },
         ],

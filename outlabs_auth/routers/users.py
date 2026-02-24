@@ -73,6 +73,55 @@ def get_users_router(
     """
     router = APIRouter(prefix=prefix, tags=tags or ["users"])
 
+    async def _get_actor_user_or_401(session: AsyncSession, actor_user_id: Optional[str]) -> Any:
+        if not actor_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated",
+            )
+        try:
+            actor_uuid = UUID(str(actor_user_id))
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid user identity",
+            )
+
+        actor_user = await auth.user_service.get_user_by_id(session, actor_uuid)
+        if not actor_user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found",
+            )
+        return actor_user
+
+    def _is_tenant_scoped(actor_user: Any) -> bool:
+        return bool(
+            auth.config.multi_tenant and actor_user is not None and not getattr(actor_user, "is_superuser", False)
+        )
+
+    async def _get_target_user_or_404(
+        session: AsyncSession,
+        target_user_id: UUID,
+        actor_user: Any,
+    ) -> Any:
+        target_user = await auth.user_service.get_user_by_id(session, target_user_id)
+        if not target_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
+
+        if _is_tenant_scoped(actor_user):
+            if target_user.tenant_id != actor_user.tenant_id:
+                # Use 404 to avoid cross-tenant user enumeration.
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User not found",
+                )
+
+        return target_user
+
     @router.post(
         "/",
         response_model=UserResponse,
@@ -99,6 +148,22 @@ def get_users_router(
         Triggers on_after_register hook.
         """
         try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+
+            if data.is_superuser and not actor_user.is_superuser:
+                has_superuser_create_permission = await auth.permission_service.check_permission(
+                    session,
+                    user_id=UUID(str(actor_user.id)),
+                    permission="user:create_superuser",
+                )
+                if not has_superuser_create_permission:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Only superusers or users with user:create_superuser can create superusers",
+                    )
+
+            tenant_id = actor_user.tenant_id if _is_tenant_scoped(actor_user) else None
+
             user = await auth.user_service.create_user(
                 session,
                 email=data.email,
@@ -106,9 +171,8 @@ def get_users_router(
                 first_name=data.first_name,
                 last_name=data.last_name,
                 is_superuser=data.is_superuser,
-                root_entity_id=UUID(data.root_entity_id)
-                if data.root_entity_id
-                else None,
+                tenant_id=tenant_id,
+                root_entity_id=UUID(data.root_entity_id) if data.root_entity_id else None,
             )
 
             # Trigger on_after_register hook
@@ -136,9 +200,7 @@ def get_users_router(
                 status=_get_status_value(user.status),
                 email_verified=user.email_verified,
                 is_superuser=user.is_superuser,
-                root_entity_id=str(user.root_entity_id)
-                if user.root_entity_id
-                else None,
+                root_entity_id=str(user.root_entity_id) if user.root_entity_id else None,
                 root_entity_name=root_entity_name,
             )
         except HTTPException:
@@ -156,9 +218,7 @@ def get_users_router(
     async def list_users(
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
         limit: int = Query(20, ge=1, le=100, description="Results per page"),
-        search: Optional[str] = Query(
-            None, description="Search by email, first name, or last name"
-        ),
+        search: Optional[str] = Query(None, description="Search by email, first name, or last name"),
         session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
@@ -174,10 +234,13 @@ def get_users_router(
         Returns paginated results with total count.
         """
         try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            tenant_id = actor_user.tenant_id if _is_tenant_scoped(actor_user) else None
+
             if search:
                 # Use search functionality (no pagination for search)
                 all_users = await auth.user_service.search_users(
-                    session, search_term=search, limit=1000
+                    session, search_term=search, limit=1000, tenant_id=tenant_id
                 )
 
                 # Manual pagination of search results
@@ -187,9 +250,7 @@ def get_users_router(
                 users = all_users[start_idx:end_idx]
             else:
                 # Use standard list with pagination
-                users, total = await auth.user_service.list_users(
-                    session, page=page, limit=limit
-                )
+                users, total = await auth.user_service.list_users(session, page=page, limit=limit, tenant_id=tenant_id)
 
             # Calculate total pages
             pages = (total + limit - 1) // limit if total > 0 else 0
@@ -208,9 +269,7 @@ def get_users_router(
                 for user in users
             ]
 
-            return PaginatedResponse(
-                items=items, total=total, page=page, limit=limit, pages=pages
-            )
+            return PaginatedResponse(items=items, total=total, page=page, limit=limit, pages=pages)
 
         except Exception as e:
             obs.log_500_error(e, page=page, limit=limit, search=search)
@@ -315,9 +374,7 @@ def get_users_router(
 
             # Log password change
             if auth.observability:
-                auth.observability.logger.info(
-                    "user_password_changed", user_id=obs.user_id
-                )
+                auth.observability.logger.info("user_password_changed", user_id=obs.user_id)
 
         except HTTPException:
             raise
@@ -345,11 +402,8 @@ def get_users_router(
     ):
         """Get user by ID (admin only)."""
         try:
-            user = await auth.user_service.get_user_by_id(session, user_id)
-            if not user:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
-                )
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            user = await _get_target_user_or_404(session, user_id, actor_user)
 
             return UserResponse(
                 id=str(user.id),
@@ -389,6 +443,9 @@ def get_users_router(
         Triggers on_after_update hook.
         """
         try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
+
             update_data = data.model_dump(exclude_unset=True)
             user = await auth.user_service.update_user_fields(
                 session,
@@ -440,6 +497,9 @@ def get_users_router(
         Triggers password_changed notification.
         """
         try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
+
             # Change user password using user service
             await auth.user_service.change_password(
                 session,
@@ -449,9 +509,7 @@ def get_users_router(
 
             # Log admin password reset
             if auth.observability:
-                auth.observability.logger.info(
-                    "admin_password_reset", target_user_id=user_id, reset_by=obs.user_id
-                )
+                auth.observability.logger.info("admin_password_reset", target_user_id=user_id, reset_by=obs.user_id)
 
         except HTTPException:
             raise
@@ -490,6 +548,9 @@ def get_users_router(
         Use DELETE /{user_id} for soft deletion.
         """
         try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
+
             # Convert string status to enum
             try:
                 new_status = UserStatus(data.status)
@@ -512,9 +573,7 @@ def get_users_router(
                 from datetime import datetime as dt
 
                 try:
-                    suspended_until = dt.fromisoformat(
-                        data.suspended_until.replace("Z", "+00:00")
-                    )
+                    suspended_until = dt.fromisoformat(data.suspended_until.replace("Z", "+00:00"))
                 except ValueError:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
@@ -577,25 +636,18 @@ def get_users_router(
         Triggers on_before_delete and on_after_delete hooks.
         """
         try:
-            user = await auth.user_service.get_user_by_id(session, user_id)
-            if not user:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
-                )
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            user = await _get_target_user_or_404(session, user_id, actor_user)
 
             await auth.user_service.on_before_delete(user, None)
             deleted = await auth.user_service.delete_user(session, user_id)
             if not deleted:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
-                )
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
             await auth.user_service.on_after_delete(user, None)
 
             # Log event
             if auth.observability:
-                auth.observability.logger.info(
-                    "user_deleted", target_user_id=user_id, deleted_by=obs.user_id
-                )
+                auth.observability.logger.info("user_deleted", target_user_id=user_id, deleted_by=obs.user_id)
         except HTTPException:
             raise
         except Exception as e:
@@ -616,9 +668,7 @@ def get_users_router(
     )
     async def get_user_roles(
         user_id: UUID,
-        include_inactive: bool = Query(
-            False, description="Include inactive memberships"
-        ),
+        include_inactive: bool = Query(False, description="Include inactive memberships"),
         session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
@@ -633,23 +683,14 @@ def get_users_router(
         Returns list of roles with their details. Optionally includes inactive memberships.
         """
         try:
-            # Validate user exists
-            user = await auth.user_service.get_user_by_id(session, user_id)
-            if not user:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
-                )
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
 
             # Get roles using role service
-            roles = await auth.role_service.get_user_roles(
-                session, user_id=user_id, include_inactive=include_inactive
-            )
+            roles = await auth.role_service.get_user_roles(session, user_id=user_id, include_inactive=include_inactive)
 
             # Convert to response schema
-            return [
-                RoleResponse(**role.model_dump(mode="json", exclude={"entity"}))
-                for role in roles
-            ]
+            return [RoleResponse(**role.model_dump(mode="json", exclude={"entity"})) for role in roles]
 
         except HTTPException:
             raise
@@ -681,19 +722,13 @@ def get_users_router(
         Creates a new role membership with optional time-based validity.
         """
         try:
-            # Validate user exists
-            user = await auth.user_service.get_user_by_id(session, user_id)
-            if not user:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
-                )
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
 
             # Validate role exists
             role = await auth.role_service.get_role_by_id(session, UUID(data.role_id))
             if not role:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="Role not found"
-                )
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
 
             # Assign role
             membership = await auth.role_service.assign_role_to_user(
@@ -719,16 +754,12 @@ def get_users_router(
                 user_id=str(membership.user_id),
                 role_id=str(membership.role_id),
                 assigned_at=membership.assigned_at,
-                assigned_by_id=str(membership.assigned_by_id)
-                if membership.assigned_by_id
-                else None,
+                assigned_by_id=str(membership.assigned_by_id) if membership.assigned_by_id else None,
                 valid_from=membership.valid_from,
                 valid_until=membership.valid_until,
                 status=membership.status,
                 revoked_at=membership.revoked_at,
-                revoked_by_id=str(membership.revoked_by_id)
-                if membership.revoked_by_id
-                else None,
+                revoked_by_id=str(membership.revoked_by_id) if membership.revoked_by_id else None,
                 is_currently_valid=membership.is_currently_valid(),
                 can_grant_permissions=membership.can_grant_permissions(),
             )
@@ -762,12 +793,8 @@ def get_users_router(
         Soft deletes the role membership (changes status to REVOKED).
         """
         try:
-            # Validate user exists
-            user = await auth.user_service.get_user_by_id(session, user_id)
-            if not user:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
-                )
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
 
             # Revoke role
             success = await auth.role_service.revoke_role_from_user(
@@ -822,12 +849,8 @@ def get_users_router(
         Returns detailed permission objects with information about which role granted each permission.
         """
         try:
-            # Validate user exists
-            user = await auth.user_service.get_user_by_id(session, user_id)
-            if not user:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
-                )
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
 
             # Get user's roles
             roles = await auth.role_service.get_user_roles(session, user_id=user_id)
@@ -838,11 +861,7 @@ def get_users_router(
 
             for role in roles:
                 # Get permissions for this role
-                role_permissions = (
-                    await auth.permission_service.get_permissions_for_role(
-                        session, role.id
-                    )
-                )
+                role_permissions = await auth.permission_service.get_permissions_for_role(session, role.id)
                 for perm in role_permissions:
                     if perm.name not in seen_permissions:
                         permission_sources.append(

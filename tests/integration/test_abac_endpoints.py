@@ -26,7 +26,7 @@ async def auth(test_engine) -> OutlabsAuth:
 @pytest_asyncio.fixture
 async def app(auth: OutlabsAuth) -> FastAPI:
     app = FastAPI()
-    app.add_middleware(ResourceContextMiddleware)
+    app.add_middleware(ResourceContextMiddleware, trust_client_header=True)
     app.include_router(get_roles_router(auth, prefix="/v1/roles"))
     app.include_router(get_permissions_router(auth, prefix="/v1/permissions"))
     return app
@@ -194,9 +194,7 @@ async def test_abac_role_condition_allows_when_env_matches(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_abac_resource_context_from_header(
-    auth: OutlabsAuth, client: httpx.AsyncClient, abac_setup: dict
-):
+async def test_abac_resource_context_from_header(auth: OutlabsAuth, client: httpx.AsyncClient, abac_setup: dict):
     admin_token = abac_setup["admin_token"]
     actor_token = abac_setup["actor_token"]
     role_id = abac_setup["role_id"]

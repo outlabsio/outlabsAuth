@@ -147,9 +147,7 @@ async def test_admin_can_create_api_key(client: httpx.AsyncClient, admin_user: d
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_api_key_only_returned_on_creation(
-    client: httpx.AsyncClient, admin_user: dict
-):
+async def test_api_key_only_returned_on_creation(client: httpx.AsyncClient, admin_user: dict):
     """Test that full API key is only returned on creation, not on subsequent requests."""
     # Create key
     create_resp = await client.post(
@@ -195,9 +193,7 @@ async def test_admin_can_list_api_keys(client: httpx.AsyncClient, admin_user: di
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_admin_can_get_single_api_key(
-    client: httpx.AsyncClient, admin_user: dict
-):
+async def test_admin_can_get_single_api_key(client: httpx.AsyncClient, admin_user: dict):
     """Test that admin can get a single API key by ID."""
     # Create key
     create_resp = await client.post(
@@ -249,6 +245,36 @@ async def test_admin_can_delete_api_key(client: httpx.AsyncClient, admin_user: d
         assert get_resp.status_code == 404
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_admin_can_rotate_api_key(client: httpx.AsyncClient, admin_user: dict, auth_instance: SimpleRBAC):
+    """Test API key rotation returns a fresh key and revokes the old key."""
+    create_resp = await client.post(
+        "/v1/api-keys/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"name": f"rotatable-{uuid.uuid4().hex[:8]}"},
+    )
+    assert create_resp.status_code == 201
+    old_key = create_resp.json()["api_key"]
+    key_id = create_resp.json()["id"]
+
+    rotate_resp = await client.post(
+        f"/v1/api-keys/{key_id}/rotate",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert rotate_resp.status_code == 200
+    rotated = rotate_resp.json()
+    assert rotated["id"] != key_id
+    assert rotated["api_key"] != old_key
+    assert rotated["api_key"].startswith(rotated["prefix"])
+
+    async with auth_instance.get_session() as session:
+        old_verified, _ = await auth_instance.api_key_service.verify_api_key(session, old_key)
+        new_verified, _ = await auth_instance.api_key_service.verify_api_key(session, rotated["api_key"])
+        assert old_verified is None
+        assert new_verified is not None
+
+
 # ============================================================================
 # API Key Ownership Tests
 # ============================================================================
@@ -256,9 +282,7 @@ async def test_admin_can_delete_api_key(client: httpx.AsyncClient, admin_user: d
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_user_can_see_own_api_keys(
-    client: httpx.AsyncClient, regular_user: dict, auth_instance: SimpleRBAC
-):
+async def test_user_can_see_own_api_keys(client: httpx.AsyncClient, regular_user: dict, auth_instance: SimpleRBAC):
     """Test that user can see their own API keys."""
     # Create key via service for the regular user
     async with auth_instance.get_session() as session:
@@ -334,6 +358,30 @@ async def test_user_cannot_delete_other_user_key(
     ]  # Forbidden or Not Found (if filtered by ownership)
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_api_key_header_authentication_works(
+    client: httpx.AsyncClient,
+    admin_user: dict,
+    auth_instance: SimpleRBAC,
+):
+    """Test authenticated access via X-API-Key without Bearer token."""
+    async with auth_instance.get_session() as session:
+        full_key, _ = await auth_instance.api_key_service.create_api_key(
+            session,
+            owner_id=uuid.UUID(admin_user["id"]),
+            name=f"header-auth-{uuid.uuid4().hex[:8]}",
+        )
+        await session.commit()
+
+    resp = await client.get(
+        "/v1/api-keys/",
+        headers={"X-API-Key": full_key},
+    )
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
+
+
 # ============================================================================
 # API Key Security Features
 # ============================================================================
@@ -357,9 +405,7 @@ async def test_api_key_has_prefix(client: httpx.AsyncClient, admin_user: dict):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_api_key_prefix_starts_with_sk(
-    client: httpx.AsyncClient, admin_user: dict
-):
+async def test_api_key_prefix_starts_with_sk(client: httpx.AsyncClient, admin_user: dict):
     """Test that API key prefix starts with 'sk_' convention."""
     resp = await client.post(
         "/v1/api-keys/",
@@ -428,9 +474,7 @@ async def test_service_create_api_key(auth_instance: SimpleRBAC, admin_user: dic
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_service_create_api_key_with_expiration(
-    auth_instance: SimpleRBAC, admin_user: dict
-):
+async def test_service_create_api_key_with_expiration(auth_instance: SimpleRBAC, admin_user: dict):
     """Test creating API key with expiration via service."""
     async with auth_instance.get_session() as session:
         full_key, key_model = await auth_instance.api_key_service.create_api_key(
@@ -461,18 +505,14 @@ async def test_service_verify_api_key(auth_instance: SimpleRBAC, admin_user: dic
         await session.commit()
 
         # Verify key - returns tuple (api_key, remaining_rate_limit)
-        verified_key, remaining = await auth_instance.api_key_service.verify_api_key(
-            session, full_key
-        )
+        verified_key, remaining = await auth_instance.api_key_service.verify_api_key(session, full_key)
         assert verified_key is not None
         assert verified_key.id == key_model.id
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_service_verify_api_key_enforces_scope(
-    auth_instance: SimpleRBAC, admin_user: dict
-):
+async def test_service_verify_api_key_enforces_scope(auth_instance: SimpleRBAC, admin_user: dict):
     """Verify API key rejects missing required scope."""
     async with auth_instance.get_session() as session:
         full_key, _ = await auth_instance.api_key_service.create_api_key(
@@ -491,9 +531,7 @@ async def test_service_verify_api_key_enforces_scope(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_service_verify_api_key_enforces_entity_access(
-    auth_instance: SimpleRBAC, admin_user: dict
-):
+async def test_service_verify_api_key_enforces_entity_access(auth_instance: SimpleRBAC, admin_user: dict):
     """Verify API key rejects access to non-matching entity."""
     async with auth_instance.get_session() as session:
         entity_a = Entity(
@@ -522,9 +560,7 @@ async def test_service_verify_api_key_enforces_entity_access(
         )
         await session.commit()
 
-        verified_key, _ = await auth_instance.api_key_service.verify_api_key(
-            session, full_key, entity_id=entity_b.id
-        )
+        verified_key, _ = await auth_instance.api_key_service.verify_api_key(session, full_key, entity_id=entity_b.id)
         assert verified_key is None
 
 
@@ -562,17 +598,13 @@ async def test_service_revoke_api_key(auth_instance: SimpleRBAC, admin_user: dic
         await session.commit()
 
         # Verify key no longer works
-        invalid, _ = await auth_instance.api_key_service.verify_api_key(
-            session, full_key
-        )
+        invalid, _ = await auth_instance.api_key_service.verify_api_key(session, full_key)
         assert invalid is None
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_service_expired_key_verification_fails(
-    auth_instance: SimpleRBAC, admin_user: dict
-):
+async def test_service_expired_key_verification_fails(auth_instance: SimpleRBAC, admin_user: dict):
     """Test that expired API key fails verification."""
     async with auth_instance.get_session() as session:
         # Create key
@@ -586,9 +618,7 @@ async def test_service_expired_key_verification_fails(
         await session.commit()
 
         # Verify - should fail because expired - returns tuple (api_key, remaining)
-        verified, _ = await auth_instance.api_key_service.verify_api_key(
-            session, full_key
-        )
+        verified, _ = await auth_instance.api_key_service.verify_api_key(session, full_key)
         assert verified is None
 
 

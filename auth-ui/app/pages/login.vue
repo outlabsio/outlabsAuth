@@ -13,12 +13,9 @@
                 @submit="onSubmit"
             >
                 <template #description>
-                    <p class="text-sm text-gray-600 dark:text-gray-400">
-                        Sign in with your credentials. Try:
-                        <code
-                            class="text-xs bg-neutral-100 dark:bg-neutral-800 px-1 py-0.5 rounded"
-                            >newuser@example.com</code
-                        >
+                    <p class="text-sm text-muted">
+                        Sign in with the credentials provided by your
+                        organization administrator.
                     </p>
                 </template>
 
@@ -116,7 +113,7 @@ const onSubmit = async (event: FormSubmitEvent<LoginSchema>) => {
         await router.push(redirect || "/dashboard");
     } catch (error: any) {
         console.error("Login error:", error);
-        errorMessage.value = error.message || "Invalid email address";
+        errorMessage.value = error.message || "Invalid email or password";
     } finally {
         isLoading.value = false;
     }

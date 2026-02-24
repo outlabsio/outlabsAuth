@@ -177,6 +177,100 @@ async def user_with_read_permission(auth_instance: EnterpriseRBAC) -> dict:
 
 
 @pytest_asyncio.fixture
+async def user_with_create_permission(auth_instance: EnterpriseRBAC) -> dict:
+    """Create user with user:create permission."""
+    async with auth_instance.get_session() as session:
+        perm = await auth_instance.permission_service.create_permission(
+            session,
+            name="user:create",
+            display_name="User Create",
+            description="Can create users",
+        )
+
+        role = await auth_instance.role_service.create_role(
+            session,
+            name="user_creator",
+            display_name="User Creator",
+            description="Can create users",
+        )
+        await auth_instance.role_service.add_permissions(session, role.id, [perm.id])
+
+        user = await auth_instance.user_service.create_user(
+            session=session,
+            email="creator@example.com",
+            password="TestPass123!",
+            first_name="User",
+            last_name="Creator",
+            is_superuser=False,
+        )
+        await auth_instance.role_service.assign_role_to_user(session, user.id, role.id)
+        await session.commit()
+
+        token = create_access_token(
+            {"sub": str(user.id)},
+            secret_key=auth_instance.config.secret_key,
+            algorithm=auth_instance.config.algorithm,
+        )
+
+        return {
+            "id": str(user.id),
+            "email": user.email,
+            "token": token,
+            "role_id": str(role.id),
+        }
+
+
+@pytest_asyncio.fixture
+async def user_with_create_superuser_permission(auth_instance: EnterpriseRBAC) -> dict:
+    """Create user with both user:create and user:create_superuser permissions."""
+    async with auth_instance.get_session() as session:
+        create_perm = await auth_instance.permission_service.create_permission(
+            session,
+            name="user:create",
+            display_name="User Create",
+            description="Can create users",
+        )
+        superuser_create_perm = await auth_instance.permission_service.create_permission(
+            session,
+            name="user:create_superuser",
+            display_name="User Create Superuser",
+            description="Can create superusers",
+        )
+
+        role = await auth_instance.role_service.create_role(
+            session,
+            name="superuser_creator",
+            display_name="Superuser Creator",
+            description="Can create superusers",
+        )
+        await auth_instance.role_service.add_permissions(session, role.id, [create_perm.id, superuser_create_perm.id])
+
+        user = await auth_instance.user_service.create_user(
+            session=session,
+            email="superuser-creator@example.com",
+            password="TestPass123!",
+            first_name="Superuser",
+            last_name="Creator",
+            is_superuser=False,
+        )
+        await auth_instance.role_service.assign_role_to_user(session, user.id, role.id)
+        await session.commit()
+
+        token = create_access_token(
+            {"sub": str(user.id)},
+            secret_key=auth_instance.config.secret_key,
+            algorithm=auth_instance.config.algorithm,
+        )
+
+        return {
+            "id": str(user.id),
+            "email": user.email,
+            "token": token,
+            "role_id": str(role.id),
+        }
+
+
+@pytest_asyncio.fixture
 async def user_with_role_read_tree_permission(auth_instance: EnterpriseRBAC) -> dict:
     """Create user with role:read_tree permission."""
     async with auth_instance.get_session() as session:
@@ -333,9 +427,7 @@ async def test_superuser_can_create_role(client: httpx.AsyncClient, admin_user: 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_regular_user_cannot_list_users(
-    client: httpx.AsyncClient, regular_user: dict
-):
+async def test_regular_user_cannot_list_users(client: httpx.AsyncClient, regular_user: dict):
     """Test that user without permissions cannot list users."""
     resp = await client.get(
         "/v1/users/",
@@ -346,9 +438,7 @@ async def test_regular_user_cannot_list_users(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_regular_user_cannot_create_user(
-    client: httpx.AsyncClient, regular_user: dict
-):
+async def test_regular_user_cannot_create_user(client: httpx.AsyncClient, regular_user: dict):
     """Test that user without permissions cannot create users."""
     resp = await client.post(
         "/v1/users/",
@@ -365,9 +455,7 @@ async def test_regular_user_cannot_create_user(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_regular_user_cannot_list_roles(
-    client: httpx.AsyncClient, regular_user: dict
-):
+async def test_regular_user_cannot_list_roles(client: httpx.AsyncClient, regular_user: dict):
     """Test that user without permissions cannot list roles."""
     resp = await client.get(
         "/v1/roles/",
@@ -378,9 +466,7 @@ async def test_regular_user_cannot_list_roles(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_regular_user_cannot_create_role(
-    client: httpx.AsyncClient, regular_user: dict
-):
+async def test_regular_user_cannot_create_role(client: httpx.AsyncClient, regular_user: dict):
     """Test that user without permissions cannot create roles."""
     resp = await client.post(
         "/v1/roles/",
@@ -490,9 +576,7 @@ async def test_user_with_role_update_can_update_role_permissions(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_user_with_read_permission_can_list_users(
-    client: httpx.AsyncClient, user_with_read_permission: dict
-):
+async def test_user_with_read_permission_can_list_users(client: httpx.AsyncClient, user_with_read_permission: dict):
     """Test that user with user:read can list users."""
     resp = await client.get(
         "/v1/users/",
@@ -503,9 +587,7 @@ async def test_user_with_read_permission_can_list_users(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_user_with_read_permission_cannot_create_user(
-    client: httpx.AsyncClient, user_with_read_permission: dict
-):
+async def test_user_with_read_permission_cannot_create_user(client: httpx.AsyncClient, user_with_read_permission: dict):
     """Test that user with only user:read cannot create users."""
     resp = await client.post(
         "/v1/users/",
@@ -550,6 +632,68 @@ async def test_user_with_read_permission_cannot_delete_user(
     assert delete_resp.status_code == 403
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_user_with_create_permission_can_create_non_superuser(
+    client: httpx.AsyncClient, user_with_create_permission: dict
+):
+    """Test that user:create can create standard users."""
+    resp = await client.post(
+        "/v1/users/",
+        headers={"Authorization": f"Bearer {user_with_create_permission['token']}"},
+        json={
+            "email": f"created-{uuid.uuid4().hex[:8]}@example.com",
+            "password": "TestPass123!",
+            "first_name": "Created",
+            "last_name": "User",
+            "is_superuser": False,
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.json()["is_superuser"] is False
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_user_with_create_permission_cannot_create_superuser(
+    client: httpx.AsyncClient, user_with_create_permission: dict
+):
+    """Test that user:create alone cannot escalate to is_superuser=True."""
+    resp = await client.post(
+        "/v1/users/",
+        headers={"Authorization": f"Bearer {user_with_create_permission['token']}"},
+        json={
+            "email": f"escalation-{uuid.uuid4().hex[:8]}@example.com",
+            "password": "TestPass123!",
+            "first_name": "Escalation",
+            "last_name": "Attempt",
+            "is_superuser": True,
+        },
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_user_with_create_superuser_permission_can_create_superuser(
+    client: httpx.AsyncClient, user_with_create_superuser_permission: dict
+):
+    """Test delegated superuser creation when explicit permission is granted."""
+    resp = await client.post(
+        "/v1/users/",
+        headers={"Authorization": f"Bearer {user_with_create_superuser_permission['token']}"},
+        json={
+            "email": f"new-super-{uuid.uuid4().hex[:8]}@example.com",
+            "password": "TestPass123!",
+            "first_name": "New",
+            "last_name": "Superuser",
+            "is_superuser": True,
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.json()["is_superuser"] is True
+
+
 # ============================================================================
 # Self-Access Tests (users/me)
 # ============================================================================
@@ -557,9 +701,7 @@ async def test_user_with_read_permission_cannot_delete_user(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_any_authenticated_user_can_access_me(
-    client: httpx.AsyncClient, regular_user: dict
-):
+async def test_any_authenticated_user_can_access_me(client: httpx.AsyncClient, regular_user: dict):
     """Test that any authenticated user can access /users/me."""
     resp = await client.get(
         "/v1/users/me",
@@ -571,9 +713,7 @@ async def test_any_authenticated_user_can_access_me(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_user_can_update_own_profile(
-    client: httpx.AsyncClient, regular_user: dict
-):
+async def test_user_can_update_own_profile(client: httpx.AsyncClient, regular_user: dict):
     """Test that user can update their own profile via /users/me."""
     resp = await client.patch(
         "/v1/users/me",
@@ -638,9 +778,7 @@ async def user_with_wildcard_permission(auth_instance: EnterpriseRBAC) -> dict:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_wildcard_permission_grants_all_actions(
-    client: httpx.AsyncClient, user_with_wildcard_permission: dict
-):
+async def test_wildcard_permission_grants_all_actions(client: httpx.AsyncClient, user_with_wildcard_permission: dict):
     """Test that user:* grants all user operations."""
     headers = {"Authorization": f"Bearer {user_with_wildcard_permission['token']}"}
 
@@ -682,9 +820,7 @@ async def test_wildcard_permission_grants_all_actions(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_user_permission_does_not_grant_role_access(
-    client: httpx.AsyncClient, user_with_read_permission: dict
-):
+async def test_user_permission_does_not_grant_role_access(client: httpx.AsyncClient, user_with_read_permission: dict):
     """Test that user:read does not grant role:read."""
     resp = await client.get(
         "/v1/roles/",
@@ -744,9 +880,7 @@ async def entity_setup(auth_instance: EnterpriseRBAC, admin_user: dict) -> dict:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_entity_list_returns_empty_for_regular_user(
-    client: httpx.AsyncClient, regular_user: dict
-):
+async def test_entity_list_returns_empty_for_regular_user(client: httpx.AsyncClient, regular_user: dict):
     """Test that entity list returns empty for user without entity access.
 
     Note: The entity list endpoint requires entity:read permission. A user
@@ -793,9 +927,7 @@ async def test_roles_for_entity_allows_tree_permission(
     """Test that role:read_tree allows listing roles for entity."""
     resp = await client.get(
         f"/v1/roles/entity/{entity_setup['parent_id']}",
-        headers={
-            "Authorization": f"Bearer {user_with_role_read_tree_permission['token']}"
-        },
+        headers={"Authorization": f"Bearer {user_with_role_read_tree_permission['token']}"},
     )
     assert resp.status_code == 200
 
@@ -1222,9 +1354,7 @@ async def test_membership_update_allows_hierarchy_role_from_ancestor(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_api_key_list_returns_empty_for_regular_user(
-    client: httpx.AsyncClient, regular_user: dict
-):
+async def test_api_key_list_returns_empty_for_regular_user(client: httpx.AsyncClient, regular_user: dict):
     """Test that API key list returns empty for user without any keys.
 
     Note: The API key list endpoint returns the user's own API keys.
@@ -1253,9 +1383,7 @@ async def test_superuser_can_list_api_keys(client: httpx.AsyncClient, admin_user
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_superuser_can_create_api_key(
-    client: httpx.AsyncClient, admin_user: dict
-):
+async def test_superuser_can_create_api_key(client: httpx.AsyncClient, admin_user: dict):
     """Test that superuser can create API keys."""
     resp = await client.post(
         "/v1/api-keys/",

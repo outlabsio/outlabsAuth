@@ -18,6 +18,13 @@ const orgFilter = ref<string | undefined>(undefined);
 const showCreateModal = ref(false);
 const showEditModal = ref(false);
 const selectedRoleId = ref("");
+const pagination = ref({
+    pageIndex: 0,
+    pageSize: 20,
+});
+const showDeleteConfirm = ref(false);
+const roleToDelete = ref<Role | null>(null);
+const isDeletingRole = ref(false);
 
 // Fetch root entities for filter dropdown (EnterpriseRBAC only)
 const { data: entitiesData } = useQuery(
@@ -53,18 +60,38 @@ watch(scopeFilter, (newScope) => {
     }
 });
 
+// Reset to page 1 when filters change
+watch([search, scopeFilter, orgFilter], () => {
+    pagination.value.pageIndex = 0;
+});
+
 // Reactive filters for query
 const filters = computed(() => {
     const f: any = {};
+
     if (search.value) {
         f.search = search.value;
     }
-    // Note: Backend would need to support these filters
-    // For now we'll filter client-side
+
+    // Use backend-supported filters first to keep pagination accurate.
+    if (scopeFilter.value === "global") {
+        f.is_global = true;
+    } else if (scopeFilter.value === "organization") {
+        f.is_global = false;
+        if (orgFilter.value) {
+            f.entity_id = orgFilter.value;
+        }
+    }
+
     return f;
 });
 
-// Client-side filtering for scope (until backend supports it)
+const params = computed(() => ({
+    page: pagination.value.pageIndex + 1,
+    limit: pagination.value.pageSize,
+}));
+
+// Client-side filtering fallback for scope edge-cases
 const filteredRoles = computed(() => {
     let roles = rolesData.value?.items || [];
 
@@ -88,10 +115,44 @@ const {
     data: rolesData,
     isLoading,
     error,
-} = useQuery(() => rolesQueries.list(filters.value, { page: 1, limit: 100 }));
+} = useQuery(() => rolesQueries.list(filters.value, params.value));
 
 // Mutations
 const { mutate: deleteRole } = useDeleteRoleMutation();
+
+function requestDeleteRole(role: Role) {
+    roleToDelete.value = role;
+    showDeleteConfirm.value = true;
+}
+
+function closeDeleteRoleConfirm() {
+    if (isDeletingRole.value) {
+        return;
+    }
+    showDeleteConfirm.value = false;
+    roleToDelete.value = null;
+}
+
+async function confirmDeleteRole() {
+    if (!roleToDelete.value) {
+        return;
+    }
+
+    isDeletingRole.value = true;
+    try {
+        await deleteRole(roleToDelete.value.id);
+        showDeleteConfirm.value = false;
+        roleToDelete.value = null;
+    } finally {
+        isDeletingRole.value = false;
+    }
+}
+
+watch(showDeleteConfirm, (isOpen) => {
+    if (!isOpen && !isDeletingRole.value) {
+        roleToDelete.value = null;
+    }
+});
 
 // Table columns - computed to handle EnterpriseRBAC vs SimpleRBAC
 const columns = computed((): TableColumn<Role>[] => {
@@ -193,15 +254,7 @@ const columns = computed((): TableColumn<Role>[] => {
                         color: "error",
                         variant: "ghost",
                         size: "xs",
-                        onClick: async () => {
-                            if (
-                                confirm(
-                                    `Are you sure you want to delete role "${row.original.display_name || row.original.name}"?`,
-                                )
-                            ) {
-                                await deleteRole(row.original.id);
-                            }
-                        },
+                        onClick: () => requestDeleteRole(row.original),
                     }),
                 ]),
         },
@@ -322,13 +375,18 @@ const columns = computed((): TableColumn<Role>[] => {
 
             <!-- Pagination -->
             <div
-                v-if="rolesData && rolesData.pages > 1"
-                class="px-4 py-3 border-t border-default"
+                v-if="rolesData && rolesData.total > pagination.pageSize"
+                class="flex items-center justify-end px-4 py-3 border-t border-default"
             >
                 <UPagination
-                    :model-value="rolesData.page"
+                    :model-value="pagination.pageIndex + 1"
                     :total="rolesData.total"
-                    :page-size="rolesData.limit"
+                    :items-per-page="pagination.pageSize"
+                    @update:model-value="
+                        (p: number) => {
+                            pagination.pageIndex = p - 1;
+                        }
+                    "
                 />
             </div>
         </div>
@@ -342,5 +400,19 @@ const columns = computed((): TableColumn<Role>[] => {
         v-if="selectedRoleId"
         v-model:open="showEditModal"
         :role-id="selectedRoleId"
+    />
+
+    <ConfirmActionModal
+        v-model:open="showDeleteConfirm"
+        title="Delete role?"
+        :description="
+            roleToDelete
+                ? `This will permanently delete '${roleToDelete.display_name || roleToDelete.name}'.`
+                : 'This will permanently delete this role.'
+        "
+        confirm-label="Delete role"
+        :loading="isDeletingRole"
+        @confirm="confirmDeleteRole"
+        @cancel="closeDeleteRoleConfirm"
     />
 </template>

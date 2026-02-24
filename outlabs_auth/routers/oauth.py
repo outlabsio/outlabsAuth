@@ -3,22 +3,51 @@ OAuth/Social login router factory (DD-043).
 
 Provides ready-to-use OAuth routes for authentication with social providers
 (Google, Facebook, Apple, GitHub, etc.).
-
-Based on FastAPI-Users OAuth implementation but adapted for OutlabsAuth.
 """
 
+import secrets
+from datetime import datetime, timezone
 from typing import Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from httpx_oauth.oauth2 import BaseOAuth2, OAuth2Token
-from httpx_oauth.integrations.fastapi import OAuth2AuthorizeCallback
 
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from httpx_oauth.integrations.fastapi import OAuth2AuthorizeCallback
+from httpx_oauth.oauth2 import BaseOAuth2, OAuth2Token
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from outlabs_auth.models.sql.social_account import SocialAccount
+from outlabs_auth.oauth.state import decode_state_token, generate_state_token
 from outlabs_auth.schemas.oauth import OAuthAuthorizeResponse
-from outlabs_auth.oauth.state import generate_state_token, decode_state_token
+
+
+def _normalize_expires_at(expires_at: Optional[Any]) -> Optional[datetime]:
+    """Normalize OAuth expires_at values into timezone-aware UTC datetimes."""
+    if expires_at is None:
+        return None
+
+    if isinstance(expires_at, datetime):
+        if expires_at.tzinfo is None:
+            return expires_at.replace(tzinfo=timezone.utc)
+        return expires_at.astimezone(timezone.utc)
+
+    try:
+        return datetime.fromtimestamp(int(expires_at), tz=timezone.utc)
+    except Exception:
+        return None
+
+
+def _append_auth_method(user: Any, provider: str) -> None:
+    """Ensure the provider auth method is present on user.auth_methods."""
+    provider_method = provider.upper()
+    methods = list(user.auth_methods or [])
+    if provider_method not in methods:
+        methods.append(provider_method)
+        user.auth_methods = methods
 
 
 def get_oauth_router(
     oauth_client: BaseOAuth2,
-    auth: Any,  # OutlabsAuth instance (SimpleRBAC or EnterpriseRBAC)
+    auth: Any,
     state_secret: str,
     prefix: str = "",
     tags: Optional[list[str]] = None,
@@ -26,75 +55,11 @@ def get_oauth_router(
     associate_by_email: bool = False,
     is_verified_by_default: bool = False,
 ) -> APIRouter:
-    """
-    Generate OAuth authentication router for a provider.
-
-    Creates `/authorize` and `/callback` endpoints for OAuth flow.
-
-    Args:
-        oauth_client: httpx-oauth client instance (GoogleOAuth2, FacebookOAuth2, etc.)
-        auth: OutlabsAuth instance (SimpleRBAC or EnterpriseRBAC)
-        state_secret: Secret for signing OAuth state JWT tokens (CSRF protection)
-        prefix: Router prefix (default: "", usually set when including router)
-        tags: OpenAPI tags (default: ["oauth"])
-        redirect_url: Optional fixed redirect URL (if not using FastAPI route names)
-        associate_by_email: Auto-link OAuth to existing user with same email (default: False)
-        is_verified_by_default: Set is_verified=True for OAuth users (default: False)
-
-    Returns:
-        APIRouter with `/authorize` and `/callback` endpoints
-
-    Security Notes:
-        - state_secret MUST be different from JWT secret (use separate secret)
-        - associate_by_email=True requires trusted email providers (Google ✅, random OAuth ❌)
-        - is_verified_by_default=True requires provider email verification
-
-    Example:
-        ```python
-        from httpx_oauth.clients.google import GoogleOAuth2
-        from outlabs_auth import SimpleRBAC
-        from outlabs_auth.routers import get_oauth_router
-
-        google_client = GoogleOAuth2(
-            client_id="your-client-id.apps.googleusercontent.com",
-            client_secret="your-client-secret"
-        )
-
-        auth = SimpleRBAC(database=db)
-
-        app.include_router(
-            get_oauth_router(
-                google_client,
-                auth,
-                state_secret="different-secret-for-oauth-state",
-                associate_by_email=True,  # Google verifies emails
-                is_verified_by_default=True,  # Trust Google's email verification
-            ),
-            prefix="/auth/google",
-            tags=["auth"]
-        )
-        ```
-
-    Flow:
-        1. User visits GET /auth/google/authorize
-        2. Returns authorization_url (redirect user there)
-        3. User authenticates with Google
-        4. Google redirects to GET /auth/google/callback?code=...&state=...
-        5. Backend validates state, exchanges code for tokens
-        6. Creates/updates user and social account
-        7. Returns auth tokens (JWT + refresh)
-
-    Related:
-        - DD-042: JWT State Tokens
-        - DD-043: OAuth Router Factory Pattern
-        - DD-046: associate_by_email Security Flag
-    """
+    """Generate OAuth authentication router for a provider."""
     router = APIRouter(prefix=prefix, tags=tags or ["oauth"])
 
-    # Route name for callback (used if redirect_url not provided)
     callback_route_name = f"oauth:{oauth_client.name}.callback"
 
-    # Setup OAuth callback handler
     if redirect_url is not None:
         oauth2_authorize_callback = OAuth2AuthorizeCallback(
             oauth_client,
@@ -116,26 +81,14 @@ def get_oauth_router(
         request: Request,
         scopes: list[str] = Query(None, description="OAuth scopes to request"),
     ) -> OAuthAuthorizeResponse:
-        """
-        Start OAuth authorization flow.
-
-        Returns the authorization URL where the user should be redirected
-        to authenticate with the OAuth provider.
-
-        The state parameter (JWT token) is automatically generated and
-        included in the authorization URL for CSRF protection.
-        """
-        # Determine callback URL
         if redirect_url is not None:
             authorize_redirect_url = redirect_url
         else:
             authorize_redirect_url = str(request.url_for(callback_route_name))
 
-        # Generate JWT state token (no database write!)
-        state_data: dict[str, str] = {}  # Empty for new user registration
+        state_data: dict[str, str] = {}
         state = generate_state_token(state_data, state_secret, lifetime_seconds=600)
 
-        # Get authorization URL from provider
         authorization_url = await oauth_client.get_authorization_url(
             authorize_redirect_url,
             state,
@@ -179,46 +132,29 @@ def get_oauth_router(
     )
     async def callback(
         request: Request,
+        session: AsyncSession = Depends(auth.uow),
         access_token_state: tuple[OAuth2Token, str] = Depends(oauth2_authorize_callback),
     ):
-        """
-        Handle OAuth provider callback.
-
-        Validates state token, gets user info from provider, and either:
-        - Creates new user (if first time)
-        - Links OAuth account (if associate_by_email=True and email exists)
-        - Updates existing OAuth account tokens
-        - Returns authentication tokens (JWT + refresh)
-
-        Triggers hooks:
-        - on_after_register (if new user created)
-        - on_after_oauth_register (if new user via OAuth)
-        - on_after_login (always)
-        - on_after_oauth_login (always)
-        """
         token, state = access_token_state
 
-        # Get user info from OAuth provider
         account_id, account_email = await oauth_client.get_id_email(token["access_token"])
-
         if account_email is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Email not available from OAuth provider",
             )
 
-        # Validate state token (JWT signature + expiration)
         try:
-            state_data = decode_state_token(state, state_secret)
+            decode_state_token(state, state_secret)
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid OAuth state token",
             )
 
-        # OAuth callback logic (create/update user + social account)
         user = await oauth_callback(
             auth=auth,
+            session=session,
             provider=oauth_client.name,
             access_token=token["access_token"],
             refresh_token=token.get("refresh_token"),
@@ -230,26 +166,29 @@ def get_oauth_router(
             request=request,
         )
 
-        if not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="User is inactive",
-            )
+        tokens = await auth.auth_service.create_tokens_for_user(
+            session,
+            user,
+            device_name=f"oauth:{oauth_client.name}",
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
 
-        # Create auth tokens (JWT + refresh)
-        tokens = await auth.auth_service.create_tokens(user)
-
-        # Trigger hooks
         await auth.user_service.on_after_login(user, request)
         await auth.user_service.on_after_oauth_login(user, oauth_client.name, request)
 
-        return tokens
+        # OAuth callback is a GET endpoint; commit explicitly before the UoW
+        # middleware's read-method rollback step runs.
+        await session.commit()
+
+        return tokens.to_dict()
 
     return router
 
 
 async def oauth_callback(
     auth: Any,
+    session: AsyncSession,
     provider: str,
     access_token: str,
     account_id: str,
@@ -260,115 +199,99 @@ async def oauth_callback(
     is_verified_by_default: bool = False,
     request: Optional[Request] = None,
 ) -> Any:
-    """
-    Handle OAuth callback logic (create/update user and social account).
+    """Resolve/create a user and social-account link for an OAuth callback."""
+    token_expires_at = _normalize_expires_at(expires_at)
+    now = datetime.now(timezone.utc)
+    store_provider_tokens = bool(getattr(auth.config, "store_oauth_provider_tokens", False))
+    provider_access_token = access_token if store_provider_tokens else None
+    provider_refresh_token = refresh_token if store_provider_tokens else None
 
-    This is the core OAuth logic adapted from FastAPI-Users.
-
-    Logic:
-    1. Try to find user by OAuth account (provider + account_id)
-    2. If not found, try to find user by email:
-       - If associate_by_email=True: Link OAuth to existing user
-       - If associate_by_email=False: Raise error (security)
-    3. If still not found: Create new user
-    4. Update/create social account record
-    5. Trigger appropriate hooks
-
-    Args:
-        auth: OutlabsAuth instance
-        provider: OAuth provider name ("google", "facebook", etc.)
-        access_token: OAuth access token
-        account_id: User ID from OAuth provider
-        account_email: Email from OAuth provider
-        refresh_token: Optional refresh token
-        expires_at: Optional token expiration timestamp
-        associate_by_email: Auto-link to existing user by email
-        is_verified_by_default: Set is_verified=True for new users
-        request: Optional FastAPI request
-
-    Returns:
-        User object
-
-    Raises:
-        HTTPException: If user exists but associate_by_email=False
-
-    Security:
-        - Only enable associate_by_email for trusted providers that verify emails
-        - Check provider's email_verified claim if available
-        - Log all OAuth account linking for security audit
-    """
-    # TODO: Implement actual database logic
-    # This is a placeholder showing the pattern
-
-    # Try to find existing user by OAuth account
-    try:
-        user = await auth.user_service.get_by_oauth_account(provider, account_id)
-
-        # Update OAuth tokens (user logged in with existing OAuth account)
-        await auth.social_account_service.update_tokens(
-            user_id=user.id,
-            provider=provider,
-            access_token=access_token,
-            refresh_token=refresh_token,
-            expires_at=expires_at,
-        )
-
-        return user
-
-    except Exception:  # User not found by OAuth account
-        pass
-
-    # Try to find existing user by email
-    try:
-        user = await auth.user_service.get_by_email(account_email)
-
-        if not associate_by_email:
-            # Security: Don't auto-link accounts unless explicitly enabled
+    # 1) Existing provider account mapping.
+    stmt = select(SocialAccount).where(
+        SocialAccount.provider == provider,
+        SocialAccount.provider_user_id == account_id,
+    )
+    result = await session.execute(stmt)
+    social_account = result.scalar_one_or_none()
+    if social_account:
+        user = await auth.user_service.get_user_by_id(session, social_account.user_id)
+        if not user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="User with this email already exists",
+                detail="OAuth account is linked to an invalid user",
             )
 
-        # Link OAuth account to existing user
-        await auth.social_account_service.create(
-            user_id=user.id,
-            provider=provider,
-            provider_user_id=account_id,
-            email=account_email,
-            access_token=access_token,
-            refresh_token=refresh_token,
-            expires_at=expires_at,
+        social_account.provider_email = account_email
+        social_account.update_tokens(
+            access_token=provider_access_token,
+            refresh_token=provider_refresh_token,
+            expires_at=token_expires_at,
         )
-
+        social_account.last_login_at = now
+        _append_auth_method(user, provider)
+        await session.flush()
         return user
 
-    except Exception:  # User not found by email
-        pass
+    # 2) Existing local user by email.
+    user = await auth.user_service.get_user_by_email(session, account_email)
+    created_user = False
 
-    # Create new user
-    # Generate random password (user will use OAuth to login)
-    import secrets
-    random_password = secrets.token_urlsafe(32)
+    if user is None:
+        random_password = secrets.token_urlsafe(32)
+        user = await auth.user_service.create_user(
+            session=session,
+            email=account_email,
+            password=random_password,
+        )
+        user.email_verified = is_verified_by_default
+        created_user = True
+    elif not associate_by_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User with this email already exists",
+        )
 
-    user = await auth.user_service.create_user(
-        email=account_email,
-        password=random_password,
-        is_verified=is_verified_by_default,
+    # 3) Link provider to user (or refresh existing same-provider mapping).
+    existing_provider_stmt = select(SocialAccount).where(
+        SocialAccount.user_id == user.id,
+        SocialAccount.provider == provider,
     )
+    existing_provider_result = await session.execute(existing_provider_stmt)
+    existing_provider_link = existing_provider_result.scalar_one_or_none()
 
-    # Create social account
-    await auth.social_account_service.create(
-        user_id=user.id,
-        provider=provider,
-        provider_user_id=account_id,
-        email=account_email,
-        access_token=access_token,
-        refresh_token=refresh_token,
-        expires_at=expires_at,
-    )
+    if existing_provider_link:
+        if existing_provider_link.provider_user_id != account_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This provider is already linked to a different account",
+            )
+        existing_provider_link.provider_email = account_email
+        existing_provider_link.update_tokens(
+            access_token=provider_access_token,
+            refresh_token=provider_refresh_token,
+            expires_at=token_expires_at,
+        )
+        existing_provider_link.last_login_at = now
+    else:
+        session.add(
+            SocialAccount(
+                user_id=user.id,
+                provider=provider,
+                provider_user_id=account_id,
+                provider_email=account_email,
+                access_token=provider_access_token,
+                refresh_token=provider_refresh_token,
+                token_expires_at=token_expires_at,
+                token_refreshed_at=now,
+                last_login_at=now,
+            )
+        )
 
-    # Trigger hooks
-    await auth.user_service.on_after_register(user, request)
-    await auth.user_service.on_after_oauth_register(user, provider, request)
+    _append_auth_method(user, provider)
+    await session.flush()
+
+    if created_user:
+        await auth.user_service.on_after_register(user, request)
+        await auth.user_service.on_after_oauth_register(user, provider, request)
 
     return user

@@ -31,6 +31,10 @@ const pagination = ref({
     pageIndex: 0,
     pageSize: 20,
 });
+const showUserActionConfirm = ref(false);
+const pendingAction = ref<"ban" | "delete" | null>(null);
+const pendingUser = ref<User | null>(null);
+const isConfirmingUserAction = ref(false);
 
 // Reset to page 1 when filters change
 watch([search, statusFilter], () => {
@@ -64,8 +68,97 @@ const {
     error,
 } = useQuery(() => usersQueries.list(filters.value, params.value));
 
+const usersErrorMessage = computed(() => {
+    if (!error.value) {
+        return "";
+    }
+    return error.value instanceof Error ? error.value.message : String(error.value);
+});
+
 // Mutations
 const { mutate: deleteUser } = useDeleteUserMutation();
+
+const userActionConfirmMeta = computed(() => {
+    const name =
+        pendingUser.value?.first_name ||
+        pendingUser.value?.full_name ||
+        pendingUser.value?.email ||
+        "this user";
+
+    if (pendingAction.value === "ban") {
+        return {
+            title: "Ban user?",
+            description: `The user '${name}' will be blocked from signing in until an admin reactivates the account.`,
+            confirmLabel: "Ban user",
+            confirmColor: "error",
+        };
+    }
+
+    return {
+        title: "Delete user?",
+        description: `This will permanently delete '${name}'.`,
+        confirmLabel: "Delete user",
+        confirmColor: "error",
+    };
+});
+
+function requestUserAction(action: "ban" | "delete", user: User) {
+    pendingAction.value = action;
+    pendingUser.value = user;
+    showUserActionConfirm.value = true;
+}
+
+function resetUserActionState() {
+    if (isConfirmingUserAction.value) {
+        return;
+    }
+    showUserActionConfirm.value = false;
+    pendingAction.value = null;
+    pendingUser.value = null;
+}
+
+async function confirmUserAction() {
+    if (!pendingAction.value || !pendingUser.value) {
+        return;
+    }
+
+    isConfirmingUserAction.value = true;
+
+    try {
+        if (pendingAction.value === "ban") {
+            await usersStore.updateUserStatus(pendingUser.value.id, "banned");
+            toast.add({
+                title: "User banned",
+                description: `${pendingUser.value.first_name || pendingUser.value.email} has been banned.`,
+            });
+        } else {
+            // Uses optimistic update mutation - UI updates instantly
+            await deleteUser(pendingUser.value.id);
+        }
+
+        showUserActionConfirm.value = false;
+        pendingAction.value = null;
+        pendingUser.value = null;
+    } catch {
+        toast.add({
+            title: "Error",
+            description:
+                pendingAction.value === "ban"
+                    ? "Failed to ban user."
+                    : "Failed to delete user.",
+            color: "error",
+        });
+    } finally {
+        isConfirmingUserAction.value = false;
+    }
+}
+
+watch(showUserActionConfirm, (isOpen) => {
+    if (!isOpen && !isConfirmingUserAction.value) {
+        pendingAction.value = null;
+        pendingUser.value = null;
+    }
+});
 
 // Get row action items
 function getRowItems(row: Row<User>) {
@@ -120,29 +213,8 @@ function getRowItems(row: Row<User>) {
                       label: "Ban user",
                       icon: "i-lucide-ban",
                       color: "error",
-                      onSelect: async () => {
-                          if (
-                              confirm(
-                                  `Are you sure you want to ban ${row.original.first_name || row.original.email}?`,
-                              )
-                          ) {
-                              try {
-                                  await usersStore.updateUserStatus(
-                                      row.original.id,
-                                      "banned",
-                                  );
-                                  toast.add({
-                                      title: "User banned",
-                                      description: `${row.original.first_name || row.original.email} has been banned.`,
-                                  });
-                              } catch {
-                                  toast.add({
-                                      title: "Error",
-                                      description: "Failed to ban user.",
-                                      color: "error",
-                                  });
-                              }
-                          }
+                      onSelect: () => {
+                          requestUserAction("ban", row.original);
                       },
                   },
               ]
@@ -177,15 +249,8 @@ function getRowItems(row: Row<User>) {
             label: "Delete user",
             icon: "i-lucide-trash",
             color: "error",
-            onSelect: async () => {
-                if (
-                    confirm(
-                        `Are you sure you want to delete ${row.original.first_name || row.original.email}?`,
-                    )
-                ) {
-                    // Uses optimistic update mutation - UI updates instantly!
-                    await deleteUser(row.original.id);
-                }
+            onSelect: () => {
+                requestUserAction("delete", row.original);
             },
         },
     ];
@@ -359,6 +424,16 @@ const columns: TableColumn<User>[] = [
             </div>
 
             <!-- Table -->
+            <UAlert
+                v-if="usersErrorMessage"
+                color="error"
+                variant="subtle"
+                icon="i-lucide-alert-circle"
+                title="Unable to load users"
+                :description="usersErrorMessage"
+                class="m-4"
+            />
+
             <UTable
                 ref="table"
                 v-model:column-filters="columnFilters"
@@ -405,4 +480,15 @@ const columns: TableColumn<User>[] = [
 
     <!-- Create User Modal -->
     <UserCreateModal v-model:open="showCreateModal" />
+
+    <ConfirmActionModal
+        v-model:open="showUserActionConfirm"
+        :title="userActionConfirmMeta.title"
+        :description="userActionConfirmMeta.description"
+        :confirm-label="userActionConfirmMeta.confirmLabel"
+        :confirm-color="userActionConfirmMeta.confirmColor"
+        :loading="isConfirmingUserAction"
+        @confirm="confirmUserAction"
+        @cancel="resetUserActionState"
+    />
 </template>

@@ -6,7 +6,7 @@ Provides ready-to-use authentication routes (DD-041).
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.exceptions import OutlabsAuthException
@@ -107,9 +107,7 @@ def get_auth_router(
         }
 
         # Get available permissions from database
-        permissions, _ = await auth.permission_service.list_permissions(
-            session, page=1, limit=1000, is_active=True
-        )
+        permissions, _ = await auth.permission_service.list_permissions(session, page=1, limit=1000, is_active=True)
         available_permissions = [p.name for p in permissions]
 
         return AuthConfigResponse(
@@ -180,9 +178,7 @@ def get_auth_router(
         """
         try:
             # Authenticate user and get tokens
-            user, tokens = await auth.auth_service.login(
-                session, email=data.email, password=data.password
-            )
+            user, tokens = await auth.auth_service.login(session, email=data.email, password=data.password)
 
             # Check verification requirement
             if requires_verification:
@@ -224,9 +220,7 @@ def get_auth_router(
     ):
         """Refresh access token using refresh token."""
         try:
-            tokens = await auth.auth_service.refresh_access_token(
-                session, data.refresh_token
-            )
+            tokens = await auth.auth_service.refresh_access_token(session, data.refresh_token)
             return RefreshResponse(
                 access_token=tokens.access_token,
                 refresh_token=tokens.refresh_token,
@@ -295,17 +289,13 @@ def get_auth_router(
             )
         else:
             # Logout from all devices (revoke all user's refresh tokens)
-            await auth.auth_service.revoke_all_user_tokens(
-                session, auth_result["user_id"]
-            )
+            await auth.auth_service.revoke_all_user_tokens(session, auth_result["user_id"])
 
             # If immediate revocation requested, still blacklist current access token
             if immediate and jti and redis_client:
                 if hasattr(redis_client, "is_available") and redis_client.is_available:
                     remaining_ttl = auth.config.access_token_expire_minutes * 60
-                    await redis_client.set(
-                        f"blacklist:jwt:{jti}", "revoked", ttl=remaining_ttl
-                    )
+                    await redis_client.set(f"blacklist:jwt:{jti}", "revoked", ttl=remaining_ttl)
 
         return None
 
@@ -328,7 +318,8 @@ def get_auth_router(
         """
         # Check rate limit
         is_limited, seconds_until_reset = await check_forgot_password_rate_limit(
-            data.email
+            data.email,
+            redis_client=getattr(auth, "redis_client", None),
         )
 
         if is_limited:
@@ -358,9 +349,7 @@ def get_auth_router(
         except Exception as e:
             # Log error but don't reveal to user
             if auth.observability:
-                auth.observability.logger.error(
-                    "forgot_password_error", email=data.email, error=str(e)
-                )
+                auth.observability.logger.error("forgot_password_error", email=data.email, error=str(e))
 
         return None
 
@@ -382,9 +371,7 @@ def get_auth_router(
         """
         try:
             # Verify token and reset password
-            user = await auth.auth_service.reset_password(
-                session, token=data.token, new_password=data.new_password
-            )
+            user = await auth.auth_service.reset_password(session, token=data.token, new_password=data.new_password)
 
             # Trigger hook
             await auth.user_service.on_after_reset_password(user)

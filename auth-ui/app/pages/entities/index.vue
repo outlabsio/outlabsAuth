@@ -30,6 +30,14 @@ const editRoleId = ref<string | null>(null);
 const selectedTreeEntityId = ref<string | undefined>(undefined);
 const activeTab = ref("children"); // "children" | "members" | "roles"
 const editingMember = ref<EntityMember | null>(null);
+const showActionConfirm = ref(false);
+const pendingAction = ref<
+    | { kind: "delete-entity"; entity: Entity }
+    | { kind: "remove-member"; member: EntityMember; entityId: string }
+    | { kind: "delete-role"; role: Role }
+    | null
+>(null);
+const isConfirmingAction = ref(false);
 
 // Query all entities
 const { data: entitiesData, isLoading } = useQuery(
@@ -325,6 +333,106 @@ function openEditRoleModal(roleId: string) {
     showEditRoleModal.value = true;
 }
 
+const actionConfirmMeta = computed(() => {
+    if (!pendingAction.value) {
+        return {
+            title: "Confirm action",
+            description: "",
+            confirmLabel: "Confirm",
+            confirmColor: "error",
+        };
+    }
+
+    if (pendingAction.value.kind === "delete-entity") {
+        return {
+            title: "Delete entity?",
+            description: `This will permanently delete '${pendingAction.value.entity.display_name || pendingAction.value.entity.name}'.`,
+            confirmLabel: "Delete entity",
+            confirmColor: "error",
+        };
+    }
+
+    if (pendingAction.value.kind === "remove-member") {
+        return {
+            title: "Remove member?",
+            description: `Remove '${pendingAction.value.member.user_email}' from this entity.`,
+            confirmLabel: "Remove member",
+            confirmColor: "warning",
+        };
+    }
+
+    return {
+        title: "Delete role?",
+        description: `This will permanently delete '${pendingAction.value.role.display_name || pendingAction.value.role.name}'.`,
+        confirmLabel: "Delete role",
+        confirmColor: "error",
+    };
+});
+
+function requestDeleteEntity(entity: Entity) {
+    pendingAction.value = { kind: "delete-entity", entity };
+    showActionConfirm.value = true;
+}
+
+function requestRemoveMember(member: EntityMember) {
+    if (!selectedTreeEntityId.value) {
+        return;
+    }
+    pendingAction.value = {
+        kind: "remove-member",
+        member,
+        entityId: selectedTreeEntityId.value,
+    };
+    showActionConfirm.value = true;
+}
+
+function requestDeleteRole(role: Role) {
+    pendingAction.value = { kind: "delete-role", role };
+    showActionConfirm.value = true;
+}
+
+function resetActionConfirm() {
+    if (isConfirmingAction.value) {
+        return;
+    }
+    showActionConfirm.value = false;
+    pendingAction.value = null;
+}
+
+async function confirmPendingAction() {
+    if (!pendingAction.value) {
+        return;
+    }
+
+    isConfirmingAction.value = true;
+    try {
+        if (pendingAction.value.kind === "delete-entity") {
+            await deleteEntity({
+                entityId: pendingAction.value.entity.id,
+                parentId: pendingAction.value.entity.parent_entity_id,
+            });
+        } else if (pendingAction.value.kind === "remove-member") {
+            await removeMember({
+                entityId: pendingAction.value.entityId,
+                userId: pendingAction.value.member.user_id,
+            });
+        } else {
+            await deleteRole(pendingAction.value.role.id);
+        }
+
+        showActionConfirm.value = false;
+        pendingAction.value = null;
+    } finally {
+        isConfirmingAction.value = false;
+    }
+}
+
+watch(showActionConfirm, (isOpen) => {
+    if (!isOpen && !isConfirmingAction.value) {
+        pendingAction.value = null;
+    }
+});
+
 // Get scope badge for roles
 function getRoleScopeBadge(role: Role): { color: string; label: string } {
     if (role.is_global) return { color: "info", label: "Global" };
@@ -427,18 +535,7 @@ const columns: TableColumn<Entity>[] = [
                     color: "error",
                     variant: "ghost",
                     size: "xs",
-                    onClick: async () => {
-                        if (
-                            confirm(
-                                `Are you sure you want to delete "${row.original.display_name || row.original.name}"?`,
-                            )
-                        ) {
-                            await deleteEntity({
-                                entityId: row.original.id,
-                                parentId: row.original.parent_entity_id,
-                            });
-                        }
-                    },
+                    onClick: () => requestDeleteEntity(row.original),
                 }),
             ]),
     },
@@ -548,18 +645,7 @@ const memberColumns: TableColumn<EntityMember>[] = [
                     variant: "ghost",
                     size: "xs",
                     title: "Remove member",
-                    onClick: async () => {
-                        if (
-                            confirm(
-                                `Remove ${row.original.user_email} from this entity?`,
-                            )
-                        ) {
-                            await removeMember({
-                                entityId: selectedTreeEntityId.value!,
-                                userId: row.original.user_id,
-                            });
-                        }
-                    },
+                    onClick: () => requestRemoveMember(row.original),
                 }),
             ]),
     },
@@ -1010,15 +1096,7 @@ const tabItems = [
                                             variant="ghost"
                                             size="xs"
                                             @click="
-                                                () => {
-                                                    if (
-                                                        confirm(
-                                                            `Delete role '${role.display_name || role.name}'?`,
-                                                        )
-                                                    ) {
-                                                        deleteRole(role.id);
-                                                    }
-                                                }
+                                                () => requestDeleteRole(role)
                                             "
                                         />
                                     </div>
@@ -1244,5 +1322,16 @@ const tabItems = [
         v-if="editRoleId"
         v-model:open="showEditRoleModal"
         :role-id="editRoleId"
+    />
+
+    <ConfirmActionModal
+        v-model:open="showActionConfirm"
+        :title="actionConfirmMeta.title"
+        :description="actionConfirmMeta.description"
+        :confirm-label="actionConfirmMeta.confirmLabel"
+        :confirm-color="actionConfirmMeta.confirmColor"
+        :loading="isConfirmingAction"
+        @confirm="confirmPendingAction"
+        @cancel="resetActionConfirm"
     />
 </template>

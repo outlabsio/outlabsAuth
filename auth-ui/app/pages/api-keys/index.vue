@@ -21,34 +21,89 @@ const showCreateModal = ref(false);
 const showDetailModal = ref(false);
 const showEditModal = ref(false);
 const selectedKeyId = ref<string | null>(null);
+const showKeyActionConfirm = ref(false);
+const pendingKeyAction = ref<"revoke" | "suspend" | null>(null);
+const pendingKey = ref<ApiKey | null>(null);
+const isConfirmingKeyAction = ref(false);
 
 // Fetch API keys from backend
 const { data: apiKeys, isLoading, error } = useQuery(apiKeysQueries.list());
+const apiKeysErrorMessage = computed(() => {
+    if (!error.value) {
+        return "";
+    }
+    return error.value instanceof Error ? error.value.message : String(error.value);
+});
 
 // Mutations
 const revokeMutation = useRevokeApiKeyMutation();
 const suspendMutation = useSuspendApiKeyMutation();
 const resumeMutation = useResumeApiKeyMutation();
 
-// Handle revoke action
-const handleRevoke = async (key: ApiKey) => {
-    const confirmed = confirm(
-        `Are you sure you want to revoke the API key "${key.name}" (${key.prefix})?\n\nThis action cannot be undone.`,
-    );
-    if (!confirmed) return;
+const keyActionConfirmMeta = computed(() => {
+    const label = pendingKey.value
+        ? `'${pendingKey.value.name}' (${pendingKey.value.prefix})`
+        : "this API key";
 
-    await revokeMutation.mutateAsync(key.id);
-};
+    if (pendingKeyAction.value === "revoke") {
+        return {
+            title: "Revoke API key?",
+            description: `This permanently revokes ${label}. This action cannot be undone.`,
+            confirmLabel: "Revoke key",
+            confirmColor: "error",
+        };
+    }
 
-// Handle suspend action
-const handleSuspend = async (key: ApiKey) => {
-    const confirmed = confirm(
-        `Suspend the API key "${key.name}" (${key.prefix})?\n\nThe key will be temporarily disabled but can be resumed later.`,
-    );
-    if (!confirmed) return;
+    return {
+        title: "Suspend API key?",
+        description: `${label} will be temporarily disabled and can be resumed later.`,
+        confirmLabel: "Suspend key",
+        confirmColor: "warning",
+    };
+});
 
-    await suspendMutation.mutateAsync(key.id);
-};
+function requestKeyAction(action: "revoke" | "suspend", key: ApiKey) {
+    pendingKeyAction.value = action;
+    pendingKey.value = key;
+    showKeyActionConfirm.value = true;
+}
+
+function resetKeyActionState() {
+    if (isConfirmingKeyAction.value) {
+        return;
+    }
+    showKeyActionConfirm.value = false;
+    pendingKeyAction.value = null;
+    pendingKey.value = null;
+}
+
+async function confirmKeyAction() {
+    if (!pendingKeyAction.value || !pendingKey.value) {
+        return;
+    }
+
+    isConfirmingKeyAction.value = true;
+    try {
+        if (pendingKeyAction.value === "revoke") {
+            await revokeMutation.mutateAsync(pendingKey.value.id);
+        } else {
+            await suspendMutation.mutateAsync(pendingKey.value.id);
+        }
+
+        showKeyActionConfirm.value = false;
+        pendingKeyAction.value = null;
+        pendingKey.value = null;
+    } finally {
+        isConfirmingKeyAction.value = false;
+    }
+}
+
+watch(showKeyActionConfirm, (isOpen) => {
+    if (!isOpen && !isConfirmingKeyAction.value) {
+        pendingKeyAction.value = null;
+        pendingKey.value = null;
+    }
+});
 
 // Handle resume action
 const handleResume = async (key: ApiKey) => {
@@ -71,9 +126,9 @@ const columns: TableColumn<ApiKey>[] = [
         header: "Status",
         cell: ({ row }) => {
             const colors: Record<string, string> = {
-                active: "green",
-                suspended: "yellow",
-                revoked: "red",
+                active: "success",
+                suspended: "warning",
+                revoked: "error",
                 expired: "neutral",
             };
             return h(
@@ -150,7 +205,7 @@ const columns: TableColumn<ApiKey>[] = [
             if (diffHours < 1)
                 return h(
                     "span",
-                    { class: "text-sm text-green-600" },
+                    { class: "text-sm text-success" },
                     "Just now",
                 );
             if (diffHours < 24)
@@ -169,7 +224,7 @@ const columns: TableColumn<ApiKey>[] = [
             if (!row.original.expires_at) {
                 return h(
                     UBadge,
-                    { color: "blue", variant: "subtle" },
+                    { color: "info", variant: "subtle" },
                     () => "Never",
                 );
             }
@@ -248,10 +303,8 @@ const columns: TableColumn<ApiKey>[] = [
                             color: "warning",
                             variant: "ghost",
                             size: "xs",
-                            loading:
-                                suspendMutation.isPending &&
-                                suspendMutation.variables === row.original.id,
-                            onClick: () => handleSuspend(row.original),
+                            onClick: () =>
+                                requestKeyAction("suspend", row.original),
                         }),
                     isActive &&
                         h(UButton, {
@@ -259,10 +312,8 @@ const columns: TableColumn<ApiKey>[] = [
                             color: "error",
                             variant: "ghost",
                             size: "xs",
-                            loading:
-                                revokeMutation.isPending &&
-                                revokeMutation.variables === row.original.id,
-                            onClick: () => handleRevoke(row.original),
+                            onClick: () =>
+                                requestKeyAction("revoke", row.original),
                         }),
                 ].filter(Boolean),
             );
@@ -358,13 +409,13 @@ const stats = computed(() => {
                     <div class="flex items-center justify-between">
                         <div>
                             <p class="text-sm text-muted">Active</p>
-                            <p class="text-2xl font-bold mt-1 text-green-600">
+                            <p class="text-2xl font-bold mt-1 text-success">
                                 {{ stats.active }}
                             </p>
                         </div>
                         <UIcon
                             name="i-lucide-check-circle"
-                            class="w-8 h-8 text-green-500"
+                            class="w-8 h-8 text-success"
                         />
                     </div>
                 </UCard>
@@ -373,13 +424,13 @@ const stats = computed(() => {
                     <div class="flex items-center justify-between">
                         <div>
                             <p class="text-sm text-muted">Revoked</p>
-                            <p class="text-2xl font-bold mt-1 text-red-600">
+                            <p class="text-2xl font-bold mt-1 text-error">
                                 {{ stats.revoked }}
                             </p>
                         </div>
                         <UIcon
                             name="i-lucide-ban"
-                            class="w-8 h-8 text-red-500"
+                            class="w-8 h-8 text-error"
                         />
                     </div>
                 </UCard>
@@ -483,6 +534,16 @@ const stats = computed(() => {
             </div>
 
             <!-- Table -->
+            <UAlert
+                v-if="apiKeysErrorMessage"
+                color="error"
+                variant="subtle"
+                icon="i-lucide-alert-circle"
+                title="Unable to load API keys"
+                :description="apiKeysErrorMessage"
+                class="m-4"
+            />
+
             <UTable
                 sticky
                 class="flex-1"
@@ -532,5 +593,16 @@ const stats = computed(() => {
         v-if="selectedKeyId"
         v-model:open="showEditModal"
         :key-id="selectedKeyId"
+    />
+
+    <ConfirmActionModal
+        v-model:open="showKeyActionConfirm"
+        :title="keyActionConfirmMeta.title"
+        :description="keyActionConfirmMeta.description"
+        :confirm-label="keyActionConfirmMeta.confirmLabel"
+        :confirm-color="keyActionConfirmMeta.confirmColor"
+        :loading="isConfirmingKeyAction"
+        @confirm="confirmKeyAction"
+        @cancel="resetKeyActionState"
     />
 </template>

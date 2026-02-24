@@ -8,7 +8,7 @@ For production multi-instance deployments, use Redis-based rate limiting.
 import asyncio
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 
 
 class RateLimiter:
@@ -44,9 +44,7 @@ class RateLimiter:
             window_start = now - timedelta(seconds=window_seconds)
 
             # Remove old requests outside the window
-            self._requests[key] = [
-                req_time for req_time in self._requests[key] if req_time > window_start
-            ]
+            self._requests[key] = [req_time for req_time in self._requests[key] if req_time > window_start]
 
             # Check if limit exceeded
             if len(self._requests[key]) >= max_requests:
@@ -80,7 +78,13 @@ class RateLimiter:
 _rate_limiter = RateLimiter()
 
 
-async def check_forgot_password_rate_limit(email: str) -> Tuple[bool, int]:
+async def check_forgot_password_rate_limit(
+    email: str,
+    redis_client: Any = None,
+    *,
+    max_requests: int = 3,
+    window_seconds: int = 300,
+) -> Tuple[bool, int]:
     """
     Check if email has exceeded forgot password rate limit.
 
@@ -92,10 +96,23 @@ async def check_forgot_password_rate_limit(email: str) -> Tuple[bool, int]:
     Returns:
         Tuple of (is_limited, seconds_until_reset)
     """
+    rate_limit_key = f"forgot_password:{email.lower()}"
+
+    if redis_client is not None and getattr(redis_client, "is_available", False):
+        count = await redis_client.increment_with_ttl(
+            rate_limit_key,
+            amount=1,
+            ttl=window_seconds,
+        )
+        if count is not None and count > max_requests:
+            # Redis-backed mode does not currently compute exact reset time.
+            return True, window_seconds
+        return False, 0
+
     return await _rate_limiter.is_rate_limited(
-        key=f"forgot_password:{email.lower()}",
-        max_requests=3,
-        window_seconds=300,  # 5 minutes
+        key=rate_limit_key,
+        max_requests=max_requests,
+        window_seconds=window_seconds,
     )
 
 

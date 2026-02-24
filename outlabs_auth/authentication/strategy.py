@@ -5,7 +5,6 @@ Transport/Strategy separation pattern from FastAPI-Users (DD-038).
 """
 
 import logging
-from datetime import datetime, timedelta
 from typing import Any, Optional, Protocol
 
 from jose import JWTError, jwt
@@ -100,13 +99,8 @@ class JWTStrategy:
             # Check Redis blacklist if available (for immediate logout)
             jti = payload.get("jti")
             if jti and self.redis_client:
-                if (
-                    hasattr(self.redis_client, "is_available")
-                    and self.redis_client.is_available
-                ):
-                    is_blacklisted = await self.redis_client.exists(
-                        f"blacklist:jwt:{jti}"
-                    )
+                if hasattr(self.redis_client, "is_available") and self.redis_client.is_available:
+                    is_blacklisted = await self.redis_client.exists(f"blacklist:jwt:{jti}")
                     if is_blacklisted:
                         logger.info("jwt_blacklisted", extra={"jti": jti})
                         return None
@@ -167,7 +161,13 @@ class ApiKeyStrategy:
     """
 
     async def authenticate(
-        self, credentials: str, api_key_service: Any = None, **kwargs: Any
+        self,
+        credentials: str,
+        api_key_service: Any = None,
+        session: Any = None,
+        user_service: Any = None,
+        request: Any = None,
+        **kwargs: Any,
     ) -> Optional[dict]:
         """
         Verify API key and return user data.
@@ -183,20 +183,35 @@ class ApiKeyStrategy:
         Returns:
             User data dict if valid, None otherwise
         """
-        if not api_key_service:
+        if not api_key_service or session is None:
             return None
 
         try:
+            client_ip = None
+            if request is not None and getattr(request, "client", None):
+                client_ip = getattr(request.client, "host", None)
+
             # Verify API key (checks hash, locks, scopes, IP, etc.)
             # Returns tuple: (api_key_model, usage_count)
-            api_key, usage_count = await api_key_service.verify_api_key(credentials)
+            api_key, usage_count = await api_key_service.verify_api_key(
+                session,
+                credentials,
+                ip_address=client_ip,
+            )
 
             if api_key:
-                # Fetch the user (API key has owner relationship)
-                user = await api_key.owner.fetch()
+                # Fetch the key owner from the active request session.
+                if user_service is not None:
+                    user = await user_service.get_user_by_id(session, api_key.owner_id)
+                else:
+                    from outlabs_auth.models.sql.user import User
+
+                    user = await session.get(User, api_key.owner_id)
 
                 if not user:
                     return None
+
+                key_scopes = await api_key_service.get_api_key_scopes(session, api_key.id)
 
                 return {
                     "user": user,
@@ -206,7 +221,7 @@ class ApiKeyStrategy:
                     "metadata": {
                         "key_id": str(api_key.id),
                         "key_prefix": api_key.prefix,
-                        "scopes": api_key.scopes,
+                        "scopes": key_scopes,
                         "usage_count": usage_count,
                     },
                 }
@@ -214,6 +229,7 @@ class ApiKeyStrategy:
             return None
 
         except Exception:
+            logger.exception("api_key_auth_error")
             return None
 
 
@@ -310,9 +326,7 @@ class SuperuserStrategy:
         """
         self.superuser_token = superuser_token
 
-    async def authenticate(
-        self, credentials: str, user_service: Any = None, **kwargs: Any
-    ) -> Optional[dict]:
+    async def authenticate(self, credentials: str, user_service: Any = None, **kwargs: Any) -> Optional[dict]:
         """
         Validate superuser token.
 

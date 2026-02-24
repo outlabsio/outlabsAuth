@@ -7,12 +7,15 @@
                 </template>
 
                 <template #right>
-                    <UButton
-                        icon="i-lucide-plus"
-                        size="md"
-                        label="Quick Action"
-                        class="rounded-full"
-                    />
+                    <UDropdownMenu :items="quickActions" :content="{ align: 'end' }">
+                        <UButton
+                            icon="i-lucide-plus"
+                            trailing-icon="i-lucide-chevron-down"
+                            size="md"
+                            label="Quick Action"
+                            class="rounded-full"
+                        />
+                    </UDropdownMenu>
                 </template>
             </UDashboardNavbar>
         </template>
@@ -192,6 +195,36 @@ const stats = computed(() => ({
     entities: entitiesStore.pagination?.total || 0,
 }));
 
+const quickActions = computed(() => {
+    const actions = [
+        {
+            label: "Add user",
+            icon: "i-lucide-user-plus",
+            onSelect: () => navigateTo("/users"),
+        },
+        {
+            label: "Create role",
+            icon: "i-lucide-shield-plus",
+            onSelect: () => navigateTo("/roles"),
+        },
+        {
+            label: "Generate API key",
+            icon: "i-lucide-key",
+            onSelect: () => navigateTo("/api-keys"),
+        },
+    ];
+
+    if (authStore.isEnterpriseRBAC) {
+        actions.splice(2, 0, {
+            label: "Create entity",
+            icon: "i-lucide-building-2",
+            onSelect: () => navigateTo("/entities"),
+        });
+    }
+
+    return actions;
+});
+
 // Methods
 const fetchStats = async () => {
     try {
@@ -199,7 +232,9 @@ const fetchStats = async () => {
         await Promise.all([
             usersStore.fetchUsers({}, { page: 1, limit: 1 }),
             rolesStore.fetchRoles({}, { page: 1, limit: 1 }),
-            authStore.isEnterpriseRBAC ? entitiesStore.fetchEntities({}, { page: 1, limit: 1 }) : Promise.resolve(),
+            authStore.isEnterpriseRBAC
+                ? entitiesStore.fetchEntities({}, { page: 1, limit: 1 })
+                : Promise.resolve(),
         ]);
     } catch (error) {
         console.error("Failed to fetch stats:", error);

@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.config import AuthConfig
@@ -140,9 +140,7 @@ class AuthService:
 
         # Check if account is locked
         if user.is_locked:
-            self._log_login_failed(
-                email, "account_locked", user.failed_login_attempts, ip_address, start_time
-            )
+            self._log_login_failed(email, "account_locked", user.failed_login_attempts, ip_address, start_time)
             raise AccountLockedError(
                 message=f"Account is locked until {user.locked_until.isoformat() if user.locked_until else 'unknown'}",
                 details={
@@ -162,16 +160,12 @@ class AuthService:
             # Check if account should be locked
             was_locked = False
             if user.failed_login_attempts >= self.config.max_login_attempts:
-                user.locked_until = datetime.now(timezone.utc) + timedelta(
-                    minutes=self.config.lockout_duration_minutes
-                )
+                user.locked_until = datetime.now(timezone.utc) + timedelta(minutes=self.config.lockout_duration_minutes)
                 was_locked = True
 
             await session.flush()
 
-            self._log_login_failed(
-                email, "invalid_password", user.failed_login_attempts, ip_address, start_time
-            )
+            self._log_login_failed(email, "invalid_password", user.failed_login_attempts, ip_address, start_time)
 
             if was_locked:
                 self._log_account_locked(str(user.id), email, ip_address)
@@ -225,6 +219,7 @@ class AuthService:
         # Track activity
         if self.activity_tracker:
             import asyncio
+
             asyncio.create_task(self.activity_tracker.track_activity(str(user.id)))
 
         # Create JWT token pair
@@ -243,9 +238,7 @@ class AuthService:
             refresh_token_model = RefreshToken(
                 user_id=user.id,
                 token_hash=refresh_token_hash,
-                expires_at=datetime.now(timezone.utc) + timedelta(
-                    days=self.config.refresh_token_expire_days
-                ),
+                expires_at=datetime.now(timezone.utc) + timedelta(days=self.config.refresh_token_expire_days),
                 device_name=device_name,
                 ip_address=ip_address,
                 user_agent=user_agent,
@@ -261,6 +254,51 @@ class AuthService:
         )
 
         return user, token_pair
+
+    async def create_tokens_for_user(
+        self,
+        session: AsyncSession,
+        user: User,
+        *,
+        device_name: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> TokenPair:
+        """
+        Create a token pair for an already-authenticated user.
+
+        This is intended for non-password authentication flows
+        (for example, OAuth callbacks).
+        """
+        self._check_user_status(user)
+
+        access_token, refresh_token_value = create_token_pair(
+            user_id=str(user.id),
+            secret_key=self.config.secret_key,
+            algorithm=self.config.algorithm,
+            access_token_expire_minutes=self.config.access_token_expire_minutes,
+            refresh_token_expire_days=self.config.refresh_token_expire_days,
+            audience=self.config.jwt_audience,
+        )
+
+        if self.config.store_refresh_tokens:
+            refresh_token_hash = self._hash_token(refresh_token_value)
+            refresh_token_model = RefreshToken(
+                user_id=user.id,
+                token_hash=refresh_token_hash,
+                expires_at=datetime.now(timezone.utc) + timedelta(days=self.config.refresh_token_expire_days),
+                device_name=device_name,
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+            session.add(refresh_token_model)
+            await session.flush()
+
+        return TokenPair(
+            access_token=access_token,
+            refresh_token=refresh_token_value,
+            expires_in=self.config.access_token_expire_minutes * 60,
+        )
 
     async def logout(
         self,
@@ -313,9 +351,7 @@ class AuthService:
         token_model.revoke("User logout")
 
         # Calculate session duration for observability
-        session_duration_seconds = (
-            datetime.now(timezone.utc) - token_model.created_at
-        ).total_seconds()
+        session_duration_seconds = (datetime.now(timezone.utc) - token_model.created_at).total_seconds()
 
         await session.flush()
 
@@ -469,6 +505,7 @@ class AuthService:
         # Track activity
         if self.activity_tracker:
             import asyncio
+
             asyncio.create_task(self.activity_tracker.track_activity(str(user.id)))
 
         return TokenPair(
@@ -707,9 +744,7 @@ class AuthService:
             return
 
         if user.status == UserStatus.SUSPENDED:
-            suspended_msg = (
-                f" until {user.suspended_until.isoformat()}" if user.suspended_until else ""
-            )
+            suspended_msg = f" until {user.suspended_until.isoformat()}" if user.suspended_until else ""
             raise AccountInactiveError(
                 message=f"Account is suspended{suspended_msg}",
                 details={

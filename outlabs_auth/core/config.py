@@ -19,12 +19,8 @@ class AuthConfig(BaseModel):
         default=None,
         description="PostgreSQL connection URL (e.g., postgresql+asyncpg://user:pass@localhost:5432/dbname)",
     )
-    auto_migrate: bool = Field(
-        default=False, description="Automatically run database migrations on startup"
-    )
-    echo_sql: bool = Field(
-        default=False, description="Echo SQL statements to stdout (for debugging)"
-    )
+    auto_migrate: bool = Field(default=False, description="Automatically run database migrations on startup")
+    echo_sql: bool = Field(default=False, description="Echo SQL statements to stdout (for debugging)")
 
     # JWT Settings
     secret_key: str = Field(..., description="Secret key for JWT signing")
@@ -33,30 +29,18 @@ class AuthConfig(BaseModel):
         default="outlabs-auth",
         description="JWT audience claim for cross-application security",
     )
-    access_token_expire_minutes: int = Field(
-        default=15, description="Access token TTL in minutes"
-    )
-    refresh_token_expire_days: int = Field(
-        default=30, description="Refresh token TTL in days"
-    )
+    access_token_expire_minutes: int = Field(default=15, description="Access token TTL in minutes")
+    refresh_token_expire_days: int = Field(default=30, description="Refresh token TTL in days")
 
     # Password Settings
     password_min_length: int = Field(default=8, description="Minimum password length")
-    require_special_char: bool = Field(
-        default=True, description="Require special character in password"
-    )
-    require_uppercase: bool = Field(
-        default=True, description="Require uppercase letter in password"
-    )
+    require_special_char: bool = Field(default=True, description="Require special character in password")
+    require_uppercase: bool = Field(default=True, description="Require uppercase letter in password")
     require_digit: bool = Field(default=True, description="Require digit in password")
 
     # Security
-    max_login_attempts: int = Field(
-        default=5, description="Max failed login attempts before lockout"
-    )
-    lockout_duration_minutes: int = Field(
-        default=30, description="Account lockout duration in minutes"
-    )
+    max_login_attempts: int = Field(default=5, description="Max failed login attempts before lockout")
+    lockout_duration_minutes: int = Field(default=30, description="Account lockout duration in minutes")
 
     # Token Revocation Strategy
     enable_token_blacklist: bool = Field(
@@ -67,32 +51,26 @@ class AuthConfig(BaseModel):
         default=True,
         description="Store refresh tokens in MongoDB for revocation. Set to False for stateless-only JWT.",
     )
-    enable_token_cleanup: bool = Field(
-        default=True, description="Enable automatic cleanup of expired/revoked tokens"
-    )
-    token_cleanup_interval_hours: int = Field(
-        default=24, description="Hours between token cleanup runs"
-    )
+    enable_token_cleanup: bool = Field(default=True, description="Enable automatic cleanup of expired/revoked tokens")
+    token_cleanup_interval_hours: int = Field(default=24, description="Hours between token cleanup runs")
 
     # Feature Flags (Core - controlled by OutlabsAuth base class)
-    enable_entity_hierarchy: bool = Field(
-        default=False, description="Enable entity hierarchy (EnterpriseRBAC)"
-    )
+    enable_entity_hierarchy: bool = Field(default=False, description="Enable entity hierarchy (EnterpriseRBAC)")
     enable_context_aware_roles: bool = Field(
         default=False,
         description="Enable context-aware roles (EnterpriseRBAC optional)",
     )
-    enable_abac: bool = Field(
-        default=False, description="Enable ABAC conditions (EnterpriseRBAC optional)"
+    enable_abac: bool = Field(default=False, description="Enable ABAC conditions (EnterpriseRBAC optional)")
+    enable_caching: bool = Field(default=False, description="Enable Redis caching (optional)")
+    multi_tenant: bool = Field(default=False, description="Enable multi-tenant mode (optional)")
+    enable_audit_log: bool = Field(default=False, description="Enable audit logging (optional)")
+    trust_resource_context_header: bool = Field(
+        default=False,
+        description="Trust X-Resource-Context header from clients for ABAC resource attributes",
     )
-    enable_caching: bool = Field(
-        default=False, description="Enable Redis caching (optional)"
-    )
-    multi_tenant: bool = Field(
-        default=False, description="Enable multi-tenant mode (optional)"
-    )
-    enable_audit_log: bool = Field(
-        default=False, description="Enable audit logging (optional)"
+    store_oauth_provider_tokens: bool = Field(
+        default=False,
+        description="Persist OAuth provider access/refresh tokens in the social_accounts table",
     )
 
     # Redis Configuration (optional - for caching)
@@ -101,20 +79,12 @@ class AuthConfig(BaseModel):
     redis_port: int = Field(default=6379, description="Redis port")
     redis_db: int = Field(default=0, description="Redis database number")
     redis_password: Optional[str] = Field(default=None, description="Redis password")
-    redis_url: Optional[str] = Field(
-        default=None, description="Redis connection URL (overrides host/port)"
-    )
+    redis_url: Optional[str] = Field(default=None, description="Redis connection URL (overrides host/port)")
 
     # Cache TTL Settings
-    cache_ttl_seconds: int = Field(
-        default=300, description="Default cache TTL in seconds (5 minutes)"
-    )
-    cache_permission_ttl: int = Field(
-        default=900, description="Permission cache TTL in seconds (15 minutes)"
-    )
-    cache_entity_ttl: int = Field(
-        default=600, description="Entity cache TTL in seconds (10 minutes)"
-    )
+    cache_ttl_seconds: int = Field(default=300, description="Default cache TTL in seconds (5 minutes)")
+    cache_permission_ttl: int = Field(default=900, description="Permission cache TTL in seconds (15 minutes)")
+    cache_entity_ttl: int = Field(default=600, description="Entity cache TTL in seconds (10 minutes)")
 
     # Pub/Sub Channels
     redis_invalidation_channel: str = Field(
@@ -124,12 +94,8 @@ class AuthConfig(BaseModel):
 
     # API Key Settings (v1.3 - included in core)
     api_key_prefix_length: int = Field(default=12, description="API key prefix length")
-    api_key_rate_limit_per_minute: int = Field(
-        default=60, description="Default rate limit per API key"
-    )
-    api_key_temporary_lock_minutes: int = Field(
-        default=30, description="Temporary lock duration after failures"
-    )
+    api_key_rate_limit_per_minute: int = Field(default=60, description="Default rate limit per API key")
+    api_key_temporary_lock_minutes: int = Field(default=30, description="Temporary lock duration after failures")
 
     # Activity Tracking Settings (DD-049 - requires Redis)
     enable_activity_tracking: bool = Field(
@@ -148,9 +114,7 @@ class AuthConfig(BaseModel):
         default=False,
         description="Store user IDs in ActivityMetric for cohort analysis (increases storage)",
     )
-    activity_ttl_days: int = Field(
-        default=90, description="Days to keep ActivityMetric records (default: 90 days)"
-    )
+    activity_ttl_days: int = Field(default=90, description="Days to keep ActivityMetric records (default: 90 days)")
 
     model_config = ConfigDict(validate_assignment=True)
 
@@ -180,15 +144,9 @@ class EnterpriseConfig(AuthConfig):
     enable_entity_hierarchy: bool = Field(default=True, frozen=True)
 
     # Entity Settings (always enabled when entity hierarchy is on)
-    max_entity_depth: int = Field(
-        default=10, description="Maximum depth of entity hierarchy"
-    )
-    allowed_entity_types: Optional[list[str]] = Field(
-        default=None, description="Allowed entity types (None = any)"
-    )
-    allow_access_groups: bool = Field(
-        default=True, description="Allow ACCESS_GROUP entities"
-    )
+    max_entity_depth: int = Field(default=10, description="Maximum depth of entity hierarchy")
+    allowed_entity_types: Optional[list[str]] = Field(default=None, description="Allowed entity types (None = any)")
+    allow_access_groups: bool = Field(default=True, description="Allow ACCESS_GROUP entities")
 
     # Optional Features (opt-in)
     # enable_context_aware_roles: bool - inherited from AuthConfig

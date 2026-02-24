@@ -36,6 +36,9 @@ const availableRoles = computed(() => {
 
 // Selected role for adding
 const selectedRoleId = ref("");
+const showRemoveRoleConfirm = ref(false);
+const roleToRemove = ref<{ id: string; name: string } | null>(null);
+const isRemovingRole = ref(false);
 
 // Add role handler
 async function handleAddRole() {
@@ -64,14 +67,41 @@ async function handleRemoveRole(roleId: string) {
 
     if (!role) return;
 
-    const confirmed = confirm(
-        `Are you sure you want to remove the role "${role.role.display_name || role.role.name}" from this user?`,
-    );
+    roleToRemove.value = {
+        id: roleId,
+        name: role.role.display_name || role.role.name,
+    };
+    showRemoveRoleConfirm.value = true;
+}
 
-    if (confirmed) {
-        await userStore.removeRole(props.user.id, roleId);
+function resetRemoveRoleConfirm() {
+    if (isRemovingRole.value) {
+        return;
+    }
+    showRemoveRoleConfirm.value = false;
+    roleToRemove.value = null;
+}
+
+async function confirmRemoveRole() {
+    if (!roleToRemove.value) {
+        return;
+    }
+
+    isRemovingRole.value = true;
+    try {
+        await userStore.removeRole(props.user.id, roleToRemove.value.id);
+        showRemoveRoleConfirm.value = false;
+        roleToRemove.value = null;
+    } finally {
+        isRemovingRole.value = false;
     }
 }
+
+watch(showRemoveRoleConfirm, (isOpen) => {
+    if (!isOpen && !isRemovingRole.value) {
+        roleToRemove.value = null;
+    }
+});
 
 // Format date helper
 function formatDate(date: string) {
@@ -144,7 +174,7 @@ function formatDate(date: string) {
                             </p>
                             <UBadge
                                 v-if="membership.role.is_global"
-                                color="blue"
+                                color="info"
                                 variant="subtle"
                             >
                                 Global
@@ -242,4 +272,19 @@ function formatDate(date: string) {
             </p>
         </div>
     </div>
+
+    <ConfirmActionModal
+        v-model:open="showRemoveRoleConfirm"
+        title="Remove role assignment?"
+        :description="
+            roleToRemove
+                ? `This will remove '${roleToRemove.name}' from this user.`
+                : 'This will remove this role from the user.'
+        "
+        confirm-label="Remove role"
+        confirm-color="warning"
+        :loading="isRemovingRole"
+        @confirm="confirmRemoveRole"
+        @cancel="resetRemoveRoleConfirm"
+    />
 </template>

@@ -7,7 +7,7 @@ All features are controlled by configuration flags.
 """
 
 import asyncio
-from typing import Any, AsyncGenerator, Dict, Optional, Type
+from typing import Any, AsyncGenerator, Dict, Optional
 
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -60,6 +60,8 @@ class OutlabsAuth:
         enable_caching: bool = False,
         multi_tenant: bool = False,
         enable_audit_log: bool = False,
+        trust_resource_context_header: bool = False,
+        store_oauth_provider_tokens: bool = False,
         enable_notifications: bool = False,
         # Password settings
         password_min_length: int = 8,
@@ -105,6 +107,8 @@ class OutlabsAuth:
             enable_caching: Redis caching for performance (optional)
             multi_tenant: Multi-tenant isolation (optional)
             enable_audit_log: Audit logging for compliance (optional)
+            trust_resource_context_header: Trust client-provided X-Resource-Context headers for ABAC
+            store_oauth_provider_tokens: Persist OAuth provider tokens in database
             enable_notifications: Enable notification system (optional)
 
             redis_enabled: Enable Redis features (caching, counters, activity tracking)
@@ -159,6 +163,8 @@ class OutlabsAuth:
             redis_enabled=redis_enabled,
             multi_tenant=multi_tenant,
             enable_audit_log=enable_audit_log,
+            trust_resource_context_header=trust_resource_context_header,
+            store_oauth_provider_tokens=store_oauth_provider_tokens,
             redis_url=redis_url,
             cache_ttl_seconds=cache_ttl_seconds,
             **kwargs,
@@ -225,9 +231,7 @@ class OutlabsAuth:
         """Validate configuration is internally consistent."""
         # Context-aware roles require entity hierarchy
         if enable_context_aware_roles and not enable_entity_hierarchy:
-            raise ConfigurationError(
-                "enable_context_aware_roles requires enable_entity_hierarchy=True"
-            )
+            raise ConfigurationError("enable_context_aware_roles requires enable_entity_hierarchy=True")
 
         # Caching requires Redis URL
         if enable_caching and not redis_url:
@@ -352,9 +356,7 @@ class OutlabsAuth:
             )
 
         # API Key service
-        self.api_key_service = APIKeyService(
-            self.config, redis_client=self.redis_client
-        )
+        self.api_key_service = APIKeyService(self.config, redis_client=self.redis_client)
 
         # Service Token service
         # TODO: Update ServiceTokenService for PostgreSQL
@@ -458,9 +460,7 @@ class OutlabsAuth:
             AsyncSession context manager
         """
         if self._session_factory is None:
-            raise ConfigurationError(
-                "Database not initialized. Call await auth.initialize() first."
-            )
+            raise ConfigurationError("Database not initialized. Call await auth.initialize() first.")
         return self._session_factory()
 
     async def session(self) -> AsyncGenerator[AsyncSession, None]:
@@ -475,9 +475,7 @@ class OutlabsAuth:
             ...     ...
         """
         if self._session_factory is None:
-            raise ConfigurationError(
-                "Database not initialized. Call await auth.initialize() first."
-            )
+            raise ConfigurationError("Database not initialized. Call await auth.initialize() first.")
 
         async with self._session_factory() as session:
             try:
@@ -500,9 +498,7 @@ class OutlabsAuth:
         so the whole request shares a single session.
         """
         if self._session_factory is None:
-            raise ConfigurationError(
-                "Database not initialized. Call await auth.initialize() first."
-            )
+            raise ConfigurationError("Database not initialized. Call await auth.initialize() first.")
 
         async with self._session_factory() as session:
             try:
@@ -532,9 +528,7 @@ class OutlabsAuth:
             UserNotFoundError: If user doesn't exist
         """
         if not self._initialized:
-            raise ConfigurationError(
-                "OutlabsAuth not initialized. Call await auth.initialize() first."
-            )
+            raise ConfigurationError("OutlabsAuth not initialized. Call await auth.initialize() first.")
 
         return await self.auth_service.get_current_user(session, token)
 
@@ -542,27 +536,21 @@ class OutlabsAuth:
     def engine(self) -> AsyncEngine:
         """Get the SQLAlchemy async engine."""
         if self._engine is None:
-            raise ConfigurationError(
-                "Database not initialized. Call await auth.initialize() first."
-            )
+            raise ConfigurationError("Database not initialized. Call await auth.initialize() first.")
         return self._engine
 
     @property
     def session_factory(self) -> async_sessionmaker[AsyncSession]:
         """Get the session factory for creating database sessions."""
         if self._session_factory is None:
-            raise ConfigurationError(
-                "Database not initialized. Call await auth.initialize() first."
-            )
+            raise ConfigurationError("Database not initialized. Call await auth.initialize() first.")
         return self._session_factory
 
     @property
     def backends(self) -> list:
         """Get list of configured authentication backends."""
         if not self._backends:
-            raise ConfigurationError(
-                "Backends not initialized. Call await auth.initialize() first."
-            )
+            raise ConfigurationError("Backends not initialized. Call await auth.initialize() first.")
         return self._backends
 
     @property
@@ -579,9 +567,7 @@ class OutlabsAuth:
             ...     return auth_result["user"]
         """
         if self._deps is None:
-            raise ConfigurationError(
-                "Dependencies not initialized. Call await auth.initialize() first."
-            )
+            raise ConfigurationError("Dependencies not initialized. Call await auth.initialize() first.")
         return self._deps
 
     # ---------------------------------------------------------------------
@@ -591,12 +577,8 @@ class OutlabsAuth:
     def require_permission(self, *permissions: str, require_all: bool = False):
         return self.deps.require_permission(*permissions, require_all=require_all)
 
-    def require_entity_permission(
-        self, permission: str, entity_id_param: str = "entity_id"
-    ):
-        return self.deps.require_entity_permission(
-            permission, entity_id_param=entity_id_param
-        )
+    def require_entity_permission(self, permission: str, entity_id_param: str = "entity_id"):
+        return self.deps.require_entity_permission(permission, entity_id_param=entity_id_param)
 
     def require_tree_permission(
         self,
@@ -605,9 +587,7 @@ class OutlabsAuth:
         *,
         source: str = "path",
     ):
-        return self.deps.require_tree_permission(
-            permission, entity_id_field, source=source
-        )
+        return self.deps.require_tree_permission(permission, entity_id_field, source=source)
 
     @property
     def is_enterprise(self) -> bool:
@@ -629,9 +609,7 @@ class OutlabsAuth:
     def __repr__(self) -> str:
         """String representation showing configuration."""
         preset = "EnterpriseRBAC" if self.is_enterprise else "SimpleRBAC"
-        features = [
-            k for k, v in self.features.items() if v and k != "entity_hierarchy"
-        ]
+        features = [k for k, v in self.features.items() if v and k != "entity_hierarchy"]
         features_str = f" + {', '.join(features)}" if features else ""
         return f"<OutlabsAuth: {preset}{features_str}>"
 
@@ -667,15 +645,10 @@ class OutlabsAuth:
                     await asyncio.sleep(interval_seconds)
                     if self.activity_tracker:
                         async with self.get_session() as session:
-                            stats = await self.activity_tracker.sync_to_database(
-                                session
-                            )
+                            stats = await self.activity_tracker.sync_to_database(session)
                             await session.commit()
                         if stats.get("daily", 0) > 0 or stats.get("monthly", 0) > 0:
-                            print(
-                                f"[ActivitySync] Synced metrics - "
-                                f"DAU: {stats['daily']}, MAU: {stats['monthly']}"
-                            )
+                            print(f"[ActivitySync] Synced metrics - " f"DAU: {stats['daily']}, MAU: {stats['monthly']}")
                 except Exception as e:
                     print(f"[ActivitySync] Error: {e}")
 
@@ -757,9 +730,7 @@ class OutlabsAuth:
                 create_metrics_router,
             )
 
-            if not _safe_add_middleware(
-                CorrelationIDMiddleware, obs_service=self.observability
-            ):
+            if not _safe_add_middleware(CorrelationIDMiddleware, obs_service=self.observability):
                 middleware_added = False
             if include_metrics:
                 app.include_router(create_metrics_router(self.observability))
@@ -767,7 +738,10 @@ class OutlabsAuth:
         if include_resource_context:
             from outlabs_auth.middleware import ResourceContextMiddleware
 
-            if not _safe_add_middleware(ResourceContextMiddleware):
+            if not _safe_add_middleware(
+                ResourceContextMiddleware,
+                trust_client_header=self.config.trust_resource_context_header,
+            ):
                 middleware_added = False
 
         if not middleware_added:

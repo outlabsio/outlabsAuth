@@ -4,6 +4,8 @@ API Keys router factory.
 Provides ready-to-use API key management routes (DD-041).
 """
 
+import math
+from datetime import datetime, timezone
 from typing import Any, List, Optional
 from uuid import UUID
 
@@ -18,9 +20,7 @@ from outlabs_auth.schemas.api_key import (
 )
 
 
-def get_api_keys_router(
-    auth: Any, prefix: str = "", tags: Optional[list[str]] = None
-) -> APIRouter:
+def get_api_keys_router(auth: Any, prefix: str = "", tags: Optional[list[str]] = None) -> APIRouter:
     """
     Generate API key management router.
 
@@ -53,9 +53,7 @@ def get_api_keys_router(
 
     async def _to_response(session: AsyncSession, api_key) -> ApiKeyResponse:
         scopes = await auth.api_key_service.get_api_key_scopes(session, api_key.id)
-        ip_whitelist = await auth.api_key_service.get_api_key_ip_whitelist(
-            session, api_key.id
-        )
+        ip_whitelist = await auth.api_key_service.get_api_key_ip_whitelist(session, api_key.id)
         return ApiKeyResponse(
             id=str(api_key.id),
             prefix=api_key.prefix,
@@ -85,9 +83,7 @@ def get_api_keys_router(
     ):
         """List all API keys for the current user."""
         user_id = UUID(auth_result["user_id"])
-        api_keys = await auth.api_key_service.list_user_api_keys(
-            session, user_id=user_id
-        )
+        api_keys = await auth.api_key_service.list_user_api_keys(session, user_id=user_id)
         return [await _to_response(session, key) for key in api_keys]
 
     @router.post(
@@ -159,15 +155,11 @@ def get_api_keys_router(
         api_key = await auth.api_key_service.get_api_key(session, key_id)
 
         if not api_key:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
 
         # Verify ownership
         if str(api_key.owner_id) != auth_result["user_id"]:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
-            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
         return await _to_response(session, api_key)
 
@@ -187,9 +179,7 @@ def get_api_keys_router(
         # Get and verify ownership
         api_key = await auth.api_key_service.get_api_key(session, key_id)
         if not api_key or str(api_key.owner_id) != auth_result["user_id"]:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
 
         updates = data.model_dump(exclude_unset=True)
         if "entity_ids" in updates:
@@ -205,14 +195,10 @@ def get_api_keys_router(
                 updates["entity_id"] = None
 
         # Update
-        updated_key = await auth.api_key_service.update_api_key(
-            session, key_id=key_id, **updates
-        )
+        updated_key = await auth.api_key_service.update_api_key(session, key_id=key_id, **updates)
 
         if not updated_key:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
         return await _to_response(session, updated_key)
 
     @router.delete(
@@ -234,9 +220,7 @@ def get_api_keys_router(
         # Get and verify ownership
         api_key = await auth.api_key_service.get_api_key(session, key_id)
         if not api_key or str(api_key.owner_id) != auth_result["user_id"]:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
 
         # Delete (revoke)
         await auth.api_key_service.revoke_api_key(session, key_id)
@@ -264,43 +248,44 @@ def get_api_keys_router(
         # Get and verify ownership
         api_key = await auth.api_key_service.get_api_key(session, key_id)
         if not api_key or str(api_key.owner_id) != auth_result["user_id"]:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
+
+        scopes = await auth.api_key_service.get_api_key_scopes(session, api_key.id)
+        ip_whitelist = await auth.api_key_service.get_api_key_ip_whitelist(session, api_key.id)
+
+        expires_in_days = None
+        if api_key.expires_at:
+            remaining_seconds = (api_key.expires_at - datetime.now(timezone.utc)).total_seconds()
+            if remaining_seconds > 0:
+                expires_in_days = max(1, math.ceil(remaining_seconds / 86400))
+
+        prefix_type = "sk_live"
+        if api_key.prefix.startswith("sk_test_"):
+            prefix_type = "sk_test"
+        elif api_key.prefix.startswith("sk_live_"):
+            prefix_type = "sk_live"
 
         # Create new key with same settings
-        new_key, full_key = await auth.api_key_service.create_api_key(
+        full_key, new_key = await auth.api_key_service.create_api_key(
             session=session,
             owner_id=api_key.owner_id,
             name=f"{api_key.name} (rotated)",
-            scopes=api_key.scopes or [],
-            prefix_type=api_key.prefix[:7] if api_key.prefix else "sk_live",
-            ip_whitelist=api_key.ip_whitelist,
+            scopes=scopes or None,
+            prefix_type=prefix_type,
+            ip_whitelist=ip_whitelist or None,
             rate_limit_per_minute=api_key.rate_limit_per_minute,
-            expires_in_days=None,  # Keep same expiry policy - new key starts fresh
+            rate_limit_per_hour=api_key.rate_limit_per_hour,
+            rate_limit_per_day=api_key.rate_limit_per_day,
+            expires_in_days=expires_in_days,
             description=api_key.description,
-            entity_ids=api_key.entity_ids,
+            entity_id=api_key.entity_id,
+            inherit_from_tree=api_key.inherit_from_tree,
         )
 
         # Revoke old key
         await auth.api_key_service.revoke_api_key(session, key_id)
 
-        return ApiKeyCreateResponse(
-            id=str(new_key.id),
-            prefix=new_key.prefix,
-            name=new_key.name,
-            scopes=new_key.scopes or [],
-            ip_whitelist=new_key.ip_whitelist,
-            rate_limit_per_minute=new_key.rate_limit_per_minute,
-            status=new_key.status,
-            usage_count=new_key.usage_count,
-            created_at=new_key.created_at,
-            expires_at=new_key.expires_at,
-            last_used_at=new_key.last_used_at,
-            description=new_key.description,
-            entity_ids=new_key.entity_ids,
-            owner_id=str(new_key.owner_id) if new_key.owner_id else None,
-            api_key=full_key,
-        )
+        api_key_response = await _to_response(session, new_key)
+        return ApiKeyCreateResponse(**api_key_response.model_dump(), api_key=full_key)
 
     return router

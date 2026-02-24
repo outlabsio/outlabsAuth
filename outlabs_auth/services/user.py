@@ -60,9 +60,7 @@ class UserService(BaseService[User]):
     # Lifecycle hooks (override in subclasses)
     # =========================================================================
 
-    async def on_after_register(
-        self, user: User, request: Optional[Request] = None
-    ) -> None:
+    async def on_after_register(self, user: User, request: Optional[Request] = None) -> None:
         pass
 
     async def on_after_login(
@@ -73,39 +71,25 @@ class UserService(BaseService[User]):
     ) -> None:
         pass
 
-    async def on_after_update(
-        self, user: User, update_dict: Dict[str, Any], request: Optional[Request] = None
-    ) -> None:
+    async def on_after_update(self, user: User, update_dict: Dict[str, Any], request: Optional[Request] = None) -> None:
         pass
 
-    async def on_before_delete(
-        self, user: User, request: Optional[Request] = None
-    ) -> None:
+    async def on_before_delete(self, user: User, request: Optional[Request] = None) -> None:
         pass
 
-    async def on_after_delete(
-        self, user: User, request: Optional[Request] = None
-    ) -> None:
+    async def on_after_delete(self, user: User, request: Optional[Request] = None) -> None:
         pass
 
-    async def on_after_request_verify(
-        self, user: User, token: str, request: Optional[Request] = None
-    ) -> None:
+    async def on_after_request_verify(self, user: User, token: str, request: Optional[Request] = None) -> None:
         pass
 
-    async def on_after_verify(
-        self, user: User, request: Optional[Request] = None
-    ) -> None:
+    async def on_after_verify(self, user: User, request: Optional[Request] = None) -> None:
         pass
 
-    async def on_after_forgot_password(
-        self, user: User, token: str, request: Optional[Request] = None
-    ) -> None:
+    async def on_after_forgot_password(self, user: User, token: str, request: Optional[Request] = None) -> None:
         pass
 
-    async def on_after_reset_password(
-        self, user: User, request: Optional[Request] = None
-    ) -> None:
+    async def on_after_reset_password(self, user: User, request: Optional[Request] = None) -> None:
         pass
 
     async def on_failed_login(
@@ -117,19 +101,13 @@ class UserService(BaseService[User]):
     ) -> None:
         pass
 
-    async def on_after_oauth_register(
-        self, user: User, provider: str, request: Optional[Request] = None
-    ) -> None:
+    async def on_after_oauth_register(self, user: User, provider: str, request: Optional[Request] = None) -> None:
         pass
 
-    async def on_after_oauth_login(
-        self, user: User, provider: str, request: Optional[Request] = None
-    ) -> None:
+    async def on_after_oauth_login(self, user: User, provider: str, request: Optional[Request] = None) -> None:
         pass
 
-    async def on_after_oauth_associate(
-        self, user: User, provider: str, request: Optional[Request] = None
-    ) -> None:
+    async def on_after_oauth_associate(self, user: User, provider: str, request: Optional[Request] = None) -> None:
         pass
 
     async def create_user(
@@ -169,7 +147,10 @@ class UserService(BaseService[User]):
         email = validate_email(email)
 
         # Check if user already exists
-        existing = await self.get_one(session, User.email == email)
+        user_lookup_filters = [User.email == email]
+        if self.config.multi_tenant:
+            user_lookup_filters.append(User.tenant_id == tenant_id)
+        existing = await self.get_one(session, *user_lookup_filters)
         if existing:
             raise UserAlreadyExistsError(
                 message=f"User with email {email} already exists",
@@ -200,6 +181,15 @@ class UserService(BaseService[User]):
                         "root_entity_id": str(root_entity_id),
                         "entity_name": entity.name,
                         "parent_id": str(entity.parent_id),
+                    },
+                )
+            if tenant_id and entity.tenant_id != tenant_id:
+                raise InvalidInputError(
+                    message="Root entity must belong to the same tenant as the user",
+                    details={
+                        "root_entity_id": str(root_entity_id),
+                        "entity_tenant_id": entity.tenant_id,
+                        "user_tenant_id": tenant_id,
                     },
                 )
 
@@ -368,14 +358,10 @@ class UserService(BaseService[User]):
                 details={"user_id": str(user_id)},
             )
 
-        if not user.hashed_password or not verify_password(
-            current_password, user.hashed_password
-        ):
+        if not user.hashed_password or not verify_password(current_password, user.hashed_password):
             raise InvalidCredentialsError(message="Current password is incorrect")
 
-        return await self.change_password(
-            session, user_id=user_id, new_password=new_password
-        )
+        return await self.change_password(session, user_id=user_id, new_password=new_password)
 
     async def change_password(
         self,
@@ -476,9 +462,7 @@ class UserService(BaseService[User]):
                 data={
                     "user_id": str(user.id),
                     "email": user.email,
-                    "old_status": old_status.value
-                    if hasattr(old_status, "value")
-                    else old_status,
+                    "old_status": old_status.value if hasattr(old_status, "value") else old_status,
                     "new_status": status.value if hasattr(status, "value") else status,
                     "changed_at": datetime.now(timezone.utc).isoformat(),
                 },
@@ -572,6 +556,7 @@ class UserService(BaseService[User]):
         session: AsyncSession,
         search_term: str,
         limit: int = 20,
+        tenant_id: Optional[str] = None,
     ) -> List[User]:
         """
         Search users by email or name.
@@ -593,6 +578,7 @@ class UserService(BaseService[User]):
                 User.first_name.ilike(pattern),
                 User.last_name.ilike(pattern),
             ),
+            *([User.tenant_id == tenant_id] if tenant_id is not None else []),
             limit=limit,
         )
         return users

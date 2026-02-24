@@ -34,12 +34,7 @@ class AuthBackend:
         ```
     """
 
-    def __init__(
-        self,
-        name: str,
-        transport: Transport,
-        strategy: Strategy
-    ):
+    def __init__(self, name: str, transport: Transport, strategy: Strategy):
         """
         Initialize authentication backend.
 
@@ -52,11 +47,7 @@ class AuthBackend:
         self.transport = transport
         self.strategy = strategy
 
-    async def authenticate(
-        self,
-        request: Any,
-        **kwargs: Any
-    ) -> Optional[dict]:
+    async def authenticate(self, request: Any, **kwargs: Any) -> Optional[dict]:
         """
         Attempt authentication using this backend.
 
@@ -79,7 +70,7 @@ class AuthBackend:
             return None
 
         # Step 2: Validate credentials using strategy
-        result = await self.strategy.authenticate(credentials, **kwargs)
+        result = await self.strategy.authenticate(credentials, request=request, **kwargs)
         return result
 
     def __repr__(self) -> str:
