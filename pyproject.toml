@@ -80,8 +80,7 @@ notifications = [
 # Development tools
 dev = [
     "black>=23.0.0",
-    "isort>=5.12.0",
-    "flake8>=6.0.0",
+    "ruff>=0.9.0",
     "mypy>=1.5.0",
     "uvicorn[standard]>=0.24.0",
     "questionary>=2.0.0",  # Interactive CLI for start.py
@@ -128,8 +127,7 @@ all = [
     "twilio>=8.0.0",
     "python-telegram-bot>=20.0",
     "black>=23.0.0",
-    "isort>=5.12.0",
-    "flake8>=6.0.0",
+    "ruff>=0.9.0",
     "mypy>=1.5.0",
     "uvicorn[standard]>=0.24.0",
     "pytest>=7.4.0",
@@ -159,11 +157,13 @@ line-length = 120
 target-version = ["py312"]
 include = '\.pyi?$'
 
-# isort import sorting
-[tool.isort]
-profile = "black"
-line_length = 120
-multi_line_output = 3
+# Ruff linting baseline (high-signal correctness checks)
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
 
 # Pytest configuration
 [tool.pytest.ini_options]

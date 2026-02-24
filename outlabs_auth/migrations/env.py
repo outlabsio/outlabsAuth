@@ -9,11 +9,12 @@ import os
 import re
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import pool, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlmodel import SQLModel
+
+from alembic import context
 
 # Import all models to register them with SQLModel.metadata
 from outlabs_auth.models.sql import ALL_MODELS  # noqa: F401
@@ -50,9 +51,7 @@ def get_target_schema() -> str | None:
     if not raw_schema:
         return None
     if not _SCHEMA_RE.fullmatch(raw_schema):
-        raise RuntimeError(
-            "OUTLABS_AUTH_SCHEMA must match [A-Za-z_][A-Za-z0-9_]*"
-        )
+        raise RuntimeError("OUTLABS_AUTH_SCHEMA must match [A-Za-z_][A-Za-z0-9_]*")
     return raw_schema
 
 

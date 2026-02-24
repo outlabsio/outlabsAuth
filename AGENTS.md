@@ -15,13 +15,15 @@
 - `uv run pytest`: run the full test suite.
 - `uv run pytest tests/unit/`: unit tests only.
 - `uv run pytest tests/integration/`: integration tests (often require DB/Redis).
+- `uv run ruff check .`: run lint checks.
+- `uv run black --check .`: verify formatting.
 - `cd auth-ui && bun install && bun run dev`: run the admin UI.
 - `cd auth-ui && bun run build`: build the admin UI.
 - `docker compose up -d`: start local dependencies (Postgres/Redis/observability stack).
 
 ## Coding Style & Naming Conventions
-- Python: 4-space indentation, type hints preferred; format with `black` and sort imports with `isort`.
-- Static checks: `flake8` and `mypy` are configured in `pyproject.toml`.
+- Python: 4-space indentation, type hints preferred; format with `black`.
+- Static checks: `ruff` and `mypy` are configured in `pyproject.toml`.
 - Tests: files named `test_*.py`, pytest markers like `@pytest.mark.unit` and `@pytest.mark.integration` are used.
 - Frontend: keep existing Nuxt/TypeScript patterns; follow file-local conventions.
 

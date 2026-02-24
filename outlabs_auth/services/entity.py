@@ -15,6 +15,7 @@ from uuid import UUID
 if TYPE_CHECKING:
     from outlabs_auth.observability import ObservabilityService
     from outlabs_auth.services.config import ConfigService
+    from outlabs_auth.services.redis_client import RedisClient
 
 from sqlalchemy import and_, insert, or_, select, update
 from sqlalchemy import delete as sql_delete
@@ -121,9 +122,7 @@ class EntityService(BaseService[Entity]):
                 )
 
             # Validate hierarchy rules
-            await self._validate_hierarchy(
-                session, parent_entity, entity_class, entity_type
-            )
+            await self._validate_hierarchy(session, parent_entity, entity_class, entity_type)
             parent_depth = parent_entity.depth
             parent_path = parent_entity.path
 
@@ -197,9 +196,7 @@ class EntityService(BaseService[Entity]):
         """
         entity = await self.get_by_id(session, entity_id)
         if not entity:
-            raise EntityNotFoundError(
-                message="Entity not found", details={"entity_id": str(entity_id)}
-            )
+            raise EntityNotFoundError(message="Entity not found", details={"entity_id": str(entity_id)})
         return entity
 
     async def get_entity_by_slug(
@@ -221,9 +218,7 @@ class EntityService(BaseService[Entity]):
             filters.append(Entity.tenant_id == tenant_id)
         return await self.get_one(session, *filters)
 
-    async def update_entity(
-        self, session: AsyncSession, entity_id: UUID, **updates
-    ) -> Entity:
+    async def update_entity(self, session: AsyncSession, entity_id: UUID, **updates) -> Entity:
         """
         Update entity.
 
@@ -308,9 +303,7 @@ class EntityService(BaseService[Entity]):
                 )
 
             # Prevent cycles: cannot move under own descendant.
-            if await self.is_ancestor_of(
-                session, ancestor_id=entity.id, descendant_id=new_parent.id
-            ):
+            if await self.is_ancestor_of(session, ancestor_id=entity.id, descendant_id=new_parent.id):
                 raise InvalidInputError(
                     message="Cannot move entity under its own descendant",
                     details={
@@ -342,9 +335,7 @@ class EntityService(BaseService[Entity]):
                 details={"entity_id": str(entity_id)},
             )
 
-        subtree_depth_by_id: dict[UUID, int] = {
-            row[0].id: row[1] for row in subtree_rows
-        }
+        subtree_depth_by_id: dict[UUID, int] = {row[0].id: row[1] for row in subtree_rows}
         subtree_entities: list[Entity] = [row[0] for row in subtree_rows]
         subtree_ids = list(subtree_depth_by_id.keys())
 
@@ -353,17 +344,11 @@ class EntityService(BaseService[Entity]):
         if old_root_path and not old_root_path.endswith("/"):
             old_root_path = old_root_path + "/"
 
-        new_parent_path = (
-            (new_parent.path if new_parent else None) if new_parent_id else None
-        )
+        new_parent_path = (new_parent.path if new_parent else None) if new_parent_id else None
         if new_parent_path and not new_parent_path.endswith("/"):
             new_parent_path = new_parent_path + "/"
 
-        new_root_path = (
-            f"/{entity.slug}/"
-            if not new_parent_path
-            else f"{new_parent_path}{entity.slug}/"
-        )
+        new_root_path = f"/{entity.slug}/" if not new_parent_path else f"{new_parent_path}{entity.slug}/"
 
         # Update entity parent pointer early (so fallbacks can read it if needed).
         entity.parent_id = new_parent_id
@@ -403,9 +388,9 @@ class EntityService(BaseService[Entity]):
 
         # 2) Insert links from new ancestors (outside subtree) to moved subtree.
         if new_parent is not None:
-            ancestors_stmt = select(
-                EntityClosure.ancestor_id, EntityClosure.depth
-            ).where(EntityClosure.descendant_id == new_parent.id)
+            ancestors_stmt = select(EntityClosure.ancestor_id, EntityClosure.depth).where(
+                EntityClosure.descendant_id == new_parent.id
+            )
             ancestors_result = await session.execute(ancestors_stmt)
             ancestor_rows = ancestors_result.all()  # (ancestor_id, depth_to_parent)
 
@@ -444,9 +429,7 @@ class EntityService(BaseService[Entity]):
 
         return entity
 
-    async def delete_entity(
-        self, session: AsyncSession, entity_id: UUID, cascade: bool = False
-    ) -> bool:
+    async def delete_entity(self, session: AsyncSession, entity_id: UUID, cascade: bool = False) -> bool:
         """
         Delete entity (soft delete by setting status to 'archived').
 
@@ -518,9 +501,7 @@ class EntityService(BaseService[Entity]):
 
         return True
 
-    async def get_entity_path(
-        self, session: AsyncSession, entity_id: UUID
-    ) -> List[Entity]:
+    async def get_entity_path(self, session: AsyncSession, entity_id: UUID) -> List[Entity]:
         """
         Get path from root to entity (ancestors in order).
 
@@ -568,9 +549,7 @@ class EntityService(BaseService[Entity]):
         if self.redis_client and self.redis_client.is_available and entities:
             cache_key = self.redis_client.make_entity_path_key(str(entity_id))
             cache_data = [{"id": str(e.id)} for e in entities]
-            await self.redis_client.set(
-                cache_key, cache_data, ttl=self.config.cache_entity_ttl
-            )
+            await self.redis_client.set(cache_key, cache_data, ttl=self.config.cache_entity_ttl)
 
         return entities
 
@@ -623,23 +602,14 @@ class EntityService(BaseService[Entity]):
         entities = await self.get_many(session, *filters, limit=10000)
 
         # Cache result (if Redis enabled and no entity_type filter)
-        if (
-            self.redis_client
-            and self.redis_client.is_available
-            and not entity_type
-            and entities
-        ):
+        if self.redis_client and self.redis_client.is_available and not entity_type and entities:
             cache_key = self.redis_client.make_entity_descendants_key(str(entity_id))
             cache_data = [{"id": str(e.id)} for e in entities]
-            await self.redis_client.set(
-                cache_key, cache_data, ttl=self.config.cache_entity_ttl
-            )
+            await self.redis_client.set(cache_key, cache_data, ttl=self.config.cache_entity_ttl)
 
         return entities
 
-    async def get_children(
-        self, session: AsyncSession, entity_id: UUID
-    ) -> List[Entity]:
+    async def get_children(self, session: AsyncSession, entity_id: UUID) -> List[Entity]:
         """
         Get direct children of entity.
 
@@ -710,9 +680,7 @@ class EntityService(BaseService[Entity]):
                 type_counts[entity_type]["examples"].append(entity.display_name)
 
         # Sort by count (most common first)
-        suggestions = sorted(
-            type_counts.values(), key=lambda x: x["count"], reverse=True
-        )
+        suggestions = sorted(type_counts.values(), key=lambda x: x["count"], reverse=True)
 
         # Get parent entity info if provided
         parent_entity_data = None
@@ -723,9 +691,11 @@ class EntityService(BaseService[Entity]):
                 "name": parent_entity.name,
                 "display_name": parent_entity.display_name,
                 "entity_type": parent_entity.entity_type,
-                "entity_class": parent_entity.entity_class.value
-                if hasattr(parent_entity.entity_class, "value")
-                else parent_entity.entity_class,
+                "entity_class": (
+                    parent_entity.entity_class.value
+                    if hasattr(parent_entity.entity_class, "value")
+                    else parent_entity.entity_class
+                ),
             }
 
         return {
@@ -736,9 +706,7 @@ class EntityService(BaseService[Entity]):
 
     # Closure table maintenance
 
-    async def _create_closure_records(
-        self, session: AsyncSession, entity: Entity
-    ) -> None:
+    async def _create_closure_records(self, session: AsyncSession, entity: Entity) -> None:
         """
         Create closure table records for new entity.
 
@@ -762,9 +730,7 @@ class EntityService(BaseService[Entity]):
         # If has parent, copy parent's ancestors and add parent
         if entity.parent_id:
             # Get all ancestors of parent
-            stmt = select(EntityClosure).where(
-                EntityClosure.descendant_id == entity.parent_id
-            )
+            stmt = select(EntityClosure).where(EntityClosure.descendant_id == entity.parent_id)
             result = await session.execute(stmt)
             parent_closures = result.scalars().all()
 
@@ -780,9 +746,7 @@ class EntityService(BaseService[Entity]):
 
         await session.flush()
 
-    async def _delete_closure_records(
-        self, session: AsyncSession, entity: Entity
-    ) -> None:
+    async def _delete_closure_records(self, session: AsyncSession, entity: Entity) -> None:
         """
         Delete closure table records for entity.
 
@@ -827,19 +791,14 @@ class EntityService(BaseService[Entity]):
             InvalidInputError: If validation fails
         """
         # Rule 1: ACCESS_GROUP cannot have STRUCTURAL children
-        if (
-            parent.entity_class == EntityClass.ACCESS_GROUP
-            and child_class == EntityClass.STRUCTURAL
-        ):
+        if parent.entity_class == EntityClass.ACCESS_GROUP and child_class == EntityClass.STRUCTURAL:
             raise InvalidInputError(
                 message="Access groups cannot have structural entities as children",
                 details={
-                    "parent_class": parent.entity_class.value
-                    if hasattr(parent.entity_class, "value")
-                    else str(parent.entity_class),
-                    "child_class": child_class.value
-                    if hasattr(child_class, "value")
-                    else str(child_class),
+                    "parent_class": (
+                        parent.entity_class.value if hasattr(parent.entity_class, "value") else str(parent.entity_class)
+                    ),
+                    "child_class": child_class.value if hasattr(child_class, "value") else str(child_class),
                 },
             )
 
@@ -853,9 +812,7 @@ class EntityService(BaseService[Entity]):
 
         # Rule 3: Check allowed child types
         # Priority: parent's allowed_child_types > root entity's allowed_child_types > system defaults
-        allowed_types = await self._get_allowed_child_types(
-            session, parent, child_class
-        )
+        allowed_types = await self._get_allowed_child_types(session, parent, child_class)
 
         if allowed_types:
             if child_type.lower() not in [t.lower() for t in allowed_types]:
@@ -895,11 +852,7 @@ class EntityService(BaseService[Entity]):
 
         # Get root entity to check its allowed_child_types
         root_entity = await self._get_root_entity(session, parent)
-        if (
-            root_entity
-            and hasattr(root_entity, "allowed_child_types")
-            and root_entity.allowed_child_types
-        ):
+        if root_entity and hasattr(root_entity, "allowed_child_types") and root_entity.allowed_child_types:
             return root_entity.allowed_child_types
 
         # No restrictions if neither parent nor root has explicit allowed_child_types
@@ -993,9 +946,7 @@ class EntityService(BaseService[Entity]):
 
         return deleted
 
-    async def invalidate_entity_tree_cache(
-        self, session: AsyncSession, entity_id: UUID
-    ) -> int:
+    async def invalidate_entity_tree_cache(self, session: AsyncSession, entity_id: UUID) -> int:
         """
         Invalidate cache for entity and all ancestors/descendants.
 
@@ -1046,17 +997,13 @@ class EntityService(BaseService[Entity]):
 
         # Publish invalidation event
         if deleted > 0:
-            await self.redis_client.publish(
-                self.config.redis_invalidation_channel, "all:entities"
-            )
+            await self.redis_client.publish(self.config.redis_invalidation_channel, "all:entities")
 
         return deleted
 
     # Helper methods for ancestor/descendant checks
 
-    async def is_ancestor_of(
-        self, session: AsyncSession, ancestor_id: UUID, descendant_id: UUID
-    ) -> bool:
+    async def is_ancestor_of(self, session: AsyncSession, ancestor_id: UUID, descendant_id: UUID) -> bool:
         """
         Check if one entity is an ancestor of another.
 
@@ -1076,9 +1023,7 @@ class EntityService(BaseService[Entity]):
         result = await session.execute(stmt)
         return result.scalar_one_or_none() is not None
 
-    async def get_ancestors(
-        self, session: AsyncSession, entity_id: UUID, include_self: bool = False
-    ) -> List[Entity]:
+    async def get_ancestors(self, session: AsyncSession, entity_id: UUID, include_self: bool = False) -> List[Entity]:
         """
         Get all ancestor entities.
 

@@ -7,7 +7,7 @@ Uses SQLAlchemy for PostgreSQL backend.
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 from uuid import UUID
 
 from sqlalchemy import delete as sql_delete
@@ -25,6 +25,9 @@ from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.enums import APIKeyStatus
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.services.base import BaseService
+
+if TYPE_CHECKING:
+    from outlabs_auth.services.redis_client import RedisClient
 
 logger = logging.getLogger(__name__)
 
@@ -103,9 +106,7 @@ class APIKeyService(BaseService[APIKey]):
         # Validate owner exists
         owner = await session.get(User, owner_id)
         if not owner:
-            raise UserNotFoundError(
-                message="User not found", details={"user_id": str(owner_id)}
-            )
+            raise UserNotFoundError(message="User not found", details={"user_id": str(owner_id)})
 
         # Generate API key
         full_key, prefix = APIKey.generate_key(prefix_type)
@@ -157,9 +158,7 @@ class APIKeyService(BaseService[APIKey]):
         await session.flush()
         await session.refresh(api_key)
 
-        logger.info(
-            f"Created API key '{name}' for user {owner_id} with prefix {prefix}"
-        )
+        logger.info(f"Created API key '{name}' for user {owner_id} with prefix {prefix}")
 
         # Return full key (only time it's ever shown!)
         return full_key, api_key
@@ -211,29 +210,21 @@ class APIKeyService(BaseService[APIKey]):
 
         # Check if key is active
         if not api_key.is_active():
-            logger.warning(
-                f"Inactive API key: {api_key.prefix} (status: {api_key.status})"
-            )
+            logger.warning(f"Inactive API key: {api_key.prefix} (status: {api_key.status})")
             return None, 0
 
         # Check scope if required
         if required_scope:
             has_scope = await self._check_scope(session, api_key.id, required_scope)
             if not has_scope:
-                logger.warning(
-                    f"API key {api_key.prefix} lacks required scope: {required_scope}"
-                )
+                logger.warning(f"API key {api_key.prefix} lacks required scope: {required_scope}")
                 return None, 0
 
         # Check entity access if required (supports tree permissions)
         if entity_id:
-            has_access = await self.check_entity_access_with_tree(
-                session, api_key, entity_id
-            )
+            has_access = await self.check_entity_access_with_tree(session, api_key, entity_id)
             if not has_access:
-                logger.warning(
-                    f"API key {api_key.prefix} lacks access to entity: {entity_id}"
-                )
+                logger.warning(f"API key {api_key.prefix} lacks access to entity: {entity_id}")
                 return None, 0
 
         # Check IP whitelist if required
@@ -269,9 +260,7 @@ class APIKeyService(BaseService[APIKey]):
 
         return api_key, usage_count
 
-    async def _check_scope(
-        self, session: AsyncSession, api_key_id: UUID, required_scope: str
-    ) -> bool:
+    async def _check_scope(self, session: AsyncSession, api_key_id: UUID, required_scope: str) -> bool:
         """Check if API key has required scope."""
         # Check for exact match or wildcard
         stmt = select(APIKeyScope).where(
@@ -301,14 +290,8 @@ class APIKeyService(BaseService[APIKey]):
 
         return False
 
-    async def _check_ip(
-        self, session: AsyncSession, api_key_id: UUID, ip_address: str
-    ) -> bool:
-        stmt = (
-            select(func.count())
-            .select_from(APIKeyIPWhitelist)
-            .where(APIKeyIPWhitelist.api_key_id == api_key_id)
-        )
+    async def _check_ip(self, session: AsyncSession, api_key_id: UUID, ip_address: str) -> bool:
+        stmt = select(func.count()).select_from(APIKeyIPWhitelist).where(APIKeyIPWhitelist.api_key_id == api_key_id)
         result = await session.execute(stmt)
         count = result.scalar() or 0
 
@@ -342,10 +325,7 @@ class APIKeyService(BaseService[APIKey]):
         # Check per-minute limit
         if api_key.rate_limit_per_minute:
             minute_key = self._make_rate_limit_key(key_id, "minute")
-            count = (
-                await self.redis_client.increment_with_ttl(minute_key, amount=1, ttl=60)
-                or 0
-            )
+            count = await self.redis_client.increment_with_ttl(minute_key, amount=1, ttl=60) or 0
 
             if count > api_key.rate_limit_per_minute:
                 raise InvalidInputError(
@@ -360,10 +340,7 @@ class APIKeyService(BaseService[APIKey]):
         # Check per-hour limit
         if api_key.rate_limit_per_hour:
             hour_key = self._make_rate_limit_key(key_id, "hour")
-            count = (
-                await self.redis_client.increment_with_ttl(hour_key, amount=1, ttl=3600)
-                or 0
-            )
+            count = await self.redis_client.increment_with_ttl(hour_key, amount=1, ttl=3600) or 0
 
             if count > api_key.rate_limit_per_hour:
                 raise InvalidInputError(
@@ -378,10 +355,7 @@ class APIKeyService(BaseService[APIKey]):
         # Check per-day limit
         if api_key.rate_limit_per_day:
             day_key = self._make_rate_limit_key(key_id, "day")
-            count = (
-                await self.redis_client.increment_with_ttl(day_key, amount=1, ttl=86400)
-                or 0
-            )
+            count = await self.redis_client.increment_with_ttl(day_key, amount=1, ttl=86400) or 0
 
             if count > api_key.rate_limit_per_day:
                 raise InvalidInputError(
@@ -457,9 +431,7 @@ class APIKeyService(BaseService[APIKey]):
                     stats["synced_keys"] += 1
                     stats["total_usage"] += usage_count
 
-                    logger.debug(
-                        f"Synced {usage_count} uses for API key {api_key.prefix}"
-                    )
+                    logger.debug(f"Synced {usage_count} uses for API key {api_key.prefix}")
 
                 except Exception as e:
                     logger.error(f"Error syncing counter {counter_key}: {e}")
@@ -492,29 +464,19 @@ class APIKeyService(BaseService[APIKey]):
 
     # API Key Management Methods
 
-    async def get_api_key(
-        self, session: AsyncSession, key_id: UUID
-    ) -> Optional[APIKey]:
+    async def get_api_key(self, session: AsyncSession, key_id: UUID) -> Optional[APIKey]:
         """Get API key by ID with owner loaded."""
-        return await self.get_by_id(
-            session, key_id, options=[selectinload(APIKey.owner)]
-        )
+        return await self.get_by_id(session, key_id, options=[selectinload(APIKey.owner)])
 
-    async def get_api_key_scopes(
-        self, session: AsyncSession, key_id: UUID
-    ) -> List[str]:
+    async def get_api_key_scopes(self, session: AsyncSession, key_id: UUID) -> List[str]:
         """Get scopes for an API key."""
         stmt = select(APIKeyScope.scope).where(APIKeyScope.api_key_id == key_id)
         result = await session.execute(stmt)
         return [row[0] for row in result.all()]
 
-    async def get_api_key_ip_whitelist(
-        self, session: AsyncSession, key_id: UUID
-    ) -> List[str]:
+    async def get_api_key_ip_whitelist(self, session: AsyncSession, key_id: UUID) -> List[str]:
         """Get IP whitelist entries for an API key."""
-        stmt = select(APIKeyIPWhitelist.ip_address).where(
-            APIKeyIPWhitelist.api_key_id == key_id
-        )
+        stmt = select(APIKeyIPWhitelist.ip_address).where(APIKeyIPWhitelist.api_key_id == key_id)
         stmt = select(APIKeyIPWhitelist.ip_address).where(APIKeyIPWhitelist.api_key_id == key_id)
         result = await session.execute(stmt)
         return [row[0] for row in result.all()]
@@ -563,9 +525,7 @@ class APIKeyService(BaseService[APIKey]):
         logger.info(f"Revoked API key: {api_key.prefix}")
         return True
 
-    async def update_api_key(
-        self, session: AsyncSession, key_id: UUID, **updates
-    ) -> Optional[APIKey]:
+    async def update_api_key(self, session: AsyncSession, key_id: UUID, **updates) -> Optional[APIKey]:
         """
         Update API key fields.
 
@@ -612,9 +572,7 @@ class APIKeyService(BaseService[APIKey]):
         # Handle IP whitelist separately
         if "ip_whitelist" in updates:
             # Clear existing IPs
-            stmt = sql_delete(APIKeyIPWhitelist).where(
-                APIKeyIPWhitelist.api_key_id == key_id
-            )
+            stmt = sql_delete(APIKeyIPWhitelist).where(APIKeyIPWhitelist.api_key_id == key_id)
             await session.execute(stmt)
 
             # Add new IPs

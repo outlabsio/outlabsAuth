@@ -259,9 +259,7 @@ class OutlabsAuth:
         if self._engine is None:
             connect_args: Dict[str, Any] = {}
             if self.config.database_schema:
-                connect_args["server_settings"] = {
-                    "search_path": f"{self.config.database_schema},public"
-                }
+                connect_args["server_settings"] = {"search_path": f"{self.config.database_schema},public"}
 
             db_config = DatabaseConfig(
                 database_url=self.config.database_url,

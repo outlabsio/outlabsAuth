@@ -58,6 +58,19 @@ Select services with arrow keys, space to toggle, enter to start:
 - **ui** - Admin UI (port 3000)
 - **obs** - Observability stack (Grafana, Prometheus, Loki)
 
+### Code Quality
+
+```bash
+# Lint
+uv run ruff check .
+
+# Auto-fix lint issues where safe
+uv run ruff check . --fix
+
+# Format Python code
+uv run black .
+```
+
 ### Simple RBAC Example
 
 ```python

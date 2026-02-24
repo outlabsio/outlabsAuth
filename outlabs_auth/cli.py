@@ -52,9 +52,7 @@ def _resolve_alembic_ini() -> Path:
     if cwd_alembic.exists():
         return cwd_alembic
 
-    raise FileNotFoundError(
-        "alembic.ini not found. Expected in current working directory or package root."
-    )
+    raise FileNotFoundError("alembic.ini not found. Expected in current working directory or package root.")
 
 
 def _validate_schema_name(schema: Optional[str]) -> Optional[str]:
@@ -98,8 +96,9 @@ async def run_migrations(
     This helper is safe to call from running event loops because Alembic runs
     in a background thread.
     """
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     normalized_url = normalize_database_url(database_url)
     target_schema = _validate_schema_name(schema)
@@ -165,8 +164,9 @@ def main():
 @click.option("--revision", default="head", help="Target revision (default: head)")
 def migrate(revision: str):
     """Run database migrations to specified revision."""
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     # Find alembic.ini
     alembic_ini = Path("alembic.ini")
@@ -243,8 +243,9 @@ def drop_db():
 @main.command()
 def current():
     """Show current migration revision."""
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     alembic_ini = Path("alembic.ini")
     if not alembic_ini.exists():
@@ -259,8 +260,9 @@ def current():
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed history")
 def history(verbose: bool):
     """Show migration history."""
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     alembic_ini = Path("alembic.ini")
     if not alembic_ini.exists():
@@ -276,8 +278,9 @@ def history(verbose: bool):
 @click.option("--autogenerate", is_flag=True, help="Auto-generate from model changes")
 def revision(message: str, autogenerate: bool):
     """Create a new migration revision."""
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     alembic_ini = Path("alembic.ini")
     if not alembic_ini.exists():
@@ -294,8 +297,9 @@ def revision(message: str, autogenerate: bool):
 @main.command()
 def heads():
     """Show current available heads."""
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     alembic_ini = Path("alembic.ini")
     if not alembic_ini.exists():
@@ -310,8 +314,9 @@ def heads():
 @click.option("--revision", "-r", default="-1", help="Revision to downgrade to")
 def downgrade(revision: str):
     """Downgrade to a previous revision."""
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     alembic_ini = Path("alembic.ini")
     if not alembic_ini.exists():
@@ -335,14 +340,16 @@ def tables():
 
         async with engine.connect() as conn:
             result = await conn.execute(
-                text("""
+                text(
+                    """
                     SELECT table_name,
                            (SELECT COUNT(*) FROM information_schema.columns
                             WHERE table_name = t.table_name AND table_schema = 'public') as column_count
                     FROM information_schema.tables t
                     WHERE table_schema = 'public'
                     ORDER BY table_name
-                """)
+                """
+                )
             )
             tables = [(row[0], row[1]) for row in result]
 
