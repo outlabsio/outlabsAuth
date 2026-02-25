@@ -31,7 +31,7 @@ from outlabs_auth.models.sql.token import RefreshToken
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.enums import UserStatus
 from outlabs_auth.utils.jwt import create_token_pair, verify_token
-from outlabs_auth.utils.password import verify_password, generate_password_hash
+from outlabs_auth.utils.password import generate_password_hash, verify_and_upgrade_password, verify_password
 from outlabs_auth.utils.validation import validate_email
 
 
@@ -152,8 +152,13 @@ class AuthService:
         # Check if account is active
         self._check_user_status(user)
 
-        # Verify password
-        if not user.hashed_password or not verify_password(password, user.hashed_password):
+        # Verify password (and opportunistically upgrade legacy hashes).
+        is_valid_password = False
+        upgraded_hash: Optional[str] = None
+        if user.hashed_password:
+            is_valid_password, upgraded_hash = verify_and_upgrade_password(password, user.hashed_password)
+
+        if not is_valid_password:
             # Increment failed login attempts
             user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
 
@@ -190,6 +195,9 @@ class AuthService:
                     "max_attempts": self.config.max_login_attempts,
                 },
             )
+
+        if upgraded_hash and upgraded_hash != user.hashed_password:
+            user.hashed_password = upgraded_hash
 
         # Successful login - reset failed attempts
         user.failed_login_attempts = 0

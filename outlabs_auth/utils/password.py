@@ -1,22 +1,28 @@
 """
 Password hashing and validation utilities
 
-Uses passlib with bcrypt for secure password hashing.
+Uses pwdlib with Argon2id as the primary hasher and bcrypt compatibility
+for legacy hashes.
 """
-from passlib.context import CryptContext
-from typing import Optional
+
 import re
+from typing import Optional
+
+from pwdlib import PasswordHash
+from pwdlib.exceptions import PwdlibError
+from pwdlib.hashers.argon2 import Argon2Hasher
+from pwdlib.hashers.bcrypt import BcryptHasher
 
 from outlabs_auth.core.exceptions import InvalidPasswordError
 
 
-# Password hashing context using bcrypt
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Primary hasher is Argon2id; bcrypt remains enabled for legacy hash verify.
+password_hasher = PasswordHash((Argon2Hasher(), BcryptHasher()))
 
 
 def hash_password(password: str) -> str:
     """
-    Hash a password using bcrypt.
+    Hash a password using the current hasher (Argon2id).
 
     Args:
         password: Plain text password
@@ -29,7 +35,7 @@ def hash_password(password: str) -> str:
         >>> verify_password("MyPassword123!", hashed)
         True
     """
-    return pwd_context.hash(password)
+    return password_hasher.hash(password)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -38,7 +44,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
     Args:
         plain_password: Plain text password to verify
-        hashed_password: Bcrypt hashed password
+        hashed_password: Stored password hash (Argon2id or legacy bcrypt)
 
     Returns:
         bool: True if password matches, False otherwise
@@ -50,7 +56,25 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         >>> verify_password("WrongPassword", hashed)
         False
     """
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        return password_hasher.verify(plain_password, hashed_password)
+    except PwdlibError:
+        return False
+
+
+def verify_and_upgrade_password(plain_password: str, hashed_password: str) -> tuple[bool, Optional[str]]:
+    """
+    Verify password and return an upgraded hash when legacy algorithms are used.
+
+    Returns:
+        tuple[bool, Optional[str]]: (is_valid, upgraded_hash)
+        - is_valid=False means verification failed
+        - upgraded_hash is None when no rehash is needed
+    """
+    try:
+        return password_hasher.verify_and_update(plain_password, hashed_password)
+    except PwdlibError:
+        return False, None
 
 
 def validate_password_strength(
@@ -132,12 +156,14 @@ def validate_password_with_config(password: str, config) -> None:
     if not is_valid:
         raise InvalidPasswordError(
             message=error_message,
-            details={"password_requirements": {
-                "min_length": config.password_min_length,
-                "require_uppercase": config.require_uppercase,
-                "require_digit": config.require_digit,
-                "require_special_char": config.require_special_char,
-            }}
+            details={
+                "password_requirements": {
+                    "min_length": config.password_min_length,
+                    "require_uppercase": config.require_uppercase,
+                    "require_digit": config.require_digit,
+                    "require_special_char": config.require_special_char,
+                }
+            },
         )
 
 

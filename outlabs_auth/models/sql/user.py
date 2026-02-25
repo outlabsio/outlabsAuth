@@ -75,7 +75,7 @@ class User(BaseModel, table=True):
     hashed_password: Optional[str] = Field(
         default=None,
         sa_column=Column(String(255), nullable=True),
-        description="Argon2id hashed password (null for OAuth-only users)",
+        description="Password hash (Argon2id preferred; legacy bcrypt supported, null for OAuth-only users)",
     )
     auth_methods: List[str] = Field(
         default=["PASSWORD"],

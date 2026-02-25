@@ -3,15 +3,23 @@ Unit tests for password utilities
 
 Tests password hashing, verification, and strength validation.
 """
+
+import uuid
+
 import pytest
+from pwdlib import PasswordHash
+from pwdlib.hashers.bcrypt import BcryptHasher
+
+from outlabs_auth import SimpleRBAC
+from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.utils.password import (
+    generate_password_hash,
     hash_password,
     verify_password,
+    verify_and_upgrade_password,
     validate_password_strength,
     validate_password_with_config,
-    generate_password_hash,
 )
-from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import InvalidPasswordError
 
 
@@ -19,13 +27,12 @@ class TestPasswordHashing:
     """Test password hashing and verification."""
 
     def test_hash_password_returns_hashed_string(self):
-        """Test that hash_password returns a bcrypt hash."""
+        """Test that hash_password returns a non-plain hash."""
         password = "MySecurePassword123!"
         hashed = hash_password(password)
 
         assert hashed != password
-        assert hashed.startswith("$2b$")  # Bcrypt hash prefix
-        assert len(hashed) == 60  # Bcrypt hash length
+        assert hashed.startswith("$argon2id$")
 
     def test_verify_password_with_correct_password(self):
         """Test password verification with correct password."""
@@ -53,6 +60,29 @@ class TestPasswordHashing:
         # Both hashes verify correctly
         assert verify_password(password, hash1) is True
         assert verify_password(password, hash2) is True
+
+    def test_verify_and_upgrade_password_for_legacy_bcrypt_hash(self):
+        """Legacy bcrypt hashes should verify and return an Argon2 upgrade hash."""
+        password = "LegacyPass123!"
+        legacy_bcrypt = PasswordHash((BcryptHasher(),)).hash(password)
+
+        is_valid, upgraded_hash = verify_and_upgrade_password(password, legacy_bcrypt)
+
+        assert is_valid is True
+        assert upgraded_hash is not None
+        assert upgraded_hash.startswith("$argon2id$")
+        assert verify_password(password, upgraded_hash) is True
+
+    def test_verify_and_upgrade_password_uses_known_legacy_hash(self):
+        """Known bcrypt hashes from pre-migration systems should remain valid."""
+        password = "LegacyPass123!"
+        known_legacy_hash = "$2b$12$ODSgj/OZ1MTkQR9u60RnOO8OuY3dWW10UxU.nWunryrZAia6L2.R."
+
+        is_valid, upgraded_hash = verify_and_upgrade_password(password, known_legacy_hash)
+
+        assert is_valid is True
+        assert upgraded_hash is not None
+        assert upgraded_hash.startswith("$argon2id$")
 
 
 class TestPasswordStrengthValidation:
@@ -173,7 +203,7 @@ class TestPasswordValidationWithConfig:
 
         hashed = generate_password_hash(password, auth_config)
 
-        assert hashed.startswith("$2b$")
+        assert hashed.startswith("$argon2id$")
         assert verify_password(password, hashed) is True
 
     def test_generate_password_hash_raises_on_weak_password(self, auth_config: AuthConfig):
@@ -203,10 +233,43 @@ class TestEdgeCases:
 
     def test_very_long_password(self):
         """Test very long password (72+ characters)."""
-        # Bcrypt has a 72-character limit
         password = "A" * 100 + "1!"  # 102 characters
 
         hashed = hash_password(password)
 
-        # Bcrypt truncates at 72 chars, but should still work
         assert verify_password(password, hashed) is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_login_with_legacy_bcrypt_hash_transparently_rehashes(auth: SimpleRBAC):
+    """Successful login on legacy bcrypt should upgrade stored hash to Argon2id."""
+    email = f"legacy-{uuid.uuid4().hex[:8]}@example.com"
+    password = "LegacyPass123!"
+    legacy_hash = PasswordHash((BcryptHasher(),)).hash(password)
+
+    async with auth.get_session() as session:
+        user = await auth.user_service.create_user(
+            session=session,
+            email=email,
+            password="TempPass123!",
+            first_name="Legacy",
+            last_name="User",
+        )
+        user.hashed_password = legacy_hash
+        await session.commit()
+        await session.refresh(user)
+        user_id = user.id
+
+    async with auth.get_session() as session:
+        logged_in_user, _tokens = await auth.auth_service.login(
+            session=session,
+            email=email,
+            password=password,
+        )
+        await session.commit()
+
+        assert logged_in_user.id == user_id
+        assert logged_in_user.hashed_password != legacy_hash
+        assert logged_in_user.hashed_password.startswith("$argon2id$")
+        assert verify_password(password, logged_in_user.hashed_password) is True
