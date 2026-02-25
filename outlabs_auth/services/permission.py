@@ -557,7 +557,9 @@ class PermissionService(BaseService[Permission]):
         """
         Get all permissions for a user.
 
-        Aggregates permissions from all assigned roles via UserRoleMembership.
+        Aggregates permissions from all assigned roles via:
+        - UserRoleMembership (SimpleRBAC)
+        - EntityMembership roles (EnterpriseRBAC)
 
         Args:
             session: Database session
@@ -622,6 +624,36 @@ class PermissionService(BaseService[Permission]):
                 # Extract permission names
                 for perm in role.permissions:
                     all_permissions.add(perm.name)
+
+        # Get active entity memberships with roles eagerly loaded
+        # EnterpriseRBAC stores role assignments via entity membership, so these
+        # permissions must be included for effective user permission resolution.
+        entity_stmt = (
+            select(EntityMembership)
+            .options(selectinload(EntityMembership.roles).selectinload(Role.permissions))
+            .where(
+                EntityMembership.user_id == user_id,
+                EntityMembership.status == MembershipStatus.ACTIVE,
+            )
+        )
+        entity_result = await session.execute(entity_stmt)
+        entity_memberships = entity_result.scalars().all()
+
+        for membership in entity_memberships:
+            if not membership.can_grant_permissions():
+                continue
+
+            for role in membership.roles:
+                if not role:
+                    continue
+
+                # DD-054: Filter out entity-local roles when include_entity_local=False
+                if not include_entity_local and role.scope_entity_id is not None:
+                    continue
+
+                if role.permissions:
+                    for perm in role.permissions:
+                        all_permissions.add(perm.name)
 
         return list(all_permissions)
 
