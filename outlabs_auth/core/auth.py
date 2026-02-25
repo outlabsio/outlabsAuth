@@ -201,6 +201,7 @@ class OutlabsAuth:
         self.user_service = None
         self.role_service = None
         self.permission_service = None
+        self.access_scope_service = None
         self.api_key_service = None
         self.service_token_service = None
         self.entity_service = None
@@ -319,6 +320,7 @@ class OutlabsAuth:
 
     async def _init_services(self):
         """Initialize all services based on configuration."""
+        from outlabs_auth.services.access_scope import AccessScopeService
         from outlabs_auth.services.api_key import APIKeyService
         from outlabs_auth.services.auth import AuthService
         from outlabs_auth.services.permission import PermissionService
@@ -341,6 +343,7 @@ class OutlabsAuth:
             self.config,
             observability=self.observability,
         )
+        self.access_scope_service = AccessScopeService(self.config)
 
         # Initialize Redis client if enabled
         if self.config.redis_enabled and self.config.redis_url:
@@ -452,6 +455,7 @@ class OutlabsAuth:
             user_service=self.user_service,
             api_key_service=self.api_key_service,
             permission_service=self.permission_service,
+            access_scope_service=self.access_scope_service,
             role_service=self.role_service,
             entity_service=self.entity_service,
             membership_service=self.membership_service,

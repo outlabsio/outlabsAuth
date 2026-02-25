@@ -18,9 +18,11 @@ async def auth(test_engine) -> OutlabsAuth:
         engine=test_engine,
         secret_key="test-secret-key-do-not-use-in-production-12345678",
         enable_abac=True,
+        enable_token_cleanup=False,
     )
     await auth.initialize()
-    return auth
+    yield auth
+    await auth.shutdown()
 
 
 @pytest_asyncio.fixture

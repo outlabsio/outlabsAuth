@@ -19,9 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from .config import LogsFormat, LogsLevel, ObservabilityConfig, PermissionCheckLogging
 
 # Context variable for correlation ID
-correlation_id_var: ContextVar[Optional[str]] = ContextVar(
-    "correlation_id", default=None
-)
+correlation_id_var: ContextVar[Optional[str]] = ContextVar("correlation_id", default=None)
 
 
 class ObservabilityService:
@@ -129,9 +127,7 @@ class ObservabilityService:
             context,
             executemany,
         ):
-            conn.info.setdefault("outlabs_auth_query_start_time", []).append(
-                time.perf_counter()
-            )
+            conn.info.setdefault("outlabs_auth_query_start_time", []).append(time.perf_counter())
 
         def after_cursor_execute(
             conn,
@@ -178,9 +174,7 @@ class ObservabilityService:
         # Add hostname if enabled
         if self.config.metrics_include_hostname:
             # Add hostname directly to every log
-            processors.append(
-                lambda _, __, event_dict: {**event_dict, "hostname": self.hostname}
-            )
+            processors.append(lambda _, __, event_dict: {**event_dict, "hostname": self.hostname})
 
         # Choose output format
         if self.config.logs_format == LogsFormat.JSON:
@@ -190,9 +184,7 @@ class ObservabilityService:
 
         structlog.configure(
             processors=processors,
-            wrapper_class=structlog.make_filtering_bound_logger(
-                self._get_log_level_int()
-            ),
+            wrapper_class=structlog.make_filtering_bound_logger(self._get_log_level_int()),
             context_class=dict,
             logger_factory=structlog.PrintLoggerFactory(),
             cache_logger_on_first_use=True,
@@ -200,9 +192,7 @@ class ObservabilityService:
 
         self.logger = structlog.get_logger()
 
-    def _add_correlation_id(
-        self, logger: Any, method_name: str, event_dict: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _add_correlation_id(self, logger: Any, method_name: str, event_dict: Dict[str, Any]) -> Dict[str, Any]:
         """Add correlation ID to log event."""
         correlation_id = correlation_id_var.get()
         if correlation_id:
@@ -489,9 +479,7 @@ class ObservabilityService:
         else:
             metric.inc(value)
 
-    def _observe_histogram(
-        self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None
-    ) -> None:
+    def _observe_histogram(self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None) -> None:
         """Observe a value in a Prometheus histogram."""
         if not self.config.enable_metrics or metric_name not in self.metrics:
             return
@@ -502,9 +490,7 @@ class ObservabilityService:
         else:
             metric.observe(value)
 
-    def _set_gauge(
-        self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None
-    ) -> None:
+    def _set_gauge(self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None) -> None:
         """Set a Prometheus gauge value."""
         if not self.config.enable_metrics or metric_name not in self.metrics:
             return
@@ -569,12 +555,8 @@ class ObservabilityService:
             ip_address=ip_address if self.config.log_ip_addresses else None,
             **extra,
         )
-        self._increment_counter(
-            "login_attempts", {"status": "success", "method": method}
-        )
-        self._observe_histogram(
-            "login_duration", duration_ms / 1000.0, {"method": method}
-        )
+        self._increment_counter("login_attempts", {"status": "success", "method": method})
+        self._observe_histogram("login_duration", duration_ms / 1000.0, {"method": method})
         # Increment active sessions gauge
         self._increment_gauge("active_sessions")
 
@@ -598,9 +580,7 @@ class ObservabilityService:
             ip_address=ip_address if self.config.log_ip_addresses else None,
             **extra,
         )
-        self._increment_counter(
-            "login_attempts", {"status": "failed", "method": method}
-        )
+        self._increment_counter("login_attempts", {"status": "failed", "method": method})
         self._increment_counter("failed_login_attempts", {"reason": reason})
 
     def log_account_locked(
@@ -656,13 +636,8 @@ class ObservabilityService:
     ) -> None:
         """Log permission check and increment metrics."""
         # Respect log_permission_checks config
-        should_log = (
-            self.config.log_permission_checks == PermissionCheckLogging.ALL
-            or (
-                self.config.log_permission_checks
-                == PermissionCheckLogging.FAILURES_ONLY
-                and result == "denied"
-            )
+        should_log = self.config.log_permission_checks == PermissionCheckLogging.ALL or (
+            self.config.log_permission_checks == PermissionCheckLogging.FAILURES_ONLY and result == "denied"
         )
 
         if should_log:
@@ -678,9 +653,7 @@ class ObservabilityService:
                 **extra,
             )
 
-        self._increment_counter(
-            "permission_checks", {"result": result, "permission": permission}
-        )
+        self._increment_counter("permission_checks", {"result": result, "permission": permission})
         self._observe_histogram("permission_check_duration", duration_ms / 1000.0)
 
     def log_role_assigned(
@@ -829,9 +802,7 @@ class ObservabilityService:
                 **extra,
             )
 
-        self._observe_histogram(
-            "db_query_duration", duration_ms / 1000.0, {"operation": operation}
-        )
+        self._observe_histogram("db_query_duration", duration_ms / 1000.0, {"operation": operation})
 
     # Public API - Session Management
 
@@ -916,9 +887,7 @@ class ObservabilityService:
                 yield
             finally:
                 duration = (time.time() - start) * 1000  # Convert to ms
-                self._observe_histogram(
-                    "login_duration", duration / 1000.0, {"method": method}
-                )
+                self._observe_histogram("login_duration", duration / 1000.0, {"method": method})
 
         return _timer()
 
@@ -950,9 +919,7 @@ class ObservabilityService:
                 if duration_ms[0] == 0:
                     # Auto-record if not manually set
                     duration_ms[0] = (time.time() - start) * 1000
-                self._observe_histogram(
-                    "permission_check_duration", duration_ms[0] / 1000.0
-                )
+                self._observe_histogram("permission_check_duration", duration_ms[0] / 1000.0)
 
         return _timer()
 
@@ -1029,9 +996,7 @@ class ObservabilityService:
             stack_trace=stack_trace if self.config.log_stack_traces else None,
             **extra,
         )
-        self._increment_counter(
-            "errors_total", {"error_type": error_type, "location": location}
-        )
+        self._increment_counter("errors_total", {"error_type": error_type, "location": location})
 
     def log_500_error(
         self,
@@ -1061,7 +1026,7 @@ class ObservabilityService:
             >>> obs.log_500_error(
             ...     endpoint="/v1/users",
             ...     error_class="DatabaseConnectionError",
-            ...     error_message="Unable to connect to MongoDB",
+            ...     error_message="Unable to connect to PostgreSQL",
             ...     method="GET",
             ...     stack_trace=traceback.format_exc()
             ... )
@@ -1078,9 +1043,7 @@ class ObservabilityService:
             stack_trace=stack_trace if self.config.log_stack_traces else None,
             **extra,
         )
-        self._increment_counter(
-            "500_errors_total", {"endpoint": endpoint, "error_class": error_class}
-        )
+        self._increment_counter("500_errors_total", {"endpoint": endpoint, "error_class": error_class})
 
     def log_router_error(
         self,
@@ -1111,7 +1074,7 @@ class ObservabilityService:
             ...     router="users",
             ...     endpoint="/v1/users",
             ...     operation="list_users",
-            ...     error_type="MongoDBError",
+            ...     error_type="DatabaseError",
             ...     error_message="Connection timeout",
             ...     stack_trace=traceback.format_exc()
             ... )
@@ -1128,12 +1091,8 @@ class ObservabilityService:
             stack_trace=stack_trace if self.config.log_stack_traces else None,
             **extra,
         )
-        self._increment_counter(
-            "router_errors_total", {"router": router, "endpoint": endpoint}
-        )
-        self._increment_counter(
-            "errors_total", {"error_type": error_type, "location": f"{router}_router"}
-        )
+        self._increment_counter("router_errors_total", {"router": router, "endpoint": endpoint})
+        self._increment_counter("errors_total", {"error_type": error_type, "location": f"{router}_router"})
 
     def log_service_error(
         self,
@@ -1178,12 +1137,8 @@ class ObservabilityService:
             stack_trace=stack_trace if self.config.log_stack_traces else None,
             **extra,
         )
-        self._increment_counter(
-            "service_errors_total", {"service": service, "operation": operation}
-        )
-        self._increment_counter(
-            "errors_total", {"error_type": error_type, "location": f"{service}_service"}
-        )
+        self._increment_counter("service_errors_total", {"service": service, "operation": operation})
+        self._increment_counter("errors_total", {"error_type": error_type, "location": f"{service}_service"})
 
     def log_exception(
         self,
@@ -1224,9 +1179,7 @@ class ObservabilityService:
             stack_trace=stack_trace,
             **extra,
         )
-        self._increment_counter(
-            "errors_total", {"error_type": error_type, "location": context}
-        )
+        self._increment_counter("errors_total", {"error_type": error_type, "location": context})
 
     # Public API - Entity Operations
 
@@ -1371,9 +1324,7 @@ class ObservabilityService:
         self._observe_histogram("activity_sync_duration", duration_ms / 1000.0)
         if metric_types:
             for metric_type, count in metric_types.items():
-                self._increment_counter(
-                    "activity_sync_records", {"metric_type": metric_type}, value=count
-                )
+                self._increment_counter("activity_sync_records", {"metric_type": metric_type}, value=count)
 
     # Public API - Redis Operations
 
@@ -1417,9 +1368,7 @@ class ObservabilityService:
                 **extra,
             )
 
-        self._observe_histogram(
-            "redis_operation_duration", duration_ms / 1000.0, {"operation": operation}
-        )
+        self._observe_histogram("redis_operation_duration", duration_ms / 1000.0, {"operation": operation})
 
     # Public API - Notification Events
 

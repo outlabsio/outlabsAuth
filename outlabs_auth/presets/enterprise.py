@@ -5,11 +5,8 @@ Thin wrapper around OutlabsAuth that enables entity hierarchy and tree permissio
 
 This preset is for enterprise applications that need hierarchical RBAC
 with organizational structures and permission inheritance.
-
-NOTE: EnterpriseRBAC is currently in BETA. Some services still need
-migration to PostgreSQL. For production use, consider SimpleRBAC.
 """
-import warnings
+
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -92,14 +89,6 @@ class EnterpriseRBAC(OutlabsAuth):
             - enable_context_aware_roles: False (default, can override)
             - enable_abac: False (default, can override)
         """
-        # Emit beta warning
-        warnings.warn(
-            "EnterpriseRBAC is currently in BETA. Some services (entity, membership) "
-            "still need migration to PostgreSQL. For production use, consider SimpleRBAC.",
-            UserWarning,
-            stacklevel=2
-        )
-
         # Force enable entity hierarchy
         kwargs.pop("enable_entity_hierarchy", None)
 

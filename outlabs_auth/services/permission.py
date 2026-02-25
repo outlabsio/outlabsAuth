@@ -109,15 +109,11 @@ class PermissionService(BaseService[Permission]):
 
         # Superusers have all permissions
         if user.is_superuser:
-            self._log_permission_check(
-                user_id, permission, "granted", start_time, "superuser"
-            )
+            self._log_permission_check(user_id, permission, "granted", start_time, "superuser")
             return True
 
         abac_enabled = bool(getattr(self.config, "enable_abac", False))
-        engine: Optional[PolicyEvaluationEngine] = (
-            PolicyEvaluationEngine() if abac_enabled else None
-        )
+        engine: Optional[PolicyEvaluationEngine] = PolicyEvaluationEngine() if abac_enabled else None
         context: Optional[Dict[str, Any]] = None
         if abac_enabled:
             context = engine.create_context(
@@ -143,16 +139,27 @@ class PermissionService(BaseService[Permission]):
         # Entity-local roles (scope_entity_id set) are excluded from this check.
         # When entity_id IS provided, we check entity context permissions below.
         if not abac_enabled:
-            # Use include_entity_local based on whether we have entity context
-            user_permissions = set(
-                await self.get_user_permissions(
-                    session, user_id, include_entity_local=(entity_id is not None)
+            if entity_id is None:
+                # No entity context: keep existing behavior and evaluate the user's
+                # aggregate permissions for non-entity checks.
+                user_permissions = set(
+                    await self.get_user_permissions(
+                        session,
+                        user_id,
+                        include_entity_local=False,
+                    )
                 )
-            )
+            else:
+                # Entity context: do NOT pre-grant via entity-membership role
+                # aggregation, otherwise entity-local permissions can bypass
+                # ancestor/descendant checks in _check_permission_in_entity().
+                user_permissions = await self._get_user_role_permissions(
+                    session=session,
+                    user_id=user_id,
+                    include_entity_local=True,
+                )
             if self._permission_set_allows(permission, user_permissions):
-                self._log_permission_check(
-                    user_id, permission, "granted", start_time, "global_match"
-                )
+                self._log_permission_check(user_id, permission, "granted", start_time, "global_match")
                 return True
         else:
             if await self._check_permission_via_user_roles_with_abac(
@@ -163,9 +170,7 @@ class PermissionService(BaseService[Permission]):
                 engine=engine,
                 include_entity_local=(entity_id is not None),
             ):
-                self._log_permission_check(
-                    user_id, permission, "granted", start_time, "global_match_abac"
-                )
+                self._log_permission_check(user_id, permission, "granted", start_time, "global_match_abac")
                 return True
 
         # EnterpriseRBAC check in an entity context
@@ -179,15 +184,11 @@ class PermissionService(BaseService[Permission]):
                 context=context,
                 engine=engine,
             ):
-                self._log_permission_check(
-                    user_id, permission, "granted", start_time, "entity_match"
-                )
+                self._log_permission_check(user_id, permission, "granted", start_time, "entity_match")
                 return True
 
         # Permission denied
-        self._log_permission_check(
-            user_id, permission, "denied", start_time, "no_permission"
-        )
+        self._log_permission_check(user_id, permission, "denied", start_time, "no_permission")
         return False
 
     # =========================================================================
@@ -248,9 +249,7 @@ class PermissionService(BaseService[Permission]):
         return False
 
     @classmethod
-    def _permission_set_allows_from_ancestor(
-        cls, required: str, granted: Set[str]
-    ) -> bool:
+    def _permission_set_allows_from_ancestor(cls, required: str, granted: Set[str]) -> bool:
         """
         Like `_permission_set_allows`, but for permissions inherited from ancestors.
 
@@ -331,9 +330,7 @@ class PermissionService(BaseService[Permission]):
                     continue
 
                 # Check if entity-local role scope allows granting at this entity
-                if not self._role_can_grant_at_entity(
-                    role, membership.entity_id, entity_id, is_direct_membership
-                ):
+                if not self._role_can_grant_at_entity(role, membership.entity_id, entity_id, is_direct_membership):
                     continue
 
                 granted = set(p.name for p in (role.permissions or []))
@@ -487,11 +484,7 @@ class PermissionService(BaseService[Permission]):
         perm_result = await session.execute(perm_stmt)
         perms = perm_result.scalars().all()
 
-        matching_perms = [
-            p
-            for p in perms
-            if p and self._permission_set_allows(required_permission, {p.name})
-        ]
+        matching_perms = [p for p in perms if p and self._permission_set_allows(required_permission, {p.name})]
         if not matching_perms:
             return False
 
@@ -506,26 +499,56 @@ class PermissionService(BaseService[Permission]):
 
         group_ops: Dict[Optional[str], str] = {}
         if group_ids:
-            groups_stmt = select(SqlConditionGroup).where(
-                SqlConditionGroup.id.in_(list(group_ids))
-            )
+            groups_stmt = select(SqlConditionGroup).where(SqlConditionGroup.id.in_(list(group_ids)))
             groups_result = await session.execute(groups_stmt)
             groups = groups_result.scalars().all()
             for g in groups:
                 group_ops[str(g.id)] = g.operator
 
-        if not engine.evaluate_sql_conditions(
-            conditions=role_conditions, group_ops=group_ops, context=context
-        ):
+        if not engine.evaluate_sql_conditions(conditions=role_conditions, group_ops=group_ops, context=context):
             return False
 
         for p in matching_perms:
-            if engine.evaluate_sql_conditions(
-                conditions=(p.conditions or []), group_ops=group_ops, context=context
-            ):
+            if engine.evaluate_sql_conditions(conditions=(p.conditions or []), group_ops=group_ops, context=context):
                 return True
 
         return False
+
+    async def _get_user_role_permissions(
+        self,
+        *,
+        session: AsyncSession,
+        user_id: UUID,
+        include_entity_local: bool = True,
+    ) -> Set[str]:
+        """
+        Collect permission names from active UserRoleMembership links only.
+
+        This excludes EntityMembership role grants by design.
+        """
+        stmt = (
+            select(UserRoleMembership)
+            .options(selectinload(UserRoleMembership.role).selectinload(Role.permissions))
+            .where(
+                UserRoleMembership.user_id == user_id,
+                UserRoleMembership.status == MembershipStatus.ACTIVE,
+            )
+        )
+        result = await session.execute(stmt)
+        memberships = result.scalars().all()
+
+        permissions: Set[str] = set()
+        for membership in memberships:
+            if not membership.is_currently_valid():
+                continue
+            role = membership.role
+            if not role:
+                continue
+            if not include_entity_local and role.scope_entity_id is not None:
+                continue
+            for perm in role.permissions or []:
+                permissions.add(perm.name)
+        return permissions
 
     def _log_permission_check(
         self,
@@ -537,9 +560,7 @@ class PermissionService(BaseService[Permission]):
     ) -> None:
         """Log permission check for observability."""
         if self.observability:
-            duration_ms = (
-                datetime.now(timezone.utc) - start_time
-            ).total_seconds() * 1000
+            duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
             self.observability.log_permission_check(
                 user_id=str(user_id),
                 permission=permission,
@@ -594,9 +615,7 @@ class PermissionService(BaseService[Permission]):
         # Get active role memberships with roles eagerly loaded
         stmt = (
             select(UserRoleMembership)
-            .options(
-                selectinload(UserRoleMembership.role).selectinload(Role.permissions)
-            )
+            .options(selectinload(UserRoleMembership.role).selectinload(Role.permissions))
             .where(
                 UserRoleMembership.user_id == user_id,
                 UserRoleMembership.status == MembershipStatus.ACTIVE,
@@ -681,9 +700,7 @@ class PermissionService(BaseService[Permission]):
             Set of permission names from global/org-scoped roles
         """
         # Use the existing method with include_entity_local=False
-        permissions = await self.get_user_permissions(
-            session, user_id, include_entity_local=False
-        )
+        permissions = await self.get_user_permissions(session, user_id, include_entity_local=False)
         return set(permissions)
 
     async def require_permission(
@@ -930,9 +947,7 @@ class PermissionService(BaseService[Permission]):
         """
         Replace a permission's tag set, creating tags if needed.
         """
-        permission = await self.get_permission_by_id(
-            session, permission_id, load_tags=True
-        )
+        permission = await self.get_permission_by_id(session, permission_id, load_tags=True)
         if not permission:
             raise PermissionNotFoundError(
                 message="Permission not found",
@@ -1161,12 +1176,7 @@ class PermissionService(BaseService[Permission]):
         Returns:
             List of permissions
         """
-        stmt = (
-            select(Permission)
-            .join(PermissionTagLink)
-            .join(PermissionTag)
-            .where(PermissionTag.name == tag_name)
-        )
+        stmt = select(Permission).join(PermissionTagLink).join(PermissionTag).where(PermissionTag.name == tag_name)
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
@@ -1189,11 +1199,7 @@ class PermissionService(BaseService[Permission]):
         Returns:
             List of Permission objects
         """
-        stmt = (
-            select(Permission)
-            .join(RolePermission)
-            .where(RolePermission.role_id == role_id)
-        )
+        stmt = select(Permission).join(RolePermission).where(RolePermission.role_id == role_id)
         result = await session.execute(stmt)
         return list(result.scalars().all())
 

@@ -1,11 +1,12 @@
 """
 API Key Usage Counter Sync Worker
 
-Background worker that syncs API key usage counters from Redis to MongoDB.
+Background worker that syncs API key usage counters from Redis to PostgreSQL.
 Runs every 5 minutes (configurable) to implement the Redis counter pattern.
 
-This reduces MongoDB writes by 99%+ for high-traffic API keys.
+This reduces primary-database writes by 99%+ for high-traffic API keys.
 """
+
 import asyncio
 import logging
 from datetime import datetime
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 class APIKeyUsageSyncWorker:
     """
-    Background worker for syncing API key usage from Redis to MongoDB.
+    Background worker for syncing API key usage from Redis to PostgreSQL.
 
     Features:
     - Runs on configurable interval (default: 5 minutes)
@@ -77,10 +78,7 @@ class APIKeyUsageSyncWorker:
         self._stop_event.clear()
         self._task = asyncio.create_task(self._run())
 
-        logger.info(
-            f"API key usage sync worker started "
-            f"(interval: {self.interval_seconds}s)"
-        )
+        logger.info(f"API key usage sync worker started " f"(interval: {self.interval_seconds}s)")
 
     async def stop(self) -> None:
         """
@@ -121,10 +119,7 @@ class APIKeyUsageSyncWorker:
 
                 # Wait for next interval (or until stopped)
                 try:
-                    await asyncio.wait_for(
-                        self._stop_event.wait(),
-                        timeout=self.interval_seconds
-                    )
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=self.interval_seconds)
                     # If we reach here, stop was requested
                     break
                 except asyncio.TimeoutError:
@@ -192,6 +187,7 @@ class APIKeyUsageSyncWorker:
 
 
 # Standalone function for simple usage
+
 
 async def start_api_key_sync_worker(
     api_key_service: APIKeyService,

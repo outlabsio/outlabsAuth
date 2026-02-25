@@ -17,9 +17,11 @@ async def enterprise_auth(test_engine) -> EnterpriseRBAC:
         engine=test_engine,
         secret_key="test-secret-key-do-not-use-in-production-12345678",
         access_token_expire_minutes=60,
+        enable_token_cleanup=False,
     )
     await auth.initialize()
-    return auth
+    yield auth
+    await auth.shutdown()
 
 
 @pytest_asyncio.fixture
@@ -286,12 +288,8 @@ async def test_move_entity_requires_update_on_entity_and_create_tree_on_new_pare
     async with enterprise_auth.get_session() as session:
         node_fresh = await enterprise_auth.entity_service.get_entity(session, node.id)
         leaf_fresh = await enterprise_auth.entity_service.get_entity(session, leaf.id)
-        old_branch_fresh = await enterprise_auth.entity_service.get_entity(
-            session, old_branch.id
-        )
-        new_branch_fresh = await enterprise_auth.entity_service.get_entity(
-            session, new_branch.id
-        )
+        old_branch_fresh = await enterprise_auth.entity_service.get_entity(session, old_branch.id)
+        new_branch_fresh = await enterprise_auth.entity_service.get_entity(session, new_branch.id)
 
         assert node_fresh.parent_id == new_branch_fresh.id
         assert node_fresh.depth == new_branch_fresh.depth + 1
@@ -300,18 +298,10 @@ async def test_move_entity_requires_update_on_entity_and_create_tree_on_new_pare
         assert node_fresh.path == f"{new_branch_fresh.path}{node_fresh.slug}/"
         assert leaf_fresh.path == f"{node_fresh.path}{leaf_fresh.slug}/"
 
-        assert await enterprise_auth.entity_service.is_ancestor_of(
-            session, new_branch_fresh.id, node_fresh.id
-        )
-        assert await enterprise_auth.entity_service.is_ancestor_of(
-            session, new_branch_fresh.id, leaf_fresh.id
-        )
-        assert not await enterprise_auth.entity_service.is_ancestor_of(
-            session, old_branch_fresh.id, node_fresh.id
-        )
-        assert not await enterprise_auth.entity_service.is_ancestor_of(
-            session, old_branch_fresh.id, leaf_fresh.id
-        )
+        assert await enterprise_auth.entity_service.is_ancestor_of(session, new_branch_fresh.id, node_fresh.id)
+        assert await enterprise_auth.entity_service.is_ancestor_of(session, new_branch_fresh.id, leaf_fresh.id)
+        assert not await enterprise_auth.entity_service.is_ancestor_of(session, old_branch_fresh.id, node_fresh.id)
+        assert not await enterprise_auth.entity_service.is_ancestor_of(session, old_branch_fresh.id, leaf_fresh.id)
 
 
 @pytest.mark.integration
@@ -431,9 +421,7 @@ async def test_add_member_requires_membership_create_tree_in_target_context(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_descendants_requires_entity_read_tree(
-    enterprise_app: FastAPI, enterprise_auth: EnterpriseRBAC
-):
+async def test_descendants_requires_entity_read_tree(enterprise_app: FastAPI, enterprise_auth: EnterpriseRBAC):
     async with enterprise_auth.get_session() as session:
         await _seed_permissions(
             session,
@@ -527,9 +515,7 @@ async def test_descendants_requires_entity_read_tree(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_entity_members_requires_membership_read_tree(
-    enterprise_app: FastAPI, enterprise_auth: EnterpriseRBAC
-):
+async def test_entity_members_requires_membership_read_tree(enterprise_app: FastAPI, enterprise_auth: EnterpriseRBAC):
     async with enterprise_auth.get_session() as session:
         await _seed_permissions(
             session,
@@ -605,9 +591,7 @@ async def test_entity_members_requires_membership_read_tree(
             user_id=admin_base.id,
             role_ids=[membership_read_base_role.id],
         )
-        await membership_service.add_member(
-            session=session, entity_id=team.id, user_id=member.id, role_ids=[]
-        )
+        await membership_service.add_member(session=session, entity_id=team.id, user_id=member.id, role_ids=[])
         await session.commit()
 
         token_tree = await _bearer_token(enterprise_auth, str(admin_tree.id))

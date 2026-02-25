@@ -53,7 +53,7 @@ class AuthConfig(BaseModel):
     )
     store_refresh_tokens: bool = Field(
         default=True,
-        description="Store refresh tokens in MongoDB for revocation. Set to False for stateless-only JWT.",
+        description="Store refresh tokens in PostgreSQL for revocation. Set to False for stateless-only JWT.",
     )
     enable_token_cleanup: bool = Field(default=True, description="Enable automatic cleanup of expired/revoked tokens")
     token_cleanup_interval_hours: int = Field(default=24, description="Hours between token cleanup runs")

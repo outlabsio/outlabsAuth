@@ -25,9 +25,11 @@ async def enterprise_auth(test_engine) -> EnterpriseRBAC:
         engine=test_engine,
         secret_key="test-secret-key-do-not-use-in-production-12345678",
         access_token_expire_minutes=60,
+        enable_token_cleanup=False,
     )
     await auth.initialize()
-    return auth
+    yield auth
+    await auth.shutdown()
 
 
 @pytest_asyncio.fixture
@@ -36,14 +38,10 @@ async def app(enterprise_auth: EnterpriseRBAC) -> FastAPI:
     app.include_router(get_auth_router(enterprise_auth, prefix="/v1/auth"))
     app.include_router(get_users_router(enterprise_auth, prefix="/v1/users"))
     app.include_router(get_roles_router(enterprise_auth, prefix="/v1/roles"))
-    app.include_router(
-        get_permissions_router(enterprise_auth, prefix="/v1/permissions")
-    )
+    app.include_router(get_permissions_router(enterprise_auth, prefix="/v1/permissions"))
     app.include_router(get_api_keys_router(enterprise_auth, prefix="/v1/api-keys"))
     app.include_router(get_entities_router(enterprise_auth, prefix="/v1/entities"))
-    app.include_router(
-        get_memberships_router(enterprise_auth, prefix="/v1/memberships")
-    )
+    app.include_router(get_memberships_router(enterprise_auth, prefix="/v1/memberships"))
     return app
 
 
@@ -94,16 +92,12 @@ async def test_auth_register_login_refresh(client: httpx.AsyncClient):
     )
     assert r_register.status_code == 201, r_register.text
 
-    r_login = await client.post(
-        "/v1/auth/login", json={"email": email, "password": password}
-    )
+    r_login = await client.post("/v1/auth/login", json={"email": email, "password": password})
     assert r_login.status_code == 200, r_login.text
     tokens = r_login.json()
     assert "access_token" in tokens and "refresh_token" in tokens
 
-    r_refresh = await client.post(
-        "/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
-    )
+    r_refresh = await client.post("/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
     assert r_refresh.status_code == 200, r_refresh.text
     refreshed = r_refresh.json()
     assert "access_token" in refreshed and refreshed["access_token"]
@@ -139,9 +133,7 @@ async def test_users_crud(client: httpx.AsyncClient, admin_token: str):
     r_get = await client.get(f"/v1/users/{user_id}")
     assert r_get.status_code == 200, r_get.text
 
-    r_update = await client.patch(
-        f"/v1/users/{user_id}", json={"first_name": "Updated"}
-    )
+    r_update = await client.patch(f"/v1/users/{user_id}", json={"first_name": "Updated"})
     assert r_update.status_code == 200, r_update.text
     assert r_update.json()["first_name"] == "Updated"
 
@@ -298,9 +290,7 @@ async def test_entities_and_memberships_smoke(
     r_desc = await client.get(f"/v1/entities/{org['id']}/descendants")
     assert r_desc.status_code == 200, r_desc.text
 
-    r_members = await client.get(
-        f"/v1/entities/{org['id']}/members", params={"page": 1, "limit": 50}
-    )
+    r_members = await client.get(f"/v1/entities/{org['id']}/members", params={"page": 1, "limit": 50})
     assert r_members.status_code == 200, r_members.text
 
     # Move team to root and then delete.
