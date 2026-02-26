@@ -8,11 +8,30 @@ import { permissionsQueries, useDeletePermissionMutation } from '~/queries/permi
 const UButton = resolveComponent('UButton')
 const UBadge = resolveComponent('UBadge')
 
+const authStore = useAuthStore()
+const permissionsStore = usePermissionsStore()
 const search = ref('')
 const showCreateModal = ref(false)
 const showUpdateModal = ref(false)
 const permissionToEdit = ref<Permission | null>(null)
+const permissionForAbac = ref<Permission | null>(null)
+const showAbacModal = ref(false)
 const toast = useToast()
+const canReadPermissions = computed(
+  () => authStore.currentUser?.is_superuser || permissionsStore.hasPermission('permission:read')
+)
+const canCreatePermission = computed(
+  () => authStore.currentUser?.is_superuser || permissionsStore.hasPermission('permission:create')
+)
+const canUpdatePermission = computed(
+  () => authStore.currentUser?.is_superuser || permissionsStore.hasPermission('permission:update')
+)
+const canDeletePermission = computed(
+  () => authStore.currentUser?.is_superuser || permissionsStore.hasPermission('permission:delete')
+)
+const canManagePermissionAbac = computed(
+  () => authStore.features.abac && canReadPermissions.value && canUpdatePermission.value
+)
 
 // Query permissions with Pinia Colada (60s staleTime since permissions change rarely)
 const { data: permissions, isLoading, error } = useQuery(
@@ -24,6 +43,15 @@ const { mutate: deletePermission, isPending: isDeleting } = useDeletePermissionM
 
 // Handle delete permission
 function handleDelete(permission: Permission) {
+  if (!canDeletePermission.value) {
+    toast.add({
+      title: 'Not authorized',
+      description: 'You do not have permission to delete permissions.',
+      color: 'warning'
+    })
+    return
+  }
+
   if (permission.is_system) {
     toast.add({
       title: 'Cannot delete',
@@ -39,6 +67,15 @@ function handleDelete(permission: Permission) {
 
 // Handle edit permission
 function handleEdit(permission: Permission) {
+  if (!canUpdatePermission.value) {
+    toast.add({
+      title: 'Not authorized',
+      description: 'You do not have permission to update permissions.',
+      color: 'warning'
+    })
+    return
+  }
+
   if (permission.is_system) {
     toast.add({
       title: 'Cannot edit',
@@ -51,6 +88,11 @@ function handleEdit(permission: Permission) {
   // Open edit modal with selected permission
   permissionToEdit.value = permission
   showUpdateModal.value = true
+}
+
+function handleAbac(permission: Permission) {
+  permissionForAbac.value = permission
+  showAbacModal.value = true
 }
 
 // Table columns
@@ -121,12 +163,20 @@ const columns: TableColumn<Permission>[] = [
     id: 'actions',
     header: 'Actions',
     cell: ({ row }) => h('div', { class: 'flex items-center gap-2' }, [
+      canManagePermissionAbac.value && h(UButton, {
+        icon: 'i-lucide-sliders-horizontal',
+        color: 'secondary',
+        variant: 'ghost',
+        size: 'xs',
+        disabled: !canUpdatePermission.value,
+        onClick: () => handleAbac(row.original)
+      }),
       h(UButton, {
         icon: 'i-lucide-pencil',
         color: 'neutral',
         variant: 'ghost',
         size: 'xs',
-        disabled: row.original.is_system,
+        disabled: row.original.is_system || !canUpdatePermission.value,
         onClick: () => handleEdit(row.original)
       }),
       h(UButton, {
@@ -134,7 +184,7 @@ const columns: TableColumn<Permission>[] = [
         color: 'error',
         variant: 'ghost',
         size: 'xs',
-        disabled: row.original.is_system || isDeleting,
+        disabled: row.original.is_system || isDeleting || !canDeletePermission.value,
         onClick: () => handleDelete(row.original)
       })
     ])
@@ -173,6 +223,7 @@ const filteredPermissions = computed(() => {
             icon="i-lucide-plus"
             label="Create Permission"
             color="primary"
+            :disabled="!canCreatePermission"
             @click="showCreateModal = true"
           />
         </template>
@@ -203,8 +254,13 @@ const filteredPermissions = computed(() => {
         </div>
       </div>
 
+      <div v-if="!canReadPermissions" class="flex-1 flex flex-col items-center justify-center gap-4">
+        <UIcon name="i-lucide-lock" class="w-12 h-12 text-warning" />
+        <p class="text-muted">You do not have permission to view permissions.</p>
+      </div>
+
       <!-- Loading State -->
-      <div v-if="isLoading" class="flex-1 flex items-center justify-center">
+      <div v-else-if="isLoading" class="flex-1 flex items-center justify-center">
         <UIcon name="i-lucide-loader-2" class="w-8 h-8 animate-spin text-primary" />
       </div>
 
@@ -227,6 +283,7 @@ const filteredPermissions = computed(() => {
             <UIcon name="i-lucide-shield-off" class="w-12 h-12 text-muted" />
             <p class="text-muted">No permissions found</p>
             <UButton
+              v-if="canCreatePermission"
               icon="i-lucide-plus"
               label="Create your first permission"
               variant="outline"
@@ -239,8 +296,22 @@ const filteredPermissions = computed(() => {
   </UDashboardPanel>
 
   <!-- Create Permission Modal -->
-  <PermissionCreateModal v-model:open="showCreateModal" />
+  <PermissionCreateModal v-if="canCreatePermission" v-model:open="showCreateModal" />
 
   <!-- Update Permission Modal -->
-  <PermissionUpdateModal v-model:open="showUpdateModal" :permission="permissionToEdit" />
+  <PermissionUpdateModal
+    v-if="canUpdatePermission"
+    v-model:open="showUpdateModal"
+    :permission="permissionToEdit"
+  />
+
+  <AbacManagerModal
+    v-if="permissionForAbac && canManagePermissionAbac"
+    v-model:open="showAbacModal"
+    subject-type="permission"
+    :subject-id="permissionForAbac.id"
+    :subject-name="permissionForAbac.display_name || permissionForAbac.name"
+    :can-read="canManagePermissionAbac"
+    :can-update="canUpdatePermission"
+  />
 </template>

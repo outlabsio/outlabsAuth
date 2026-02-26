@@ -5,6 +5,14 @@
 
 import type { Permission } from '~/types/role'
 import type { UserPermissions } from '~/stores/permissions.store'
+import type {
+  AbacCondition,
+  AbacConditionCreateData,
+  AbacConditionUpdateData,
+  ConditionGroup,
+  ConditionGroupCreateData,
+  ConditionGroupUpdateData
+} from '~/types/abac'
 import { createAPIClient } from './client'
 
 /**
@@ -113,6 +121,68 @@ export function createPermissionsAPI() {
      */
     async deletePermission(permissionId: string): Promise<void> {
       return client.call<void>(`/v1/permissions/${permissionId}`, {
+        method: 'DELETE'
+      })
+    },
+
+    /**
+     * ABAC - Condition groups
+     */
+    async fetchConditionGroups(permissionId: string): Promise<ConditionGroup[]> {
+      return client.call<ConditionGroup[]>(`/v1/permissions/${permissionId}/condition-groups`)
+    },
+    async createConditionGroup(
+      permissionId: string,
+      data: ConditionGroupCreateData
+    ): Promise<ConditionGroup> {
+      return client.call<ConditionGroup>(`/v1/permissions/${permissionId}/condition-groups`, {
+        method: 'POST',
+        body: JSON.stringify(data)
+      })
+    },
+    async updateConditionGroup(
+      permissionId: string,
+      groupId: string,
+      data: ConditionGroupUpdateData
+    ): Promise<ConditionGroup> {
+      return client.call<ConditionGroup>(`/v1/permissions/${permissionId}/condition-groups/${groupId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data)
+      })
+    },
+    async deleteConditionGroup(permissionId: string, groupId: string): Promise<void> {
+      return client.call<void>(`/v1/permissions/${permissionId}/condition-groups/${groupId}`, {
+        method: 'DELETE'
+      })
+    },
+
+    /**
+     * ABAC - Conditions
+     */
+    async fetchConditions(permissionId: string): Promise<AbacCondition[]> {
+      return client.call<AbacCondition[]>(`/v1/permissions/${permissionId}/conditions`)
+    },
+    async createCondition(
+      permissionId: string,
+      data: AbacConditionCreateData
+    ): Promise<AbacCondition> {
+      return client.call<AbacCondition>(`/v1/permissions/${permissionId}/conditions`, {
+        method: 'POST',
+        body: JSON.stringify(data)
+      })
+    },
+    async updateCondition(
+      permissionId: string,
+      conditionId: string,
+      data: AbacConditionUpdateData
+    ): Promise<AbacCondition> {
+      return client.call<AbacCondition>(`/v1/permissions/${permissionId}/conditions/${conditionId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data)
+      })
+    },
+    async deleteCondition(permissionId: string, conditionId: string): Promise<void> {
+      return client.call<void>(`/v1/permissions/${permissionId}/conditions/${conditionId}`, {
         method: 'DELETE'
       })
     }

@@ -10,7 +10,27 @@ const UButton = resolveComponent("UButton");
 const UBadge = resolveComponent("UBadge");
 
 const authStore = useAuthStore();
+const permissionsStore = usePermissionsStore();
 const isEnterpriseRBAC = computed(() => authStore.isEnterpriseRBAC);
+const canReadRoles = computed(
+    () => authStore.currentUser?.is_superuser || permissionsStore.hasPermission("role:read"),
+);
+const canCreateRole = computed(
+    () => authStore.currentUser?.is_superuser || permissionsStore.hasPermission("role:create"),
+);
+const canUpdateRole = computed(
+    () => authStore.currentUser?.is_superuser || permissionsStore.hasPermission("role:update"),
+);
+const canDeleteRole = computed(
+    () => authStore.currentUser?.is_superuser || permissionsStore.hasPermission("role:delete"),
+);
+const canManageRoleAbac = computed(
+    () =>
+        authStore.features.abac &&
+        (authStore.currentUser?.is_superuser ||
+            (permissionsStore.hasPermission("role:read") &&
+                permissionsStore.hasPermission("role:update"))),
+);
 
 const search = ref("");
 const scopeFilter = ref<"all" | "global" | "organization">("all");
@@ -25,6 +45,8 @@ const pagination = ref({
 const showDeleteConfirm = ref(false);
 const roleToDelete = ref<Role | null>(null);
 const isDeletingRole = ref(false);
+const showAbacModal = ref(false);
+const roleForAbac = ref<Role | null>(null);
 
 // Fetch root entities for filter dropdown (EnterpriseRBAC only)
 const { data: entitiesData } = useQuery(
@@ -51,6 +73,11 @@ const scopeFilterOptions = [
 function openEditModal(roleId: string) {
     selectedRoleId.value = roleId;
     showEditModal.value = true;
+}
+
+function openAbacModal(role: Role) {
+    roleForAbac.value = role;
+    showAbacModal.value = true;
 }
 
 // Reset org filter when scope changes
@@ -242,11 +269,22 @@ const columns = computed((): TableColumn<Role>[] => {
             header: "Actions",
             cell: ({ row }) =>
                 h("div", { class: "flex items-center gap-2" }, [
+                    canManageRoleAbac.value
+                        ? h(UButton, {
+                              icon: "i-lucide-sliders-horizontal",
+                              color: "secondary",
+                              variant: "ghost",
+                              size: "xs",
+                              disabled: !canUpdateRole.value,
+                              onClick: () => openAbacModal(row.original),
+                          })
+                        : null,
                     h(UButton, {
                         icon: "i-lucide-pencil",
                         color: "neutral",
                         variant: "ghost",
                         size: "xs",
+                        disabled: !canUpdateRole.value,
                         onClick: () => openEditModal(row.original.id),
                     }),
                     h(UButton, {
@@ -254,6 +292,7 @@ const columns = computed((): TableColumn<Role>[] => {
                         color: "error",
                         variant: "ghost",
                         size: "xs",
+                        disabled: !canDeleteRole.value,
                         onClick: () => requestDeleteRole(row.original),
                     }),
                 ]),
@@ -279,6 +318,7 @@ const columns = computed((): TableColumn<Role>[] => {
                         icon="i-lucide-plus"
                         label="Create Role"
                         color="primary"
+                        :disabled="!canCreateRole"
                         @click="showCreateModal = true"
                     />
                 </template>
@@ -323,9 +363,20 @@ const columns = computed((): TableColumn<Role>[] => {
                 </div>
             </div>
 
+            <div
+                v-if="!canReadRoles"
+                class="flex-1 flex flex-col items-center justify-center gap-4"
+            >
+                <UIcon
+                    name="i-lucide-lock"
+                    class="w-12 h-12 text-warning"
+                />
+                <p class="text-muted">You do not have permission to view roles.</p>
+            </div>
+
             <!-- Loading State -->
             <div
-                v-if="isLoading"
+                v-else-if="isLoading"
                 class="flex-1 flex items-center justify-center"
             >
                 <UIcon
@@ -364,6 +415,7 @@ const columns = computed((): TableColumn<Role>[] => {
                         />
                         <p class="text-muted">No roles found</p>
                         <UButton
+                            v-if="canCreateRole"
                             icon="i-lucide-plus"
                             label="Create your first role"
                             variant="outline"
@@ -393,16 +445,27 @@ const columns = computed((): TableColumn<Role>[] => {
     </UDashboardPanel>
 
     <!-- Create Role Modal -->
-    <RoleCreateModal v-model:open="showCreateModal" />
+    <RoleCreateModal v-if="canCreateRole" v-model:open="showCreateModal" />
 
     <!-- Edit Role Modal -->
     <RoleUpdateModal
-        v-if="selectedRoleId"
+        v-if="selectedRoleId && canUpdateRole"
         v-model:open="showEditModal"
         :role-id="selectedRoleId"
     />
 
+    <AbacManagerModal
+        v-if="roleForAbac && canManageRoleAbac"
+        v-model:open="showAbacModal"
+        subject-type="role"
+        :subject-id="roleForAbac.id"
+        :subject-name="roleForAbac.display_name || roleForAbac.name"
+        :can-read="canManageRoleAbac"
+        :can-update="canUpdateRole"
+    />
+
     <ConfirmActionModal
+        v-if="canDeleteRole"
         v-model:open="showDeleteConfirm"
         title="Delete role?"
         :description="

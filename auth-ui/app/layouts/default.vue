@@ -3,53 +3,65 @@ import type { NavigationMenuItem } from "@nuxt/ui";
 
 const route = useRoute();
 const authStore = useAuthStore();
+const permissionsStore = usePermissionsStore();
 
 const open = ref(false);
+const canAccess = (permission: string) =>
+    authStore.currentUser?.is_superuser || permissionsStore.hasPermission(permission);
 
-// Base navigation links (all presets)
-const baseLinks = [
-    {
-        label: "Dashboard",
-        icon: "i-lucide-layout-dashboard",
-        to: "/dashboard",
-        exact: true,
-        onSelect: () => {
-            open.value = false;
-        },
+const canReadUsers = computed(() => canAccess("user:read"));
+const canReadRoles = computed(() => canAccess("role:read"));
+const canReadPermissions = computed(() => canAccess("permission:read"));
+const canReadEntities = computed(() => canAccess("entity:read"));
+const canUseApiKeys = computed(
+    () => authStore.features.api_keys && authStore.isAuthenticated,
+);
+
+const dashboardLink: NavigationMenuItem = {
+    label: "Dashboard",
+    icon: "i-lucide-layout-dashboard",
+    to: "/dashboard",
+    exact: true,
+    onSelect: () => {
+        open.value = false;
     },
-    {
-        label: "Users",
-        icon: "i-lucide-users",
-        to: "/users",
-        onSelect: () => {
-            open.value = false;
-        },
+};
+
+const usersLink: NavigationMenuItem = {
+    label: "Users",
+    icon: "i-lucide-users",
+    to: "/users",
+    onSelect: () => {
+        open.value = false;
     },
-    {
-        label: "Roles",
-        icon: "i-lucide-shield",
-        to: "/roles",
-        onSelect: () => {
-            open.value = false;
-        },
+};
+
+const rolesLink: NavigationMenuItem = {
+    label: "Roles",
+    icon: "i-lucide-shield",
+    to: "/roles",
+    onSelect: () => {
+        open.value = false;
     },
-    {
-        label: "Permissions",
-        icon: "i-lucide-lock",
-        to: "/permissions",
-        onSelect: () => {
-            open.value = false;
-        },
+};
+
+const permissionsLink: NavigationMenuItem = {
+    label: "Permissions",
+    icon: "i-lucide-lock",
+    to: "/permissions",
+    onSelect: () => {
+        open.value = false;
     },
-    {
-        label: "API Keys",
-        icon: "i-lucide-key",
-        to: "/api-keys",
-        onSelect: () => {
-            open.value = false;
-        },
+};
+
+const apiKeysLink: NavigationMenuItem = {
+    label: "API Keys",
+    icon: "i-lucide-key",
+    to: "/api-keys",
+    onSelect: () => {
+        open.value = false;
     },
-];
+};
 
 // EnterpriseRBAC-only links
 const enterpriseLinks = [
@@ -65,12 +77,29 @@ const enterpriseLinks = [
 
 // Main navigation links - dynamically composed based on preset
 const links = computed(() => {
-    const mainLinks = [...baseLinks];
+    const mainLinks: NavigationMenuItem[] = [dashboardLink];
+
+    if (canReadUsers.value) {
+        mainLinks.push(usersLink);
+    }
+    if (canReadRoles.value) {
+        mainLinks.push(rolesLink);
+    }
+    if (canReadPermissions.value) {
+        mainLinks.push(permissionsLink);
+    }
+    if (canUseApiKeys.value) {
+        mainLinks.push(apiKeysLink);
+    }
 
     // Insert Entities link after Roles if EnterpriseRBAC
-    if (authStore.isEnterpriseRBAC) {
+    if (authStore.isEnterpriseRBAC && canReadEntities.value) {
         const rolesIndex = mainLinks.findIndex((link) => link.to === "/roles");
-        mainLinks.splice(rolesIndex + 1, 0, ...enterpriseLinks);
+        if (rolesIndex >= 0) {
+            mainLinks.splice(rolesIndex + 1, 0, ...enterpriseLinks);
+        } else {
+            mainLinks.push(...enterpriseLinks);
+        }
     }
 
     // Build settings children
@@ -147,20 +176,26 @@ const groups = computed(() => {
             label: "Go to Dashboard",
             suffix: "G D",
         },
-        {
+    ];
+
+    if (canReadUsers.value) {
+        shortcuts.push({
             id: "g-u",
             label: "Go to Users",
             suffix: "G U",
-        },
-        {
+        });
+    }
+
+    if (canReadRoles.value) {
+        shortcuts.push({
             id: "g-r",
             label: "Go to Roles",
             suffix: "G R",
-        },
-    ];
+        });
+    }
 
     // Add Entities shortcut for EnterpriseRBAC
-    if (authStore.isEnterpriseRBAC) {
+    if (authStore.isEnterpriseRBAC && canReadEntities.value) {
         shortcuts.push({
             id: "g-e",
             label: "Go to Entities",
@@ -172,7 +207,12 @@ const groups = computed(() => {
         {
             id: "links",
             label: "Go to",
-            items: links.value.flat().filter((item) => !("children" in item)),
+            items: links.value
+                .flat()
+                .filter(
+                    (item): item is NavigationMenuItem =>
+                        !!item && !("children" in item),
+                ),
         },
         {
             id: "shortcuts",

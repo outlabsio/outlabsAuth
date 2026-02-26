@@ -6,6 +6,14 @@
 import type { Role, CreateRoleData, UpdateRoleData } from "~/types/role";
 import type { PaginationParams, PaginatedResponse } from "~/types/api";
 import type { RoleFilters } from "~/stores/roles.store";
+import type {
+  AbacCondition,
+  AbacConditionCreateData,
+  AbacConditionUpdateData,
+  ConditionGroup,
+  ConditionGroupCreateData,
+  ConditionGroupUpdateData,
+} from "~/types/abac";
 import { createAPIClient } from "./client";
 
 export function createRolesAPI() {
@@ -105,6 +113,68 @@ export function createRolesAPI() {
       return client.call<void>(`/v1/roles/${roleId}/permissions`, {
         method: "DELETE",
         body: JSON.stringify({ permissions }),
+      });
+    },
+
+    /**
+     * ABAC - Condition groups
+     */
+    async fetchConditionGroups(roleId: string): Promise<ConditionGroup[]> {
+      return client.call<ConditionGroup[]>(`/v1/roles/${roleId}/condition-groups`);
+    },
+    async createConditionGroup(
+      roleId: string,
+      data: ConditionGroupCreateData,
+    ): Promise<ConditionGroup> {
+      return client.call<ConditionGroup>(`/v1/roles/${roleId}/condition-groups`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+    },
+    async updateConditionGroup(
+      roleId: string,
+      groupId: string,
+      data: ConditionGroupUpdateData,
+    ): Promise<ConditionGroup> {
+      return client.call<ConditionGroup>(`/v1/roles/${roleId}/condition-groups/${groupId}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      });
+    },
+    async deleteConditionGroup(roleId: string, groupId: string): Promise<void> {
+      return client.call<void>(`/v1/roles/${roleId}/condition-groups/${groupId}`, {
+        method: "DELETE",
+      });
+    },
+
+    /**
+     * ABAC - Conditions
+     */
+    async fetchConditions(roleId: string): Promise<AbacCondition[]> {
+      return client.call<AbacCondition[]>(`/v1/roles/${roleId}/conditions`);
+    },
+    async createCondition(
+      roleId: string,
+      data: AbacConditionCreateData,
+    ): Promise<AbacCondition> {
+      return client.call<AbacCondition>(`/v1/roles/${roleId}/conditions`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+    },
+    async updateCondition(
+      roleId: string,
+      conditionId: string,
+      data: AbacConditionUpdateData,
+    ): Promise<AbacCondition> {
+      return client.call<AbacCondition>(`/v1/roles/${roleId}/conditions/${conditionId}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      });
+    },
+    async deleteCondition(roleId: string, conditionId: string): Promise<void> {
+      return client.call<void>(`/v1/roles/${roleId}/conditions/${conditionId}`, {
+        method: "DELETE",
       });
     },
   };

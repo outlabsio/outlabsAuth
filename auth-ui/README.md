@@ -134,6 +134,7 @@ auth-ui/
 - Context switching in sidebar
 - Entity hierarchy (STRUCTURAL + ACCESS_GROUP)
 - System context for superusers
+- Context-aware permission refresh after entity switch
 
 ### User Management
 
@@ -142,6 +143,12 @@ auth-ui/
 - Pagination
 - Active/inactive status
 - Avatar support
+
+### Authorization UX
+
+- Permission-aware navigation and route access gating for core admin surfaces
+- Permission-aware action gating for role/permission CRUD operations
+- ABAC condition-group/condition management for roles and permissions
 
 ### State Management
 

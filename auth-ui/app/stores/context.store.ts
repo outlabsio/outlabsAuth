@@ -186,6 +186,10 @@ export const useContextStore = defineStore("context", () => {
     if (import.meta.client) {
       localStorage.setItem(SELECTED_ENTITY_KEY, JSON.stringify(entity));
     }
+
+    // Keep permission-aware UI in sync with context-sensitive permissions.
+    const permissionsStore = usePermissionsStore();
+    void permissionsStore.refresh();
   };
 
   /**

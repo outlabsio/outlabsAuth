@@ -28,6 +28,16 @@ export const useAuthStore = defineStore("auth", () => {
   const resolveEndpoint = (endpoint: string): string =>
     resolveAuthEndpoint(endpoint, authApiPrefix.value);
 
+  const defaultFeatures: AuthConfig["features"] = {
+    entity_hierarchy: false,
+    context_aware_roles: false,
+    abac: false,
+    tree_permissions: false,
+    api_keys: true,
+    user_status: true,
+    activity_tracking: true,
+  };
+
   // State
   const state = reactive<AuthState>({
     accessToken: null,
@@ -57,7 +67,9 @@ export const useAuthStore = defineStore("auth", () => {
   const isEnterpriseRBAC = computed(
     () => state.config?.preset === "EnterpriseRBAC",
   );
-  const features = computed(() => state.config?.features || {});
+  const features = computed<AuthConfig["features"]>(
+    () => state.config?.features || defaultFeatures,
+  );
   const availablePermissions = computed(
     () => state.config?.available_permissions || [],
   );
@@ -401,15 +413,7 @@ export const useAuthStore = defineStore("auth", () => {
       // Set defaults if config fetch fails (assume SimpleRBAC)
       state.config = {
         preset: "SimpleRBAC",
-        features: {
-          entity_hierarchy: false,
-          context_aware_roles: false,
-          abac: false,
-          tree_permissions: false,
-          api_keys: true,
-          user_status: true,
-          activity_tracking: true,
-        },
+        features: defaultFeatures,
         available_permissions: [],
       };
       state.isConfigLoaded = true;
