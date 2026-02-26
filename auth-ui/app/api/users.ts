@@ -10,6 +10,7 @@ import { createAPIClient } from './client'
 
 export function createUsersAPI() {
   const client = createAPIClient()
+  const authStore = useAuthStore()
 
   return {
     /**
@@ -77,10 +78,22 @@ export function createUsersAPI() {
       currentPassword: string,
       newPassword: string
     ): Promise<void> {
-      return client.call<void>(`/v1/users/${userId}/change-password`, {
-        method: 'POST',
+      const currentUserId = authStore.currentUser?.id
+      const isSelfChange = userId === 'me' || userId === currentUserId
+
+      if (isSelfChange) {
+        return client.call<void>('/v1/users/me/change-password', {
+          method: 'POST',
+          body: JSON.stringify({
+            current_password: currentPassword,
+            new_password: newPassword
+          })
+        })
+      }
+
+      return client.call<void>(`/v1/users/${userId}/password`, {
+        method: 'PATCH',
         body: JSON.stringify({
-          current_password: currentPassword,
           new_password: newPassword
         })
       })

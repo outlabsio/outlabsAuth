@@ -28,7 +28,7 @@ export function createEntitiesAPI() {
         search: filters.search,
         entity_class: filters.entity_class,
         entity_type: filters.entity_type,
-        parent_entity_id: filters.parent_entity_id,
+        parent_id: filters.parent_entity_id,
         root_only: filters.root_only,
         page: params.page,
         limit: params.limit,
@@ -52,7 +52,12 @@ export function createEntitiesAPI() {
      * Get entity hierarchy (path and descendants)
      */
     async getEntityHierarchy(entityId: string): Promise<EntityHierarchy> {
-      return client.call<EntityHierarchy>(`/v1/entities/${entityId}/hierarchy`);
+      const [path, descendants] = await Promise.all([
+        client.call<Entity[]>(`/v1/entities/${entityId}/path`),
+        client.call<Entity[]>(`/v1/entities/${entityId}/descendants`),
+      ]);
+
+      return { path, descendants };
     },
 
     /**
@@ -87,7 +92,7 @@ export function createEntitiesAPI() {
     ): Promise<void> {
       return client.call<void>(`/v1/entities/${entityId}/move`, {
         method: "POST",
-        body: JSON.stringify({ parent_entity_id: newParentId }),
+        body: JSON.stringify({ new_parent_id: newParentId }),
       });
     },
 

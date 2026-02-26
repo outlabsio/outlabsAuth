@@ -13,6 +13,7 @@ import type {
   SystemStatus,
   AuthConfig,
 } from "~/types/auth";
+import { normalizeAuthApiPrefix, resolveAuthEndpoint } from "~/utils/auth-endpoint";
 
 const ACCESS_TOKEN_KEY = "outlabs_auth_access_token";
 const REFRESH_TOKEN_KEY = "outlabs_auth_refresh_token";
@@ -20,6 +21,12 @@ const USER_KEY = "outlabs_auth_user";
 
 export const useAuthStore = defineStore("auth", () => {
   const config = useRuntimeConfig();
+  const authApiPrefix = computed(() =>
+    normalizeAuthApiPrefix(config.public.authApiPrefix as string | undefined),
+  );
+
+  const resolveEndpoint = (endpoint: string): string =>
+    resolveAuthEndpoint(endpoint, authApiPrefix.value);
 
   // State
   const state = reactive<AuthState>({
@@ -147,7 +154,10 @@ export const useAuthStore = defineStore("auth", () => {
         requestOptions.body = JSON.stringify(requestOptions.body);
       }
 
-      const response = await fetch(`${baseURL}${endpoint}`, requestOptions);
+      const response = await fetch(
+        `${baseURL}${resolveEndpoint(endpoint)}`,
+        requestOptions,
+      );
 
       if (!response.ok) {
         const error: any = new Error(`HTTP ${response.status}`);
@@ -201,7 +211,7 @@ export const useAuthStore = defineStore("auth", () => {
     try {
       // Real API call - OutlabsAuth format
       const response = await fetch(
-        `${config.public.apiBaseUrl}/v1/auth/login`,
+        `${config.public.apiBaseUrl}${resolveEndpoint("/auth/login")}`,
         {
           method: "POST",
           headers: {
@@ -247,15 +257,18 @@ export const useAuthStore = defineStore("auth", () => {
     try {
       // Call logout endpoint if authenticated (direct fetch, not apiCall to avoid infinite loop)
       if (state.refreshToken && state.accessToken) {
-        await fetch(`${config.public.apiBaseUrl}/v1/auth/logout`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${state.accessToken}`,
+        await fetch(
+          `${config.public.apiBaseUrl}${resolveEndpoint("/auth/logout")}`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${state.accessToken}`,
+            },
+            body: JSON.stringify({ refresh_token: state.refreshToken }),
+            credentials: "include",
           },
-          body: JSON.stringify({ refresh_token: state.refreshToken }),
-          credentials: "include",
-        }).catch(() => {
+        ).catch(() => {
           // Ignore logout errors - we're clearing state anyway
         });
       }
@@ -279,7 +292,7 @@ export const useAuthStore = defineStore("auth", () => {
 
     try {
       const response = await fetch(
-        `${config.public.apiBaseUrl}/v1/auth/refresh`,
+        `${config.public.apiBaseUrl}${resolveEndpoint("/auth/refresh")}`,
         {
           method: "POST",
           headers: {
@@ -317,8 +330,7 @@ export const useAuthStore = defineStore("auth", () => {
    * Fetch current user
    */
   const fetchCurrentUser = async (): Promise<void> => {
-    // Real API call - use /v1/users/me (not /v1/auth/me)
-    const user = await apiCall<User>("/v1/users/me");
+    const user = await apiCall<User>("/users/me");
     if (user) {
       // Enrich user with computed fields
       const { enrichUser } = useUserHelpers();
@@ -337,7 +349,7 @@ export const useAuthStore = defineStore("auth", () => {
     try {
       // Make unauthenticated request to config endpoint
       const response = await fetch(
-        `${config.public.apiBaseUrl}/v1/auth/config`,
+        `${config.public.apiBaseUrl}${resolveEndpoint("/auth/config")}`,
         {
           method: "GET",
           headers: {

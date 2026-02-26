@@ -109,12 +109,24 @@ export const usePermissionsStore = defineStore('permissions', () => {
         contextHeaders['X-Entity-Context'] = contextStore.selectedEntity.id
       }
 
-      const permissions = await authStore.apiCall<UserPermissions>(
-        '/v1/users/me/permissions',
+      const response = await authStore.apiCall<UserPermissions | string[]>(
+        '/v1/permissions/me',
         { headers: contextHeaders }
       )
 
-      state.userPermissions = permissions
+      if (Array.isArray(response)) {
+        state.userPermissions = {
+          permissions: response,
+          roles: [],
+          is_superuser: currentUser.is_superuser ?? false
+        }
+      } else {
+        state.userPermissions = {
+          permissions: response.permissions || [],
+          roles: response.roles || [],
+          is_superuser: response.is_superuser ?? currentUser.is_superuser ?? false
+        }
+      }
     } catch (error: any) {
       state.error = error.message || 'Failed to fetch user permissions'
       console.error('Failed to fetch user permissions:', error)

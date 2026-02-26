@@ -297,13 +297,25 @@ export const useUserStore = defineStore("user", () => {
     try {
       state.error = null;
 
-      await authStore.apiCall(`/v1/users/${userId}/change-password`, {
-        method: "POST",
-        body: {
-          current_password: currentPassword,
-          new_password: newPassword,
-        },
-      });
+      const currentUserId = authStore.currentUser?.id;
+      const isSelfChange = userId === "me" || userId === currentUserId;
+
+      if (isSelfChange) {
+        await authStore.apiCall("/v1/users/me/change-password", {
+          method: "POST",
+          body: {
+            current_password: currentPassword,
+            new_password: newPassword,
+          },
+        });
+      } else {
+        await authStore.apiCall(`/v1/users/${userId}/password`, {
+          method: "PATCH",
+          body: {
+            new_password: newPassword,
+          },
+        });
+      }
 
       // Show success toast
       const toast = useToast();

@@ -56,14 +56,29 @@ export function createPermissionsAPI() {
     async fetchUserPermissions(): Promise<UserPermissions> {
       const contextStore = useContextStore()
       const contextHeaders: Record<string, string> = {}
+      const authStore = useAuthStore()
 
       if (contextStore.selectedEntity && !contextStore.selectedEntity.is_system) {
         contextHeaders['X-Entity-Context'] = contextStore.selectedEntity.id
       }
 
-      return client.call<UserPermissions>('/v1/users/me/permissions', {
+      const response = await client.call<UserPermissions | string[]>('/v1/permissions/me', {
         headers: contextHeaders
       })
+
+      if (Array.isArray(response)) {
+        return {
+          permissions: response,
+          roles: [],
+          is_superuser: authStore.currentUser?.is_superuser ?? false
+        }
+      }
+
+      return {
+        permissions: response.permissions || [],
+        roles: response.roles || [],
+        is_superuser: response.is_superuser ?? authStore.currentUser?.is_superuser ?? false
+      }
     },
 
     /**

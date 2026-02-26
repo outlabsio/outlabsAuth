@@ -66,7 +66,14 @@ To connect to a real OutlabsAuth backend:
 # .env
 NUXT_PUBLIC_USE_REAL_API=true
 NUXT_PUBLIC_API_BASE_URL=http://localhost:8000
+NUXT_PUBLIC_AUTH_API_PREFIX=/v1
 ```
+
+Set `NUXT_PUBLIC_AUTH_API_PREFIX` to the mounted auth path for your backend.
+Examples:
+
+- Outlabs examples: `/v1`
+- Diverse mounted runtime: `/iam`
 
 ## Project Structure
 

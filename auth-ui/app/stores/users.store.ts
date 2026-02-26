@@ -259,13 +259,25 @@ export const useUsersStore = defineStore("users", () => {
       state.isLoading = true;
       state.error = null;
 
-      await authStore.apiCall(`/v1/users/${userId}/change-password`, {
-        method: "POST",
-        body: JSON.stringify({
-          current_password: currentPassword,
-          new_password: newPassword,
-        }),
-      });
+      const currentUserId = authStore.currentUser?.id;
+      const isSelfChange = userId === "me" || userId === currentUserId;
+
+      if (isSelfChange) {
+        await authStore.apiCall("/v1/users/me/change-password", {
+          method: "POST",
+          body: JSON.stringify({
+            current_password: currentPassword,
+            new_password: newPassword,
+          }),
+        });
+      } else {
+        await authStore.apiCall(`/v1/users/${userId}/password`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            new_password: newPassword,
+          }),
+        });
+      }
 
       return true;
     } catch (error: any) {

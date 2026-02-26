@@ -126,7 +126,7 @@ export const useEntitiesStore = defineStore("entities", () => {
       if (filters.entity_type)
         queryParams.append("entity_type", filters.entity_type);
       if (filters.parent_entity_id !== undefined)
-        queryParams.append("parent_entity_id", filters.parent_entity_id);
+        queryParams.append("parent_id", filters.parent_entity_id);
       if (filters.root_only) queryParams.append("root_only", "true");
       if (params.page) queryParams.append("page", String(params.page));
       if (params.limit) queryParams.append("limit", String(params.limit));
@@ -188,10 +188,12 @@ export const useEntitiesStore = defineStore("entities", () => {
       state.isLoading = true;
       state.error = null;
 
-      const hierarchy = await authStore.apiCall<EntityHierarchy>(
-        `/v1/entities/${entityId}/hierarchy`,
-      );
-      return hierarchy;
+      const [path, descendants] = await Promise.all([
+        authStore.apiCall<Entity[]>(`/v1/entities/${entityId}/path`),
+        authStore.apiCall<Entity[]>(`/v1/entities/${entityId}/descendants`),
+      ]);
+
+      return { path, descendants };
     } catch (error: any) {
       state.error = error.message || "Failed to fetch entity hierarchy";
       console.error("Failed to fetch entity hierarchy:", error);
@@ -285,7 +287,7 @@ export const useEntitiesStore = defineStore("entities", () => {
 
       await authStore.apiCall(`/v1/entities/${entityId}/move`, {
         method: "POST",
-        body: JSON.stringify({ parent_entity_id: newParentId }),
+        body: JSON.stringify({ new_parent_id: newParentId }),
       });
 
       return true;
