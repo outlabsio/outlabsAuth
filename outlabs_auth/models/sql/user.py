@@ -185,6 +185,27 @@ class User(BaseModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
 
+    # === Invitation ===
+    invite_token: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255), nullable=True),
+        description="SHA-256 hash of the invite token",
+    )
+    invite_token_expires: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+        description="When the invite token expires",
+    )
+    invited_by_id: Optional[UUID] = Field(
+        default=None,
+        sa_column=Column(
+            PG_UUID(as_uuid=True),
+            ForeignKey("users.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+        description="User who sent the invitation",
+    )
+
     # === Relationships ===
     refresh_tokens: List["RefreshToken"] = Relationship(
         back_populates="user",

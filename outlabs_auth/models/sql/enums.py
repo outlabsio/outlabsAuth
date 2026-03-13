@@ -11,6 +11,7 @@ class UserStatus(str, Enum):
     """User account status."""
 
     ACTIVE = "active"
+    INVITED = "invited"  # Invited but hasn't set password yet
     SUSPENDED = "suspended"  # Temporary suspension (can be auto-lifted)
     BANNED = "banned"  # Permanent ban (manual lift required)
     DELETED = "deleted"  # Soft-deleted (for GDPR compliance)

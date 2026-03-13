@@ -76,6 +76,14 @@ class AuthConfig(BaseModel):
         default=False,
         description="Persist OAuth provider access/refresh tokens in the social_accounts table",
     )
+    enable_invitations: bool = Field(
+        default=True,
+        description="Enable user invitation system (invite by email, set password later)",
+    )
+    invite_token_expire_days: int = Field(
+        default=7,
+        description="Number of days before an invite token expires",
+    )
 
     # Redis Configuration (optional - for caching)
     redis_enabled: bool = Field(default=False, description="Enable Redis caching")

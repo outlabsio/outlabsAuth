@@ -746,12 +746,96 @@ class AuthService:
         """Hash token for storage using SHA256."""
         return hashlib.sha256(token.encode()).hexdigest()
 
+    async def accept_invite(
+        self,
+        session: AsyncSession,
+        token: str,
+        new_password: str,
+    ) -> User:
+        """
+        Accept an invitation by setting a password and activating the account.
+
+        Args:
+            session: Database session
+            token: Plain invite token
+            new_password: Password chosen by the invited user
+
+        Returns:
+            Activated user
+
+        Raises:
+            TokenInvalidError: If token is invalid
+            TokenExpiredError: If token has expired
+            AccountInactiveError: If user is not in INVITED status
+        """
+        # Hash token to find user (same pattern as reset_password)
+        hashed_token = hashlib.sha256(token.encode()).hexdigest()
+
+        stmt = select(User).where(User.invite_token == hashed_token)
+        result = await session.execute(stmt)
+        user = result.scalar_one_or_none()
+
+        if not user:
+            raise TokenInvalidError(
+                message="Invalid or expired invite token",
+                details={"reason": "token_not_found"},
+            )
+
+        # Check expiration
+        if not user.invite_token_expires or user.invite_token_expires < datetime.now(timezone.utc):
+            user.invite_token = None
+            user.invite_token_expires = None
+            await session.flush()
+
+            raise TokenExpiredError(
+                message="Invite token has expired",
+                details={"expired_at": user.invite_token_expires.isoformat() if user.invite_token_expires else None},
+            )
+
+        # Verify user is in INVITED status
+        if user.status != UserStatus.INVITED:
+            raise AccountInactiveError(
+                message="This invitation has already been accepted",
+                details={"status": user.status.value},
+            )
+
+        # Set password and activate
+        hashed_password = generate_password_hash(new_password, self.config)
+        user.hashed_password = hashed_password
+        user.status = UserStatus.ACTIVE
+        user.email_verified = True
+        user.last_password_change = datetime.now(timezone.utc)
+
+        # Clear invite token fields
+        user.invite_token = None
+        user.invite_token_expires = None
+
+        await session.flush()
+
+        # Emit notification
+        if self.notifications:
+            await self.notifications.emit(
+                "user.invite_accepted",
+                data={
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "accepted_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+
+        return user
+
     def _check_user_status(self, user: User) -> None:
         """Check if user account is active, raise appropriate error if not."""
         if user.status == UserStatus.ACTIVE:
             return
 
-        if user.status == UserStatus.SUSPENDED:
+        if user.status == UserStatus.INVITED:
+            raise AccountInactiveError(
+                message="Account has not been activated yet. Please check your email for the invitation link.",
+                details={"status": "invited"},
+            )
+        elif user.status == UserStatus.SUSPENDED:
             suspended_msg = f" until {user.suspended_until.isoformat()}" if user.suspended_until else ""
             raise AccountInactiveError(
                 message=f"Account is suspended{suspended_msg}",

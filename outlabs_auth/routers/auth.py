@@ -13,10 +13,13 @@ from outlabs_auth.core.exceptions import OutlabsAuthException
 from outlabs_auth.observability import (
     ObservabilityContext,
     get_observability_dependency,
+    get_observability_with_auth,
 )
 from outlabs_auth.schemas.auth import (
+    AcceptInviteRequest,
     AuthConfigResponse,
     ForgotPasswordRequest,
+    InviteUserRequest,
     LoginRequest,
     LoginResponse,
     LogoutRequest,
@@ -104,6 +107,7 @@ def get_auth_router(
             "api_keys": True,  # Always available
             "user_status": True,  # Always available
             "activity_tracking": True,  # Always available
+            "invitations": auth.config.enable_invitations,
         }
 
         # Get available permissions from database
@@ -387,5 +391,117 @@ def get_auth_router(
             raise
 
         return None
+
+    @router.post(
+        "/invite",
+        response_model=UserResponse,
+        status_code=status.HTTP_201_CREATED,
+        summary="Invite user",
+        description="Invite a user by email (requires user:create permission). Creates account with INVITED status.",
+    )
+    async def invite_user(
+        data: InviteUserRequest,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:create"),
+            )
+        ),
+    ):
+        """
+        Invite a user by email.
+
+        Creates an account with INVITED status and no password.
+        Triggers on_after_invite hook with the plain token.
+        If entity_id is provided, also adds entity membership.
+        """
+        from uuid import UUID
+
+        try:
+            actor_user_id = UUID(obs.user_id) if obs.user_id else None
+
+            user, plain_token = await auth.user_service.invite_user(
+                session,
+                email=data.email,
+                first_name=data.first_name,
+                last_name=data.last_name,
+                invited_by_id=actor_user_id,
+                root_entity_id=None,
+            )
+
+            # If entity_id provided, add membership
+            if data.entity_id and auth.membership_service:
+                await auth.membership_service.add_member(
+                    session,
+                    entity_id=UUID(data.entity_id),
+                    user_id=user.id,
+                    role_ids=[UUID(rid) for rid in data.role_ids] if data.role_ids else [],
+                    added_by_id=actor_user_id,
+                )
+
+            # Trigger hook
+            await auth.user_service.on_after_invite(user, plain_token)
+
+            obs.log_event("user_invited", invited_user_id=str(user.id), email=data.email)
+
+            return UserResponse(
+                id=str(user.id),
+                email=user.email,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                status=_status_value(user.status),
+                email_verified=user.email_verified,
+                is_superuser=user.is_superuser,
+            )
+        except HTTPException:
+            raise
+        except OutlabsAuthException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, email=data.email)
+            raise
+
+    @router.post(
+        "/accept-invite",
+        response_model=LoginResponse,
+        summary="Accept invitation",
+        description="Accept an invitation by setting a password. Returns JWT tokens for auto-login.",
+    )
+    async def accept_invite(
+        data: AcceptInviteRequest,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(get_obs),
+    ):
+        """
+        Accept an invitation and set password.
+
+        Activates the account and returns JWT tokens for immediate login.
+        """
+        try:
+            user = await auth.auth_service.accept_invite(
+                session,
+                token=data.token,
+                new_password=data.new_password,
+            )
+
+            # Auto-login: create tokens
+            tokens = await auth.auth_service.create_tokens_for_user(session, user)
+
+            obs.log_event("invite_accepted", user_id=str(user.id))
+
+            return LoginResponse(
+                access_token=tokens.access_token,
+                refresh_token=tokens.refresh_token,
+                token_type=tokens.token_type,
+                expires_in=tokens.expires_in,
+            )
+        except HTTPException:
+            raise
+        except OutlabsAuthException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e)
+            raise
 
     return router

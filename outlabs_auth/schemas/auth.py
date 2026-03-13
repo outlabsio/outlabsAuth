@@ -78,6 +78,23 @@ class LogoutRequest(BaseModel):
     )
 
 
+class InviteUserRequest(BaseModel):
+    """Invite user request schema."""
+
+    email: EmailStr
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    role_ids: Optional[List[str]] = Field(default=None, description="Role IDs to assign after invite")
+    entity_id: Optional[str] = Field(default=None, description="Entity ID to add membership to")
+
+
+class AcceptInviteRequest(BaseModel):
+    """Accept invite request schema."""
+
+    token: str
+    new_password: str = Field(..., min_length=8)
+
+
 class AuthConfigResponse(BaseModel):
     """
     Auth configuration response schema.

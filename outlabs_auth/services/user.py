@@ -4,7 +4,9 @@ User Service
 Handles user management operations with PostgreSQL/SQLAlchemy.
 """
 
-from datetime import datetime, timezone
+import hashlib
+import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
@@ -90,6 +92,10 @@ class UserService(BaseService[User]):
         pass
 
     async def on_after_reset_password(self, user: User, request: Optional[Request] = None) -> None:
+        pass
+
+    async def on_after_invite(self, user: User, token: str, request: Optional[Request] = None) -> None:
+        """Hook called after user invitation. Override to send invite link via preferred channel."""
         pass
 
     async def on_failed_login(
@@ -635,57 +641,141 @@ class UserService(BaseService[User]):
 
         await self.update(session, user)
 
-    # ========================================================================
-    # Event Hooks (FastAPI-Users pattern)
-    # ========================================================================
+    # =========================================================================
+    # Invitation System
+    # =========================================================================
 
-    async def on_after_register(
+    async def invite_user(
         self,
-        user: User,
-        request: Optional[Request] = None,
-    ) -> None:
-        """Hook called after successful user registration."""
-        pass
+        session: AsyncSession,
+        email: str,
+        *,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        invited_by_id: Optional[UUID] = None,
+        tenant_id: Optional[str] = None,
+        root_entity_id: Optional[UUID] = None,
+    ) -> Tuple[User, str]:
+        """
+        Invite a user by email. Creates account with INVITED status and no password.
 
-    async def on_after_login(
-        self,
-        user: User,
-        request: Optional[Request] = None,
-        response: Optional[Response] = None,
-    ) -> None:
-        """Hook called after successful user login."""
-        pass
+        Args:
+            session: Database session
+            email: Email to invite
+            first_name: Optional first name
+            last_name: Optional last name
+            invited_by_id: UUID of inviting user
+            tenant_id: Optional tenant ID
+            root_entity_id: Optional root entity ID
 
-    async def on_after_update(
-        self,
-        user: User,
-        update_dict: Dict[str, Any],
-        request: Optional[Request] = None,
-    ) -> None:
-        """Hook called after successful user update."""
-        pass
+        Returns:
+            Tuple of (User, plain_token)
+        """
+        email = validate_email(email)
 
-    async def on_after_forgot_password(
-        self,
-        user: User,
-        token: str,
-        request: Optional[Request] = None,
-    ) -> None:
-        """Hook called after forgot password request."""
-        pass
+        # Check if user already exists
+        user_lookup_filters = [User.email == email]
+        if self.config.multi_tenant:
+            user_lookup_filters.append(User.tenant_id == tenant_id)
+        existing = await self.get_one(session, *user_lookup_filters)
+        if existing:
+            raise UserAlreadyExistsError(
+                message=f"User with email {email} already exists",
+                details={"email": email},
+            )
 
-    async def on_after_reset_password(
-        self,
-        user: User,
-        request: Optional[Request] = None,
-    ) -> None:
-        """Hook called after successful password reset."""
-        pass
+        if first_name:
+            first_name = validate_name(first_name, "first_name")
+        if last_name:
+            last_name = validate_name(last_name, "last_name")
 
-    async def on_after_verify(
+        # Validate root_entity_id if provided
+        if root_entity_id:
+            entity = await session.get(Entity, root_entity_id)
+            if not entity:
+                raise EntityNotFoundError(
+                    message="Root entity not found",
+                    details={"root_entity_id": str(root_entity_id)},
+                )
+            if entity.parent_id is not None:
+                raise InvalidInputError(
+                    message="User can only be assigned to root entities (entities with no parent)",
+                    details={"root_entity_id": str(root_entity_id)},
+                )
+
+        # Generate invite token (same pattern as password reset)
+        plain_token = secrets.token_urlsafe(32)
+        hashed_token = hashlib.sha256(plain_token.encode()).hexdigest()
+        expires = datetime.now(timezone.utc) + timedelta(days=self.config.invite_token_expire_days)
+
+        user = User(
+            email=email,
+            hashed_password=None,
+            first_name=first_name,
+            last_name=last_name,
+            status=UserStatus.INVITED,
+            is_superuser=False,
+            tenant_id=tenant_id,
+            root_entity_id=root_entity_id,
+            invite_token=hashed_token,
+            invite_token_expires=expires,
+            invited_by_id=invited_by_id,
+        )
+
+        await self.create(session, user)
+
+        # Emit notification
+        if self.notifications:
+            await self.notifications.emit(
+                "user.invited",
+                data={
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "invited_by_id": str(invited_by_id) if invited_by_id else None,
+                    "created_at": user.created_at.isoformat(),
+                },
+            )
+
+        return user, plain_token
+
+    async def resend_invite(
         self,
-        user: User,
-        request: Optional[Request] = None,
-    ) -> None:
-        """Hook called after successful email verification."""
-        pass
+        session: AsyncSession,
+        user_id: UUID,
+    ) -> Tuple[User, str]:
+        """
+        Resend invitation by regenerating the invite token.
+
+        Args:
+            session: Database session
+            user_id: ID of the invited user
+
+        Returns:
+            Tuple of (User, new_plain_token)
+        """
+        user = await self.get_by_id(session, user_id)
+        if not user:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": str(user_id)},
+            )
+
+        if user.status != UserStatus.INVITED:
+            raise InvalidInputError(
+                message="Can only resend invitations for users with INVITED status",
+                details={"user_id": str(user_id), "current_status": user.status.value},
+            )
+
+        # Regenerate token
+        plain_token = secrets.token_urlsafe(32)
+        hashed_token = hashlib.sha256(plain_token.encode()).hexdigest()
+        expires = datetime.now(timezone.utc) + timedelta(days=self.config.invite_token_expire_days)
+
+        user.invite_token = hashed_token
+        user.invite_token_expires = expires
+
+        await self.update(session, user)
+
+        return user, plain_token

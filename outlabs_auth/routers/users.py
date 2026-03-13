@@ -656,6 +656,60 @@ def get_users_router(
 
         return None
 
+    @router.post(
+        "/{user_id}/resend-invite",
+        response_model=UserResponse,
+        summary="Resend invitation",
+        description="Resend invitation email to an INVITED user (requires user:update permission)",
+    )
+    async def resend_invite(
+        user_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        """
+        Resend invitation by regenerating the invite token.
+
+        Only works for users with INVITED status.
+        Triggers on_after_invite hook with the new token.
+        """
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
+
+            user, plain_token = await auth.user_service.resend_invite(session, user_id)
+
+            # Trigger hook
+            await auth.user_service.on_after_invite(user, plain_token)
+
+            if auth.observability:
+                auth.observability.logger.info(
+                    "invite_resent",
+                    target_user_id=str(user_id),
+                    resent_by=obs.user_id,
+                )
+
+            return UserResponse(
+                id=str(user.id),
+                email=user.email,
+                first_name=user.first_name,
+                last_name=user.last_name,
+                status=_get_status_value(user.status),
+                email_verified=user.email_verified,
+                is_superuser=user.is_superuser,
+            )
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
     # ============================================================
     # USER ROLE MANAGEMENT ENDPOINTS
     # ============================================================

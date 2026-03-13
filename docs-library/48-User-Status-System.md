@@ -8,7 +8,7 @@
 
 ## Overview
 
-OutlabsAuth uses a simple, clear user status system with 4 statuses that control authentication access. This document defines the semantics and behavior of each status.
+OutlabsAuth uses a simple, clear user status system with 5 statuses that control authentication access. This document defines the semantics and behavior of each status.
 
 ---
 
@@ -19,6 +19,7 @@ OutlabsAuth uses a simple, clear user status system with 4 statuses that control
 The status field answers one question: **Can this user authenticate?**
 
 - ✅ **ACTIVE** → Yes
+- ❌ **INVITED** → No (hasn't set password yet)
 - ❌ **SUSPENDED** → No (temporarily)
 - ❌ **BANNED** → No (permanently)
 - ❌ **DELETED** → No (soft-deleted)
@@ -35,6 +36,7 @@ from enum import Enum
 class UserStatus(str, Enum):
     """User account status controlling authentication access"""
     ACTIVE = "active"
+    INVITED = "invited"
     SUSPENDED = "suspended"
     BANNED = "banned"
     DELETED = "deleted"
@@ -68,7 +70,41 @@ class UserStatus(str, Enum):
 
 ---
 
-### 2. SUSPENDED
+### 2. INVITED
+
+**Can authenticate**: No
+
+**Description**: User has been invited but hasn't set their password yet. Created via the invitation system (`POST /v1/auth/invite`).
+
+**Use Cases**:
+- Admin invites a new team member by email
+- Onboarding users without requiring admin to set passwords
+
+**Behavior**:
+- Cannot login (no password set) — raises `AccountInactiveError` with message: "Account has not been activated yet. Please check your email for the invitation link."
+- Has no `hashed_password` (NULL)
+- Has an `invite_token` (SHA-256 hash) and `invite_token_expires`
+- `invited_by_id` tracks who sent the invitation
+
+**Related Fields**:
+```python
+invite_token: Optional[str] = None          # SHA-256 hash of invite token
+invite_token_expires: Optional[datetime] = None  # Token expiry
+invited_by_id: Optional[UUID] = None        # FK to inviting user
+```
+
+**Transitions**:
+- Changes to ACTIVE when user accepts invite (`POST /v1/auth/accept-invite`)
+- Can be changed to DELETED (admin cancels invite)
+
+**Notes**:
+- Invite tokens can be regenerated via `POST /v1/users/{id}/resend-invite`
+- On acceptance, `email_verified` is set to `true` and invite token fields are cleared
+- See [24-User-Invitations.md](./24-User-Invitations.md) for full details
+
+---
+
+### 3. SUSPENDED
 
 **Can authenticate**: ❌ No
 
@@ -114,7 +150,7 @@ suspended_until: Optional[datetime] = None  # Optional auto-expiry
 
 ---
 
-### 3. BANNED
+### 4. BANNED
 
 **Can authenticate**: ❌ No
 
@@ -161,7 +197,7 @@ user.metadata["banned_by"] = admin_user_id
 
 ---
 
-### 4. DELETED
+### 5. DELETED
 
 **Can authenticate**: ❌ No
 
@@ -253,7 +289,9 @@ user = await UserModel.find_one(UserModel.email == email)
 # Check status BEFORE password verification
 if user.status != UserStatus.ACTIVE:
     # Raise specific error based on status
-    if user.status == UserStatus.SUSPENDED:
+    if user.status == UserStatus.INVITED:
+        raise AccountInactiveError("Account has not been activated yet...")
+    elif user.status == UserStatus.SUSPENDED:
         raise AccountInactiveError("Account is suspended...")
     elif user.status == UserStatus.BANNED:
         raise AccountInactiveError("Account is permanently banned")
@@ -308,7 +346,13 @@ An application might allow unverified ACTIVE users to login but with limited per
 
 ```
 ┌─────────┐
-│  ACTIVE │  ◄── Default status for new users
+│ INVITED │  ◄── Created via POST /v1/auth/invite
+└────┬────┘
+     │
+     └──► ACTIVE (user accepts invite and sets password)
+
+┌─────────┐
+│  ACTIVE │  ◄── Default status for new users / accepted invites
 └────┬────┘
      │
      ├──► SUSPENDED  (temporary block)
@@ -459,6 +503,16 @@ Response: 200 OK
 }
 ```
 
+### INVITED User
+```http
+Response: 403 Forbidden
+{
+  "detail": "Account has not been activated yet. Please check your email for the invitation link.",
+  "error_code": "ACCOUNT_INACTIVE",
+  "status": "invited"
+}
+```
+
 ### SUSPENDED User
 ```http
 Response: 403 Forbidden
@@ -506,21 +560,28 @@ Response: 403 Forbidden
 - Test API key authentication with non-active users
 - Test status changes during active session
 
+### Invitation Tests
+- Test invite creates user with INVITED status and no password
+- Test accept_invite activates user and sets password
+- Test expired invite tokens are rejected
+- Test resend_invite regenerates token
+
 ### Security Tests
 - Verify non-ACTIVE users cannot bypass with valid tokens
 - Verify status checks happen before password verification
 - Verify all token revocation on suspension/ban/deletion
+- Verify INVITED users cannot login directly
 
 ---
 
 ## See Also
 
 - [Data Models](./12-Data-Models.md) - Full UserModel definition
-- [Email/Password Authentication](./21-Email-Password-Auth.md) - Login flow
+- [User Invitations](./24-User-Invitations.md) - Invitation system details
 - [JWT Tokens](./22-JWT-Tokens.md) - Token revocation strategies
 - [Design Decisions](./DESIGN_DECISIONS.md) - DD-048 summary
 
 ---
 
-**Last Updated**: 2025-01-24
+**Last Updated**: 2026-03-13
 **Status**: Implementation Complete

@@ -619,6 +619,7 @@ class OutlabsAuth:
             "caching": self.config.enable_caching,
             "multi_tenant": self.config.multi_tenant,
             "audit_log": self.config.enable_audit_log,
+            "invitations": self.config.enable_invitations,
         }
 
     def __repr__(self) -> str:

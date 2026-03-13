@@ -596,6 +596,7 @@ async def get_auth_config():
             "api_keys": True,
             "user_status": True,
             "activity_tracking": True,
+            "invitations": True,
         },
         "available_permissions": [
             # User permissions
