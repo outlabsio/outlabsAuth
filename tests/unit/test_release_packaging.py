@@ -5,7 +5,7 @@ import tomllib
 from pathlib import Path
 
 from outlabs_auth import __release_stage__, __version__
-from outlabs_auth.cli import _resolve_alembic_ini
+from outlabs_auth.cli import ALEMBIC_VERSION_TABLE, _resolve_alembic_ini
 from outlabs_auth.release_versioning import parse_release_version
 
 
@@ -28,6 +28,11 @@ def test_cli_prefers_bundled_alembic_config():
 
     assert resolved.name == "alembic.ini"
     assert resolved.parent.name == "outlabs_auth"
+    assert "driver://user:pass@localhost/dbname" in resolved.read_text()
+
+
+def test_cli_uses_namespaced_alembic_version_table():
+    assert ALEMBIC_VERSION_TABLE == "outlabs_auth_alembic_version"
 
 
 def test_cli_can_resolve_local_alembic_config_for_maintainers(tmp_path, monkeypatch):
