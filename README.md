@@ -5,13 +5,14 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-blue.svg)](https://www.postgresql.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Distribution: Private](https://img.shields.io/badge/distribution-private-orange.svg)](#installation)
+[![Stage: Alpha](https://img.shields.io/badge/stage-alpha-red.svg)](#development-status)
 
-> **v2.0** - PostgreSQL migration complete. SimpleRBAC and EnterpriseRBAC both working with full observability support.
+> **Alpha release** - internal multi-project distribution is now versioned, but the library and admin UI are still in active iteration.
 
 ## Overview
 
-OutlabsAuth is a comprehensive authentication and authorization library for FastAPI applications. Install it via pip and integrate powerful auth capabilities directly into your application - no separate auth service required.
+OutlabsAuth is a comprehensive authentication and authorization library for FastAPI applications. It is intended for private distribution across internal projects and integrates directly into your application; no separate auth service is required.
 
 **Inspired by [FastAPI-Users](https://github.com/fastapi-users/fastapi-users)**: We've adopted their battle-tested patterns (lifecycle hooks, router factories, transport/strategy) while adding advanced authorization features like hierarchical permissions, tree permissions, and context-aware roles.
 
@@ -32,7 +33,7 @@ OutlabsAuth is a comprehensive authentication and authorization library for Fast
 
 **Developer Experience**:
 - **FastAPI Native**: Designed specifically for FastAPI with dependency injection
-- **Production Ready**: Redis caching, Pub/Sub invalidation, comprehensive security
+- **Production-Oriented**: Redis caching, Pub/Sub invalidation, comprehensive security
 - **Extensible**: Override services, add custom hooks, create custom transports
 - **Observability**: Prometheus metrics, structured logging, correlation IDs
 
@@ -41,8 +42,36 @@ OutlabsAuth is a comprehensive authentication and authorization library for Fast
 ### Installation
 
 ```bash
-pip install outlabs-auth
+uv add --index outlabs-private outlabs-auth
 ```
+
+For private distribution with `uv`, use one of these patterns:
+
+```toml
+# Private package index (recommended)
+[project]
+dependencies = ["outlabs-auth>=0.1.0a1,<0.2"]
+
+[tool.uv.sources]
+outlabs-auth = { index = "outlabs-private" }
+
+[[tool.uv.index]]
+name = "outlabs-private"
+url = "https://<your-registry>/simple/"
+publish-url = "https://<your-registry>/"
+explicit = true
+```
+
+```toml
+# Private Git source
+[project]
+dependencies = ["outlabs-auth"]
+
+[tool.uv.sources]
+outlabs-auth = { git = "ssh://git@github.com/<org>/outlabsAuth.git", tag = "v0.1.0a1" }
+```
+
+See [docs/PRIVATE_RELEASE.md](./docs/PRIVATE_RELEASE.md) for the release workflow.
 
 ### Development Setup
 
@@ -377,15 +406,17 @@ Implementation-specific documentation (9 files):
 
 ## Development Status
 
-**Current Version**: 2.0
+**Current Library Version**: 0.1.0a1
+**Current Admin UI Version**: 0.1.0-alpha.1
+**Release Stage**: Alpha
 **Database**: PostgreSQL (via SQLAlchemy async)
 
-### Production Status
+### Delivery Status
 
 | Preset | Status | Notes |
 |--------|--------|-------|
-| **SimpleRBAC** | ✅ Production Ready | Flat RBAC, JWT auth, API keys, rate limiting |
-| **EnterpriseRBAC** | ✅ Production Ready | Entity hierarchy, tree permissions, closure table |
+| **SimpleRBAC** | Alpha | Flat RBAC, JWT auth, API keys, rate limiting |
+| **EnterpriseRBAC** | Alpha | Entity hierarchy, tree permissions, closure table |
 
 ### What's Working
 
@@ -401,16 +432,16 @@ Implementation-specific documentation (9 files):
 
 ## Roadmap
 
-### v2.0 (Current)
-- ✅ SimpleRBAC production-ready
-- ✅ EnterpriseRBAC production-ready
+### Alpha (Current)
+- ✅ SimpleRBAC core functionality working
+- ✅ EnterpriseRBAC core functionality working
 - ✅ JWT + API key authentication
 - ✅ PostgreSQL with SQLAlchemy async
 - ✅ Entity hierarchy with closure table
 - ✅ Tree permissions
 - ✅ Observability (Prometheus + structured logging)
 
-### v2.1+ (Future)
+### Post-Alpha (Future)
 - OAuth/social login (Google, Facebook, Apple)
 - Passwordless auth (magic links, OTP)
 - MFA/TOTP
@@ -425,7 +456,7 @@ Implementation-specific documentation (9 files):
 
 ## License
 
-MIT License - see LICENSE file for details
+Private package. Distribution and usage are governed by internal Outlabs terms.
 
 ## Contributing
 
@@ -450,9 +481,9 @@ Special thanks to the FastAPI-Users team for pioneering these patterns in the Fa
 
 ## Support
 
-- **Documentation**: `docs/`
-- **Issues**: [GitHub Issues](https://github.com/outlabs/outlabs-auth/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/outlabs/outlabs-auth/discussions)
+- **Documentation**: `docs/` and `docs-library/`
+- **Release workflow**: `docs/PRIVATE_RELEASE.md`
+- **Support**: internal Outlabs engineering channels
 
 ---
 

@@ -1,5 +1,11 @@
 # OutlabsAuth Alembic Configuration Template
 #
+# Maintainers can copy this file to alembic.ini when creating or editing
+# migrations from a repository checkout.
+#
+# Installed library consumers do not need to copy this file; the package now
+# ships with a bundled Alembic config used by `outlabs-auth migrate`.
+#
 # Copy this file to alembic.ini and update the database URL:
 #   cp alembic.ini.template alembic.ini
 #
