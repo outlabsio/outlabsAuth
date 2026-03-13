@@ -52,6 +52,13 @@ def test_auth_ui_package_tracks_its_own_version_and_library_version():
     assert data["outlabsAuth"]["releaseStage"] == __release_stage__
 
 
+def test_auth_ui_readme_tracks_current_ui_version():
+    auth_ui_readme = (Path(__file__).resolve().parents[2] / "auth-ui" / "README.md").read_text()
+    release = parse_release_version(__version__)
+
+    assert f"Current tracked UI version: `{release.ui_version}`" in auth_ui_readme
+
+
 def test_readme_tracks_current_release_metadata():
     readme = (Path(__file__).resolve().parents[2] / "README.md").read_text()
     release = parse_release_version(__version__)

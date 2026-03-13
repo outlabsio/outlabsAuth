@@ -12,6 +12,7 @@ from outlabs_auth.release_versioning import parse_release_version
 ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILE = ROOT / "outlabs_auth" / "_version.py"
 PACKAGE_JSON = ROOT / "auth-ui" / "package.json"
+AUTH_UI_README = ROOT / "auth-ui" / "README.md"
 README = ROOT / "README.md"
 PRIVATE_RELEASE_DOC = ROOT / "docs" / "PRIVATE_RELEASE.md"
 
@@ -123,6 +124,18 @@ def _write_readme(version: str) -> None:
     README.write_text(readme)
 
 
+def _write_auth_ui_readme(version: str) -> None:
+    release = parse_release_version(version)
+    auth_ui_readme = AUTH_UI_README.read_text()
+    auth_ui_readme = _replace_once(
+        auth_ui_readme,
+        r"^Current tracked UI version: `[^`]+`$",
+        f"Current tracked UI version: `{release.ui_version}`",
+        description="auth-ui README UI version",
+    )
+    AUTH_UI_README.write_text(auth_ui_readme)
+
+
 def _check_private_release_doc() -> list[str]:
     issues: list[str] = []
     doc_text = PRIVATE_RELEASE_DOC.read_text()
@@ -157,6 +170,10 @@ def check_release_metadata(version: str) -> list[str]:
     if outlabs_auth_meta.get("releaseStage") != release.release_stage:
         issues.append("`auth-ui/package.json` release stage is out of sync")
 
+    auth_ui_readme = AUTH_UI_README.read_text()
+    if f"Current tracked UI version: `{release.ui_version}`" not in auth_ui_readme:
+        issues.append("`auth-ui/README.md` tracked UI version is out of sync")
+
     readme = README.read_text()
     for description, fragment in _expected_readme_fragments(version).items():
         if fragment not in readme:
@@ -169,6 +186,7 @@ def check_release_metadata(version: str) -> list[str]:
 def _set_version(version: str) -> None:
     _write_version_file(version)
     _write_package_json(version)
+    _write_auth_ui_readme(version)
     _write_readme(version)
 
 
@@ -213,4 +231,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
