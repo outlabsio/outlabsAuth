@@ -49,6 +49,14 @@ Environment variables:
 The bundled `outlabs_auth/alembic.ini` intentionally ships with a placeholder URL.
 Installed consumers must provide `DATABASE_URL`; there is no real fallback database target.
 
+Legacy installs that previously used `init-db` or another model-bootstrap path
+can be adopted into Alembic history with:
+
+- `DATABASE_URL=... OUTLABS_AUTH_SCHEMA=... uv run python -m outlabs_auth.cli adopt-existing-schema`
+
+The standard `migrate` command will also auto-adopt a fully bootstrapped legacy
+auth schema before attempting new DDL.
+
 ## Publish To A Private Index
 
 Add the private index to `pyproject.toml` in consuming projects:

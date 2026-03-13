@@ -23,6 +23,28 @@ def _python_bin(venv_dir: Path) -> Path:
     return venv_dir / "bin" / "python"
 
 
+def _install_packaged_repo(tmp_path: Path) -> Path:
+    venv_dir = tmp_path / ".venv"
+    install_env = os.environ.copy()
+    install_env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+
+    subprocess.run(
+        ["uv", "venv", str(venv_dir)],
+        cwd=tmp_path,
+        check=True,
+        env=install_env,
+    )
+    python_bin = _python_bin(venv_dir)
+
+    subprocess.run(
+        ["uv", "pip", "install", "--python", str(python_bin), str(ROOT)],
+        cwd=ROOT,
+        check=True,
+        env=install_env,
+    )
+    return python_bin
+
+
 async def _drop_schema(schema: str) -> None:
     engine = create_async_engine(TEST_DATABASE_URL, echo=False)
     try:
@@ -65,27 +87,8 @@ async def _count_rows(schema: str, table_name: str) -> int:
 @pytest.mark.integration
 def test_packaged_cli_migrate_seed_and_bootstrap(tmp_path):
     schema = f"release_{uuid4().hex[:10]}"
-    venv_dir = tmp_path / ".venv"
-
-    install_env = os.environ.copy()
-    install_env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
-
-    subprocess.run(
-        ["uv", "venv", str(venv_dir)],
-        cwd=tmp_path,
-        check=True,
-        env=install_env,
-    )
-    python_bin = _python_bin(venv_dir)
-
-    subprocess.run(
-        ["uv", "pip", "install", "--python", str(python_bin), str(ROOT)],
-        cwd=ROOT,
-        check=True,
-        env=install_env,
-    )
-
-    cmd_env = install_env.copy()
+    python_bin = _install_packaged_repo(tmp_path)
+    cmd_env = os.environ.copy()
     cmd_env["DATABASE_URL"] = TEST_DATABASE_URL
     cmd_env["OUTLABS_AUTH_SCHEMA"] = schema
 
@@ -144,5 +147,49 @@ def test_packaged_cli_migrate_seed_and_bootstrap(tmp_path):
             get_system_permission_catalog()
         )
         assert asyncio.run(_count_rows(schema, "system_config")) == 1
+    finally:
+        asyncio.run(_drop_schema(schema))
+
+
+@pytest.mark.integration
+def test_packaged_cli_migrate_adopts_legacy_bootstrap_schema(tmp_path):
+    schema = f"legacy_{uuid4().hex[:10]}"
+    python_bin = _install_packaged_repo(tmp_path)
+    cmd_env = os.environ.copy()
+    cmd_env["DATABASE_URL"] = TEST_DATABASE_URL
+    cmd_env["OUTLABS_AUTH_SCHEMA"] = schema
+
+    try:
+        asyncio.run(_drop_schema(schema))
+
+        subprocess.run(
+            [str(python_bin), "-m", "outlabs_auth.cli", "init-db", "--force"],
+            cwd=tmp_path,
+            check=True,
+            env=cmd_env,
+        )
+
+        assert asyncio.run(_table_count(schema, "users")) == 1
+        assert asyncio.run(_table_count(schema, "outlabs_auth_alembic_version")) == 0
+
+        subprocess.run(
+            [str(python_bin), "-m", "outlabs_auth.cli", "migrate"],
+            cwd=tmp_path,
+            check=True,
+            env=cmd_env,
+        )
+
+        assert asyncio.run(_table_count(schema, "outlabs_auth_alembic_version")) == 1
+
+        subprocess.run(
+            [str(python_bin), "-m", "outlabs_auth.cli", "seed-system"],
+            cwd=tmp_path,
+            check=True,
+            env=cmd_env,
+        )
+
+        assert asyncio.run(_count_rows(schema, "permissions")) == len(
+            get_system_permission_catalog()
+        )
     finally:
         asyncio.run(_drop_schema(schema))

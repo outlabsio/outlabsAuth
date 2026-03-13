@@ -30,6 +30,16 @@ from outlabs_auth.bootstrap import (
 
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 ALEMBIC_VERSION_TABLE = "outlabs_auth_alembic_version"
+LEGACY_SCHEMA_ADOPTION_TABLES = frozenset(
+    {
+        "users",
+        "roles",
+        "permissions",
+        "entities",
+        "entity_memberships",
+        "system_config",
+    }
+)
 
 
 def normalize_database_url(url: str) -> str:
@@ -143,6 +153,26 @@ async def _ensure_schema_exists(database_url: str, schema: Optional[str]) -> Non
         await engine.dispose()
 
 
+async def _list_schema_tables(database_url: str, schema: Optional[str]) -> set[str]:
+    schema_name = _validate_schema_name(schema) or "public"
+    engine = create_async_engine(normalize_database_url(database_url), echo=False)
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                text(
+                    """
+                    SELECT table_name
+                    FROM information_schema.tables
+                    WHERE table_schema = :schema_name
+                    """
+                ),
+                {"schema_name": schema_name},
+            )
+            return {str(row[0]) for row in result}
+    finally:
+        await engine.dispose()
+
+
 def _invoke_alembic_command(
     sync_connection,
     *,
@@ -195,12 +225,59 @@ async def run_migrations(
     """Run Alembic migrations asynchronously against the target DB/schema."""
     from alembic import command
 
+    if revision == "head":
+        adopted = await adopt_existing_schema(database_url, schema=schema, revision=revision)
+        if adopted:
+            return
+
     await _run_alembic_command(
         database_url,
         schema=schema,
         ensure_schema=True,
         runner=lambda alembic_cfg: command.upgrade(alembic_cfg, revision),
     )
+
+
+async def adopt_existing_schema(
+    database_url: str,
+    *,
+    schema: Optional[str] = None,
+    revision: str = "head",
+) -> bool:
+    """
+    Stamp a legacy auth schema that was created outside Alembic.
+
+    This is intended for older installs that used model bootstrap/create_all and
+    therefore have a complete auth schema but no Alembic version table yet.
+    """
+
+    from alembic import command
+
+    normalized_url = normalize_database_url(database_url)
+    target_schema = _validate_schema_name(schema)
+    tables = await _list_schema_tables(normalized_url, target_schema)
+
+    if ALEMBIC_VERSION_TABLE in tables:
+        return False
+    if not tables:
+        return False
+
+    if not LEGACY_SCHEMA_ADOPTION_TABLES.issubset(tables):
+        missing_tables = sorted(LEGACY_SCHEMA_ADOPTION_TABLES - tables)
+        schema_name = target_schema or "public"
+        raise RuntimeError(
+            "Target schema contains tables but is not versioned by Alembic. "
+            f'Automatic adoption only supports fully bootstrapped auth schemas in "{schema_name}". '
+            f"Missing required tables: {', '.join(missing_tables)}"
+        )
+
+    await _run_alembic_command(
+        normalized_url,
+        schema=target_schema,
+        ensure_schema=True,
+        runner=lambda alembic_cfg: command.stamp(alembic_cfg, revision),
+    )
+    return True
 
 
 async def downgrade_migrations(
@@ -356,6 +433,24 @@ def migrate(revision: str):
         )
     )
     click.echo("Done!")
+
+
+@main.command("adopt-existing-schema")
+@click.option("--revision", default="head", show_default=True, help="Alembic revision to stamp")
+def adopt_existing_schema_command(revision: str):
+    """Stamp a fully bootstrapped legacy auth schema into Alembic history."""
+    click.echo(f"Checking for legacy auth schema adoption at revision {revision}...")
+    adopted = asyncio.run(
+        adopt_existing_schema(
+            get_database_url(),
+            schema=get_target_schema_from_env(),
+            revision=revision,
+        )
+    )
+    if adopted:
+        click.echo("Stamped existing auth schema into Alembic history.")
+    else:
+        click.echo("No legacy auth schema adoption was needed.")
 
 
 @main.command("seed-system")
