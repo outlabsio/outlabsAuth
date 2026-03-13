@@ -41,16 +41,14 @@ OutlabsAuth is a comprehensive authentication and authorization library for Fast
 
 ### Installation
 
-```bash
-uv add --index outlabs-private outlabs-auth
-```
-
-For private distribution with `uv`, use one of these patterns:
+For private distribution with `uv`, use one of these patterns. For the current
+internal projects, private Git tags are the default because they are the
+lowest-friction option for a small team.
 
 ```toml
-# Private package index (recommended)
+# Private package index (optional)
 [project]
-dependencies = ["outlabs-auth>=0.1.0a1,<0.2"]
+dependencies = ["outlabs-auth>=0.1.0a5,<0.2"]
 
 [tool.uv.sources]
 outlabs-auth = { index = "outlabs-private" }
@@ -68,10 +66,40 @@ explicit = true
 dependencies = ["outlabs-auth"]
 
 [tool.uv.sources]
-outlabs-auth = { git = "ssh://git@github.com/<org>/outlabsAuth.git", tag = "v0.1.0a1" }
+outlabs-auth = { git = "ssh://git@github.com/<org>/outlabsAuth.git", tag = "v0.1.0a5" }
 ```
 
-See [docs/PRIVATE_RELEASE.md](./docs/PRIVATE_RELEASE.md) for the release workflow.
+See [docs/PRIVATE_RELEASE.md](./docs/PRIVATE_RELEASE.md) for the release workflow. Run `uv run python scripts/release_version.py check` to verify the library version, UI version, and release docs stay aligned before you tag a release.
+
+### Consumer Database Bootstrap
+
+OutlabsAuth owns its own schema lifecycle. A host application should install the
+library and then run these steps against the target database before expecting
+the mounted routers or services to work:
+
+```bash
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/mydb \
+OUTLABS_AUTH_SCHEMA=outlabs_auth \
+uv run outlabs-auth migrate
+
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/mydb \
+OUTLABS_AUTH_SCHEMA=outlabs_auth \
+uv run outlabs-auth seed-system
+
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/mydb \
+OUTLABS_AUTH_SCHEMA=outlabs_auth \
+uv run outlabs-auth bootstrap-admin \
+  --email admin@example.com \
+  --password 'ChangeMe123!'
+```
+
+`migrate` manages only the auth schema, `seed-system` provisions the library-owned
+permission catalog and config defaults, and `bootstrap-admin` creates the first
+superuser exactly once.
+
+If you are migrating a host app that previously bootstrapped auth tables with
+`create_all`, `migrate` will automatically adopt a fully bootstrapped legacy
+schema by stamping `outlabs_auth_alembic_version` before future migrations run.
 
 ### Development Setup
 
@@ -406,8 +434,8 @@ Implementation-specific documentation (9 files):
 
 ## Development Status
 
-**Current Library Version**: 0.1.0a1
-**Current Admin UI Version**: 0.1.0-alpha.1
+**Current Library Version**: 0.1.0a5
+**Current Admin UI Version**: 0.1.0-alpha.5
 **Release Stage**: Alpha
 **Database**: PostgreSQL (via SQLAlchemy async)
 

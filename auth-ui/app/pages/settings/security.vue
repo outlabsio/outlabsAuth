@@ -1,34 +1,81 @@
 <script setup lang="ts">
 const authStore = useAuthStore()
+const currentUser = computed(() => authStore.currentUser)
 
-// Password change form
-const passwordForm = reactive({
-  current_password: '',
-  new_password: '',
-  confirm_password: ''
+const securityAlert = computed(() => {
+  if (!currentUser.value) return null
+
+  if (currentUser.value.status === 'suspended') {
+    return {
+      color: 'warning' as const,
+      icon: 'i-lucide-shield-alert',
+      title: 'This account is currently suspended',
+      description: 'Access is restricted until the suspension expires or an administrator reactivates the account.'
+    }
+  }
+
+  if (currentUser.value.status === 'banned') {
+    return {
+      color: 'error' as const,
+      icon: 'i-lucide-ban',
+      title: 'This account is banned',
+      description: 'Administrative intervention is required before this account can authenticate again.'
+    }
+  }
+
+  if (!currentUser.value.email_verified) {
+    return {
+      color: 'warning' as const,
+      icon: 'i-lucide-mail-warning',
+      title: 'Email verification is still pending',
+      description: 'This account can authenticate, but email verification has not been completed yet.'
+    }
+  }
+
+  return null
 })
 
-const isChangingPassword = ref(false)
+function formatDateTime(dateString?: string | null): string {
+  if (!dateString) return 'Not available'
 
-const changePassword = async () => {
-  isChangingPassword.value = true
-  // Simulate API call
-  await new Promise(resolve => setTimeout(resolve, 1000))
-  isChangingPassword.value = false
-  console.log('Password changed')
-  // Reset form
-  Object.assign(passwordForm, {
-    current_password: '',
-    new_password: '',
-    confirm_password: ''
+  return new Date(dateString).toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
   })
+}
+
+function formatRelativeTime(dateString?: string | null): string {
+  if (!dateString) return 'No recent activity'
+
+  const then = new Date(dateString)
+  const now = new Date()
+  const diffMinutes = Math.floor((now.getTime() - then.getTime()) / 60000)
+
+  if (diffMinutes < 1) return 'Just now'
+  if (diffMinutes < 60) return `${diffMinutes}m ago`
+
+  const diffHours = Math.floor(diffMinutes / 60)
+  if (diffHours < 24) return `${diffHours}h ago`
+
+  const diffDays = Math.floor(diffHours / 24)
+  return `${diffDays}d ago`
+}
+
+function statusColor(status?: string): 'success' | 'warning' | 'error' | 'neutral' {
+  if (status === 'active') return 'success'
+  if (status === 'suspended') return 'warning'
+  if (status === 'banned' || status === 'deleted') return 'error'
+  return 'neutral'
 }
 </script>
 
 <template>
   <UDashboardPanel id="settings-security">
     <template #header>
-      <UDashboardNavbar title="Security Settings">
+      <UDashboardNavbar title="Security Overview">
         <template #leading>
           <UDashboardSidebarCollapse />
         </template>
@@ -46,166 +93,173 @@ const changePassword = async () => {
     </template>
 
     <template #body>
-      <div class="max-w-2xl space-y-6">
-        <!-- Change Password -->
-        <UCard>
-          <template #header>
-            <div class="flex items-center gap-3">
-              <UIcon name="i-lucide-key" class="w-5 h-5" />
-              <h3 class="text-lg font-semibold">Change Password</h3>
-            </div>
-          </template>
+      <div class="space-y-6 max-w-5xl">
+        <UAlert
+          v-if="securityAlert"
+          :color="securityAlert.color"
+          variant="subtle"
+          :icon="securityAlert.icon"
+          :title="securityAlert.title"
+          :description="securityAlert.description"
+        />
 
-          <UForm
-            :state="passwordForm"
-            class="space-y-4"
-            @submit="changePassword"
-          >
-            <UFormField
-              name="current_password"
-              label="Current Password"
-              required
-            >
-              <UInput
-                v-model="passwordForm.current_password"
-                type="password"
-                icon="i-lucide-lock"
-                placeholder="Enter current password"
-              />
-            </UFormField>
-
-            <UFormField
-              name="new_password"
-              label="New Password"
-              required
-            >
-              <UInput
-                v-model="passwordForm.new_password"
-                type="password"
-                icon="i-lucide-lock"
-                placeholder="Enter new password"
-              />
-            </UFormField>
-
-            <UFormField
-              name="confirm_password"
-              label="Confirm New Password"
-              required
-            >
-              <UInput
-                v-model="passwordForm.confirm_password"
-                type="password"
-                icon="i-lucide-lock"
-                placeholder="Confirm new password"
-              />
-            </UFormField>
-
-            <div class="flex justify-end pt-2">
-              <UButton
-                type="submit"
-                icon="i-lucide-save"
-                label="Change Password"
-                :loading="isChangingPassword"
-              />
-            </div>
-          </UForm>
-        </UCard>
-
-        <!-- Two-Factor Authentication -->
-        <UCard>
-          <template #header>
-            <div class="flex items-center gap-3">
-              <UIcon name="i-lucide-shield" class="w-5 h-5" />
-              <h3 class="text-lg font-semibold">Two-Factor Authentication</h3>
-            </div>
-          </template>
-
-          <div class="space-y-4">
-            <p class="text-sm text-muted">
-              Add an extra layer of security to your account by enabling two-factor authentication.
-            </p>
-
-            <div class="flex items-center justify-between py-3 border-t border-default">
-              <div>
-                <p class="font-medium">Authenticator App</p>
-                <p class="text-sm text-muted mt-1">Use an authenticator app to generate codes</p>
-              </div>
-              <UBadge color="neutral" variant="subtle">
-                Not Enabled
-              </UBadge>
-            </div>
-
-            <div class="flex items-center justify-between py-3 border-t border-default">
-              <div>
-                <p class="font-medium">SMS Authentication</p>
-                <p class="text-sm text-muted mt-1">Receive codes via SMS</p>
-              </div>
-              <UBadge color="neutral" variant="subtle">
-                Not Enabled
-              </UBadge>
-            </div>
-
-            <div class="flex justify-end pt-2">
-              <UButton
-                icon="i-lucide-shield-plus"
-                label="Enable 2FA"
-                color="primary"
-                variant="outline"
-              />
-            </div>
-          </div>
-        </UCard>
-
-        <!-- Active Sessions -->
-        <UCard>
-          <template #header>
-            <div class="flex items-center gap-3">
-              <UIcon name="i-lucide-monitor" class="w-5 h-5" />
-              <h3 class="text-lg font-semibold">Active Sessions</h3>
-            </div>
-          </template>
-
-          <div class="space-y-4">
-            <div class="flex items-center justify-between py-3 border-b border-default">
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <UCard>
+            <template #header>
               <div class="flex items-center gap-3">
-                <UIcon name="i-lucide-monitor" class="w-8 h-8 text-primary" />
-                <div>
-                  <p class="font-medium">Current Session</p>
-                  <p class="text-sm text-muted">Chrome on macOS • San Francisco, US</p>
+                <UIcon name="i-lucide-key-round" class="w-5 h-5" />
+                <h3 class="text-lg font-semibold">Password</h3>
+              </div>
+            </template>
+
+            <div class="space-y-4">
+              <p class="text-sm text-muted">
+                Change your password through the dedicated secure flow. The backend records the last password change timestamp for audit visibility.
+              </p>
+
+              <div>
+                <label class="text-sm font-medium text-muted">Last Password Change</label>
+                <p class="mt-1 text-base">
+                  {{ formatDateTime(currentUser?.last_password_change) }}
+                </p>
+              </div>
+
+              <div>
+                <label class="text-sm font-medium text-muted">Password Policy</label>
+                <p class="mt-1 text-base">Minimum 8 characters</p>
+              </div>
+            </div>
+
+            <template #footer>
+              <div class="flex justify-end">
+                <UButton
+                  to="/settings/password"
+                  icon="i-lucide-key"
+                  label="Change Password"
+                />
+              </div>
+            </template>
+          </UCard>
+
+          <UCard>
+            <template #header>
+              <div class="flex items-center gap-3">
+                <UIcon name="i-lucide-shield" class="w-5 h-5" />
+                <h3 class="text-lg font-semibold">Account State</h3>
+              </div>
+            </template>
+
+            <div class="space-y-4">
+              <div>
+                <label class="text-sm font-medium text-muted">Current Status</label>
+                <div class="mt-1">
+                  <UBadge
+                    :color="statusColor(currentUser?.status)"
+                    variant="subtle"
+                  >
+                    {{ currentUser?.status || 'unknown' }}
+                  </UBadge>
                 </div>
               </div>
-              <UBadge color="success" variant="subtle">
-                Active Now
-              </UBadge>
-            </div>
 
-            <div class="flex items-center justify-between py-3">
-              <div class="flex items-center gap-3">
-                <UIcon name="i-lucide-smartphone" class="w-8 h-8 text-muted" />
-                <div>
-                  <p class="font-medium">Mobile Device</p>
-                  <p class="text-sm text-muted">Safari on iOS • 2 hours ago</p>
+              <div>
+                <label class="text-sm font-medium text-muted">Email Verification</label>
+                <div class="mt-1">
+                  <UBadge
+                    :color="currentUser?.email_verified ? 'success' : 'warning'"
+                    variant="subtle"
+                  >
+                    {{ currentUser?.email_verified ? 'Verified' : 'Pending' }}
+                  </UBadge>
                 </div>
               </div>
-              <UButton
-                icon="i-lucide-log-out"
-                label="Revoke"
-                color="error"
-                variant="ghost"
-                size="xs"
-              />
+
+              <div>
+                <label class="text-sm font-medium text-muted">Locked Until</label>
+                <p class="mt-1 text-base">{{ formatDateTime(currentUser?.locked_until) }}</p>
+              </div>
+
+              <div>
+                <label class="text-sm font-medium text-muted">Suspended Until</label>
+                <p class="mt-1 text-base">{{ formatDateTime(currentUser?.suspended_until) }}</p>
+              </div>
+            </div>
+          </UCard>
+
+          <UCard>
+            <template #header>
+              <div class="flex items-center gap-3">
+                <UIcon name="i-lucide-activity" class="w-5 h-5" />
+                <h3 class="text-lg font-semibold">Audit Signals</h3>
+              </div>
+            </template>
+
+            <div class="space-y-4">
+              <div>
+                <label class="text-sm font-medium text-muted">Last Login</label>
+                <p class="mt-1 text-base">{{ formatDateTime(currentUser?.last_login) }}</p>
+                <p class="text-xs text-muted mt-1">{{ formatRelativeTime(currentUser?.last_login) }}</p>
+              </div>
+
+              <div>
+                <label class="text-sm font-medium text-muted">Last Activity</label>
+                <p class="mt-1 text-base">{{ formatDateTime(currentUser?.last_activity) }}</p>
+                <p class="text-xs text-muted mt-1">{{ formatRelativeTime(currentUser?.last_activity) }}</p>
+              </div>
+            </div>
+          </UCard>
+
+          <UCard>
+            <template #header>
+              <div class="flex items-center gap-3">
+                <UIcon name="i-lucide-key-square" class="w-5 h-5" />
+                <h3 class="text-lg font-semibold">Programmatic Access</h3>
+              </div>
+            </template>
+
+            <div class="space-y-4">
+              <p class="text-sm text-muted">
+                API key management is handled from the shared admin UI and enforced by the backend permission model.
+              </p>
+
+              <div>
+                <label class="text-sm font-medium text-muted">API Keys</label>
+                <div class="mt-1">
+                  <UBadge
+                    :color="authStore.features.api_keys ? 'success' : 'neutral'"
+                    variant="subtle"
+                  >
+                    {{ authStore.features.api_keys ? 'Enabled' : 'Disabled' }}
+                  </UBadge>
+                </div>
+              </div>
+
+              <div>
+                <label class="text-sm font-medium text-muted">Activity Tracking</label>
+                <div class="mt-1">
+                  <UBadge
+                    :color="authStore.features.activity_tracking ? 'success' : 'neutral'"
+                    variant="subtle"
+                  >
+                    {{ authStore.features.activity_tracking ? 'Enabled' : 'Disabled' }}
+                  </UBadge>
+                </div>
+              </div>
             </div>
 
-            <div class="flex justify-end pt-2">
-              <UButton
-                icon="i-lucide-log-out"
-                label="Revoke All Sessions"
-                color="error"
-                variant="outline"
-              />
-            </div>
-          </div>
-        </UCard>
+            <template #footer>
+              <div class="flex justify-end">
+                <UButton
+                  to="/api-keys"
+                  icon="i-lucide-key"
+                  label="Manage API Keys"
+                  color="neutral"
+                  variant="outline"
+                />
+              </div>
+            </template>
+          </UCard>
+        </div>
       </div>
     </template>
   </UDashboardPanel>

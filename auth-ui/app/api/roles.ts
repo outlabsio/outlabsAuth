@@ -43,12 +43,9 @@ export function createRolesAPI() {
       const queryString = client.buildQueryString({
         search: filters.search,
         is_global: filters.is_global,
-        entity_id: filters.entity_id,
-        entity_type: filters.entity_type,
+        root_entity_id: filters.root_entity_id,
         page: params.page,
         limit: params.limit,
-        sort_by: params.sort_by,
-        sort_order: params.sort_order,
       });
 
       return client.call<PaginatedResponse<Role>>(`/v1/roles/${queryString}`);
@@ -96,8 +93,8 @@ export function createRolesAPI() {
     async assignPermissions(
       roleId: string,
       permissions: string[],
-    ): Promise<void> {
-      return client.call<void>(`/v1/roles/${roleId}/permissions`, {
+    ): Promise<Role> {
+      return client.call<Role>(`/v1/roles/${roleId}/permissions`, {
         method: "POST",
         body: { permissions },
       });
@@ -109,8 +106,8 @@ export function createRolesAPI() {
     async removePermissions(
       roleId: string,
       permissions: string[],
-    ): Promise<void> {
-      return client.call<void>(`/v1/roles/${roleId}/permissions`, {
+    ): Promise<Role> {
+      return client.call<Role>(`/v1/roles/${roleId}/permissions`, {
         method: "DELETE",
         body: { permissions },
       });

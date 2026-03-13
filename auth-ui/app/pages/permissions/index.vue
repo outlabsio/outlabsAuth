@@ -61,7 +61,6 @@ function handleDelete(permission: Permission) {
     return
   }
 
-  // TODO: Add confirmation dialog
   deletePermission(permission.id)
 }
 
@@ -75,16 +74,6 @@ function handleEdit(permission: Permission) {
     })
     return
   }
-
-  if (permission.is_system) {
-    toast.add({
-      title: 'Cannot edit',
-      description: 'System permissions cannot be edited',
-      color: 'warning'
-    })
-    return
-  }
-
   // Open edit modal with selected permission
   permissionToEdit.value = permission
   showUpdateModal.value = true
@@ -176,7 +165,7 @@ const columns: TableColumn<Permission>[] = [
         color: 'neutral',
         variant: 'ghost',
         size: 'xs',
-        disabled: row.original.is_system || !canUpdatePermission.value,
+        disabled: !canUpdatePermission.value,
         onClick: () => handleEdit(row.original)
       }),
       h(UButton, {
@@ -238,20 +227,6 @@ const filteredPermissions = computed(() => {
           class="w-64"
         />
 
-        <div class="flex items-center gap-2">
-          <UButton
-            icon="i-lucide-filter"
-            color="neutral"
-            variant="ghost"
-            label="Filter"
-          />
-          <UButton
-            icon="i-lucide-download"
-            color="neutral"
-            variant="ghost"
-            label="Export"
-          />
-        </div>
       </div>
 
       <div v-if="!canReadPermissions" class="flex-1 flex flex-col items-center justify-center gap-4">

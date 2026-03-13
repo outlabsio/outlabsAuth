@@ -10,6 +10,10 @@
 - ✅ Migrated to Pinia Colada for data fetching (Jan 2025)
 - ✅ Removed mock data system
 - ✅ Implemented optimistic UI updates
+- ✅ Hardened backend parity across CRUD/settings/API keys/ABAC/dashboard surfaces (Mar 13, 2026)
+
+**Remaining Gap**:
+- OAuth/social provider discovery and linked-account management still need a dedicated backend contract. See `docs/AUTH_UI_PARITY_GAPS.md`.
 
 ---
 
@@ -4424,4 +4428,3 @@ The OutlabsAuth admin UI has been comprehensively tested with browser automation
 - `.playwright-mcp/api-keys-implementation-progress.png` - API Keys page
 
 **Testing completed**: 2025-01-10 via MCP Playwright browser automation
-

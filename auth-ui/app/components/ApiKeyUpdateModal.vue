@@ -12,7 +12,6 @@ const props = defineProps<{
 
 const open = defineModel<boolean>('open', { default: false })
 
-// Fetch available permissions dynamically
 const { data: permissions, isLoading: loadingPermissions } = useQuery(permissionsQueries.available())
 
 // Fetch existing API key data when modal opens
@@ -21,22 +20,19 @@ const { data: existingKey, isLoading: isLoadingKey } = useQuery(() => ({
   enabled: open.value && !!props.keyId
 }))
 
-// Available scopes computed from permissions
 const availableScopes = computed(() => {
   if (!permissions.value) return []
 
-  // Add "All Permissions" option
   const allPermissions = {
     value: '*:*',
     label: 'All Permissions',
     description: '⚠️ Full access to all resources - use with caution'
   }
 
-  // Map permissions to scope options
-  const scopeOptions = permissions.value.map(p => ({
-    value: p.name,
-    label: p.display_name || p.name,
-    description: p.description || ''
+  const scopeOptions = permissions.value.map((permission) => ({
+    value: permission.name,
+    label: permission.display_name || permission.name,
+    description: permission.description || ''
   }))
 
   return [allPermissions, ...scopeOptions]
@@ -74,7 +70,6 @@ function buildInitialState(): ApiKeyUpdateForm {
 // Form state
 const state = reactive<ApiKeyUpdateForm>(buildInitialState())
 
-// Pre-populate form when key data loads
 watch(existingKey, (key) => {
   if (key) {
     state.name = key.name
@@ -89,7 +84,6 @@ watch(existingKey, (key) => {
   }
 }, { immediate: true })
 
-// Watch IP whitelist raw input
 watch(() => state.ip_whitelist_raw, (raw) => {
   if (raw.trim()) {
     state.ip_whitelist = raw
@@ -104,10 +98,8 @@ watch(() => state.ip_whitelist_raw, (raw) => {
 // Update mutation
 const { mutateAsync: updateKey, isLoading: isSubmitting } = useUpdateApiKeyMutation()
 
-// Submit handler
 async function handleSubmit() {
   try {
-    // Build update payload (only send changed fields)
     const payload: UpdateApiKeyRequest = {
       name: state.name,
       description: state.description || undefined,
@@ -118,15 +110,16 @@ async function handleSubmit() {
     }
 
     await updateKey({ id: props.keyId, data: payload })
-
-    // Close modal on success
     open.value = false
   } catch (error) {
-    // Error handling is done by the mutation
     console.error('Failed to update API key:', error)
   }
 }
 
+function formatDate(dateString?: string | null): string {
+  if (!dateString) return 'Never'
+  return new Date(dateString).toLocaleString()
+}
 </script>
 
 <template>
@@ -143,7 +136,6 @@ async function handleSubmit() {
       </div>
 
       <div v-else class="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
-        <!-- Name & Description -->
         <div class="space-y-2">
           <label class="block text-sm font-medium">Name <span class="text-error">*</span></label>
           <UInput
@@ -166,7 +158,6 @@ async function handleSubmit() {
 
         <USeparator label="Status" />
 
-        <!-- Status Selection -->
         <div class="space-y-2">
           <label class="block text-sm font-medium">Key Status</label>
           <div class="grid grid-cols-3 gap-2">
@@ -191,14 +182,13 @@ async function handleSubmit() {
             icon="i-lucide-alert-triangle"
             color="error"
             variant="subtle"
-            title="Warning: Revoking is permanent"
-            description="Once revoked, an API key cannot be re-activated. Consider suspending instead if you may need to re-enable it later."
+            title="Warning: revoking is permanent"
+            description="Once revoked, an API key cannot be re-activated. Suspend it instead if you may need to restore access later."
           />
         </div>
 
         <USeparator label="Permissions" />
 
-        <!-- Scopes Selection -->
         <div class="space-y-2">
           <label class="block text-sm font-medium">Scopes (Permissions)</label>
           <p class="text-xs text-muted mb-2">
@@ -226,7 +216,6 @@ async function handleSubmit() {
 
         <USeparator label="Rate Limits" />
 
-        <!-- Rate Limiting -->
         <div class="space-y-3">
           <div class="space-y-2">
             <label class="block text-sm font-medium">Requests per minute</label>
@@ -243,7 +232,6 @@ async function handleSubmit() {
 
         <USeparator label="Security" />
 
-        <!-- IP Whitelist -->
         <div class="space-y-2">
           <label class="block text-sm font-medium">IP Whitelist (optional)</label>
           <UTextarea
@@ -269,7 +257,7 @@ async function handleSubmit() {
         <!-- Usage Stats (read-only) -->
         <USeparator label="Usage Statistics" />
 
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
           <UCard>
             <div class="flex items-center justify-between">
               <div>
@@ -285,10 +273,22 @@ async function handleSubmit() {
               <div>
                 <p class="text-sm text-muted">Last Used</p>
                 <p class="text-sm font-medium mt-1">
-                  {{ existingKey?.last_used_at ? new Date(existingKey.last_used_at).toLocaleDateString() : 'Never' }}
+                  {{ formatDate(existingKey?.last_used_at) }}
                 </p>
               </div>
               <UIcon name="i-lucide-clock" class="w-8 h-8 text-muted" />
+            </div>
+          </UCard>
+
+          <UCard>
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-sm text-muted">Expires</p>
+                <p class="text-sm font-medium mt-1">
+                  {{ formatDate(existingKey?.expires_at) }}
+                </p>
+              </div>
+              <UIcon name="i-lucide-calendar" class="w-8 h-8 text-muted" />
             </div>
           </UCard>
         </div>

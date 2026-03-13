@@ -24,11 +24,9 @@ export function createUsersAPI() {
         search: filters.search,
         status: filters.status,
         is_superuser: filters.is_superuser,
-        entity_id: filters.entity_id,
+        root_entity_id: filters.root_entity_id,
         page: params.page,
         limit: params.limit,
-        sort_by: params.sort_by,
-        sort_order: params.sort_order
       })
 
       return client.call<PaginatedResponse<User>>(`/v1/users${queryString}`)
@@ -58,6 +56,27 @@ export function createUsersAPI() {
       return client.call<User>(`/v1/users/${userId}`, {
         method: 'PATCH',
         body: data
+      })
+    },
+
+    /**
+     * Update user status
+     */
+    async updateUserStatus(
+      userId: string,
+      status: "active" | "suspended" | "banned",
+      options?: {
+        suspended_until?: string
+        reason?: string
+      }
+    ): Promise<User> {
+      return client.call<User>(`/v1/users/${userId}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status,
+          suspended_until: options?.suspended_until,
+          reason: options?.reason,
+        })
       })
     },
 

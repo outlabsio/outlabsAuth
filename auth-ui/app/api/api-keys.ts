@@ -49,7 +49,7 @@ export function createApiKeysAPI() {
     /**
      * Update API key
      * PATCH /v1/api-keys/{id}
-     * Can update: name, description, scopes, rate limits, IP whitelist, status, expires_at
+     * Can update: name, description, scopes, rate_limit_per_minute, IP whitelist, status
      */
     async updateApiKey(
       keyId: string,
@@ -75,7 +75,6 @@ export function createApiKeysAPI() {
     /**
      * Rotate API key (create new, revoke old)
      * POST /v1/api-keys/{id}/rotate
-     * NOTE: Backend returns 501 Not Implemented - feature not yet available
      */
     async rotateApiKey(keyId: string): Promise<ApiKeyCreateResponse> {
       return client.call<ApiKeyCreateResponse>(`/v1/api-keys/${keyId}/rotate`, {

@@ -32,8 +32,6 @@ export function createEntitiesAPI() {
         root_only: filters.root_only,
         page: params.page,
         limit: params.limit,
-        sort_by: params.sort_by,
-        sort_order: params.sort_order,
       });
 
       return client.call<PaginatedResponse<Entity>>(

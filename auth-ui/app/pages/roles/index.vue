@@ -107,7 +107,7 @@ const filters = computed(() => {
     } else if (scopeFilter.value === "organization") {
         f.is_global = false;
         if (orgFilter.value) {
-            f.entity_id = orgFilter.value;
+            f.root_entity_id = orgFilter.value;
         }
     }
 
@@ -354,14 +354,6 @@ const columns = computed((): TableColumn<Role>[] => {
                     </template>
                 </div>
 
-                <div class="flex items-center gap-2">
-                    <UButton
-                        icon="i-lucide-download"
-                        color="neutral"
-                        variant="ghost"
-                        label="Export"
-                    />
-                </div>
             </div>
 
             <div

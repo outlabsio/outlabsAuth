@@ -11,6 +11,8 @@ const props = defineProps<{
 }>()
 
 const toast = useToast()
+const authStore = useAuthStore()
+const showAbac = computed(() => authStore.features.abac)
 
 // Show help slideover
 const showPermissionHelp = ref(false)
@@ -140,7 +142,8 @@ function toggleTag(tag: string) {
 
     <template #body>
       <!-- Body with two columns -->
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div class="space-y-6">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
         <!-- Left Column: Basic Information -->
         <div class="space-y-4">
           <div>
@@ -275,6 +278,14 @@ function toggleTag(tag: string) {
         </div>
       </div>
 
+      <AbacConditionsEditor
+        v-if="showAbac && permission"
+        target-type="permission"
+        :target-id="permission.id"
+        :active="open"
+      />
+      </div>
+
     </template>
 
     <!-- Footer -->
@@ -305,6 +316,4 @@ function toggleTag(tag: string) {
     </template>
   </UModal>
 
-  <!-- Help Slideover (placeholder) -->
-  <!-- <PermissionHelpSlideover v-model:open="showPermissionHelp" /> -->
 </template>

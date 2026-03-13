@@ -16,6 +16,14 @@ __author__ = "Outlabs"
 __license__ = "Proprietary"
 
 from outlabs_auth._version import __release_stage__, __version__
+from outlabs_auth.bootstrap import (
+    BootstrapAdminResult,
+    PermissionSeed,
+    SeedSystemResult,
+    bootstrap_superuser,
+    get_system_permission_catalog,
+    seed_system_records,
+)
 
 # Database infrastructure
 # Core Auth Classes
@@ -125,6 +133,12 @@ __all__ = [
     # Version
     "__release_stage__",
     "__version__",
+    "PermissionSeed",
+    "SeedSystemResult",
+    "BootstrapAdminResult",
+    "get_system_permission_catalog",
+    "seed_system_records",
+    "bootstrap_superuser",
 
     # Core Auth Classes
     "OutlabsAuth",

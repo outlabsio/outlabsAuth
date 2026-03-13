@@ -83,6 +83,9 @@ def get_entities_router(
         description="List all entities (requires entity:read permission)",
     )
     async def list_entities(
+        search: Optional[str] = Query(
+            None, description="Search by name, display name, description, or type"
+        ),
         entity_class: Optional[str] = Query(
             None, description="Filter by class (structural/access_group)"
         ),
@@ -90,19 +93,33 @@ def get_entities_router(
             None, description="Filter by type (organization/department/team/etc)"
         ),
         parent_id: Optional[UUID] = Query(None, description="Filter by parent entity"),
+        root_only: bool = Query(False, description="Only include root entities"),
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
         limit: int = Query(100, ge=1, le=1000, description="Items per page"),
         auth_result=Depends(auth.deps.require_permission("entity:read")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """List all entities with optional filtering and pagination."""
-        from sqlalchemy import func, select
+        from sqlalchemy import func, or_, select
 
         from outlabs_auth.models.sql.entity import Entity
         from outlabs_auth.models.sql.enums import EntityClass
 
         # Build query filters
         filters = [Entity.status == "active"]
+
+        if search:
+            pattern = f"%{search}%"
+            filters.append(
+                or_(
+                    Entity.name.ilike(pattern),
+                    Entity.display_name.ilike(pattern),
+                    Entity.description.ilike(pattern),
+                    Entity.entity_type.ilike(pattern),
+                )
+            )
+        if root_only:
+            filters.append(Entity.parent_id.is_(None))
 
         if entity_class:
             try:

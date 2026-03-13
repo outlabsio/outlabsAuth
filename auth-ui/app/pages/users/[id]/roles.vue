@@ -124,7 +124,7 @@ function formatDate(date: string) {
                     Role Assignments
                 </h3>
                 <p class="text-sm text-muted">
-                    Manage global roles for this user
+                    Manage roles assigned to this user
                 </p>
             </div>
             <UBadge color="primary" variant="subtle">
@@ -179,6 +179,20 @@ function formatDate(date: string) {
                             >
                                 Global
                             </UBadge>
+                            <UBadge
+                                v-else-if="membership.role.scope_entity_name"
+                                color="warning"
+                                variant="subtle"
+                            >
+                                {{ membership.role.scope_entity_name }}
+                            </UBadge>
+                            <UBadge
+                                v-else-if="membership.role.root_entity_name"
+                                color="neutral"
+                                variant="subtle"
+                            >
+                                {{ membership.role.root_entity_name }}
+                            </UBadge>
                         </div>
 
                         <p
@@ -198,7 +212,10 @@ function formatDate(date: string) {
                                     permissions</span
                                 >
                             </div>
-                            <div class="flex items-center gap-1">
+                            <div
+                                v-if="membership.granted_at"
+                                class="flex items-center gap-1"
+                            >
                                 <UIcon
                                     name="i-lucide-calendar"
                                     class="w-3 h-3"

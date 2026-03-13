@@ -5,12 +5,13 @@
  */
 
 import { defineStore } from "pinia";
+import { enrichUser } from "~/composables/useUserHelpers";
 import type { User } from "~/types/auth";
 import type { Role, Permission } from "~/types/role";
 
 export interface UserMembership {
   role: Role;
-  granted_at: string;
+  granted_at?: string;
   granted_by?: string;
 }
 
@@ -81,8 +82,9 @@ export const useUserStore = defineStore("user", () => {
       state.error = null;
 
       const user = await authStore.apiCall<User>(`/v1/users/${userId}`);
-      state.currentUser = user;
-      return user;
+      const enrichedUser = enrichUser(user);
+      state.currentUser = enrichedUser;
+      return enrichedUser;
     } catch (error: any) {
       state.error = error.message || "Failed to fetch user";
       console.error("[user.store] Failed to fetch user:", error);
@@ -107,11 +109,7 @@ export const useUserStore = defineStore("user", () => {
         `/v1/users/${userId}/roles`,
       );
 
-      // Convert to UserMembership format
-      state.userRoles = roles.map((role) => ({
-        role,
-        granted_at: new Date().toISOString(), // TODO: Backend should provide this
-      }));
+      state.userRoles = roles.map((role) => ({ role }));
 
       return state.userRoles;
     } catch (error: any) {
@@ -155,8 +153,7 @@ export const useUserStore = defineStore("user", () => {
 
   /**
    * Assign a role to the user
-   * SimpleRBAC: Assigns global role
-   * EnterpriseRBAC: Would need entity_id parameter
+   * Works for both SimpleRBAC and EnterpriseRBAC because scope is encoded on the role itself.
    */
   const assignRole = async (
     userId: string,
@@ -260,7 +257,7 @@ export const useUserStore = defineStore("user", () => {
         body: data,
       });
 
-      state.currentUser = updatedUser;
+      state.currentUser = enrichUser(updatedUser);
 
       // Show success toast
       const toast = useToast();

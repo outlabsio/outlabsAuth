@@ -1,27 +1,16 @@
-/**
- * ABAC Types
- * Shared condition group and condition contracts for roles/permissions ABAC management.
- */
+export type AbacTargetType = "role" | "permission";
 
 export type ConditionGroupOperator = "AND" | "OR";
-export type ConditionValueType = "string" | "integer" | "float" | "boolean" | "list";
+
+export type AbacValueType = "string" | "integer" | "float" | "boolean" | "list";
+export type ConditionValueType = AbacValueType;
 
 export interface ConditionGroup {
   id: string;
   operator: ConditionGroupOperator;
-  description?: string;
-  role_id?: string;
-  permission_id?: string;
-}
-
-export interface AbacCondition {
-  id: string;
-  attribute: string;
-  operator: string;
-  value?: string | null;
-  value_type: ConditionValueType;
-  description?: string;
-  condition_group_id?: string | null;
+  description?: string | null;
+  role_id?: string | null;
+  permission_id?: string | null;
 }
 
 export interface ConditionGroupCreateData {
@@ -31,14 +20,24 @@ export interface ConditionGroupCreateData {
 
 export interface ConditionGroupUpdateData {
   operator?: ConditionGroupOperator;
-  description?: string;
+  description?: string | null;
+}
+
+export interface AbacCondition {
+  id: string;
+  attribute: string;
+  operator: string;
+  value?: string | null;
+  value_type: AbacValueType;
+  description?: string | null;
+  condition_group_id?: string | null;
 }
 
 export interface AbacConditionCreateData {
   attribute: string;
   operator: string;
-  value?: unknown;
-  value_type: ConditionValueType;
+  value?: string | number | boolean | string[] | null;
+  value_type: AbacValueType;
   description?: string;
   condition_group_id?: string | null;
 }
@@ -46,8 +45,8 @@ export interface AbacConditionCreateData {
 export interface AbacConditionUpdateData {
   attribute?: string;
   operator?: string;
-  value?: unknown;
-  value_type?: ConditionValueType;
-  description?: string;
+  value?: string | number | boolean | string[] | null;
+  value_type?: AbacValueType;
+  description?: string | null;
   condition_group_id?: string | null;
 }

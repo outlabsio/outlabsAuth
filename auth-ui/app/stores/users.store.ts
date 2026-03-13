@@ -11,7 +11,7 @@ export interface UserFilters {
   search?: string;
   status?: "active" | "suspended" | "banned";
   is_superuser?: boolean;
-  entity_id?: string;
+  root_entity_id?: string;
 }
 
 /**
@@ -23,6 +23,7 @@ export interface CreateUserData {
   first_name?: string;
   last_name?: string;
   is_superuser?: boolean;
+  root_entity_id?: string;
 }
 
 /**
@@ -74,12 +75,10 @@ export const useUsersStore = defineStore("users", () => {
       if (filters.status) queryParams.append("status", filters.status);
       if (filters.is_superuser !== undefined)
         queryParams.append("is_superuser", String(filters.is_superuser));
-      if (filters.entity_id) queryParams.append("entity_id", filters.entity_id);
+      if (filters.root_entity_id)
+        queryParams.append("root_entity_id", filters.root_entity_id);
       if (params.page) queryParams.append("page", String(params.page));
       if (params.limit) queryParams.append("limit", String(params.limit));
-      if (params.sort_by) queryParams.append("sort_by", params.sort_by);
-      if (params.sort_order)
-        queryParams.append("sort_order", params.sort_order);
 
       const response = await authStore.apiCall<PaginatedResponse<User>>(
         `/v1/users/?${queryParams.toString()}`,

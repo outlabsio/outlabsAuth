@@ -11,6 +11,7 @@ const props = defineProps<{
 const open = defineModel<boolean>('open', { default: false })
 const emit = defineEmits<{
   edit: []
+  rotate: []
 }>()
 
 // Fetch API key details
@@ -27,13 +28,11 @@ const statusColors: Record<ApiKeyStatus, UiColor> = {
   [ApiKeyStatus.EXPIRED]: 'neutral'
 }
 
-// Helper to format dates
 function formatDate(dateString: string | null | undefined): string {
   if (!dateString) return 'Never'
   return new Date(dateString).toLocaleString()
 }
 
-// Helper to format relative time
 function formatRelativeTime(dateString: string | null | undefined): string {
   if (!dateString) return 'Never'
 
@@ -49,13 +48,11 @@ function formatRelativeTime(dateString: string | null | undefined): string {
   return formatDate(dateString)
 }
 
-// Check if key is expired
 const isExpired = computed(() => {
   if (!apiKey.value?.expires_at) return false
   return new Date(apiKey.value.expires_at) < new Date()
 })
 
-// Days until expiry
 const daysUntilExpiry = computed(() => {
   if (!apiKey.value?.expires_at) return null
   const date = new Date(apiKey.value.expires_at)
@@ -63,7 +60,6 @@ const daysUntilExpiry = computed(() => {
   return Math.ceil((date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
 })
 
-// Copy to clipboard
 async function copyPrefix() {
   if (apiKey.value?.prefix) {
     await navigator.clipboard.writeText(apiKey.value.prefix)
@@ -90,14 +86,13 @@ async function copyPrefix() {
       </div>
 
       <div v-else-if="apiKey" class="space-y-6">
-        <!-- Status Alert -->
         <UAlert
           v-if="isExpired"
           icon="i-lucide-alert-triangle"
           color="error"
           variant="solid"
           title="This API key has expired"
-          description="This key can no longer be used for authentication. Create a new key or extend the expiration date."
+          description="This key can no longer be used for authentication. Create a new key if you still need this access."
         />
         <UAlert
           v-else-if="apiKey.status === 'revoked'"
@@ -113,7 +108,7 @@ async function copyPrefix() {
           color="warning"
           variant="solid"
           title="This API key is suspended"
-          description="Suspended keys are temporarily disabled. Re-activate to resume usage."
+          description="Suspended keys are temporarily disabled. Re-activate or rotate the key to resume usage."
         />
         <UAlert
           v-else-if="daysUntilExpiry && daysUntilExpiry <= 7"
@@ -124,7 +119,6 @@ async function copyPrefix() {
           :description="`This key will expire in ${daysUntilExpiry} days`"
         />
 
-        <!-- Basic Information -->
         <div>
           <h3 class="text-sm font-semibold mb-3 flex items-center gap-2">
             <UIcon name="i-lucide-info" class="w-4 h-4" />
@@ -168,7 +162,6 @@ async function copyPrefix() {
 
         <USeparator />
 
-        <!-- Usage Statistics -->
         <div>
           <h3 class="text-sm font-semibold mb-3 flex items-center gap-2">
             <UIcon name="i-lucide-activity" class="w-4 h-4" />
@@ -200,7 +193,6 @@ async function copyPrefix() {
 
         <USeparator />
 
-        <!-- Permissions / Scopes -->
         <div>
           <h3 class="text-sm font-semibold mb-3 flex items-center gap-2">
             <UIcon name="i-lucide-shield-check" class="w-4 h-4" />
@@ -235,21 +227,25 @@ async function copyPrefix() {
 
         <USeparator />
 
-        <!-- Rate Limits -->
         <div>
           <h3 class="text-sm font-semibold mb-3 flex items-center gap-2">
             <UIcon name="i-lucide-gauge" class="w-4 h-4" />
-            Rate Limits
+            Enforcement
           </h3>
-          <div class="grid grid-cols-1 gap-4">
+          <div class="grid grid-cols-2 gap-4">
             <div class="space-y-1">
-              <p class="text-xs text-muted">Per Minute</p>
+              <p class="text-xs text-muted">Requests Per Minute</p>
               <p class="text-lg font-bold">{{ apiKey.rate_limit_per_minute }}</p>
+            </div>
+            <div class="space-y-1">
+              <p class="text-xs text-muted">Network Access</p>
+              <p class="text-lg font-bold">
+                {{ apiKey.ip_whitelist?.length ? `${apiKey.ip_whitelist.length} rule(s)` : 'Any IP' }}
+              </p>
             </div>
           </div>
         </div>
 
-        <!-- IP Whitelist -->
         <div v-if="apiKey.ip_whitelist && apiKey.ip_whitelist.length > 0">
           <USeparator />
           <div>
@@ -278,14 +274,24 @@ async function copyPrefix() {
 
     <template #footer>
       <div class="flex justify-between w-full">
-        <UButton
-          label="Edit Key"
-          icon="i-lucide-pencil"
-          color="primary"
-          variant="outline"
-          :disabled="apiKey?.status === 'revoked'"
-          @click="emit('edit')"
-        />
+        <div class="flex gap-2">
+          <UButton
+            label="Edit Key"
+            icon="i-lucide-pencil"
+            color="primary"
+            variant="outline"
+            :disabled="apiKey?.status === 'revoked'"
+            @click="emit('edit')"
+          />
+          <UButton
+            label="Rotate Key"
+            icon="i-lucide-refresh-cw"
+            color="neutral"
+            variant="outline"
+            :disabled="apiKey?.status === 'revoked'"
+            @click="emit('rotate')"
+          />
+        </div>
         <UButton
           label="Close"
           color="neutral"
