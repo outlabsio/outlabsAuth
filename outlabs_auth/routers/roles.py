@@ -120,6 +120,9 @@ def get_roles_router(
     async def list_roles(
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
         limit: int = Query(20, ge=1, le=100, description="Results per page"),
+        search: Optional[str] = Query(
+            None, description="Search by role name, display name, or description"
+        ),
         is_global: Optional[bool] = Query(
             None, description="Filter by global/non-global roles"
         ),
@@ -140,6 +143,7 @@ def get_roles_router(
                 session,
                 page=page,
                 limit=limit,
+                search=search,
                 is_global=is_global,
                 root_entity_id=root_entity_id,
             )
@@ -162,7 +166,9 @@ def get_roles_router(
         except HTTPException:
             raise
         except Exception as e:
-            obs.log_500_error(e, page=page, limit=limit, is_global=is_global)
+            obs.log_500_error(
+                e, page=page, limit=limit, search=search, is_global=is_global
+            )
             raise
 
     @router.get(

@@ -359,6 +359,7 @@ class RoleService(BaseService[Role]):
         session: AsyncSession,
         page: int = 1,
         limit: int = 20,
+        search: Optional[str] = None,
         is_global: Optional[bool] = None,
         root_entity_id: Optional[UUID] = None,
         tenant_id: Optional[str] = None,
@@ -370,6 +371,7 @@ class RoleService(BaseService[Role]):
             session: Database session
             page: Page number (1-indexed)
             limit: Results per page
+            search: Optional search term for name, display name, or description
             is_global: Filter by global flag
             root_entity_id: Filter by root entity that owns the role
             tenant_id: Filter by tenant
@@ -378,6 +380,15 @@ class RoleService(BaseService[Role]):
             Tuple of (roles, total_count)
         """
         filters = []
+        if search:
+            pattern = f"%{search}%"
+            filters.append(
+                or_(
+                    Role.name.ilike(pattern),
+                    Role.display_name.ilike(pattern),
+                    Role.description.ilike(pattern),
+                )
+            )
         if is_global is not None:
             filters.append(Role.is_global == is_global)
         if root_entity_id is not None:

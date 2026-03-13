@@ -164,6 +164,50 @@ export function useDeleteUserMutation() {
 }
 
 /**
+ * Update User Status Mutation
+ * Invalidates affected user detail and list queries
+ */
+export function useUpdateUserStatusMutation() {
+  const queryClient = useQueryCache()
+  const toast = useToast()
+
+  return useMutation({
+    mutation: async ({
+      userId,
+      status,
+      options
+    }: {
+      userId: string
+      status: "active" | "suspended" | "banned"
+      options?: {
+        suspended_until?: string
+        reason?: string
+      }
+    }) => {
+      const usersAPI = createUsersAPI()
+      return usersAPI.updateUserStatus(userId, status, options)
+    },
+    onSuccess: (_data, { userId, status }) => {
+      queryClient.invalidateQueries({ key: USER_KEYS.detail(userId) })
+      queryClient.invalidateQueries({ key: USER_KEYS.lists() })
+
+      toast.add({
+        title: 'User status updated',
+        description: `The user is now ${status}.`,
+        color: 'success'
+      })
+    },
+    onError: (error: any) => {
+      toast.add({
+        title: 'Error updating status',
+        description: error.message || 'Failed to update user status',
+        color: 'error'
+      })
+    },
+  })
+}
+
+/**
  * Change Password Mutation
  */
 export function useChangePasswordMutation() {

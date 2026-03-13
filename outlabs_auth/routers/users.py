@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.models.sql.enums import UserStatus
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
+from outlabs_auth.response_builders import build_user_response
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.permission import PermissionResponse, UserPermissionSource
 from outlabs_auth.schemas.role import RoleResponse
@@ -27,11 +28,6 @@ from outlabs_auth.schemas.user_role_membership import (
     AssignRoleRequest,
     UserRoleMembershipResponse,
 )
-
-
-def _get_status_value(status_val: Any) -> str:
-    """Get status value as string, handling both enum and string types."""
-    return status_val.value if hasattr(status_val, "value") else status_val
 
 
 def get_users_router(
@@ -189,20 +185,14 @@ def get_users_router(
 
             # Get root entity name for convenience
             root_entity_name = None
-            if user.root_entity_id and user.root_entity:
-                root_entity_name = user.root_entity.display_name
+            if user.root_entity_id:
+                from outlabs_auth.models.sql.entity import Entity
 
-            return UserResponse(
-                id=str(user.id),
-                email=user.email,
-                first_name=user.first_name,
-                last_name=user.last_name,
-                status=_get_status_value(user.status),
-                email_verified=user.email_verified,
-                is_superuser=user.is_superuser,
-                root_entity_id=str(user.root_entity_id) if user.root_entity_id else None,
-                root_entity_name=root_entity_name,
-            )
+                root_entity = await session.get(Entity, user.root_entity_id)
+                if root_entity:
+                    root_entity_name = root_entity.display_name
+
+            return build_user_response(user, root_entity_name=root_entity_name)
         except HTTPException:
             raise
         except Exception as e:
@@ -219,6 +209,11 @@ def get_users_router(
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
         limit: int = Query(20, ge=1, le=100, description="Results per page"),
         search: Optional[str] = Query(None, description="Search by email, first name, or last name"),
+        user_status: Optional[str] = Query(
+            None, alias="status", description="Filter by account status"
+        ),
+        is_superuser: Optional[bool] = Query(None, description="Filter by superuser flag"),
+        root_entity_id: Optional[UUID] = Query(None, description="Filter by root entity assignment"),
         session: AsyncSession = Depends(auth.uow),
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
@@ -236,11 +231,26 @@ def get_users_router(
         try:
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
             tenant_id = actor_user.tenant_id if _is_tenant_scoped(actor_user) else None
+            parsed_status = None
+            if user_status is not None:
+                try:
+                    parsed_status = UserStatus(user_status)
+                except ValueError:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Invalid status: {user_status}. Must be one of: active, suspended, banned, deleted",
+                    )
 
             if search:
                 # Use search functionality (no pagination for search)
                 all_users = await auth.user_service.search_users(
-                    session, search_term=search, limit=1000, tenant_id=tenant_id
+                    session,
+                    search_term=search,
+                    limit=1000,
+                    status=parsed_status,
+                    is_superuser=is_superuser,
+                    root_entity_id=root_entity_id,
+                    tenant_id=tenant_id,
                 )
 
                 # Manual pagination of search results
@@ -250,27 +260,26 @@ def get_users_router(
                 users = all_users[start_idx:end_idx]
             else:
                 # Use standard list with pagination
-                users, total = await auth.user_service.list_users(session, page=page, limit=limit, tenant_id=tenant_id)
+                users, total = await auth.user_service.list_users(
+                    session,
+                    page=page,
+                    limit=limit,
+                    status=parsed_status,
+                    is_superuser=is_superuser,
+                    root_entity_id=root_entity_id,
+                    tenant_id=tenant_id,
+                )
 
             # Calculate total pages
             pages = (total + limit - 1) // limit if total > 0 else 0
 
             # Convert to response schema
-            items = [
-                UserResponse(
-                    id=str(user.id),
-                    email=user.email,
-                    first_name=user.first_name,
-                    last_name=user.last_name,
-                    status=_get_status_value(user.status),
-                    email_verified=user.email_verified,
-                    is_superuser=user.is_superuser,
-                )
-                for user in users
-            ]
+            items = [build_user_response(user) for user in users]
 
             return PaginatedResponse(items=items, total=total, page=page, limit=limit, pages=pages)
 
+        except HTTPException:
+            raise
         except Exception as e:
             obs.log_500_error(e, page=page, limit=limit, search=search)
             raise
@@ -286,15 +295,7 @@ def get_users_router(
     ):
         """Get current user profile."""
         user = auth_result["user"]
-        return UserResponse(
-            id=str(user.id),
-            email=user.email,
-            first_name=user.first_name,
-            last_name=user.last_name,
-            status=_get_status_value(user.status),
-            email_verified=user.email_verified,
-            is_superuser=user.is_superuser,
-        )
+        return build_user_response(user)
 
     @router.patch(
         "/me",
@@ -328,15 +329,7 @@ def get_users_router(
             )
             obs.log_event("user_updated", user_id=obs.user_id)
             await auth.user_service.on_after_update(user, update_dict, None)
-            return UserResponse(
-                id=str(user.id),
-                email=user.email,
-                first_name=user.first_name,
-                last_name=user.last_name,
-                status=_get_status_value(user.status),
-                email_verified=user.email_verified,
-                is_superuser=user.is_superuser,
-            )
+            return build_user_response(user)
         except HTTPException:
             raise
         except Exception as e:
@@ -405,15 +398,7 @@ def get_users_router(
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
             user = await _get_target_user_or_404(session, user_id, actor_user)
 
-            return UserResponse(
-                id=str(user.id),
-                email=user.email,
-                first_name=user.first_name,
-                last_name=user.last_name,
-                status=_get_status_value(user.status),
-                email_verified=user.email_verified,
-                is_superuser=user.is_superuser,
-            )
+            return build_user_response(user)
         except HTTPException:
             raise
         except Exception as e:
@@ -456,15 +441,7 @@ def get_users_router(
             )
             await auth.user_service.on_after_update(user, update_data, None)
             # TODO: Add proper observability logging for user updates
-            return UserResponse(
-                id=str(user.id),
-                email=user.email,
-                first_name=user.first_name,
-                last_name=user.last_name,
-                status=_get_status_value(user.status),
-                email_verified=user.email_verified,
-                is_superuser=user.is_superuser,
-            )
+            return build_user_response(user)
         except HTTPException:
             raise
         except Exception as e:
@@ -598,15 +575,7 @@ def get_users_router(
                     changed_by=obs.user_id,
                 )
 
-            return UserResponse(
-                id=str(user.id),
-                email=user.email,
-                first_name=user.first_name,
-                last_name=user.last_name,
-                status=_get_status_value(user.status),
-                email_verified=user.email_verified,
-                is_superuser=user.is_superuser,
-            )
+            return build_user_response(user)
 
         except HTTPException:
             raise

@@ -79,7 +79,7 @@ const filters = computed(() => {
     } else if (scopeFilter.value === "organization") {
         f.is_global = false;
         if (orgFilter.value) {
-            f.entity_id = orgFilter.value;
+            f.root_entity_id = orgFilter.value;
         }
     }
 

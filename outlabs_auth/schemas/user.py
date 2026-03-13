@@ -1,5 +1,6 @@
 """User request/response schemas."""
 
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -19,6 +20,10 @@ class UserResponse(BaseModel):
     status: str  # UserStatus enum value
     email_verified: bool = False
     is_superuser: bool = False
+    avatar_url: Optional[str] = None
+    phone: Optional[str] = None
+    locale: Optional[str] = None
+    timezone: Optional[str] = None
     root_entity_id: Optional[str] = Field(
         None,
         description="Root entity (organization) this user belongs to.",
@@ -27,6 +32,14 @@ class UserResponse(BaseModel):
         None,
         description="Display name of the root entity (for convenience).",
     )
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    last_login: Optional[datetime] = None
+    last_activity: Optional[datetime] = None
+    last_password_change: Optional[datetime] = None
+    suspended_until: Optional[datetime] = None
+    locked_until: Optional[datetime] = None
+    deleted_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 
