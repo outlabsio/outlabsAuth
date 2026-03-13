@@ -10,76 +10,58 @@ const props = defineProps<{
 
 const open = defineModel<boolean>('open', { default: false })
 
-// Fetch available permissions dynamically
 const { data: permissions, isLoading: loadingPermissions } = useQuery(permissionsQueries.available())
-
-// Fetch existing API key data when modal opens
 const { data: existingKey, isLoading: isLoadingKey } = useQuery({
   ...apiKeysQueries.detail(props.keyId),
   enabled: computed(() => open.value && !!props.keyId)
 })
 
-// Available scopes computed from permissions
 const availableScopes = computed(() => {
   if (!permissions.value) return []
 
-  // Add "All Permissions" option
   const allPermissions = {
     value: '*:*',
     label: 'All Permissions',
     description: '⚠️ Full access to all resources - use with caution'
   }
 
-  // Map permissions to scope options
-  const scopeOptions = permissions.value.map(p => ({
-    value: p.name,
-    label: p.display_name || p.name,
-    description: p.description || ''
+  const scopeOptions = permissions.value.map((permission) => ({
+    value: permission.name,
+    label: permission.display_name || permission.name,
+    description: permission.description || ''
   }))
 
   return [allPermissions, ...scopeOptions]
 })
 
-// Status options
 const statusOptions = [
-  { value: 'active', label: 'Active', description: 'Key is operational', color: 'success' },
-  { value: 'suspended', label: 'Suspended', description: 'Temporarily disabled', color: 'warning' },
-  { value: 'revoked', label: 'Revoked', description: 'Permanently disabled (cannot be reversed)', color: 'error' }
+  { value: 'active', label: 'Active', description: 'Key is operational' },
+  { value: 'suspended', label: 'Suspended', description: 'Temporarily disabled' },
+  { value: 'revoked', label: 'Revoked', description: 'Permanently disabled' }
 ]
 
-// Form state
-const state = reactive<UpdateApiKeyRequest & { never_expires: boolean; ip_whitelist_raw: string }>({
+const state = reactive<UpdateApiKeyRequest & { ip_whitelist_raw: string }>({
   name: '',
   description: '',
   scopes: [],
   ip_whitelist: [],
   ip_whitelist_raw: '',
   rate_limit_per_minute: 60,
-  rate_limit_per_hour: undefined,
-  rate_limit_per_day: undefined,
-  status: 'active' as ApiKeyStatus,
-  expires_at: undefined,
-  never_expires: false
+  status: 'active' as ApiKeyStatus
 })
 
-// Pre-populate form when key data loads
 watch(existingKey, (key) => {
-  if (key) {
-    state.name = key.name
-    state.description = key.description || ''
-    state.scopes = key.scopes || []
-    state.ip_whitelist = key.ip_whitelist || []
-    state.ip_whitelist_raw = (key.ip_whitelist || []).join('\n')
-    state.rate_limit_per_minute = key.rate_limit_per_minute
-    state.rate_limit_per_hour = key.rate_limit_per_hour
-    state.rate_limit_per_day = key.rate_limit_per_day
-    state.status = key.status
-    state.expires_at = key.expires_at || undefined
-    state.never_expires = !key.expires_at
-  }
+  if (!key) return
+
+  state.name = key.name
+  state.description = key.description || ''
+  state.scopes = key.scopes || []
+  state.ip_whitelist = key.ip_whitelist || []
+  state.ip_whitelist_raw = (key.ip_whitelist || []).join('\n')
+  state.rate_limit_per_minute = key.rate_limit_per_minute
+  state.status = key.status
 }, { immediate: true })
 
-// Watch IP whitelist raw input
 watch(() => state.ip_whitelist_raw, (raw) => {
   if (raw.trim()) {
     state.ip_whitelist = raw
@@ -91,57 +73,30 @@ watch(() => state.ip_whitelist_raw, (raw) => {
   }
 })
 
-// Watch never_expires checkbox
-watch(() => state.never_expires, (neverExpires) => {
-  if (neverExpires) {
-    state.expires_at = null
-  }
-})
-
-// Update mutation
 const { mutate: updateKey, isPending: isSubmitting } = useUpdateApiKeyMutation()
 
-// Submit handler
 async function handleSubmit() {
   try {
-    // Build update payload (only send changed fields)
     const payload: UpdateApiKeyRequest = {
       name: state.name,
       description: state.description || undefined,
       scopes: state.scopes.length > 0 ? state.scopes : undefined,
       ip_whitelist: state.ip_whitelist.length > 0 ? state.ip_whitelist : undefined,
       rate_limit_per_minute: state.rate_limit_per_minute,
-      rate_limit_per_hour: state.rate_limit_per_hour,
-      rate_limit_per_day: state.rate_limit_per_day,
-      status: state.status,
-      expires_at: state.never_expires ? null : state.expires_at,
+      status: state.status
     }
 
     await updateKey({ id: props.keyId, data: payload })
-
-    // Close modal on success
     open.value = false
   } catch (error) {
-    // Error handling is done by the mutation
     console.error('Failed to update API key:', error)
   }
 }
 
-// Helper to format dates for datetime-local input
-const expiresAtLocal = computed({
-  get: () => {
-    if (!state.expires_at) return ''
-    // Convert ISO string to datetime-local format (YYYY-MM-DDTHH:mm)
-    return new Date(state.expires_at).toISOString().slice(0, 16)
-  },
-  set: (value: string) => {
-    if (value) {
-      state.expires_at = new Date(value).toISOString()
-    } else {
-      state.expires_at = undefined
-    }
-  }
-})
+function formatDate(dateString?: string | null): string {
+  if (!dateString) return 'Never'
+  return new Date(dateString).toLocaleString()
+}
 </script>
 
 <template>
@@ -158,7 +113,6 @@ const expiresAtLocal = computed({
       </div>
 
       <div v-else class="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
-        <!-- Name & Description -->
         <div class="space-y-2">
           <label class="block text-sm font-medium">Name <span class="text-error">*</span></label>
           <UInput
@@ -181,7 +135,6 @@ const expiresAtLocal = computed({
 
         <USeparator label="Status" />
 
-        <!-- Status Selection -->
         <div class="space-y-2">
           <label class="block text-sm font-medium">Key Status</label>
           <div class="grid grid-cols-3 gap-2">
@@ -206,14 +159,13 @@ const expiresAtLocal = computed({
             icon="i-lucide-alert-triangle"
             color="error"
             variant="subtle"
-            title="Warning: Revoking is permanent"
-            description="Once revoked, an API key cannot be re-activated. Consider suspending instead if you may need to re-enable it later."
+            title="Warning: revoking is permanent"
+            description="Once revoked, an API key cannot be re-activated. Suspend it instead if you may need to restore access later."
           />
         </div>
 
         <USeparator label="Permissions" />
 
-        <!-- Scopes Selection -->
         <div class="space-y-2">
           <label class="block text-sm font-medium">Scopes (Permissions)</label>
           <p class="text-xs text-muted mb-2">
@@ -241,7 +193,6 @@ const expiresAtLocal = computed({
 
         <USeparator label="Rate Limits" />
 
-        <!-- Rate Limiting -->
         <div class="space-y-3">
           <div class="space-y-2">
             <label class="block text-sm font-medium">Requests per minute</label>
@@ -252,34 +203,12 @@ const expiresAtLocal = computed({
               placeholder="60"
               icon="i-lucide-gauge"
             />
-            <p class="text-xs text-muted">Current: {{ state.rate_limit_per_minute }} requests/minute</p>
-          </div>
-
-          <div class="grid grid-cols-2 gap-3">
-            <div class="space-y-2">
-              <label class="block text-sm font-medium">Per hour (optional)</label>
-              <UInput
-                v-model.number="state.rate_limit_per_hour"
-                type="number"
-                min="1"
-                placeholder="3600"
-              />
-            </div>
-            <div class="space-y-2">
-              <label class="block text-sm font-medium">Per day (optional)</label>
-              <UInput
-                v-model.number="state.rate_limit_per_day"
-                type="number"
-                min="1"
-                placeholder="86400"
-              />
-            </div>
+            <p class="text-xs text-muted">The backend currently enforces a per-minute limit for this key.</p>
           </div>
         </div>
 
         <USeparator label="Security" />
 
-        <!-- IP Whitelist -->
         <div class="space-y-2">
           <label class="block text-sm font-medium">IP Whitelist (optional)</label>
           <UTextarea
@@ -293,31 +222,9 @@ const expiresAtLocal = computed({
           </p>
         </div>
 
-        <!-- Expiration Settings -->
-        <div class="space-y-3">
-          <UCheckbox
-            v-model="state.never_expires"
-            label="Never expires"
-            help="⚠️ Not recommended for production - keys should be rotated regularly"
-          />
+        <USeparator label="Lifecycle" />
 
-          <div v-if="!state.never_expires" class="space-y-2">
-            <label class="block text-sm font-medium">Expires at</label>
-            <UInput
-              v-model="expiresAtLocal"
-              type="datetime-local"
-              icon="i-lucide-calendar"
-            />
-            <p class="text-xs text-muted">
-              {{ state.expires_at ? `Expires: ${new Date(state.expires_at).toLocaleString()}` : 'No expiration set' }}
-            </p>
-          </div>
-        </div>
-
-        <!-- Usage Stats (read-only) -->
-        <USeparator label="Usage Statistics" />
-
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
           <UCard>
             <div class="flex items-center justify-between">
               <div>
@@ -333,10 +240,22 @@ const expiresAtLocal = computed({
               <div>
                 <p class="text-sm text-muted">Last Used</p>
                 <p class="text-sm font-medium mt-1">
-                  {{ existingKey?.last_used_at ? new Date(existingKey.last_used_at).toLocaleDateString() : 'Never' }}
+                  {{ formatDate(existingKey?.last_used_at) }}
                 </p>
               </div>
               <UIcon name="i-lucide-clock" class="w-8 h-8 text-muted" />
+            </div>
+          </UCard>
+
+          <UCard>
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-sm text-muted">Expires</p>
+                <p class="text-sm font-medium mt-1">
+                  {{ formatDate(existingKey?.expires_at) }}
+                </p>
+              </div>
+              <UIcon name="i-lucide-calendar" class="w-8 h-8 text-muted" />
             </div>
           </UCard>
         </div>

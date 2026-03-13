@@ -313,14 +313,6 @@ const columns = computed((): TableColumn<Role>[] => {
                     </template>
                 </div>
 
-                <div class="flex items-center gap-2">
-                    <UButton
-                        icon="i-lucide-download"
-                        color="neutral"
-                        variant="ghost"
-                        label="Export"
-                    />
-                </div>
             </div>
 
             <!-- Loading State -->

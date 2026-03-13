@@ -1,30 +1,108 @@
 <script setup lang="ts">
 const authStore = useAuthStore()
-const currentUser = computed(() => authStore.currentUser)
+const toast = useToast()
 
-// Form state
+const currentUser = computed(() => authStore.currentUser)
+const isLoading = ref(false)
+const errorMessage = ref('')
+const successMessage = ref('')
+
 const formState = reactive({
-  full_name: currentUser.value?.full_name || '',
-  username: currentUser.value?.username || '',
-  email: currentUser.value?.email || ''
+  first_name: '',
+  last_name: '',
+  email: ''
 })
 
-const isLoading = ref(false)
+watch(currentUser, (user) => {
+  formState.first_name = user?.first_name || ''
+  formState.last_name = user?.last_name || ''
+  formState.email = user?.email || ''
+}, { immediate: true })
 
-const onSubmit = async () => {
+const accountDisplayName = computed(() => currentUser.value?.full_name || currentUser.value?.email || 'User')
+
+const hasChanges = computed(() => {
+  return (
+    formState.first_name !== (currentUser.value?.first_name || '') ||
+    formState.last_name !== (currentUser.value?.last_name || '') ||
+    formState.email !== (currentUser.value?.email || '')
+  )
+})
+
+const isFormValid = computed(() => formState.email.trim().length > 0)
+
+function formatDate(dateString?: string | null): string {
+  if (!dateString) return 'Not available'
+
+  return new Date(dateString).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  })
+}
+
+function statusColor(status?: string): 'success' | 'warning' | 'error' | 'neutral' {
+  if (status === 'active') return 'success'
+  if (status === 'suspended') return 'warning'
+  if (status === 'banned' || status === 'deleted') return 'error'
+  return 'neutral'
+}
+
+function resetForm() {
+  formState.first_name = currentUser.value?.first_name || ''
+  formState.last_name = currentUser.value?.last_name || ''
+  formState.email = currentUser.value?.email || ''
+  errorMessage.value = ''
+  successMessage.value = ''
+}
+
+async function onSubmit() {
+  if (!isFormValid.value || !hasChanges.value) return
+
   isLoading.value = true
-  // Simulate API call
-  await new Promise(resolve => setTimeout(resolve, 1000))
-  isLoading.value = false
-  // Show success toast
-  console.log('Profile updated:', formState)
+  errorMessage.value = ''
+  successMessage.value = ''
+
+  try {
+    await authStore.apiCall('/v1/users/me', {
+      method: 'PATCH',
+      body: {
+        first_name: formState.first_name.trim() || undefined,
+        last_name: formState.last_name.trim() || undefined,
+        email: formState.email.trim() || undefined
+      }
+    })
+
+    await authStore.fetchCurrentUser()
+
+    successMessage.value = 'Profile updated successfully.'
+    toast.add({
+      title: 'Profile updated',
+      description: 'Your account profile was saved successfully.',
+      color: 'success'
+    })
+  } catch (error: any) {
+    if (Array.isArray(error?.data?.detail)) {
+      errorMessage.value = error.data.detail
+        .map((detail: { msg?: string }) => detail.msg || 'Invalid request')
+        .join(', ')
+    } else if (typeof error?.data?.detail === 'string') {
+      errorMessage.value = error.data.detail
+    } else if (error?.message) {
+      errorMessage.value = error.message
+    } else {
+      errorMessage.value = 'Failed to update your profile.'
+    }
+  } finally {
+    isLoading.value = false
+  }
 }
 </script>
 
 <template>
   <UDashboardPanel id="settings-profile">
     <template #header>
-      <UDashboardNavbar title="Edit Profile">
+      <UDashboardNavbar title="Profile">
         <template #leading>
           <UDashboardSidebarCollapse />
         </template>
@@ -42,66 +120,53 @@ const onSubmit = async () => {
     </template>
 
     <template #body>
-      <div class="max-w-2xl">
+      <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,2fr)_20rem] gap-6">
         <UCard>
-          <UForm
-            :state="formState"
-            class="space-y-6"
-            @submit="onSubmit"
-          >
-            <!-- Avatar Section -->
-            <div>
-              <label class="block text-sm font-medium mb-2">Profile Picture</label>
-              <div class="flex items-center gap-4">
-                <UAvatar
-                  :src="currentUser?.metadata?.avatar"
-                  size="xl"
-                  :alt="currentUser?.full_name"
-                />
-                <div class="flex gap-2">
-                  <UButton
-                    icon="i-lucide-upload"
-                    label="Upload"
-                    color="neutral"
-                    variant="outline"
-                    size="sm"
-                  />
-                  <UButton
-                    icon="i-lucide-trash-2"
-                    label="Remove"
-                    color="error"
-                    variant="ghost"
-                    size="sm"
-                  />
-                </div>
+          <template #header>
+            <div class="flex items-center gap-4">
+              <UAvatar
+                :src="currentUser?.avatar_url || undefined"
+                :alt="accountDisplayName"
+                size="xl"
+                icon="i-lucide-user"
+              />
+              <div class="space-y-1">
+                <h2 class="text-lg font-semibold">{{ accountDisplayName }}</h2>
+                <p class="text-sm text-muted">
+                  Update the identity details used across the auth admin UI.
+                </p>
               </div>
             </div>
+          </template>
 
-            <UFormField
-              name="full_name"
-              label="Full Name"
-              required
-            >
-              <UInput
-                v-model="formState.full_name"
-                icon="i-lucide-user"
-                placeholder="Enter your full name"
-                size="lg"
-              />
-            </UFormField>
+          <form class="space-y-6" @submit.prevent="onSubmit">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <UFormField
+                name="first_name"
+                label="First Name"
+              >
+                <UInput
+                  v-model="formState.first_name"
+                  icon="i-lucide-user"
+                  placeholder="Jane"
+                  size="lg"
+                  :disabled="isLoading"
+                />
+              </UFormField>
 
-            <UFormField
-              name="username"
-              label="Username"
-              required
-            >
-              <UInput
-                v-model="formState.username"
-                icon="i-lucide-at-sign"
-                placeholder="Enter your username"
-                size="lg"
-              />
-            </UFormField>
+              <UFormField
+                name="last_name"
+                label="Last Name"
+              >
+                <UInput
+                  v-model="formState.last_name"
+                  icon="i-lucide-user-round"
+                  placeholder="Doe"
+                  size="lg"
+                  :disabled="isLoading"
+                />
+              </UFormField>
+            </div>
 
             <UFormField
               name="email"
@@ -112,51 +177,98 @@ const onSubmit = async () => {
                 v-model="formState.email"
                 type="email"
                 icon="i-lucide-mail"
-                placeholder="Enter your email"
+                placeholder="jane@example.com"
                 size="lg"
+                :disabled="isLoading"
               />
             </UFormField>
 
-            <!-- Additional Fields -->
-            <UFormField
-              name="department"
-              label="Department"
-            >
-              <UInput
-                :model-value="currentUser?.metadata?.department"
-                icon="i-lucide-building"
-                placeholder="Your department"
-                size="lg"
-              />
-            </UFormField>
+            <UAlert
+              v-if="successMessage"
+              color="success"
+              variant="subtle"
+              icon="i-lucide-check-circle"
+              :title="successMessage"
+            />
 
-            <UFormField
-              name="title"
-              label="Job Title"
-            >
-              <UInput
-                :model-value="currentUser?.metadata?.title"
-                icon="i-lucide-briefcase"
-                placeholder="Your job title"
-                size="lg"
-              />
-            </UFormField>
+            <UAlert
+              v-if="errorMessage"
+              color="error"
+              variant="subtle"
+              icon="i-lucide-alert-circle"
+              :title="errorMessage"
+            />
 
-            <div class="flex justify-end gap-3 pt-4">
+            <div class="flex justify-end gap-3 pt-2">
               <UButton
-                to="/settings"
-                label="Cancel"
+                type="button"
+                label="Reset"
                 color="neutral"
-                variant="ghost"
+                variant="outline"
+                :disabled="isLoading || !hasChanges"
+                @click="resetForm"
               />
               <UButton
                 type="submit"
                 icon="i-lucide-save"
-                label="Save Changes"
+                label="Save Profile"
                 :loading="isLoading"
+                :disabled="!isFormValid || !hasChanges"
               />
             </div>
-          </UForm>
+          </form>
+        </UCard>
+
+        <UCard>
+          <template #header>
+            <div class="flex items-center gap-3">
+              <UIcon name="i-lucide-badge-info" class="w-5 h-5" />
+              <h3 class="text-lg font-semibold">Account Context</h3>
+            </div>
+          </template>
+
+          <div class="space-y-4">
+            <div>
+              <label class="text-sm font-medium text-muted">Account Status</label>
+              <div class="mt-1">
+                <UBadge
+                  :color="statusColor(currentUser?.status)"
+                  variant="subtle"
+                >
+                  {{ currentUser?.status || 'unknown' }}
+                </UBadge>
+              </div>
+            </div>
+
+            <div>
+              <label class="text-sm font-medium text-muted">Email Verification</label>
+              <div class="mt-1">
+                <UBadge
+                  :color="currentUser?.email_verified ? 'success' : 'warning'"
+                  variant="subtle"
+                >
+                  {{ currentUser?.email_verified ? 'Verified' : 'Pending' }}
+                </UBadge>
+              </div>
+            </div>
+
+            <div>
+              <label class="text-sm font-medium text-muted">Root Entity</label>
+              <p class="mt-1 text-base">
+                {{ currentUser?.root_entity_name || currentUser?.root_entity_id || 'Unassigned' }}
+              </p>
+            </div>
+
+            <div>
+              <label class="text-sm font-medium text-muted">Member Since</label>
+              <p class="mt-1 text-base">{{ formatDate(currentUser?.created_at) }}</p>
+            </div>
+
+            <div>
+              <label class="text-sm font-medium text-muted">Last Updated</label>
+              <p class="mt-1 text-base">{{ formatDate(currentUser?.updated_at) }}</p>
+            </div>
+          </div>
         </UCard>
       </div>
     </template>

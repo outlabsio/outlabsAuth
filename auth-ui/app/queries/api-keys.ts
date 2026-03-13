@@ -10,6 +10,7 @@ import type {
   CreateApiKeyRequest,
   UpdateApiKeyRequest,
   ApiKeyCreateResponse,
+  ApiKeyStatus,
 } from "~/types/api-key";
 
 /**
@@ -211,8 +212,6 @@ export function useRevokeApiKeyMutation() {
 
 /**
  * Rotate API Key Mutation
- * NOTE: Backend returns 501 Not Implemented - feature not yet available
- * This is included for future use when backend implements rotation
  */
 export function useRotateApiKeyMutation() {
   const queryCache = useQueryCache();
@@ -230,25 +229,12 @@ export function useRotateApiKeyMutation() {
 
       toast.add({
         title: "API key rotated",
-        description: `New API key created. Old key "${data.prefix}" has been revoked.`,
+        description:
+          "A replacement API key was created and the previous key was revoked.",
         color: "success",
       });
     },
     onError: (error: any) => {
-      // Handle 501 Not Implemented gracefully
-      if (
-        error.status === 501 ||
-        error.data?.detail === "Rotation not yet implemented"
-      ) {
-        toast.add({
-          title: "Feature not available",
-          description: "API key rotation is not yet implemented",
-          color: "warning",
-        });
-        return;
-      }
-
-      // Extract error message from response body
       let errorMessage = "Failed to rotate API key";
       if (error.data?.detail) {
         if (Array.isArray(error.data.detail)) {

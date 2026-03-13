@@ -6,10 +6,12 @@ import {
     useRevokeApiKeyMutation,
     useSuspendApiKeyMutation,
     useResumeApiKeyMutation,
+    useRotateApiKeyMutation,
 } from "~/queries/api-keys";
-import type { ApiKey } from "~/types/api-key";
+import type { ApiKey, ApiKeyCreateResponse } from "~/types/api-key";
 
-// Resolve components for h() render functions
+const toast = useToast();
+
 const UBadge = resolveComponent("UBadge");
 const UButton = resolveComponent("UButton");
 
@@ -22,12 +24,17 @@ const showDetailModal = ref(false);
 const showEditModal = ref(false);
 const selectedKeyId = ref<string | null>(null);
 const showKeyActionConfirm = ref(false);
-const pendingKeyAction = ref<"revoke" | "suspend" | null>(null);
+const pendingKeyAction = ref<"revoke" | "suspend" | "rotate" | null>(null);
 const pendingKey = ref<ApiKey | null>(null);
 const isConfirmingKeyAction = ref(false);
+const showRotatedKeyModal = ref(false);
+const rotatedKeyResponse = ref<ApiKeyCreateResponse | null>(null);
+const rotatedKeySavedConfirmation = ref(false);
 
-// Fetch API keys from backend
 const { data: apiKeys, isLoading, error } = useQuery(apiKeysQueries.list());
+const selectedKey = computed(
+    () => apiKeys.value?.find((key) => key.id === selectedKeyId.value) || null,
+);
 const apiKeysErrorMessage = computed(() => {
     if (!error.value) {
         return "";
@@ -35,10 +42,10 @@ const apiKeysErrorMessage = computed(() => {
     return error.value instanceof Error ? error.value.message : String(error.value);
 });
 
-// Mutations
 const revokeMutation = useRevokeApiKeyMutation();
 const suspendMutation = useSuspendApiKeyMutation();
 const resumeMutation = useResumeApiKeyMutation();
+const rotateMutation = useRotateApiKeyMutation();
 
 const keyActionConfirmMeta = computed(() => {
     const label = pendingKey.value
@@ -54,6 +61,15 @@ const keyActionConfirmMeta = computed(() => {
         };
     }
 
+    if (pendingKeyAction.value === "rotate") {
+        return {
+            title: "Rotate API key?",
+            description: `A new secret will be generated for ${label} and the current key will be revoked. Make sure you can replace the existing secret everywhere it is deployed before continuing.`,
+            confirmLabel: "Rotate key",
+            confirmColor: "primary",
+        };
+    }
+
     return {
         title: "Suspend API key?",
         description: `${label} will be temporarily disabled and can be resumed later.`,
@@ -62,7 +78,10 @@ const keyActionConfirmMeta = computed(() => {
     };
 });
 
-function requestKeyAction(action: "revoke" | "suspend", key: ApiKey) {
+function requestKeyAction(
+    action: "revoke" | "suspend" | "rotate",
+    key: ApiKey,
+) {
     pendingKeyAction.value = action;
     pendingKey.value = key;
     showKeyActionConfirm.value = true;
@@ -86,6 +105,12 @@ async function confirmKeyAction() {
     try {
         if (pendingKeyAction.value === "revoke") {
             await revokeMutation.mutateAsync(pendingKey.value.id);
+        } else if (pendingKeyAction.value === "rotate") {
+            rotatedKeyResponse.value = await rotateMutation.mutateAsync(
+                pendingKey.value.id,
+            );
+            rotatedKeySavedConfirmation.value = false;
+            showRotatedKeyModal.value = true;
         } else {
             await suspendMutation.mutateAsync(pendingKey.value.id);
         }
@@ -105,12 +130,39 @@ watch(showKeyActionConfirm, (isOpen) => {
     }
 });
 
-// Handle resume action
+watch(showRotatedKeyModal, (isOpen) => {
+    if (!isOpen) {
+        rotatedKeyResponse.value = null;
+        rotatedKeySavedConfirmation.value = false;
+    }
+});
+
 const handleResume = async (key: ApiKey) => {
     await resumeMutation.mutateAsync(key.id);
 };
 
-// Table columns
+async function copyRotatedKey() {
+    if (!rotatedKeyResponse.value?.api_key) {
+        return;
+    }
+
+    await navigator.clipboard.writeText(rotatedKeyResponse.value.api_key);
+    toast.add({
+        title: "Copied!",
+        description: "Rotated API key copied to clipboard.",
+        color: "success",
+    });
+}
+
+function handleRotateFromDetail() {
+    if (!selectedKey.value) {
+        return;
+    }
+
+    showDetailModal.value = false;
+    requestKeyAction("rotate", selectedKey.value);
+}
+
 const columns: TableColumn<ApiKey>[] = [
     {
         accessorKey: "name",
@@ -238,7 +290,6 @@ const columns: TableColumn<ApiKey>[] = [
             if (isExpired) {
                 return h("span", { class: "text-sm text-error" }, "Expired");
             }
-            // Warn if expiring within 7 days
             if (daysUntilExpiry <= 7) {
                 return h(
                     UBadge,
@@ -260,6 +311,7 @@ const columns: TableColumn<ApiKey>[] = [
             const isActive = row.original.status === "active";
             const isSuspended = row.original.status === "suspended";
             const isRevoked = row.original.status === "revoked";
+            const canRotate = isActive || isSuspended;
 
             return h(
                 "div",
@@ -285,6 +337,18 @@ const columns: TableColumn<ApiKey>[] = [
                                 selectedKeyId.value = row.original.id;
                                 showEditModal.value = true;
                             },
+                        }),
+                    canRotate &&
+                        h(UButton, {
+                            icon: "i-lucide-refresh-cw",
+                            color: "primary",
+                            variant: "ghost",
+                            size: "xs",
+                            loading:
+                                rotateMutation.isPending &&
+                                rotateMutation.variables === row.original.id,
+                            onClick: () =>
+                                requestKeyAction("rotate", row.original),
                         }),
                     isSuspended &&
                         h(UButton, {
@@ -321,17 +385,14 @@ const columns: TableColumn<ApiKey>[] = [
     },
 ];
 
-// Filtered API keys
 const filteredKeys = computed(() => {
     if (!apiKeys.value) return [];
     let result = apiKeys.value;
 
-    // Apply status filter
     if (statusFilter.value !== "all") {
         result = result.filter((key) => key.status === statusFilter.value);
     }
 
-    // Apply search filter
     if (search.value) {
         const searchLower = search.value.toLowerCase();
         result = result.filter(
@@ -346,7 +407,6 @@ const filteredKeys = computed(() => {
     return result;
 });
 
-// Stats
 const stats = computed(() => {
     if (!apiKeys.value)
         return { total: 0, active: 0, revoked: 0, expired: 0, suspended: 0 };
@@ -368,9 +428,7 @@ const stats = computed(() => {
 
 <template>
     <UDashboardPanel id="api-keys">
-        <!-- Default slot for edge-to-edge table -->
         <div class="flex flex-col flex-1 min-h-0">
-            <!-- Header -->
             <UDashboardNavbar title="API Keys">
                 <template #leading>
                     <UDashboardSidebarCollapse />
@@ -386,7 +444,6 @@ const stats = computed(() => {
                 </template>
             </UDashboardNavbar>
 
-            <!-- Stats Cards -->
             <div
                 class="grid grid-cols-1 md:grid-cols-4 gap-4 px-4 py-4 border-b border-default"
             >
@@ -394,14 +451,9 @@ const stats = computed(() => {
                     <div class="flex items-center justify-between">
                         <div>
                             <p class="text-sm text-muted">Total Keys</p>
-                            <p class="text-2xl font-bold mt-1">
-                                {{ stats.total }}
-                            </p>
+                            <p class="text-2xl font-bold mt-1">{{ stats.total }}</p>
                         </div>
-                        <UIcon
-                            name="i-lucide-key"
-                            class="w-8 h-8 text-primary"
-                        />
+                        <UIcon name="i-lucide-key" class="w-8 h-8 text-primary" />
                     </div>
                 </UCard>
 
@@ -428,10 +480,7 @@ const stats = computed(() => {
                                 {{ stats.revoked }}
                             </p>
                         </div>
-                        <UIcon
-                            name="i-lucide-ban"
-                            class="w-8 h-8 text-error"
-                        />
+                        <UIcon name="i-lucide-ban" class="w-8 h-8 text-error" />
                     </div>
                 </UCard>
 
@@ -451,7 +500,6 @@ const stats = computed(() => {
                 </UCard>
             </div>
 
-            <!-- Toolbar -->
             <div
                 class="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-default"
             >
@@ -465,75 +513,39 @@ const stats = computed(() => {
 
                     <div class="flex items-center gap-1">
                         <UButton
-                            :color="
-                                statusFilter === 'all' ? 'primary' : 'neutral'
-                            "
-                            :variant="
-                                statusFilter === 'all' ? 'solid' : 'ghost'
-                            "
+                            :color="statusFilter === 'all' ? 'primary' : 'neutral'"
+                            :variant="statusFilter === 'all' ? 'solid' : 'ghost'"
                             label="All"
                             @click="statusFilter = 'all'"
                         />
                         <UButton
-                            :color="
-                                statusFilter === 'active'
-                                    ? 'primary'
-                                    : 'neutral'
-                            "
-                            :variant="
-                                statusFilter === 'active' ? 'solid' : 'ghost'
-                            "
+                            :color="statusFilter === 'active' ? 'primary' : 'neutral'"
+                            :variant="statusFilter === 'active' ? 'solid' : 'ghost'"
                             label="Active"
                             @click="statusFilter = 'active'"
                         />
                         <UButton
-                            :color="
-                                statusFilter === 'suspended'
-                                    ? 'primary'
-                                    : 'neutral'
-                            "
-                            :variant="
-                                statusFilter === 'suspended' ? 'solid' : 'ghost'
-                            "
+                            :color="statusFilter === 'suspended' ? 'primary' : 'neutral'"
+                            :variant="statusFilter === 'suspended' ? 'solid' : 'ghost'"
                             label="Suspended"
                             @click="statusFilter = 'suspended'"
                         />
                         <UButton
-                            :color="
-                                statusFilter === 'revoked'
-                                    ? 'primary'
-                                    : 'neutral'
-                            "
-                            :variant="
-                                statusFilter === 'revoked' ? 'solid' : 'ghost'
-                            "
+                            :color="statusFilter === 'revoked' ? 'primary' : 'neutral'"
+                            :variant="statusFilter === 'revoked' ? 'solid' : 'ghost'"
                             label="Revoked"
                             @click="statusFilter = 'revoked'"
                         />
                         <UButton
-                            :color="
-                                statusFilter === 'expired'
-                                    ? 'primary'
-                                    : 'neutral'
-                            "
-                            :variant="
-                                statusFilter === 'expired' ? 'solid' : 'ghost'
-                            "
+                            :color="statusFilter === 'expired' ? 'primary' : 'neutral'"
+                            :variant="statusFilter === 'expired' ? 'solid' : 'ghost'"
                             label="Expired"
                             @click="statusFilter = 'expired'"
                         />
                     </div>
                 </div>
-
-                <UButton
-                    icon="i-lucide-download"
-                    color="neutral"
-                    variant="ghost"
-                    label="Export"
-                />
             </div>
 
-            <!-- Table -->
             <UAlert
                 v-if="apiKeysErrorMessage"
                 color="error"
@@ -572,10 +584,8 @@ const stats = computed(() => {
         </div>
     </UDashboardPanel>
 
-    <!-- Create API Key Modal -->
     <ApiKeyCreateModal v-model:open="showCreateModal" />
 
-    <!-- API Key Detail Modal -->
     <ApiKeyDetailModal
         v-if="selectedKeyId"
         v-model:open="showDetailModal"
@@ -586,9 +596,9 @@ const stats = computed(() => {
                 showEditModal = true;
             }
         "
+        @rotate="handleRotateFromDetail"
     />
 
-    <!-- API Key Update/Edit Modal -->
     <ApiKeyUpdateModal
         v-if="selectedKeyId"
         v-model:open="showEditModal"
@@ -605,4 +615,69 @@ const stats = computed(() => {
         @confirm="confirmKeyAction"
         @cancel="resetKeyActionState"
     />
+
+    <UModal
+        v-model:open="showRotatedKeyModal"
+        title="API Key Rotated"
+        description="Save the replacement API key now. The previous secret has already been revoked."
+        size="xl"
+    >
+        <template #body>
+            <div v-if="rotatedKeyResponse" class="space-y-4">
+                <UAlert
+                    icon="i-lucide-alert-triangle"
+                    color="error"
+                    variant="solid"
+                    title="Save this new API key immediately"
+                    description="This replacement key is only shown once. Copy it to a secure password manager or secrets vault before closing this dialog."
+                />
+
+                <div class="space-y-2">
+                    <label class="text-sm font-medium">Replacement API Key</label>
+                    <div class="flex items-center gap-2">
+                        <UInput
+                            :model-value="rotatedKeyResponse.api_key"
+                            readonly
+                            class="flex-1 font-mono text-sm"
+                        />
+                        <UButton
+                            icon="i-lucide-copy"
+                            color="primary"
+                            variant="solid"
+                            label="Copy"
+                            @click="copyRotatedKey"
+                        />
+                    </div>
+                    <p class="text-xs text-muted">
+                        Prefix: {{ rotatedKeyResponse.prefix }}
+                    </p>
+                </div>
+
+                <UAlert
+                    icon="i-lucide-shield-check"
+                    color="primary"
+                    variant="subtle"
+                    title="Rotation Checklist"
+                    description="Replace the old secret everywhere it was deployed, then remove any stale copies from local files, CI variables, or temporary notes."
+                />
+
+                <UCheckbox
+                    v-model="rotatedKeySavedConfirmation"
+                    label="I have securely saved this replacement API key"
+                    help="Required before closing this dialog"
+                />
+            </div>
+        </template>
+
+        <template #footer>
+            <div class="flex justify-end w-full">
+                <UButton
+                    label="Done"
+                    color="primary"
+                    :disabled="!rotatedKeySavedConfirmation"
+                    @click="showRotatedKeyModal = false"
+                />
+            </div>
+        </template>
+    </UModal>
 </template>

@@ -47,8 +47,6 @@ const state = reactive<CreateApiKeyRequest & { never_expires: boolean; ip_whitel
   ip_whitelist: [],
   ip_whitelist_raw: '',
   rate_limit_per_minute: 60,
-  rate_limit_per_hour: undefined,
-  rate_limit_per_day: undefined,
   expires_in_days: 90,
   never_expires: false,
   saved_confirmation: false
@@ -92,8 +90,6 @@ async function handleSubmit() {
     prefix_type: state.prefix_type,
     ip_whitelist: state.ip_whitelist.length > 0 ? state.ip_whitelist : undefined,
     rate_limit_per_minute: state.rate_limit_per_minute,
-    rate_limit_per_hour: state.rate_limit_per_hour,
-    rate_limit_per_day: state.rate_limit_per_day,
     expires_in_days: state.never_expires ? undefined : state.expires_in_days,
   }
 
@@ -133,8 +129,6 @@ function closeModal() {
       ip_whitelist: [],
       ip_whitelist_raw: '',
       rate_limit_per_minute: 60,
-      rate_limit_per_hour: undefined,
-      rate_limit_per_day: undefined,
       expires_in_days: 90,
       never_expires: false,
       saved_confirmation: false
@@ -286,27 +280,6 @@ function closeModal() {
               icon="i-lucide-gauge"
             />
             <p class="text-xs text-muted">Default: 60 requests/minute</p>
-          </div>
-
-          <div class="grid grid-cols-2 gap-3">
-            <div class="space-y-2">
-              <label class="block text-sm font-medium">Per hour (optional)</label>
-              <UInput
-                v-model.number="state.rate_limit_per_hour"
-                type="number"
-                min="1"
-                placeholder="3600"
-              />
-            </div>
-            <div class="space-y-2">
-              <label class="block text-sm font-medium">Per day (optional)</label>
-              <UInput
-                v-model.number="state.rate_limit_per_day"
-                type="number"
-                min="1"
-                placeholder="86400"
-              />
-            </div>
           </div>
         </div>
 
