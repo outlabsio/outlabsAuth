@@ -19,10 +19,12 @@ Looking for usage documentation? See **[docs-library/](../docs-library/)** inste
 ### API & Integration
 - **API_DESIGN.md** - Library API design and developer experience
 - **DEPENDENCY_PATTERNS.md** - FastAPI dependency injection patterns
+- **AUTH_UI_PARITY_GAPS.md** - Remaining agnostic admin UI vs backend contract gaps
 
 ### Operational
 - **SECURITY.md** - Security hardening requirements
 - **DEPLOYMENT_GUIDE.md** - Production deployment specifications
+- **PRIVATE_RELEASE.md** - Private package release workflow for `uv`
 - **TESTING_GUIDE.md** - Testing strategy and coverage goals
 
 ### Extensions

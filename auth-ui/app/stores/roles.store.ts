@@ -10,8 +10,7 @@ import type { PaginationParams, PaginatedResponse } from "~/types/api";
 export interface RoleFilters {
   search?: string;
   is_global?: boolean;
-  entity_id?: string;
-  entity_type?: string;
+  root_entity_id?: string;
   for_entity_id?: string; // Get roles available for assignment at this entity
 }
 
@@ -56,18 +55,33 @@ export const useRolesStore = defineStore("roles", () => {
       state.isLoading = true;
       state.error = null;
 
+      if (filters.for_entity_id) {
+        const queryParams = new URLSearchParams();
+        if (params.page) queryParams.append("page", String(params.page));
+        if (params.limit) queryParams.append("limit", String(params.limit));
+
+        const response = await authStore.apiCall<PaginatedResponse<Role>>(
+          `/v1/roles/entity/${filters.for_entity_id}?${queryParams.toString()}`,
+        );
+
+        state.roles = response.items;
+        state.pagination = {
+          total: response.total,
+          page: response.page,
+          limit: response.limit,
+          pages: response.pages,
+        };
+        return;
+      }
+
       const queryParams = new URLSearchParams();
       if (filters.search) queryParams.append("search", filters.search);
       if (filters.is_global !== undefined)
         queryParams.append("is_global", String(filters.is_global));
-      if (filters.entity_id) queryParams.append("entity_id", filters.entity_id);
-      if (filters.entity_type)
-        queryParams.append("entity_type", filters.entity_type);
+      if (filters.root_entity_id)
+        queryParams.append("root_entity_id", filters.root_entity_id);
       if (params.page) queryParams.append("page", String(params.page));
       if (params.limit) queryParams.append("limit", String(params.limit));
-      if (params.sort_by) queryParams.append("sort_by", params.sort_by);
-      if (params.sort_order)
-        queryParams.append("sort_order", params.sort_order);
 
       const response = await authStore.apiCall<PaginatedResponse<Role>>(
         `/v1/roles/?${queryParams.toString()}`,
@@ -203,7 +217,7 @@ export const useRolesStore = defineStore("roles", () => {
 
       await authStore.apiCall(`/v1/roles/${roleId}/permissions`, {
         method: "POST",
-        body: JSON.stringify({ permissions }),
+        body: JSON.stringify(permissions),
       });
 
       // Refresh role data
@@ -231,7 +245,7 @@ export const useRolesStore = defineStore("roles", () => {
 
       await authStore.apiCall(`/v1/roles/${roleId}/permissions`, {
         method: "DELETE",
-        body: JSON.stringify({ permissions }),
+        body: JSON.stringify(permissions),
       });
 
       // Refresh role data

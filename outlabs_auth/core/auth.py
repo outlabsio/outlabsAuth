@@ -288,12 +288,6 @@ class OutlabsAuth:
         if self.redis_client:
             await self.redis_client.connect()
 
-        # Seed default configuration for EnterpriseRBAC
-        if self.config.enable_entity_hierarchy and self.config_service:
-            async with self.get_session() as session:
-                await self.config_service.seed_defaults(session)
-                await session.commit()
-
         # Initialize authentication backends
         self._init_backends()
 

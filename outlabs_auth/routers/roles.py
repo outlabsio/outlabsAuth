@@ -120,6 +120,9 @@ def get_roles_router(
     async def list_roles(
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
         limit: int = Query(20, ge=1, le=100, description="Results per page"),
+        search: Optional[str] = Query(
+            None, description="Search by role name, display name, or description"
+        ),
         is_global: Optional[bool] = Query(
             None, description="Filter by global/non-global roles"
         ),
@@ -140,6 +143,7 @@ def get_roles_router(
                 session,
                 page=page,
                 limit=limit,
+                search=search,
                 is_global=is_global,
                 root_entity_id=root_entity_id,
             )
@@ -162,7 +166,9 @@ def get_roles_router(
         except HTTPException:
             raise
         except Exception as e:
-            obs.log_500_error(e, page=page, limit=limit, is_global=is_global)
+            obs.log_500_error(
+                e, page=page, limit=limit, search=search, is_global=is_global
+            )
             raise
 
     @router.get(
@@ -454,9 +460,11 @@ def get_roles_router(
         if not group or group.role_id != role_id:
             raise HTTPException(status_code=404, detail="Condition group not found")
 
-        if data.operator is not None:
+        fields_set = data.model_fields_set
+
+        if "operator" in fields_set and data.operator is not None:
             group.operator = data.operator
-        if data.description is not None:
+        if "description" in fields_set:
             group.description = data.description
 
         await session.flush()
@@ -582,7 +590,9 @@ def get_roles_router(
         if not cond or cond.role_id != role_id:
             raise HTTPException(status_code=404, detail="Condition not found")
 
-        if data.condition_group_id is not None:
+        fields_set = data.model_fields_set
+
+        if "condition_group_id" in fields_set:
             group_id = parse_uuid(data.condition_group_id)
             if group_id is not None:
                 group = await session.get(ConditionGroup, group_id)
@@ -592,17 +602,17 @@ def get_roles_router(
                     )
             cond.condition_group_id = group_id
 
-        if data.attribute is not None:
+        if "attribute" in fields_set and data.attribute is not None:
             cond.attribute = data.attribute
-        if data.operator is not None:
+        if "operator" in fields_set and data.operator is not None:
             cond.operator = data.operator
-        if data.value_type is not None:
+        if "value_type" in fields_set and data.value_type is not None:
             cond.value_type = data.value_type
-        if data.value is not None or data.value_type is not None:
+        if "value" in fields_set or "value_type" in fields_set:
             cond.value = serialize_condition_value(
                 data.value, data.value_type or cond.value_type
             )
-        if data.description is not None:
+        if "description" in fields_set:
             cond.description = data.description
 
         await session.flush()

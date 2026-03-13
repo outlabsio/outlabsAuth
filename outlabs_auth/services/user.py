@@ -514,6 +514,8 @@ class UserService(BaseService[User]):
         page: int = 1,
         limit: int = 20,
         status: Optional[UserStatus] = None,
+        is_superuser: Optional[bool] = None,
+        root_entity_id: Optional[UUID] = None,
         tenant_id: Optional[str] = None,
     ) -> Tuple[List[User], int]:
         """
@@ -524,6 +526,8 @@ class UserService(BaseService[User]):
             page: Page number (1-indexed)
             limit: Results per page
             status: Filter by status
+            is_superuser: Filter by superuser flag
+            root_entity_id: Filter by assigned root entity
             tenant_id: Filter by tenant (multi-tenant mode)
 
         Returns:
@@ -533,6 +537,10 @@ class UserService(BaseService[User]):
         filters = []
         if status:
             filters.append(User.status == status)
+        if is_superuser is not None:
+            filters.append(User.is_superuser == is_superuser)
+        if root_entity_id is not None:
+            filters.append(User.root_entity_id == root_entity_id)
         if tenant_id:
             filters.append(User.tenant_id == tenant_id)
 
@@ -556,6 +564,9 @@ class UserService(BaseService[User]):
         session: AsyncSession,
         search_term: str,
         limit: int = 20,
+        status: Optional[UserStatus] = None,
+        is_superuser: Optional[bool] = None,
+        root_entity_id: Optional[UUID] = None,
         tenant_id: Optional[str] = None,
     ) -> List[User]:
         """
@@ -565,12 +576,25 @@ class UserService(BaseService[User]):
             session: Database session
             search_term: Search term (searches email, first name, last name)
             limit: Maximum results to return
+            status: Filter by status
+            is_superuser: Filter by superuser flag
+            root_entity_id: Filter by assigned root entity
 
         Returns:
             List of matching users
         """
         # Case-insensitive search using ILIKE
         pattern = f"%{search_term}%"
+        filters = []
+        if status:
+            filters.append(User.status == status)
+        if is_superuser is not None:
+            filters.append(User.is_superuser == is_superuser)
+        if root_entity_id is not None:
+            filters.append(User.root_entity_id == root_entity_id)
+        if tenant_id is not None:
+            filters.append(User.tenant_id == tenant_id)
+
         users = await self.get_many(
             session,
             or_(
@@ -578,7 +602,7 @@ class UserService(BaseService[User]):
                 User.first_name.ilike(pattern),
                 User.last_name.ilike(pattern),
             ),
-            *([User.tenant_id == tenant_id] if tenant_id is not None else []),
+            *filters,
             limit=limit,
         )
         return users

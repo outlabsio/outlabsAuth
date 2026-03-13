@@ -9,6 +9,7 @@ const props = defineProps<{
 const open = defineModel<boolean>("open", { default: false });
 
 const authStore = useAuthStore();
+const showAbac = computed(() => authStore.features.abac);
 
 // Get available permissions from auth config (dynamically loaded from backend)
 const availablePermissions = computed(() => authStore.availablePermissions);
@@ -544,6 +545,13 @@ async function handleSubmit() {
                         </div>
                     </div>
                 </div>
+
+                <AbacConditionsEditor
+                    v-if="showAbac"
+                    target-type="role"
+                    :target-id="props.roleId"
+                    :active="open"
+                />
             </div>
         </template>
 

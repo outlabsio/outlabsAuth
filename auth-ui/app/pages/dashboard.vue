@@ -97,20 +97,61 @@
                     </UCard>
                 </div>
 
-                <!-- Recent Activity Section -->
-                <UCard>
-                    <template #header>
-                        <h3 class="text-base font-semibold text-highlighted">
-                            Recent Activity
-                        </h3>
-                    </template>
+                <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                    <UCard>
+                        <template #header>
+                            <h3 class="text-base font-semibold text-highlighted">
+                                Account Signals
+                            </h3>
+                        </template>
 
-                    <div class="space-y-3">
-                        <p class="text-sm text-muted">
-                            No recent activity to display.
-                        </p>
-                    </div>
-                </UCard>
+                        <div class="space-y-3">
+                            <div
+                                v-for="signal in accountSignals"
+                                :key="signal.label"
+                                class="flex items-start justify-between gap-4"
+                            >
+                                <span class="text-sm text-muted">
+                                    {{ signal.label }}
+                                </span>
+                                <span class="text-sm font-medium text-right text-highlighted">
+                                    {{ signal.value }}
+                                </span>
+                            </div>
+                        </div>
+                    </UCard>
+
+                    <UCard>
+                        <template #header>
+                            <div class="flex items-center justify-between gap-3">
+                                <h3 class="text-base font-semibold text-highlighted">
+                                    Enabled Capabilities
+                                </h3>
+                                <UBadge color="primary" variant="subtle">
+                                    {{ authStore.state.config?.preset || "Unknown preset" }}
+                                </UBadge>
+                            </div>
+                        </template>
+
+                        <div class="space-y-4">
+                            <p class="text-sm text-muted">
+                                This dashboard only surfaces capabilities the backend
+                                reports as enabled for the current auth preset.
+                            </p>
+
+                            <div class="flex flex-wrap gap-2">
+                                <UBadge
+                                    v-for="capability in enabledCapabilities"
+                                    :key="capability"
+                                    color="neutral"
+                                    variant="subtle"
+                                >
+                                    {{ capability }}
+                                </UBadge>
+                            </div>
+                        </div>
+                    </UCard>
+                </div>
 
                 <!-- Quick Actions -->
                 <div
@@ -194,6 +235,58 @@ const stats = computed(() => ({
     roles: rolesStore.pagination.total,
     entities: entitiesStore.pagination?.total || 0,
 }));
+
+function formatSignalTimestamp(value?: string): string {
+    if (!value) {
+        return "Not recorded";
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return "Not recorded";
+    }
+
+    return new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+    }).format(date);
+}
+
+function formatFeatureLabel(featureName: string): string {
+    return featureName
+        .split("_")
+        .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+        .join(" ");
+}
+
+const accountSignals = computed(() => [
+    {
+        label: "Email verification",
+        value: authStore.currentUser?.email_verified ? "Verified" : "Pending",
+    },
+    {
+        label: "Last login",
+        value: formatSignalTimestamp(authStore.currentUser?.last_login),
+    },
+    {
+        label: "Last activity",
+        value: formatSignalTimestamp(authStore.currentUser?.last_activity),
+    },
+    {
+        label: "Password changed",
+        value: formatSignalTimestamp(authStore.currentUser?.last_password_change),
+    },
+    {
+        label: "Root entity",
+        value: authStore.currentUser?.root_entity_name || "Global scope",
+    },
+]);
+
+const enabledCapabilities = computed(() =>
+    Object.entries(authStore.features || {})
+        .filter(([, enabled]) => Boolean(enabled))
+        .map(([featureName]) => formatFeatureLabel(featureName)),
+);
 
 const quickActions = computed(() => {
     const actions = [

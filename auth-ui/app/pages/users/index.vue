@@ -4,7 +4,11 @@ import type { Row } from "@tanstack/table-core";
 import { getPaginationRowModel } from "@tanstack/table-core";
 import type { User } from "~/types/auth";
 import { useQuery } from "@pinia/colada";
-import { usersQueries, useDeleteUserMutation } from "~/queries/users";
+import {
+    usersQueries,
+    useDeleteUserMutation,
+    useUpdateUserStatusMutation,
+} from "~/queries/users";
 
 definePageMeta({
     layout: "default",
@@ -16,7 +20,6 @@ const UBadge = resolveComponent("UBadge");
 const UDropdownMenu = resolveComponent("UDropdownMenu");
 const UCheckbox = resolveComponent("UCheckbox");
 
-const usersStore = useUsersStore();
 const toast = useToast();
 const table = useTemplateRef("table");
 
@@ -77,6 +80,7 @@ const usersErrorMessage = computed(() => {
 
 // Mutations
 const { mutate: deleteUser } = useDeleteUserMutation();
+const { mutate: updateUserStatus } = useUpdateUserStatusMutation();
 
 const userActionConfirmMeta = computed(() => {
     const name =
@@ -126,10 +130,9 @@ async function confirmUserAction() {
 
     try {
         if (pendingAction.value === "ban") {
-            await usersStore.updateUserStatus(pendingUser.value.id, "banned");
-            toast.add({
-                title: "User banned",
-                description: `${pendingUser.value.first_name || pendingUser.value.email} has been banned.`,
+            await updateUserStatus({
+                userId: pendingUser.value.id,
+                status: "banned",
             });
         } else {
             // Uses optimistic update mutation - UI updates instantly
@@ -192,13 +195,9 @@ function getRowItems(row: Row<User>) {
                       icon: "i-lucide-pause-circle",
                       onSelect: async () => {
                           try {
-                              await usersStore.updateUserStatus(
-                                  row.original.id,
-                                  "suspended",
-                              );
-                              toast.add({
-                                  title: "User suspended",
-                                  description: `${row.original.first_name || row.original.email} has been suspended.`,
+                              await updateUserStatus({
+                                  userId: row.original.id,
+                                  status: "suspended",
                               });
                           } catch {
                               toast.add({
@@ -224,13 +223,9 @@ function getRowItems(row: Row<User>) {
                       icon: "i-lucide-user-check",
                       onSelect: async () => {
                           try {
-                              await usersStore.updateUserStatus(
-                                  row.original.id,
-                                  "active",
-                              );
-                              toast.add({
-                                  title: "User activated",
-                                  description: `${row.original.first_name || row.original.email} has been activated.`,
+                              await updateUserStatus({
+                                  userId: row.original.id,
+                                  status: "active",
                               });
                           } catch {
                               toast.add({
@@ -286,7 +281,7 @@ const columns: TableColumn<User>[] = [
                     ? `${row.original.first_name} ${row.original.last_name}`
                     : row.original.first_name || row.original.email;
             const avatarUrl =
-                row.original.metadata?.avatar ||
+                row.original.avatar_url ||
                 `https://api.dicebear.com/7.x/avataaars/svg?seed=${row.original.email}`;
 
             return h("div", { class: "flex items-center gap-3" }, [
@@ -343,7 +338,7 @@ const columns: TableColumn<User>[] = [
             return h(
                 "span",
                 { class: "text-sm text-muted" },
-                row.original.metadata?.title || "User",
+                "User",
             );
         },
     },

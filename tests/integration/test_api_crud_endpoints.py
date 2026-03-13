@@ -143,6 +143,81 @@ async def test_users_crud(client: httpx.AsyncClient, admin_token: str):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_user_responses_and_filters_match_admin_ui_contract(
+    client: httpx.AsyncClient, admin_token: str
+):
+    client.headers.update({"Authorization": f"Bearer {admin_token}"})
+
+    root_name = f"org-{uuid.uuid4().hex[:8]}"
+    root_resp = await client.post(
+        "/v1/entities/",
+        json={
+            "name": root_name,
+            "display_name": "Scoped Organization",
+            "slug": root_name,
+            "entity_class": EntityClass.STRUCTURAL.value,
+            "entity_type": "organization",
+        },
+    )
+    assert root_resp.status_code == 201, root_resp.text
+    root_id = root_resp.json()["id"]
+
+    scoped_email = f"scoped-{uuid.uuid4().hex[:8]}@example.com"
+    scoped_resp = await client.post(
+        "/v1/users/",
+        json={
+            "email": scoped_email,
+            "password": "TestPass123!",
+            "first_name": "Scoped",
+            "last_name": "User",
+            "root_entity_id": root_id,
+        },
+    )
+    assert scoped_resp.status_code == 201, scoped_resp.text
+    scoped_user = scoped_resp.json()
+
+    assert scoped_user["root_entity_id"] == root_id
+    assert "created_at" in scoped_user
+    assert "updated_at" in scoped_user
+    assert "last_login" in scoped_user
+    assert "last_activity" in scoped_user
+    assert "last_password_change" in scoped_user
+
+    status_resp = await client.patch(
+        f"/v1/users/{scoped_user['id']}/status",
+        json={"status": "suspended"},
+    )
+    assert status_resp.status_code == 200, status_resp.text
+    assert status_resp.json()["status"] == "suspended"
+
+    filtered_by_status = await client.get(
+        "/v1/users/",
+        params={"status": "suspended"},
+    )
+    assert filtered_by_status.status_code == 200, filtered_by_status.text
+    assert [item["id"] for item in filtered_by_status.json()["items"]] == [
+        scoped_user["id"]
+    ]
+
+    filtered_by_root = await client.get(
+        "/v1/users/",
+        params={"root_entity_id": root_id},
+    )
+    assert filtered_by_root.status_code == 200, filtered_by_root.text
+    assert [item["id"] for item in filtered_by_root.json()["items"]] == [
+        scoped_user["id"]
+    ]
+
+    filtered_superusers = await client.get(
+        "/v1/users/",
+        params={"is_superuser": "true"},
+    )
+    assert filtered_superusers.status_code == 200, filtered_superusers.text
+    assert all(item["is_superuser"] is True for item in filtered_superusers.json()["items"])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_permissions_and_roles_crud(client: httpx.AsyncClient, admin_token: str):
     client.headers.update({"Authorization": f"Bearer {admin_token}"})
 
@@ -200,6 +275,115 @@ async def test_permissions_and_roles_crud(client: httpx.AsyncClient, admin_token
 
     r_perm_delete = await client.delete(f"/v1/permissions/{perm_id}")
     assert r_perm_delete.status_code == 204, r_perm_delete.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_roles_search_and_permission_array_payloads(
+    client: httpx.AsyncClient, admin_token: str
+):
+    client.headers.update({"Authorization": f"Bearer {admin_token}"})
+
+    first_perm_name = f"alpha:{uuid.uuid4().hex[:6]}"
+    second_perm_name = f"beta:{uuid.uuid4().hex[:6]}"
+
+    for permission_name in (first_perm_name, second_perm_name):
+        resp = await client.post(
+            "/v1/permissions/",
+            json={
+                "name": permission_name,
+                "display_name": permission_name,
+                "description": "integration test",
+                "is_system": False,
+                "is_active": True,
+                "tags": [],
+            },
+        )
+        assert resp.status_code == 201, resp.text
+
+    role_name = f"searchable-role-{uuid.uuid4().hex[:6]}"
+    role_resp = await client.post(
+        "/v1/roles/",
+        json={
+            "name": role_name,
+            "display_name": "Searchable Role",
+            "description": "role search contract",
+            "permissions": [first_perm_name],
+            "is_global": True,
+        },
+    )
+    assert role_resp.status_code == 201, role_resp.text
+    role = role_resp.json()
+
+    search_resp = await client.get("/v1/roles/", params={"search": "Searchable"})
+    assert search_resp.status_code == 200, search_resp.text
+    assert any(item["id"] == role["id"] for item in search_resp.json()["items"])
+
+    add_perm_resp = await client.post(
+        f"/v1/roles/{role['id']}/permissions",
+        json=[second_perm_name],
+    )
+    assert add_perm_resp.status_code == 200, add_perm_resp.text
+    assert sorted(add_perm_resp.json()["permissions"]) == sorted(
+        [first_perm_name, second_perm_name]
+    )
+
+    remove_perm_resp = await client.request(
+        "DELETE",
+        f"/v1/roles/{role['id']}/permissions",
+        json=[first_perm_name],
+    )
+    assert remove_perm_resp.status_code == 200, remove_perm_resp.text
+    assert remove_perm_resp.json()["permissions"] == [second_perm_name]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_entities_support_root_only_and_search_filters(
+    client: httpx.AsyncClient, admin_token: str
+):
+    client.headers.update({"Authorization": f"Bearer {admin_token}"})
+
+    root_name = f"root-{uuid.uuid4().hex[:8]}"
+    root_resp = await client.post(
+        "/v1/entities/",
+        json={
+            "name": root_name,
+            "display_name": "Filter Root",
+            "slug": root_name,
+            "entity_class": EntityClass.STRUCTURAL.value,
+            "entity_type": "organization",
+        },
+    )
+    assert root_resp.status_code == 201, root_resp.text
+    root_id = root_resp.json()["id"]
+
+    child_name = f"child-{uuid.uuid4().hex[:8]}"
+    child_resp = await client.post(
+        "/v1/entities/",
+        json={
+            "name": child_name,
+            "display_name": "Searchable Child",
+            "slug": child_name,
+            "entity_class": EntityClass.STRUCTURAL.value,
+            "entity_type": "department",
+            "parent_entity_id": root_id,
+        },
+    )
+    assert child_resp.status_code == 201, child_resp.text
+    child_id = child_resp.json()["id"]
+
+    root_only_resp = await client.get("/v1/entities/", params={"root_only": "true"})
+    assert root_only_resp.status_code == 200, root_only_resp.text
+    root_only_ids = {item["id"] for item in root_only_resp.json()["items"]}
+    assert root_id in root_only_ids
+    assert child_id not in root_only_ids
+
+    search_resp = await client.get("/v1/entities/", params={"search": "Searchable Child"})
+    assert search_resp.status_code == 200, search_resp.text
+    search_ids = {item["id"] for item in search_resp.json()["items"]}
+    assert child_id in search_ids
+    assert root_id not in search_ids
 
 
 @pytest.mark.integration

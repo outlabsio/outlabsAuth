@@ -7,12 +7,11 @@ defineProps<{
 
 const authStore = useAuthStore()
 const colorMode = useColorMode()
-const appConfig = useAppConfig()
 
 const user = computed(() => ({
   name: authStore.currentUser?.full_name || authStore.currentUser?.email || 'User',
-  avatar: authStore.currentUser?.metadata?.avatar
-    ? { src: authStore.currentUser.metadata.avatar }
+  avatar: authStore.currentUser?.avatar_url
+    ? { src: authStore.currentUser.avatar_url }
     : { icon: 'i-lucide-user' }
 }))
 

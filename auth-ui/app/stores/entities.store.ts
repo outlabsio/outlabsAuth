@@ -130,9 +130,6 @@ export const useEntitiesStore = defineStore("entities", () => {
       if (filters.root_only) queryParams.append("root_only", "true");
       if (params.page) queryParams.append("page", String(params.page));
       if (params.limit) queryParams.append("limit", String(params.limit));
-      if (params.sort_by) queryParams.append("sort_by", params.sort_by);
-      if (params.sort_order)
-        queryParams.append("sort_order", params.sort_order);
 
       const response = await authStore.apiCall<PaginatedResponse<Entity>>(
         `/v1/entities/?${queryParams.toString()}`,

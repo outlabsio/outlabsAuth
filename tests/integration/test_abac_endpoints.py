@@ -259,3 +259,117 @@ async def test_abac_resource_context_from_header(auth: OutlabsAuth, client: http
         },
     )
     assert allowed.status_code == 201, allowed.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_role_abac_updates_allow_explicit_ungrouping_and_description_clear(
+    client: httpx.AsyncClient, abac_setup: dict
+):
+    admin_token = abac_setup["admin_token"]
+    role_id = abac_setup["role_id"]
+
+    group_response = await client.post(
+        f"/v1/roles/{role_id}/condition-groups",
+        json={"operator": "AND", "description": "Regional approvals"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert group_response.status_code == 201, group_response.text
+    group_id = group_response.json()["id"]
+
+    condition_response = await client.post(
+        f"/v1/roles/{role_id}/conditions",
+        json={
+            "attribute": "context.region",
+            "operator": "equals",
+            "value": "latam",
+            "value_type": "string",
+            "description": "Regional gate",
+            "condition_group_id": group_id,
+        },
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert condition_response.status_code == 201, condition_response.text
+    condition_id = condition_response.json()["id"]
+
+    updated_group = await client.patch(
+        f"/v1/roles/{role_id}/condition-groups/{group_id}",
+        json={"description": None},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert updated_group.status_code == 200, updated_group.text
+    assert updated_group.json()["description"] is None
+
+    updated_condition = await client.patch(
+        f"/v1/roles/{role_id}/conditions/{condition_id}",
+        json={"condition_group_id": None, "description": None},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert updated_condition.status_code == 200, updated_condition.text
+    payload = updated_condition.json()
+    assert payload["condition_group_id"] is None
+    assert payload["description"] is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_permission_abac_updates_allow_explicit_ungrouping_and_description_clear(
+    client: httpx.AsyncClient, abac_setup: dict
+):
+    admin_token = abac_setup["admin_token"]
+
+    permission_response = await client.post(
+        "/v1/permissions/",
+        json={
+            "name": f"abac:{uuid.uuid4().hex[:6]}",
+            "display_name": "ABAC Permission",
+            "description": "ABAC test permission",
+            "is_system": False,
+            "is_active": True,
+            "tags": [],
+        },
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert permission_response.status_code == 201, permission_response.text
+    permission_id = permission_response.json()["id"]
+
+    group_response = await client.post(
+        f"/v1/permissions/{permission_id}/condition-groups",
+        json={"operator": "OR", "description": "Temporary exceptions"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert group_response.status_code == 201, group_response.text
+    group_id = group_response.json()["id"]
+
+    condition_response = await client.post(
+        f"/v1/permissions/{permission_id}/conditions",
+        json={
+            "attribute": "context.department",
+            "operator": "equals",
+            "value": "finance",
+            "value_type": "string",
+            "description": "Department gate",
+            "condition_group_id": group_id,
+        },
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert condition_response.status_code == 201, condition_response.text
+    condition_id = condition_response.json()["id"]
+
+    updated_group = await client.patch(
+        f"/v1/permissions/{permission_id}/condition-groups/{group_id}",
+        json={"description": None},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert updated_group.status_code == 200, updated_group.text
+    assert updated_group.json()["description"] is None
+
+    updated_condition = await client.patch(
+        f"/v1/permissions/{permission_id}/conditions/{condition_id}",
+        json={"condition_group_id": None, "description": None},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert updated_condition.status_code == 200, updated_condition.text
+    payload = updated_condition.json()
+    assert payload["condition_group_id"] is None
+    assert payload["description"] is None

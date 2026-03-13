@@ -126,6 +126,13 @@ const links = computed(() => {
                 open.value = false;
             },
         },
+        {
+            label: "Password",
+            to: "/settings/password",
+            onSelect: () => {
+                open.value = false;
+            },
+        },
     ];
 
     // Add Entity Types settings for superusers in EnterpriseRBAC mode

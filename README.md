@@ -5,13 +5,14 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-blue.svg)](https://www.postgresql.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Distribution: Private](https://img.shields.io/badge/distribution-private-orange.svg)](#installation)
+[![Stage: Alpha](https://img.shields.io/badge/stage-alpha-red.svg)](#development-status)
 
-> **v2.0** - PostgreSQL migration complete. SimpleRBAC and EnterpriseRBAC both working with full observability support.
+> **Alpha release** - internal multi-project distribution is now versioned, but the library and admin UI are still in active iteration.
 
 ## Overview
 
-OutlabsAuth is a comprehensive authentication and authorization library for FastAPI applications. Install it via pip and integrate powerful auth capabilities directly into your application - no separate auth service required.
+OutlabsAuth is a comprehensive authentication and authorization library for FastAPI applications. It is intended for private distribution across internal projects and integrates directly into your application; no separate auth service is required.
 
 **Inspired by [FastAPI-Users](https://github.com/fastapi-users/fastapi-users)**: We've adopted their battle-tested patterns (lifecycle hooks, router factories, transport/strategy) while adding advanced authorization features like hierarchical permissions, tree permissions, and context-aware roles.
 
@@ -32,7 +33,7 @@ OutlabsAuth is a comprehensive authentication and authorization library for Fast
 
 **Developer Experience**:
 - **FastAPI Native**: Designed specifically for FastAPI with dependency injection
-- **Production Ready**: Redis caching, Pub/Sub invalidation, comprehensive security
+- **Production-Oriented**: Redis caching, Pub/Sub invalidation, comprehensive security
 - **Extensible**: Override services, add custom hooks, create custom transports
 - **Observability**: Prometheus metrics, structured logging, correlation IDs
 
@@ -40,9 +41,65 @@ OutlabsAuth is a comprehensive authentication and authorization library for Fast
 
 ### Installation
 
-```bash
-pip install outlabs-auth
+For private distribution with `uv`, use one of these patterns. For the current
+internal projects, private Git tags are the default because they are the
+lowest-friction option for a small team.
+
+```toml
+# Private package index (optional)
+[project]
+dependencies = ["outlabs-auth>=0.1.0a5,<0.2"]
+
+[tool.uv.sources]
+outlabs-auth = { index = "outlabs-private" }
+
+[[tool.uv.index]]
+name = "outlabs-private"
+url = "https://<your-registry>/simple/"
+publish-url = "https://<your-registry>/"
+explicit = true
 ```
+
+```toml
+# Private Git source
+[project]
+dependencies = ["outlabs-auth"]
+
+[tool.uv.sources]
+outlabs-auth = { git = "ssh://git@github.com/<org>/outlabsAuth.git", tag = "v0.1.0a5" }
+```
+
+See [docs/PRIVATE_RELEASE.md](./docs/PRIVATE_RELEASE.md) for the release workflow. Run `uv run python scripts/release_version.py check` to verify the library version, UI version, and release docs stay aligned before you tag a release.
+
+### Consumer Database Bootstrap
+
+OutlabsAuth owns its own schema lifecycle. A host application should install the
+library and then run these steps against the target database before expecting
+the mounted routers or services to work:
+
+```bash
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/mydb \
+OUTLABS_AUTH_SCHEMA=outlabs_auth \
+uv run outlabs-auth migrate
+
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/mydb \
+OUTLABS_AUTH_SCHEMA=outlabs_auth \
+uv run outlabs-auth seed-system
+
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/mydb \
+OUTLABS_AUTH_SCHEMA=outlabs_auth \
+uv run outlabs-auth bootstrap-admin \
+  --email admin@example.com \
+  --password 'ChangeMe123!'
+```
+
+`migrate` manages only the auth schema, `seed-system` provisions the library-owned
+permission catalog and config defaults, and `bootstrap-admin` creates the first
+superuser exactly once.
+
+If you are migrating a host app that previously bootstrapped auth tables with
+`create_all`, `migrate` will automatically adopt a fully bootstrapped legacy
+schema by stamping `outlabs_auth_alembic_version` before future migrations run.
 
 ### Development Setup
 
@@ -377,15 +434,17 @@ Implementation-specific documentation (9 files):
 
 ## Development Status
 
-**Current Version**: 2.0
+**Current Library Version**: 0.1.0a5
+**Current Admin UI Version**: 0.1.0-alpha.5
+**Release Stage**: Alpha
 **Database**: PostgreSQL (via SQLAlchemy async)
 
-### Production Status
+### Delivery Status
 
 | Preset | Status | Notes |
 |--------|--------|-------|
-| **SimpleRBAC** | ✅ Production Ready | Flat RBAC, JWT auth, API keys, rate limiting |
-| **EnterpriseRBAC** | ✅ Production Ready | Entity hierarchy, tree permissions, closure table |
+| **SimpleRBAC** | Alpha | Flat RBAC, JWT auth, API keys, rate limiting |
+| **EnterpriseRBAC** | Alpha | Entity hierarchy, tree permissions, closure table |
 
 ### What's Working
 
@@ -401,16 +460,16 @@ Implementation-specific documentation (9 files):
 
 ## Roadmap
 
-### v2.0 (Current)
-- ✅ SimpleRBAC production-ready
-- ✅ EnterpriseRBAC production-ready
+### Alpha (Current)
+- ✅ SimpleRBAC core functionality working
+- ✅ EnterpriseRBAC core functionality working
 - ✅ JWT + API key authentication
 - ✅ PostgreSQL with SQLAlchemy async
 - ✅ Entity hierarchy with closure table
 - ✅ Tree permissions
 - ✅ Observability (Prometheus + structured logging)
 
-### v2.1+ (Future)
+### Post-Alpha (Future)
 - OAuth/social login (Google, Facebook, Apple)
 - Passwordless auth (magic links, OTP)
 - MFA/TOTP
@@ -425,7 +484,7 @@ Implementation-specific documentation (9 files):
 
 ## License
 
-MIT License - see LICENSE file for details
+Private package. Distribution and usage are governed by internal Outlabs terms.
 
 ## Contributing
 
@@ -450,9 +509,9 @@ Special thanks to the FastAPI-Users team for pioneering these patterns in the Fa
 
 ## Support
 
-- **Documentation**: `docs/`
-- **Issues**: [GitHub Issues](https://github.com/outlabs/outlabs-auth/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/outlabs/outlabs-auth/discussions)
+- **Documentation**: `docs/` and `docs-library/`
+- **Release workflow**: `docs/PRIVATE_RELEASE.md`
+- **Support**: internal Outlabs engineering channels
 
 ---
 

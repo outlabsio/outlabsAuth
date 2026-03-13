@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import { useQuery } from "@pinia/colada";
+import { entitiesQueries } from "~/queries/entities";
 import { useCreateUserMutation } from '~/queries/users'
 
 const open = defineModel<boolean>('open', { default: false })
+const authStore = useAuthStore();
 
 // Form state
 const state = reactive({
@@ -9,7 +12,24 @@ const state = reactive({
   password: '',
   first_name: '',
   last_name: '',
-  is_superuser: false
+  is_superuser: false,
+  root_entity_id: '',
+})
+
+const { data: rootEntitiesData } = useQuery({
+  ...entitiesQueries.list({ root_only: true }, { page: 1, limit: 100 }),
+  enabled: computed(() => authStore.isEnterpriseRBAC),
+})
+
+const rootEntityOptions = computed(() => {
+  const items = rootEntitiesData.value?.items || []
+  return [
+    { label: 'Unassigned', value: '' },
+    ...items.map((entity) => ({
+      label: entity.display_name || entity.name,
+      value: entity.id,
+    })),
+  ]
 })
 
 // Password strength indicator
@@ -43,7 +63,14 @@ const { mutate: createUser, isLoading: isSubmitting } = useCreateUserMutation()
 // Submit handler
 async function handleSubmit() {
   try {
-    await createUser(state)
+    await createUser({
+      email: state.email,
+      password: state.password,
+      first_name: state.first_name || undefined,
+      last_name: state.last_name || undefined,
+      is_superuser: state.is_superuser,
+      ...(state.root_entity_id ? { root_entity_id: state.root_entity_id } : {}),
+    })
     // Close modal and reset form on success
     open.value = false
     Object.assign(state, {
@@ -51,7 +78,8 @@ async function handleSubmit() {
       password: '',
       first_name: '',
       last_name: '',
-      is_superuser: false
+      is_superuser: false,
+      root_entity_id: '',
     })
   } catch (error) {
     // Error handling is done by the mutation
@@ -130,6 +158,19 @@ async function handleSubmit() {
               </li>
             </ul>
           </div>
+        </div>
+
+        <div v-if="authStore.isEnterpriseRBAC" class="space-y-2">
+          <label class="block text-sm font-medium">Organization</label>
+          <USelect
+            v-model="state.root_entity_id"
+            :items="rootEntityOptions"
+            value-key="value"
+            placeholder="Select organization"
+          />
+          <p class="text-xs text-muted">
+            Assign the user to a root organization now, or leave unassigned.
+          </p>
         </div>
 
         <USeparator label="Permissions" />

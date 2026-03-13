@@ -2,6 +2,8 @@
 
 Modern admin dashboard for the OutlabsAuth library, built with Nuxt 4, Nuxt UI v4, and Pinia.
 
+Current tracked UI version: `0.1.0-alpha.5`
+
 ## Tech Stack
 
 - **Nuxt 4.1.3** - Vue 3 meta-framework

@@ -11,9 +11,20 @@ export interface User {
   status: string; // "active" | "suspended" | "banned" | "deleted"
   email_verified: boolean;
   is_superuser: boolean;
+  avatar_url?: string;
+  phone?: string;
+  locale?: string;
+  timezone?: string;
+  root_entity_id?: string;
+  root_entity_name?: string;
   created_at?: string;
   updated_at?: string;
-  metadata?: Record<string, any>;
+  last_login?: string;
+  last_activity?: string;
+  last_password_change?: string;
+  suspended_until?: string;
+  locked_until?: string;
+  deleted_at?: string;
 
   // Computed fields (derived on frontend)
   username?: string;
