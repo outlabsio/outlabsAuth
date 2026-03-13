@@ -49,9 +49,10 @@ const showAbacModal = ref(false);
 const roleForAbac = ref<Role | null>(null);
 
 // Fetch root entities for filter dropdown (EnterpriseRBAC only)
-const { data: entitiesData } = useQuery(
-    entitiesQueries.list({ root_only: true }, { page: 1, limit: 100 }),
-);
+const { data: entitiesData } = useQuery(() => ({
+    ...entitiesQueries.list({ root_only: true }, { page: 1, limit: 100 }),
+    enabled: isEnterpriseRBAC.value,
+}));
 
 const rootEntityOptions = computed(() => {
     const entities = entitiesData.value?.items || [];

@@ -8,6 +8,7 @@ import {
     useResumeApiKeyMutation,
 } from "~/queries/api-keys";
 import type { ApiKey } from "~/types/api-key";
+import type { UiColor } from "~/types/ui";
 
 // Resolve components for h() render functions
 const UBadge = resolveComponent("UBadge");
@@ -40,7 +41,12 @@ const revokeMutation = useRevokeApiKeyMutation();
 const suspendMutation = useSuspendApiKeyMutation();
 const resumeMutation = useResumeApiKeyMutation();
 
-const keyActionConfirmMeta = computed(() => {
+const keyActionConfirmMeta = computed<{
+    title: string;
+    description: string;
+    confirmLabel: string;
+    confirmColor: UiColor;
+}>(() => {
     const label = pendingKey.value
         ? `'${pendingKey.value.name}' (${pendingKey.value.prefix})`
         : "this API key";
@@ -293,8 +299,8 @@ const columns: TableColumn<ApiKey>[] = [
                             variant: "ghost",
                             size: "xs",
                             loading:
-                                resumeMutation.isPending &&
-                                resumeMutation.variables === row.original.id,
+                                resumeMutation.isLoading.value &&
+                                resumeMutation.variables.value === row.original.id,
                             onClick: () => handleResume(row.original),
                         }),
                     isActive &&

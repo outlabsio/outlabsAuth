@@ -10,6 +10,8 @@ import type {
   UpdateMembershipData,
 } from "~/types/membership";
 
+type MembershipListParams = { page?: number; limit?: number };
+
 /**
  * Query Keys for memberships
  */
@@ -20,9 +22,21 @@ export const MEMBERSHIP_KEYS = {
     [...MEMBERSHIP_KEYS.entityMembers(), entityId] as const,
   entityMembersWithDetails: (entityId: string) =>
     [...MEMBERSHIP_KEYS.entityMembers(), entityId, "details"] as const,
+  entityMemberList: (
+    entityId: string,
+    params: MembershipListParams = {},
+  ) => [...MEMBERSHIP_KEYS.entityMember(entityId), { params }] as const,
+  entityMembersWithDetailsList: (
+    entityId: string,
+    params: MembershipListParams = {},
+  ) => [...MEMBERSHIP_KEYS.entityMembersWithDetails(entityId), { params }] as const,
   userMemberships: () => [...MEMBERSHIP_KEYS.all, "user"] as const,
   userMembership: (userId: string) =>
     [...MEMBERSHIP_KEYS.userMemberships(), userId] as const,
+  userMembershipList: (
+    userId: string,
+    params: MembershipListParams = {},
+  ) => [...MEMBERSHIP_KEYS.userMembership(userId), { params }] as const,
   myMemberships: () => [...MEMBERSHIP_KEYS.all, "me"] as const,
 };
 
@@ -35,10 +49,10 @@ export const membershipsQueries = {
    */
   entityMembers: (
     entityId: string,
-    params: { page?: number; limit?: number } = {}
+    params: MembershipListParams = {}
   ) =>
     defineQueryOptions({
-      key: MEMBERSHIP_KEYS.entityMember(entityId),
+      key: MEMBERSHIP_KEYS.entityMemberList(entityId, params),
       query: async () => {
         const api = createMembershipsAPI();
         return api.fetchEntityMembers(entityId, params);
@@ -51,10 +65,10 @@ export const membershipsQueries = {
    */
   entityMembersWithDetails: (
     entityId: string,
-    params: { page?: number; limit?: number } = {}
+    params: MembershipListParams = {}
   ) =>
     defineQueryOptions({
-      key: MEMBERSHIP_KEYS.entityMembersWithDetails(entityId),
+      key: MEMBERSHIP_KEYS.entityMembersWithDetailsList(entityId, params),
       query: async () => {
         const api = createMembershipsAPI();
         return api.fetchEntityMembersWithDetails(entityId, params);
@@ -67,10 +81,10 @@ export const membershipsQueries = {
    */
   userMemberships: (
     userId: string,
-    params: { page?: number; limit?: number } = {}
+    params: MembershipListParams = {}
   ) =>
     defineQueryOptions({
-      key: MEMBERSHIP_KEYS.userMembership(userId),
+      key: MEMBERSHIP_KEYS.userMembershipList(userId, params),
       query: async () => {
         const api = createMembershipsAPI();
         return api.fetchUserMemberships(userId, params);
@@ -105,16 +119,9 @@ export function useAddMemberMutation() {
       return api.addMember(data);
     },
     onSuccess: (_data, variables) => {
-      // Invalidate entity members queries
+      // Invalidate all membership queries (broad prefix to catch all param variations)
       queryCache.invalidateQueries({
-        key: MEMBERSHIP_KEYS.entityMember(variables.entity_id),
-      });
-      queryCache.invalidateQueries({
-        key: MEMBERSHIP_KEYS.entityMembersWithDetails(variables.entity_id),
-      });
-      // Invalidate user memberships
-      queryCache.invalidateQueries({
-        key: MEMBERSHIP_KEYS.userMembership(variables.user_id),
+        key: MEMBERSHIP_KEYS.all,
       });
 
       toast.add({
@@ -154,16 +161,8 @@ export function useUpdateMemberRolesMutation() {
       return api.updateMemberRoles(entityId, userId, data);
     },
     onSuccess: (_data, { entityId, userId }) => {
-      // Invalidate entity members queries
       queryCache.invalidateQueries({
-        key: MEMBERSHIP_KEYS.entityMember(entityId),
-      });
-      queryCache.invalidateQueries({
-        key: MEMBERSHIP_KEYS.entityMembersWithDetails(entityId),
-      });
-      // Invalidate user memberships
-      queryCache.invalidateQueries({
-        key: MEMBERSHIP_KEYS.userMembership(userId),
+        key: MEMBERSHIP_KEYS.all,
       });
 
       toast.add({
@@ -202,16 +201,8 @@ export function useRemoveMemberMutation() {
       return { entityId, userId };
     },
     onSuccess: ({ entityId, userId }) => {
-      // Invalidate entity members queries
       queryCache.invalidateQueries({
-        key: MEMBERSHIP_KEYS.entityMember(entityId),
-      });
-      queryCache.invalidateQueries({
-        key: MEMBERSHIP_KEYS.entityMembersWithDetails(entityId),
-      });
-      // Invalidate user memberships
-      queryCache.invalidateQueries({
-        key: MEMBERSHIP_KEYS.userMembership(userId),
+        key: MEMBERSHIP_KEYS.all,
       });
 
       toast.add({

@@ -25,7 +25,7 @@ const state = reactive({
 })
 
 // Update mutation
-const { mutate: updatePermission, isPending: isSubmitting } = useUpdatePermissionMutation()
+const { mutate: updatePermission, isLoading: isSubmitting } = useUpdatePermissionMutation()
 
 // Initialize form when permission changes
 watch(() => props.permission, (permission) => {
@@ -151,7 +151,7 @@ function toggleTag(tag: string) {
               <div class="flex items-center justify-between mb-1.5">
                 <label class="text-sm font-medium text-foreground">Permission Name</label>
                 <UTooltip text="Permission name cannot be changed">
-                  <UButton icon="i-lucide-info" color="neutral" variant="ghost" size="2xs" />
+                  <UButton icon="i-lucide-info" color="neutral" variant="ghost" size="xs" />
                 </UTooltip>
               </div>
               <UInput
@@ -172,7 +172,7 @@ function toggleTag(tag: string) {
               <div class="flex items-center justify-between mb-1.5">
                 <label class="text-sm font-medium text-foreground">Display Name</label>
                 <UTooltip text="Human-readable name shown in the UI">
-                  <UButton icon="i-lucide-info" color="neutral" variant="ghost" size="2xs" />
+                  <UButton icon="i-lucide-info" color="neutral" variant="ghost" size="xs" />
                 </UTooltip>
               </div>
               <UInput
@@ -186,7 +186,7 @@ function toggleTag(tag: string) {
               <div class="flex items-center justify-between mb-1.5">
                 <label class="text-sm font-medium text-foreground">Description</label>
                 <UTooltip text="Detailed description of what this permission allows">
-                  <UButton icon="i-lucide-info" color="neutral" variant="ghost" size="2xs" />
+                  <UButton icon="i-lucide-info" color="neutral" variant="ghost" size="xs" />
                 </UTooltip>
               </div>
               <UTextarea
@@ -211,10 +211,10 @@ function toggleTag(tag: string) {
                   <UIcon name="i-lucide-shield-check" class="w-4 h-4 text-muted" />
                   <span class="text-sm font-medium text-foreground">System Permission</span>
                   <UTooltip text="System permissions cannot be deleted">
-                    <UButton icon="i-lucide-info" color="neutral" variant="ghost" size="2xs" />
+                    <UButton icon="i-lucide-info" color="neutral" variant="ghost" size="xs" />
                   </UTooltip>
                 </div>
-                <UBadge v-if="permission?.is_system" color="blue" variant="subtle">System</UBadge>
+                <UBadge v-if="permission?.is_system" color="info" variant="subtle">System</UBadge>
                 <UBadge v-else color="neutral" variant="subtle">Custom</UBadge>
               </div>
 
@@ -224,7 +224,7 @@ function toggleTag(tag: string) {
                   <div class="flex items-center gap-2">
                     <span class="text-sm font-medium text-foreground">Active</span>
                     <UTooltip text="Active permissions are enforced by the system">
-                      <UButton icon="i-lucide-info" color="neutral" variant="ghost" size="2xs" />
+                      <UButton icon="i-lucide-info" color="neutral" variant="ghost" size="xs" />
                     </UTooltip>
                   </div>
                   <p class="text-xs text-muted mt-1">
@@ -241,7 +241,7 @@ function toggleTag(tag: string) {
             <div class="flex items-center justify-between mb-3">
               <h3 class="text-sm font-semibold text-foreground">Tags & Categories</h3>
               <UTooltip text="Tags help organize and filter permissions">
-                <UButton icon="i-lucide-info" color="neutral" variant="ghost" size="2xs" />
+                <UButton icon="i-lucide-info" color="neutral" variant="ghost" size="xs" />
               </UTooltip>
             </div>
 

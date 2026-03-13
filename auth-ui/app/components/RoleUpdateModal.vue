@@ -26,11 +26,10 @@ const permissionsByCategory = computed(() => {
 });
 
 // Fetch existing role data when modal opens
-const { data: existingRole, isLoading: isLoadingRole } = useQuery({
-    key: computed(() => ["role", props.roleId]),
-    query: () => rolesQueries.detail(props.roleId),
-    enabled: computed(() => open.value && !!props.roleId),
-});
+const { data: existingRole, isLoading: isLoadingRole } = useQuery(() => ({
+    ...rolesQueries.detail(props.roleId),
+    enabled: open.value && !!props.roleId,
+}));
 
 // Form state
 const state = reactive({
@@ -100,7 +99,7 @@ function toggleCategory(category: string) {
 const showPermissionsHelp = ref(false);
 
 // Mutation for updating roles
-const { mutate: updateRole, isPending: isSubmitting } = useUpdateRoleMutation();
+const { mutate: updateRole, isLoading: isSubmitting } = useUpdateRoleMutation();
 
 async function handleSubmit() {
     try {

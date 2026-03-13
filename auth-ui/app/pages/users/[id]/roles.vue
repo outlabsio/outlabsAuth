@@ -20,7 +20,7 @@ const toast = useToast();
 const userRoles = computed(() => userStore.userRoles);
 
 // Fetch all available roles
-const { data: allRoles, isLoading: isLoadingRoles } = useQuery(
+const { data: allRoles, isLoading: isLoadingAvailableRoles } = useQuery(
     rolesQueries.list(),
 );
 
@@ -229,7 +229,7 @@ function formatDate(date: string) {
         <div class="border-t border-default pt-6">
             <h4 class="text-sm font-semibold text-foreground mb-3">Add Role</h4>
 
-            <div v-if="isLoadingRoles" class="text-center py-4">
+            <div v-if="isLoadingAvailableRoles" class="text-center py-4">
                 <UIcon
                     name="i-lucide-loader-2"
                     class="w-5 h-5 animate-spin text-primary"

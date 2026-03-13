@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { useQuery } from '@pinia/colada'
 import { apiKeysQueries } from '~/queries/api-keys'
+import { ApiKeyStatus } from '~/types/api-key'
+import type { UiColor } from '~/types/ui'
 
 const props = defineProps<{
   keyId: string
@@ -12,17 +14,17 @@ const emit = defineEmits<{
 }>()
 
 // Fetch API key details
-const { data: apiKey, isLoading } = useQuery({
+const { data: apiKey, isLoading } = useQuery(() => ({
   ...apiKeysQueries.detail(props.keyId),
-  enabled: computed(() => open.value && !!props.keyId)
-})
+  enabled: open.value && !!props.keyId
+}))
 
 // Status color mapping
-const statusColors: Record<string, string> = {
-  active: 'success',
-  suspended: 'warning',
-  revoked: 'error',
-  expired: 'neutral'
+const statusColors: Record<ApiKeyStatus, UiColor> = {
+  [ApiKeyStatus.ACTIVE]: 'success',
+  [ApiKeyStatus.SUSPENDED]: 'warning',
+  [ApiKeyStatus.REVOKED]: 'error',
+  [ApiKeyStatus.EXPIRED]: 'neutral'
 }
 
 // Helper to format dates
@@ -239,18 +241,10 @@ async function copyPrefix() {
             <UIcon name="i-lucide-gauge" class="w-4 h-4" />
             Rate Limits
           </h3>
-          <div class="grid grid-cols-3 gap-4">
+          <div class="grid grid-cols-1 gap-4">
             <div class="space-y-1">
               <p class="text-xs text-muted">Per Minute</p>
               <p class="text-lg font-bold">{{ apiKey.rate_limit_per_minute }}</p>
-            </div>
-            <div class="space-y-1">
-              <p class="text-xs text-muted">Per Hour</p>
-              <p class="text-lg font-bold">{{ apiKey.rate_limit_per_hour || '∞' }}</p>
-            </div>
-            <div class="space-y-1">
-              <p class="text-xs text-muted">Per Day</p>
-              <p class="text-lg font-bold">{{ apiKey.rate_limit_per_day || '∞' }}</p>
             </div>
           </div>
         </div>

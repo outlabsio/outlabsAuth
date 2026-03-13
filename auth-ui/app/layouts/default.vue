@@ -1,5 +1,9 @@
 <script setup lang="ts">
-import type { NavigationMenuItem } from "@nuxt/ui";
+import type {
+    CommandPaletteGroup,
+    CommandPaletteItem,
+    NavigationMenuItem,
+} from "@nuxt/ui";
 
 const route = useRoute();
 const authStore = useAuthStore();
@@ -168,9 +172,41 @@ const links = computed(() => {
     ] satisfies NavigationMenuItem[][];
 });
 
+function isSearchableNavigationItem(
+    item: NavigationMenuItem | undefined,
+): item is NavigationMenuItem & { label: string } {
+    return Boolean(item && typeof item.label === "string" && !item.children?.length);
+}
+
+const navigationSearchItems = computed<CommandPaletteItem[]>(() =>
+    links.value.flat().filter(isSearchableNavigationItem).map((item, index) => ({
+        id: `nav-${index}-${item.label.toLowerCase().replace(/\s+/g, "-")}`,
+        label: item.label,
+        icon: item.icon,
+        suffix:
+            typeof item.to === "string" && item.to.startsWith("http")
+                ? "Ext"
+                : undefined,
+        onSelect: (event) => {
+            item.onSelect?.(event);
+
+            if (item.to) {
+                void navigateTo(item.to, {
+                    external:
+                        item.target === "_blank" ||
+                        (typeof item.to === "string" &&
+                            item.to.startsWith("http")),
+                });
+            }
+
+            open.value = false;
+        },
+    })),
+);
+
 // Search groups for global search
-const groups = computed(() => {
-    const shortcuts = [
+const groups = computed<CommandPaletteGroup<CommandPaletteItem>[]>(() => {
+    const shortcuts: CommandPaletteItem[] = [
         {
             id: "g-d",
             label: "Go to Dashboard",
@@ -207,12 +243,7 @@ const groups = computed(() => {
         {
             id: "links",
             label: "Go to",
-            items: links.value
-                .flat()
-                .filter(
-                    (item): item is NavigationMenuItem =>
-                        !!item && !("children" in item),
-                ),
+            items: navigationSearchItems.value,
         },
         {
             id: "shortcuts",

@@ -2,6 +2,7 @@
 import type { TableColumn, TreeItem, BreadcrumbItem } from "@nuxt/ui";
 import type { Entity, EntityClass } from "~/types/entity";
 import type { EntityMember } from "~/types/membership";
+import type { UiColor } from "~/types/ui";
 import { useQuery } from "@pinia/colada";
 import { entitiesQueries, useDeleteEntityMutation } from "~/queries/entities";
 import {
@@ -45,25 +46,23 @@ const { data: entitiesData, isLoading } = useQuery(
 );
 
 // Query entity members (only when entity selected and members tab active)
-const { data: membersData, isLoading: isMembersLoading } = useQuery({
+const { data: membersData, isLoading: isMembersLoading } = useQuery(() => ({
     ...membershipsQueries.entityMembersWithDetails(
         selectedTreeEntityId.value || "",
     ),
-    enabled: computed(
-        () => !!selectedTreeEntityId.value && activeTab.value === "members",
-    ),
-});
+    enabled:
+        !!selectedTreeEntityId.value && activeTab.value === "members",
+}));
 
 // Query entity roles (only when entity selected and roles tab active)
-const { data: entityRolesData, isLoading: isRolesLoading } = useQuery({
+const { data: entityRolesData, isLoading: isRolesLoading } = useQuery(() => ({
     ...rolesQueries.list(
         { for_entity_id: selectedTreeEntityId.value || "" },
         { limit: 100 },
     ),
-    enabled: computed(
-        () => !!selectedTreeEntityId.value && activeTab.value === "roles",
-    ),
-});
+    enabled:
+        !!selectedTreeEntityId.value && activeTab.value === "roles",
+}));
 
 // Mutations
 const { mutate: deleteEntity } = useDeleteEntityMutation();
@@ -333,7 +332,12 @@ function openEditRoleModal(roleId: string) {
     showEditRoleModal.value = true;
 }
 
-const actionConfirmMeta = computed(() => {
+const actionConfirmMeta = computed<{
+    title: string;
+    description: string;
+    confirmLabel: string;
+    confirmColor: UiColor;
+}>(() => {
     if (!pendingAction.value) {
         return {
             title: "Confirm action",
@@ -434,7 +438,7 @@ watch(showActionConfirm, (isOpen) => {
 });
 
 // Get scope badge for roles
-function getRoleScopeBadge(role: Role): { color: string; label: string } {
+function getRoleScopeBadge(role: Role): { color: UiColor; label: string } {
     if (role.is_global) return { color: "info", label: "Global" };
     if (role.scope === "entity_only")
         return { color: "warning", label: "This entity only" };

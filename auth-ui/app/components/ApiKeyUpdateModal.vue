@@ -2,7 +2,9 @@
 import { useQuery } from '@pinia/colada'
 import { permissionsQueries } from '~/queries/permissions'
 import { apiKeysQueries, useUpdateApiKeyMutation } from '~/queries/api-keys'
-import type { UpdateApiKeyRequest, ApiKeyStatus } from '~/types/api-key'
+import { ApiKeyStatus } from '~/types/api-key'
+import type { UpdateApiKeyRequest } from '~/types/api-key'
+import type { UiColor } from '~/types/ui'
 
 const props = defineProps<{
   keyId: string
@@ -14,10 +16,10 @@ const open = defineModel<boolean>('open', { default: false })
 const { data: permissions, isLoading: loadingPermissions } = useQuery(permissionsQueries.available())
 
 // Fetch existing API key data when modal opens
-const { data: existingKey, isLoading: isLoadingKey } = useQuery({
+const { data: existingKey, isLoading: isLoadingKey } = useQuery(() => ({
   ...apiKeysQueries.detail(props.keyId),
-  enabled: computed(() => open.value && !!props.keyId)
-})
+  enabled: open.value && !!props.keyId
+}))
 
 // Available scopes computed from permissions
 const availableScopes = computed(() => {
@@ -41,26 +43,36 @@ const availableScopes = computed(() => {
 })
 
 // Status options
-const statusOptions = [
-  { value: 'active', label: 'Active', description: 'Key is operational', color: 'success' },
-  { value: 'suspended', label: 'Suspended', description: 'Temporarily disabled', color: 'warning' },
-  { value: 'revoked', label: 'Revoked', description: 'Permanently disabled (cannot be reversed)', color: 'error' }
+const statusOptions: { value: ApiKeyStatus; label: string; description: string; color: UiColor }[] = [
+  { value: ApiKeyStatus.ACTIVE, label: 'Active', description: 'Key is operational', color: 'success' },
+  { value: ApiKeyStatus.SUSPENDED, label: 'Suspended', description: 'Temporarily disabled', color: 'warning' },
+  { value: ApiKeyStatus.REVOKED, label: 'Revoked', description: 'Permanently disabled (cannot be reversed)', color: 'error' }
 ]
 
+interface ApiKeyUpdateForm {
+  name: string
+  description: string
+  scopes: string[]
+  ip_whitelist: string[]
+  ip_whitelist_raw: string
+  rate_limit_per_minute: number
+  status: ApiKeyStatus
+}
+
+function buildInitialState(): ApiKeyUpdateForm {
+  return {
+    name: '',
+    description: '',
+    scopes: [],
+    ip_whitelist: [],
+    ip_whitelist_raw: '',
+    rate_limit_per_minute: 60,
+    status: ApiKeyStatus.ACTIVE
+  }
+}
+
 // Form state
-const state = reactive<UpdateApiKeyRequest & { never_expires: boolean; ip_whitelist_raw: string }>({
-  name: '',
-  description: '',
-  scopes: [],
-  ip_whitelist: [],
-  ip_whitelist_raw: '',
-  rate_limit_per_minute: 60,
-  rate_limit_per_hour: undefined,
-  rate_limit_per_day: undefined,
-  status: 'active' as ApiKeyStatus,
-  expires_at: undefined,
-  never_expires: false
-})
+const state = reactive<ApiKeyUpdateForm>(buildInitialState())
 
 // Pre-populate form when key data loads
 watch(existingKey, (key) => {
@@ -71,11 +83,9 @@ watch(existingKey, (key) => {
     state.ip_whitelist = key.ip_whitelist || []
     state.ip_whitelist_raw = (key.ip_whitelist || []).join('\n')
     state.rate_limit_per_minute = key.rate_limit_per_minute
-    state.rate_limit_per_hour = key.rate_limit_per_hour
-    state.rate_limit_per_day = key.rate_limit_per_day
     state.status = key.status
-    state.expires_at = key.expires_at || undefined
-    state.never_expires = !key.expires_at
+  } else {
+    Object.assign(state, buildInitialState())
   }
 }, { immediate: true })
 
@@ -91,15 +101,8 @@ watch(() => state.ip_whitelist_raw, (raw) => {
   }
 })
 
-// Watch never_expires checkbox
-watch(() => state.never_expires, (neverExpires) => {
-  if (neverExpires) {
-    state.expires_at = null
-  }
-})
-
 // Update mutation
-const { mutate: updateKey, isPending: isSubmitting } = useUpdateApiKeyMutation()
+const { mutateAsync: updateKey, isLoading: isSubmitting } = useUpdateApiKeyMutation()
 
 // Submit handler
 async function handleSubmit() {
@@ -108,13 +111,10 @@ async function handleSubmit() {
     const payload: UpdateApiKeyRequest = {
       name: state.name,
       description: state.description || undefined,
-      scopes: state.scopes.length > 0 ? state.scopes : undefined,
-      ip_whitelist: state.ip_whitelist.length > 0 ? state.ip_whitelist : undefined,
+      scopes: state.scopes.length > 0 ? [...state.scopes] : undefined,
+      ip_whitelist: state.ip_whitelist.length > 0 ? [...state.ip_whitelist] : undefined,
       rate_limit_per_minute: state.rate_limit_per_minute,
-      rate_limit_per_hour: state.rate_limit_per_hour,
-      rate_limit_per_day: state.rate_limit_per_day,
       status: state.status,
-      expires_at: state.never_expires ? null : state.expires_at,
     }
 
     await updateKey({ id: props.keyId, data: payload })
@@ -127,21 +127,6 @@ async function handleSubmit() {
   }
 }
 
-// Helper to format dates for datetime-local input
-const expiresAtLocal = computed({
-  get: () => {
-    if (!state.expires_at) return ''
-    // Convert ISO string to datetime-local format (YYYY-MM-DDTHH:mm)
-    return new Date(state.expires_at).toISOString().slice(0, 16)
-  },
-  set: (value: string) => {
-    if (value) {
-      state.expires_at = new Date(value).toISOString()
-    } else {
-      state.expires_at = undefined
-    }
-  }
-})
 </script>
 
 <template>
@@ -190,7 +175,7 @@ const expiresAtLocal = computed({
               :key="statusOption.value"
               class="flex items-start gap-2 p-3 border rounded-lg cursor-pointer transition-colors"
               :class="state.status === statusOption.value ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'"
-              @click="state.status = statusOption.value as ApiKeyStatus"
+              @click="state.status = statusOption.value"
             >
               <div class="mt-0.5 w-4 h-4 rounded-full border-2 flex items-center justify-center" :class="state.status === statusOption.value ? 'border-primary' : 'border-muted'">
                 <div v-if="state.status === statusOption.value" class="w-2 h-2 rounded-full bg-primary"></div>
@@ -202,7 +187,7 @@ const expiresAtLocal = computed({
             </div>
           </div>
           <UAlert
-            v-if="state.status === 'revoked'"
+            v-if="state.status === ApiKeyStatus.REVOKED"
             icon="i-lucide-alert-triangle"
             color="error"
             variant="subtle"
@@ -254,27 +239,6 @@ const expiresAtLocal = computed({
             />
             <p class="text-xs text-muted">Current: {{ state.rate_limit_per_minute }} requests/minute</p>
           </div>
-
-          <div class="grid grid-cols-2 gap-3">
-            <div class="space-y-2">
-              <label class="block text-sm font-medium">Per hour (optional)</label>
-              <UInput
-                v-model.number="state.rate_limit_per_hour"
-                type="number"
-                min="1"
-                placeholder="3600"
-              />
-            </div>
-            <div class="space-y-2">
-              <label class="block text-sm font-medium">Per day (optional)</label>
-              <UInput
-                v-model.number="state.rate_limit_per_day"
-                type="number"
-                min="1"
-                placeholder="86400"
-              />
-            </div>
-          </div>
         </div>
 
         <USeparator label="Security" />
@@ -293,25 +257,13 @@ const expiresAtLocal = computed({
           </p>
         </div>
 
-        <!-- Expiration Settings -->
-        <div class="space-y-3">
-          <UCheckbox
-            v-model="state.never_expires"
-            label="Never expires"
-            help="⚠️ Not recommended for production - keys should be rotated regularly"
-          />
-
-          <div v-if="!state.never_expires" class="space-y-2">
-            <label class="block text-sm font-medium">Expires at</label>
-            <UInput
-              v-model="expiresAtLocal"
-              type="datetime-local"
-              icon="i-lucide-calendar"
-            />
-            <p class="text-xs text-muted">
-              {{ state.expires_at ? `Expires: ${new Date(state.expires_at).toLocaleString()}` : 'No expiration set' }}
-            </p>
-          </div>
+        <!-- Expiration is read-only after creation -->
+        <div class="space-y-2">
+          <label class="block text-sm font-medium">Expiration</label>
+          <p class="text-sm">
+            {{ existingKey?.expires_at ? new Date(existingKey.expires_at).toLocaleString() : 'Never expires' }}
+          </p>
+          <p class="text-xs text-muted">Expiration is set when the key is created.</p>
         </div>
 
         <!-- Usage Stats (read-only) -->

@@ -12,17 +12,54 @@ const props = defineProps<{
 }>();
 
 const userStore = useUserStore();
+const usersStore = useUsersStore();
 const authStore = useAuthStore();
 const toast = useToast();
 
+type UserAccountStatus = "active" | "suspended" | "banned";
+
+interface UserDetailFormState {
+    email: string;
+    username: string;
+    full_name: string;
+    is_active: boolean;
+    status: UserAccountStatus;
+}
+
+const normalizeStatus = (status?: string): UserAccountStatus => {
+    if (status === "suspended" || status === "banned") {
+        return status;
+    }
+
+    return "active";
+};
+
+function splitFullName(fullName: string): {
+    first_name?: string;
+    last_name?: string;
+} {
+    const parts = fullName
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+
+    if (parts.length === 0) {
+        return {};
+    }
+
+    return {
+        first_name: parts[0],
+        last_name: parts.length > 1 ? parts.slice(1).join(" ") : undefined,
+    };
+}
+
 // Form state
-const state = reactive({
+const state = reactive<UserDetailFormState>({
     email: "",
     username: "",
     full_name: "",
     is_active: true,
     status: "active",
-    metadata: {} as Record<string, any>,
 });
 
 // Watch for user changes and populate form
@@ -30,19 +67,21 @@ watch(
     () => props.user,
     (newUser) => {
         if (newUser) {
-            state.email = newUser.email || "";
-            state.username = newUser.username || newUser.email.split("@")[0];
+            const normalizedStatus = normalizeStatus(newUser.status);
+            state.email = newUser.email;
+            state.username =
+                newUser.username ?? newUser.email.split("@")[0] ?? "";
             state.full_name = newUser.full_name || "";
-            state.is_active = newUser.is_active !== false;
-            state.status = newUser.status || "active";
-            state.metadata = newUser.metadata || {};
+            state.is_active = normalizedStatus === "active";
+            state.status = normalizedStatus;
         }
     },
     { immediate: true },
 );
 
 // Update mutation
-const { mutate: updateUser, isPending: isSubmitting } = useUpdateUserMutation();
+const { mutateAsync: updateUser, isLoading: isSubmitting } =
+    useUpdateUserMutation();
 
 // Password change modal
 const showPasswordModal = ref(false);
@@ -57,7 +96,28 @@ const statusOptions = [
     { label: "Active", value: "active" },
     { label: "Suspended", value: "suspended" },
     { label: "Banned", value: "banned" },
-];
+] satisfies { label: string; value: UserAccountStatus }[];
+
+watch(
+    () => state.status,
+    (status) => {
+        const nextIsActive = status === "active";
+        if (state.is_active !== nextIsActive) {
+            state.is_active = nextIsActive;
+        }
+    },
+);
+
+watch(
+    () => state.is_active,
+    (isActive) => {
+        if (isActive && state.status !== "active") {
+            state.status = "active";
+        } else if (!isActive && state.status === "active") {
+            state.status = "suspended";
+        }
+    },
+);
 
 // Form validation
 const canSubmit = computed(() => {
@@ -81,19 +141,22 @@ async function handleSubmit() {
         return;
     }
 
+    const { first_name, last_name } = splitFullName(state.full_name);
+
     // Call mutation - toasts handled by mutation callbacks
     await updateUser({
         userId: props.user.id,
         data: {
             email: state.email,
-            full_name: state.full_name || undefined,
-            is_active: state.is_active,
-            metadata:
-                Object.keys(state.metadata).length > 0
-                    ? state.metadata
-                    : undefined,
+            first_name,
+            last_name,
         },
     });
+
+    const currentStatus = normalizeStatus(props.user.status);
+    if (state.status !== currentStatus) {
+        await usersStore.updateUserStatus(props.user.id, state.status);
+    }
 
     // Refresh user data in store
     await userStore.fetchUser(props.user.id);
@@ -212,7 +275,7 @@ async function handlePasswordChange() {
                             icon="i-lucide-info"
                             color="neutral"
                             variant="ghost"
-                            size="2xs"
+                            size="xs"
                         />
                     </UTooltip>
                 </div>

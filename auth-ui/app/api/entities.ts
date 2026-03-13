@@ -66,7 +66,7 @@ export function createEntitiesAPI() {
     async createEntity(data: CreateEntityData): Promise<Entity> {
       return client.call<Entity>("/v1/entities/", {
         method: "POST",
-        body: JSON.stringify(data),
+        body: data,
       });
     },
 
@@ -79,7 +79,7 @@ export function createEntitiesAPI() {
     ): Promise<Entity> {
       return client.call<Entity>(`/v1/entities/${entityId}`, {
         method: "PATCH",
-        body: JSON.stringify(data),
+        body: data,
       });
     },
 
@@ -92,7 +92,7 @@ export function createEntitiesAPI() {
     ): Promise<void> {
       return client.call<void>(`/v1/entities/${entityId}/move`, {
         method: "POST",
-        body: JSON.stringify({ new_parent_id: newParentId }),
+        body: { new_parent_id: newParentId },
       });
     },
 

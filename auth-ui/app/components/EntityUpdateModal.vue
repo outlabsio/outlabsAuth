@@ -108,7 +108,7 @@ const statusOptions = [
 ];
 
 // Submit handler using mutation
-const { mutateAsync: updateEntity, isPending } = useUpdateEntityMutation();
+const { mutateAsync: updateEntity, isLoading: isSubmitting } = useUpdateEntityMutation();
 
 async function handleSubmit() {
     try {
@@ -344,12 +344,12 @@ async function handleSubmit() {
                     color="neutral"
                     variant="outline"
                     @click="open = false"
-                    :disabled="isPending"
+                    :disabled="isSubmitting"
                 />
                 <UButton
                     label="Save Changes"
                     icon="i-lucide-save"
-                    :loading="isPending"
+                    :loading="isSubmitting"
                     @click="handleSubmit"
                 />
             </div>

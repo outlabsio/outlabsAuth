@@ -67,7 +67,7 @@ export function createRolesAPI() {
     async createRole(data: CreateRoleData): Promise<Role> {
       return client.call<Role>("/v1/roles", {
         method: "POST",
-        body: JSON.stringify(data),
+        body: data,
       });
     },
 
@@ -77,7 +77,7 @@ export function createRolesAPI() {
     async updateRole(roleId: string, data: UpdateRoleData): Promise<Role> {
       return client.call<Role>(`/v1/roles/${roleId}`, {
         method: "PATCH",
-        body: JSON.stringify(data),
+        body: data,
       });
     },
 
@@ -99,7 +99,7 @@ export function createRolesAPI() {
     ): Promise<void> {
       return client.call<void>(`/v1/roles/${roleId}/permissions`, {
         method: "POST",
-        body: JSON.stringify({ permissions }),
+        body: { permissions },
       });
     },
 
@@ -112,7 +112,7 @@ export function createRolesAPI() {
     ): Promise<void> {
       return client.call<void>(`/v1/roles/${roleId}/permissions`, {
         method: "DELETE",
-        body: JSON.stringify({ permissions }),
+        body: { permissions },
       });
     },
 
@@ -128,7 +128,7 @@ export function createRolesAPI() {
     ): Promise<ConditionGroup> {
       return client.call<ConditionGroup>(`/v1/roles/${roleId}/condition-groups`, {
         method: "POST",
-        body: JSON.stringify(data),
+        body: data,
       });
     },
     async updateConditionGroup(
@@ -138,7 +138,7 @@ export function createRolesAPI() {
     ): Promise<ConditionGroup> {
       return client.call<ConditionGroup>(`/v1/roles/${roleId}/condition-groups/${groupId}`, {
         method: "PATCH",
-        body: JSON.stringify(data),
+        body: data,
       });
     },
     async deleteConditionGroup(roleId: string, groupId: string): Promise<void> {
@@ -159,7 +159,7 @@ export function createRolesAPI() {
     ): Promise<AbacCondition> {
       return client.call<AbacCondition>(`/v1/roles/${roleId}/conditions`, {
         method: "POST",
-        body: JSON.stringify(data),
+        body: data,
       });
     },
     async updateCondition(
@@ -169,7 +169,7 @@ export function createRolesAPI() {
     ): Promise<AbacCondition> {
       return client.call<AbacCondition>(`/v1/roles/${roleId}/conditions/${conditionId}`, {
         method: "PATCH",
-        body: JSON.stringify(data),
+        body: data,
       });
     },
     async deleteCondition(roleId: string, conditionId: string): Promise<void> {

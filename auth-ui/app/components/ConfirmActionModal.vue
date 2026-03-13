@@ -1,5 +1,5 @@
 <template>
-    <UModal v-model:open="open" :ui="{ width: 'sm:max-w-md' }">
+    <UModal v-model:open="open" :ui="{ content: 'sm:max-w-md' }">
         <UCard>
             <template #header>
                 <div class="flex items-start gap-3">
@@ -40,13 +40,15 @@
 </template>
 
 <script setup lang="ts">
+import type { UiColor } from "~/types/ui";
+
 interface Props {
     title?: string;
     description?: string;
     icon?: string;
     confirmLabel?: string;
     cancelLabel?: string;
-    confirmColor?: string;
+    confirmColor?: UiColor;
     confirmVariant?: "solid" | "outline" | "soft" | "ghost" | "subtle" | "link";
     loading?: boolean;
 }

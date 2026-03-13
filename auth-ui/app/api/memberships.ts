@@ -75,7 +75,7 @@ export function createMembershipsAPI() {
     addMember: async (data: CreateMembershipData): Promise<Membership> => {
       return api.call<Membership>("/v1/memberships/", {
         method: "POST",
-        body: JSON.stringify(data),
+        body: data,
       });
     },
 
@@ -89,7 +89,7 @@ export function createMembershipsAPI() {
     ): Promise<Membership> => {
       return api.call<Membership>(`/v1/memberships/${entityId}/${userId}`, {
         method: "PATCH",
-        body: JSON.stringify(data),
+        body: data,
       });
     },
 

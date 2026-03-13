@@ -10,6 +10,7 @@ import type {
   CreateApiKeyRequest,
   UpdateApiKeyRequest,
   ApiKeyCreateResponse,
+  ApiKeyStatus,
 } from "~/types/api-key";
 
 /**

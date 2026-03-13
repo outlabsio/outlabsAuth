@@ -5,6 +5,8 @@
  * Follows Nuxt nested routes pattern
  */
 
+import type { UiColor } from "~/types/ui";
+
 const route = useRoute();
 const userStore = useUserStore();
 const authStore = useAuthStore();
@@ -24,7 +26,7 @@ watch(
         if (id) {
             await userStore.fetchUser(id);
             // Prefetch roles and permissions
-            const prefetchPromises = [
+            const prefetchPromises: Promise<unknown>[] = [
                 userStore.fetchUserRoles(id),
                 userStore.fetchUserPermissions(id),
             ];
@@ -103,7 +105,7 @@ const currentTab = computed({
 });
 
 // Status badge color
-const statusColor = computed(() => {
+const statusColor = computed<UiColor>(() => {
     if (!user.value) return "neutral";
     switch (user.value.status) {
         case "active":

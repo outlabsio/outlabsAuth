@@ -39,7 +39,7 @@ const { data: permissions, isLoading, error } = useQuery(
 )
 
 // Delete mutation
-const { mutate: deletePermission, isPending: isDeleting } = useDeletePermissionMutation()
+const { mutate: deletePermission, isLoading: isDeleting } = useDeletePermissionMutation()
 
 // Handle delete permission
 function handleDelete(permission: Permission) {
@@ -108,7 +108,7 @@ const columns: TableColumn<Permission>[] = [
             class: `font-mono text-sm font-medium ${isDeprecated ? 'line-through text-muted' : ''}`
           }, row.original.name),
           row.original.is_system && h(UBadge, {
-            color: 'blue',
+            color: 'info',
             variant: 'subtle',
             size: 'xs'
           }, () => 'System'),

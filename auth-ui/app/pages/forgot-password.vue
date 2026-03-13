@@ -86,7 +86,7 @@
                         </UButton>
 
                         <UButton
-                            color="gray"
+                            color="neutral"
                             variant="ghost"
                             block
                             @click="$router.push('/login')"

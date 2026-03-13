@@ -96,6 +96,47 @@ function toggleCategory(category: string) {
     }
 }
 
+// Permission search filter
+const permissionSearch = ref('');
+
+const filteredPermissionsByCategory = computed(() => {
+    const query = permissionSearch.value.toLowerCase().trim();
+    if (!query) return permissionsByCategory.value;
+
+    const filtered: Record<string, typeof availablePermissions.value> = {};
+    for (const [category, items] of Object.entries(permissionsByCategory.value)) {
+        const matched = items.filter(
+            (p) =>
+                p.label.toLowerCase().includes(query) ||
+                p.value.toLowerCase().includes(query),
+        );
+        if (matched.length > 0) filtered[category] = matched;
+    }
+    return filtered;
+});
+
+function isCategoryPartiallySelected(category: string) {
+    const categoryPerms = permissionsByCategory.value[category];
+    if (!categoryPerms) return false;
+    return (
+        categoryPerms.some((perm) => state.permissions.includes(perm.value)) &&
+        !categoryPerms.every((perm) => state.permissions.includes(perm.value))
+    );
+}
+
+function togglePermission(value: string) {
+    const idx = state.permissions.indexOf(value);
+    if (idx >= 0) {
+        state.permissions.splice(idx, 1);
+    } else {
+        state.permissions.push(value);
+    }
+}
+
+function removePermission(value: string) {
+    state.permissions = state.permissions.filter((p) => p !== value);
+}
+
 // Mutation for creating roles
 const { mutate: createRole, isLoading: isSubmitting } = useCreateRoleMutation();
 
@@ -185,106 +226,105 @@ async function handleSubmit() {
                             Basic Information
                         </h3>
 
-                        <!-- Grid layout for Display Name and Name -->
-                        <div class="grid grid-cols-2 gap-4">
-                            <div class="space-y-2">
-                                <label
-                                    class="block text-sm font-medium flex items-center gap-1.5"
-                                >
-                                    Display Name
-                                    <UPopover>
-                                        <UButton
-                                            icon="i-lucide-help-circle"
-                                            color="neutral"
-                                            variant="ghost"
-                                            size="xs"
-                                            class="text-muted hover:text-highlighted"
-                                        />
-                                        <template #content>
-                                            <div class="p-4 max-w-xs space-y-2">
-                                                <h4
-                                                    class="font-semibold text-sm"
-                                                >
-                                                    Display Name
-                                                </h4>
-                                                <p class="text-sm text-muted">
-                                                    The human-friendly name
-                                                    shown in the UI.
+                        <div class="space-y-2">
+                            <label
+                                class="block text-sm font-medium flex items-center gap-1.5"
+                            >
+                                Display Name
+                                <UPopover>
+                                    <UButton
+                                        icon="i-lucide-help-circle"
+                                        color="neutral"
+                                        variant="ghost"
+                                        size="xs"
+                                        class="text-muted hover:text-highlighted"
+                                    />
+                                    <template #content>
+                                        <div class="p-4 max-w-xs space-y-2">
+                                            <h4
+                                                class="font-semibold text-sm"
+                                            >
+                                                Display Name
+                                            </h4>
+                                            <p class="text-sm text-muted">
+                                                The human-friendly name
+                                                shown in the UI.
+                                            </p>
+                                            <div
+                                                class="text-xs text-muted mt-2"
+                                            >
+                                                <p class="font-medium mb-1">
+                                                    Examples:
                                                 </p>
-                                                <div
-                                                    class="text-xs text-muted mt-2"
+                                                <ul
+                                                    class="list-disc list-inside pl-2 space-y-0.5"
                                                 >
-                                                    <p class="font-medium mb-1">
-                                                        Examples:
-                                                    </p>
-                                                    <ul
-                                                        class="list-disc list-inside pl-2 space-y-0.5"
-                                                    >
-                                                        <li>"Team Lead"</li>
-                                                        <li>
-                                                            "Content Reviewer"
-                                                        </li>
-                                                        <li>
-                                                            "Budget Approver"
-                                                        </li>
-                                                    </ul>
-                                                </div>
+                                                    <li>"Team Lead"</li>
+                                                    <li>
+                                                        "Content Reviewer"
+                                                    </li>
+                                                    <li>
+                                                        "Budget Approver"
+                                                    </li>
+                                                </ul>
                                             </div>
-                                        </template>
-                                    </UPopover>
-                                </label>
-                                <UInput
-                                    v-model="state.display_name"
-                                    placeholder="Team Lead"
-                                    icon="i-lucide-shield"
-                                />
-                            </div>
+                                        </div>
+                                    </template>
+                                </UPopover>
+                            </label>
+                            <UInput
+                                v-model="state.display_name"
+                                placeholder="Team Lead"
+                                icon="i-lucide-shield"
+                                class="w-full"
+                            />
+                        </div>
 
-                            <div class="space-y-2">
-                                <label
-                                    class="block text-sm font-medium flex items-center gap-1.5"
-                                >
-                                    Name
-                                    <UPopover>
-                                        <UButton
-                                            icon="i-lucide-help-circle"
-                                            color="neutral"
-                                            variant="ghost"
-                                            size="xs"
-                                            class="text-muted hover:text-highlighted"
-                                        />
-                                        <template #content>
-                                            <div class="p-4 max-w-xs space-y-2">
-                                                <h4
-                                                    class="font-semibold text-sm"
-                                                >
-                                                    Role Name (Identifier)
-                                                </h4>
-                                                <p class="text-sm text-muted">
-                                                    Technical identifier used in
-                                                    code and APIs. Must be
-                                                    unique, lowercase.
-                                                </p>
-                                                <UAlert
-                                                    icon="i-lucide-lightbulb"
-                                                    color="info"
-                                                    variant="subtle"
-                                                    description="Auto-generated from Display Name."
-                                                    class="mt-2"
-                                                />
-                                            </div>
-                                        </template>
-                                    </UPopover>
-                                </label>
-                                <UInput
-                                    v-model="state.name"
-                                    placeholder="team_lead"
-                                    icon="i-lucide-tag"
-                                />
-                                <p class="text-xs text-muted">
-                                    Lowercase, no spaces
-                                </p>
-                            </div>
+                        <div class="space-y-2">
+                            <label
+                                class="block text-sm font-medium flex items-center gap-1.5"
+                            >
+                                Name
+                                <UPopover>
+                                    <UButton
+                                        icon="i-lucide-help-circle"
+                                        color="neutral"
+                                        variant="ghost"
+                                        size="xs"
+                                        class="text-muted hover:text-highlighted"
+                                    />
+                                    <template #content>
+                                        <div class="p-4 max-w-xs space-y-2">
+                                            <h4
+                                                class="font-semibold text-sm"
+                                            >
+                                                Role Name (Identifier)
+                                            </h4>
+                                            <p class="text-sm text-muted">
+                                                Technical identifier used in
+                                                code and APIs. Must be
+                                                unique, lowercase.
+                                            </p>
+                                            <UAlert
+                                                icon="i-lucide-lightbulb"
+                                                color="info"
+                                                variant="subtle"
+                                                description="Auto-generated from Display Name."
+                                                class="mt-2"
+                                            />
+                                        </div>
+                                    </template>
+                                </UPopover>
+                            </label>
+                            <UInput
+                                v-model="state.name"
+                                placeholder="team_lead"
+                                icon="i-lucide-tag"
+                                class="w-full"
+                            />
+                            <p class="text-xs text-muted">
+                                Lowercase, no spaces
+                            </p>
                         </div>
 
                         <!-- Full width description -->
@@ -519,83 +559,89 @@ async function handleSubmit() {
                             />
                         </div>
 
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div
-                                v-for="(
-                                    perms, category
-                                ) in permissionsByCategory"
-                                :key="category"
+                        <!-- Selected permissions chips -->
+                        <div
+                            v-if="state.permissions.length > 0"
+                            class="flex flex-wrap gap-1.5 mb-3"
+                        >
+                            <UBadge
+                                v-for="perm in state.permissions"
+                                :key="perm"
+                                :label="perm"
+                                color="primary"
+                                variant="subtle"
+                                size="sm"
+                                class="cursor-pointer"
+                                @click="removePermission(perm)"
                             >
-                                <UCard>
-                                    <!-- Category header with select all -->
-                                    <div
-                                        class="flex items-center justify-between mb-3"
-                                    >
-                                        <h4 class="text-sm font-semibold">
-                                            {{ category }}
-                                        </h4>
-                                        <UButton
-                                            :label="
-                                                isCategoryFullySelected(
-                                                    category,
-                                                )
-                                                    ? 'Clear'
-                                                    : 'All'
-                                            "
-                                            size="xs"
-                                            :variant="
-                                                isCategoryFullySelected(
-                                                    category,
-                                                )
-                                                    ? 'solid'
-                                                    : 'ghost'
-                                            "
-                                            :color="
-                                                isCategoryFullySelected(
-                                                    category,
-                                                )
-                                                    ? 'primary'
-                                                    : 'neutral'
-                                            "
-                                            @click="toggleCategory(category)"
-                                        />
-                                    </div>
+                                <template #trailing>
+                                    <UIcon name="i-lucide-x" class="size-3" />
+                                </template>
+                            </UBadge>
+                        </div>
 
-                                    <!-- Permission checkboxes -->
-                                    <div class="space-y-2">
-                                        <div
+                        <!-- Permission search -->
+                        <UInput
+                            v-model="permissionSearch"
+                            placeholder="Filter permissions..."
+                            icon="i-lucide-search"
+                            class="w-full mb-3"
+                            :ui="{ trailing: permissionSearch ? '' : 'hidden' }"
+                        >
+                            <template v-if="permissionSearch" #trailing>
+                                <UButton
+                                    icon="i-lucide-x"
+                                    size="xs"
+                                    color="neutral"
+                                    variant="ghost"
+                                    @click="permissionSearch = ''"
+                                />
+                            </template>
+                        </UInput>
+
+                        <!-- Permissions by category (scrollable list) -->
+                        <div
+                            class="max-h-[60vh] overflow-y-auto rounded-lg ring ring-inset ring-accented"
+                        >
+                            <template v-if="Object.keys(filteredPermissionsByCategory).length > 0">
+                                <div
+                                    v-for="(perms, category) in filteredPermissionsByCategory"
+                                    :key="category"
+                                >
+                                    <button
+                                        type="button"
+                                        class="w-full flex items-center gap-2 px-3 py-2 bg-elevated text-xs font-semibold uppercase tracking-wide text-muted sticky top-0 z-10 hover:text-default transition-colors shadow-[0_1px_0_0_var(--ui-border)]"
+                                        @click="toggleCategory(category as string)"
+                                    >
+                                        <UCheckbox
+                                            :model-value="isCategoryFullySelected(category as string)"
+                                            :indeterminate="isCategoryPartiallySelected(category as string)"
+                                            size="xs"
+                                        />
+                                        <span>{{ category }}</span>
+                                        <span class="ml-auto text-dimmed font-normal normal-case">
+                                            {{ perms.filter(p => state.permissions.includes(p.value)).length }}/{{ perms.length }}
+                                        </span>
+                                    </button>
+                                    <div>
+                                        <button
                                             v-for="perm in perms"
                                             :key="perm.value"
+                                            type="button"
+                                            class="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-elevated/50 transition-colors text-left"
+                                            @click="togglePermission(perm.value)"
                                         >
-                                            <UCheckbox
-                                                :model-value="
-                                                    state.permissions.includes(
-                                                        perm.value,
-                                                    )
-                                                "
-                                                @update:model-value="
-                                                    (checked) => {
-                                                        if (checked) {
-                                                            state.permissions =
-                                                                [
-                                                                    ...state.permissions,
-                                                                    perm.value,
-                                                                ];
-                                                        } else {
-                                                            state.permissions =
-                                                                state.permissions.filter(
-                                                                    (p) =>
-                                                                        p !==
-                                                                        perm.value,
-                                                                );
-                                                        }
-                                                    }
-                                                "
-                                                :label="perm.label"
-                                            />
-                                        </div>
+                                            <UCheckbox :model-value="state.permissions.includes(perm.value)" size="xs" />
+                                            <div class="flex-1 min-w-0">
+                                                <p class="text-sm truncate">{{ perm.label }}</p>
+                                            </div>
+                                        </button>
                                     </div>
-                                </UCard>
+                                </div>
+                            </template>
+                            <div v-else class="flex flex-col items-center gap-1 py-6 text-muted">
+                                <UIcon name="i-lucide-search-x" class="size-5" />
+                                <span class="text-sm">No permissions match "{{ permissionSearch }}"</span>
                             </div>
                         </div>
                     </div>

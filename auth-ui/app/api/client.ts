@@ -4,6 +4,8 @@
  * Wraps auth store's apiCall method for use in query functions
  */
 
+import type { ApiRequestOptions } from "~/types/http"
+
 /**
  * Create API client
  * Returns a function that makes authenticated API calls
@@ -17,7 +19,7 @@ export function createAPIClient() {
      * Make authenticated API call
      * Automatically includes auth token and context headers
      */
-    call: async <T>(endpoint: string, options?: RequestInit): Promise<T> => {
+    call: async <T>(endpoint: string, options?: ApiRequestOptions): Promise<T> => {
       return authStore.apiCall<T>(endpoint, options)
     },
 

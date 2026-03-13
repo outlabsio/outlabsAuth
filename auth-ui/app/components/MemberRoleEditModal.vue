@@ -4,6 +4,7 @@ import { rolesQueries } from "~/queries/roles";
 import { useUpdateMemberRolesMutation } from "~/queries/memberships";
 import type { EntityMember } from "~/types/membership";
 import type { Role } from "~/types/role";
+import type { UiColor } from "~/types/ui";
 
 const props = defineProps<{
     entityId: string;
@@ -13,10 +14,10 @@ const props = defineProps<{
 const open = defineModel<boolean>("open", { default: false });
 
 // Fetch roles available for this entity
-const { data: rolesData, isLoading: isLoadingRoles } = useQuery({
+const { data: rolesData, isLoading: isLoadingRoles } = useQuery(() => ({
     ...rolesQueries.list({ for_entity_id: props.entityId }, { limit: 100 }),
-    enabled: computed(() => open.value),
-});
+    enabled: open.value && !!props.entityId,
+}));
 
 // Get all available roles
 const availableRoles = computed(() => rolesData.value?.items || []);
@@ -85,7 +86,7 @@ const hasChanges = computed(() => {
 });
 
 // Mutation for updating roles
-const { mutate: updateRoles, isPending: isSubmitting } =
+const { mutate: updateRoles, isLoading: isSubmitting } =
     useUpdateMemberRolesMutation();
 
 // Submit handler
@@ -109,7 +110,7 @@ const memberDisplayName = computed(() => {
 });
 
 // Get scope badge color
-function getScopeBadgeColor(role: Role): string {
+function getScopeBadgeColor(role: Role): UiColor {
     if (role.is_global) return "info";
     if (role.scope === "entity_only") return "warning";
     return "success"; // hierarchy
@@ -124,7 +125,7 @@ function getScopeBadgeLabel(role: Role): string {
 </script>
 
 <template>
-    <UModal v-model:open="open" title="Edit Member Roles" :ui="{ width: 'sm:max-w-lg' }">
+    <UModal v-model:open="open" title="Edit Member Roles" :ui="{ content: 'sm:max-w-lg' }">
         <template #body>
             <!-- Member Info -->
             <div class="flex items-center gap-3 pb-4 mb-4 border-b border-default">

@@ -168,7 +168,7 @@ const activityStatus = computed(() => {
               <p class="text-xs text-muted">Active within the last 7 days</p>
             </div>
           </div>
-          <UBadge :color="activityStatus.is_wau ? 'blue' : 'neutral'" variant="subtle">
+          <UBadge :color="activityStatus.is_wau ? 'info' : 'neutral'" variant="subtle">
             {{ activityStatus.is_wau ? 'Active This Week' : 'Inactive' }}
           </UBadge>
         </div>

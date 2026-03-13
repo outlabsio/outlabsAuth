@@ -1,11 +1,11 @@
 <template>
-  <UModal v-model="isOpen" :ui="{ width: 'sm:max-w-md' }">
+  <UModal v-model="isOpen" :ui="{ content: 'sm:max-w-md' }">
     <UCard>
       <template #header>
         <div class="flex items-center justify-between">
           <h3 class="text-lg font-semibold">Reset User Password</h3>
           <UButton
-            color="gray"
+            color="neutral"
             variant="ghost"
             icon="i-lucide-x"
             @click="close"
@@ -72,7 +72,7 @@
       <template #footer>
         <div class="flex justify-end gap-3">
           <UButton
-            color="gray"
+            color="neutral"
             variant="soft"
             @click="close"
             :disabled="isLoading"
@@ -95,7 +95,7 @@
 </template>
 
 <script setup lang="ts">
-import type { User } from '~/types'
+import type { User } from '~/types/auth'
 
 const props = defineProps<{
   user: User | null
@@ -161,7 +161,7 @@ const onSubmit = async () => {
     toast.add({
       title: 'Password reset successful',
       description: `Password reset for ${props.user.email}`,
-      color: 'green',
+      color: 'success',
       icon: 'i-lucide-check-circle'
     })
 

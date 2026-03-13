@@ -27,6 +27,7 @@
 
 import { useQuery } from '@pinia/colada'
 import type { UseQueryOptions } from '@pinia/colada'
+import { toValue } from 'vue'
 
 /**
  * Wraps useQuery to automatically include context in query keys
@@ -38,25 +39,18 @@ export function useContextAwareQuery<TData = unknown, TError = Error>(
 ) {
   const contextStore = useContextStore()
 
-  // Wrap the query options to inject context into the key
-  const wrappedOptionsFn = () => {
+  return useQuery((() => {
     const options = optionsFn()
-    const originalKey = options.key
-
-    // Append context ID to the query key
-    // This makes the key reactive to context changes
-    const contextAwareKey = computed(() => [
-      ...(Array.isArray(originalKey) ? originalKey : [originalKey]),
-      { contextId: contextStore.selectedEntity?.id || null }
-    ])
+    const originalKey = toValue(options.key)
 
     return {
       ...options,
-      key: contextAwareKey
+      key: [
+        ...(Array.isArray(originalKey) ? originalKey : [originalKey]),
+        { contextId: contextStore.selectedEntity?.id ?? null }
+      ]
     }
-  }
-
-  return useQuery(wrappedOptionsFn)
+  }) as any)
 }
 
 /**

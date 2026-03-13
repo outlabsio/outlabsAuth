@@ -17,7 +17,7 @@ const { data: entitiesData, refetch: refetchEntities } = useQuery(
     entitiesQueries.list({}, { page: 1, limit: 500 }),
 );
 
-const { mutateAsync: createEntity, isPending } = useCreateEntityMutation();
+const { mutateAsync: createEntity, isLoading: isSubmitting } = useCreateEntityMutation();
 
 // Form state
 const state = reactive({
@@ -216,7 +216,6 @@ const isFormValid = computed(() => {
         state.name.trim() !== "" &&
         state.display_name.trim() !== "" &&
         state.slug.trim() !== "" &&
-        state.entity_class !== "" &&
         state.entity_type !== ""
     );
 });
@@ -860,13 +859,13 @@ async function handleSubmit() {
                         color="neutral"
                         variant="outline"
                         @click="open = false"
-                        :disabled="isPending"
+                    :disabled="isSubmitting"
                     />
                     <UButton
                         label="Create Entity"
                         icon="i-lucide-plus"
-                        :loading="isPending"
-                        :disabled="!isFormValid || isPending"
+                    :loading="isSubmitting"
+                    :disabled="!isFormValid || isSubmitting"
                         @click="handleSubmit"
                     />
                 </div>

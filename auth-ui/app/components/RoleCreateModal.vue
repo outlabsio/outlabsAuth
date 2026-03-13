@@ -11,9 +11,10 @@ const authStore = useAuthStore();
 const isEnterpriseRBAC = computed(() => authStore.isEnterpriseRBAC);
 
 // Fetch root entities for scope selection (EnterpriseRBAC only)
-const { data: entitiesData } = useQuery(
-    entitiesQueries.list({ root_only: true }, { page: 1, limit: 100 }),
-);
+const { data: entitiesData } = useQuery(() => ({
+    ...entitiesQueries.list({ root_only: true }, { page: 1, limit: 100 }),
+    enabled: isEnterpriseRBAC.value,
+}));
 
 // Get available permissions from auth config (dynamically loaded from backend)
 const availablePermissions = computed(() => authStore.availablePermissions);

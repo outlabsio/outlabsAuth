@@ -68,6 +68,7 @@ export const useUserStore = defineStore("user", () => {
       state.isLoadingPermissions ||
       state.isLoadingMemberships,
   );
+  const isLoadingRoles = computed(() => state.isLoadingRoles);
   const isLoadingMemberships = computed(() => state.isLoadingMemberships);
   const error = computed(() => state.error);
 
@@ -190,7 +191,7 @@ export const useUserStore = defineStore("user", () => {
       const toast = useToast();
       toast.add({
         title: "Error assigning role",
-        description: state.error,
+        description: state.error ?? undefined,
         color: "error",
       });
 
@@ -231,7 +232,7 @@ export const useUserStore = defineStore("user", () => {
       const toast = useToast();
       toast.add({
         title: "Error removing role",
-        description: state.error,
+        description: state.error ?? undefined,
         color: "error",
       });
 
@@ -247,9 +248,8 @@ export const useUserStore = defineStore("user", () => {
     userId: string,
     data: {
       email?: string;
-      full_name?: string;
-      is_active?: boolean;
-      metadata?: Record<string, any>;
+      first_name?: string;
+      last_name?: string;
     },
   ): Promise<boolean> => {
     try {
@@ -278,7 +278,7 @@ export const useUserStore = defineStore("user", () => {
       const toast = useToast();
       toast.add({
         title: "Error updating user",
-        description: state.error,
+        description: state.error ?? undefined,
         color: "error",
       });
 
@@ -333,7 +333,7 @@ export const useUserStore = defineStore("user", () => {
       const toast = useToast();
       toast.add({
         title: "Error changing password",
-        description: state.error,
+        description: state.error ?? undefined,
         color: "error",
       });
 
@@ -409,7 +409,7 @@ export const useUserStore = defineStore("user", () => {
       const toast = useToast();
       toast.add({
         title: "Error adding to entity",
-        description: state.error,
+        description: state.error ?? undefined,
         color: "error",
       });
 
@@ -449,7 +449,7 @@ export const useUserStore = defineStore("user", () => {
       const toast = useToast();
       toast.add({
         title: "Error removing from entity",
-        description: state.error,
+        description: state.error ?? undefined,
         color: "error",
       });
 
@@ -485,6 +485,7 @@ export const useUserStore = defineStore("user", () => {
     userPermissions,
     userMemberships,
     isLoading,
+    isLoadingRoles,
     isLoadingMemberships,
     error,
 

@@ -220,7 +220,7 @@ export function useMoveEntityMutation() {
 
 /**
  * Delete Entity Mutation
- * With optimistic updates and hierarchical cache invalidation
+ * Handles hierarchical cache invalidation after deletion
  */
 export function useDeleteEntityMutation() {
   const queryClient = useQueryCache();

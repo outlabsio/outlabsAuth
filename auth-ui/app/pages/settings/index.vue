@@ -1,6 +1,11 @@
 <script setup lang="ts">
 const authStore = useAuthStore()
 const currentUser = computed(() => authStore.currentUser)
+const runtimeConfig = useRuntimeConfig()
+const uiVersion = computed(() => runtimeConfig.public.uiVersion)
+const authLibraryVersion = computed(() => runtimeConfig.public.authLibraryVersion)
+const releaseStage = computed(() => runtimeConfig.public.releaseStage)
+const apiBaseUrl = computed(() => runtimeConfig.public.apiBaseUrl)
 </script>
 
 <template>
@@ -148,8 +153,20 @@ const currentUser = computed(() => authStore.currentUser)
 
           <div class="space-y-4">
             <div>
-              <label class="text-sm font-medium text-muted">Version</label>
-              <p class="mt-1 text-base">OutlabsAuth v1.0.0</p>
+              <label class="text-sm font-medium text-muted">Library Version</label>
+              <p class="mt-1 text-base">OutlabsAuth {{ authLibraryVersion }}</p>
+            </div>
+
+            <div>
+              <label class="text-sm font-medium text-muted">Admin UI Version</label>
+              <p class="mt-1 text-base">{{ uiVersion }}</p>
+            </div>
+
+            <div>
+              <label class="text-sm font-medium text-muted">Release Stage</label>
+              <UBadge color="error" variant="subtle" class="mt-1">
+                {{ releaseStage }}
+              </UBadge>
             </div>
 
             <div>
@@ -162,7 +179,7 @@ const currentUser = computed(() => authStore.currentUser)
             <div>
               <label class="text-sm font-medium text-muted">API Endpoint</label>
               <code class="block mt-1 text-xs bg-neutral-100 dark:bg-neutral-800 px-2 py-1 rounded">
-                http://localhost:8000
+                {{ apiBaseUrl }}
               </code>
             </div>
           </div>

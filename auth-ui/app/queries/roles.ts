@@ -122,7 +122,6 @@ export function useUpdateRoleMutation() {
 
 /**
  * Delete Role Mutation
- * With optimistic updates for instant UI feedback
  */
 export function useDeleteRoleMutation() {
   const queryClient = useQueryCache()

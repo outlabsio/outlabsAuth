@@ -137,7 +137,7 @@ export function createPermissionsAPI() {
     ): Promise<ConditionGroup> {
       return client.call<ConditionGroup>(`/v1/permissions/${permissionId}/condition-groups`, {
         method: 'POST',
-        body: JSON.stringify(data)
+        body: data
       })
     },
     async updateConditionGroup(
@@ -147,7 +147,7 @@ export function createPermissionsAPI() {
     ): Promise<ConditionGroup> {
       return client.call<ConditionGroup>(`/v1/permissions/${permissionId}/condition-groups/${groupId}`, {
         method: 'PATCH',
-        body: JSON.stringify(data)
+        body: data
       })
     },
     async deleteConditionGroup(permissionId: string, groupId: string): Promise<void> {
@@ -168,7 +168,7 @@ export function createPermissionsAPI() {
     ): Promise<AbacCondition> {
       return client.call<AbacCondition>(`/v1/permissions/${permissionId}/conditions`, {
         method: 'POST',
-        body: JSON.stringify(data)
+        body: data
       })
     },
     async updateCondition(
@@ -178,7 +178,7 @@ export function createPermissionsAPI() {
     ): Promise<AbacCondition> {
       return client.call<AbacCondition>(`/v1/permissions/${permissionId}/conditions/${conditionId}`, {
         method: 'PATCH',
-        body: JSON.stringify(data)
+        body: data
       })
     },
     async deleteCondition(permissionId: string, conditionId: string): Promise<void> {
