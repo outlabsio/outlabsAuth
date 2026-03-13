@@ -23,6 +23,7 @@ Looking for usage documentation? See **[docs-library/](../docs-library/)** inste
 ### Operational
 - **SECURITY.md** - Security hardening requirements
 - **DEPLOYMENT_GUIDE.md** - Production deployment specifications
+- **PRIVATE_RELEASE.md** - Private package release workflow for `uv`
 - **TESTING_GUIDE.md** - Testing strategy and coverage goals
 
 ### Extensions

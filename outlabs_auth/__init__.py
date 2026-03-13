@@ -12,9 +12,10 @@ Quick Start:
     >>> await auth.initialize()
 """
 
-__version__ = "2.0.0"
 __author__ = "Outlabs"
-__license__ = "MIT"
+__license__ = "Proprietary"
+
+from outlabs_auth._version import __release_stage__, __version__
 
 # Database infrastructure
 # Core Auth Classes
@@ -122,6 +123,7 @@ from outlabs_auth.services import (
 
 __all__ = [
     # Version
+    "__release_stage__",
     "__version__",
 
     # Core Auth Classes

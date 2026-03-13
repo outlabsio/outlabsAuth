@@ -24,6 +24,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel
 
+from outlabs_auth._version import __version__
+
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -36,23 +38,34 @@ def normalize_database_url(url: str) -> str:
     return url
 
 
-def _resolve_alembic_ini() -> Path:
+def _resolve_alembic_ini(*, require_local: bool = False) -> Path:
     """
-    Resolve alembic.ini from package repository root first, then cwd.
+    Resolve alembic.ini for either installed-package usage or local maintenance.
 
-    Library consumers may call run_migrations() from another project that also has
-    an alembic.ini; we must prefer OutlabsAuth's migration config.
+    Installed consumers should use the bundled package config. Repository
+    maintainers can require a local config when creating revisions.
     """
-    package_root = Path(__file__).resolve().parents[1]
-    bundled_alembic = package_root / "alembic.ini"
+    package_dir = Path(__file__).resolve().parent
+    package_root = package_dir.parent
+    bundled_alembic = package_dir / "alembic.ini"
+    repo_alembic = package_root / "alembic.ini"
+    cwd_alembic = Path.cwd() / "alembic.ini"
+
+    if require_local:
+        if repo_alembic.exists():
+            return repo_alembic
+        if cwd_alembic.exists():
+            return cwd_alembic
+        raise FileNotFoundError("Local alembic.ini not found. Expected in repository root or current working directory.")
+
     if bundled_alembic.exists():
         return bundled_alembic
-
-    cwd_alembic = Path.cwd() / "alembic.ini"
+    if repo_alembic.exists():
+        return repo_alembic
     if cwd_alembic.exists():
         return cwd_alembic
 
-    raise FileNotFoundError("alembic.ini not found. Expected in current working directory or package root.")
+    raise FileNotFoundError("alembic.ini not found. Expected in package, repository root, or current working directory.")
 
 
 def _validate_schema_name(schema: Optional[str]) -> Optional[str]:
@@ -85,6 +98,24 @@ def _resolve_script_location(alembic_ini: Path) -> Optional[str]:
     return None
 
 
+def _load_alembic_config(
+    *,
+    revision_database_url: Optional[str] = None,
+    require_local: bool = False,
+) -> "Config":
+    """Load Alembic config and normalize script location for any install mode."""
+    from alembic.config import Config
+
+    alembic_ini = _resolve_alembic_ini(require_local=require_local)
+    alembic_cfg = Config(str(alembic_ini))
+    if revision_database_url:
+        alembic_cfg.set_main_option("sqlalchemy.url", revision_database_url)
+    script_location = _resolve_script_location(alembic_ini)
+    if script_location:
+        alembic_cfg.set_main_option("script_location", script_location)
+    return alembic_cfg
+
+
 async def run_migrations(
     database_url: str,
     revision: str = "head",
@@ -96,8 +127,6 @@ async def run_migrations(
     This helper is safe to call from running event loops because Alembic runs
     in a background thread.
     """
-    from alembic.config import Config
-
     from alembic import command
 
     normalized_url = normalize_database_url(database_url)
@@ -112,12 +141,7 @@ async def run_migrations(
             await engine.dispose()
 
     def _upgrade() -> None:
-        alembic_ini = _resolve_alembic_ini()
-        alembic_cfg = Config(str(alembic_ini))
-        alembic_cfg.set_main_option("sqlalchemy.url", normalized_url)
-        script_location = _resolve_script_location(alembic_ini)
-        if script_location:
-            alembic_cfg.set_main_option("script_location", script_location)
+        alembic_cfg = _load_alembic_config(revision_database_url=normalized_url)
 
         previous_database_url = os.environ.get("DATABASE_URL")
         previous_schema = os.environ.get("OUTLABS_AUTH_SCHEMA")
@@ -154,7 +178,7 @@ def get_database_url() -> str:
 
 
 @click.group()
-@click.version_option(version="2.0.0", prog_name="outlabs-auth")
+@click.version_option(version=__version__, prog_name="outlabs-auth")
 def main():
     """OutlabsAuth CLI - Database management and migrations."""
     pass
@@ -164,20 +188,14 @@ def main():
 @click.option("--revision", default="head", help="Target revision (default: head)")
 def migrate(revision: str):
     """Run database migrations to specified revision."""
-    from alembic.config import Config
-
-    from alembic import command
-
-    # Find alembic.ini
-    alembic_ini = Path("alembic.ini")
-    if not alembic_ini.exists():
-        click.echo("Error: alembic.ini not found. Copy from alembic.ini.template", err=True)
-        sys.exit(1)
-
-    alembic_cfg = Config(str(alembic_ini))
-
     click.echo(f"Running migrations to {revision}...")
-    command.upgrade(alembic_cfg, revision)
+    asyncio.run(
+        run_migrations(
+            get_database_url(),
+            revision=revision,
+            schema=os.environ.get("OUTLABS_AUTH_SCHEMA"),
+        )
+    )
     click.echo("Done!")
 
 
@@ -243,16 +261,8 @@ def drop_db():
 @main.command()
 def current():
     """Show current migration revision."""
-    from alembic.config import Config
-
     from alembic import command
-
-    alembic_ini = Path("alembic.ini")
-    if not alembic_ini.exists():
-        click.echo("Error: alembic.ini not found", err=True)
-        sys.exit(1)
-
-    alembic_cfg = Config(str(alembic_ini))
+    alembic_cfg = _load_alembic_config(revision_database_url=get_database_url())
     command.current(alembic_cfg)
 
 
@@ -260,16 +270,8 @@ def current():
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed history")
 def history(verbose: bool):
     """Show migration history."""
-    from alembic.config import Config
-
     from alembic import command
-
-    alembic_ini = Path("alembic.ini")
-    if not alembic_ini.exists():
-        click.echo("Error: alembic.ini not found", err=True)
-        sys.exit(1)
-
-    alembic_cfg = Config(str(alembic_ini))
+    alembic_cfg = _load_alembic_config()
     command.history(alembic_cfg, verbose=verbose)
 
 
@@ -278,16 +280,8 @@ def history(verbose: bool):
 @click.option("--autogenerate", is_flag=True, help="Auto-generate from model changes")
 def revision(message: str, autogenerate: bool):
     """Create a new migration revision."""
-    from alembic.config import Config
-
     from alembic import command
-
-    alembic_ini = Path("alembic.ini")
-    if not alembic_ini.exists():
-        click.echo("Error: alembic.ini not found", err=True)
-        sys.exit(1)
-
-    alembic_cfg = Config(str(alembic_ini))
+    alembic_cfg = _load_alembic_config(require_local=True)
 
     click.echo(f"Creating migration: {message}")
     command.revision(alembic_cfg, message=message, autogenerate=autogenerate)
@@ -297,16 +291,8 @@ def revision(message: str, autogenerate: bool):
 @main.command()
 def heads():
     """Show current available heads."""
-    from alembic.config import Config
-
     from alembic import command
-
-    alembic_ini = Path("alembic.ini")
-    if not alembic_ini.exists():
-        click.echo("Error: alembic.ini not found", err=True)
-        sys.exit(1)
-
-    alembic_cfg = Config(str(alembic_ini))
+    alembic_cfg = _load_alembic_config()
     command.heads(alembic_cfg)
 
 
@@ -314,18 +300,10 @@ def heads():
 @click.option("--revision", "-r", default="-1", help="Revision to downgrade to")
 def downgrade(revision: str):
     """Downgrade to a previous revision."""
-    from alembic.config import Config
-
     from alembic import command
 
-    alembic_ini = Path("alembic.ini")
-    if not alembic_ini.exists():
-        click.echo("Error: alembic.ini not found", err=True)
-        sys.exit(1)
-
-    alembic_cfg = Config(str(alembic_ini))
-
     click.echo(f"Downgrading to {revision}...")
+    alembic_cfg = _load_alembic_config(revision_database_url=get_database_url())
     command.downgrade(alembic_cfg, revision)
     click.echo("Done!")
 
