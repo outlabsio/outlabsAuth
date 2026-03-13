@@ -230,7 +230,7 @@ async def reset_database():
         users_data = [
             {
                 "email": "admin@test.com",
-                "password": "Test123!!",
+                "password": "Testpass1",
                 "first_name": "Admin",
                 "last_name": "User",
                 "role": "admin",
@@ -238,7 +238,7 @@ async def reset_database():
             },
             {
                 "email": "editor@test.com",
-                "password": "Test123!!",
+                "password": "Testpass1",
                 "first_name": "Editor",
                 "last_name": "User",
                 "role": "editor",
@@ -246,7 +246,7 @@ async def reset_database():
             },
             {
                 "email": "writer@test.com",
-                "password": "Test123!!",
+                "password": "Testpass1",
                 "first_name": "Writer",
                 "last_name": "User",
                 "role": "writer",

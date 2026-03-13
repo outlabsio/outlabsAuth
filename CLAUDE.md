@@ -240,9 +240,9 @@ python reset_test_env.py
 
 | Email | Password | Role | Permissions |
 |-------|----------|------|-------------|
-| `admin@test.com` | `Test123!!` | Admin | Full system access (user:*, role:*, post:*, comment:*) |
-| `editor@test.com` | `Test123!!` | Editor | Content management (post:*, comment:*) |
-| `writer@test.com` | `Test123!!` | Writer | Content creation (post:read/create/update, comment:create) |
+| `admin@test.com` | `Testpass1` | Admin | Full system access (user:*, role:*, post:*, comment:*) |
+| `editor@test.com` | `Testpass1` | Editor | Content management (post:*, comment:*) |
+| `writer@test.com` | `Testpass1` | Writer | Content creation (post:read/create/update, comment:create) |
 
 **When to use this:**
 - 🔄 After breaking auth/permissions during development
@@ -636,7 +636,7 @@ cd auth-ui
 bun run dev
 
 # Login at http://localhost:3000
-# admin@test.com / Test123!!
+# admin@test.com / Testpass1
 ```
 
 ### Full Documentation

@@ -581,7 +581,7 @@ async def reset_database():
         users_data = [
             {
                 "email": "admin@acme.com",
-                "password": "Test123!!",
+                "password": "Testpass1",
                 "first_name": "System",
                 "last_name": "Admin",
                 "role": "admin",
@@ -590,7 +590,7 @@ async def reset_database():
             },
             {
                 "email": "manager@sf.acme.com",
-                "password": "Test123!!",
+                "password": "Testpass1",
                 "first_name": "Sarah",
                 "last_name": "Manager",
                 "role": "office_manager",
@@ -599,7 +599,7 @@ async def reset_database():
             },
             {
                 "email": "lead@sf.acme.com",
-                "password": "Test123!!",
+                "password": "Testpass1",
                 "first_name": "Tom",
                 "last_name": "TeamLead",
                 "role": "team_lead",
@@ -608,7 +608,7 @@ async def reset_database():
             },
             {
                 "email": "agent@sf.acme.com",
-                "password": "Test123!!",
+                "password": "Testpass1",
                 "first_name": "Jane",
                 "last_name": "Agent",
                 "role": "agent",
