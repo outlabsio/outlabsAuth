@@ -130,7 +130,6 @@ export function useUpdateUserMutation() {
 
 /**
  * Delete User Mutation
- * With optimistic updates for instant UI feedback
  */
 export function useDeleteUserMutation() {
   const queryClient = useQueryCache()
@@ -157,6 +156,71 @@ export function useDeleteUserMutation() {
       toast.add({
         title: 'Error deleting user',
         description: error.message || 'Failed to delete user',
+        color: 'error'
+      })
+    },
+  })
+}
+
+/**
+ * Invite User Mutation
+ * Creates an INVITED user and invalidates user lists
+ */
+export function useInviteUserMutation() {
+  const queryClient = useQueryCache()
+  const toast = useToast()
+
+  return useMutation({
+    mutation: async (data: {
+      email: string
+      first_name?: string
+      last_name?: string
+      role_ids?: string[]
+      entity_id?: string
+    }) => {
+      const usersAPI = createUsersAPI()
+      return usersAPI.inviteUser(data)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ key: USER_KEYS.lists() })
+      toast.add({
+        title: 'Invitation sent',
+        description: 'The user has been invited successfully',
+        color: 'success'
+      })
+    },
+    onError: (error: any) => {
+      toast.add({
+        title: 'Error sending invitation',
+        description: error.message || 'Failed to invite user',
+        color: 'error'
+      })
+    },
+  })
+}
+
+/**
+ * Resend Invite Mutation
+ */
+export function useResendInviteMutation() {
+  const toast = useToast()
+
+  return useMutation({
+    mutation: async (userId: string) => {
+      const usersAPI = createUsersAPI()
+      return usersAPI.resendInvite(userId)
+    },
+    onSuccess: () => {
+      toast.add({
+        title: 'Invitation resent',
+        description: 'The invitation has been resent successfully',
+        color: 'success'
+      })
+    },
+    onError: (error: any) => {
+      toast.add({
+        title: 'Error resending invitation',
+        description: error.message || 'Failed to resend invitation',
         color: 'error'
       })
     },

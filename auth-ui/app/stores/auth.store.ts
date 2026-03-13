@@ -13,6 +13,7 @@ import type {
   SystemStatus,
   AuthConfig,
 } from "~/types/auth";
+import type { ApiRequestOptions, JsonRequestBody } from "~/types/http";
 import { normalizeAuthApiPrefix, resolveAuthEndpoint } from "~/utils/auth-endpoint";
 
 const ACCESS_TOKEN_KEY = "outlabs_auth_access_token";
@@ -36,6 +37,7 @@ export const useAuthStore = defineStore("auth", () => {
     api_keys: true,
     user_status: true,
     activity_tracking: true,
+    invitations: true,
   };
 
   // State
@@ -73,6 +75,23 @@ export const useAuthStore = defineStore("auth", () => {
   const availablePermissions = computed(
     () => state.config?.available_permissions || [],
   );
+
+  const isJsonRequestBody = (body: unknown): body is JsonRequestBody => {
+    if (body == null) {
+      return false;
+    }
+
+    if (Array.isArray(body)) {
+      return true;
+    }
+
+    if (typeof body !== "object") {
+      return false;
+    }
+
+    const prototype = Object.getPrototypeOf(body);
+    return prototype === Object.prototype || prototype === null;
+  };
 
   /**
    * Initialize auth state from localStorage
@@ -139,31 +158,41 @@ export const useAuthStore = defineStore("auth", () => {
    */
   const apiCall = async <T>(
     endpoint: string,
-    options: RequestInit & { baseURL?: string } = {},
+    options: ApiRequestOptions = {},
   ): Promise<T> => {
     const contextStore = useContextStore();
-    const baseURL = options.baseURL || config.public.apiBaseUrl;
+    const { baseURL = config.public.apiBaseUrl, ...fetchOptions } = options;
 
     // Get context headers if available
     const contextHeaders = contextStore?.getContextHeaders() || {};
 
     const makeRequest = async (token: string | null): Promise<T> => {
-      const headers: HeadersInit = {
-        "Content-Type": "application/json",
-        ...contextHeaders,
-        ...options.headers,
-        ...(token && { Authorization: `Bearer ${token}` }),
-      };
+      const { body, ...requestInitOptions } = fetchOptions;
+      const headers = new Headers(contextHeaders);
+      if (fetchOptions.headers) {
+        new Headers(fetchOptions.headers).forEach((value, key) => {
+          headers.set(key, value);
+        });
+      }
+      if (token) {
+        headers.set("Authorization", `Bearer ${token}`);
+      }
 
-      // Stringify body if it's an object (required for JSON requests)
+      const isJsonBody = isJsonRequestBody(body);
+      if (isJsonBody && !headers.has("Content-Type")) {
+        headers.set("Content-Type", "application/json");
+      }
+
       const requestOptions: RequestInit = {
-        ...options,
+        ...requestInitOptions,
         headers,
         credentials: "include", // Important for httpOnly cookies
       };
 
-      if (requestOptions.body && typeof requestOptions.body === "object") {
-        requestOptions.body = JSON.stringify(requestOptions.body);
+      if (isJsonBody) {
+        requestOptions.body = JSON.stringify(body);
+      } else if (body !== undefined) {
+        requestOptions.body = body;
       }
 
       const response = await fetch(
@@ -400,6 +429,7 @@ export const useAuthStore = defineStore("auth", () => {
 
       state.config = {
         ...configData,
+        features: { ...defaultFeatures, ...configData.features },
         available_permissions: transformedPermissions,
       };
       state.isConfigLoaded = true;

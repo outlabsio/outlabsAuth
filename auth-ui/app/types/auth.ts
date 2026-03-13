@@ -74,6 +74,7 @@ export interface AuthConfig {
     api_keys: boolean;
     user_status: boolean;
     activity_tracking: boolean;
+    invitations: boolean;
   };
   available_permissions: PermissionOption[];
 }

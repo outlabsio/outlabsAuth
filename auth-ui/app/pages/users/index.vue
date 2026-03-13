@@ -3,8 +3,9 @@ import type { TableColumn } from "@nuxt/ui";
 import type { Row } from "@tanstack/table-core";
 import { getPaginationRowModel } from "@tanstack/table-core";
 import type { User } from "~/types/auth";
+import type { UiColor } from "~/types/ui";
 import { useQuery } from "@pinia/colada";
-import { usersQueries, useDeleteUserMutation } from "~/queries/users";
+import { usersQueries, useDeleteUserMutation, useResendInviteMutation } from "~/queries/users";
 
 definePageMeta({
     layout: "default",
@@ -17,13 +18,15 @@ const UDropdownMenu = resolveComponent("UDropdownMenu");
 const UCheckbox = resolveComponent("UCheckbox");
 
 const usersStore = useUsersStore();
+const authStore = useAuthStore();
 const toast = useToast();
 const table = useTemplateRef("table");
 
 // State
 const search = ref("");
-const statusFilter = ref<"all" | "active" | "suspended" | "banned">("all");
+const statusFilter = ref<"all" | "active" | "invited" | "suspended" | "banned">("all");
 const showCreateModal = ref(false);
+const showInviteModal = ref(false);
 const columnFilters = ref([{ id: "email", value: "" }]);
 const columnVisibility = ref();
 const rowSelection = ref({});
@@ -77,8 +80,14 @@ const usersErrorMessage = computed(() => {
 
 // Mutations
 const { mutate: deleteUser } = useDeleteUserMutation();
+const { mutate: resendInvite } = useResendInviteMutation();
 
-const userActionConfirmMeta = computed(() => {
+const userActionConfirmMeta = computed<{
+    title: string;
+    description: string;
+    confirmLabel: string;
+    confirmColor: UiColor;
+}>(() => {
     const name =
         pendingUser.value?.first_name ||
         pendingUser.value?.full_name ||
@@ -132,7 +141,6 @@ async function confirmUserAction() {
                 description: `${pendingUser.value.first_name || pendingUser.value.email} has been banned.`,
             });
         } else {
-            // Uses optimistic update mutation - UI updates instantly
             await deleteUser(pendingUser.value.id);
         }
 
@@ -185,7 +193,21 @@ function getRowItems(row: Row<User>) {
             type: "separator",
         },
         // Status actions based on current user status
-        ...(row.original.status === "active"
+        ...(row.original.status === "invited"
+            ? [
+                  {
+                      label: "Resend invite",
+                      icon: "i-lucide-send",
+                      onSelect: async () => {
+                          try {
+                              await resendInvite(row.original.id);
+                          } catch {
+                              // Error handled by mutation
+                          }
+                      },
+                  },
+              ]
+            : row.original.status === "active"
             ? [
                   {
                       label: "Suspend user",
@@ -315,8 +337,9 @@ const columns: TableColumn<User>[] = [
         accessorKey: "status",
         header: "Status",
         cell: ({ row }) => {
-            const statusColors: Record<string, string> = {
+            const statusColors: Record<string, UiColor> = {
                 active: "success",
+                invited: "info",
                 suspended: "warning",
                 banned: "error",
                 deleted: "neutral",
@@ -384,12 +407,22 @@ const columns: TableColumn<User>[] = [
                 </template>
 
                 <template #right>
-                    <UButton
-                        label="Create User"
-                        icon="i-lucide-user-plus"
-                        color="primary"
-                        @click="showCreateModal = true"
-                    />
+                    <div class="flex items-center gap-2">
+                        <UButton
+                            v-if="authStore.features.invitations"
+                            label="Invite User"
+                            icon="i-lucide-send"
+                            color="neutral"
+                            variant="outline"
+                            @click="showInviteModal = true"
+                        />
+                        <UButton
+                            label="Create User"
+                            icon="i-lucide-user-plus"
+                            color="primary"
+                            @click="showCreateModal = true"
+                        />
+                    </div>
                 </template>
             </UDashboardNavbar>
 
@@ -410,6 +443,7 @@ const columns: TableColumn<User>[] = [
                         :items="[
                             { label: 'All', value: 'all' },
                             { label: 'Active', value: 'active' },
+                            { label: 'Invited', value: 'invited' },
                             { label: 'Suspended', value: 'suspended' },
                             { label: 'Banned', value: 'banned' },
                         ]"
@@ -480,6 +514,9 @@ const columns: TableColumn<User>[] = [
 
     <!-- Create User Modal -->
     <UserCreateModal v-model:open="showCreateModal" />
+
+    <!-- Invite User Modal -->
+    <UserInviteModal v-model:open="showInviteModal" />
 
     <ConfirmActionModal
         v-model:open="showUserActionConfirm"

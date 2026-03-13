@@ -22,7 +22,7 @@ export function createUsersAPI() {
     ): Promise<PaginatedResponse<User>> {
       const queryString = client.buildQueryString({
         search: filters.search,
-        is_active: filters.is_active,
+        status: filters.status,
         is_superuser: filters.is_superuser,
         entity_id: filters.entity_id,
         page: params.page,
@@ -47,7 +47,7 @@ export function createUsersAPI() {
     async createUser(data: CreateUserData): Promise<User> {
       return client.call<User>('/v1/users', {
         method: 'POST',
-        body: JSON.stringify(data)
+        body: data
       })
     },
 
@@ -57,7 +57,7 @@ export function createUsersAPI() {
     async updateUser(userId: string, data: UpdateUserData): Promise<User> {
       return client.call<User>(`/v1/users/${userId}`, {
         method: 'PATCH',
-        body: JSON.stringify(data)
+        body: data
       })
     },
 
@@ -73,6 +73,31 @@ export function createUsersAPI() {
     /**
      * Change user password
      */
+    /**
+     * Invite a user by email
+     */
+    async inviteUser(data: {
+      email: string
+      first_name?: string
+      last_name?: string
+      role_ids?: string[]
+      entity_id?: string
+    }): Promise<User> {
+      return client.call<User>('/v1/auth/invite', {
+        method: 'POST',
+        body: data
+      })
+    },
+
+    /**
+     * Resend invitation to an INVITED user
+     */
+    async resendInvite(userId: string): Promise<User> {
+      return client.call<User>(`/v1/users/${userId}/resend-invite`, {
+        method: 'POST'
+      })
+    },
+
     async changePassword(
       userId: string,
       currentPassword: string,
@@ -84,18 +109,18 @@ export function createUsersAPI() {
       if (isSelfChange) {
         return client.call<void>('/v1/users/me/change-password', {
           method: 'POST',
-          body: JSON.stringify({
+          body: {
             current_password: currentPassword,
             new_password: newPassword
-          })
+          }
         })
       }
 
       return client.call<void>(`/v1/users/${userId}/password`, {
         method: 'PATCH',
-        body: JSON.stringify({
+        body: {
           new_password: newPassword
-        })
+        }
       })
     }
   }
