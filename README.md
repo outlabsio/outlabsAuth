@@ -71,7 +71,7 @@ dependencies = ["outlabs-auth"]
 outlabs-auth = { git = "ssh://git@github.com/<org>/outlabsAuth.git", tag = "v0.1.0a1" }
 ```
 
-See [docs/PRIVATE_RELEASE.md](./docs/PRIVATE_RELEASE.md) for the release workflow.
+See [docs/PRIVATE_RELEASE.md](./docs/PRIVATE_RELEASE.md) for the release workflow. Run `uv run python scripts/release_version.py check` to verify the library version, UI version, and release docs stay aligned before you tag a release.
 
 ### Development Setup
 

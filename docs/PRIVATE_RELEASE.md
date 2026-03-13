@@ -4,11 +4,15 @@ This package is intended for private distribution across internal projects.
 
 ## Release Checklist
 
-1. Update the library version in `outlabs_auth/_version.py`.
-2. Update the admin UI version and linked library version in `auth-ui/package.json`.
-3. Run the release validation commands:
-   - `uv run pytest tests/unit/test_release_packaging.py`
+1. Set the new release version:
+   - `uv run python scripts/release_version.py set X.Y.ZaN`
+   - Use `X.Y.Z` for a stable release, `X.Y.ZaN` for alpha, `X.Y.ZbN` for beta, and `X.Y.ZrcN` for release candidates.
+2. Run the release validation commands locally:
+   - `uv run python scripts/release_version.py check`
+   - `uv run --extra test python -m pytest tests/unit/test_release_packaging.py -q`
    - `uv build --no-sources`
+   - `cd auth-ui && bun ci && bun run build`
+3. Push the branch and wait for the `Release Readiness` GitHub Actions workflow to pass.
 4. Verify the wheel contains:
    - `outlabs_auth/alembic.ini`
    - `outlabs_auth/migrations/`
@@ -22,7 +26,7 @@ Add the private index to `pyproject.toml` in consuming projects:
 
 ```toml
 [project]
-dependencies = ["outlabs-auth>=0.1.0a1,<0.2"]
+dependencies = ["outlabs-auth>=X.Y.ZaN,<X.(Y+1)"]  # Example: >=0.1.0a1,<0.2
 
 [tool.uv.sources]
 outlabs-auth = { index = "outlabs-private" }
@@ -51,7 +55,7 @@ If you are not ready to operate a private index yet, pin a Git tag instead:
 dependencies = ["outlabs-auth"]
 
 [tool.uv.sources]
-outlabs-auth = { git = "ssh://git@github.com/<org>/outlabsAuth.git", tag = "v0.1.0a1" }
+outlabs-auth = { git = "ssh://git@github.com/<org>/outlabsAuth.git", tag = "vX.Y.ZaN" }
 ```
 
 This is acceptable for the first few projects, but a private index is the better
