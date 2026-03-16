@@ -192,6 +192,11 @@ All implementations include these standardized routes:
 
 #### User, Role, Membership, Permission Management
 - Full CRUD for users, roles, memberships
+- Membership lifecycle controls:
+  - add entity memberships with scoped roles
+  - suspend one entity membership without suspending the whole account
+  - apply membership validity windows (`valid_from`, `valid_until`)
+  - remove one entity membership with audit-preserving soft revoke
 - Permission checking endpoints
 - See Swagger UI for complete list
 

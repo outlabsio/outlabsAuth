@@ -663,15 +663,7 @@ def get_users_router(
                     resent_by=obs.user_id,
                 )
 
-            return UserResponse(
-                id=str(user.id),
-                email=user.email,
-                first_name=user.first_name,
-                last_name=user.last_name,
-                status=_get_status_value(user.status),
-                email_verified=user.email_verified,
-                is_superuser=user.is_superuser,
-            )
+            return build_user_response(user)
 
         except HTTPException:
             raise

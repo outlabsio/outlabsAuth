@@ -75,6 +75,8 @@ class MembershipService(BaseService[EntityMembership]):
         joined_by_id: Optional[UUID] = None,
         valid_from: Optional[datetime] = None,
         valid_until: Optional[datetime] = None,
+        status: MembershipStatus = MembershipStatus.ACTIVE,
+        reason: Optional[str] = None,
         skip_auto_assign: bool = False,
     ) -> EntityMembership:
         """
@@ -91,6 +93,8 @@ class MembershipService(BaseService[EntityMembership]):
             joined_by_id: Optional user ID who added the member
             valid_from: Optional start date for membership
             valid_until: Optional end date for membership
+            status: Initial membership status (active or suspended)
+            reason: Optional status reason (used for suspended memberships)
             skip_auto_assign: If True, don't auto-assign roles (used for retroactive assignment)
 
         Returns:
@@ -105,28 +109,31 @@ class MembershipService(BaseService[EntityMembership]):
         start_time = time.perf_counter()
         role_ids = role_ids or []
 
+        if valid_from and valid_until and valid_until < valid_from:
+            raise InvalidInputError(
+                message="valid_until must be after valid_from",
+                details={
+                    "entity_id": str(entity_id),
+                    "user_id": str(user_id),
+                },
+            )
+
         # Validate entity exists
         entity = await session.get(Entity, entity_id)
         if not entity:
-            raise EntityNotFoundError(
-                message="Entity not found", details={"entity_id": str(entity_id)}
-            )
+            raise EntityNotFoundError(message="Entity not found", details={"entity_id": str(entity_id)})
 
         # Validate user exists
         user = await session.get(User, user_id)
         if not user:
-            raise UserNotFoundError(
-                message="User not found", details={"user_id": str(user_id)}
-            )
+            raise UserNotFoundError(message="User not found", details={"user_id": str(user_id)})
 
         # Validate explicitly requested roles exist
         roles = []
         for role_id in role_ids:
             role = await session.get(Role, role_id)
             if not role:
-                raise RoleNotFoundError(
-                    message="Role not found", details={"role_id": str(role_id)}
-                )
+                raise RoleNotFoundError(message="Role not found", details={"role_id": str(role_id)})
             roles.append(role)
 
         # Get the root entity for this entity using closure table
@@ -150,9 +157,7 @@ class MembershipService(BaseService[EntityMembership]):
 
         # Get auto-assigned roles for this entity (unless skipped)
         if not skip_auto_assign:
-            auto_roles = await self._get_auto_assigned_roles_for_entity(
-                session, entity_id
-            )
+            auto_roles = await self._get_auto_assigned_roles_for_entity(session, entity_id)
             # Merge auto-assigned roles with explicitly requested roles (avoiding duplicates)
             auto_role_ids = {r.id for r in auto_roles}
             explicit_role_ids = {r.id for r in roles}
@@ -162,18 +167,14 @@ class MembershipService(BaseService[EntityMembership]):
 
         # Validate each role is available for this entity
         for role in roles:
-            if not await self._is_role_available_for_entity(
-                session, role, entity_id, root_entity_id
-            ):
+            if not await self._is_role_available_for_entity(session, role, entity_id, root_entity_id):
                 raise InvalidInputError(
                     message=f"Role '{role.name}' is not available for this entity",
                     details={
                         "role_id": str(role.id),
                         "role_name": role.name,
                         "entity_id": str(entity_id),
-                        "role_root_entity_id": str(role.root_entity_id)
-                        if role.root_entity_id
-                        else None,
+                        "role_root_entity_id": str(role.root_entity_id) if role.root_entity_id else None,
                     },
                 )
 
@@ -187,9 +188,7 @@ class MembershipService(BaseService[EntityMembership]):
 
         # Check max_members limit only for NEW memberships
         if not existing and entity.max_members:
-            current_members = await self.get_entity_members_count(
-                session, entity_id, active_only=True
-            )
+            current_members = await self.get_entity_members_count(session, entity_id, active_only=True)
             if current_members >= entity.max_members:
                 raise InvalidInputError(
                     message=f"Entity has reached maximum members limit ({entity.max_members})",
@@ -202,15 +201,19 @@ class MembershipService(BaseService[EntityMembership]):
 
         if existing:
             # Update existing membership
-            existing.status = MembershipStatus.ACTIVE
+            existing.status = status
             existing.valid_from = valid_from
             existing.valid_until = valid_until
+            if status == MembershipStatus.ACTIVE:
+                existing.revoked_at = None
+                existing.revoked_by_id = None
+                existing.revocation_reason = None
+            else:
+                existing.revocation_reason = reason
 
             # Update roles via junction table
             # First, clear existing roles
-            stmt = sql_delete(EntityMembershipRole).where(
-                EntityMembershipRole.membership_id == existing.id
-            )
+            stmt = sql_delete(EntityMembershipRole).where(EntityMembershipRole.membership_id == existing.id)
             await session.execute(stmt)
 
             # Add new roles
@@ -246,7 +249,8 @@ class MembershipService(BaseService[EntityMembership]):
             valid_from=valid_from,
             valid_until=valid_until,
             tenant_id=entity.tenant_id,
-            status=MembershipStatus.ACTIVE,
+            status=status,
+            revocation_reason=reason,
         )
 
         session.add(membership)
@@ -343,6 +347,123 @@ class MembershipService(BaseService[EntityMembership]):
 
         return True
 
+    async def update_membership(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        user_id: UUID,
+        *,
+        role_ids: Optional[List[UUID]] = None,
+        update_roles: bool = False,
+        status: Optional[MembershipStatus] = None,
+        update_status: bool = False,
+        valid_from: Optional[datetime] = None,
+        update_valid_from: bool = False,
+        valid_until: Optional[datetime] = None,
+        update_valid_until: bool = False,
+        reason: Optional[str] = None,
+        update_reason: bool = False,
+        changed_by_id: Optional[UUID] = None,
+    ) -> EntityMembership:
+        """
+        Update a membership's roles and/or lifecycle settings.
+
+        Args:
+            session: Database session
+            entity_id: Entity ID
+            user_id: User ID
+            role_ids: Updated role IDs when update_roles=True
+            update_roles: Whether to replace the membership role set
+            status: Updated membership status when update_status=True
+            update_status: Whether to update the membership status
+            valid_from: Updated validity start when update_valid_from=True
+            update_valid_from: Whether to update valid_from
+            valid_until: Updated validity end when update_valid_until=True
+            update_valid_until: Whether to update valid_until
+            reason: Updated lifecycle reason when update_reason=True
+            update_reason: Whether to update the reason field
+            changed_by_id: Optional actor performing the update
+
+        Returns:
+            EntityMembership: Updated membership with roles loaded
+        """
+        membership = await self.get_one(
+            session,
+            EntityMembership.user_id == user_id,
+            EntityMembership.entity_id == entity_id,
+            options=[selectinload(EntityMembership.roles)],
+        )
+
+        if not membership:
+            raise MembershipNotFoundError(
+                message="Membership not found",
+                details={"entity_id": str(entity_id), "user_id": str(user_id)},
+            )
+
+        next_valid_from = valid_from if update_valid_from else membership.valid_from
+        next_valid_until = valid_until if update_valid_until else membership.valid_until
+        if next_valid_from and next_valid_until and next_valid_until < next_valid_from:
+            raise InvalidInputError(
+                message="valid_until must be after valid_from",
+                details={
+                    "entity_id": str(entity_id),
+                    "user_id": str(user_id),
+                },
+            )
+
+        if update_roles:
+            roles = []
+            for role_id in role_ids or []:
+                role = await session.get(Role, role_id)
+                if not role:
+                    raise RoleNotFoundError(message="Role not found", details={"role_id": str(role_id)})
+                roles.append(role)
+
+            root_entity_id = await self._get_root_entity_id(session, entity_id)
+            for role in roles:
+                if not await self._is_role_available_for_entity(session, role, entity_id, root_entity_id):
+                    raise InvalidInputError(
+                        message=f"Role '{role.name}' is not available for this entity",
+                        details={
+                            "role_id": str(role.id),
+                            "role_name": role.name,
+                            "entity_id": str(entity_id),
+                            "role_root_entity_id": str(role.root_entity_id) if role.root_entity_id else None,
+                        },
+                    )
+
+            stmt = sql_delete(EntityMembershipRole).where(EntityMembershipRole.membership_id == membership.id)
+            await session.execute(stmt)
+
+            for role in roles:
+                role_link = EntityMembershipRole(
+                    membership_id=membership.id,
+                    role_id=role.id,
+                )
+                session.add(role_link)
+
+        if update_valid_from:
+            membership.valid_from = valid_from
+        if update_valid_until:
+            membership.valid_until = valid_until
+        if update_reason:
+            membership.revocation_reason = reason
+
+        if update_status and status is not None:
+            membership.status = status
+            if status == MembershipStatus.ACTIVE:
+                membership.revoked_at = None
+                membership.revoked_by_id = None
+                if not update_reason:
+                    membership.revocation_reason = None
+            elif status == MembershipStatus.SUSPENDED:
+                membership.revoked_by_id = changed_by_id
+
+        await session.flush()
+        await session.refresh(membership, ["roles"])
+
+        return membership
+
     async def update_member_roles(
         self,
         session: AsyncSession,
@@ -366,70 +487,13 @@ class MembershipService(BaseService[EntityMembership]):
             MembershipNotFoundError: If membership not found
             RoleNotFoundError: If role not found
         """
-        # Find membership
-        membership = await self.get_one(
-            session,
-            EntityMembership.user_id == user_id,
-            EntityMembership.entity_id == entity_id,
-            options=[selectinload(EntityMembership.roles)],
+        return await self.update_membership(
+            session=session,
+            entity_id=entity_id,
+            user_id=user_id,
+            role_ids=role_ids,
+            update_roles=True,
         )
-
-        if not membership:
-            raise MembershipNotFoundError(
-                message="Membership not found",
-                details={"entity_id": str(entity_id), "user_id": str(user_id)},
-            )
-
-        # Validate roles exist
-        roles = []
-        for role_id in role_ids:
-            role = await session.get(Role, role_id)
-            if not role:
-                raise RoleNotFoundError(
-                    message="Role not found", details={"role_id": str(role_id)}
-                )
-            roles.append(role)
-
-        root_entity_id = await self._get_root_entity_id(session, entity_id)
-        for role in roles:
-            if not await self._is_role_available_for_entity(
-                session, role, entity_id, root_entity_id
-            ):
-                raise InvalidInputError(
-                    message=f"Role '{role.name}' is not available for this entity",
-                    details={
-                        "role_id": str(role.id),
-                        "role_name": role.name,
-                        "entity_id": str(entity_id),
-                        "role_root_entity_id": str(role.root_entity_id)
-                        if role.root_entity_id
-                        else None,
-                    },
-                )
-
-        # Clear existing roles
-        stmt = sql_delete(EntityMembershipRole).where(
-            EntityMembershipRole.membership_id == membership.id
-        )
-        await session.execute(stmt)
-
-        # Add new roles
-        for role in roles:
-            role_link = EntityMembershipRole(
-                membership_id=membership.id,
-                role_id=role.id,
-            )
-            session.add(role_link)
-
-        await session.execute(
-            update(EntityMembership)
-            .where(EntityMembership.id == membership.id)
-            .values(updated_at=func.now())
-        )
-        await session.flush()
-        await session.refresh(membership, ["roles"])
-
-        return membership
 
     async def get_entity_members(
         self,
@@ -602,9 +666,7 @@ class MembershipService(BaseService[EntityMembership]):
             )
         else:
             # Get count without entity_type filter
-            count_stmt = (
-                select(func.count()).select_from(EntityMembership).where(*filters)
-            )
+            count_stmt = select(func.count()).select_from(EntityMembership).where(*filters)
             count_result = await session.execute(count_stmt)
             total_count = count_result.scalar() or 0
 
@@ -743,11 +805,7 @@ class MembershipService(BaseService[EntityMembership]):
         if active_only:
             filters.append(EntityMembership.status == MembershipStatus.ACTIVE)
 
-        stmt = (
-            select(EntityMembership)
-            .where(*filters)
-            .options(selectinload(EntityMembership.roles))
-        )
+        stmt = select(EntityMembership).where(*filters).options(selectinload(EntityMembership.roles))
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
@@ -917,11 +975,7 @@ class MembershipService(BaseService[EntityMembership]):
             bool: True if role can be used in this entity's context
         """
         # 1. Global system-wide roles are available everywhere
-        if (
-            role.is_global
-            and role.root_entity_id is None
-            and role.scope_entity_id is None
-        ):
+        if role.is_global and role.root_entity_id is None and role.scope_entity_id is None:
             return True
 
         # 2. Org-scoped roles (not entity-local)
@@ -937,9 +991,7 @@ class MembershipService(BaseService[EntityMembership]):
             if role.scope == RoleScope.HIERARCHY:
                 # Hierarchy scope: available if scope_entity is this entity or an ancestor
                 # Get ancestors of entity_id
-                ancestors_stmt = select(EntityClosure.ancestor_id).where(
-                    EntityClosure.descendant_id == entity_id
-                )
+                ancestors_stmt = select(EntityClosure.ancestor_id).where(EntityClosure.descendant_id == entity_id)
                 ancestors_result = await session.execute(ancestors_stmt)
                 ancestor_ids = {row[0] for row in ancestors_result.all()}
                 return role.scope_entity_id in ancestor_ids
@@ -970,9 +1022,7 @@ class MembershipService(BaseService[EntityMembership]):
             List of Role objects that should be auto-assigned
         """
         # Get all ancestors (including self)
-        ancestors_stmt = select(EntityClosure.ancestor_id).where(
-            EntityClosure.descendant_id == entity_id
-        )
+        ancestors_stmt = select(EntityClosure.ancestor_id).where(EntityClosure.descendant_id == entity_id)
         ancestors_result = await session.execute(ancestors_stmt)
         ancestor_ids = [row[0] for row in ancestors_result.all()]
 

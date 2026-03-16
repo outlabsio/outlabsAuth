@@ -1048,6 +1048,10 @@ The admin UI expects these endpoints from any OutlabsAuth implementation:
 
 **Memberships** (EnterpriseRBAC only):
 - `GET /v1/memberships/me` - Current user's memberships (for context switching)
+- `GET /v1/memberships/user/{user_id}` - User memberships with lifecycle metadata
+- `POST /v1/memberships/` - Add entity membership with scoped roles and optional validity window
+- `PATCH /v1/memberships/{entity_id}/{user_id}` - Update membership roles, status, and validity
+- `DELETE /v1/memberships/{entity_id}/{user_id}` - Remove one entity membership (soft revoke)
 
 ---
 
