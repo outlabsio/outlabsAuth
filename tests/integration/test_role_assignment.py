@@ -308,6 +308,104 @@ async def test_admin_can_revoke_role_from_user(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_admin_can_view_direct_role_memberships_with_lifecycle_metadata(
+    client: httpx.AsyncClient, admin_user: dict, regular_user: dict
+):
+    """Test that direct role memberships expose lifecycle fields and nested role data."""
+    role_name = f"detail-{uuid.uuid4().hex[:8]}"
+    create_resp = await client.post(
+        "/v1/roles/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"name": role_name, "display_name": "Detailed Role"},
+    )
+    role_id = create_resp.json()["id"]
+
+    assign_resp = await client.post(
+        f"/v1/users/{regular_user['id']}/roles",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "role_id": role_id,
+            "valid_from": "2026-03-16T09:00:00Z",
+            "valid_until": "2026-03-20T17:00:00Z",
+        },
+    )
+    assert assign_resp.status_code == 201
+
+    memberships_resp = await client.get(
+        f"/v1/users/{regular_user['id']}/role-memberships",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert memberships_resp.status_code == 200
+
+    memberships = memberships_resp.json()
+    assert len(memberships) == 1
+
+    membership = memberships[0]
+    assert membership["user_id"] == regular_user["id"]
+    assert membership["role_id"] == role_id
+    assert membership["status"] == "active"
+    assert membership["assigned_by_id"] == admin_user["id"]
+    assert membership["valid_from"] == "2026-03-16T09:00:00Z"
+    assert membership["valid_until"] == "2026-03-20T17:00:00Z"
+    assert membership["revoked_at"] is None
+    assert membership["revocation_reason"] is None
+    assert membership["role"]["id"] == role_id
+    assert membership["role"]["display_name"] == "Detailed Role"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_direct_role_memberships_hide_revoked_by_default_but_show_when_requested(
+    client: httpx.AsyncClient, admin_user: dict, regular_user: dict
+):
+    """Test that revoked direct role memberships only appear with include_inactive=true."""
+    role_name = f"revoked-detail-{uuid.uuid4().hex[:8]}"
+    create_resp = await client.post(
+        "/v1/roles/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"name": role_name, "display_name": "Revoked Detail Role"},
+    )
+    role_id = create_resp.json()["id"]
+
+    assign_resp = await client.post(
+        f"/v1/users/{regular_user['id']}/roles",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"role_id": role_id},
+    )
+    assert assign_resp.status_code == 201
+
+    revoke_resp = await client.delete(
+        f"/v1/users/{regular_user['id']}/roles/{role_id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert revoke_resp.status_code == 204
+
+    active_only_resp = await client.get(
+        f"/v1/users/{regular_user['id']}/role-memberships",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert active_only_resp.status_code == 200
+    assert active_only_resp.json() == []
+
+    include_inactive_resp = await client.get(
+        f"/v1/users/{regular_user['id']}/role-memberships?include_inactive=true",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert include_inactive_resp.status_code == 200
+
+    memberships = include_inactive_resp.json()
+    assert len(memberships) == 1
+
+    membership = memberships[0]
+    assert membership["role_id"] == role_id
+    assert membership["status"] == "revoked"
+    assert membership["revoked_at"] is not None
+    assert membership["is_currently_valid"] is True
+    assert membership["can_grant_permissions"] is False
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_user_can_view_own_roles(
     client: httpx.AsyncClient, admin_user: dict, regular_user: dict
 ):

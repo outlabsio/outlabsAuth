@@ -13,6 +13,21 @@
 - **Closure Table**: Test O(1) tree permission queries (DD-036)
 - **JWT Service Tokens**: Test stateless internal service authentication (DD-034)
 
+**Recent Coverage Note (Mar 2026)**:
+- membership lifecycle API coverage exists in `tests/integration/test_membership_lifecycle_api.py`
+- direct role membership lifecycle read coverage exists in `tests/integration/test_role_assignment.py`
+- a comprehensive admin user-details regression suite is still missing and should be added in a future pass
+
+That future suite should cover the combined contract used by the admin frontend record page:
+
+- profile update
+- user status change
+- resend invite
+- admin password reset
+- delete user
+- direct role assignment, read, and revoke
+- entity membership create, update, revoke, and reactivate
+
 ---
 
 ## Table of Contents

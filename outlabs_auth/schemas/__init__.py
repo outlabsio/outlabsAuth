@@ -76,6 +76,7 @@ from outlabs_auth.schemas.user_role_membership import (
     AssignRoleRequest,
     RevokeRoleRequest,
     UserRoleMembershipCreate,
+    UserRoleMembershipDetailResponse,
     UserRoleMembershipResponse,
     UserRoleMembershipUpdate,
 )
@@ -106,6 +107,7 @@ __all__ = [
     "PermissionCheckResponse",
     # UserRoleMembership
     "UserRoleMembershipResponse",
+    "UserRoleMembershipDetailResponse",
     "UserRoleMembershipCreate",
     "UserRoleMembershipUpdate",
     "AssignRoleRequest",

@@ -26,6 +26,7 @@ from outlabs_auth.schemas.user import (
 )
 from outlabs_auth.schemas.user_role_membership import (
     AssignRoleRequest,
+    UserRoleMembershipDetailResponse,
     UserRoleMembershipResponse,
 )
 
@@ -117,6 +118,47 @@ def get_users_router(
                 )
 
         return target_user
+
+    async def _build_role_response(session: AsyncSession, role: Any) -> RoleResponse:
+        from outlabs_auth.models.sql import Entity
+        from outlabs_auth.models.sql.enums import RoleScope
+        from outlabs_auth.schemas.role import RoleScopeEnum
+
+        root_entity_name = None
+        if role.root_entity_id:
+            root_entity = await session.get(Entity, role.root_entity_id)
+            if root_entity:
+                root_entity_name = root_entity.display_name
+
+        scope_entity_name = None
+        if role.scope_entity_id:
+            scope_entity = await session.get(Entity, role.scope_entity_id)
+            if scope_entity:
+                scope_entity_name = scope_entity.display_name
+
+        scope_value = RoleScopeEnum.HIERARCHY
+        if role.scope == RoleScope.ENTITY_ONLY:
+            scope_value = RoleScopeEnum.ENTITY_ONLY
+
+        permission_names = role.get_permission_names() if hasattr(role, "get_permission_names") else []
+
+        return RoleResponse(
+            id=str(role.id),
+            name=role.name,
+            display_name=role.display_name,
+            description=role.description,
+            permissions=permission_names,
+            entity_type_permissions=None,
+            is_system_role=role.is_system_role,
+            is_global=role.is_global,
+            root_entity_id=str(role.root_entity_id) if role.root_entity_id else None,
+            root_entity_name=root_entity_name,
+            scope_entity_id=str(role.scope_entity_id) if role.scope_entity_id else None,
+            scope_entity_name=scope_entity_name,
+            scope=scope_value,
+            is_auto_assigned=role.is_auto_assigned,
+            assignable_at_types=[],
+        )
 
     @router.post(
         "/",
@@ -706,6 +748,68 @@ def get_users_router(
 
             # Convert to response schema
             return [RoleResponse(**role.model_dump(mode="json", exclude={"entity"})) for role in roles]
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+    @router.get(
+        "/{user_id}/role-memberships",
+        response_model=List[UserRoleMembershipDetailResponse],
+        summary="Get user's direct role memberships",
+        description="Get direct role assignment records with lifecycle metadata (requires user:read permission)",
+    )
+    async def get_user_role_memberships(
+        user_id: UUID,
+        include_inactive: bool = Query(False, description="Include inactive role memberships"),
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
+    ):
+        """
+        Get direct role membership records for a user.
+
+        Returns assignment metadata such as validity windows and revocation info
+        alongside the embedded role definition.
+        """
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
+
+            memberships = await auth.role_service.get_user_role_memberships(
+                session,
+                user_id=user_id,
+                include_inactive=include_inactive,
+            )
+
+            response_items = []
+            for membership in memberships:
+                response_items.append(
+                    UserRoleMembershipDetailResponse(
+                        id=str(membership.id),
+                        user_id=str(membership.user_id),
+                        role_id=str(membership.role_id),
+                        assigned_at=membership.assigned_at,
+                        assigned_by_id=str(membership.assigned_by_id) if membership.assigned_by_id else None,
+                        valid_from=membership.valid_from,
+                        valid_until=membership.valid_until,
+                        status=membership.status,
+                        revoked_at=membership.revoked_at,
+                        revoked_by_id=str(membership.revoked_by_id) if membership.revoked_by_id else None,
+                        revocation_reason=membership.revocation_reason,
+                        is_currently_valid=membership.is_currently_valid(),
+                        can_grant_permissions=membership.can_grant_permissions(),
+                        role=await _build_role_response(session, membership.role),
+                    )
+                )
+
+            return response_items
 
         except HTTPException:
             raise

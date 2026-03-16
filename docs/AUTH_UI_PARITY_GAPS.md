@@ -21,6 +21,30 @@ Supporting verification:
 - `uv run pytest tests/integration/test_abac_endpoints.py -q`
 - `cd auth-ui && bun run build`
 
+Recent backend additions that now support the frontend user-details surface:
+
+- membership lifecycle fields and lifecycle-aware update/remove flows under `/v1/memberships/...`
+- direct account role membership metadata via `GET /v1/users/{id}/role-memberships`
+
+Coverage note:
+
+- targeted regression coverage exists for these additions in:
+  - `tests/integration/test_membership_lifecycle_api.py`
+  - `tests/integration/test_role_assignment.py` (`role-memberships` cases)
+- a comprehensive admin user-details contract suite is still missing
+
+That missing suite should eventually cover the full record-page lifecycle together:
+
+- profile update
+- status change and suspension window handling
+- resend invite
+- admin password reset
+- delete user
+- direct role assign/read/revoke with lifecycle metadata
+- entity membership create/update/remove/reactivate with lifecycle windows
+
+Until that broader suite exists, treat this surface as implemented but not fully hardened by comprehensive integration coverage.
+
 ## Remaining Gap
 
 ### OAuth and Social Account Parity

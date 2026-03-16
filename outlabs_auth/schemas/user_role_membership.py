@@ -6,6 +6,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from outlabs_auth.models.sql.enums import MembershipStatus
+from outlabs_auth.schemas.role import RoleResponse
 
 
 class UserRoleMembershipResponse(BaseModel):
@@ -21,10 +22,17 @@ class UserRoleMembershipResponse(BaseModel):
     status: MembershipStatus
     revoked_at: Optional[datetime] = None
     revoked_by_id: Optional[str] = None
+    revocation_reason: Optional[str] = None
     is_currently_valid: bool
     can_grant_permissions: bool
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class UserRoleMembershipDetailResponse(UserRoleMembershipResponse):
+    """User role membership response with embedded role details."""
+
+    role: RoleResponse
 
 
 class UserRoleMembershipCreate(BaseModel):

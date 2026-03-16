@@ -218,3 +218,24 @@ That means:
 Membership-level timing is supported.
 
 Per-role timing inside a membership is not currently supported. Scoped roles inside one membership share the same membership lifecycle window.
+
+## Testing Status
+
+Current automated coverage for this lifecycle contract exists in:
+
+- `tests/integration/test_membership_lifecycle_api.py`
+
+That coverage verifies:
+
+- create with lifecycle fields
+- update with lifecycle fields and multiple roles
+- inactive membership filtering
+- soft revoke plus reactivation
+
+Important note:
+
+- this is still feature-focused coverage, not the full admin user-details contract exercised end-to-end with the adjacent user-management routes
+- comprehensive cross-surface integration coverage should still be added in the future for:
+  - user detail reads
+  - direct role memberships
+  - membership lifecycle updates from the same record page flow

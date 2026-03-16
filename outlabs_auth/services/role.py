@@ -1069,6 +1069,36 @@ class RoleService(BaseService[Role]):
 
         return roles
 
+    async def get_user_role_memberships(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        include_inactive: bool = False,
+    ) -> List[UserRoleMembership]:
+        """
+        Get direct role membership records for a user.
+
+        Args:
+            session: Database session
+            user_id: User UUID
+            include_inactive: Include revoked/suspended memberships
+
+        Returns:
+            List of UserRoleMembership records with roles loaded
+        """
+        filters = [UserRoleMembership.user_id == user_id]
+        if not include_inactive:
+            filters.append(UserRoleMembership.status == MembershipStatus.ACTIVE)
+
+        stmt = (
+            select(UserRoleMembership)
+            .options(selectinload(UserRoleMembership.role).selectinload(Role.permissions))
+            .where(*filters)
+            .order_by(UserRoleMembership.assigned_at.desc())
+        )
+        result = await session.execute(stmt)
+        return result.scalars().all()
+
     async def get_user_permission_names(
         self,
         session: AsyncSession,
