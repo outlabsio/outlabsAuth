@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import inspect, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -22,6 +22,7 @@ from outlabs_auth.core.exceptions import (
     UserNotFoundError,
 )
 from outlabs_auth.models.sql.closure import EntityClosure
+from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.entity_membership import EntityMembership
 from outlabs_auth.models.sql.enums import MembershipStatus, RoleScope
 from outlabs_auth.models.sql.permission import (
@@ -30,7 +31,7 @@ from outlabs_auth.models.sql.permission import (
     PermissionTagLink,
 )
 from outlabs_auth.models.sql.role import ConditionGroup as SqlConditionGroup
-from outlabs_auth.models.sql.role import Role, RolePermission
+from outlabs_auth.models.sql.role import Role, RoleEntityTypePermission, RolePermission
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
 from outlabs_auth.services.base import BaseService
@@ -107,12 +108,40 @@ class PermissionService(BaseService[Permission]):
                 details={"user_id": str(user_id)},
             )
 
+        target_entity_type: Optional[str] = None
+        if entity_id is not None and self.config.enable_context_aware_roles:
+            target_entity = await session.get(Entity, entity_id)
+            if target_entity is not None:
+                target_entity_type = target_entity.entity_type
+
+        abac_enabled = bool(getattr(self.config, "enable_abac", False))
+        use_permission_cache = self._can_use_permission_cache(
+            resource_context=resource_context,
+            env_context=env_context,
+            time_attrs=time_attrs,
+            abac_enabled=abac_enabled,
+        )
+        if use_permission_cache:
+            cached = await self._get_cached_permission_result(
+                user_id=user_id,
+                permission=permission,
+                entity_id=entity_id,
+            )
+            if cached is not None:
+                self._log_permission_check(
+                    user_id,
+                    permission,
+                    "granted" if cached else "denied",
+                    start_time,
+                    "cache",
+                )
+                return cached
+
         # Superusers have all permissions
         if user.is_superuser:
             self._log_permission_check(user_id, permission, "granted", start_time, "superuser")
             return True
 
-        abac_enabled = bool(getattr(self.config, "enable_abac", False))
         engine: Optional[PolicyEvaluationEngine] = PolicyEvaluationEngine() if abac_enabled else None
         context: Optional[Dict[str, Any]] = None
         if abac_enabled:
@@ -157,8 +186,16 @@ class PermissionService(BaseService[Permission]):
                     session=session,
                     user_id=user_id,
                     include_entity_local=True,
+                    entity_type=target_entity_type,
                 )
             if self._permission_set_allows(permission, user_permissions):
+                await self._cache_permission_result(
+                    use_cache=use_permission_cache,
+                    user_id=user_id,
+                    permission=permission,
+                    entity_id=entity_id,
+                    result=True,
+                )
                 self._log_permission_check(user_id, permission, "granted", start_time, "global_match")
                 return True
         else:
@@ -169,6 +206,7 @@ class PermissionService(BaseService[Permission]):
                 context=context or {},
                 engine=engine,
                 include_entity_local=(entity_id is not None),
+                entity_type=target_entity_type,
             ):
                 self._log_permission_check(user_id, permission, "granted", start_time, "global_match_abac")
                 return True
@@ -181,13 +219,28 @@ class PermissionService(BaseService[Permission]):
                 user_id=user_id,
                 permission=permission,
                 entity_id=entity_id,
+                entity_type=target_entity_type,
                 context=context,
                 engine=engine,
             ):
+                await self._cache_permission_result(
+                    use_cache=use_permission_cache,
+                    user_id=user_id,
+                    permission=permission,
+                    entity_id=entity_id,
+                    result=True,
+                )
                 self._log_permission_check(user_id, permission, "granted", start_time, "entity_match")
                 return True
 
         # Permission denied
+        await self._cache_permission_result(
+            use_cache=use_permission_cache,
+            user_id=user_id,
+            permission=permission,
+            entity_id=entity_id,
+            result=False,
+        )
         self._log_permission_check(user_id, permission, "denied", start_time, "no_permission")
         return False
 
@@ -276,6 +329,7 @@ class PermissionService(BaseService[Permission]):
         user_id: UUID,
         permission: str,
         entity_id: UUID,
+        entity_type: Optional[str] = None,
         context: Optional[Dict[str, Any]] = None,
         engine: Optional[PolicyEvaluationEngine] = None,
     ) -> bool:
@@ -301,8 +355,14 @@ class PermissionService(BaseService[Permission]):
         memberships_stmt = (
             select(EntityMembership)
             .options(
-                selectinload(EntityMembership.roles).selectinload(Role.permissions),
+                selectinload(EntityMembership.roles)
+                .selectinload(Role.permissions)
+                .selectinload(Permission.conditions),
                 selectinload(EntityMembership.roles).selectinload(Role.conditions),
+                selectinload(EntityMembership.roles)
+                .selectinload(Role.entity_type_permissions)
+                .selectinload(RoleEntityTypePermission.permission)
+                .selectinload(Permission.conditions),
             )
             .where(
                 EntityMembership.user_id == user_id,
@@ -333,7 +393,7 @@ class PermissionService(BaseService[Permission]):
                 if not self._role_can_grant_at_entity(role, membership.entity_id, entity_id, is_direct_membership):
                     continue
 
-                granted = set(p.name for p in (role.permissions or []))
+                granted = self._get_role_permission_names_for_context(role, entity_type)
 
                 is_match = (
                     self._permission_set_allows(permission, granted)
@@ -348,6 +408,7 @@ class PermissionService(BaseService[Permission]):
                         session=session,
                         role=role,
                         required_permission=permission,
+                        entity_type=entity_type,
                         context=context,
                         engine=engine,
                     ):
@@ -406,6 +467,7 @@ class PermissionService(BaseService[Permission]):
         context: Dict[str, Any],
         engine: PolicyEvaluationEngine,
         include_entity_local: bool = True,
+        entity_type: Optional[str] = None,
     ) -> bool:
         """
         Check permission via user roles with ABAC evaluation.
@@ -424,8 +486,14 @@ class PermissionService(BaseService[Permission]):
         stmt = (
             select(UserRoleMembership)
             .options(
-                selectinload(UserRoleMembership.role).selectinload(Role.permissions),
+                selectinload(UserRoleMembership.role)
+                .selectinload(Role.permissions)
+                .selectinload(Permission.conditions),
                 selectinload(UserRoleMembership.role).selectinload(Role.conditions),
+                selectinload(UserRoleMembership.role)
+                .selectinload(Role.entity_type_permissions)
+                .selectinload(RoleEntityTypePermission.permission)
+                .selectinload(Permission.conditions),
             )
             .where(
                 UserRoleMembership.user_id == user_id,
@@ -447,7 +515,7 @@ class PermissionService(BaseService[Permission]):
             if not include_entity_local and role.scope_entity_id is not None:
                 continue
 
-            granted = set(p.name for p in (role.permissions or []))
+            granted = self._get_role_permission_names_for_context(role, entity_type)
             if not self._permission_set_allows(permission, granted):
                 continue
 
@@ -455,6 +523,7 @@ class PermissionService(BaseService[Permission]):
                 session=session,
                 role=role,
                 required_permission=permission,
+                entity_type=entity_type,
                 context=context,
                 engine=engine,
             ):
@@ -470,19 +539,29 @@ class PermissionService(BaseService[Permission]):
         session: AsyncSession,
         role: Role,
         required_permission: str,
+        entity_type: Optional[str],
         context: Dict[str, Any],
         engine: PolicyEvaluationEngine,
     ) -> bool:
-        role_conditions = getattr(role, "conditions", []) or []
-
-        perm_stmt = (
-            select(Permission)
-            .options(selectinload(Permission.conditions))
-            .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .where(RolePermission.role_id == role.id)
-        )
-        perm_result = await session.execute(perm_stmt)
-        perms = perm_result.scalars().all()
+        role_conditions = list(role.conditions or []) if self._relationship_is_loaded(role, "conditions") else []
+        perms = self._get_role_permissions_for_context(role, entity_type)
+        unloaded_permission_ids = [
+            permission.id
+            for permission in perms
+            if permission is not None and not self._relationship_is_loaded(permission, "conditions")
+        ]
+        if unloaded_permission_ids:
+            perm_stmt = (
+                select(Permission)
+                .options(selectinload(Permission.conditions))
+                .where(Permission.id.in_(unloaded_permission_ids))
+            )
+            perm_result = await session.execute(perm_stmt)
+            permission_map = {permission.id: permission for permission in perm_result.scalars().all()}
+            perms = [
+                permission_map.get(permission.id, permission) if permission is not None else None
+                for permission in perms
+            ]
 
         matching_perms = [p for p in perms if p and self._permission_set_allows(required_permission, {p.name})]
         if not matching_perms:
@@ -514,12 +593,17 @@ class PermissionService(BaseService[Permission]):
 
         return False
 
+    @staticmethod
+    def _relationship_is_loaded(instance: Any, attribute: str) -> bool:
+        return attribute not in inspect(instance).unloaded
+
     async def _get_user_role_permissions(
         self,
         *,
         session: AsyncSession,
         user_id: UUID,
         include_entity_local: bool = True,
+        entity_type: Optional[str] = None,
     ) -> Set[str]:
         """
         Collect permission names from active UserRoleMembership links only.
@@ -528,7 +612,14 @@ class PermissionService(BaseService[Permission]):
         """
         stmt = (
             select(UserRoleMembership)
-            .options(selectinload(UserRoleMembership.role).selectinload(Role.permissions))
+            .options(
+                selectinload(UserRoleMembership.role)
+                .selectinload(Role.permissions)
+                .selectinload(Permission.conditions),
+                selectinload(UserRoleMembership.role)
+                .selectinload(Role.entity_type_permissions)
+                .selectinload(RoleEntityTypePermission.permission),
+            )
             .where(
                 UserRoleMembership.user_id == user_id,
                 UserRoleMembership.status == MembershipStatus.ACTIVE,
@@ -546,7 +637,7 @@ class PermissionService(BaseService[Permission]):
                 continue
             if not include_entity_local and role.scope_entity_id is not None:
                 continue
-            for perm in role.permissions or []:
+            for perm in self._get_role_permissions_for_context(role, entity_type):
                 permissions.add(perm.name)
         return permissions
 
@@ -574,6 +665,7 @@ class PermissionService(BaseService[Permission]):
         session: AsyncSession,
         user_id: UUID,
         include_entity_local: bool = True,
+        entity_type: Optional[str] = None,
     ) -> List[str]:
         """
         Get all permissions for a user.
@@ -615,7 +707,14 @@ class PermissionService(BaseService[Permission]):
         # Get active role memberships with roles eagerly loaded
         stmt = (
             select(UserRoleMembership)
-            .options(selectinload(UserRoleMembership.role).selectinload(Role.permissions))
+            .options(
+                selectinload(UserRoleMembership.role)
+                .selectinload(Role.permissions)
+                .selectinload(Permission.conditions),
+                selectinload(UserRoleMembership.role)
+                .selectinload(Role.entity_type_permissions)
+                .selectinload(RoleEntityTypePermission.permission),
+            )
             .where(
                 UserRoleMembership.user_id == user_id,
                 UserRoleMembership.status == MembershipStatus.ACTIVE,
@@ -639,17 +738,22 @@ class PermissionService(BaseService[Permission]):
             if not include_entity_local and role.scope_entity_id is not None:
                 continue
 
-            if role.permissions:
-                # Extract permission names
-                for perm in role.permissions:
-                    all_permissions.add(perm.name)
+            for perm in self._get_role_permissions_for_context(role, entity_type):
+                all_permissions.add(perm.name)
 
         # Get active entity memberships with roles eagerly loaded
         # EnterpriseRBAC stores role assignments via entity membership, so these
         # permissions must be included for effective user permission resolution.
         entity_stmt = (
             select(EntityMembership)
-            .options(selectinload(EntityMembership.roles).selectinload(Role.permissions))
+            .options(
+                selectinload(EntityMembership.roles)
+                .selectinload(Role.permissions)
+                .selectinload(Permission.conditions),
+                selectinload(EntityMembership.roles)
+                .selectinload(Role.entity_type_permissions)
+                .selectinload(RoleEntityTypePermission.permission),
+            )
             .where(
                 EntityMembership.user_id == user_id,
                 EntityMembership.status == MembershipStatus.ACTIVE,
@@ -670,9 +774,8 @@ class PermissionService(BaseService[Permission]):
                 if not include_entity_local and role.scope_entity_id is not None:
                     continue
 
-                if role.permissions:
-                    for perm in role.permissions:
-                        all_permissions.add(perm.name)
+                for perm in self._get_role_permissions_for_context(role, entity_type):
+                    all_permissions.add(perm.name)
 
         return list(all_permissions)
 
@@ -702,6 +805,89 @@ class PermissionService(BaseService[Permission]):
         # Use the existing method with include_entity_local=False
         permissions = await self.get_user_permissions(session, user_id, include_entity_local=False)
         return set(permissions)
+
+    def _get_role_permissions_for_context(
+        self,
+        role: Role,
+        entity_type: Optional[str] = None,
+    ) -> List[Permission]:
+        if not self.config.enable_context_aware_roles or not entity_type:
+            return list(role.permissions or [])
+
+        normalized_entity_type = entity_type.lower()
+        overrides = [
+            entry.permission
+            for entry in (role.entity_type_permissions or [])
+            if entry.permission and entry.entity_type.lower() == normalized_entity_type
+        ]
+        if overrides:
+            return overrides
+        return list(role.permissions or [])
+
+    def _get_role_permission_names_for_context(
+        self,
+        role: Role,
+        entity_type: Optional[str] = None,
+    ) -> Set[str]:
+        return {
+            permission.name
+            for permission in self._get_role_permissions_for_context(role, entity_type)
+            if permission and permission.name
+        }
+
+    def _can_use_permission_cache(
+        self,
+        *,
+        resource_context: Optional[Dict[str, Any]],
+        env_context: Optional[Dict[str, Any]],
+        time_attrs: Optional[Dict[str, Any]],
+        abac_enabled: bool,
+    ) -> bool:
+        return bool(
+            getattr(self.config, "enable_caching", False)
+            and getattr(self, "cache_service", None) is not None
+            and not abac_enabled
+            and not resource_context
+            and not env_context
+            and not time_attrs
+        )
+
+    async def _get_cached_permission_result(
+        self,
+        *,
+        user_id: UUID,
+        permission: str,
+        entity_id: Optional[UUID],
+    ) -> Optional[bool]:
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is None:
+            return None
+        return await cache_service.get_permission_check(
+            str(user_id),
+            permission,
+            str(entity_id) if entity_id is not None else None,
+        )
+
+    async def _cache_permission_result(
+        self,
+        *,
+        use_cache: bool,
+        user_id: UUID,
+        permission: str,
+        entity_id: Optional[UUID],
+        result: bool,
+    ) -> None:
+        if not use_cache:
+            return
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is None:
+            return
+        await cache_service.set_permission_check(
+            str(user_id),
+            permission,
+            result,
+            str(entity_id) if entity_id is not None else None,
+        )
 
     async def require_permission(
         self,
@@ -797,7 +983,6 @@ class PermissionService(BaseService[Permission]):
         is_system: bool = False,
         is_active: bool = True,
         tags: Optional[List[str]] = None,
-        tenant_id: Optional[str] = None,
     ) -> Permission:
         """
         Create a new permission.
@@ -808,8 +993,6 @@ class PermissionService(BaseService[Permission]):
             display_name: Human-readable name
             description: Permission description
             is_system: Whether this is a system permission
-            tenant_id: Optional tenant ID
-
         Returns:
             Created permission
         """
@@ -831,13 +1014,14 @@ class PermissionService(BaseService[Permission]):
             description=description,
             is_system=is_system,
             is_active=is_active,
-            tenant_id=tenant_id,
         )
 
         await self.create(session, permission)
 
         if tags:
             await self.set_permission_tags(session, permission.id, tags)
+
+        await self._invalidate_all_permissions_cache()
 
         return permission
 
@@ -936,6 +1120,7 @@ class PermissionService(BaseService[Permission]):
         if tags is not None:
             await self.set_permission_tags(session, permission_id, tags)
 
+        await self._invalidate_all_permissions_cache()
         return permission
 
     async def set_permission_tags(
@@ -973,10 +1158,7 @@ class PermissionService(BaseService[Permission]):
             return permission
 
         # Load/create tag models
-        stmt = select(PermissionTag).where(
-            PermissionTag.name.in_(normalized),
-            PermissionTag.tenant_id == permission.tenant_id,
-        )
+        stmt = select(PermissionTag).where(PermissionTag.name.in_(normalized))
         result = await session.execute(stmt)
         existing_tags = {t.name: t for t in result.scalars().all()}
 
@@ -984,13 +1166,14 @@ class PermissionService(BaseService[Permission]):
         for tag_name in normalized:
             tag_model = existing_tags.get(tag_name)
             if not tag_model:
-                tag_model = PermissionTag(name=tag_name, tenant_id=permission.tenant_id)
+                tag_model = PermissionTag(name=tag_name)
                 session.add(tag_model)
                 await session.flush()
             tag_models.append(tag_model)
 
         permission.tags = tag_models
         await self.update(session, permission)
+        await self._invalidate_all_permissions_cache()
         return permission
 
     async def delete_permission(
@@ -1025,6 +1208,7 @@ class PermissionService(BaseService[Permission]):
             )
 
         await self.delete(session, permission)
+        await self._invalidate_all_permissions_cache()
         return True
 
     async def list_permissions(
@@ -1034,7 +1218,6 @@ class PermissionService(BaseService[Permission]):
         limit: int = 50,
         resource: Optional[str] = None,
         is_active: Optional[bool] = None,
-        tenant_id: Optional[str] = None,
     ) -> Tuple[List[Permission], int]:
         """
         List permissions with pagination.
@@ -1045,8 +1228,6 @@ class PermissionService(BaseService[Permission]):
             limit: Results per page
             resource: Filter by resource (e.g., "user")
             is_active: Filter by active status
-            tenant_id: Filter by tenant
-
         Returns:
             Tuple of (permissions, total_count)
         """
@@ -1055,8 +1236,6 @@ class PermissionService(BaseService[Permission]):
             filters.append(Permission.resource == resource)
         if is_active is not None:
             filters.append(Permission.is_active == is_active)
-        if tenant_id:
-            filters.append(Permission.tenant_id == tenant_id)
 
         total_count = await self.count(session, *filters)
 
@@ -1225,7 +1404,6 @@ class PermissionService(BaseService[Permission]):
         self,
         session: AsyncSession,
         permissions_data: List[Dict[str, Any]],
-        tenant_id: Optional[str] = None,
     ) -> List[Permission]:
         """
         Create multiple permissions at once.
@@ -1233,8 +1411,6 @@ class PermissionService(BaseService[Permission]):
         Args:
             session: Database session
             permissions_data: List of dicts with name, display_name, description
-            tenant_id: Optional tenant ID
-
         Returns:
             List of created permissions
         """
@@ -1253,7 +1429,6 @@ class PermissionService(BaseService[Permission]):
                 display_name=data.get("display_name", name),
                 description=data.get("description"),
                 is_system=data.get("is_system", False),
-                tenant_id=tenant_id,
             )
             session.add(permission)
             created.append(permission)
@@ -1264,4 +1439,10 @@ class PermissionService(BaseService[Permission]):
         for perm in created:
             await session.refresh(perm)
 
+        await self._invalidate_all_permissions_cache()
         return created
+
+    async def _invalidate_all_permissions_cache(self) -> None:
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is not None:
+            await cache_service.publish_all_permissions_invalidation()

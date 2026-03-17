@@ -96,7 +96,7 @@ export function createRolesAPI() {
     ): Promise<Role> {
       return client.call<Role>(`/v1/roles/${roleId}/permissions`, {
         method: "POST",
-        body: { permissions },
+        body: JSON.stringify(permissions),
       });
     },
 
@@ -109,7 +109,7 @@ export function createRolesAPI() {
     ): Promise<Role> {
       return client.call<Role>(`/v1/roles/${roleId}/permissions`, {
         method: "DELETE",
-        body: { permissions },
+        body: JSON.stringify(permissions),
       });
     },
 

@@ -26,10 +26,9 @@ class ActivityMetric(BaseModel, table=True):
     """
     __tablename__ = "activity_metrics"
     __table_args__ = (
-        UniqueConstraint("metric_date", "metric_type", "tenant_id", name="uq_activity_metric_date_type"),
+        UniqueConstraint("metric_date", "metric_type", name="uq_activity_metric_date_type"),
         Index("ix_activity_metrics_date", "metric_date"),
         Index("ix_activity_metrics_type", "metric_type"),
-        Index("ix_activity_metrics_tenant_id", "tenant_id"),
     )
 
     # === Metric Identity ===
@@ -76,7 +75,6 @@ class UserActivity(BaseModel, table=True):
         UniqueConstraint("user_id", "activity_date", name="uq_user_activity_date"),
         Index("ix_user_activities_user_id", "user_id"),
         Index("ix_user_activities_date", "activity_date"),
-        Index("ix_user_activities_tenant_id", "tenant_id"),
     )
 
     # === User ===
@@ -142,7 +140,6 @@ class LoginHistory(BaseModel, table=True):
         Index("ix_login_history_user_id", "user_id"),
         Index("ix_login_history_timestamp", "login_at"),
         Index("ix_login_history_success", "success"),
-        Index("ix_login_history_tenant_id", "tenant_id"),
     )
 
     # === User ===

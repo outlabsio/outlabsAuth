@@ -46,6 +46,7 @@ class UserService(BaseService[User]):
         self,
         config: AuthConfig,
         notification_service: Optional[Any] = None,
+        auth_service: Optional[Any] = None,
     ):
         """
         Initialize UserService.
@@ -57,6 +58,7 @@ class UserService(BaseService[User]):
         super().__init__(User)
         self.config = config
         self.notifications = notification_service
+        self.auth_service = auth_service
 
     # =========================================================================
     # Lifecycle hooks (override in subclasses)
@@ -124,7 +126,6 @@ class UserService(BaseService[User]):
         first_name: Optional[str] = None,
         last_name: Optional[str] = None,
         is_superuser: bool = False,
-        tenant_id: Optional[str] = None,
         root_entity_id: Optional[UUID] = None,
     ) -> User:
         """
@@ -137,7 +138,6 @@ class UserService(BaseService[User]):
             first_name: Optional first name
             last_name: Optional last name
             is_superuser: Whether user has superuser privileges
-            tenant_id: Optional tenant ID for multi-tenant mode
             root_entity_id: Optional root entity ID to assign user to an organization.
                            Must be a root entity (parent_id is NULL).
 
@@ -153,10 +153,7 @@ class UserService(BaseService[User]):
         email = validate_email(email)
 
         # Check if user already exists
-        user_lookup_filters = [User.email == email]
-        if self.config.multi_tenant:
-            user_lookup_filters.append(User.tenant_id == tenant_id)
-        existing = await self.get_one(session, *user_lookup_filters)
+        existing = await self.get_one(session, User.email == email)
         if existing:
             raise UserAlreadyExistsError(
                 message=f"User with email {email} already exists",
@@ -189,15 +186,6 @@ class UserService(BaseService[User]):
                         "parent_id": str(entity.parent_id),
                     },
                 )
-            if tenant_id and entity.tenant_id != tenant_id:
-                raise InvalidInputError(
-                    message="Root entity must belong to the same tenant as the user",
-                    details={
-                        "root_entity_id": str(root_entity_id),
-                        "entity_tenant_id": entity.tenant_id,
-                        "user_tenant_id": tenant_id,
-                    },
-                )
 
         # Create user
         user = User(
@@ -207,7 +195,6 @@ class UserService(BaseService[User]):
             last_name=last_name,
             status=UserStatus.ACTIVE,
             is_superuser=is_superuser,
-            tenant_id=tenant_id,
             root_entity_id=root_entity_id,
         )
 
@@ -328,7 +315,6 @@ class UserService(BaseService[User]):
                 existing = await self.get_one(
                     session,
                     User.email == normalized_email,
-                    User.tenant_id == user.tenant_id,
                 )
                 if existing:
                     raise UserAlreadyExistsError(
@@ -336,6 +322,7 @@ class UserService(BaseService[User]):
                         details={"email": normalized_email},
                     )
                 user.email = normalized_email
+                user.email_verified = False
 
         if first_name is not None:
             user.first_name = validate_name(first_name, "first_name")
@@ -406,6 +393,13 @@ class UserService(BaseService[User]):
         user.locked_until = None
 
         await self.update(session, user)
+
+        if self.auth_service is not None:
+            await self.auth_service.revoke_all_user_tokens(
+                session,
+                user.id,
+                reason="Password changed",
+            )
 
         # Emit notification
         if self.notifications:
@@ -522,7 +516,6 @@ class UserService(BaseService[User]):
         status: Optional[UserStatus] = None,
         is_superuser: Optional[bool] = None,
         root_entity_id: Optional[UUID] = None,
-        tenant_id: Optional[str] = None,
     ) -> Tuple[List[User], int]:
         """
         List users with pagination.
@@ -534,8 +527,6 @@ class UserService(BaseService[User]):
             status: Filter by status
             is_superuser: Filter by superuser flag
             root_entity_id: Filter by assigned root entity
-            tenant_id: Filter by tenant (multi-tenant mode)
-
         Returns:
             Tuple of (users, total_count)
         """
@@ -547,8 +538,6 @@ class UserService(BaseService[User]):
             filters.append(User.is_superuser == is_superuser)
         if root_entity_id is not None:
             filters.append(User.root_entity_id == root_entity_id)
-        if tenant_id:
-            filters.append(User.tenant_id == tenant_id)
 
         # Get total count
         total_count = await self.count(session, *filters)
@@ -573,7 +562,6 @@ class UserService(BaseService[User]):
         status: Optional[UserStatus] = None,
         is_superuser: Optional[bool] = None,
         root_entity_id: Optional[UUID] = None,
-        tenant_id: Optional[str] = None,
     ) -> List[User]:
         """
         Search users by email or name.
@@ -598,8 +586,6 @@ class UserService(BaseService[User]):
             filters.append(User.is_superuser == is_superuser)
         if root_entity_id is not None:
             filters.append(User.root_entity_id == root_entity_id)
-        if tenant_id is not None:
-            filters.append(User.tenant_id == tenant_id)
 
         users = await self.get_many(
             session,
@@ -657,7 +643,7 @@ class UserService(BaseService[User]):
             success: Whether login was successful
         """
         if success:
-            user.last_login_at = datetime.now(timezone.utc)
+            user.last_login = datetime.now(timezone.utc)
             user.failed_login_attempts = 0
             user.locked_until = None
         else:
@@ -677,7 +663,6 @@ class UserService(BaseService[User]):
         first_name: Optional[str] = None,
         last_name: Optional[str] = None,
         invited_by_id: Optional[UUID] = None,
-        tenant_id: Optional[str] = None,
         root_entity_id: Optional[UUID] = None,
     ) -> Tuple[User, str]:
         """
@@ -689,7 +674,6 @@ class UserService(BaseService[User]):
             first_name: Optional first name
             last_name: Optional last name
             invited_by_id: UUID of inviting user
-            tenant_id: Optional tenant ID
             root_entity_id: Optional root entity ID
 
         Returns:
@@ -698,10 +682,7 @@ class UserService(BaseService[User]):
         email = validate_email(email)
 
         # Check if user already exists
-        user_lookup_filters = [User.email == email]
-        if self.config.multi_tenant:
-            user_lookup_filters.append(User.tenant_id == tenant_id)
-        existing = await self.get_one(session, *user_lookup_filters)
+        existing = await self.get_one(session, User.email == email)
         if existing:
             raise UserAlreadyExistsError(
                 message=f"User with email {email} already exists",
@@ -739,7 +720,6 @@ class UserService(BaseService[User]):
             last_name=last_name,
             status=UserStatus.INVITED,
             is_superuser=False,
-            tenant_id=tenant_id,
             root_entity_id=root_entity_id,
             invite_token=hashed_token,
             invite_token_expires=expires,

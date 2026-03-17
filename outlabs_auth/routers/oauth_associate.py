@@ -9,13 +9,12 @@ from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from httpx_oauth.integrations.fastapi import OAuth2AuthorizeCallback
-from httpx_oauth.oauth2 import BaseOAuth2, OAuth2Token
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.models.sql.social_account import SocialAccount
 from outlabs_auth.oauth.state import decode_state_token, generate_state_token
+from outlabs_auth.routers.oauth_utils import encrypt_provider_token, get_oauth_user_info
 from outlabs_auth.schemas.oauth import OAuthAuthorizeResponse, SocialAccountResponse
 
 
@@ -45,7 +44,7 @@ def _to_social_account_response(account: SocialAccount) -> SocialAccountResponse
         provider=account.provider,
         provider_user_id=account.provider_user_id,
         email=account.provider_email or "",
-        email_verified=bool(account.provider_email),
+        email_verified=account.provider_email_verified,
         display_name=account.display_name,
         avatar_url=account.avatar_url,
         linked_at=account.created_at.isoformat(),
@@ -54,7 +53,7 @@ def _to_social_account_response(account: SocialAccount) -> SocialAccountResponse
 
 
 def get_oauth_associate_router(
-    oauth_client: BaseOAuth2,
+    oauth_client: Any,
     auth: Any,
     state_secret: str,
     prefix: str = "",
@@ -63,6 +62,8 @@ def get_oauth_associate_router(
     requires_verification: bool = False,
 ) -> APIRouter:
     """Generate OAuth account association router for authenticated users."""
+    from httpx_oauth.integrations.fastapi import OAuth2AuthorizeCallback
+
     router = APIRouter(prefix=prefix, tags=tags or ["oauth"])
 
     get_current_user = auth.deps.require_auth(
@@ -150,18 +151,14 @@ def get_oauth_associate_router(
         request: Request,
         session: AsyncSession = Depends(auth.uow),
         auth_context=Depends(get_current_user),
-        access_token_state: tuple[OAuth2Token, str] = Depends(oauth2_authorize_callback),
+        access_token_state: tuple[dict[str, Any], str] = Depends(
+            oauth2_authorize_callback
+        ),
     ):
         token, state = access_token_state
         user_id = auth_context.get("user_id")
 
-        account_id, account_email = await oauth_client.get_id_email(token["access_token"])
-
-        if account_email is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email not available from OAuth provider",
-            )
+        user_info = await get_oauth_user_info(oauth_client, token)
 
         try:
             state_data = decode_state_token(state, state_secret)
@@ -195,13 +192,17 @@ def get_oauth_associate_router(
         now = datetime.now(timezone.utc)
         token_expires_at = _normalize_expires_at(token.get("expires_at"))
         store_provider_tokens = bool(getattr(auth.config, "store_oauth_provider_tokens", False))
-        provider_access_token = token["access_token"] if store_provider_tokens else None
-        provider_refresh_token = token.get("refresh_token") if store_provider_tokens else None
+        provider_access_token = (
+            encrypt_provider_token(auth, token["access_token"]) if store_provider_tokens else None
+        )
+        provider_refresh_token = (
+            encrypt_provider_token(auth, token.get("refresh_token")) if store_provider_tokens else None
+        )
 
         # Ensure this provider-user account is not linked to another user.
         linked_stmt = select(SocialAccount).where(
             SocialAccount.provider == oauth_client.name,
-            SocialAccount.provider_user_id == account_id,
+            SocialAccount.provider_user_id == user_info.provider_user_id,
         )
         linked_result = await session.execute(linked_stmt)
         linked_account = linked_result.scalar_one_or_none()
@@ -212,7 +213,8 @@ def get_oauth_associate_router(
             )
 
         if linked_account and linked_account.user_id == user.id:
-            linked_account.provider_email = account_email
+            linked_account.provider_email = user_info.email
+            linked_account.provider_email_verified = user_info.email_verified
             linked_account.update_tokens(
                 access_token=provider_access_token,
                 refresh_token=provider_refresh_token,
@@ -231,14 +233,18 @@ def get_oauth_associate_router(
         existing_provider_result = await session.execute(existing_provider_stmt)
         existing_provider_account = existing_provider_result.scalar_one_or_none()
 
-        if existing_provider_account and existing_provider_account.provider_user_id != account_id:
+        if (
+            existing_provider_account
+            and existing_provider_account.provider_user_id != user_info.provider_user_id
+        ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="A different account for this provider is already linked",
             )
 
         if existing_provider_account:
-            existing_provider_account.provider_email = account_email
+            existing_provider_account.provider_email = user_info.email
+            existing_provider_account.provider_email_verified = user_info.email_verified
             existing_provider_account.update_tokens(
                 access_token=provider_access_token,
                 refresh_token=provider_refresh_token,
@@ -250,8 +256,9 @@ def get_oauth_associate_router(
             social_account = SocialAccount(
                 user_id=user.id,
                 provider=oauth_client.name,
-                provider_user_id=account_id,
-                provider_email=account_email,
+                provider_user_id=user_info.provider_user_id,
+                provider_email=user_info.email,
+                provider_email_verified=user_info.email_verified,
                 access_token=provider_access_token,
                 refresh_token=provider_refresh_token,
                 token_expires_at=token_expires_at,

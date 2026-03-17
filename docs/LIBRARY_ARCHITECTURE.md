@@ -86,7 +86,7 @@ outlabs_auth/
 ├── middleware/
 │   ├── __init__.py
 │   ├── auth.py                 # JWT middleware
-│   └── tenant.py               # Multi-tenant middleware (optional)
+│   └── entity_context.py       # Entity context middleware (optional)
 ├── utils/
 │   ├── __init__.py
 │   ├── password.py             # Password hashing
@@ -135,7 +135,6 @@ class OutlabsAuth:
         enable_context_aware_roles: bool = False,
         enable_abac: bool = False,
         enable_caching: bool = False,
-        multi_tenant: bool = False,
         enable_audit_log: bool = False,
         # Optional dependencies
         redis_url: Optional[str] = None,
@@ -152,7 +151,6 @@ class OutlabsAuth:
             enable_context_aware_roles=enable_context_aware_roles,
             enable_abac=enable_abac,
             enable_caching=enable_caching,
-            multi_tenant=multi_tenant,
             enable_audit_log=enable_audit_log,
             redis_url=redis_url,
             **kwargs
@@ -339,7 +337,7 @@ class EnterpriseRBAC(OutlabsAuth):
 - Context-aware roles (permissions vary by entity type) - `enable_context_aware_roles=True`
 - ABAC conditions (attribute-based access control) - `enable_abac=True`
 - Permission caching (Redis) - `enable_caching=True` (requires `redis_url`)
-- Multi-tenant support - `multi_tenant=True`
+- Entity-isolated operation via root-entity scoping
 - Advanced audit logging - `enable_audit_log=True`
 
 **Example - Basic Configuration** (entity hierarchy only):
@@ -398,7 +396,6 @@ auth = EnterpriseRBAC(
     redis_enabled=True,
     enable_context_aware_roles=True,  # Opt-in
     enable_abac=True,                 # Opt-in
-    multi_tenant=True,                # Opt-in
     enable_audit_log=True             # Opt-in
 )
 
@@ -553,7 +550,7 @@ class UserRoleMembership(BaseDocument):
             "user",                       # Get user's roles
             "role",                       # Get users with role
             "is_active",                  # Filter active memberships
-            [("tenant_id", 1)]            # Multi-tenant support
+            [("root_entity_id", 1)]       # Entity isolation support
         ]
 ```
 
@@ -590,8 +587,8 @@ class EntityModel(BaseDocument):
     # Hierarchy
     parent_entity: Optional[Link["EntityModel"]] = None
 
-    # Optional: Multi-tenant support
-    tenant_id: Optional[str] = None
+    # Optional: root-entity scoping
+    root_entity_id: Optional[str] = None
 
     # Status
     status: str = "active"
@@ -682,7 +679,7 @@ is_ancestor = await EntityClosure.find_one({
 - ❌ Platform-specific isolation logic
 
 #### Added Fields
-- ✅ `tenant_id` (optional, for multi-tenant mode)
+- ✅ `root_entity_id` (optional, for entity-scoped isolation)
 
 #### Preserved Fields
 - ✅ All entity hierarchy logic
@@ -2247,7 +2244,6 @@ class EnterpriseConfig(AuthConfig):
     enable_abac: bool = False
     enable_caching: bool = False
     enable_audit_log: bool = False
-    multi_tenant: bool = False
 
     # Caching settings (only used when enable_caching=True)
     redis_url: Optional[str] = None
@@ -2284,7 +2280,7 @@ tests/integration/test_enterprise_rbac.py
 tests/integration/test_tree_permissions.py
 tests/integration/test_context_aware_roles.py
 tests/integration/test_abac_conditions.py
-tests/integration/test_multi_tenant.py
+tests/integration/test_root_entity_isolation.py
 ```
 
 ### Example Tests

@@ -26,7 +26,7 @@ Start here: Do you need organizational hierarchy (departments/teams)?
            ✓ Optional: Context-aware roles (enable_context_aware_roles=True)
            ✓ Optional: ABAC conditions (enable_abac=True)
            ✓ Optional: Redis caching (enable_caching=True)
-           ✓ Optional: Multi-tenant (multi_tenant=True)
+           ✓ Entity-isolated single app (root-entity scoping)
 
            Configure only what you need via feature flags!
 ```
@@ -85,7 +85,7 @@ Start here: Do you need organizational hierarchy (departments/teams)?
 | ABAC conditions | ❌ | ⭕ `enable_abac=True` |
 | Redis caching | ❌ | ⭕ `enable_caching=True` (requires Redis) |
 | Redis Pub/Sub cache invalidation | ❌ | ⭕ `enable_caching=True` (DD-037) |
-| Multi-tenant isolation | ❌ | ⭕ `multi_tenant=True` |
+| Tenant isolation mode | ❌ | ❌ (removed; use entity/root scoping) |
 | Audit logging | ❌ | ⭕ `enable_audit_log=True` |
 | **Performance (Updated v1.4)** |
 | Permission check | ~10ms | ~10ms (uncached)<br>~5ms (cached) |
@@ -435,7 +435,6 @@ auth = EnterpriseRBAC(
     enable_context_aware_roles=True,  # Opt-in
     enable_abac=True,                 # Opt-in
     enable_caching=True,              # Opt-in (requires Redis)
-    multi_tenant=True,                # Opt-in
     enable_audit_log=True             # Opt-in
 )
 
@@ -472,7 +471,7 @@ invoice_approval = await auth.permission_service.create_permission(
 - Context-aware roles (`enable_context_aware_roles=True`)
 - ABAC conditions (`enable_abac=True`)
 - Redis caching (`enable_caching=True`, requires Redis)
-- Multi-tenant isolation (`multi_tenant=True`)
+- Entity/root scoping isolation
 - Audit logging (`enable_audit_log=True`)
 
 **Limitations:**
@@ -643,7 +642,7 @@ Need:
 
 EnterpriseRBAC with optional features:
 - Entity hierarchy ✅ (core)
-- Multi-tenant isolation ⭕ (multi_tenant=True)
+- Tenant mode ❌ (removed)
 - ABAC for feature flags ⭕ (enable_abac=True)
 - Redis caching ⭕ (enable_caching=True)
 ```
@@ -706,7 +705,7 @@ await auth.membership_service.add_member(
 - **Context-aware roles**: Role permissions need to vary by entity type
 - **ABAC conditions**: Need attribute-based access control
 - **Redis caching**: Performance is critical (high traffic)
-- **Multi-tenant**: Need tenant isolation
+- **Entity isolation**: Need strict root-entity boundaries
 - **Audit logging**: Need comprehensive audit trails
 
 **Migration Steps:**
@@ -730,7 +729,6 @@ auth = EnterpriseRBAC(
     enable_context_aware_roles=True,  # Enable as needed
     enable_abac=True,                 # Enable as needed
     enable_caching=True,              # Enable as needed
-    multi_tenant=True,                # Enable as needed
     enable_audit_log=True             # Enable as needed
 )
 
@@ -846,7 +844,7 @@ manager_role = await auth.role_service.create_role(
 | Need ABAC | EnterpriseRBAC | + ABAC |
 | Performance critical | EnterpriseRBAC | + caching (requires Redis) |
 | Context-dependent roles | EnterpriseRBAC | + context-aware roles |
-| Multi-tenant SaaS | EnterpriseRBAC | + multi_tenant + caching |
+| Entity-isolated SaaS | EnterpriseRBAC | + root-entity scoping + caching |
 | Audit requirements | EnterpriseRBAC | + audit logging |
 
 ---
@@ -871,7 +869,7 @@ manager_role = await auth.role_service.create_role(
 - ⭕ **Context-aware roles**: Role permissions need to vary by entity type
 - ⭕ **ABAC conditions**: Complex access rules based on attributes
 - ⭕ **Redis caching**: Performance is critical (high traffic)
-- ⭕ **Multi-tenant**: Need tenant isolation
+- ✅ **Entity isolation**: Use root-entity scoping
 - ⭕ **Audit logging**: Compliance or audit trail requirements
 
 **Pro Tip**: Start with basic EnterpriseRBAC (just hierarchy) and enable optional features incrementally as needed!

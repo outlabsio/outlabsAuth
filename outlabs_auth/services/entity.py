@@ -80,7 +80,6 @@ class EntityService(BaseService[Entity]):
         description: Optional[str] = None,
         slug: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        tenant_id: Optional[UUID] = None,
         **kwargs,
     ) -> Entity:
         """
@@ -96,7 +95,6 @@ class EntityService(BaseService[Entity]):
             description: Optional description
             slug: Optional URL-friendly identifier (auto-generated if not provided)
             metadata: Optional metadata dict
-            tenant_id: Optional tenant ID for multi-tenancy
             **kwargs: Additional fields (status, valid_from, valid_until, etc.)
 
         Returns:
@@ -130,11 +128,10 @@ class EntityService(BaseService[Entity]):
         if not slug:
             slug = self._generate_slug(name)
 
-        # Check for duplicate slug (within tenant)
+        # Check for duplicate slug.
         existing = await self.get_one(
             session,
             Entity.slug == slug,
-            Entity.tenant_id == tenant_id if tenant_id else True,
         )
         if existing:
             raise InvalidInputError(
@@ -152,7 +149,6 @@ class EntityService(BaseService[Entity]):
             entity_type=entity_type.lower(),
             parent_id=parent_id,
             depth=parent_depth + 1,
-            tenant_id=tenant_id,
             **kwargs,
         )
 
@@ -178,6 +174,7 @@ class EntityService(BaseService[Entity]):
                 parent_id=str(parent_id) if parent_id else None,
             )
 
+        await self._invalidate_permission_cache(entity.id)
         return entity
 
     async def get_entity(self, session: AsyncSession, entity_id: UUID) -> Entity:
@@ -200,7 +197,7 @@ class EntityService(BaseService[Entity]):
         return entity
 
     async def get_entity_by_slug(
-        self, session: AsyncSession, slug: str, tenant_id: Optional[UUID] = None
+        self, session: AsyncSession, slug: str
     ) -> Optional[Entity]:
         """
         Get entity by slug.
@@ -208,15 +205,10 @@ class EntityService(BaseService[Entity]):
         Args:
             session: Database session
             slug: Entity slug
-            tenant_id: Optional tenant ID
-
         Returns:
             Entity or None: Entity if found
         """
-        filters = [Entity.slug == slug]
-        if tenant_id:
-            filters.append(Entity.tenant_id == tenant_id)
-        return await self.get_one(session, *filters)
+        return await self.get_one(session, Entity.slug == slug)
 
     async def update_entity(self, session: AsyncSession, entity_id: UUID, **updates) -> Entity:
         """
@@ -255,6 +247,7 @@ class EntityService(BaseService[Entity]):
                 duration_ms=duration_ms,
             )
 
+        await self._invalidate_permission_cache(entity.id)
         return entity
 
     async def move_entity(
@@ -402,7 +395,6 @@ class EntityService(BaseService[Entity]):
                             "ancestor_id": ancestor_id,
                             "descendant_id": descendant_id,
                             "depth": int(depth_to_parent) + 1 + int(depth_from_root),
-                            "tenant_id": entity.tenant_id,
                         }
                     )
 
@@ -427,6 +419,7 @@ class EntityService(BaseService[Entity]):
                 parent_id=str(new_parent_id) if new_parent_id else None,
             )
 
+        await self._invalidate_permission_cache(entity.id)
         return entity
 
     async def delete_entity(self, session: AsyncSession, entity_id: UUID, cascade: bool = False) -> bool:
@@ -499,6 +492,7 @@ class EntityService(BaseService[Entity]):
                 cascade=cascade,
             )
 
+        await self._invalidate_permission_cache(entity_id)
         return True
 
     async def get_entity_path(self, session: AsyncSession, entity_id: UUID) -> List[Entity]:
@@ -723,7 +717,6 @@ class EntityService(BaseService[Entity]):
             ancestor_id=entity.id,
             descendant_id=entity.id,
             depth=0,
-            tenant_id=entity.tenant_id,
         )
         session.add(self_closure)
 
@@ -740,7 +733,6 @@ class EntityService(BaseService[Entity]):
                     ancestor_id=closure.ancestor_id,
                     descendant_id=entity.id,
                     depth=closure.depth + 1,
-                    tenant_id=entity.tenant_id,
                 )
                 session.add(ancestor_closure)
 
@@ -1022,6 +1014,13 @@ class EntityService(BaseService[Entity]):
         )
         result = await session.execute(stmt)
         return result.scalar_one_or_none() is not None
+
+    async def _invalidate_permission_cache(self, entity_id: UUID) -> None:
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is None:
+            return
+        await cache_service.publish_entity_permissions_invalidation(str(entity_id))
+        await cache_service.publish_all_permissions_invalidation()
 
     async def get_ancestors(self, session: AsyncSession, entity_id: UUID, include_self: bool = False) -> List[Entity]:
         """

@@ -265,7 +265,7 @@ Do you have departments/teams/organizational hierarchy?
 - ✅ Context-aware roles (opt-in)
 - ✅ ABAC conditions (opt-in)
 - ✅ Redis caching (opt-in)
-- ✅ Multi-tenant support (opt-in)
+- ✅ Entity-isolated architecture (single app)
 
 ## Authentication Methods
 
@@ -503,7 +503,7 @@ We extend these patterns with advanced authorization features:
 - Hierarchical entity system
 - Tree permissions with closure table
 - Context-aware roles
-- Multi-tenant support
+- Entity-based isolation via root entities
 
 Special thanks to the FastAPI-Users team for pioneering these patterns in the FastAPI ecosystem.
 

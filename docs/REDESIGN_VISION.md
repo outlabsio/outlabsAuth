@@ -102,7 +102,7 @@ auth = SimpleRBAC(database=db)
 # Enterprise RBAC: Thin wrapper with feature flags
 auth = EnterpriseRBAC(database=db)
 # Entity hierarchy + tree permissions (always included)
-# Optional: context-aware roles, ABAC, caching, multi-tenant
+# Optional: context-aware roles, ABAC, caching
 
 # Direct use of core (maximum flexibility)
 auth = OutlabsAuth(
@@ -111,7 +111,6 @@ auth = OutlabsAuth(
     enable_context_aware_roles=True,  # Opt-in
     enable_abac=True,                 # Opt-in
     enable_caching=True,              # Opt-in
-    multi_tenant=True,                # Opt-in
     redis_url="redis://localhost:6379"
 )
 ```
@@ -237,8 +236,8 @@ Our current system has several brilliant design elements:
 
 1. **Remove Platform Abstraction**
    - **Old**: Multiple platforms per deployment
-   - **New**: One "tenant" per application (optional multi-tenant mode)
-   - **Change**: Remove `platform_id`, optionally add `tenant_id`
+   - **New**: One application deployment with entity-based isolation
+   - **Change**: Remove `platform_id` and tenant-mode assumptions
 
 2. **Simplify Permission System**
    - **Old**: System permissions vs custom permissions distinction

@@ -123,8 +123,10 @@ from outlabs_auth.presets import EnterpriseRBAC, SimpleRBAC
 from outlabs_auth.services import (
     AuthService,
     BaseService,
+    CacheService,
     PermissionService,
     RoleService,
+    ServiceTokenService,
     TokenPair,
     UserService,
 )
@@ -149,10 +151,12 @@ __all__ = [
     "EnterpriseRBAC",
     # Services
     "BaseService",
+    "CacheService",
     "UserService",
     "RoleService",
     "PermissionService",
     "AuthService",
+    "ServiceTokenService",
     "TokenPair",
     # Database
     "DatabaseConfig",

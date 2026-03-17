@@ -31,9 +31,10 @@ Coverage note:
 - targeted regression coverage exists for these additions in:
   - `tests/integration/test_membership_lifecycle_api.py`
   - `tests/integration/test_role_assignment.py` (`role-memberships` cases)
-- a comprehensive admin user-details contract suite is still missing
+- comprehensive admin user-details contract coverage now exists in:
+  - `tests/integration/test_admin_user_details_contract.py`
 
-That missing suite should eventually cover the full record-page lifecycle together:
+That suite covers the full record-page lifecycle together:
 
 - profile update
 - status change and suspension window handling

@@ -241,7 +241,6 @@ class Role(BaseModel, table=True):
     __tablename__ = "roles"
     __table_args__ = (
         Index("ix_roles_name", "name"),
-        Index("ix_roles_name_tenant", "name", "tenant_id"),
         Index("ix_roles_is_global", "is_global"),
         Index("ix_roles_root_entity_id", "root_entity_id"),
         Index("ix_roles_scope_entity_id", "scope_entity_id"),

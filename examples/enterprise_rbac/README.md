@@ -1,6 +1,6 @@
 # EnterpriseRBAC Example - Real Estate Leads Platform
 
-This example demonstrates OutlabsAuth's **EnterpriseRBAC** preset with real-world complexity through a multi-tenant real estate leads platform.
+This example demonstrates OutlabsAuth's **EnterpriseRBAC** preset with real-world complexity through an entity-isolated real estate leads platform.
 
 ## 🎯 What This Demonstrates
 

@@ -74,7 +74,6 @@ class APIKeyService(BaseService[APIKey]):
         ip_whitelist: Optional[List[str]] = None,
         expires_in_days: Optional[int] = None,
         description: Optional[str] = None,
-        tenant_id: Optional[UUID] = None,
         prefix_type: str = "sk_live",
     ) -> tuple[str, APIKey]:
         """
@@ -93,7 +92,6 @@ class APIKeyService(BaseService[APIKey]):
             ip_whitelist: Allowed IP addresses
             expires_in_days: Days until expiration
             description: Optional description
-            tenant_id: Optional tenant ID
             prefix_type: Key prefix (sk_live, sk_test)
 
         Returns:
@@ -131,7 +129,6 @@ class APIKeyService(BaseService[APIKey]):
             entity_id=entity_id,
             inherit_from_tree=inherit_from_tree,
             description=description,
-            tenant_id=tenant_id,
         )
 
         session.add(api_key)
@@ -259,6 +256,21 @@ class APIKeyService(BaseService[APIKey]):
             await self._check_rate_limits(api_key)
 
         return api_key, usage_count
+
+    @staticmethod
+    def scopes_allow_permission(scopes: Optional[List[str]], required_scope: str) -> bool:
+        """Check whether API key scopes allow a permission."""
+        normalized = {
+            ("*:*" if scope == "*" else scope)
+            for scope in (scopes or [])
+            if scope
+        }
+        if not normalized:
+            return True
+
+        from outlabs_auth.services.permission import PermissionService
+
+        return PermissionService._permission_set_allows(required_scope, normalized)
 
     async def _check_scope(self, session: AsyncSession, api_key_id: UUID, required_scope: str) -> bool:
         """Check if API key has required scope."""

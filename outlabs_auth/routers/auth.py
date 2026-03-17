@@ -176,7 +176,7 @@ def get_auth_router(
 
             # Check verification requirement
             if requires_verification:
-                if not hasattr(user, "is_verified") or not user.is_verified:
+                if not getattr(user, "email_verified", False):
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="Email verification required",
@@ -427,8 +427,9 @@ def get_auth_router(
                     entity_id=UUID(data.entity_id),
                     user_id=user.id,
                     role_ids=[UUID(rid) for rid in data.role_ids] if data.role_ids else [],
-                    added_by_id=actor_user_id,
+                    joined_by_id=actor_user_id,
                 )
+                await session.refresh(user)
 
             # Trigger hook
             await auth.user_service.on_after_invite(user, plain_token)

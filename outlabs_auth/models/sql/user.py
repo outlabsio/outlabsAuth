@@ -49,10 +49,9 @@ class User(BaseModel, table=True):
 
     __tablename__ = "users"
     __table_args__ = (
-        UniqueConstraint("email", "tenant_id", name="uq_users_email_tenant"),
+        UniqueConstraint("email", name="uq_users_email"),
         Index("ix_users_email", "email"),
         Index("ix_users_status", "status"),
-        Index("ix_users_tenant_id", "tenant_id"),
         Index("ix_users_root_entity_id", "root_entity_id"),
     )
 
@@ -70,7 +69,7 @@ class User(BaseModel, table=True):
     # === Authentication ===
     email: str = Field(
         sa_column=Column(String(255), nullable=False),
-        description="User email address (unique per tenant)",
+        description="User email address",
     )
     hashed_password: Optional[str] = Field(
         default=None,

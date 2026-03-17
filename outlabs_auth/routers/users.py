@@ -92,11 +92,6 @@ def get_users_router(
             )
         return actor_user
 
-    def _is_tenant_scoped(actor_user: Any) -> bool:
-        return bool(
-            auth.config.multi_tenant and actor_user is not None and not getattr(actor_user, "is_superuser", False)
-        )
-
     async def _get_target_user_or_404(
         session: AsyncSession,
         target_user_id: UUID,
@@ -109,20 +104,15 @@ def get_users_router(
                 detail="User not found",
             )
 
-        if _is_tenant_scoped(actor_user):
-            if target_user.tenant_id != actor_user.tenant_id:
-                # Use 404 to avoid cross-tenant user enumeration.
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="User not found",
-                )
-
         return target_user
 
     async def _build_role_response(session: AsyncSession, role: Any) -> RoleResponse:
         from outlabs_auth.models.sql import Entity
         from outlabs_auth.models.sql.enums import RoleScope
+        from outlabs_auth.models.sql.permission import Permission
+        from outlabs_auth.models.sql.role import RoleEntityTypePermission
         from outlabs_auth.schemas.role import RoleScopeEnum
+        from sqlalchemy import select
 
         root_entity_name = None
         if role.root_entity_id:
@@ -142,13 +132,22 @@ def get_users_router(
 
         permission_names = role.get_permission_names() if hasattr(role, "get_permission_names") else []
 
+        entity_type_permissions = {}
+        entries = await session.execute(
+            select(RoleEntityTypePermission.entity_type, Permission.name)
+            .join(Permission, Permission.id == RoleEntityTypePermission.permission_id)
+            .where(RoleEntityTypePermission.role_id == role.id)
+        )
+        for entity_type, permission_name in entries.all():
+            entity_type_permissions.setdefault(entity_type, []).append(permission_name)
+
         return RoleResponse(
             id=str(role.id),
             name=role.name,
             display_name=role.display_name,
             description=role.description,
             permissions=permission_names,
-            entity_type_permissions=None,
+            entity_type_permissions=entity_type_permissions or None,
             is_system_role=role.is_system_role,
             is_global=role.is_global,
             root_entity_id=str(role.root_entity_id) if role.root_entity_id else None,
@@ -200,8 +199,6 @@ def get_users_router(
                         detail="Only superusers or users with user:create_superuser can create superusers",
                     )
 
-            tenant_id = actor_user.tenant_id if _is_tenant_scoped(actor_user) else None
-
             user = await auth.user_service.create_user(
                 session,
                 email=data.email,
@@ -209,7 +206,6 @@ def get_users_router(
                 first_name=data.first_name,
                 last_name=data.last_name,
                 is_superuser=data.is_superuser,
-                tenant_id=tenant_id,
                 root_entity_id=UUID(data.root_entity_id) if data.root_entity_id else None,
             )
 
@@ -272,7 +268,6 @@ def get_users_router(
         """
         try:
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
-            tenant_id = actor_user.tenant_id if _is_tenant_scoped(actor_user) else None
             parsed_status = None
             if user_status is not None:
                 try:
@@ -292,7 +287,6 @@ def get_users_router(
                     status=parsed_status,
                     is_superuser=is_superuser,
                     root_entity_id=root_entity_id,
-                    tenant_id=tenant_id,
                 )
 
                 # Manual pagination of search results
@@ -309,7 +303,6 @@ def get_users_router(
                     status=parsed_status,
                     is_superuser=is_superuser,
                     root_entity_id=root_entity_id,
-                    tenant_id=tenant_id,
                 )
 
             # Calculate total pages

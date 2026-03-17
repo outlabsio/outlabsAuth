@@ -48,6 +48,8 @@ class ServiceTokenService:
         >>> payload["permissions"]  # ['report:generate', 'data:read']
     """
 
+    SERVICE_AUDIENCE = "outlabs-auth:service"
+
     def __init__(self, config: AuthConfig):
         """
         Initialize ServiceTokenService.
@@ -93,6 +95,7 @@ class ServiceTokenService:
         payload = {
             "sub": service_id,  # Subject (service ID)
             "type": "service",  # Token type
+            "aud": self.SERVICE_AUDIENCE,
             "service_name": service_name,
             "permissions": permissions,  # Embedded permissions
             "iat": datetime.now(timezone.utc),  # Issued at
@@ -147,6 +150,7 @@ class ServiceTokenService:
                 token,
                 self.config.secret_key,
                 algorithms=[self.config.algorithm],
+                audience=self.SERVICE_AUDIENCE,
             )
 
             # Verify it's a service token
@@ -190,23 +194,15 @@ class ServiceTokenService:
             ...     # Service has permission to export data
         """
         permissions = token_payload.get("permissions", [])
+        normalized = {
+            ("*:*" if permission == "*" else permission)
+            for permission in permissions
+            if permission
+        }
 
-        # Check exact permission
-        if required_permission in permissions:
-            return True
+        from outlabs_auth.services.permission import PermissionService
 
-        # Check wildcard permissions
-        resource, action = required_permission.split(":", 1) if ":" in required_permission else (required_permission, "*")
-
-        # Check resource wildcard (e.g., "data:*")
-        if f"{resource}:*" in permissions:
-            return True
-
-        # Check full wildcard (e.g., "*:*")
-        if "*:*" in permissions:
-            return True
-
-        return False
+        return PermissionService._permission_set_allows(required_permission, normalized)
 
     def get_service_permissions(self, token_payload: Dict[str, Any]) -> List[str]:
         """
@@ -331,3 +327,11 @@ class ServiceTokenService:
             expires_days=expires_days,
             metadata={"service_type": "worker"}
         )
+
+    def create_token(self, *args: Any, **kwargs: Any) -> str:
+        """Backward-compatible alias for service token creation."""
+        return self.create_service_token(*args, **kwargs)
+
+    def validate_jwt(self, token: str) -> Dict[str, Any]:
+        """Backward-compatible alias for service token validation."""
+        return self.validate_service_token(token)

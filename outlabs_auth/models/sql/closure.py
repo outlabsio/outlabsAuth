@@ -44,7 +44,6 @@ class EntityClosure(BaseModel, table=True):
         Index("ix_closure_descendant_id", "descendant_id"),
         Index("ix_closure_ancestor_depth", "ancestor_id", "depth"),
         Index("ix_closure_descendant_depth", "descendant_id", "depth"),
-        Index("ix_closure_tenant_id", "tenant_id"),
     )
 
     # === Foreign Keys to Entity ===

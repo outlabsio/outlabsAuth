@@ -42,6 +42,91 @@ class AuthDeps:
         self.get_session = get_session
         self.services = services
 
+    def _permission_set_allows(
+        self,
+        required_permission: str,
+        granted_permissions: Sequence[str],
+    ) -> bool:
+        permission_service = self.services.get("permission_service")
+        normalized = {
+            ("*:*" if permission == "*" else permission)
+            for permission in granted_permissions
+            if permission
+        }
+        if permission_service and hasattr(permission_service, "_permission_set_allows"):
+            return permission_service._permission_set_allows(required_permission, normalized)
+        return required_permission in normalized or "*:*" in normalized
+
+    async def _auth_result_has_permission(
+        self,
+        *,
+        auth_result: dict,
+        session: AsyncSession,
+        permission: str,
+        entity_id: Optional[UUID],
+        resource_context: Optional[dict],
+        env_context: Optional[dict],
+    ) -> bool:
+        source = auth_result.get("source")
+        permission_service = self.services.get("permission_service")
+        api_key_service = self.api_key_service
+        service_token_service = self.services.get("service_token_service")
+
+        if source == "service_token":
+            granted_permissions = (auth_result.get("metadata") or {}).get("permissions", [])
+            if service_token_service is not None:
+                return service_token_service.check_service_permission(
+                    auth_result.get("metadata") or {},
+                    permission,
+                )
+            return self._permission_set_allows(permission, granted_permissions)
+
+        user_id = auth_result.get("user_id")
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User ID not found in auth result",
+            )
+
+        try:
+            user_id_uuid = user_id if isinstance(user_id, UUID) else UUID(str(user_id))
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid user ID in auth result",
+            )
+
+        has_permission = await permission_service.check_permission(
+            session,
+            user_id=user_id_uuid,
+            permission=permission,
+            entity_id=entity_id,
+            resource_context=resource_context,
+            env_context=env_context,
+        )
+        if not has_permission:
+            return False
+
+        if source != "api_key":
+            return True
+
+        api_key = auth_result.get("api_key")
+        api_key_scopes = (auth_result.get("metadata") or {}).get("scopes", [])
+        if api_key is None or api_key_service is None:
+            return False
+
+        if not api_key_service.scopes_allow_permission(api_key_scopes, permission):
+            return False
+
+        if entity_id is not None:
+            return await api_key_service.check_entity_access_with_tree(
+                session,
+                api_key,
+                entity_id,
+            )
+
+        return True
+
     def require_auth(
         self, active: bool = True, verified: bool = False, optional: bool = False
     ) -> Callable:
@@ -156,23 +241,9 @@ class AuthDeps:
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Permission service not configured",
                 )
-
-            user_id = auth_result.get("user_id")
-            if not user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="User ID not found in auth result",
-                )
-
-            try:
-                user_id_uuid = (
-                    user_id if isinstance(user_id, UUID) else UUID(str(user_id))
-                )
-            except Exception:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid user ID in auth result",
-                )
+            abac_enabled = bool(
+                getattr(getattr(permission_service, "config", None), "enable_abac", False)
+            )
 
             if session is None:
                 raise HTTPException(
@@ -181,40 +252,41 @@ class AuthDeps:
                 )
 
             entity_id = _parse_entity_context_id(request)
-            request_resource_context = getattr(request.state, "resource_context", None)
-            request_resource_context = (
-                request_resource_context
-                if isinstance(request_resource_context, dict)
-                else None
-            )
-
             resource_context: Optional[dict] = None
-            if resource_context_provider is not None:
-                maybe_context = resource_context_provider(request, session, auth_result)
-                if inspect.isawaitable(maybe_context):
-                    maybe_context = await maybe_context
-                if isinstance(maybe_context, dict):
-                    # Provider takes precedence over request-provided context (e.g. header middleware).
-                    resource_context = (
-                        {**request_resource_context, **maybe_context}
-                        if request_resource_context
-                        else maybe_context
-                    )
-            else:
-                resource_context = request_resource_context
+            env_context: Optional[dict] = None
+            if abac_enabled:
+                request_resource_context = getattr(request.state, "resource_context", None)
+                request_resource_context = (
+                    request_resource_context
+                    if isinstance(request_resource_context, dict)
+                    else None
+                )
 
-            env_context = {
-                "method": request.method,
-                "path": request.url.path,
-                "client_host": request.client.host if request.client else None,
-                "user_agent": request.headers.get("user-agent"),
-            }
+                if resource_context_provider is not None:
+                    maybe_context = resource_context_provider(request, session, auth_result)
+                    if inspect.isawaitable(maybe_context):
+                        maybe_context = await maybe_context
+                    if isinstance(maybe_context, dict):
+                        resource_context = (
+                            {**request_resource_context, **maybe_context}
+                            if request_resource_context
+                            else maybe_context
+                        )
+                else:
+                    resource_context = request_resource_context
+
+                env_context = {
+                    "method": request.method,
+                    "path": request.url.path,
+                    "client_host": request.client.host if request.client else None,
+                    "user_agent": request.headers.get("user-agent"),
+                }
 
             if require_all:
                 for perm in permissions:
-                    has_perm = await permission_service.check_permission(
-                        session,
-                        user_id=user_id_uuid,
+                    has_perm = await self._auth_result_has_permission(
+                        auth_result=auth_result,
+                        session=session,
                         permission=perm,
                         entity_id=entity_id,
                         resource_context=resource_context,
@@ -228,9 +300,9 @@ class AuthDeps:
             else:
                 has_any = False
                 for perm in permissions:
-                    if await permission_service.check_permission(
-                        session,
-                        user_id=user_id_uuid,
+                    if await self._auth_result_has_permission(
+                        auth_result=auth_result,
+                        session=session,
                         permission=perm,
                         entity_id=entity_id,
                         resource_context=resource_context,
@@ -293,23 +365,9 @@ class AuthDeps:
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Permission service not configured",
                 )
-
-            user_id = auth_result.get("user_id")
-            if not user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="User ID not found in auth result",
-                )
-
-            try:
-                user_id_uuid = (
-                    user_id if isinstance(user_id, UUID) else UUID(str(user_id))
-                )
-            except Exception:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid user ID in auth result",
-                )
+            abac_enabled = bool(
+                getattr(getattr(permission_service, "config", None), "enable_abac", False)
+            )
 
             if session is None:
                 raise HTTPException(
@@ -324,20 +382,23 @@ class AuthDeps:
                 raw_entity_id = request.headers.get("X-Entity-Context")
 
             entity_id = _parse_uuid(raw_entity_id, detail="Entity ID is required")
-            resource_context = getattr(request.state, "resource_context", None)
-            resource_context = (
-                resource_context if isinstance(resource_context, dict) else None
-            )
-            env_context = {
-                "method": request.method,
-                "path": request.url.path,
-                "client_host": request.client.host if request.client else None,
-                "user_agent": request.headers.get("user-agent"),
-            }
+            resource_context = None
+            env_context = None
+            if abac_enabled:
+                resource_context = getattr(request.state, "resource_context", None)
+                resource_context = (
+                    resource_context if isinstance(resource_context, dict) else None
+                )
+                env_context = {
+                    "method": request.method,
+                    "path": request.url.path,
+                    "client_host": request.client.host if request.client else None,
+                    "user_agent": request.headers.get("user-agent"),
+                }
 
-            has_perm = await permission_service.check_permission(
-                session,
-                user_id=user_id_uuid,
+            has_perm = await self._auth_result_has_permission(
+                auth_result=auth_result,
+                session=session,
                 permission=permission,
                 entity_id=entity_id,
                 resource_context=resource_context,
@@ -423,23 +484,9 @@ class AuthDeps:
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Permission service not configured",
                 )
-
-            user_id = auth_result.get("user_id")
-            if not user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="User ID not found in auth result",
-                )
-
-            try:
-                user_id_uuid = (
-                    user_id if isinstance(user_id, UUID) else UUID(str(user_id))
-                )
-            except Exception:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid user ID in auth result",
-                )
+            abac_enabled = bool(
+                getattr(getattr(permission_service, "config", None), "enable_abac", False)
+            )
 
             if session is None:
                 raise HTTPException(
@@ -469,20 +516,23 @@ class AuthDeps:
                 else permission
             )
 
-            resource_context = getattr(request.state, "resource_context", None)
-            resource_context = (
-                resource_context if isinstance(resource_context, dict) else None
-            )
-            env_context = {
-                "method": request.method,
-                "path": request.url.path,
-                "client_host": request.client.host if request.client else None,
-                "user_agent": request.headers.get("user-agent"),
-            }
+            resource_context = None
+            env_context = None
+            if abac_enabled:
+                resource_context = getattr(request.state, "resource_context", None)
+                resource_context = (
+                    resource_context if isinstance(resource_context, dict) else None
+                )
+                env_context = {
+                    "method": request.method,
+                    "path": request.url.path,
+                    "client_host": request.client.host if request.client else None,
+                    "user_agent": request.headers.get("user-agent"),
+                }
 
-            has_perm = await permission_service.check_permission(
-                session,
-                user_id=user_id_uuid,
+            has_perm = await self._auth_result_has_permission(
+                auth_result=auth_result,
+                session=session,
                 permission=required_permission,
                 entity_id=entity_id,
                 resource_context=resource_context,

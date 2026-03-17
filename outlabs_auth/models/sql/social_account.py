@@ -9,7 +9,7 @@ from typing import Optional, TYPE_CHECKING
 from uuid import UUID
 
 from sqlmodel import Field, Relationship, SQLModel
-from sqlalchemy import Column, Index, UniqueConstraint, ForeignKey, String, DateTime, Text
+from sqlalchemy import Boolean, Column, Index, UniqueConstraint, ForeignKey, String, DateTime, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 from outlabs_auth.database.base import BaseModel
@@ -33,7 +33,6 @@ class SocialAccount(BaseModel, table=True):
         UniqueConstraint("provider", "provider_user_id", name="uq_social_provider_user"),
         Index("ix_social_accounts_user_id", "user_id"),
         Index("ix_social_accounts_provider", "provider"),
-        Index("ix_social_accounts_tenant_id", "tenant_id"),
     )
 
     # === User Link ===
@@ -58,6 +57,11 @@ class SocialAccount(BaseModel, table=True):
         default=None,
         sa_column=Column(String(255), nullable=True),
         description="Email from the provider (may differ from user's primary email)",
+    )
+    provider_email_verified: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, default=False),
+        description="Whether the provider verified this email address",
     )
     provider_username: Optional[str] = Field(
         default=None,

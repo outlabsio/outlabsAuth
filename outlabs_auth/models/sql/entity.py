@@ -43,13 +43,12 @@ class Entity(BaseModel, table=True):
 
     __tablename__ = "entities"
     __table_args__ = (
-        UniqueConstraint("slug", "tenant_id", name="uq_entities_slug_tenant"),
+        UniqueConstraint("slug", name="uq_entities_slug"),
         Index("ix_entities_name", "name"),
         Index("ix_entities_slug", "slug"),
         Index("ix_entities_class_type", "entity_class", "entity_type"),
         Index("ix_entities_parent_id", "parent_id"),
         Index("ix_entities_status", "status"),
-        Index("ix_entities_tenant_id", "tenant_id"),
     )
 
     # === Identity ===

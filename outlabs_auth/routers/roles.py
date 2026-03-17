@@ -38,6 +38,9 @@ async def _build_role_response(
 ) -> RoleResponse:
     """Build a RoleResponse from a Role model with permissions."""
     from outlabs_auth.models.sql import Entity
+    from outlabs_auth.models.sql.permission import Permission
+    from outlabs_auth.models.sql.role import RoleEntityTypePermission
+    from sqlalchemy import select
 
     # Get root entity name (fetch from DB to avoid lazy loading issues)
     root_entity_name = None
@@ -58,13 +61,22 @@ async def _build_role_response(
     if role.scope == RoleScope.ENTITY_ONLY:
         scope_value = RoleScopeEnum.ENTITY_ONLY
 
+    entity_type_permissions = {}
+    entries = await session.execute(
+        select(RoleEntityTypePermission.entity_type, Permission.name)
+        .join(Permission, Permission.id == RoleEntityTypePermission.permission_id)
+        .where(RoleEntityTypePermission.role_id == role.id)
+    )
+    for entity_type, permission_name in entries.all():
+        entity_type_permissions.setdefault(entity_type, []).append(permission_name)
+
     return RoleResponse(
         id=str(role.id),
         name=role.name,
         display_name=role.display_name,
         description=role.description,
         permissions=permission_names,
-        entity_type_permissions=None,
+        entity_type_permissions=entity_type_permissions or None,
         is_system_role=role.is_system_role,
         is_global=role.is_global,
         root_entity_id=str(role.root_entity_id) if role.root_entity_id else None,
@@ -248,6 +260,7 @@ def get_roles_router(
             else None,
             scope=scope,
             is_auto_assigned=data.is_auto_assigned,
+            entity_type_permissions=data.entity_type_permissions,
         )
 
         permission_names = await auth.role_service.get_role_permission_names(
@@ -317,6 +330,13 @@ def get_roles_router(
                 session,
                 role_id=role_id,
                 permission_names=update_dict["permissions"],
+            )
+
+        if "entity_type_permissions" in update_dict:
+            role = await auth.role_service.set_entity_type_permissions(
+                session,
+                role_id=role_id,
+                entity_type_permissions=update_dict["entity_type_permissions"],
             )
 
         permission_names = await auth.role_service.get_role_permission_names(

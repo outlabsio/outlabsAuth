@@ -59,10 +59,10 @@ class OutlabsAuth:
         enable_context_aware_roles: bool = False,
         enable_abac: bool = False,
         enable_caching: bool = False,
-        multi_tenant: bool = False,
         enable_audit_log: bool = False,
         trust_resource_context_header: bool = False,
         store_oauth_provider_tokens: bool = False,
+        oauth_token_encryption_key: Optional[str] = None,
         enable_notifications: bool = False,
         # Password settings
         password_min_length: int = 8,
@@ -107,10 +107,10 @@ class OutlabsAuth:
             enable_context_aware_roles: Context-based role permissions (optional)
             enable_abac: Attribute-based access control (optional)
             enable_caching: Redis caching for performance (optional)
-            multi_tenant: Multi-tenant isolation (optional)
             enable_audit_log: Audit logging for compliance (optional)
             trust_resource_context_header: Trust client-provided X-Resource-Context headers for ABAC
             store_oauth_provider_tokens: Persist OAuth provider tokens in database
+            oauth_token_encryption_key: Fernet key for OAuth provider token encryption
             enable_notifications: Enable notification system (optional)
 
             redis_enabled: Enable Redis features (caching, counters, activity tracking)
@@ -127,6 +127,11 @@ class OutlabsAuth:
         if not secret_key:
             raise ConfigurationError("secret_key is required")
 
+        if "multi_tenant" in kwargs:
+            raise ConfigurationError(
+                "multi_tenant is no longer supported. Use entity hierarchy and root-entity scoping instead."
+            )
+
         # Validate configuration
         self._validate_config(
             enable_entity_hierarchy=enable_entity_hierarchy,
@@ -134,6 +139,8 @@ class OutlabsAuth:
             enable_abac=enable_abac,
             enable_caching=enable_caching,
             redis_url=redis_url,
+            store_oauth_provider_tokens=store_oauth_provider_tokens,
+            oauth_token_encryption_key=oauth_token_encryption_key,
         )
 
         # Set redis_enabled based on redis_url if not explicitly set
@@ -164,10 +171,10 @@ class OutlabsAuth:
             enable_abac=enable_abac,
             enable_caching=enable_caching,
             redis_enabled=redis_enabled,
-            multi_tenant=multi_tenant,
             enable_audit_log=enable_audit_log,
             trust_resource_context_header=trust_resource_context_header,
             store_oauth_provider_tokens=store_oauth_provider_tokens,
+            oauth_token_encryption_key=oauth_token_encryption_key,
             redis_url=redis_url,
             cache_ttl_seconds=cache_ttl_seconds,
             **kwargs,
@@ -208,7 +215,9 @@ class OutlabsAuth:
         self.membership_service = None
         self.config_service = None
         self.cache_service = None
+        self.cache = None
         self.activity_tracker = None
+        self.oauth_token_cipher = None
 
         # Redis client
         self.redis_client = None
@@ -231,6 +240,8 @@ class OutlabsAuth:
         enable_abac: bool,
         enable_caching: bool,
         redis_url: Optional[str],
+        store_oauth_provider_tokens: bool,
+        oauth_token_encryption_key: Optional[str],
     ):
         """Validate configuration is internally consistent."""
         # Context-aware roles require entity hierarchy
@@ -240,6 +251,11 @@ class OutlabsAuth:
         # Caching requires Redis URL
         if enable_caching and not redis_url:
             raise ConfigurationError("enable_caching=True requires redis_url parameter")
+
+        if store_oauth_provider_tokens and not oauth_token_encryption_key:
+            raise ConfigurationError(
+                "store_oauth_provider_tokens=True requires oauth_token_encryption_key"
+            )
 
     async def initialize(self):
         """
@@ -287,6 +303,8 @@ class OutlabsAuth:
         # Connect to Redis if available
         if self.redis_client:
             await self.redis_client.connect()
+            if self.cache_service is not None:
+                await self.cache_service.start()
 
         # Initialize authentication backends
         self._init_backends()
@@ -317,9 +335,12 @@ class OutlabsAuth:
         from outlabs_auth.services.access_scope import AccessScopeService
         from outlabs_auth.services.api_key import APIKeyService
         from outlabs_auth.services.auth import AuthService
+        from outlabs_auth.services.cache import CacheService
         from outlabs_auth.services.permission import PermissionService
         from outlabs_auth.services.role import RoleService
+        from outlabs_auth.services.service_token import ServiceTokenService
         from outlabs_auth.services.user import UserService
+        from outlabs_auth.utils.crypto import FernetCipher
 
         # Core services
         self.auth_service = AuthService(
@@ -331,6 +352,7 @@ class OutlabsAuth:
         self.user_service = UserService(
             self.config,
             notification_service=self.notification_service,
+            auth_service=self.auth_service,
         )
         self.role_service = RoleService(self.config)
         self.permission_service = PermissionService(
@@ -344,6 +366,12 @@ class OutlabsAuth:
             from outlabs_auth.services.redis_client import RedisClient
 
             self.redis_client = RedisClient(self.config)
+            if self.config.enable_caching:
+                self.cache_service = CacheService(self.redis_client, self.config)
+                self.cache = self.cache_service
+
+        if self.config.store_oauth_provider_tokens:
+            self.oauth_token_cipher = FernetCipher(self.config.oauth_token_encryption_key)
 
         # Entity, membership, and config services for EnterpriseRBAC
         if self.config.enable_entity_hierarchy:
@@ -367,8 +395,16 @@ class OutlabsAuth:
         self.api_key_service = APIKeyService(self.config, redis_client=self.redis_client)
 
         # Service Token service
-        # TODO: Update ServiceTokenService for PostgreSQL
-        # self.service_token_service = ServiceTokenService(...)
+        self.service_token_service = ServiceTokenService(self.config)
+
+        for service in (
+            self.role_service,
+            self.permission_service,
+            self.entity_service,
+            self.membership_service,
+        ):
+            if service is not None:
+                setattr(service, "cache_service", self.cache_service)
 
         # Activity tracking
         if self.config.enable_activity_tracking:
@@ -453,6 +489,7 @@ class OutlabsAuth:
             role_service=self.role_service,
             entity_service=self.entity_service,
             membership_service=self.membership_service,
+            service_token_service=self.service_token_service,
             activity_tracker=self.activity_tracker,
             get_session=self.uow,  # Shared per-request unit-of-work
         )
@@ -611,7 +648,6 @@ class OutlabsAuth:
             "context_aware_roles": self.config.enable_context_aware_roles,
             "abac": self.config.enable_abac,
             "caching": self.config.enable_caching,
-            "multi_tenant": self.config.multi_tenant,
             "audit_log": self.config.enable_audit_log,
             "invitations": self.config.enable_invitations,
         }
@@ -685,6 +721,9 @@ class OutlabsAuth:
                 await self._activity_sync_task
             except asyncio.CancelledError:
                 pass
+
+        if self.cache_service is not None:
+            await self.cache_service.shutdown()
 
         # Close Redis connection
         if self.redis_client:

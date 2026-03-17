@@ -239,6 +239,7 @@ class MembershipService(BaseService[EntityMembership]):
                     performed_by=str(joined_by_id) if joined_by_id else None,
                 )
 
+            await self._invalidate_membership_permissions_cache(user_id)
             return existing
 
         # Create new membership
@@ -248,7 +249,6 @@ class MembershipService(BaseService[EntityMembership]):
             joined_by_id=joined_by_id,
             valid_from=valid_from,
             valid_until=valid_until,
-            tenant_id=entity.tenant_id,
             status=status,
             revocation_reason=reason,
         )
@@ -279,6 +279,7 @@ class MembershipService(BaseService[EntityMembership]):
                 performed_by=str(joined_by_id) if joined_by_id else None,
             )
 
+        await self._invalidate_membership_permissions_cache(user_id)
         return membership
 
     async def remove_member(
@@ -345,6 +346,7 @@ class MembershipService(BaseService[EntityMembership]):
                 performed_by=str(revoked_by_id) if revoked_by_id else None,
             )
 
+        await self._invalidate_membership_permissions_cache(user_id)
         return True
 
     async def update_membership(
@@ -461,6 +463,7 @@ class MembershipService(BaseService[EntityMembership]):
 
         await session.flush()
         await session.refresh(membership, ["roles"])
+        await self._invalidate_membership_permissions_cache(user_id)
 
         return membership
 
@@ -861,6 +864,7 @@ class MembershipService(BaseService[EntityMembership]):
                 status="suspended",
             )
 
+        await self._invalidate_membership_permissions_cache(user_id)
         return membership
 
     async def reactivate_membership(
@@ -915,7 +919,14 @@ class MembershipService(BaseService[EntityMembership]):
                 status="active",
             )
 
+        await self._invalidate_membership_permissions_cache(user_id)
         return membership
+
+    async def _invalidate_membership_permissions_cache(self, user_id: UUID) -> None:
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is None:
+            return
+        await cache_service.publish_user_permissions_invalidation(str(user_id))
 
     # =========================================================================
     # Helper Methods for Root Entity Validation
