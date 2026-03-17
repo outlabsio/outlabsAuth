@@ -151,7 +151,14 @@ async def lifespan(app: FastAPI):
     print("✅ Library routers included")
 
     # Install centralized exception handlers (and observability if configured)
-    auth.instrument_fastapi(app, debug=True, include_metrics=True)
+    auth.instrument_fastapi(
+        app,
+        debug=True,
+        exception_handler_mode="global",
+        include_metrics=True,
+        include_correlation_id=True,
+        include_resource_context=True,
+    )
 
     # Create blog-specific tables if they don't exist
     print("📝 Creating blog tables...")

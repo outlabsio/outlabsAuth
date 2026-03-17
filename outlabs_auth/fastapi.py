@@ -7,7 +7,7 @@ HTTP error response shape.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -16,32 +16,41 @@ from sqlalchemy.exc import IntegrityError
 
 from outlabs_auth.core.exceptions import OutlabsAuthException
 
+ExceptionHandlerMode = Literal["auth_only", "global"]
+
+
+def register_outlabs_exception_handler(app: FastAPI) -> None:
+    """Register only the OutlabsAuthException handler on a FastAPI app."""
+
+    @app.exception_handler(OutlabsAuthException)
+    async def _handle_outlabs_auth_exception(request: Request, exc: OutlabsAuthException) -> JSONResponse:
+        return JSONResponse(status_code=exc.status_code, content=exc.to_dict())
+
 
 def register_exception_handlers(
     app: FastAPI,
     *,
     debug: bool = False,
     observability: Optional[Any] = None,
+    mode: ExceptionHandlerMode = "global",
 ) -> None:
     """
     Register OutlabsAuth-friendly exception handlers on a FastAPI app.
 
-    - `OutlabsAuthException` -> `exc.status_code` + `exc.to_dict()`
-    - `RequestValidationError` -> 422 with consistent shape
-    - `IntegrityError` -> 409 with consistent shape
-    - fallback `Exception` -> 500 with consistent shape (no internal details unless `debug=True`)
+    Modes:
+    - `auth_only`: register only the library-specific `OutlabsAuthException` handler
+    - `global`: also install generic validation/HTTP/unexpected handlers
     """
+    if mode not in {"auth_only", "global"}:
+        raise ValueError("mode must be 'auth_only' or 'global'")
 
-    @app.exception_handler(OutlabsAuthException)
-    async def _handle_outlabs_auth_exception(
-        request: Request, exc: OutlabsAuthException
-    ) -> JSONResponse:
-        return JSONResponse(status_code=exc.status_code, content=exc.to_dict())
+    register_outlabs_exception_handler(app)
+
+    if mode == "auth_only":
+        return
 
     @app.exception_handler(RequestValidationError)
-    async def _handle_validation_error(
-        request: Request, exc: RequestValidationError
-    ) -> JSONResponse:
+    async def _handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(
             status_code=422,
             content={
@@ -52,9 +61,7 @@ def register_exception_handlers(
         )
 
     @app.exception_handler(IntegrityError)
-    async def _handle_integrity_error(
-        request: Request, exc: IntegrityError
-    ) -> JSONResponse:
+    async def _handle_integrity_error(request: Request, exc: IntegrityError) -> JSONResponse:
         details: dict[str, Any] = {}
         if debug:
             details["error"] = str(exc)
@@ -82,9 +89,7 @@ def register_exception_handlers(
         )
 
     @app.exception_handler(HTTPException)
-    async def _handle_http_exception(
-        request: Request, exc: HTTPException
-    ) -> JSONResponse:
+    async def _handle_http_exception(request: Request, exc: HTTPException) -> JSONResponse:
         details: dict[str, Any] = {}
         if isinstance(exc.detail, dict):
             details = exc.detail
@@ -100,9 +105,7 @@ def register_exception_handlers(
         )
 
     @app.exception_handler(Exception)
-    async def _handle_unexpected_exception(
-        request: Request, exc: Exception
-    ) -> JSONResponse:
+    async def _handle_unexpected_exception(request: Request, exc: Exception) -> JSONResponse:
         if observability:
             try:
                 observability.logger.error(

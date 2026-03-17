@@ -4,10 +4,11 @@ Unit tests for observability integration across services.
 Tests that services correctly emit metrics and logs through ObservabilityService.
 """
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from prometheus_client import REGISTRY, CollectorRegistry
+from prometheus_client import REGISTRY, CollectorRegistry, generate_latest
 
 from outlabs_auth.observability.config import (
     LogsFormat,
@@ -108,6 +109,46 @@ class TestObservabilityServiceInitialization:
         assert len(service.metrics) == 0
 
         await service.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_initialize_uses_custom_registry(self, obs_config):
+        """Injected registries receive auth metrics without polluting the default registry."""
+        registry = CollectorRegistry()
+        service = ObservabilityService(obs_config, metrics_registry=registry)
+        await service.initialize()
+
+        service.log_entity_operation(
+            operation="create",
+            entity_id="entity-123",
+            entity_type="department",
+        )
+
+        custom_metrics = generate_latest(registry).decode()
+        default_metrics = generate_latest(REGISTRY).decode()
+
+        assert "outlabs_auth_entity_operations_total" in custom_metrics
+        assert "outlabs_auth_entity_operations_total" not in default_metrics
+
+        await service.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_initialize_uses_host_logger(self, obs_config, caplog):
+        """Injected host loggers receive auth events without global logger reconfiguration."""
+        logger = logging.getLogger("tests.outlabs_auth.host_logger")
+        caplog.set_level(logging.INFO, logger=logger.name)
+
+        service = ObservabilityService(obs_config, logger=logger)
+        await service.initialize()
+        service.log_entity_operation(
+            operation="create",
+            entity_id="entity-123",
+            entity_type="department",
+        )
+        await service.shutdown()
+
+        messages = [record.getMessage() for record in caplog.records if record.name == logger.name]
+        assert any("observability_initialized" in message for message in messages)
+        assert any("entity_create" in message for message in messages)
 
 
 class TestEntityOperationLogging:

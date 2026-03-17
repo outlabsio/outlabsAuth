@@ -101,6 +101,66 @@ If you are migrating a host app that previously bootstrapped auth tables with
 `create_all`, `migrate` will automatically adopt a fully bootstrapped legacy
 schema by stamping `outlabs_auth_alembic_version` before future migrations run.
 
+### Embedded Observability
+
+OutlabsAuth is now **embedded-safe by default**. When you install it inside an
+existing FastAPI app, the host app keeps ownership of:
+
+- logging configuration and log sinks
+- the Prometheus registry and `/metrics` endpoint
+- generic exception handlers
+- request middleware such as correlation IDs or tracing
+
+The library still emits auth-domain logs and metrics, but it does not mount
+host-facing surfaces unless you explicitly opt in.
+
+```python
+import logging
+
+from fastapi import FastAPI
+from prometheus_client import REGISTRY
+
+from outlabs_auth import EnterpriseRBAC
+from outlabs_auth.fastapi import register_outlabs_exception_handler
+from outlabs_auth.observability import ObservabilityConfig
+
+logger = logging.getLogger("outlabs_api.auth")
+app = FastAPI()
+
+auth = EnterpriseRBAC(
+    database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/mydb",
+    secret_key="your-secret-key",
+    observability_config=ObservabilityConfig(enable_metrics=True),
+    observability_logger=logger,
+    observability_metrics_registry=REGISTRY,
+)
+
+register_outlabs_exception_handler(app)
+```
+
+If you prefer a single helper, `auth.instrument_fastapi(app)` now uses safe
+embedded defaults:
+
+- registers only `OutlabsAuthException`
+- does not mount a metrics route
+- does not add correlation-ID middleware
+- does not add resource-context middleware
+
+Standalone demos can still opt into the broader behavior explicitly:
+
+```python
+auth.instrument_fastapi(
+    app,
+    exception_handler_mode="global",
+    include_metrics=True,
+    include_correlation_id=True,
+    include_resource_context=True,
+)
+```
+
+See [97-Observability.md](./docs-library/97-Observability.md) for the full
+embedded vs standalone guide.
+
 ### Development Setup
 
 For local development, use the interactive service launcher:

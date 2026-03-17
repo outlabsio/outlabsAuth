@@ -83,6 +83,9 @@ class OutlabsAuth:
         notification_service: Optional[Any] = None,
         # Observability
         observability_config: Optional[Any] = None,
+        observability_logger: Optional[Any] = None,
+        observability_metrics_registry: Optional[Any] = None,
+        observability_instrument_external_engine: bool = False,
         # Enterprise settings (only when enable_entity_hierarchy=True)
         max_entity_depth: int = 10,
         allowed_entity_types: Optional[list[str]] = None,
@@ -116,6 +119,9 @@ class OutlabsAuth:
             redis_enabled: Enable Redis features (caching, counters, activity tracking)
             redis_url: Redis connection URL (required if redis_enabled=True)
             notification_service: NotificationService instance (optional)
+            observability_logger: Optional host-managed logger adapter for auth events
+            observability_metrics_registry: Optional Prometheus registry for auth metrics
+            observability_instrument_external_engine: Allow DB query instrumentation when the engine is host-owned
 
         Raises:
             ConfigurationError: If configuration is invalid
@@ -186,12 +192,17 @@ class OutlabsAuth:
         # Initialize observability
         self.observability_config = observability_config
         self.observability = None
+        self._observability_instrument_external_engine = observability_instrument_external_engine
         if self.observability_config:
             from outlabs_auth.observability import ObservabilityService
 
             # Instantiate early so FastAPI middleware/routers can be registered
             # before app startup. Async initialization still happens in `initialize()`.
-            self.observability = ObservabilityService(self.observability_config)
+            self.observability = ObservabilityService(
+                self.observability_config,
+                logger=observability_logger,
+                metrics_registry=observability_metrics_registry,
+            )
 
         # Store enterprise settings
         if enable_entity_hierarchy:
@@ -201,6 +212,7 @@ class OutlabsAuth:
 
         # Database engine and session factory
         self._engine = engine
+        self._owns_engine = engine is None
         self._session_factory: Optional[async_sessionmaker[AsyncSession]] = None
 
         # Services will be initialized by _init_services()
@@ -253,9 +265,7 @@ class OutlabsAuth:
             raise ConfigurationError("enable_caching=True requires redis_url parameter")
 
         if store_oauth_provider_tokens and not oauth_token_encryption_key:
-            raise ConfigurationError(
-                "store_oauth_provider_tokens=True requires oauth_token_encryption_key"
-            )
+            raise ConfigurationError("store_oauth_provider_tokens=True requires oauth_token_encryption_key")
 
     async def initialize(self):
         """
@@ -295,7 +305,8 @@ class OutlabsAuth:
         # Initialize observability service
         if self.observability_config and self.observability:
             await self.observability.initialize()
-            self.observability.instrument_sqlalchemy(self._engine)
+            if self._owns_engine or self._observability_instrument_external_engine:
+                self.observability.instrument_sqlalchemy(self._engine)
 
         # Initialize services
         await self._init_services()
@@ -694,7 +705,7 @@ class OutlabsAuth:
                             stats = await self.activity_tracker.sync_to_database(session)
                             await session.commit()
                         if stats.get("daily", 0) > 0 or stats.get("monthly", 0) > 0:
-                            print(f"[ActivitySync] Synced metrics - " f"DAU: {stats['daily']}, MAU: {stats['monthly']}")
+                            print(f"[ActivitySync] Synced metrics - DAU: {stats['daily']}, MAU: {stats['monthly']}")
                 except Exception as e:
                     print(f"[ActivitySync] Error: {e}")
 
@@ -741,25 +752,35 @@ class OutlabsAuth:
         app: FastAPI,
         *,
         debug: bool = False,
-        include_metrics: bool = True,
-        include_resource_context: bool = True,
+        exception_handler_mode: str = "auth_only",
+        include_metrics: bool = False,
+        include_correlation_id: bool = False,
+        include_resource_context: bool = False,
     ) -> None:
         """
-        Install OutlabsAuth observability + error handling onto a FastAPI app.
+        Install optional OutlabsAuth FastAPI integrations onto a host app.
 
-        - Correlation ID middleware (if observability enabled)
-        - Centralized exception handlers (uses observability for logging)
-        - /metrics endpoint (if enabled and include_metrics=True)
+        Safe embedded defaults:
+        - only register the `OutlabsAuthException` handler
+        - do not mount a metrics endpoint
+        - do not add correlation-ID or resource-context middleware
 
-        IMPORTANT: This method adds middleware and must be called BEFORE the app
-        starts (i.e., before uvicorn.run() or entering the lifespan context).
-        Call this at module level after creating the FastAPI app instance.
+        Standalone/demo apps can opt into the broader behavior with:
+        - `exception_handler_mode="global"`
+        - `include_metrics=True`
+        - `include_correlation_id=True`
+        - `include_resource_context=True`
         """
         import warnings
 
         from outlabs_auth.fastapi import register_exception_handlers
 
-        register_exception_handlers(app, debug=debug, observability=self.observability)
+        register_exception_handlers(
+            app,
+            debug=debug,
+            observability=self.observability,
+            mode=exception_handler_mode,
+        )
 
         def _safe_add_middleware(middleware_class: type, **kwargs: object) -> bool:
             """Try to add middleware, return False if app already started."""
@@ -779,10 +800,18 @@ class OutlabsAuth:
                 create_metrics_router,
             )
 
-            if not _safe_add_middleware(CorrelationIDMiddleware, obs_service=self.observability):
+            if include_correlation_id and not _safe_add_middleware(
+                CorrelationIDMiddleware,
+                obs_service=self.observability,
+            ):
                 middleware_added = False
             if include_metrics:
-                app.include_router(create_metrics_router(self.observability))
+                app.include_router(
+                    create_metrics_router(
+                        self.observability,
+                        path=self.observability.config.metrics_path,
+                    )
+                )
 
         if include_resource_context:
             from outlabs_auth.middleware import ResourceContextMiddleware

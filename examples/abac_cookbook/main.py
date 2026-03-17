@@ -114,7 +114,9 @@ async def lifespan(app: FastAPI):
     auth.instrument_fastapi(
         app,
         debug=True,
+        exception_handler_mode="global",
         include_metrics=False,
+        include_correlation_id=True,
         include_resource_context=True,
     )
 

@@ -50,7 +50,10 @@ from outlabs_auth.database import (
     create_engine,
     create_session_factory,
 )
-from outlabs_auth.fastapi import register_exception_handlers
+from outlabs_auth.fastapi import (
+    register_exception_handlers,
+    register_outlabs_exception_handler,
+)
 
 # Model groups for convenience
 from outlabs_auth.models.sql import (
@@ -141,11 +144,11 @@ __all__ = [
     "get_system_permission_catalog",
     "seed_system_records",
     "bootstrap_superuser",
-
     # Core Auth Classes
     "OutlabsAuth",
     "AuthConfig",
     "register_exception_handlers",
+    "register_outlabs_exception_handler",
     # Presets
     "SimpleRBAC",
     "EnterpriseRBAC",

@@ -370,12 +370,21 @@ async def lifespan(app: FastAPI):
     await auth.shutdown()
 
 app = FastAPI(lifespan=lifespan)
-auth.instrument_fastapi(app)
+auth.instrument_fastapi(
+    app,
+    exception_handler_mode="global",
+    include_metrics=True,
+    include_correlation_id=True,
+)
 
 # Mount routers — invite endpoints are included automatically
 app.include_router(get_auth_router(auth, prefix="/v1/auth"))
 app.include_router(get_users_router(auth, prefix="/v1/users"))
 ```
+
+For an embedded host API that already owns logging, middleware, and `/metrics`,
+keep those host surfaces in place and either skip `instrument_fastapi()` or use
+its safe defaults instead of the standalone configuration above.
 
 ### Sending Invites (curl)
 

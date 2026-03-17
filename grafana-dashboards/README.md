@@ -30,7 +30,7 @@ global:
 scrape_configs:
   - job_name: 'outlabs-auth'
     static_configs:
-      - targets: ['localhost:8000']  # Your FastAPI app with /metrics endpoint
+      - targets: ['localhost:8000']  # Host app metrics endpoint, which may also expose auth metrics
 ```
 
 ```bash
@@ -282,8 +282,9 @@ Check:
 
 Check:
 1. `ObservabilityConfig(enable_metrics=True)` in your app
-2. `/metrics` endpoint added to FastAPI app
-3. Prometheus scrape job includes correct target
+2. The host app is exposing a Prometheus endpoint from the same process
+3. If you injected a custom registry, the host metrics route is rendering that registry
+4. Prometheus scrape job includes the correct target
 
 **Problem: Incorrect values**
 

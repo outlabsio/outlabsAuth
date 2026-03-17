@@ -69,6 +69,11 @@ class ObservabilityConfig(BaseModel):
         default=LogsLevel.INFO, description="Minimum log level to output"
     )
 
+    logger_name: str = Field(
+        default="outlabs_auth",
+        description="Named logger used when no host logger is injected",
+    )
+
     logs_include_timestamps: bool = Field(
         default=True, description="Include timestamps in log output"
     )

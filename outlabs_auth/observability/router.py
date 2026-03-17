@@ -12,7 +12,7 @@ from .service import ObservabilityService
 
 def create_metrics_router(
     obs_service: ObservabilityService,
-    path: str = "/metrics",
+    path: str | None = None,
     tags: list = None,
 ) -> APIRouter:
     """
@@ -43,9 +43,10 @@ def create_metrics_router(
         # Return empty router if metrics disabled
         return APIRouter()
 
+    metrics_path = path or obs_service.config.metrics_path
     router = APIRouter(tags=tags or ["Observability"])
 
-    @router.get(path, include_in_schema=False)
+    @router.get(metrics_path, include_in_schema=False)
     async def metrics():
         """
         Prometheus metrics endpoint.
@@ -58,7 +59,7 @@ def create_metrics_router(
             outlabs_auth_active_sessions 156
         """
         return Response(
-            content=generate_latest(),
+            content=generate_latest(obs_service.metrics_registry),
             media_type=CONTENT_TYPE_LATEST,
         )
 

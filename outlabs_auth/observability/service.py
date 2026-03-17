@@ -5,13 +5,14 @@ Unified service for emitting structured logs and Prometheus metrics.
 """
 
 import asyncio
+import json
+import logging
 import socket
 from contextvars import ContextVar
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import structlog
-from prometheus_client import Counter, Gauge, Histogram
+from prometheus_client import REGISTRY, CollectorRegistry, Counter, Gauge, Histogram
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -20,6 +21,90 @@ from .config import LogsFormat, LogsLevel, ObservabilityConfig, PermissionCheckL
 
 # Context variable for correlation ID
 correlation_id_var: ContextVar[Optional[str]] = ContextVar("correlation_id", default=None)
+
+
+class _EventLogger:
+    """Emit auth events through either a host logger or stdlib logging."""
+
+    def __init__(
+        self,
+        base_logger: Any,
+        *,
+        config: ObservabilityConfig,
+        hostname: str,
+    ):
+        self._base_logger = base_logger
+        self._config = config
+        self._hostname = hostname
+        self._supports_structured_kwargs = hasattr(base_logger, "bind") or ("structlog" in type(base_logger).__module__)
+
+    def debug(self, event: str, **fields: Any) -> None:
+        self._log("debug", event, **fields)
+
+    def info(self, event: str, **fields: Any) -> None:
+        self._log("info", event, **fields)
+
+    def warning(self, event: str, **fields: Any) -> None:
+        self._log("warning", event, **fields)
+
+    def error(self, event: str, **fields: Any) -> None:
+        self._log("error", event, **fields)
+
+    def _log(self, level: str, event: str, **fields: Any) -> None:
+        log_method = getattr(self._base_logger, level, self._base_logger.info)
+        payload = self._build_payload(event, level, fields)
+
+        if self._supports_structured_kwargs:
+            try:
+                log_method(event, **payload)
+                return
+            except TypeError:
+                self._supports_structured_kwargs = False
+
+        log_method(self._render_message(payload))
+
+    def _build_payload(self, event: str, level: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(fields)
+        payload.setdefault("event", event)
+        payload.setdefault("level", level)
+
+        if self._config.logs_include_timestamps:
+            payload.setdefault(
+                "timestamp",
+                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            )
+
+        if self._config.logs_include_correlation_id:
+            correlation_id = correlation_id_var.get()
+            if correlation_id:
+                payload.setdefault("correlation_id", correlation_id)
+
+        if self._config.metrics_include_hostname:
+            payload.setdefault("hostname", self._hostname)
+
+        return payload
+
+    def _render_message(self, payload: Dict[str, Any]) -> str:
+        if self._config.logs_format == LogsFormat.JSON:
+            return json.dumps(payload, default=self._serialize_value, sort_keys=True)
+
+        timestamp = f"{payload['timestamp']} " if "timestamp" in payload else ""
+        event = str(payload.get("event", "outlabs_auth_event"))
+        level = str(payload.get("level", "info")).upper()
+        details = " ".join(
+            f"{key}={self._serialize_value(value)}"
+            for key, value in payload.items()
+            if key not in {"event", "level", "timestamp"}
+        )
+        if details:
+            return f"{timestamp}[{level}] {event} {details}"
+        return f"{timestamp}[{level}] {event}"
+
+    @staticmethod
+    def _serialize_value(value: Any) -> str:
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return str(value)
+        return repr(value)
 
 
 class ObservabilityService:
@@ -46,18 +131,28 @@ class ObservabilityService:
         ...     await authenticate_user()
     """
 
-    def __init__(self, config: ObservabilityConfig):
+    def __init__(
+        self,
+        config: ObservabilityConfig,
+        *,
+        logger: Optional[Any] = None,
+        metrics_registry: Optional[CollectorRegistry] = None,
+    ):
         """
         Initialize observability service.
 
         Args:
             config: Observability configuration
+            logger: Optional host-owned logger adapter
+            metrics_registry: Optional Prometheus collector registry
         """
         self.config = config
         self.hostname = socket.gethostname()
-        self.logger: Optional[structlog.BoundLogger] = None
+        self.logger: Optional[_EventLogger] = None
+        self._base_logger = logger
         self._log_queue: Optional[asyncio.Queue] = None
         self._log_worker_task: Optional[asyncio.Task] = None
+        self.metrics_registry = metrics_registry or REGISTRY
 
         # Prometheus metrics (will be initialized in initialize())
         self.metrics: Dict[str, Any] = {}
@@ -68,10 +163,9 @@ class ObservabilityService:
         """
         Initialize observability service.
 
-        Sets up structured logging with structlog and defines Prometheus metrics.
+        Sets up a logger adapter and defines Prometheus metrics.
         """
-        # Configure structlog
-        self._configure_structlog()
+        self._configure_logger()
 
         # Initialize Prometheus metrics if enabled
         if self.config.enable_metrics:
@@ -159,45 +253,16 @@ class ObservabilityService:
         self._sqlalchemy_instrumented = True
         self._sqlalchemy_engine_id = id(engine)
 
-    def _configure_structlog(self) -> None:
-        """Configure structlog for structured logging."""
-        processors = [
-            structlog.contextvars.merge_contextvars,
-            structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso"),
-        ]
-
-        # Add correlation ID processor if enabled
-        if self.config.logs_include_correlation_id:
-            processors.append(self._add_correlation_id)
-
-        # Add hostname if enabled
-        if self.config.metrics_include_hostname:
-            # Add hostname directly to every log
-            processors.append(lambda _, __, event_dict: {**event_dict, "hostname": self.hostname})
-
-        # Choose output format
-        if self.config.logs_format == LogsFormat.JSON:
-            processors.append(structlog.processors.JSONRenderer())
-        else:
-            processors.append(structlog.dev.ConsoleRenderer())
-
-        structlog.configure(
-            processors=processors,
-            wrapper_class=structlog.make_filtering_bound_logger(self._get_log_level_int()),
-            context_class=dict,
-            logger_factory=structlog.PrintLoggerFactory(),
-            cache_logger_on_first_use=True,
+    def _configure_logger(self) -> None:
+        """Wrap either a host logger or a namespaced stdlib logger."""
+        base_logger = self._base_logger or logging.getLogger(self.config.logger_name)
+        if self._base_logger is None and isinstance(base_logger, logging.Logger):
+            base_logger.setLevel(self._get_log_level_int())
+        self.logger = _EventLogger(
+            base_logger,
+            config=self.config,
+            hostname=self.hostname,
         )
-
-        self.logger = structlog.get_logger()
-
-    def _add_correlation_id(self, logger: Any, method_name: str, event_dict: Dict[str, Any]) -> Dict[str, Any]:
-        """Add correlation ID to log event."""
-        correlation_id = correlation_id_var.get()
-        if correlation_id:
-            event_dict["correlation_id"] = correlation_id
-        return event_dict
 
     def _get_log_level_int(self) -> int:
         """Convert log level string to int."""
@@ -211,34 +276,37 @@ class ObservabilityService:
 
     def _initialize_metrics(self) -> None:
         """Initialize Prometheus metrics."""
+        registry_kwargs = {"registry": self.metrics_registry}
+
         # Authentication metrics
         self.metrics["login_attempts"] = Counter(
             "outlabs_auth_login_attempts_total",
             "Total login attempts",
             ["status", "method"],
+            **registry_kwargs,
         )
-
         self.metrics["login_duration"] = Histogram(
             "outlabs_auth_login_duration_seconds",
             "Login duration in seconds",
             ["method"],
             buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
+            **registry_kwargs,
         )
-
         self.metrics["account_locked"] = Counter(
             "outlabs_auth_account_locked_total",
             "Total account lockouts",
+            **registry_kwargs,
         )
-
         self.metrics["password_reset_requests"] = Counter(
             "outlabs_auth_password_reset_requests_total",
             "Total password reset requests",
+            **registry_kwargs,
         )
-
         self.metrics["email_verifications"] = Counter(
             "outlabs_auth_email_verifications_total",
             "Total email verifications",
             ["status"],
+            **registry_kwargs,
         )
 
         # Authorization metrics
@@ -246,60 +314,63 @@ class ObservabilityService:
             "outlabs_auth_permission_checks_total",
             "Total permission checks",
             ["result", "permission"],
+            **registry_kwargs,
         )
-
         self.metrics["permission_check_duration"] = Histogram(
             "outlabs_auth_permission_check_duration_seconds",
             "Permission check duration in seconds",
             buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5],
+            **registry_kwargs,
         )
-
         self.metrics["role_assignments"] = Counter(
             "outlabs_auth_role_assignments_total",
             "Total role assignments",
             ["operation"],
+            **registry_kwargs,
         )
 
         # Session metrics
         self.metrics["active_sessions"] = Gauge(
             "outlabs_auth_active_sessions",
             "Number of active sessions",
+            **registry_kwargs,
         )
-
         self.metrics["session_duration"] = Histogram(
             "outlabs_auth_session_duration_seconds",
             "Session duration in seconds",
             buckets=[60, 300, 900, 1800, 3600, 7200, 14400, 28800],
+            **registry_kwargs,
         )
-
         self.metrics["token_refreshes"] = Counter(
             "outlabs_auth_token_refreshes_total",
             "Total token refresh operations",
             ["status"],
+            **registry_kwargs,
         )
-
         self.metrics["token_blacklist_checks"] = Counter(
             "outlabs_auth_token_blacklist_checks_total",
             "Total token blacklist checks",
             ["result"],
+            **registry_kwargs,
         )
 
-        # API Key metrics
+        # API key metrics
         self.metrics["api_key_validations"] = Counter(
             "outlabs_auth_api_key_validations_total",
             "Total API key validations",
             ["status"],
+            **registry_kwargs,
         )
-
         self.metrics["api_key_rate_limit_hits"] = Counter(
             "outlabs_auth_api_key_rate_limit_hits_total",
             "Total API key rate limit hits",
+            **registry_kwargs,
         )
-
         self.metrics["api_key_usage"] = Counter(
             "outlabs_auth_api_key_usage_total",
             "Total API key usage",
             ["prefix"],
+            **registry_kwargs,
         )
 
         # Security metrics
@@ -307,12 +378,13 @@ class ObservabilityService:
             "outlabs_auth_suspicious_activity_total",
             "Suspicious activity detected",
             ["type"],
+            **registry_kwargs,
         )
-
         self.metrics["failed_login_attempts"] = Counter(
             "outlabs_auth_failed_login_attempts_total",
             "Failed login attempts",
             ["reason"],
+            **registry_kwargs,
         )
 
         # Performance metrics
@@ -320,44 +392,46 @@ class ObservabilityService:
             "outlabs_auth_cache_hits_total",
             "Cache hits",
             ["cache_type"],
+            **registry_kwargs,
         )
-
         self.metrics["cache_misses"] = Counter(
             "outlabs_auth_cache_misses_total",
             "Cache misses",
             ["cache_type"],
+            **registry_kwargs,
         )
-
         self.metrics["db_query_duration"] = Histogram(
             "outlabs_auth_db_query_duration_seconds",
             "Database query duration in seconds",
             ["operation"],
             buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5],
+            **registry_kwargs,
         )
 
-        # Error metrics (NEW - for 500 error tracking)
+        # Error metrics
         self.metrics["errors_total"] = Counter(
             "outlabs_auth_errors_total",
             "Total errors by type and location",
             ["error_type", "location"],
+            **registry_kwargs,
         )
-
         self.metrics["500_errors_total"] = Counter(
             "outlabs_auth_500_errors_total",
             "Total 500 Internal Server Errors",
             ["endpoint", "error_class"],
+            **registry_kwargs,
         )
-
         self.metrics["router_errors_total"] = Counter(
             "outlabs_auth_router_errors_total",
             "Total router-level errors",
             ["router", "endpoint"],
+            **registry_kwargs,
         )
-
         self.metrics["service_errors_total"] = Counter(
             "outlabs_auth_service_errors_total",
             "Total service-level errors",
             ["service", "operation"],
+            **registry_kwargs,
         )
 
         # Entity operations metrics
@@ -365,13 +439,14 @@ class ObservabilityService:
             "outlabs_auth_entity_operations_total",
             "Entity operations",
             ["operation"],
+            **registry_kwargs,
         )
-
         self.metrics["entity_operation_duration"] = Histogram(
             "outlabs_auth_entity_operation_duration_seconds",
             "Entity operation duration in seconds",
             ["operation"],
             buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
+            **registry_kwargs,
         )
 
         # Membership operations metrics
@@ -379,13 +454,14 @@ class ObservabilityService:
             "outlabs_auth_membership_operations_total",
             "Membership operations",
             ["operation"],
+            **registry_kwargs,
         )
-
         self.metrics["membership_operation_duration"] = Histogram(
             "outlabs_auth_membership_operation_duration_seconds",
             "Membership operation duration in seconds",
             ["operation"],
             buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0],
+            **registry_kwargs,
         )
 
         # Activity tracking metrics
@@ -393,18 +469,19 @@ class ObservabilityService:
             "outlabs_auth_activity_track_total",
             "Activity tracking operations",
             ["period"],
+            **registry_kwargs,
         )
-
         self.metrics["activity_sync_duration"] = Histogram(
             "outlabs_auth_activity_sync_duration_seconds",
             "Activity sync duration in seconds",
             buckets=[0.1, 0.5, 1.0, 2.5, 5.0, 10.0],
+            **registry_kwargs,
         )
-
         self.metrics["activity_sync_records"] = Counter(
             "outlabs_auth_activity_sync_records_total",
             "Activity records synced",
             ["metric_type"],
+            **registry_kwargs,
         )
 
         # Redis operations metrics
@@ -413,25 +490,27 @@ class ObservabilityService:
             "Redis operation duration in seconds",
             ["operation"],
             buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1],
+            **registry_kwargs,
         )
-
         self.metrics["redis_errors_total"] = Counter(
             "outlabs_auth_redis_errors_total",
             "Redis operation errors",
             ["operation"],
+            **registry_kwargs,
         )
 
-        # Notification events metrics
+        # Notification metrics
         self.metrics["notification_events_total"] = Counter(
             "outlabs_auth_notification_events_total",
             "Notification events emitted",
             ["event_type"],
+            **registry_kwargs,
         )
-
         self.metrics["notification_delivery_failures"] = Counter(
             "outlabs_auth_notification_delivery_failures_total",
             "Notification delivery failures",
             ["channel", "event_type"],
+            **registry_kwargs,
         )
 
     async def _log_worker(self) -> None:
