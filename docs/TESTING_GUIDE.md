@@ -16,9 +16,9 @@
 **Recent Coverage Note (Mar 2026)**:
 - membership lifecycle API coverage exists in `tests/integration/test_membership_lifecycle_api.py`
 - direct role membership lifecycle read coverage exists in `tests/integration/test_role_assignment.py`
-- a comprehensive admin user-details regression suite is still missing and should be added in a future pass
+- comprehensive admin user-details contract coverage now exists in `tests/integration/test_admin_user_details_contract.py`
 
-That future suite should cover the combined contract used by the admin frontend record page:
+That suite covers the combined contract used by the admin frontend record page:
 
 - profile update
 - user status change

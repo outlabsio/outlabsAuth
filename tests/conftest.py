@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
@@ -37,9 +38,7 @@ TEST_DATABASE_URL = os.getenv(
 
 def pytest_configure(config):
     """Configure pytest with custom markers."""
-    config.addinivalue_line(
-        "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
-    )
+    config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
     config.addinivalue_line("markers", "integration: marks tests as integration tests")
     config.addinivalue_line("markers", "unit: marks tests as unit tests")
 
@@ -67,25 +66,34 @@ async def test_engine():
     """
     Create async engine for testing.
 
-    Creates all tables before tests and drops them after.
+    Creates an isolated schema for each test and drops it after.
     """
-    engine = create_async_engine(
+    schema_name = f"test_{uuid4().hex}"
+    admin_engine = create_async_engine(
         TEST_DATABASE_URL,
         echo=False,
         pool_pre_ping=True,
     )
 
-    # Create all tables
+    engine = create_async_engine(
+        TEST_DATABASE_URL,
+        echo=False,
+        pool_pre_ping=True,
+        connect_args={"server_settings": {"search_path": schema_name}},
+    )
+
+    async with admin_engine.begin() as conn:
+        await conn.execute(text(f'CREATE SCHEMA "{schema_name}"'))
+
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
 
     yield engine
 
-    # Drop all tables after test
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.drop_all)
-
     await engine.dispose()
+    async with admin_engine.begin() as conn:
+        await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE'))
+    await admin_engine.dispose()
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -95,9 +103,7 @@ async def test_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
 
     Each test gets a fresh session that's rolled back after the test.
     """
-    async_session = async_sessionmaker(
-        test_engine, class_=AsyncSession, expire_on_commit=False
-    )
+    async_session = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session() as session:
         yield session
