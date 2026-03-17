@@ -41,8 +41,6 @@ def _entity_to_response(entity: Any) -> EntityResponse:
         status=entity.status,
         valid_from=entity.valid_from,
         valid_until=entity.valid_until,
-        direct_permissions=[],  # Not used in current SQL model
-        metadata={},  # Not used in current SQL model
         allowed_child_classes=entity.allowed_child_classes or [],
         allowed_child_types=entity.allowed_child_types or [],
         max_members=entity.max_members,
@@ -197,6 +195,11 @@ def get_entities_router(
             entity_type=data.entity_type,
             parent_id=UUID(data.parent_entity_id) if data.parent_entity_id else None,
             status=data.status or "active",
+            valid_from=data.valid_from,
+            valid_until=data.valid_until,
+            allowed_child_classes=data.allowed_child_classes,
+            allowed_child_types=data.allowed_child_types,
+            max_members=data.max_members,
         )
         return _entity_to_response(entity)
 

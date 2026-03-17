@@ -13,6 +13,7 @@ works correctly in real-world scenarios.
 """
 
 import uuid
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -157,6 +158,46 @@ async def test_admin_can_create_root_entity(
     data = resp.json()
     assert data["display_name"] == "Test Organization"
     assert data["entity_type"] == "organization"
+    assert "direct_permissions" not in data
+    assert "metadata" not in data
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_admin_can_create_entity_with_supported_optional_fields(
+    client: httpx.AsyncClient, admin_user: dict
+):
+    """Test that entity create forwards supported optional model-backed fields."""
+    unique_name = f"configurable-{uuid.uuid4().hex[:8]}"
+    valid_from = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
+    valid_until = datetime(2026, 12, 31, 18, 30, tzinfo=timezone.utc)
+
+    resp = await client.post(
+        "/v1/entities/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "name": unique_name,
+            "display_name": "Configurable Entity",
+            "slug": unique_name,
+            "entity_class": "structural",
+            "entity_type": "organization",
+            "valid_from": valid_from.isoformat(),
+            "valid_until": valid_until.isoformat(),
+            "allowed_child_classes": ["structural", "access_group"],
+            "allowed_child_types": ["department", "team"],
+            "max_members": 25,
+        },
+    )
+
+    assert resp.status_code == 201
+    data = resp.json()
+    assert datetime.fromisoformat(data["valid_from"].replace("Z", "+00:00")) == valid_from
+    assert datetime.fromisoformat(data["valid_until"].replace("Z", "+00:00")) == valid_until
+    assert data["allowed_child_classes"] == ["structural", "access_group"]
+    assert data["allowed_child_types"] == ["department", "team"]
+    assert data["max_members"] == 25
+    assert "direct_permissions" not in data
+    assert "metadata" not in data
 
 
 @pytest.mark.integration

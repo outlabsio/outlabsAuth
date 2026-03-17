@@ -175,6 +175,35 @@ async def _assign_entity_membership(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_entity_membership_without_roles_does_not_grant_permission(
+    test_session, permission_service: PermissionService
+):
+    """
+    Entity authorization stays role-only.
+
+    A membership establishes scope, but permissions still come from roles
+    attached to that membership.
+    """
+    user = User(email="member-no-roles@example.com", hashed_password="x")
+    test_session.add(user)
+    await test_session.flush()
+
+    entity = await _create_entity(test_session, "role-only-scope")
+    await _add_closure_self(test_session, entity)
+    await _assign_entity_membership(test_session, user, entity, roles=[])
+
+    allowed = await permission_service.check_permission(
+        session=test_session,
+        user_id=user.id,
+        permission="entity:update",
+        entity_id=entity.id,
+    )
+
+    assert allowed is False
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_global_role_grants_permission_without_entity_context(
     test_session, permission_service: PermissionService
 ):

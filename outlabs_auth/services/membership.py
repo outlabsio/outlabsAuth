@@ -167,7 +167,13 @@ class MembershipService(BaseService[EntityMembership]):
 
         # Validate each role is available for this entity
         for role in roles:
-            if not await self._is_role_available_for_entity(session, role, entity_id, root_entity_id):
+            if not await self._is_role_available_for_entity(
+                session,
+                role,
+                entity_id,
+                root_entity_id,
+                entity_type=entity.entity_type,
+            ):
                 raise InvalidInputError(
                     message=f"Role '{role.name}' is not available for this entity",
                     details={
@@ -421,9 +427,22 @@ class MembershipService(BaseService[EntityMembership]):
                     raise RoleNotFoundError(message="Role not found", details={"role_id": str(role_id)})
                 roles.append(role)
 
+            entity = await session.get(Entity, entity_id)
+            if not entity:
+                raise EntityNotFoundError(
+                    message="Entity not found",
+                    details={"entity_id": str(entity_id)},
+                )
+
             root_entity_id = await self._get_root_entity_id(session, entity_id)
             for role in roles:
-                if not await self._is_role_available_for_entity(session, role, entity_id, root_entity_id):
+                if not await self._is_role_available_for_entity(
+                    session,
+                    role,
+                    entity_id,
+                    root_entity_id,
+                    entity_type=entity.entity_type,
+                ):
                     raise InvalidInputError(
                         message=f"Role '{role.name}' is not available for this entity",
                         details={
@@ -966,6 +985,7 @@ class MembershipService(BaseService[EntityMembership]):
         role: Role,
         entity_id: UUID,
         root_entity_id: UUID,
+        entity_type: Optional[str] = None,
     ) -> bool:
         """
         Check if a role can be assigned within an entity's context.
@@ -985,6 +1005,9 @@ class MembershipService(BaseService[EntityMembership]):
         Returns:
             bool: True if role can be used in this entity's context
         """
+        if not self._allows_entity_type(role, entity_type):
+            return False
+
         # 1. Global system-wide roles are available everywhere
         if role.is_global and role.root_entity_id is None and role.scope_entity_id is None:
             return True
@@ -1013,6 +1036,18 @@ class MembershipService(BaseService[EntityMembership]):
         # Role with no root_entity_id and is_global=False is orphaned/unusable
         return False
 
+    @staticmethod
+    def _allows_entity_type(role: Role, entity_type: Optional[str]) -> bool:
+        if not role.assignable_at_types:
+            return True
+
+        if not entity_type:
+            return False
+
+        return entity_type.lower() in {
+            role_entity_type.lower() for role_entity_type in role.assignable_at_types
+        }
+
     async def _get_auto_assigned_roles_for_entity(
         self,
         session: AsyncSession,
@@ -1032,6 +1067,10 @@ class MembershipService(BaseService[EntityMembership]):
         Returns:
             List of Role objects that should be auto-assigned
         """
+        entity = await session.get(Entity, entity_id)
+        if not entity:
+            return []
+
         # Get all ancestors (including self)
         ancestors_stmt = select(EntityClosure.ancestor_id).where(EntityClosure.descendant_id == entity_id)
         ancestors_result = await session.execute(ancestors_stmt)
@@ -1063,7 +1102,11 @@ class MembershipService(BaseService[EntityMembership]):
 
         stmt = select(Role).where(role_filter).order_by(Role.name)
         result = await session.execute(stmt)
-        return list(result.scalars().all())
+        return [
+            role
+            for role in result.scalars().all()
+            if self._allows_entity_type(role, entity.entity_type)
+        ]
 
     async def apply_auto_assigned_role(
         self,
@@ -1124,7 +1167,10 @@ class MembershipService(BaseService[EntityMembership]):
         # Get all active memberships in target entities
         memberships_stmt = (
             select(EntityMembership)
-            .options(selectinload(EntityMembership.roles))
+            .options(
+                selectinload(EntityMembership.roles),
+                selectinload(EntityMembership.entity),
+            )
             .where(
                 EntityMembership.entity_id.in_(target_entity_ids),
                 EntityMembership.status == MembershipStatus.ACTIVE,
@@ -1136,6 +1182,14 @@ class MembershipService(BaseService[EntityMembership]):
         # Add role to memberships that don't already have it
         updated_count = 0
         for membership in memberships:
+            entity_type = (
+                membership.entity.entity_type
+                if getattr(membership, "entity", None) is not None
+                else None
+            )
+            if not self._allows_entity_type(role, entity_type):
+                continue
+
             existing_role_ids = {r.id for r in membership.roles}
             if role_id not in existing_role_ids:
                 role_link = EntityMembershipRole(

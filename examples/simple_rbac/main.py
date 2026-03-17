@@ -30,11 +30,11 @@ from sqlmodel import SQLModel
 from outlabs_auth import SimpleRBAC, User
 from outlabs_auth.database import DatabaseConfig, create_engine, create_session_factory
 from outlabs_auth.routers import (
-    get_auth_router,
-    get_users_router,
-    get_roles_router,
-    get_permissions_router,
     get_api_keys_router,
+    get_auth_router,
+    get_permissions_router,
+    get_roles_router,
+    get_users_router,
 )
 
 # ============================================================================
@@ -209,25 +209,15 @@ app.add_middleware(
 def include_auth_routers(app: FastAPI, auth_instance: SimpleRBAC):
     """Include all OutlabsAuth library routers"""
     # Auth routes (login, register, logout, refresh, config, me)
-    app.include_router(
-        get_auth_router(auth_instance, prefix="/v1/auth", tags=["Auth"])
-    )
+    app.include_router(get_auth_router(auth_instance, prefix="/v1/auth", tags=["Auth"]))
     # User management routes
-    app.include_router(
-        get_users_router(auth_instance, prefix="/v1/users", tags=["Users"])
-    )
+    app.include_router(get_users_router(auth_instance, prefix="/v1/users", tags=["Users"]))
     # Role management routes
-    app.include_router(
-        get_roles_router(auth_instance, prefix="/v1/roles", tags=["Roles"])
-    )
+    app.include_router(get_roles_router(auth_instance, prefix="/v1/roles", tags=["Roles"]))
     # Permission management routes
-    app.include_router(
-        get_permissions_router(auth_instance, prefix="/v1/permissions", tags=["Permissions"])
-    )
+    app.include_router(get_permissions_router(auth_instance, prefix="/v1/permissions", tags=["Permissions"]))
     # API Key management routes
-    app.include_router(
-        get_api_keys_router(auth_instance, prefix="/v1/api-keys", tags=["API Keys"])
-    )
+    app.include_router(get_api_keys_router(auth_instance, prefix="/v1/api-keys", tags=["API Keys"]))
 
 
 # ============================================================================
@@ -358,9 +348,7 @@ async def create_default_roles():
     async with auth_instance.get_session() as session:
         # Create permissions if they don't exist
         for perm_name, display_name in all_permissions:
-            existing = await auth_instance.permission_service.get_permission_by_name(
-                session, perm_name
-            )
+            existing = await auth_instance.permission_service.get_permission_by_name(session, perm_name)
             if not existing:
                 await auth_instance.permission_service.create_permission(
                     session,
@@ -371,9 +359,7 @@ async def create_default_roles():
 
         # Create roles if they don't exist
         for role_data in roles:
-            existing = await auth_instance.role_service.get_role_by_name(
-                session, role_data["name"]
-            )
+            existing = await auth_instance.role_service.get_role_by_name(session, role_data["name"])
             if not existing:
                 await auth_instance.role_service.create_role(
                     session,
@@ -441,9 +427,7 @@ async def create_post(
 
 @app.get("/posts", response_model=dict, tags=["Posts"], summary="List blog posts")
 async def list_posts(
-    post_status: Optional[str] = Query(
-        None, alias="status", description="Filter by status"
-    ),
+    post_status: Optional[str] = Query(None, alias="status", description="Filter by status"),
     author_id: Optional[str] = Query(None, description="Filter by author"),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
@@ -475,13 +459,7 @@ async def list_posts(
 
     # Paginate
     skip = (page - 1) * limit
-    stmt = (
-        select(BlogPost)
-        .where(*filters)
-        .order_by(BlogPost.created_at.desc())
-        .offset(skip)
-        .limit(limit)
-    )
+    stmt = select(BlogPost).where(*filters).order_by(BlogPost.created_at.desc()).offset(skip).limit(limit)
     result = await session.execute(stmt)
     posts = result.scalars().all()
 
@@ -527,9 +505,7 @@ async def get_post(
     post = result.scalar_one_or_none()
 
     if not post:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Post not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
 
     # Increment view count
     post.increment_views()
@@ -572,9 +548,7 @@ async def update_post(
     post = result.scalar_one_or_none()
 
     if not post:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Post not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
 
     # TODO: Add permission checks via auth dependency
 
@@ -620,9 +594,7 @@ async def delete_post(
     post = result.scalar_one_or_none()
 
     if not post:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Post not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
 
     await session.delete(post)
     await session.commit()
@@ -656,9 +628,7 @@ async def add_comment(
     post = result.scalar_one_or_none()
 
     if not post:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Post not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
 
     # Create comment
     comment = Comment(
@@ -694,11 +664,7 @@ async def list_comments(
     """
     List all comments on a post (public access).
     """
-    stmt = (
-        select(Comment)
-        .where(Comment.post_id == UUID(post_id))
-        .order_by(Comment.created_at)
-    )
+    stmt = select(Comment).where(Comment.post_id == UUID(post_id)).order_by(Comment.created_at)
     result = await session.execute(stmt)
     comments = result.scalars().all()
 
@@ -736,9 +702,7 @@ async def delete_comment(
     comment = result.scalar_one_or_none()
 
     if not comment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
 
     # TODO: Add permission checks via auth dependency
 

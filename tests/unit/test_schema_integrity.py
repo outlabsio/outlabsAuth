@@ -62,6 +62,8 @@ def test_entities_parent_fk_is_set_null():
     assert _fk_ondelete(table, "parent_id") == "SET NULL"
     assert _has_unique(table, "slug")
     assert not _has_column(table, "tenant_id")
+    assert not _has_column(table, "direct_permissions")
+    assert not _has_column(table, "metadata")
 
 
 def test_entity_membership_constraints_and_join_table_cascades():
@@ -86,6 +88,13 @@ def test_role_permissions_join_table_cascades():
     rp = _get_table("role_permissions")
     assert _fk_ondelete(rp, "role_id") == "CASCADE"
     assert _fk_ondelete(rp, "permission_id") == "CASCADE"
+
+
+def test_roles_table_includes_assignable_entity_type_restrictions():
+    roles = _get_table("roles")
+
+    assert _has_column(roles, "assignable_at_types")
+    assert not _has_column(roles, "tenant_id")
 
 
 def test_permission_tags_join_table_cascades():

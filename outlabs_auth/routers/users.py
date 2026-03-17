@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.models.sql.enums import UserStatus
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
-from outlabs_auth.response_builders import build_user_response
+from outlabs_auth.response_builders import build_role_response, build_user_response
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.permission import PermissionResponse, UserPermissionSource
 from outlabs_auth.schemas.role import RoleResponse
@@ -105,59 +105,6 @@ def get_users_router(
             )
 
         return target_user
-
-    async def _build_role_response(session: AsyncSession, role: Any) -> RoleResponse:
-        from outlabs_auth.models.sql import Entity
-        from outlabs_auth.models.sql.enums import RoleScope
-        from outlabs_auth.models.sql.permission import Permission
-        from outlabs_auth.models.sql.role import RoleEntityTypePermission
-        from outlabs_auth.schemas.role import RoleScopeEnum
-        from sqlalchemy import select
-
-        root_entity_name = None
-        if role.root_entity_id:
-            root_entity = await session.get(Entity, role.root_entity_id)
-            if root_entity:
-                root_entity_name = root_entity.display_name
-
-        scope_entity_name = None
-        if role.scope_entity_id:
-            scope_entity = await session.get(Entity, role.scope_entity_id)
-            if scope_entity:
-                scope_entity_name = scope_entity.display_name
-
-        scope_value = RoleScopeEnum.HIERARCHY
-        if role.scope == RoleScope.ENTITY_ONLY:
-            scope_value = RoleScopeEnum.ENTITY_ONLY
-
-        permission_names = role.get_permission_names() if hasattr(role, "get_permission_names") else []
-
-        entity_type_permissions = {}
-        entries = await session.execute(
-            select(RoleEntityTypePermission.entity_type, Permission.name)
-            .join(Permission, Permission.id == RoleEntityTypePermission.permission_id)
-            .where(RoleEntityTypePermission.role_id == role.id)
-        )
-        for entity_type, permission_name in entries.all():
-            entity_type_permissions.setdefault(entity_type, []).append(permission_name)
-
-        return RoleResponse(
-            id=str(role.id),
-            name=role.name,
-            display_name=role.display_name,
-            description=role.description,
-            permissions=permission_names,
-            entity_type_permissions=entity_type_permissions or None,
-            is_system_role=role.is_system_role,
-            is_global=role.is_global,
-            root_entity_id=str(role.root_entity_id) if role.root_entity_id else None,
-            root_entity_name=root_entity_name,
-            scope_entity_id=str(role.scope_entity_id) if role.scope_entity_id else None,
-            scope_entity_name=scope_entity_name,
-            scope=scope_value,
-            is_auto_assigned=role.is_auto_assigned,
-            assignable_at_types=[],
-        )
 
     @router.post(
         "/",
@@ -740,7 +687,7 @@ def get_users_router(
             roles = await auth.role_service.get_user_roles(session, user_id=user_id, include_inactive=include_inactive)
 
             # Convert to response schema
-            return [RoleResponse(**role.model_dump(mode="json", exclude={"entity"})) for role in roles]
+            return [await build_role_response(session, role) for role in roles]
 
         except HTTPException:
             raise
@@ -798,7 +745,7 @@ def get_users_router(
                         revocation_reason=membership.revocation_reason,
                         is_currently_valid=membership.is_currently_valid(),
                         can_grant_permissions=membership.can_grant_permissions(),
-                        role=await _build_role_response(session, membership.role),
+                        role=await build_role_response(session, membership.role),
                     )
                 )
 

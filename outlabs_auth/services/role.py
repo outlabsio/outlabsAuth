@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, false, or_, select
 from sqlalchemy import delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -66,6 +66,7 @@ class RoleService(BaseService[Role]):
         scope_entity_id: Optional[UUID] = None,
         scope: RoleScope = RoleScope.HIERARCHY,
         is_auto_assigned: bool = False,
+        assignable_at_types: Optional[List[str]] = None,
         entity_type_permissions: Optional[Dict[str, List[str]]] = None,
     ) -> Role:
         """
@@ -87,6 +88,7 @@ class RoleService(BaseService[Role]):
             scope: How this role's permissions apply (entity_only or hierarchy).
                    Also controls auto-assignment scope.
             is_auto_assigned: If true, automatically assigned to members within scope.
+            assignable_at_types: Entity types where this role can be assigned.
         Returns:
             Role: Created role
 
@@ -97,20 +99,45 @@ class RoleService(BaseService[Role]):
         # Validate and normalize
         name = validate_slug(name, "name")
         display_name = validate_name(display_name, "display_name")
+        assignable_at_types = self._normalize_assignable_at_types(assignable_at_types)
+
+        if is_global and (root_entity_id is not None or scope_entity_id is not None):
+            raise InvalidInputError(
+                message="System-wide roles cannot set root_entity_id or scope_entity_id",
+                details={
+                    "name": name,
+                    "root_entity_id": str(root_entity_id) if root_entity_id else None,
+                    "scope_entity_id": str(scope_entity_id) if scope_entity_id else None,
+                },
+            )
+
+        if not is_global and root_entity_id is None and scope_entity_id is None:
+            raise InvalidInputError(
+                message="Scoped roles must define root_entity_id or scope_entity_id",
+                details={"name": name},
+            )
 
         # Check role name uniqueness within scope_entity_id
-        # (Different entities can have roles with the same name)
+        # (Different entities and different root scopes can have roles with the same name)
         if scope_entity_id:
             existing = await self.get_one(
                 session,
                 Role.name == name,
                 Role.scope_entity_id == scope_entity_id,
             )
-        else:
-            # For non-entity-local roles, check global uniqueness
+        elif root_entity_id:
             existing = await self.get_one(
                 session,
                 Role.name == name,
+                Role.root_entity_id == root_entity_id,
+                Role.scope_entity_id.is_(None),
+            )
+        else:
+            # System-wide roles must remain globally unique
+            existing = await self.get_one(
+                session,
+                Role.name == name,
+                Role.root_entity_id.is_(None),
                 Role.scope_entity_id.is_(None),
             )
         if existing:
@@ -170,6 +197,12 @@ class RoleService(BaseService[Role]):
                     )
 
         # Create role
+        if is_auto_assigned and not scope_entity_id:
+            raise InvalidInputError(
+                message="Auto-assigned roles must have a scope_entity_id",
+                details={"name": name},
+            )
+
         role = Role(
             name=name,
             display_name=display_name,
@@ -180,6 +213,7 @@ class RoleService(BaseService[Role]):
             scope_entity_id=scope_entity_id,
             scope=scope,
             is_auto_assigned=is_auto_assigned,
+            assignable_at_types=assignable_at_types,
         )
 
         await self.create(session, role)
@@ -198,6 +232,37 @@ class RoleService(BaseService[Role]):
         await self._invalidate_all_permissions_cache()
 
         return role
+
+    @staticmethod
+    def _normalize_assignable_at_types(
+        assignable_at_types: Optional[List[str]],
+    ) -> List[str]:
+        if not assignable_at_types:
+            return []
+
+        normalized: List[str] = []
+        seen = set()
+        for entity_type in assignable_at_types:
+            if not entity_type:
+                continue
+            next_value = entity_type.strip().lower()
+            if not next_value or next_value in seen:
+                continue
+            seen.add(next_value)
+            normalized.append(next_value)
+        return normalized
+
+    @staticmethod
+    def _allows_entity_type(role: Role, entity_type: Optional[str]) -> bool:
+        if not role.assignable_at_types:
+            return True
+
+        if not entity_type:
+            return False
+
+        return entity_type.lower() in {
+            role_entity_type.lower() for role_entity_type in role.assignable_at_types
+        }
 
     async def _get_root_entity_id(
         self,
@@ -285,6 +350,7 @@ class RoleService(BaseService[Role]):
         is_global: Optional[bool] = None,
         scope: Optional[RoleScope] = None,
         is_auto_assigned: Optional[bool] = None,
+        assignable_at_types: Optional[List[str]] = None,
     ) -> Role:
         """
         Update role.
@@ -297,6 +363,7 @@ class RoleService(BaseService[Role]):
             is_global: Whether role is global
             scope: Role scope (entity_only or hierarchy)
             is_auto_assigned: Whether to auto-assign to members
+            assignable_at_types: Entity types where this role can be assigned
 
         Returns:
             Updated role
@@ -325,13 +392,33 @@ class RoleService(BaseService[Role]):
             role.description = description
 
         if is_global is not None:
+            if is_global and (role.root_entity_id is not None or role.scope_entity_id is not None):
+                raise InvalidInputError(
+                    message="Scoped roles cannot be converted to system-wide roles",
+                    details={"role_id": str(role_id), "role_name": role.name},
+                )
+            if not is_global and role.root_entity_id is None and role.scope_entity_id is None:
+                raise InvalidInputError(
+                    message="System-wide roles cannot be made non-global without a scope",
+                    details={"role_id": str(role_id), "role_name": role.name},
+                )
             role.is_global = is_global
 
         if scope is not None:
             role.scope = scope
 
         if is_auto_assigned is not None:
+            if is_auto_assigned and role.scope_entity_id is None:
+                raise InvalidInputError(
+                    message="Auto-assigned roles must have a scope_entity_id",
+                    details={"role_id": str(role_id), "role_name": role.name},
+                )
             role.is_auto_assigned = is_auto_assigned
+
+        if assignable_at_types is not None:
+            role.assignable_at_types = self._normalize_assignable_at_types(
+                assignable_at_types
+            )
 
         await self.update(session, role)
         await self._invalidate_all_permissions_cache()
@@ -377,6 +464,9 @@ class RoleService(BaseService[Role]):
         search: Optional[str] = None,
         is_global: Optional[bool] = None,
         root_entity_id: Optional[UUID] = None,
+        manageable_root_entity_ids: Optional[List[UUID]] = None,
+        manageable_entity_ids: Optional[List[UUID]] = None,
+        include_system_global: bool = True,
     ) -> Tuple[List[Role], int]:
         """
         List roles with pagination.
@@ -388,6 +478,9 @@ class RoleService(BaseService[Role]):
             search: Optional search term for name, display name, or description
             is_global: Filter by global flag
             root_entity_id: Filter by root entity that owns the role
+            manageable_root_entity_ids: Optional root scopes visible to the actor
+            manageable_entity_ids: Optional entity scopes visible to the actor
+            include_system_global: Whether to include system-wide global roles
         Returns:
             Tuple of (roles, total_count)
         """
@@ -405,6 +498,32 @@ class RoleService(BaseService[Role]):
             filters.append(Role.is_global == is_global)
         if root_entity_id is not None:
             filters.append(Role.root_entity_id == root_entity_id)
+
+        scope_filters = []
+        if include_system_global:
+            scope_filters.append(
+                and_(
+                    Role.is_global == True,
+                    Role.root_entity_id.is_(None),
+                    Role.scope_entity_id.is_(None),
+                )
+            )
+        if manageable_root_entity_ids:
+            scope_filters.append(
+                and_(
+                    Role.root_entity_id.in_(manageable_root_entity_ids),
+                    Role.scope_entity_id.is_(None),
+                )
+            )
+        if manageable_entity_ids:
+            scope_filters.append(Role.scope_entity_id.in_(manageable_entity_ids))
+
+        if (
+            manageable_root_entity_ids is not None
+            or manageable_entity_ids is not None
+            or not include_system_global
+        ):
+            filters.append(or_(*scope_filters) if scope_filters else false())
 
         total_count = await self.count(session, *filters)
 
@@ -448,6 +567,10 @@ class RoleService(BaseService[Role]):
         Returns:
             Tuple of (roles, total_count)
         """
+        entity = await session.get(Entity, entity_id)
+        if not entity:
+            return [], 0
+
         # Step 1: Get all ancestors (including self) using closure table
         ancestors_stmt = select(EntityClosure.ancestor_id, EntityClosure.depth).where(
             EntityClosure.descendant_id == entity_id
@@ -511,23 +634,17 @@ class RoleService(BaseService[Role]):
         if include_auto_assigned_only:
             role_filter = and_(role_filter, Role.is_auto_assigned == True)
 
-        # Step 3: Count and fetch
-        count_stmt = select(Role).where(role_filter)
-        count_result = await session.execute(count_stmt)
-        total_count = len(count_result.all())
-
-        skip = (page - 1) * limit
-        stmt = (
-            select(Role)
-            .where(role_filter)
-            .order_by(Role.name)
-            .offset(skip)
-            .limit(limit)
-        )
+        stmt = select(Role).where(role_filter).order_by(Role.name)
         result = await session.execute(stmt)
-        roles = list(result.scalars().all())
+        roles = [
+            role
+            for role in result.scalars().all()
+            if self._allows_entity_type(role, entity.entity_type)
+        ]
 
-        return roles, total_count
+        total_count = len(roles)
+        skip = (page - 1) * limit
+        return roles[skip : skip + limit], total_count
 
     async def get_auto_assigned_roles_for_entity(
         self,
@@ -604,6 +721,13 @@ class RoleService(BaseService[Role]):
         Returns:
             bool: True if role can be used in this entity's context
         """
+        entity = await session.get(Entity, entity_id)
+        if not entity:
+            return False
+
+        if not self._allows_entity_type(role, entity.entity_type):
+            return False
+
         # 1. Global system-wide roles are available everywhere
         if (
             role.is_global

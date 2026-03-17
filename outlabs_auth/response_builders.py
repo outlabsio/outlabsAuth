@@ -2,6 +2,10 @@
 
 from typing import Any, Optional
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from outlabs_auth.models.sql.enums import RoleScope
+from outlabs_auth.schemas.role import RoleResponse, RoleScopeEnum
 from outlabs_auth.schemas.user import UserResponse
 
 
@@ -39,4 +43,54 @@ def build_user_response(user: Any, root_entity_name: Optional[str] = None) -> Us
         suspended_until=getattr(user, "suspended_until", None),
         locked_until=getattr(user, "locked_until", None),
         deleted_at=getattr(user, "deleted_at", None),
+    )
+
+
+async def build_role_response(
+    session: AsyncSession,
+    role: Any,
+    permission_names: Optional[list[str]] = None,
+) -> RoleResponse:
+    """Build a consistent role response from a SQL model."""
+    from outlabs_auth.models.sql.entity import Entity
+
+    root_entity_name = None
+    if getattr(role, "root_entity_id", None):
+        root_entity = await session.get(Entity, role.root_entity_id)
+        if root_entity:
+            root_entity_name = root_entity.display_name
+
+    scope_entity_name = None
+    if getattr(role, "scope_entity_id", None):
+        scope_entity = await session.get(Entity, role.scope_entity_id)
+        if scope_entity:
+            scope_entity_name = scope_entity.display_name
+
+    resolved_permissions = permission_names
+    if resolved_permissions is None:
+        resolved_permissions = (
+            role.get_permission_names()
+            if hasattr(role, "get_permission_names")
+            else []
+        )
+
+    scope_value = RoleScopeEnum.HIERARCHY
+    if getattr(role, "scope", None) == RoleScope.ENTITY_ONLY:
+        scope_value = RoleScopeEnum.ENTITY_ONLY
+
+    return RoleResponse(
+        id=str(role.id),
+        name=role.name,
+        display_name=role.display_name,
+        description=role.description,
+        permissions=resolved_permissions,
+        is_system_role=role.is_system_role,
+        is_global=role.is_global,
+        root_entity_id=str(role.root_entity_id) if role.root_entity_id else None,
+        root_entity_name=root_entity_name,
+        assignable_at_types=list(getattr(role, "assignable_at_types", []) or []),
+        scope_entity_id=str(role.scope_entity_id) if role.scope_entity_id else None,
+        scope_entity_name=scope_entity_name,
+        scope=scope_value,
+        is_auto_assigned=role.is_auto_assigned,
     )

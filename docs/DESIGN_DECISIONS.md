@@ -3565,6 +3565,57 @@ This is a **potentially breaking change** for code that:
 
 ---
 
+## DD-055: Entity Authorization Remains Role-Only
+
+**Date**: 2026-03-17
+**Status**: Accepted
+**Deciders**: Core team
+**Context**: The live entity schemas and docs advertised `entity.direct_permissions` and `entity.metadata`, but the runtime system already grants entity access through roles and memberships only. Keeping placeholder entity-owned permissions would create a second authorization model without a clear use case.
+
+### Options Considered
+
+1. **Implement entity direct permissions**
+   - Pros: Fewer records for trivial cases, possible shortcut for simple grants
+   - Cons: Duplicates the role model, weakens auditability, complicates inheritance and UI explainability
+
+2. **Keep placeholders in the live contract**
+   - Pros: Avoids a breaking API correction
+   - Cons: Leaves the runtime contract dishonest and encourages unsupported integrations
+
+3. **Keep entity authorization role-only**
+   - Pros: Single grant model, clearer audit trail, matches DD-053/DD-054, keeps entities as scope containers rather than raw permission bags
+   - Cons: Some simple admin workflows may require managed roles instead of direct toggles
+
+### Decision
+
+Entity authorization remains role-only.
+
+Entities do not store live direct permission grants. Access is granted through:
+
+- direct user role memberships
+- entity membership roles
+- entity-local roles with `entity_only` or `hierarchy` scope
+- auto-assigned entity-local roles
+
+`entity.direct_permissions` is removed from the live model, schemas, and frontend types.
+
+`entity.metadata` is also removed from the live entity contract until it becomes a real persisted feature with explicit storage, API behavior, and tests.
+
+### Consequences
+
+- **Positive**: Preserves a single authorization model centered on roles
+- **Positive**: Improves explainability and auditability for entity access
+- **Positive**: Aligns the entity API with the persisted SQL model
+- **Negative**: Any UI that wants per-entity permission toggles must express them through managed roles instead of raw permission arrays
+- **Neutral**: Future entity metadata is still possible, but only as a fully implemented persisted feature
+
+### Related Decisions
+
+- DD-053 (Entity-Local Roles with Scope Control)
+- DD-054 (Permission Scope Enforcement)
+
+---
+
 ## Questions Still Open
 
 Track questions that need decisions:
@@ -3608,8 +3659,9 @@ Track questions that need decisions:
 | 2026-01-22 | **DD-052** | **Accepted (Entity Type Configuration CRUD Operations)** |
 | 2026-01-22 | **DD-053** | **Accepted (Entity-Local Roles with Scope Control)** |
 | 2026-01-22 | **DD-054** | **Accepted (Permission Scope Enforcement)** |
+| 2026-03-17 | **DD-055** | **Accepted (Entity Authorization Remains Role-Only)** |
 
 ---
 
-**Last Updated**: 2026-01-22 (DD-054 added: Permission scope enforcement to fix entity-local role permission leakage)
+**Last Updated**: 2026-03-17 (DD-055 added: entity authorization remains role-only)
 **Next Review**: After testing all examples

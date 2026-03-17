@@ -11,6 +11,7 @@ Looking for usage documentation? See **[docs-library/](../docs-library/)** inste
 - **REDESIGN_VISION.md** - Project vision and architectural approach
 - **LIBRARY_ARCHITECTURE.md** - Technical architecture details
 - **IMPLEMENTATION_ROADMAP.md** - Development phases and timeline
+- **ENTITY_AUTHORIZATION_ROLE_ONLY.md** - Decision memo for role-only entity authorization
 
 ### Design Decisions
 - **DESIGN_DECISIONS.md** - Complete record of architectural decisions (DD-001 to DD-037+)

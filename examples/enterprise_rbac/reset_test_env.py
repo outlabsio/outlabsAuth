@@ -20,10 +20,8 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-# Import domain models
-from models import Lead, LeadNote
 from sqlalchemy import select, text
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -33,19 +31,17 @@ from sqlmodel import SQLModel
 from outlabs_auth import (
     Entity,
     EntityClosure,
-    EntityMembership,
     MembershipStatus,
     Permission,
     Role,
-    User,
     UserRoleMembership,
     UserStatus,
 )
 from outlabs_auth.core.config import AuthConfig
-from outlabs_auth.models.sql.entity_membership import EntityMembershipRole
-from outlabs_auth.models.sql.enums import EntityClass
-from outlabs_auth.models.sql.role import RolePermission
-from outlabs_auth.utils.password import generate_password_hash
+from outlabs_auth.models.sql.enums import ConditionOperator, EntityClass, RoleScope
+from outlabs_auth.models.sql.role import ConditionGroup, RoleCondition, RolePermission
+from outlabs_auth.services.membership import MembershipService
+from outlabs_auth.services.user import UserService
 
 # Configuration
 DATABASE_URL = os.getenv(
@@ -312,14 +308,62 @@ async def reset_database():
         await session.flush()
         print(f"   Created {len(permissions_map)} permissions\n")
 
-        # Create roles
+        # Create base/system roles before entities exist. Additional scoped roles are
+        # created after the hierarchy so they can reference real root/scope entities.
         print("Creating roles...")
-        roles_data = [
+        roles_map = {}
+        seeded_roles_for_manifest = []
+
+        async def create_role_record(
+            *,
+            name: str,
+            display_name: str,
+            description: str,
+            permission_names: list[str],
+            is_system_role: bool,
+            is_global: bool,
+            root_entity_id=None,
+            scope_entity_id=None,
+            scope: RoleScope = RoleScope.HIERARCHY,
+            is_auto_assigned: bool = False,
+            assignable_at_types: list[str] | None = None,
+        ) -> Role:
+            role = Role(
+                name=name,
+                display_name=display_name,
+                description=description,
+                is_system_role=is_system_role,
+                is_global=is_global,
+                root_entity_id=root_entity_id,
+                scope_entity_id=scope_entity_id,
+                scope=scope,
+                is_auto_assigned=is_auto_assigned,
+                assignable_at_types=assignable_at_types or [],
+            )
+            session.add(role)
+            await session.flush()
+
+            for permission_name in permission_names:
+                permission = permissions_map.get(permission_name)
+                if permission is None:
+                    continue
+                session.add(
+                    RolePermission(
+                        role_id=role.id,
+                        permission_id=permission.id,
+                    )
+                )
+
+            roles_map[name] = role
+            seeded_roles_for_manifest.append(role)
+            return role
+
+        base_roles_data = [
             {
                 "name": "agent",
                 "display_name": "Agent",
-                "description": "Real estate agent - can manage leads in their team",
-                "permissions": [
+                "description": "Real estate agent who can manage leads within a team.",
+                "permission_names": [
                     "lead:read",
                     "lead:create",
                     "lead:update",
@@ -328,8 +372,8 @@ async def reset_database():
             {
                 "name": "team_lead",
                 "display_name": "Team Lead",
-                "description": "Team leader - can manage leads and view team members",
-                "permissions": [
+                "description": "Team lead who can manage leads and inspect nearby user activity.",
+                "permission_names": [
                     "lead:read",
                     "lead:read_tree",
                     "lead:create",
@@ -341,8 +385,8 @@ async def reset_database():
             {
                 "name": "office_manager",
                 "display_name": "Office Manager",
-                "description": "Office manager - full access to office and all descendants",
-                "permissions": [
+                "description": "Office manager with broad office-level operational visibility.",
+                "permission_names": [
                     "lead:read",
                     "lead:read_tree",
                     "lead:create",
@@ -358,36 +402,24 @@ async def reset_database():
             {
                 "name": "admin",
                 "display_name": "Administrator",
-                "description": "Full system access",
-                "permissions": list(permissions_map.keys()),
+                "description": "Full system access.",
+                "permission_names": list(permissions_map.keys()),
             },
         ]
 
-        roles_map = {}
-        for role_data in roles_data:
-            role = Role(
+        for role_data in base_roles_data:
+            await create_role_record(
                 name=role_data["name"],
                 display_name=role_data["display_name"],
                 description=role_data["description"],
+                permission_names=role_data["permission_names"],
                 is_system_role=True,
                 is_global=True,
             )
-            session.add(role)
-            await session.flush()
-
-            # Add permissions via junction table
-            for perm_name in role_data["permissions"]:
-                if perm_name in permissions_map:
-                    role_perm = RolePermission(
-                        role_id=role.id,
-                        permission_id=permissions_map[perm_name].id,
-                    )
-                    session.add(role_perm)
-
-            roles_map[role_data["name"]] = role
 
         await session.flush()
-        print(f"   Created {len(roles_map)} roles\n")
+
+        seed_now = datetime.now(timezone.utc)
 
         # Create entities (Organization -> Region -> Office -> Team)
         print("Creating entity hierarchy...")
@@ -431,6 +463,9 @@ async def reset_database():
             depth=0,
             path="/acme-realty",
             status="active",
+            allowed_child_types=["region"],
+            allowed_child_classes=["structural"],
+            max_depth=3,
         )
         session.add(org)
         await session.flush()
@@ -448,6 +483,8 @@ async def reset_database():
             depth=1,
             path="/acme-realty/west-coast",
             status="active",
+            allowed_child_types=["office"],
+            allowed_child_classes=["structural"],
         )
         session.add(west_coast)
         await session.flush()
@@ -464,6 +501,8 @@ async def reset_database():
             depth=1,
             path="/acme-realty/east-coast",
             status="active",
+            allowed_child_types=["office"],
+            allowed_child_classes=["structural"],
         )
         session.add(east_coast)
         await session.flush()
@@ -481,6 +520,9 @@ async def reset_database():
             depth=2,
             path="/acme-realty/west-coast/sf-office",
             status="active",
+            allowed_child_types=["team"],
+            allowed_child_classes=["access_group"],
+            max_members=40,
         )
         session.add(sf_office)
         await session.flush()
@@ -490,13 +532,16 @@ async def reset_database():
             name="la_office",
             display_name="Los Angeles Office",
             slug="la-office",
-            description="Los Angeles branch office",
+            description="Los Angeles branch office. Seeded as inactive to exercise lifecycle messaging.",
             entity_class=EntityClass.STRUCTURAL,
             entity_type="office",
             parent_id=west_coast.id,
             depth=2,
             path="/acme-realty/west-coast/la-office",
-            status="active",
+            status="inactive",
+            allowed_child_types=["team"],
+            allowed_child_classes=["access_group"],
+            valid_until=seed_now + timedelta(days=90),
         )
         session.add(la_office)
         await session.flush()
@@ -513,6 +558,9 @@ async def reset_database():
             depth=2,
             path="/acme-realty/east-coast/nyc-office",
             status="active",
+            allowed_child_types=["team"],
+            allowed_child_classes=["access_group"],
+            max_members=25,
         )
         session.add(nyc_office)
         await session.flush()
@@ -530,6 +578,8 @@ async def reset_database():
             depth=3,
             path="/acme-realty/west-coast/sf-office/sf-residential",
             status="active",
+            max_members=12,
+            valid_from=seed_now - timedelta(days=120),
         )
         session.add(sf_residential)
         await session.flush()
@@ -546,10 +596,85 @@ async def reset_database():
             depth=3,
             path="/acme-realty/west-coast/sf-office/sf-commercial",
             status="active",
+            max_members=10,
         )
         session.add(sf_commercial)
         await session.flush()
         await create_closure_for_entity(sf_commercial, sf_office)
+
+        summit_org = Entity(
+            name="summit_commercial",
+            display_name="Summit Commercial",
+            slug="summit-commercial",
+            description="Second organization root for multi-root browser testing.",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+            parent_id=None,
+            depth=0,
+            path="/summit-commercial",
+            status="active",
+            allowed_child_types=["region"],
+            allowed_child_classes=["structural"],
+            max_depth=3,
+        )
+        session.add(summit_org)
+        await session.flush()
+        await create_closure_for_entity(summit_org)
+
+        texas_region = Entity(
+            name="texas_region",
+            display_name="Texas Region",
+            slug="texas-region",
+            description="Summit regional operations across Texas.",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="region",
+            parent_id=summit_org.id,
+            depth=1,
+            path="/summit-commercial/texas-region",
+            status="active",
+            allowed_child_types=["office"],
+            allowed_child_classes=["structural"],
+        )
+        session.add(texas_region)
+        await session.flush()
+        await create_closure_for_entity(texas_region, summit_org)
+
+        austin_office = Entity(
+            name="austin_office",
+            display_name="Austin Office",
+            slug="austin-office",
+            description="Austin commercial sales office.",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="office",
+            parent_id=texas_region.id,
+            depth=2,
+            path="/summit-commercial/texas-region/austin-office",
+            status="active",
+            allowed_child_types=["team"],
+            allowed_child_classes=["access_group"],
+            max_members=30,
+        )
+        session.add(austin_office)
+        await session.flush()
+        await create_closure_for_entity(austin_office, texas_region)
+
+        austin_growth = Entity(
+            name="austin_growth",
+            display_name="Austin Growth Team",
+            slug="austin-growth",
+            description="Summit pipeline generation team for Austin.",
+            entity_class=EntityClass.ACCESS_GROUP,
+            entity_type="team",
+            parent_id=austin_office.id,
+            depth=3,
+            path="/summit-commercial/texas-region/austin-office/austin-growth",
+            status="active",
+            max_members=15,
+            valid_from=seed_now - timedelta(days=45),
+        )
+        session.add(austin_growth)
+        await session.flush()
+        await create_closure_for_entity(austin_growth, austin_office)
 
         await session.flush()
         print("   Created entity hierarchy:")
@@ -560,7 +685,11 @@ async def reset_database():
         print("         - SF Commercial Team")
         print("       - Los Angeles Office")
         print("     - East Coast Region")
-        print("       - New York City Office\n")
+        print("       - New York City Office")
+        print("   - Summit Commercial (organization)")
+        print("     - Texas Region")
+        print("       - Austin Office")
+        print("         - Austin Growth Team\n")
 
         entities_map = {
             "org": org,
@@ -571,12 +700,268 @@ async def reset_database():
             "nyc_office": nyc_office,
             "sf_residential": sf_residential,
             "sf_commercial": sf_commercial,
+            "summit_org": summit_org,
+            "texas_region": texas_region,
+            "austin_office": austin_office,
+            "austin_growth": austin_growth,
         }
+
+        demo_roles_data = [
+            {
+                "name": "scoped_roles_admin",
+                "display_name": "Scoped Roles Admin",
+                "description": "Directly grants role-management permissions. Pair it with user root or entity scope to limit what that admin can actually change.",
+                "permission_names": [
+                    "role:read",
+                    "role:create",
+                    "role:update",
+                    "role:delete",
+                    "user:read",
+                    "user:read_tree",
+                    "entity:read",
+                    "entity:read_tree",
+                ],
+                "is_global": True,
+                "is_system_role": False,
+            },
+            {
+                "name": "acme_org_admin",
+                "display_name": "ACME Org Admin",
+                "description": "Top-level ACME admin role. Intended for organization operators who manage roles across the full root scope.",
+                "permission_names": [
+                    "role:read",
+                    "role:create",
+                    "role:update",
+                    "role:delete",
+                    "user:read",
+                    "user:read_tree",
+                    "user:create",
+                    "entity:read",
+                    "entity:read_tree",
+                ],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "org",
+            },
+            {
+                "name": "acme_auditor",
+                "display_name": "ACME Auditor",
+                "description": "Read-only organization role for audit and review workflows.",
+                "permission_names": [
+                    "role:read",
+                    "user:read",
+                    "user:read_tree",
+                    "entity:read",
+                    "entity:read_tree",
+                    "lead:read",
+                    "lead:read_tree",
+                ],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "org",
+            },
+            {
+                "name": "office_dispatch_coordinator",
+                "display_name": "Office Dispatch Coordinator",
+                "description": "Root-scoped example role that is only intended to be assigned at office memberships.",
+                "permission_names": [
+                    "lead:read",
+                    "lead:update",
+                    "user:read",
+                    "entity:read",
+                ],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "org",
+                "assignable_at_types": ["office"],
+            },
+            {
+                "name": "west_coast_hierarchy_admin",
+                "display_name": "West Coast Hierarchy Admin",
+                "description": "Entity-defined admin role from West Coast. It applies at the region and all descendants.",
+                "permission_names": [
+                    "role:read",
+                    "role:create",
+                    "role:update",
+                    "user:read",
+                    "user:read_tree",
+                    "entity:read",
+                    "entity:read_tree",
+                    "lead:read",
+                    "lead:read_tree",
+                ],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "org",
+                "scope_entity_key": "west_coast",
+                "scope": RoleScope.HIERARCHY,
+                "assignable_at_types": ["region", "office", "team"],
+            },
+            {
+                "name": "sf_office_local_admin",
+                "display_name": "SF Office Local Admin",
+                "description": "Entity-only admin role defined at the San Francisco office. It stays local and does not inherit to teams.",
+                "permission_names": [
+                    "role:read",
+                    "role:create",
+                    "role:update",
+                    "user:read",
+                    "entity:read",
+                    "lead:read",
+                    "lead:update",
+                ],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "org",
+                "scope_entity_key": "sf_office",
+                "scope": RoleScope.ENTITY_ONLY,
+                "assignable_at_types": ["office"],
+            },
+            {
+                "name": "sf_team_member_default",
+                "display_name": "SF Team Default Member",
+                "description": "Auto-assigned example role for SF Residential memberships. Useful for testing inherited defaults and blast radius messaging.",
+                "permission_names": [
+                    "lead:read",
+                    "lead:create",
+                ],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "org",
+                "scope_entity_key": "sf_residential",
+                "scope": RoleScope.HIERARCHY,
+                "is_auto_assigned": True,
+                "assignable_at_types": ["team"],
+            },
+            {
+                "name": "east_coast_hierarchy_admin",
+                "display_name": "East Coast Hierarchy Admin",
+                "description": "Sibling branch admin role for East Coast scope filtering and scoped admin review.",
+                "permission_names": [
+                    "role:read",
+                    "role:create",
+                    "role:update",
+                    "user:read",
+                    "user:read_tree",
+                    "entity:read",
+                    "entity:read_tree",
+                    "lead:read",
+                    "lead:read_tree",
+                ],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "org",
+                "scope_entity_key": "east_coast",
+                "scope": RoleScope.HIERARCHY,
+                "assignable_at_types": ["region", "office"],
+            },
+            {
+                "name": "west_coast_after_hours",
+                "display_name": "West Coast After Hours Override",
+                "description": "Entity-defined hierarchy role with ABAC conditions. Intended for emergency after-hours handling from approved backoffice sessions.",
+                "permission_names": [
+                    "lead:read",
+                    "lead:update",
+                ],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "org",
+                "scope_entity_key": "west_coast",
+                "scope": RoleScope.HIERARCHY,
+                "assignable_at_types": ["region", "office"],
+            },
+            {
+                "name": "summit_org_admin",
+                "display_name": "Summit Org Admin",
+                "description": "Top-level Summit administrator for testing multi-root role workspaces.",
+                "permission_names": [
+                    "role:read",
+                    "role:create",
+                    "role:update",
+                    "role:delete",
+                    "user:read",
+                    "user:read_tree",
+                    "user:create",
+                    "entity:read",
+                    "entity:read_tree",
+                ],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "summit_org",
+            },
+            {
+                "name": "austin_office_local_admin",
+                "display_name": "Austin Office Local Admin",
+                "description": "Entity-only Summit role for office-local administration and entity_only testing on a second root.",
+                "permission_names": [
+                    "role:read",
+                    "role:create",
+                    "role:update",
+                    "user:read",
+                    "entity:read",
+                    "lead:read",
+                    "lead:update",
+                ],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "summit_org",
+                "scope_entity_key": "austin_office",
+                "scope": RoleScope.ENTITY_ONLY,
+                "assignable_at_types": ["office"],
+            },
+            {
+                "name": "summit_growth_default",
+                "display_name": "Summit Growth Default",
+                "description": "Auto-assigned baseline role for Summit growth team members.",
+                "permission_names": [
+                    "lead:read",
+                    "lead:create",
+                ],
+                "is_global": False,
+                "is_system_role": False,
+                "root_entity_key": "summit_org",
+                "scope_entity_key": "austin_growth",
+                "scope": RoleScope.HIERARCHY,
+                "is_auto_assigned": True,
+                "assignable_at_types": ["team"],
+            },
+        ]
+
+        for role_data in demo_roles_data:
+            await create_role_record(
+                name=role_data["name"],
+                display_name=role_data["display_name"],
+                description=role_data["description"],
+                permission_names=role_data["permission_names"],
+                is_system_role=role_data["is_system_role"],
+                is_global=role_data["is_global"],
+                root_entity_id=(
+                    entities_map[role_data["root_entity_key"]].id
+                    if role_data.get("root_entity_key")
+                    else None
+                ),
+                scope_entity_id=(
+                    entities_map[role_data["scope_entity_key"]].id
+                    if role_data.get("scope_entity_key")
+                    else None
+                ),
+                scope=role_data.get("scope", RoleScope.HIERARCHY),
+                is_auto_assigned=role_data.get("is_auto_assigned", False),
+                assignable_at_types=role_data.get("assignable_at_types", []),
+            )
+
+        await session.flush()
+        print(
+            f"   Created {len(seeded_roles_for_manifest)} roles "
+            f"({len(base_roles_data)} system + {len(demo_roles_data)} demo)\n"
+        )
 
         # Create config for password hashing
         config = AuthConfig(secret_key="test-secret-key")
+        user_service = UserService(config)
+        membership_service = MembershipService(config)
 
-        # Create test users with role assignments
+        # Create test users with review-friendly personas.
         print("Creating test users...")
         users_data = [
             {
@@ -584,117 +969,426 @@ async def reset_database():
                 "password": "Testpass1!",
                 "first_name": "System",
                 "last_name": "Admin",
-                "role": "admin",
+                "persona": "Superuser",
+                "notes": "Can manage global, root-scoped, and entity-defined roles everywhere.",
                 "is_superuser": True,
-                "entity_memberships": [("org", "admin")],
+                "root_entity_key": "org",
+                "direct_roles": ["admin"],
+                "entity_memberships": [
+                    {"entity_key": "org", "role_names": ["admin"]},
+                ],
+            },
+            {
+                "email": "org-admin@acme.com",
+                "password": "Testpass1!",
+                "first_name": "Olivia",
+                "last_name": "OrgAdmin",
+                "persona": "Root-scoped admin",
+                "notes": "Can manage ACME root roles and descendants, but not system-wide global roles.",
+                "is_superuser": False,
+                "root_entity_key": "org",
+                "direct_roles": ["acme_org_admin"],
+                "entity_memberships": [
+                    {"entity_key": "org", "role_names": ["acme_org_admin"]},
+                ],
+            },
+            {
+                "email": "regional-admin@acme.com",
+                "password": "Testpass1!",
+                "first_name": "Riley",
+                "last_name": "RegionalAdmin",
+                "persona": "West Coast scoped admin",
+                "notes": "Can manage West Coast entity-defined roles only. Good for hierarchy-scope testing.",
+                "is_superuser": False,
+                "root_entity_key": "org",
+                "direct_roles": ["scoped_roles_admin"],
+                "entity_memberships": [
+                    {
+                        "entity_key": "west_coast",
+                        "role_names": [
+                            "west_coast_hierarchy_admin",
+                            "west_coast_after_hours",
+                        ],
+                    },
+                ],
             },
             {
                 "email": "manager@sf.acme.com",
                 "password": "Testpass1!",
                 "first_name": "Sarah",
                 "last_name": "Manager",
-                "role": "office_manager",
+                "persona": "SF office scoped admin",
+                "notes": "Can manage San Francisco office-local roles only. Useful for entity_only review.",
                 "is_superuser": False,
-                "entity_memberships": [("sf_office", "office_manager")],
+                "root_entity_key": "org",
+                "direct_roles": ["scoped_roles_admin"],
+                "entity_memberships": [
+                    {
+                        "entity_key": "sf_office",
+                        "role_names": ["office_manager", "sf_office_local_admin"],
+                    },
+                ],
+            },
+            {
+                "email": "east-admin@acme.com",
+                "password": "Testpass1!",
+                "first_name": "Elliot",
+                "last_name": "EastAdmin",
+                "persona": "East Coast scoped admin",
+                "notes": "Sibling branch admin for East Coast scope filtering and branch-isolation browser tests.",
+                "is_superuser": False,
+                "root_entity_key": "org",
+                "direct_roles": ["scoped_roles_admin"],
+                "entity_memberships": [
+                    {
+                        "entity_key": "east_coast",
+                        "role_names": ["east_coast_hierarchy_admin"],
+                    },
+                ],
+            },
+            {
+                "email": "auditor@acme.com",
+                "password": "Testpass1!",
+                "first_name": "Avery",
+                "last_name": "Auditor",
+                "persona": "Read-only auditor",
+                "notes": "Can inspect the ACME role catalog without mutation permissions.",
+                "is_superuser": False,
+                "root_entity_key": "org",
+                "direct_roles": ["acme_auditor"],
+                "entity_memberships": [
+                    {"entity_key": "org", "role_names": ["acme_auditor"]},
+                ],
             },
             {
                 "email": "lead@sf.acme.com",
                 "password": "Testpass1!",
                 "first_name": "Tom",
                 "last_name": "TeamLead",
-                "role": "team_lead",
+                "persona": "Operational team lead",
+                "notes": "Has normal team permissions plus the auto-assigned SF team default role.",
                 "is_superuser": False,
-                "entity_memberships": [("sf_residential", "team_lead")],
+                "direct_roles": ["team_lead"],
+                "entity_memberships": [
+                    {"entity_key": "sf_residential", "role_names": ["team_lead"]},
+                ],
             },
             {
                 "email": "agent@sf.acme.com",
                 "password": "Testpass1!",
                 "first_name": "Jane",
                 "last_name": "Agent",
-                "role": "agent",
+                "persona": "Residential agent",
+                "notes": "Receives the auto-assigned SF team default role on the residential team.",
                 "is_superuser": False,
-                "entity_memberships": [("sf_residential", "agent")],
+                "direct_roles": ["agent"],
+                "entity_memberships": [
+                    {"entity_key": "sf_residential", "role_names": ["agent"]},
+                ],
+            },
+            {
+                "email": "commercial@sf.acme.com",
+                "password": "Testpass1!",
+                "first_name": "Chris",
+                "last_name": "Commercial",
+                "persona": "Commercial agent",
+                "notes": "Operational user outside the residential auto-assignment scope.",
+                "is_superuser": False,
+                "direct_roles": ["agent"],
+                "entity_memberships": [
+                    {"entity_key": "sf_commercial", "role_names": ["agent"]},
+                ],
+            },
+            {
+                "email": "summit-admin@summit.com",
+                "password": "Testpass1!",
+                "first_name": "Morgan",
+                "last_name": "SummitAdmin",
+                "persona": "Second root admin",
+                "notes": "Root-scoped Summit admin for multi-root testing and superuser root switching.",
+                "is_superuser": False,
+                "root_entity_key": "summit_org",
+                "direct_roles": ["summit_org_admin"],
+                "entity_memberships": [
+                    {"entity_key": "summit_org", "role_names": ["summit_org_admin"]},
+                ],
+            },
+            {
+                "email": "agent@austin.summit.com",
+                "password": "Testpass1!",
+                "first_name": "Parker",
+                "last_name": "Growth",
+                "persona": "Summit growth agent",
+                "notes": "Operational user in the second organization with an auto-assigned team default role.",
+                "is_superuser": False,
+                "root_entity_key": "summit_org",
+                "direct_roles": ["agent"],
+                "entity_memberships": [
+                    {"entity_key": "austin_growth", "role_names": ["agent"]},
+                ],
+            },
+            {
+                "email": "invited@acme.com",
+                "password": None,
+                "first_name": "Indigo",
+                "last_name": "Invitee",
+                "persona": "Pending invite",
+                "notes": "Fresh invite fixture for resend-invite flows and invited-user filtering.",
+                "is_superuser": False,
+                "root_entity_key": "org",
+                "status": UserStatus.INVITED,
+                "email_verified": False,
+                "invited_by_email": "org-admin@acme.com",
+                "direct_roles": [],
+                "entity_memberships": [],
+            },
+            {
+                "email": "suspended@ny.acme.com",
+                "password": "Testpass1!",
+                "first_name": "Nina",
+                "last_name": "Suspended",
+                "persona": "Suspended operator",
+                "notes": "Suspended user for lifecycle screens and audit trails.",
+                "is_superuser": False,
+                "root_entity_key": "org",
+                "status": UserStatus.SUSPENDED,
+                "suspended_days": 14,
+                "direct_roles": ["agent"],
+                "entity_memberships": [
+                    {
+                        "entity_key": "nyc_office",
+                        "role_names": ["office_dispatch_coordinator"],
+                    },
+                ],
+            },
+            {
+                "email": "locked@la.acme.com",
+                "password": "Testpass1!",
+                "first_name": "Lena",
+                "last_name": "Locked",
+                "persona": "Locked support user",
+                "notes": "Active but temporarily locked account for security-state UI coverage.",
+                "is_superuser": False,
+                "root_entity_key": "org",
+                "locked_hours": 8,
+                "failed_login_attempts": 5,
+                "direct_roles": ["agent"],
+                "entity_memberships": [
+                    {
+                        "entity_key": "la_office",
+                        "role_names": ["office_dispatch_coordinator"],
+                    },
+                ],
+            },
+            {
+                "email": "unverified@austin.summit.com",
+                "password": "Testpass1!",
+                "first_name": "Uma",
+                "last_name": "Unverified",
+                "persona": "Unverified Summit hire",
+                "notes": "Email-unverified active user for badge and filter coverage in the second root.",
+                "is_superuser": False,
+                "root_entity_key": "summit_org",
+                "email_verified": False,
+                "direct_roles": ["agent"],
+                "entity_memberships": [
+                    {
+                        "entity_key": "austin_growth",
+                        "role_names": ["agent"],
+                    },
+                ],
             },
         ]
 
         users_map = {}
         for user_data in users_data:
-            # Create user
-            user = User(
-                email=user_data["email"],
-                hashed_password=generate_password_hash(user_data["password"], config),
-                first_name=user_data["first_name"],
-                last_name=user_data["last_name"],
-                is_superuser=user_data["is_superuser"],
-                status=UserStatus.ACTIVE,
-                email_verified=True,
+            root_entity_id = (
+                entities_map[user_data["root_entity_key"]].id
+                if user_data.get("root_entity_key")
+                else None
             )
-            session.add(user)
+            if user_data.get("status") == UserStatus.INVITED:
+                invited_by_id = None
+                invited_by_email = user_data.get("invited_by_email")
+                if invited_by_email and invited_by_email in users_map:
+                    invited_by_id = users_map[invited_by_email].id
+                user, _plain_invite_token = await user_service.invite_user(
+                    session,
+                    user_data["email"],
+                    first_name=user_data["first_name"],
+                    last_name=user_data["last_name"],
+                    invited_by_id=invited_by_id,
+                    root_entity_id=root_entity_id,
+                )
+            else:
+                user = await user_service.create_user(
+                    session,
+                    user_data["email"],
+                    user_data["password"],
+                    first_name=user_data["first_name"],
+                    last_name=user_data["last_name"],
+                    is_superuser=user_data["is_superuser"],
+                    root_entity_id=root_entity_id,
+                )
+
+            user.status = user_data.get("status", UserStatus.ACTIVE)
+            user.email_verified = user_data.get(
+                "email_verified",
+                user.status == UserStatus.ACTIVE,
+            )
+            user.last_login = seed_now - timedelta(hours=user_data.get("last_login_hours_ago", 18))
+            user.last_activity = seed_now - timedelta(hours=user_data.get("last_activity_hours_ago", 2))
+            user.last_password_change = seed_now - timedelta(
+                days=user_data.get("last_password_change_days_ago", 45)
+            )
+            user.failed_login_attempts = user_data.get("failed_login_attempts", 0)
+            user.locale = user_data.get("locale", "en-US")
+            user.timezone = user_data.get("timezone", "America/Los_Angeles")
+            if user_data.get("suspended_days"):
+                user.suspended_until = seed_now + timedelta(days=user_data["suspended_days"])
+            if user_data.get("locked_hours"):
+                user.locked_until = seed_now + timedelta(hours=user_data["locked_hours"])
+            if user.status == UserStatus.INVITED:
+                user.last_login = None
+                user.last_activity = None
+                user.last_password_change = None
             await session.flush()
             users_map[user_data["email"]] = user
 
-            # Create global role assignment
-            role = roles_map[user_data["role"]]
-            membership = UserRoleMembership(
-                user_id=user.id,
-                role_id=role.id,
-                status=MembershipStatus.ACTIVE,
-                assigned_at=datetime.now(timezone.utc),
-            )
-            session.add(membership)
+            for role_name in user_data["direct_roles"]:
+                session.add(
+                    UserRoleMembership(
+                        user_id=user.id,
+                        role_id=roles_map[role_name].id,
+                        status=MembershipStatus.ACTIVE,
+                        assigned_at=seed_now,
+                    )
+                )
 
-            # Create entity memberships
-            for entity_key, role_name in user_data["entity_memberships"]:
-                entity = entities_map[entity_key]
-                role = roles_map[role_name]
-
-                entity_membership = EntityMembership(
+            joined_by_email = user_data.get("joined_by_email", "admin@acme.com")
+            joined_by = users_map.get(joined_by_email)
+            for membership_data in user_data["entity_memberships"]:
+                await membership_service.add_member(
+                    session,
+                    entity_id=entities_map[membership_data["entity_key"]].id,
                     user_id=user.id,
-                    entity_id=entity.id,
-                    status=MembershipStatus.ACTIVE,
-                    joined_at=datetime.now(timezone.utc),
+                    role_ids=[roles_map[role_name].id for role_name in membership_data["role_names"]],
+                    joined_by_id=joined_by.id if joined_by else None,
+                    status=membership_data.get("status", MembershipStatus.ACTIVE),
+                    reason=membership_data.get("reason"),
                 )
-                session.add(entity_membership)
-                await session.flush()
 
-                # Add role to membership
-                membership_role = EntityMembershipRole(
-                    membership_id=entity_membership.id,
-                    role_id=role.id,
-                )
-                session.add(membership_role)
+        print(
+            f"   Created {len(users_data)} test users with persona, lifecycle, and multi-root coverage\n"
+        )
+
+        print("Creating ABAC demo conditions...")
+        after_hours_group = ConditionGroup(
+            role_id=roles_map["west_coast_after_hours"].id,
+            operator="AND",
+            description="Only allow after-hours override from approved backoffice workflows.",
+        )
+        session.add(after_hours_group)
+        await session.flush()
+        session.add(
+            RoleCondition(
+                role_id=roles_map["west_coast_after_hours"].id,
+                condition_group_id=after_hours_group.id,
+                attribute="env.request_origin",
+                operator=ConditionOperator.EQUALS,
+                value="backoffice",
+                value_type="string",
+                description="Restrict to backoffice-originated requests.",
+            )
+        )
+        session.add(
+            RoleCondition(
+                role_id=roles_map["west_coast_after_hours"].id,
+                condition_group_id=after_hours_group.id,
+                attribute="env.shift_window",
+                operator=ConditionOperator.EQUALS,
+                value="after_hours",
+                value_type="string",
+                description="Require the after-hours shift window flag.",
+            )
+        )
+        print("   Added ABAC condition group to West Coast After Hours Override\n")
 
         await session.commit()
-        print(f"   Created {len(users_data)} test users with entity memberships\n")
-
-        # --------------------------------------------------------------------
-        # ABAC demo conditions
-        # --------------------------------------------------------------------
-        # We intentionally do NOT write ABAC conditions directly in this reset script.
-        # The example smoke runner seeds ABAC via the public API endpoints:
-        #   POST /v1/roles/{role_id}/conditions
-        # This keeps examples aligned with how a real integration would configure ABAC.
-        print(
-            "ABAC demo conditions: seeded via API (see scripts/smoke_enterprise_api.py)\n"
-        )
 
     # Close engine
     await engine.dispose()
 
-    # Print credentials
+    entity_display_by_id = {str(entity.id): entity.display_name for entity in entities_map.values()}
+
+    # Print credentials and starter manifest
     print("=" * 60)
     print("Test Environment Reset Complete!")
     print("=" * 60)
-    print("\nTest User Credentials:\n")
+    print("\nReview Personas:\n")
 
     for user_data in users_data:
-        print(
-            f"   {user_data['first_name']} {user_data['last_name']} ({user_data['role']})"
-        )
+        print(f"   {user_data['persona']}: {user_data['first_name']} {user_data['last_name']}")
         print(f"   Email:    {user_data['email']}")
-        print(f"   Password: {user_data['password']}")
-        print(f"   Entities: {[e[0] for e in user_data['entity_memberships']]}")
+        print(f"   Password: {user_data['password'] or 'Invite flow only'}")
+        print(
+            f"   Status:   {user_data.get('status', UserStatus.ACTIVE).value if isinstance(user_data.get('status'), UserStatus) else user_data.get('status', 'active')}"
+        )
+        print(
+            f"   Direct Roles: {', '.join(user_data['direct_roles']) or 'None'}"
+        )
+        print(
+            "   Entity Scope: "
+            + ", ".join(
+                f"{membership['entity_key']} ({', '.join(membership['role_names'])})"
+                for membership in user_data["entity_memberships"]
+            )
+        )
+        if user_data.get("root_entity_key"):
+            print(
+                "   Root Scope: "
+                + entities_map[user_data["root_entity_key"]].display_name
+            )
+        print(f"   Notes:    {user_data['notes']}")
         print()
+
+    print("Seeded Roles Workspace Examples:\n")
+    for role in seeded_roles_for_manifest:
+        if role.is_global and role.root_entity_id is None and role.scope_entity_id is None:
+            role_type = "Global"
+            defined_at = "System"
+            scope_label = "system-wide"
+        elif role.scope_entity_id is None:
+            role_type = "Organization-scoped"
+            defined_at = entity_display_by_id.get(str(role.root_entity_id), "Unknown root")
+            scope_label = "root"
+        else:
+            role_type = "Entity-defined"
+            defined_at = entity_display_by_id.get(str(role.scope_entity_id), "Unknown entity")
+            scope_label = role.scope.value
+
+        flags = []
+        if role.is_system_role:
+            flags.append("system")
+        if role.is_auto_assigned:
+            flags.append("auto-assigned")
+        if role.name == "west_coast_after_hours":
+            flags.append("abac")
+
+        assignable = ", ".join(role.assignable_at_types) if role.assignable_at_types else "any entity type"
+        flag_summary = f" [{', '.join(flags)}]" if flags else ""
+        print(
+            f"   - {role.display_name}{flag_summary}: {role_type}, defined at {defined_at}, "
+            f"scope={scope_label}, assignable_at={assignable}"
+        )
+    print()
+
+    print("Seed Summary:")
+    print(f"   Root entities: {sum(1 for entity in entities_map.values() if entity.parent_id is None)}")
+    print(f"   Total entities: {len(entities_map)}")
+    print(f"   Total roles: {len(seeded_roles_for_manifest)}")
+    print(f"   Total personas: {len(users_data)}")
+    print()
 
     print("URLs:")
     print(f"   Backend:  http://localhost:8004")

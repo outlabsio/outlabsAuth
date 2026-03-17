@@ -335,7 +335,7 @@ class PermissionService(BaseService[Permission]):
     ) -> bool:
         """
         EnterpriseRBAC permission evaluation:
-        - direct permissions via membership roles on the target entity
+        - permissions granted by membership roles on the target entity
         - inherited tree permissions via membership roles on ancestor entities (closure table)
         - respects entity-local role scope (entity_only vs hierarchy)
         """

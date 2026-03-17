@@ -595,14 +595,13 @@ class EntityModel(BaseDocument):
     valid_from: Optional[datetime] = None
     valid_until: Optional[datetime] = None
 
-    # Direct permissions (optional)
-    direct_permissions: List[str] = Field(default_factory=list)
-
     # Configuration
     allowed_child_classes: List[EntityClass] = []
     allowed_child_types: List[str] = []
     max_members: Optional[int] = None
 ```
+
+`Entity.metadata` is future design intent only. It is intentionally absent from the current persisted SQL model and live API contract.
 
 #### EntityMembershipModel
 ```python

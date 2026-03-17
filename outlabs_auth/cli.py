@@ -30,6 +30,7 @@ from outlabs_auth.bootstrap import (
 
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 ALEMBIC_VERSION_TABLE = "outlabs_auth_alembic_version"
+SQUASHED_BASELINE_REVISION = "20260316_0001"
 LEGACY_SCHEMA_ADOPTION_TABLES = frozenset(
     {
         "users",
@@ -226,9 +227,11 @@ async def run_migrations(
     from alembic import command
 
     if revision == "head":
-        adopted = await adopt_existing_schema(database_url, schema=schema, revision=revision)
-        if adopted:
-            return
+        await adopt_existing_schema(
+            database_url,
+            schema=schema,
+            revision=SQUASHED_BASELINE_REVISION,
+        )
 
     await _run_alembic_command(
         database_url,
@@ -479,8 +482,7 @@ def seed_system(permissions: bool, seed_config: bool):
         )
     )
     click.echo(
-        "Permissions created: "
-        f"{created} | existing: {existing} | config seeded: {'yes' if config_seeded else 'no'}"
+        "Permissions created: " f"{created} | existing: {existing} | config seeded: {'yes' if config_seeded else 'no'}"
     )
 
 
@@ -572,9 +574,7 @@ def init_db(force: bool):
 
             async with engine.connect() as conn:
                 result = await conn.execute(
-                    text(
-                        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = :schema_name"
-                    ),
+                    text("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = :schema_name"),
                     {"schema_name": schema_name},
                 )
                 return int(result.scalar_one())

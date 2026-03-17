@@ -246,6 +246,20 @@ async def test_permissions_and_roles_crud(client: httpx.AsyncClient, admin_token
     )
     assert r_perm_update.status_code == 200, r_perm_update.text
 
+    root_name = f"role-root-{uuid.uuid4().hex[:8]}"
+    r_root_create = await client.post(
+        "/v1/entities/",
+        json={
+            "name": root_name,
+            "display_name": "Role Root",
+            "slug": root_name,
+            "entity_class": EntityClass.STRUCTURAL.value,
+            "entity_type": "organization",
+        },
+    )
+    assert r_root_create.status_code == 201, r_root_create.text
+    root_id = r_root_create.json()["id"]
+
     role_name = f"demo_role_{uuid.uuid4().hex[:6]}"
     r_role_create = await client.post(
         "/v1/roles/",
@@ -255,20 +269,28 @@ async def test_permissions_and_roles_crud(client: httpx.AsyncClient, admin_token
             "description": "integration test",
             "permissions": [perm_name],
             "is_global": False,
+            "root_entity_id": root_id,
+            "assignable_at_types": ["department"],
         },
     )
     assert r_role_create.status_code == 201, r_role_create.text
     role = r_role_create.json()
     role_id = role["id"]
+    assert role["assignable_at_types"] == ["department"]
+    assert "entity_type_permissions" not in role
 
     r_role_get = await client.get(f"/v1/roles/{role_id}")
     assert r_role_get.status_code == 200, r_role_get.text
+    assert r_role_get.json()["assignable_at_types"] == ["department"]
+    assert "entity_type_permissions" not in r_role_get.json()
 
     r_role_update = await client.patch(
         f"/v1/roles/{role_id}",
-        json={"display_name": "Demo Role Updated", "is_global": True},
+        json={"display_name": "Demo Role Updated", "assignable_at_types": ["team"]},
     )
     assert r_role_update.status_code == 200, r_role_update.text
+    assert r_role_update.json()["assignable_at_types"] == ["team"]
+    assert "entity_type_permissions" not in r_role_update.json()
 
     r_role_delete = await client.delete(f"/v1/roles/{role_id}")
     assert r_role_delete.status_code == 204, r_role_delete.text

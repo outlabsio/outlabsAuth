@@ -1,7 +1,7 @@
 """Entity request/response schemas."""
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -20,8 +20,6 @@ class EntityResponse(BaseModel):
     status: str = "active"
     valid_from: Optional[datetime] = None
     valid_until: Optional[datetime] = None
-    direct_permissions: List[str] = Field(default_factory=list)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
     allowed_child_classes: List[str] = Field(default_factory=list)
     allowed_child_types: List[str] = Field(default_factory=list)
     max_members: Optional[int] = None
@@ -42,8 +40,6 @@ class EntityCreateRequest(BaseModel):
     status: str = Field(default="active", pattern="^(active|inactive|archived)$")
     valid_from: Optional[datetime] = None
     valid_until: Optional[datetime] = None
-    direct_permissions: List[str] = Field(default_factory=list)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
     allowed_child_classes: List[str] = Field(default_factory=list)
     allowed_child_types: List[str] = Field(default_factory=list)
     max_members: Optional[int] = None
@@ -57,8 +53,6 @@ class EntityUpdateRequest(BaseModel):
     status: Optional[str] = Field(None, pattern="^(active|inactive|archived)$")
     valid_from: Optional[datetime] = None
     valid_until: Optional[datetime] = None
-    direct_permissions: Optional[List[str]] = None
-    metadata: Optional[Dict[str, Any]] = None
     allowed_child_classes: Optional[List[str]] = None
     allowed_child_types: Optional[List[str]] = None
     max_members: Optional[int] = None

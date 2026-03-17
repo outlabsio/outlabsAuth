@@ -875,7 +875,7 @@ Before moving to Phase 3, we need:
   - **Check tree permissions using closure table** (O(1) query, not recursive) - DD-036
   - Resolve user permissions across all memberships
 - [x] Implement permission resolution algorithm:
-  1. Check direct permission in target entity
+  1. Check permissions granted by membership roles in the target entity
   2. **Check _tree permission in ancestors (single query via closure table)** - DD-036
   3. Check _all permission anywhere
 - [x] Add permission caching (Redis-based)

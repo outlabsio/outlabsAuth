@@ -26,6 +26,17 @@ def test_roles_api_sends_permission_arrays_and_root_entity_filter():
     assert "entity_id: filters.entity_id" not in roles_api
 
 
+def test_legacy_auth_ui_entity_types_match_backend_entity_contract():
+    entity_types = _read("auth-ui/app/types/entity.ts")
+
+    assert "direct_permissions" not in entity_types
+    assert "metadata" not in entity_types
+    assert "valid_from" in entity_types
+    assert "valid_until" in entity_types
+    assert "allowed_child_types" in entity_types
+    assert "max_members" in entity_types
+
+
 def test_user_detail_form_only_submits_supported_profile_fields():
     user_detail = _read("auth-ui/app/pages/users/[id]/index.vue")
 

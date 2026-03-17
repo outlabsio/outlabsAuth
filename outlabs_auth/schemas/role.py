@@ -1,9 +1,9 @@
 """Role request/response schemas."""
 
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class RoleScopeEnum(str, Enum):
@@ -31,7 +31,6 @@ class RoleResponse(BaseModel):
     display_name: str
     description: Optional[str] = None
     permissions: List[str] = Field(default_factory=list)
-    entity_type_permissions: Optional[Dict[str, List[str]]] = None
     is_system_role: bool = False
     is_global: bool = False
     root_entity_id: Optional[str] = Field(
@@ -72,7 +71,6 @@ class RoleCreateRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=200)
     description: Optional[str] = Field(None, max_length=500)
     permissions: List[str] = Field(default_factory=list)
-    entity_type_permissions: Optional[Dict[str, List[str]]] = None
     is_global: bool = Field(
         default=True,
         description="If True with no root_entity_id, role is available system-wide.",
@@ -97,6 +95,11 @@ class RoleCreateRequest(BaseModel):
         description="If true, automatically assigned to all members within scope (retroactive).",
     )
 
+    @field_validator("assignable_at_types")
+    @classmethod
+    def normalize_assignable_at_types(cls, value: List[str]) -> List[str]:
+        return list(dict.fromkeys(item.strip().lower() for item in value if item and item.strip()))
+
 
 class RoleUpdateRequest(BaseModel):
     """Role update request schema."""
@@ -104,7 +107,6 @@ class RoleUpdateRequest(BaseModel):
     display_name: Optional[str] = Field(None, min_length=1, max_length=200)
     description: Optional[str] = None
     permissions: Optional[List[str]] = None
-    entity_type_permissions: Optional[Dict[str, List[str]]] = None
     is_global: Optional[bool] = None
     assignable_at_types: Optional[List[str]] = None
 
@@ -117,3 +119,12 @@ class RoleUpdateRequest(BaseModel):
         None,
         description="If true, automatically assigned to all members within scope (retroactive when changed to true).",
     )
+
+    @field_validator("assignable_at_types")
+    @classmethod
+    def normalize_optional_assignable_at_types(
+        cls, value: Optional[List[str]]
+    ) -> Optional[List[str]]:
+        if value is None:
+            return None
+        return list(dict.fromkeys(item.strip().lower() for item in value if item and item.strip()))

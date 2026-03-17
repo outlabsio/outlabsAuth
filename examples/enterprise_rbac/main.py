@@ -52,9 +52,7 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac",
 )
-SECRET_KEY = os.getenv(
-    "SECRET_KEY", "enterprise-rbac-secret-change-in-production-please"
-)
+SECRET_KEY = os.getenv("SECRET_KEY", "enterprise-rbac-secret-change-in-production-please")
 REDIS_URL = os.getenv("REDIS_URL", None)
 
 
@@ -71,9 +69,7 @@ class RealEstateUserService(UserService):
     For development, we just print the reset links to console.
     """
 
-    async def on_after_forgot_password(
-        self, user: User, token: str, request: Optional[any] = None
-    ) -> None:
+    async def on_after_forgot_password(self, user: User, token: str, request: Optional[any] = None) -> None:
         """Send password reset email to user."""
         reset_link = f"http://localhost:3000/reset-password?token={token}"
 
@@ -87,9 +83,7 @@ class RealEstateUserService(UserService):
         print(f"\nThis link will expire in 1 hour.")
         print("=" * 80 + "\n")
 
-    async def on_after_reset_password(
-        self, user: User, request: Optional[any] = None
-    ) -> None:
+    async def on_after_reset_password(self, user: User, request: Optional[any] = None) -> None:
         """Send password reset confirmation email."""
         print("\n" + "=" * 80)
         print("PASSWORD RESET CONFIRMATION (Development Mode)")
@@ -213,11 +207,13 @@ async def lifespan(app: FastAPI):
     auth = EnterpriseRBAC(
         database_url=DATABASE_URL,
         secret_key=SECRET_KEY,
+        auto_migrate=True,
         access_token_expire_minutes=480,  # 8 hours for dev (default: 15 min)
         refresh_token_expire_days=7,  # 7 days for dev (default: 30 days)
         redis_client=redis_client,
         redis_url=REDIS_URL if redis_client else None,
         enable_caching=redis_client is not None,
+        enable_context_aware_roles=True,
         enable_abac=True,
         observability_config=obs_config,
     )
@@ -257,9 +253,7 @@ async def lifespan(app: FastAPI):
 
     print("Routers included (including /metrics for Prometheus)")
     print("Real Estate API (EnterpriseRBAC) started successfully")
-    print(
-        f"Database: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else DATABASE_URL}"
-    )
+    print(f"Database: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else DATABASE_URL}")
     print(f"API: http://localhost:8004")
     print(f"Docs: http://localhost:8004/docs")
 
@@ -340,34 +334,26 @@ def _lead_to_response(lead: Lead) -> LeadResponse:
 # ============================================================================
 
 
-async def require_lead_create(
-    request: Request, session: AsyncSession = Depends(get_session)
-):
+async def require_lead_create(request: Request, session: AsyncSession = Depends(get_session)):
     """Dependency for lead:create permission in entity context."""
     # Use require_entity_permission which reads X-Entity-Context header
     dep_fn = get_auth().deps.require_entity_permission("lead:create")
     return await dep_fn(request=request, session=session)
 
 
-async def require_lead_read(
-    request: Request, session: AsyncSession = Depends(get_session)
-):
+async def require_lead_read(request: Request, session: AsyncSession = Depends(get_session)):
     """Dependency for lead:read permission"""
     dep_fn = get_auth().deps.require_permission("lead:read")
     return await dep_fn(request=request, session=session)
 
 
-async def require_lead_update(
-    request: Request, session: AsyncSession = Depends(get_session)
-):
+async def require_lead_update(request: Request, session: AsyncSession = Depends(get_session)):
     """Dependency for lead:update permission"""
     dep_fn = get_auth().deps.require_permission("lead:update")
     return await dep_fn(request=request, session=session)
 
 
-async def require_lead_delete(
-    request: Request, session: AsyncSession = Depends(get_session)
-):
+async def require_lead_delete(request: Request, session: AsyncSession = Depends(get_session)):
     """Dependency for lead:delete permission"""
     dep_fn = get_auth().deps.require_permission("lead:delete")
     return await dep_fn(request=request, session=session)
@@ -490,9 +476,7 @@ async def get_lead(
     """
     lead = await session.get(Lead, UUID(lead_id))
     if not lead:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
 
     return _lead_to_response(lead)
 
@@ -517,9 +501,7 @@ async def update_lead(
     """
     lead = await session.get(Lead, UUID(lead_id))
     if not lead:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
 
     # Update fields
     update_data = data.model_dump(exclude_unset=True)
@@ -555,9 +537,7 @@ async def delete_lead(
     """
     lead = await session.get(Lead, UUID(lead_id))
     if not lead:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
 
     await session.delete(lead)
     await session.commit()
@@ -577,111 +557,6 @@ async def health_check():
         "version": "1.0.0",
         "preset": "EnterpriseRBAC",
         "docs": "/docs",
-    }
-
-
-@app.get("/v1/auth/config", tags=["Auth"], summary="Get auth configuration")
-async def get_auth_config():
-    """
-    Get authentication system configuration.
-
-    Returns preset type, feature flags, and available permissions.
-    This allows the admin UI to adapt to the backend's capabilities.
-    """
-    return {
-        "preset": "EnterpriseRBAC",
-        "features": {
-            "entity_hierarchy": True,
-            "context_aware_roles": True,
-            "abac": False,
-            "tree_permissions": True,
-            "api_keys": True,
-            "user_status": True,
-            "activity_tracking": True,
-            "invitations": True,
-        },
-        "available_permissions": [
-            # User permissions
-            {"value": "user:read", "label": "User Read", "category": "Users"},
-            {
-                "value": "user:read_tree",
-                "label": "User Read (Tree)",
-                "category": "Users",
-            },
-            {"value": "user:create", "label": "User Create", "category": "Users"},
-            {"value": "user:update", "label": "User Update", "category": "Users"},
-            {"value": "user:delete", "label": "User Delete", "category": "Users"},
-            # Entity permissions
-            {"value": "entity:read", "label": "Entity Read", "category": "Entities"},
-            {
-                "value": "entity:read_tree",
-                "label": "Entity Read (Tree)",
-                "category": "Entities",
-            },
-            {
-                "value": "entity:create",
-                "label": "Entity Create",
-                "category": "Entities",
-            },
-            {
-                "value": "entity:update",
-                "label": "Entity Update",
-                "category": "Entities",
-            },
-            {
-                "value": "entity:delete",
-                "label": "Entity Delete",
-                "category": "Entities",
-            },
-            # Lead permissions
-            {"value": "lead:read", "label": "Lead Read", "category": "Leads"},
-            {
-                "value": "lead:read_tree",
-                "label": "Lead Read (Tree)",
-                "category": "Leads",
-            },
-            {"value": "lead:create", "label": "Lead Create", "category": "Leads"},
-            {"value": "lead:update", "label": "Lead Update", "category": "Leads"},
-            {"value": "lead:delete", "label": "Lead Delete", "category": "Leads"},
-            # Role permissions
-            {"value": "role:read", "label": "Role Read", "category": "Roles"},
-            {"value": "role:create", "label": "Role Create", "category": "Roles"},
-            {"value": "role:update", "label": "Role Update", "category": "Roles"},
-            {"value": "role:delete", "label": "Role Delete", "category": "Roles"},
-            # Permission permissions
-            {
-                "value": "permission:read",
-                "label": "Permission Read",
-                "category": "Permissions",
-            },
-            {
-                "value": "permission:create",
-                "label": "Permission Create",
-                "category": "Permissions",
-            },
-            {
-                "value": "permission:update",
-                "label": "Permission Update",
-                "category": "Permissions",
-            },
-            {
-                "value": "permission:delete",
-                "label": "Permission Delete",
-                "category": "Permissions",
-            },
-            # API Key permissions
-            {"value": "api_key:read", "label": "API Key Read", "category": "API Keys"},
-            {
-                "value": "api_key:create",
-                "label": "API Key Create",
-                "category": "API Keys",
-            },
-            {
-                "value": "api_key:revoke",
-                "label": "API Key Revoke",
-                "category": "API Keys",
-            },
-        ],
     }
 
 

@@ -79,7 +79,6 @@ class EntityService(BaseService[Entity]):
         parent_id: Optional[UUID] = None,
         description: Optional[str] = None,
         slug: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Entity:
         """
@@ -94,7 +93,6 @@ class EntityService(BaseService[Entity]):
             parent_id: Optional parent entity ID
             description: Optional description
             slug: Optional URL-friendly identifier (auto-generated if not provided)
-            metadata: Optional metadata dict
             **kwargs: Additional fields (status, valid_from, valid_until, etc.)
 
         Returns:

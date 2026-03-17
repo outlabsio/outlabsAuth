@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, List, Optional
 from uuid import UUID
 
 from sqlalchemy import Boolean, Column, ForeignKey, Index, String, Text
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import ARRAY, UUID as PG_UUID
 from sqlmodel import Field, Relationship, SQLModel
 
 from outlabs_auth.database.base import BaseModel
@@ -303,6 +303,15 @@ class Role(BaseModel, table=True):
         default=False,
         sa_column=Column(Boolean, nullable=False, default=False),
         description="If true, automatically assigned to all members within scope (retroactive).",
+    )
+    assignable_at_types: List[str] = Field(
+        default_factory=list,
+        sa_column=Column(
+            ARRAY(String(50)),
+            nullable=False,
+            server_default="{}",
+        ),
+        description="Entity types where this role can be assigned. Empty = no entity-type restriction.",
     )
 
     # === Relationships ===

@@ -591,12 +591,6 @@ class EntityModel(BaseDocument):
     valid_from: Optional[datetime] = None
     valid_until: Optional[datetime] = None
 
-    # Permissions (optional)
-    direct_permissions: List[str] = Field(default_factory=list)
-
-    # Metadata
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
     # Configuration (per-entity child type customization - DD-051)
     allowed_child_types: List[str] = Field(default_factory=list)
     # If empty, uses system default child types from SystemConfig
@@ -607,6 +601,8 @@ class EntityModel(BaseDocument):
     
     max_members: Optional[int] = None
 ```
+
+`Entity.metadata` is reserved for a future persisted feature. It is not part of the live SQL entity model or API contract today.
 
 **Child Type Configuration (DD-051)**:
 Root entities can define their own allowed child types, which override the system defaults:

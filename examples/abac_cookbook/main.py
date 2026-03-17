@@ -143,25 +143,19 @@ async def get_session(request: Request):
         yield session
 
 
-async def require_document_read(
-    request: Request, session: AsyncSession = Depends(get_session)
-):
+async def require_document_read(request: Request, session: AsyncSession = Depends(get_session)):
     """Dependency for document:read permission"""
     dep_fn = get_auth().deps.require_permission("document:read")
     return await dep_fn(request=request, session=session)
 
 
-async def require_document_create(
-    request: Request, session: AsyncSession = Depends(get_session)
-):
+async def require_document_create(request: Request, session: AsyncSession = Depends(get_session)):
     """Dependency for document:create permission"""
     dep_fn = get_auth().deps.require_permission("document:create")
     return await dep_fn(request=request, session=session)
 
 
-async def require_document_update(
-    request: Request, session: AsyncSession = Depends(get_session)
-):
+async def require_document_update(request: Request, session: AsyncSession = Depends(get_session)):
     """Dependency for document:update permission with resource context"""
     dep_fn = get_auth().deps.require_permission(
         "document:update",
