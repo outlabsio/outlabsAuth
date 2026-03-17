@@ -65,7 +65,7 @@ class EntityModel:
 
 # NEW (Library)
 class EntityModel:
-    tenant_id: Optional[str] = None  # ✅ Optional tenant isolation
+    root_entity_id: Optional[str] = None  # ✅ Entity-based isolation
 ```
 
 #### Migration Script
@@ -92,11 +92,10 @@ async def migrate_database():
     )
     print(f"Updated {result.modified_count} entities")
 
-    # 2. Add tenant_id if needed (for multi-tenant apps)
-    # Skip this if you're not using multi-tenancy
+    # 2. Optionally add root_entity_id to existing records
     # result = await db.entities.update_many(
     #     {},
-    #     {"$set": {"tenant_id": "default"}}
+    #     {"$set": {"root_entity_id": "<root-id>"}}
     # )
 
     # 3. Update indexes
@@ -366,8 +365,8 @@ DATABASE_NAME=your_app
 SECRET_KEY=your-secret-key-change-in-production
 REDIS_URL=redis://localhost:6379  # Optional, for caching
 
-# Optional: Multi-tenant
-TENANT_ID=your-tenant  # Only if using multi-tenancy
+# Optional: Root-entity scoping
+ROOT_ENTITY_ID=your-root-entity-id
 ```
 
 ```python
@@ -556,20 +555,20 @@ Request → Auth Library → Database
 # Find all references
 grep -r "platform_id" .
 
-# Replace with tenant_id (if needed) or remove
+# Replace with root_entity_id (if needed) or remove
 ```
 
 ### Issue 2: API-Specific Headers
 
 **Problem**: Code sends `X-Platform-Id` header
 
-**Solution**: Remove platform headers, use tenant_id in config if needed
+**Solution**: Remove platform headers and use root-entity scoping where needed
 
 ### Issue 3: Cross-Platform Queries
 
 **Problem**: Queries filtered by `platform_id`
 
-**Solution**: Remove platform filters or replace with `tenant_id`
+**Solution**: Remove platform filters or replace with `root_entity_id`
 
 ```python
 # BEFORE
@@ -577,12 +576,12 @@ entities = await EntityModel.find(
     EntityModel.platform_id == platform_id
 ).to_list()
 
-# AFTER (single tenant)
+# AFTER (single app)
 entities = await EntityModel.find().to_list()
 
-# AFTER (multi-tenant)
+# AFTER (entity-isolated)
 entities = await EntityModel.find(
-    EntityModel.tenant_id == tenant_id
+    EntityModel.root_entity_id == root_entity_id
 ).to_list()
 ```
 

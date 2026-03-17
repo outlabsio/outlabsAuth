@@ -65,10 +65,10 @@ def _resolve_alembic_ini(*, require_local: bool = False) -> Path:
     cwd_alembic = Path.cwd() / "alembic.ini"
 
     if require_local:
-        if repo_alembic.exists():
-            return repo_alembic
         if cwd_alembic.exists():
             return cwd_alembic
+        if repo_alembic.exists():
+            return repo_alembic
         raise FileNotFoundError(
             "Local alembic.ini not found. Expected in repository root or current working directory."
         )

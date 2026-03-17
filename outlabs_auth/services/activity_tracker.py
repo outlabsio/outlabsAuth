@@ -134,7 +134,7 @@ class ActivityTracker:
             Count of unique active users for the day
         """
         if day is None:
-            day = date.today()
+            day = datetime.now(timezone.utc).date()
 
         key = self._make_daily_key(day)
         count = await self.redis.scard(key)
@@ -310,7 +310,6 @@ class ActivityTracker:
             stmt = select(ActivityMetric).where(
                 ActivityMetric.metric_type == metric_type,
                 ActivityMetric.metric_date == metric_date,
-                ActivityMetric.tenant_id.is_(None),
             )
             result = await session.execute(stmt)
             metric = result.scalar_one_or_none()

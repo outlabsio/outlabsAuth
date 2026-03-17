@@ -414,7 +414,7 @@ async def get_entities_with_permission(
 
 ### Optional Features Examples
 
-These examples show EnterpriseRBAC's optional features (context-aware roles, ABAC, caching, multi-tenant, audit logging), which can be enabled via feature flags.
+These examples show EnterpriseRBAC's optional features (context-aware roles, ABAC, caching, audit logging), which can be enabled via feature flags.
 
 #### Example 1: Context-Aware Roles
 
@@ -1643,7 +1643,6 @@ config = EnterpriseConfig(
     enable_abac=True,
     enable_caching=True,
     enable_audit_log=True,
-    multi_tenant=True,
 
     # Caching settings (only used when enable_caching=True)
     redis_url="redis://localhost:6379",

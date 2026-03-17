@@ -10,13 +10,12 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from httpx_oauth.integrations.fastapi import OAuth2AuthorizeCallback
-from httpx_oauth.oauth2 import BaseOAuth2, OAuth2Token
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.models.sql.social_account import SocialAccount
 from outlabs_auth.oauth.state import decode_state_token, generate_state_token
+from outlabs_auth.routers.oauth_utils import encrypt_provider_token, get_oauth_user_info
 from outlabs_auth.schemas.oauth import OAuthAuthorizeResponse
 
 
@@ -36,6 +35,29 @@ def _normalize_expires_at(expires_at: Optional[Any]) -> Optional[datetime]:
         return None
 
 
+def _generate_oauth_placeholder_password(config: Any) -> str:
+    """Generate a password that satisfies the configured password policy."""
+    special_chars = "!@#$%^&*(),.?\":{}|<>"
+    alphabet = "abcdefghijklmnopqrstuvwxyz"
+    digits = "0123456789"
+
+    required_parts = ["a"]
+    if getattr(config, "require_uppercase", True):
+        required_parts.append("A")
+    if getattr(config, "require_digit", True):
+        required_parts.append("1")
+    if getattr(config, "require_special_char", True):
+        required_parts.append("!")
+
+    min_length = max(getattr(config, "password_min_length", 8), len(required_parts))
+    pool = alphabet + alphabet.upper() + digits + special_chars
+    password_chars = required_parts + [
+        secrets.choice(pool) for _ in range(min_length - len(required_parts))
+    ]
+    secrets.SystemRandom().shuffle(password_chars)
+    return "".join(password_chars)
+
+
 def _append_auth_method(user: Any, provider: str) -> None:
     """Ensure the provider auth method is present on user.auth_methods."""
     provider_method = provider.upper()
@@ -46,7 +68,7 @@ def _append_auth_method(user: Any, provider: str) -> None:
 
 
 def get_oauth_router(
-    oauth_client: BaseOAuth2,
+    oauth_client: Any,
     auth: Any,
     state_secret: str,
     prefix: str = "",
@@ -56,6 +78,8 @@ def get_oauth_router(
     is_verified_by_default: bool = False,
 ) -> APIRouter:
     """Generate OAuth authentication router for a provider."""
+    from httpx_oauth.integrations.fastapi import OAuth2AuthorizeCallback
+
     router = APIRouter(prefix=prefix, tags=tags or ["oauth"])
 
     callback_route_name = f"oauth:{oauth_client.name}.callback"
@@ -133,16 +157,13 @@ def get_oauth_router(
     async def callback(
         request: Request,
         session: AsyncSession = Depends(auth.uow),
-        access_token_state: tuple[OAuth2Token, str] = Depends(oauth2_authorize_callback),
+        access_token_state: tuple[dict[str, Any], str] = Depends(
+            oauth2_authorize_callback
+        ),
     ):
         token, state = access_token_state
 
-        account_id, account_email = await oauth_client.get_id_email(token["access_token"])
-        if account_email is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email not available from OAuth provider",
-            )
+        user_info = await get_oauth_user_info(oauth_client, token)
 
         try:
             decode_state_token(state, state_secret)
@@ -159,8 +180,9 @@ def get_oauth_router(
             access_token=token["access_token"],
             refresh_token=token.get("refresh_token"),
             expires_at=token.get("expires_at"),
-            account_id=account_id,
-            account_email=account_email,
+            account_id=user_info.provider_user_id,
+            account_email=user_info.email,
+            account_email_verified=user_info.email_verified,
             associate_by_email=associate_by_email,
             is_verified_by_default=is_verified_by_default,
             request=request,
@@ -193,6 +215,7 @@ async def oauth_callback(
     access_token: str,
     account_id: str,
     account_email: str,
+    account_email_verified: bool,
     refresh_token: Optional[str] = None,
     expires_at: Optional[int] = None,
     associate_by_email: bool = False,
@@ -203,8 +226,23 @@ async def oauth_callback(
     token_expires_at = _normalize_expires_at(expires_at)
     now = datetime.now(timezone.utc)
     store_provider_tokens = bool(getattr(auth.config, "store_oauth_provider_tokens", False))
-    provider_access_token = access_token if store_provider_tokens else None
-    provider_refresh_token = refresh_token if store_provider_tokens else None
+    if associate_by_email and not account_email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="associate_by_email requires a provider-verified email",
+        )
+    if is_verified_by_default and not account_email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="is_verified_by_default requires a provider-verified email",
+        )
+
+    provider_access_token = (
+        encrypt_provider_token(auth, access_token) if store_provider_tokens else None
+    )
+    provider_refresh_token = (
+        encrypt_provider_token(auth, refresh_token) if store_provider_tokens else None
+    )
 
     # 1) Existing provider account mapping.
     stmt = select(SocialAccount).where(
@@ -222,6 +260,7 @@ async def oauth_callback(
             )
 
         social_account.provider_email = account_email
+        social_account.provider_email_verified = account_email_verified
         social_account.update_tokens(
             access_token=provider_access_token,
             refresh_token=provider_refresh_token,
@@ -237,13 +276,13 @@ async def oauth_callback(
     created_user = False
 
     if user is None:
-        random_password = secrets.token_urlsafe(32)
+        random_password = _generate_oauth_placeholder_password(auth.config)
         user = await auth.user_service.create_user(
             session=session,
             email=account_email,
             password=random_password,
         )
-        user.email_verified = is_verified_by_default
+        user.email_verified = account_email_verified if is_verified_by_default else False
         created_user = True
     elif not associate_by_email:
         raise HTTPException(
@@ -266,6 +305,7 @@ async def oauth_callback(
                 detail="This provider is already linked to a different account",
             )
         existing_provider_link.provider_email = account_email
+        existing_provider_link.provider_email_verified = account_email_verified
         existing_provider_link.update_tokens(
             access_token=provider_access_token,
             refresh_token=provider_refresh_token,
@@ -279,6 +319,7 @@ async def oauth_callback(
                 provider=provider,
                 provider_user_id=account_id,
                 provider_email=account_email,
+                provider_email_verified=account_email_verified,
                 access_token=provider_access_token,
                 refresh_token=provider_refresh_token,
                 token_expires_at=token_expires_at,

@@ -69,7 +69,6 @@ class EntityMembership(BaseModel, table=True):
         Index("ix_em_user_status", "user_id", "status"),
         Index("ix_em_status", "status"),
         Index("ix_em_valid_until", "valid_until"),
-        Index("ix_em_tenant_id", "tenant_id"),
     )
 
     # === Foreign Keys ===

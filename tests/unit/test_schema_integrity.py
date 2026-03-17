@@ -39,6 +39,10 @@ def _has_index(table, name: str, *columns: str) -> bool:
     return False
 
 
+def _has_column(table, column: str) -> bool:
+    return column in table.c
+
+
 def test_entity_closure_has_fks_unique_and_indexes():
     table = _get_table("entity_closure")
 
@@ -50,13 +54,14 @@ def test_entity_closure_has_fks_unique_and_indexes():
     assert _has_index(table, "ix_closure_descendant_id", "descendant_id")
     assert _has_index(table, "ix_closure_ancestor_depth", "ancestor_id", "depth")
     assert _has_index(table, "ix_closure_descendant_depth", "descendant_id", "depth")
-    assert _has_index(table, "ix_closure_tenant_id", "tenant_id")
+    assert not _has_column(table, "tenant_id")
 
 
 def test_entities_parent_fk_is_set_null():
     table = _get_table("entities")
     assert _fk_ondelete(table, "parent_id") == "SET NULL"
-    assert _has_unique(table, "slug", "tenant_id")
+    assert _has_unique(table, "slug")
+    assert not _has_column(table, "tenant_id")
 
 
 def test_entity_membership_constraints_and_join_table_cascades():
@@ -87,3 +92,20 @@ def test_permission_tags_join_table_cascades():
     links = _get_table("permission_tag_links")
     assert _fk_ondelete(links, "permission_id") == "CASCADE"
     assert _fk_ondelete(links, "tag_id") == "CASCADE"
+
+
+def test_user_and_permission_tables_are_global_and_tenantless():
+    users = _get_table("users")
+    permissions = _get_table("permissions")
+    tags = _get_table("permission_tags")
+    metrics = _get_table("activity_metrics")
+
+    assert _has_unique(users, "email")
+    assert _has_unique(permissions, "name")
+    assert _has_unique(tags, "name")
+    assert _has_unique(metrics, "metric_date", "metric_type")
+
+    assert not _has_column(users, "tenant_id")
+    assert not _has_column(permissions, "tenant_id")
+    assert not _has_column(tags, "tenant_id")
+    assert not _has_column(metrics, "tenant_id")

@@ -149,6 +149,49 @@ async def test_user_can_change_own_password(client: httpx.AsyncClient, test_user
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_password_change_invalidates_existing_access_and_refresh_tokens(
+    client: httpx.AsyncClient,
+    test_user: dict,
+):
+    """Changing a password should revoke existing sessions."""
+    login_resp = await client.post(
+        "/v1/auth/login",
+        json={"email": test_user["email"], "password": test_user["password"]},
+    )
+    assert login_resp.status_code == 200, login_resp.text
+    tokens = login_resp.json()
+
+    change_resp = await client.post(
+        "/v1/users/me/change-password",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        json={
+            "current_password": test_user["password"],
+            "new_password": "ChangedPass123!",
+        },
+    )
+    assert change_resp.status_code == 204, change_resp.text
+
+    stale_access_resp = await client.get(
+        "/v1/users/me",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    assert stale_access_resp.status_code == 401, stale_access_resp.text
+
+    stale_refresh_resp = await client.post(
+        "/v1/auth/refresh",
+        json={"refresh_token": tokens["refresh_token"]},
+    )
+    assert stale_refresh_resp.status_code == 401, stale_refresh_resp.text
+
+    relogin_resp = await client.post(
+        "/v1/auth/login",
+        json={"email": test_user["email"], "password": "ChangedPass123!"},
+    )
+    assert relogin_resp.status_code == 200, relogin_resp.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_old_password_fails_after_change(
     client: httpx.AsyncClient, test_user: dict
 ):
@@ -238,6 +281,47 @@ async def test_admin_can_reset_user_password(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_admin_password_reset_invalidates_existing_access_and_refresh_tokens(
+    client: httpx.AsyncClient,
+    admin_user: dict,
+    test_user: dict,
+):
+    """Admin resets should invalidate the user's pre-reset sessions."""
+    login_resp = await client.post(
+        "/v1/auth/login",
+        json={"email": test_user["email"], "password": test_user["password"]},
+    )
+    assert login_resp.status_code == 200, login_resp.text
+    tokens = login_resp.json()
+
+    reset_resp = await client.patch(
+        f"/v1/users/{test_user['id']}/password",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"new_password": "AdminChanged123!"},
+    )
+    assert reset_resp.status_code == 204, reset_resp.text
+
+    stale_access_resp = await client.get(
+        "/v1/users/me",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    assert stale_access_resp.status_code == 401, stale_access_resp.text
+
+    stale_refresh_resp = await client.post(
+        "/v1/auth/refresh",
+        json={"refresh_token": tokens["refresh_token"]},
+    )
+    assert stale_refresh_resp.status_code == 401, stale_refresh_resp.text
+
+    relogin_resp = await client.post(
+        "/v1/auth/login",
+        json={"email": test_user["email"], "password": "AdminChanged123!"},
+    )
+    assert relogin_resp.status_code == 200, relogin_resp.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_non_admin_cannot_reset_other_user_password(
     client: httpx.AsyncClient, test_user: dict, auth_instance: SimpleRBAC
 ):
@@ -275,6 +359,54 @@ async def test_admin_reset_requires_authentication(
         json={"new_password": "NewPass123!"},
     )
     assert resp.status_code == 401
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reset_password_invalidates_existing_access_and_refresh_tokens(
+    client: httpx.AsyncClient,
+    auth_instance: SimpleRBAC,
+    test_user: dict,
+):
+    """Reset-token password changes should invalidate pre-reset sessions."""
+    login_resp = await client.post(
+        "/v1/auth/login",
+        json={"email": test_user["email"], "password": test_user["password"]},
+    )
+    assert login_resp.status_code == 200, login_resp.text
+    tokens = login_resp.json()
+
+    async with auth_instance.get_session() as session:
+        user = await auth_instance.user_service.get_user_by_email(
+            session, test_user["email"]
+        )
+        assert user is not None
+        reset_token = await auth_instance.auth_service.generate_reset_token(session, user)
+        await session.commit()
+
+    reset_resp = await client.post(
+        "/v1/auth/reset-password",
+        json={"token": reset_token, "new_password": "ResetFlow123!"},
+    )
+    assert reset_resp.status_code == 204, reset_resp.text
+
+    stale_access_resp = await client.get(
+        "/v1/users/me",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    assert stale_access_resp.status_code == 401, stale_access_resp.text
+
+    stale_refresh_resp = await client.post(
+        "/v1/auth/refresh",
+        json={"refresh_token": tokens["refresh_token"]},
+    )
+    assert stale_refresh_resp.status_code == 401, stale_refresh_resp.text
+
+    relogin_resp = await client.post(
+        "/v1/auth/login",
+        json={"email": test_user["email"], "password": "ResetFlow123!"},
+    )
+    assert relogin_resp.status_code == 200, relogin_resp.text
 
 
 # ============================================================================
@@ -447,6 +579,13 @@ async def test_multiple_consecutive_password_changes(
     client: httpx.AsyncClient, test_user: dict
 ):
     """Test that multiple consecutive password changes work correctly."""
+    login_resp = await client.post(
+        "/v1/auth/login",
+        json={"email": test_user["email"], "password": test_user["password"]},
+    )
+    assert login_resp.status_code == 200, login_resp.text
+    current_access_token = login_resp.json()["access_token"]
+
     passwords = [
         ("OldPass123!", "FirstChange123!"),
         ("FirstChange123!", "SecondChange456!"),
@@ -457,7 +596,7 @@ async def test_multiple_consecutive_password_changes(
         # Change password
         resp = await client.post(
             "/v1/users/me/change-password",
-            headers={"Authorization": f"Bearer {test_user['token']}"},
+            headers={"Authorization": f"Bearer {current_access_token}"},
             json={
                 "current_password": current_pass,
                 "new_password": new_pass,
@@ -471,6 +610,7 @@ async def test_multiple_consecutive_password_changes(
             json={"email": test_user["email"], "password": new_pass},
         )
         assert login_resp.status_code == 200
+        current_access_token = login_resp.json()["access_token"]
 
 
 @pytest.mark.integration
@@ -478,12 +618,7 @@ async def test_multiple_consecutive_password_changes(
 async def test_token_still_valid_after_password_change(
     client: httpx.AsyncClient, test_user: dict
 ):
-    """Test that existing token remains valid after password change.
-
-    Note: This tests current behavior. Some systems invalidate tokens on
-    password change for security, but the default behavior here is to
-    keep existing tokens valid until they expire.
-    """
+    """Existing access tokens should become invalid after password change."""
     # Change password
     resp = await client.post(
         "/v1/users/me/change-password",
@@ -500,8 +635,7 @@ async def test_token_still_valid_after_password_change(
         "/v1/users/me",
         headers={"Authorization": f"Bearer {test_user['token']}"},
     )
-    # Token remains valid (depends on implementation - adjust if needed)
-    assert profile_resp.status_code == 200
+    assert profile_resp.status_code == 401
 
 
 # ============================================================================

@@ -27,7 +27,7 @@ class PermissionTag(BaseModel, table=True):
     """
     __tablename__ = "permission_tags"
     __table_args__ = (
-        UniqueConstraint("name", "tenant_id", name="uq_permission_tags_name_tenant"),
+        UniqueConstraint("name", name="uq_permission_tags_name"),
         Index("ix_permission_tags_name", "name"),
     )
 
@@ -136,7 +136,7 @@ class Permission(BaseModel, table=True):
     """
     __tablename__ = "permissions"
     __table_args__ = (
-        UniqueConstraint("name", "tenant_id", name="uq_permissions_name_tenant"),
+        UniqueConstraint("name", name="uq_permissions_name"),
         Index("ix_permissions_name", "name"),
         Index("ix_permissions_resource", "resource"),
         Index("ix_permissions_is_system", "is_system"),

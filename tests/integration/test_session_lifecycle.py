@@ -19,6 +19,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
+from datetime import datetime, timezone
 
 from outlabs_auth import SimpleRBAC
 from outlabs_auth.fastapi import register_exception_handlers
@@ -480,11 +481,7 @@ async def test_account_lockout_after_failed_attempts(
     auth_instance: SimpleRBAC, client: httpx.AsyncClient, registered_user: dict
 ):
     """
-    Test behavior after max failed login attempts.
-
-    Note: Current implementation tracks failed attempts but allows
-    correct password to succeed even after lockout threshold.
-    This test verifies wrong passwords continue to fail.
+    Failed login attempts should persist and lock the account.
     """
     max_attempts = auth_instance.config.max_login_attempts
 
@@ -497,13 +494,24 @@ async def test_account_lockout_after_failed_attempts(
         # All should fail with 401
         assert resp.status_code == 401, f"Attempt {i + 1} should fail"
 
-    # Wrong password should still fail after max attempts
+    # Correct password should now be blocked while the account is locked.
     resp = await client.post(
         "/v1/auth/login",
-        json={"email": registered_user["email"], "password": "WrongPassword123!"},
+        json={
+            "email": registered_user["email"],
+            "password": registered_user["password"],
+        },
     )
-    # Should be 401 (invalid credentials) or 429 (rate limited)
-    assert resp.status_code in [401, 429]
+    assert resp.status_code == 401
+
+    async with auth_instance.get_session() as session:
+        user = await auth_instance.user_service.get_user_by_email(
+            session, registered_user["email"]
+        )
+        assert user is not None
+        assert user.failed_login_attempts >= max_attempts
+        assert user.locked_until is not None
+        assert user.locked_until > datetime.now(timezone.utc)
 
 
 @pytest.mark.integration

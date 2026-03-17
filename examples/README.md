@@ -108,7 +108,7 @@ python main.py
 - ✅ You need entity-scoped permissions
 - ✅ Complex organizational structures
 
-**Examples**: Corporate systems, multi-tenant apps, project management
+**Examples**: Corporate systems, entity-isolated apps, project management
 
 ---
 

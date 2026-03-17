@@ -105,7 +105,7 @@ Each phase has clear deliverables and success criteria. Phases build on each oth
 #### Day 3-4: Core Models ✅
 - [x] Port `UserModel` from current system (flattened profile)
   - Remove `platform_id` references ✅
-  - Add optional `tenant_id` ✅
+  - Keep entity/root assignment model ✅
   - Keep status system (enhanced to DD-048) ✅
 - [x] Port `RoleModel` (basic version without entity_type_permissions)
 - [x] Port `PermissionModel` (basic version without conditions)
@@ -830,7 +830,7 @@ Before moving to Phase 3, we need:
 
 #### Day 1-2: Entity Models ✅ COMPLETE
 - [x] Port `EntityModel`:
-  - Remove `platform_id`, add optional `tenant_id`
+  - Remove `platform_id`, keep entity/root-isolation model
   - Keep entity_class (STRUCTURAL, ACCESS_GROUP)
   - Keep flexible entity_type
   - Hierarchy relationships
@@ -1416,7 +1416,7 @@ From `PHASE_5_TEST_PLAN.md`, need to create:
   - Context-aware role scenarios
   - ABAC policy evaluation
   - Cache hit/miss scenarios
-  - Multi-tenant isolation (if enabled)
+  - Root-entity isolation scenarios
 - [ ] Performance tests (cached vs uncached)
 - [ ] Test all feature flag combinations
 
@@ -1580,7 +1580,7 @@ From `PHASE_5_TEST_PLAN.md`, need to create:
 **Deliverable**: Publishable package
 
 #### Week 7, Day 5-6: Additional Examples & Extensions
-- [ ] Create `examples/multi_tenant_app/` (if multi-tenant implemented)
+- [ ] Create `examples/entity_isolation_app/`
 - [ ] Create `examples/custom_extension/` (how to extend the library)
 - [ ] Document extension points and hooks
 - [ ] Custom middleware examples
@@ -2336,7 +2336,7 @@ Template:
 ## Contingency Plans
 
 ### If Running Behind Schedule
-1. **Defer multi-tenant**: Not essential for MVP
+1. **Keep tenant mode out of scope**: Not part of the architecture
 2. **Simplify examples**: Focus on demonstrating features, not polished UI
 3. **Reduce ABAC operators**: Start with basic operators, add more later
 4. **Delay PostgreSQL support**: MongoDB only for initial release
@@ -2359,7 +2359,7 @@ Template:
 
 ### Version 1.5 (Weeks 17-20, optional)
 - PostgreSQL support
-- Multi-tenant mode refinements
+- Entity-isolation refinements
 - Additional ABAC operators
 - Performance optimizations
 - Admin UI component library (optional)
@@ -2382,7 +2382,7 @@ Template:
 
 Track open questions that need resolution:
 
-1. **Multi-tenant**: Include in v1.0 or defer to v1.1?
+1. **Tenant mode**: Remain removed from v1.x?
    - *Status*: Open
    - *Decision by*: End of Week 2
 

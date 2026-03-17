@@ -24,7 +24,7 @@ from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.enums import MembershipStatus, RoleScope
 from outlabs_auth.models.sql.permission import Permission
-from outlabs_auth.models.sql.role import Role, RolePermission
+from outlabs_auth.models.sql.role import Role, RoleEntityTypePermission, RolePermission
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
 from outlabs_auth.services.base import BaseService
@@ -66,7 +66,7 @@ class RoleService(BaseService[Role]):
         scope_entity_id: Optional[UUID] = None,
         scope: RoleScope = RoleScope.HIERARCHY,
         is_auto_assigned: bool = False,
-        tenant_id: Optional[str] = None,
+        entity_type_permissions: Optional[Dict[str, List[str]]] = None,
     ) -> Role:
         """
         Create a new role.
@@ -87,8 +87,6 @@ class RoleService(BaseService[Role]):
             scope: How this role's permissions apply (entity_only or hierarchy).
                    Also controls auto-assignment scope.
             is_auto_assigned: If true, automatically assigned to members within scope.
-            tenant_id: Optional tenant ID
-
         Returns:
             Role: Created role
 
@@ -182,7 +180,6 @@ class RoleService(BaseService[Role]):
             scope_entity_id=scope_entity_id,
             scope=scope,
             is_auto_assigned=is_auto_assigned,
-            tenant_id=tenant_id,
         )
 
         await self.create(session, role)
@@ -190,6 +187,15 @@ class RoleService(BaseService[Role]):
         # Add permissions via junction table
         if permission_names:
             await self._add_permissions_by_name(session, role.id, permission_names)
+
+        if entity_type_permissions is not None:
+            await self.set_entity_type_permissions(
+                session,
+                role.id,
+                entity_type_permissions,
+            )
+
+        await self._invalidate_all_permissions_cache()
 
         return role
 
@@ -228,6 +234,7 @@ class RoleService(BaseService[Role]):
         session: AsyncSession,
         role_id: UUID,
         load_permissions: bool = False,
+        load_entity_type_permissions: bool = False,
     ) -> Optional[Role]:
         """
         Get role by ID.
@@ -243,6 +250,12 @@ class RoleService(BaseService[Role]):
         options = []
         if load_permissions:
             options.append(selectinload(Role.permissions))
+        if load_entity_type_permissions:
+            options.append(
+                selectinload(Role.entity_type_permissions).selectinload(
+                    RoleEntityTypePermission.permission
+                )
+            )
         return await self.get_by_id(session, role_id, options=options)
 
     async def get_role_by_name(
@@ -321,6 +334,7 @@ class RoleService(BaseService[Role]):
             role.is_auto_assigned = is_auto_assigned
 
         await self.update(session, role)
+        await self._invalidate_all_permissions_cache()
         return role
 
     async def delete_role(
@@ -352,6 +366,7 @@ class RoleService(BaseService[Role]):
             )
 
         await self.delete(session, role)
+        await self._invalidate_all_permissions_cache()
         return True
 
     async def list_roles(
@@ -362,7 +377,6 @@ class RoleService(BaseService[Role]):
         search: Optional[str] = None,
         is_global: Optional[bool] = None,
         root_entity_id: Optional[UUID] = None,
-        tenant_id: Optional[str] = None,
     ) -> Tuple[List[Role], int]:
         """
         List roles with pagination.
@@ -374,8 +388,6 @@ class RoleService(BaseService[Role]):
             search: Optional search term for name, display name, or description
             is_global: Filter by global flag
             root_entity_id: Filter by root entity that owns the role
-            tenant_id: Filter by tenant
-
         Returns:
             Tuple of (roles, total_count)
         """
@@ -393,8 +405,6 @@ class RoleService(BaseService[Role]):
             filters.append(Role.is_global == is_global)
         if root_entity_id is not None:
             filters.append(Role.root_entity_id == root_entity_id)
-        if tenant_id:
-            filters.append(Role.tenant_id == tenant_id)
 
         total_count = await self.count(session, *filters)
 
@@ -664,6 +674,7 @@ class RoleService(BaseService[Role]):
 
         # Add requested permissions
         await self._add_permissions_by_name(session, role_id, permission_names)
+        await self._invalidate_all_permissions_cache()
 
         # Reload role with permissions
         return (
@@ -692,6 +703,7 @@ class RoleService(BaseService[Role]):
             )
 
         await self._add_permissions_by_name(session, role_id, permission_names)
+        await self._invalidate_all_permissions_cache()
         return (
             await self.get_role_by_id(session, role_id, load_permissions=True) or role
         )
@@ -730,6 +742,8 @@ class RoleService(BaseService[Role]):
             )
             await session.flush()
 
+        await self._invalidate_all_permissions_cache()
+
         return (
             await self.get_role_by_id(session, role_id, load_permissions=True) or role
         )
@@ -745,18 +759,84 @@ class RoleService(BaseService[Role]):
         permission_names: List[str],
     ) -> None:
         """Add permissions to role by name."""
-        for perm_name in permission_names:
-            # Find permission by name
-            stmt = select(Permission).where(Permission.name == perm_name)
-            result = await session.execute(stmt)
-            perm = result.scalar_one_or_none()
-
-            if perm:
-                # Create junction record
-                role_perm = RolePermission(role_id=role_id, permission_id=perm.id)
-                session.add(role_perm)
+        permissions = await self._resolve_permissions_by_name(session, permission_names)
+        for permission in permissions:
+            role_perm = RolePermission(role_id=role_id, permission_id=permission.id)
+            session.add(role_perm)
 
         await session.flush()
+
+    async def _resolve_permissions_by_name(
+        self,
+        session: AsyncSession,
+        permission_names: List[str],
+    ) -> List[Permission]:
+        normalized_names = list(dict.fromkeys(permission_names))
+        if not normalized_names:
+            return []
+
+        stmt = select(Permission).where(Permission.name.in_(normalized_names))
+        result = await session.execute(stmt)
+        permissions_by_name = {permission.name: permission for permission in result.scalars().all()}
+        missing_names = [name for name in normalized_names if name not in permissions_by_name]
+        if missing_names:
+            raise InvalidInputError(
+                message="One or more permissions do not exist",
+                details={"missing_permissions": missing_names},
+            )
+        return [
+            permissions_by_name[name]
+            for name in normalized_names
+        ]
+
+    async def set_entity_type_permissions(
+        self,
+        session: AsyncSession,
+        role_id: UUID,
+        entity_type_permissions: Optional[Dict[str, List[str]]],
+    ) -> Role:
+        """Replace a role's context-aware permission overrides."""
+        role = await self.get_by_id(session, role_id)
+        if not role:
+            raise RoleNotFoundError(
+                message="Role not found",
+                details={"role_id": str(role_id)},
+            )
+        if role.is_system_role:
+            raise InvalidInputError(
+                message="Cannot modify system role permissions",
+                details={"role_id": str(role_id), "role_name": role.name},
+            )
+
+        await session.execute(
+            sql_delete(RoleEntityTypePermission).where(
+                RoleEntityTypePermission.role_id == role_id
+            )
+        )
+        await session.flush()
+
+        for entity_type, permission_names in (entity_type_permissions or {}).items():
+            permissions = await self._resolve_permissions_by_name(session, permission_names)
+            for permission in permissions:
+                session.add(
+                    RoleEntityTypePermission(
+                        role_id=role_id,
+                        entity_type=entity_type.lower(),
+                        permission_id=permission.id,
+                    )
+                )
+
+        await session.flush()
+        await self._invalidate_all_permissions_cache()
+        return (
+            await self.get_role_by_id(
+                session,
+                role_id,
+                load_permissions=True,
+                load_entity_type_permissions=True,
+            )
+            or role
+        )
 
     async def add_permissions(
         self,
@@ -806,6 +886,7 @@ class RoleService(BaseService[Role]):
                 session.add(role_perm)
 
         await session.flush()
+        await self._invalidate_all_permissions_cache()
         return role
 
     async def remove_permissions(
@@ -854,6 +935,7 @@ class RoleService(BaseService[Role]):
                 await session.delete(role_perm)
 
         await session.flush()
+        await self._invalidate_all_permissions_cache()
         return role
 
     async def get_role_permissions(
@@ -904,6 +986,30 @@ class RoleService(BaseService[Role]):
         """
         permissions = await self.get_role_permissions(session, role_id)
         return [p.name for p in permissions]
+
+    async def get_role_entity_type_permission_names(
+        self,
+        session: AsyncSession,
+        role_id: UUID,
+    ) -> Dict[str, List[str]]:
+        """Get context-aware permission overrides for a role."""
+        role = await self.get_role_by_id(
+            session,
+            role_id,
+            load_entity_type_permissions=True,
+        )
+        if not role:
+            raise RoleNotFoundError(
+                message="Role not found",
+                details={"role_id": str(role_id)},
+            )
+
+        overrides: Dict[str, List[str]] = {}
+        for entry in role.entity_type_permissions or []:
+            if not entry.permission:
+                continue
+            overrides.setdefault(entry.entity_type, []).append(entry.permission.name)
+        return overrides
 
     # =========================================================================
     # User Role Membership (SimpleRBAC)
@@ -990,6 +1096,7 @@ class RoleService(BaseService[Role]):
         session.add(membership)
         await session.flush()
         await session.refresh(membership)
+        await self._invalidate_user_permissions_cache(user_id)
         return membership
 
     async def revoke_role_from_user(
@@ -1030,6 +1137,7 @@ class RoleService(BaseService[Role]):
         membership.revocation_reason = reason
 
         await session.flush()
+        await self._invalidate_user_permissions_cache(user_id)
         return True
 
     async def get_user_roles(
@@ -1055,7 +1163,12 @@ class RoleService(BaseService[Role]):
 
         stmt = (
             select(UserRoleMembership)
-            .options(selectinload(UserRoleMembership.role))
+            .options(
+                selectinload(UserRoleMembership.role).selectinload(Role.permissions),
+                selectinload(UserRoleMembership.role)
+                .selectinload(Role.entity_type_permissions)
+                .selectinload(RoleEntityTypePermission.permission),
+            )
             .where(*filters)
         )
         result = await session.execute(stmt)
@@ -1092,7 +1205,12 @@ class RoleService(BaseService[Role]):
 
         stmt = (
             select(UserRoleMembership)
-            .options(selectinload(UserRoleMembership.role).selectinload(Role.permissions))
+            .options(
+                selectinload(UserRoleMembership.role).selectinload(Role.permissions),
+                selectinload(UserRoleMembership.role)
+                .selectinload(Role.entity_type_permissions)
+                .selectinload(RoleEntityTypePermission.permission),
+            )
             .where(*filters)
             .order_by(UserRoleMembership.assigned_at.desc())
         )
@@ -1123,3 +1241,13 @@ class RoleService(BaseService[Role]):
             all_permissions.update(perms)
 
         return list(all_permissions)
+
+    async def _invalidate_all_permissions_cache(self) -> None:
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is not None:
+            await cache_service.publish_all_permissions_invalidation()
+
+    async def _invalidate_user_permissions_cache(self, user_id: UUID) -> None:
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is not None:
+            await cache_service.publish_user_permissions_invalidation(str(user_id))

@@ -1,12 +1,13 @@
+import secrets
 """
 JWT token creation and verification utilities
 
 Uses python-jose for JWT operations with configurable algorithm and expiration.
 """
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
-from jose import jwt, JWTError
-import secrets
+from typing import Any, Dict, Optional
+
+from jose import JWTError, jwt
 
 from outlabs_auth.core.exceptions import TokenInvalidError, TokenExpiredError
 
@@ -41,18 +42,21 @@ def create_access_token(
     """
     to_encode = data.copy()
 
+    issued_at = datetime.now(timezone.utc)
+
     # Set expiration time
     if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
+        expire = issued_at + expires_delta
     else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+        expire = issued_at + timedelta(minutes=15)
 
     # Generate unique JWT ID for blacklist support
     jti = secrets.token_urlsafe(16)
 
     to_encode.update({
         "exp": expire,
-        "iat": datetime.now(timezone.utc),  # Issued at
+        "iat": issued_at,  # Issued at
+        "iat_ms": int(issued_at.timestamp() * 1000),
         "type": "access",
         "aud": audience,  # Audience claim for cross-application security
         "jti": jti  # JWT ID for token revocation/blacklisting
@@ -92,18 +96,21 @@ def create_refresh_token(
     """
     to_encode = data.copy()
 
+    issued_at = datetime.now(timezone.utc)
+
     # Set expiration time
     if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
+        expire = issued_at + expires_delta
     else:
-        expire = datetime.now(timezone.utc) + timedelta(days=30)
+        expire = issued_at + timedelta(days=30)
 
     # Generate unique JWT ID for each refresh token (prevents token collisions)
     jti = secrets.token_urlsafe(16)
 
     to_encode.update({
         "exp": expire,
-        "iat": datetime.now(timezone.utc),
+        "iat": issued_at,
+        "iat_ms": int(issued_at.timestamp() * 1000),
         "type": "refresh",
         "aud": audience,  # Audience claim for cross-application security
         "jti": jti  # JWT ID ensures each token is unique

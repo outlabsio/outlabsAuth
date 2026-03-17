@@ -43,13 +43,14 @@ class TestActivityTracking:
     async def test_track_activity_adds_to_daily_set(self, activity_tracker, mock_redis):
         """Track activity adds user to daily Redis Set."""
         user_id = "user_123"
-        await activity_tracker.track_activity(user_id)
+        with patch.object(activity_tracker, "_make_daily_key", return_value="active_users:daily:test") as mock_key:
+            await activity_tracker.track_activity(user_id)
 
         # Check daily set was called
-        today = date.today()
-        daily_key = f"active_users:daily:{today.isoformat()}"
-        mock_redis.sadd.assert_any_call(daily_key, user_id)
-        mock_redis.expire.assert_any_call(daily_key, 48 * 3600)
+        mock_key.assert_called_once()
+        assert isinstance(mock_key.call_args.args[0], date)
+        mock_redis.sadd.assert_any_call("active_users:daily:test", user_id)
+        mock_redis.expire.assert_any_call("active_users:daily:test", 48 * 3600)
 
     @pytest.mark.asyncio
     async def test_track_activity_adds_to_monthly_set(
@@ -123,13 +124,13 @@ class TestActivityTracking:
     ):
         """Get DAU with no args returns today's count."""
         mock_redis.scard.return_value = 42
-
-        dau = await activity_tracker.get_daily_active_users()
+        with patch.object(activity_tracker, "_make_daily_key", return_value="active_users:daily:test") as mock_key:
+            dau = await activity_tracker.get_daily_active_users()
 
         assert dau == 42
-        today = date.today()
-        daily_key = f"active_users:daily:{today.isoformat()}"
-        mock_redis.scard.assert_called_with(daily_key)
+        mock_key.assert_called_once()
+        assert isinstance(mock_key.call_args.args[0], date)
+        mock_redis.scard.assert_called_with("active_users:daily:test")
 
     @pytest.mark.asyncio
     async def test_get_daily_active_users_specific_date(

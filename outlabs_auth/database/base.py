@@ -1,11 +1,10 @@
 """
 SQLModel Base Classes for OutlabsAuth
 
-Provides base model with common fields (id, timestamps, tenant_id) for all tables.
+Provides base model with common fields (id, timestamps) for all tables.
 """
 
 from datetime import datetime, timezone
-from typing import Optional
 from uuid import UUID, uuid4
 
 from pydantic import ConfigDict
@@ -23,8 +22,6 @@ class BaseModel(SQLModel):
     - UUID primary key (auto-generated)
     - created_at timestamp (auto-set on insert)
     - updated_at timestamp (auto-updated on modification)
-    - tenant_id for multi-tenant support (optional)
-
     All OutlabsAuth models should inherit from this class:
 
         class User(BaseModel, table=True):
@@ -59,15 +56,6 @@ class BaseModel(SQLModel):
         sa_column_kwargs={"server_default": func.now(), "onupdate": func.now()},
         description="Timestamp when record was last updated (UTC)",
     )
-
-    tenant_id: Optional[str] = Field(
-        default=None,
-        max_length=36,
-        nullable=True,
-        description="Tenant identifier for multi-tenant isolation",
-    )
-    # Note: tenant_id is NOT indexed here. Each table defines its own
-    # tenant_id index in __table_args__ for proper naming.
 
     model_config = ConfigDict(
         arbitrary_types_allowed=True,

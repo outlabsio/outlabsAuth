@@ -342,7 +342,7 @@ Company → Departments → Teams → Users → Roles → Permissions
 **Examples**:
 - Real estate platforms (franchises, brokerages, teams)
 - Enterprise CRM systems
-- Multi-tenant SaaS with org hierarchies
+- Entity-isolated SaaS with org hierarchies
 - Corporate applications
 
 **Characteristics**:

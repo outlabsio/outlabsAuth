@@ -77,53 +77,46 @@ Convert to library. Each application embeds auth directly.
 - **Neutral**: Need good migration guides for existing projects
 
 ### Related Decisions
-- DD-002 (Multi-tenant support)
+- DD-002 (Entity-isolated model)
 - DD-004 (Database choice)
 
 ---
 
-## DD-002: Multi-Tenant Support
+## DD-002: Entity-Isolated Deployment Model
 
 **Date**: 2025-01-14
-**Status**: Accepted (Optional)
+**Status**: Accepted
 **Deciders**: Core team
-**Context**: Some apps need multi-tenancy, but most don't
+**Context**: Keep deployment simple and isolate by entity hierarchy/root assignment.
 
 ### Options Considered
 
-1. **Always Multi-Tenant**
-   - Pros: Consistent model, powerful
-   - Cons: Complexity for single-tenant apps, performance overhead
+1. **Tenant Mode**
+   - Pros: Explicit tenant boundary model
+   - Cons: Extra complexity and additional code paths
 
-2. **Never Multi-Tenant**
+2. **Single-App Entity Isolation**
    - Pros: Simplest implementation
-   - Cons: Locks out valid use cases
-
-3. **Optional Multi-Tenant**
-   - Pros: Flexible, pay-for-what-you-use
-   - Cons: Need to maintain two code paths
+   - Cons: Requires clear root-entity scoping rules
 
 ### Decision
-Make multi-tenant optional via configuration.
+Use single-app deployments with entity/root scoping as the isolation model.
 
 **Implementation**:
 ```python
-# Single tenant (default)
+# Single app (default)
 auth = SimpleRBAC(database=db)
-
-# Multi-tenant
-auth = SimpleRBAC(database=db, multi_tenant=True)
 ```
 
 **Reasoning**:
-- Most of our apps are single-tenant
-- Don't force complexity on simple use cases
-- Enable it for apps that need it
+- Most apps benefit from the simpler single-app model
+- Avoid dual behavior and tenant-mode drift
+- Keep isolation explicit through entities/root assignment
 
 ### Consequences
-- **Positive**: Flexibility, simpler for most cases
-- **Negative**: Two code paths to test
-- **Neutral**: Models include optional `tenant_id` field
+- **Positive**: Lower complexity and fewer edge cases
+- **Negative**: No tenant-mode abstraction
+- **Neutral**: Isolation is explicit in entity/root data
 
 ### Related Decisions
 - DD-001 (Library approach)
@@ -228,7 +221,7 @@ auth = SimpleRBAC(database=postgres_url, backend="postgres")
 
 ---
 
-## DD-005: Remove platform_id, Add Optional tenant_id
+## DD-005: Remove platform_id, Keep Entity-Based Isolation
 
 **Date**: 2025-01-14
 **Status**: Accepted
@@ -243,19 +236,15 @@ auth = SimpleRBAC(database=postgres_url, backend="postgres")
 
 2. **Remove Completely**
    - Pros: Simplest
-   - Cons**: Can't support multi-tenant later
-
-3. **Replace with tenant_id (Optional)**
-   - Pros: Simpler than platform_id, enables multi-tenant
-   - Cons: Still some complexity
+   - Cons**: Requires explicit isolation boundaries in app logic
 
 ### Decision
-Remove `platform_id`, add optional `tenant_id`.
+Remove `platform_id` and avoid adding tenant-mode fields.
 
 **Reasoning**:
 - `platform_id` was for multi-platform isolation we don't need
-- `tenant_id` is simpler and more standard
-- Making it optional keeps single-tenant apps simple
+- Root-entity scoping already provides practical isolation boundaries
+- Avoid carrying a second isolation abstraction
 
 ### Schema Changes
 ```python
@@ -265,7 +254,7 @@ class EntityModel:
 
 # AFTER
 class EntityModel:
-    tenant_id: Optional[str] = None  # Optional
+    root_entity_id: Optional[str] = None  # Optional, per-user assignment
 ```
 
 ### Consequences
@@ -278,7 +267,7 @@ See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) for details.
 
 ### Related Decisions
 - DD-001 (Library approach)
-- DD-002 (Multi-tenant support)
+- DD-002 (Entity-isolated model)
 
 ---
 
@@ -760,7 +749,6 @@ auth = EnterpriseRBAC(
     enable_context_aware_roles=True,  # Opt-in
     enable_abac=True,                 # Opt-in
     enable_caching=True,              # Opt-in
-    multi_tenant=True,                # Opt-in
     enable_audit_log=True             # Opt-in
 )
 ```
@@ -814,7 +802,6 @@ Optional features in EnterpriseRBAC via feature flags (opt-in):
 - `enable_context_aware_roles`: Context-aware role permissions
 - `enable_abac`: Attribute-based access control
 - `enable_caching`: Redis caching (requires Redis)
-- `multi_tenant`: Multi-tenant isolation
 - `enable_audit_log`: Comprehensive audit logging
 
 **Design Principle**: Start with basic EnterpriseRBAC (entity hierarchy), enable features as needed.
@@ -1978,7 +1965,6 @@ class OutlabsAuth:
         enable_context_aware_roles: bool = False,
         enable_abac: bool = False,
         enable_caching: bool = False,
-        multi_tenant: bool = False,
         redis_url: Optional[str] = None,
         **kwargs
     ):

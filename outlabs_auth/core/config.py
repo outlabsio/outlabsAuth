@@ -66,7 +66,6 @@ class AuthConfig(BaseModel):
     )
     enable_abac: bool = Field(default=False, description="Enable ABAC conditions (EnterpriseRBAC optional)")
     enable_caching: bool = Field(default=False, description="Enable Redis caching (optional)")
-    multi_tenant: bool = Field(default=False, description="Enable multi-tenant mode (optional)")
     enable_audit_log: bool = Field(default=False, description="Enable audit logging (optional)")
     trust_resource_context_header: bool = Field(
         default=False,
@@ -75,6 +74,10 @@ class AuthConfig(BaseModel):
     store_oauth_provider_tokens: bool = Field(
         default=False,
         description="Persist OAuth provider access/refresh tokens in the social_accounts table",
+    )
+    oauth_token_encryption_key: Optional[str] = Field(
+        default=None,
+        description="Fernet key used to encrypt OAuth provider tokens at rest",
     )
     enable_invitations: bool = Field(
         default=True,
@@ -164,5 +167,4 @@ class EnterpriseConfig(AuthConfig):
     # enable_context_aware_roles: bool - inherited from AuthConfig
     # enable_abac: bool - inherited from AuthConfig
     # enable_caching: bool - inherited from AuthConfig
-    # multi_tenant: bool - inherited from AuthConfig
     # enable_audit_log: bool - inherited from AuthConfig

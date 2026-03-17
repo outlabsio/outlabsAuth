@@ -5,9 +5,12 @@ Transport/Strategy separation pattern from FastAPI-Users (DD-038).
 """
 
 import logging
-from typing import Any, Optional, Protocol
+from datetime import datetime, timezone
+from typing import Any, Mapping, Optional, Protocol
 
 from jose import JWTError, jwt
+
+from outlabs_auth.core.exceptions import TokenInvalidError
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +125,9 @@ class JWTStrategy:
                         "can_authenticate": user.can_authenticate() if user else None,
                     },
                 )
+                if user and self._token_is_stale(payload, getattr(user, "last_password_change", None)):
+                    logger.info("jwt_stale_password_change", extra={"user_id": user_id})
+                    return None
                 if user and user.can_authenticate():
                     return {
                         "user": user,
@@ -146,6 +152,48 @@ class JWTStrategy:
         except Exception as e:
             logger.exception("jwt_auth_error", extra={"error": str(e)})
             return None
+
+    @staticmethod
+    def _normalize_token_timestamp(value: Any) -> Optional[datetime]:
+        if isinstance(value, Mapping):
+            precise_issued_at = value.get("iat_ms")
+            if precise_issued_at is not None:
+                try:
+                    return datetime.fromtimestamp(
+                        float(precise_issued_at) / 1000,
+                        tz=timezone.utc,
+                    )
+                except (TypeError, ValueError, OSError):
+                    return None
+            value = value.get("iat")
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except (TypeError, ValueError, OSError):
+            return None
+
+    @classmethod
+    def _token_is_stale(
+        cls,
+        issued_at: Any,
+        last_password_change: Optional[datetime],
+    ) -> bool:
+        if last_password_change is None:
+            return False
+
+        issued_at_dt = cls._normalize_token_timestamp(issued_at)
+        if issued_at_dt is None:
+            return True
+
+        password_change_dt = (
+            last_password_change
+            if last_password_change.tzinfo is not None
+            else last_password_change.replace(tzinfo=timezone.utc)
+        )
+        return issued_at_dt < password_change_dt
 
 
 class ApiKeyStrategy:
@@ -273,18 +321,25 @@ class ServiceTokenStrategy:
             Service auth data if valid, None otherwise
         """
         try:
-            # Decode and validate service token
-            payload = jwt.decode(
-                credentials,
-                self.secret,
-                algorithms=[self.algorithm],
-                audience=[self.audience],
-                options={"verify_exp": True},
-            )
+            service_token_service = kwargs.get("service_token_service")
+            if service_token_service is not None:
+                payload = service_token_service.validate_service_token(credentials)
+            else:
+                payload = jwt.decode(
+                    credentials,
+                    self.secret,
+                    algorithms=[self.algorithm],
+                    audience=self.audience,
+                    options={"verify_exp": True},
+                )
 
-            # Service tokens must have service_name
+                if payload.get("type") != "service":
+                    return None
+
+            service_id = payload.get("sub")
             service_name = payload.get("service_name")
-            if not service_name:
+            permissions = payload.get("permissions")
+            if not service_id or not service_name or not isinstance(permissions, list):
                 return None
 
             # Return service authentication context
@@ -292,18 +347,16 @@ class ServiceTokenStrategy:
                 "user": None,  # Services don't have user accounts
                 "user_id": None,
                 "source": "service_token",
+                "service_id": service_id,
                 "service_name": service_name,
-                "metadata": {
-                    "service_name": service_name,
-                    "permissions": payload.get("permissions", []),
-                    "iat": payload.get("iat"),
-                    "exp": payload.get("exp"),
-                },
+                "metadata": payload,
             }
 
         except jwt.ExpiredSignatureError:
             return None
-        except jwt.InvalidTokenError:
+        except TokenInvalidError:
+            return None
+        except JWTError:
             return None
         except Exception:
             return None

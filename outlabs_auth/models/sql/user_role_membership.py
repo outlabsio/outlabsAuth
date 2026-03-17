@@ -39,7 +39,6 @@ class UserRoleMembership(BaseModel, table=True):
         Index("ix_urm_user_status", "user_id", "status"),
         Index("ix_urm_status", "status"),
         Index("ix_urm_valid_until", "valid_until"),
-        Index("ix_urm_tenant_id", "tenant_id"),
     )
 
     # === Foreign Keys ===

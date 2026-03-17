@@ -11,7 +11,7 @@ Handles user authentication operations with PostgreSQL/SQLAlchemy:
 
 import hashlib
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
 from uuid import UUID
 
 from sqlalchemy import select
@@ -169,6 +169,7 @@ class AuthService:
                 was_locked = True
 
             await session.flush()
+            await session.commit()
 
             self._log_login_failed(email, "invalid_password", user.failed_login_attempts, ip_address, start_time)
 
@@ -488,6 +489,15 @@ class AuthService:
         # Check user status
         self._check_user_status(user)
 
+        if self._token_is_stale(payload, user.last_password_change):
+            if token_model is not None:
+                token_model.revoke("Password changed")
+                await session.flush()
+            raise RefreshTokenInvalidError(
+                message="Refresh token is no longer valid",
+                details={"reason": "password_changed"},
+            )
+
         # Create new access token
         access_token, _ = create_token_pair(
             user_id=str(user.id),
@@ -573,6 +583,12 @@ class AuthService:
 
         # Check user status
         self._check_user_status(user)
+
+        if self._token_is_stale(payload, user.last_password_change):
+            raise TokenInvalidError(
+                message="Token is no longer valid",
+                details={"reason": "password_changed"},
+            )
 
         return user
 
@@ -689,6 +705,7 @@ class AuthService:
             user.password_reset_token = None
             user.password_reset_expires = None
             await session.flush()
+            await session.commit()
 
             raise TokenExpiredError(
                 message="Reset token has expired",
@@ -708,6 +725,11 @@ class AuthService:
         user.password_reset_token = None
         user.password_reset_expires = None
 
+        await self.revoke_all_user_tokens(
+            session,
+            user.id,
+            reason="Password reset",
+        )
         await session.flush()
 
         # Emit notification
@@ -745,6 +767,48 @@ class AuthService:
     def _hash_token(self, token: str) -> str:
         """Hash token for storage using SHA256."""
         return hashlib.sha256(token.encode()).hexdigest()
+
+    @staticmethod
+    def _normalize_token_timestamp(value: Any) -> Optional[datetime]:
+        if isinstance(value, Mapping):
+            precise_issued_at = value.get("iat_ms")
+            if precise_issued_at is not None:
+                try:
+                    return datetime.fromtimestamp(
+                        float(precise_issued_at) / 1000,
+                        tz=timezone.utc,
+                    )
+                except (TypeError, ValueError, OSError):
+                    return None
+            value = value.get("iat")
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except (TypeError, ValueError, OSError):
+            return None
+
+    @classmethod
+    def _token_is_stale(
+        cls,
+        issued_at: Any,
+        last_password_change: Optional[datetime],
+    ) -> bool:
+        if last_password_change is None:
+            return False
+
+        issued_at_dt = cls._normalize_token_timestamp(issued_at)
+        if issued_at_dt is None:
+            return True
+
+        password_change_dt = (
+            last_password_change
+            if last_password_change.tzinfo is not None
+            else last_password_change.replace(tzinfo=timezone.utc)
+        )
+        return issued_at_dt < password_change_dt
 
     async def accept_invite(
         self,

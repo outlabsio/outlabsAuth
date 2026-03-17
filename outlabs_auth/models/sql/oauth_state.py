@@ -28,7 +28,6 @@ class OAuthState(BaseModel, table=True):
     __table_args__ = (
         Index("ix_oauth_states_state", "state"),
         Index("ix_oauth_states_expires_at", "expires_at"),
-        Index("ix_oauth_states_tenant_id", "tenant_id"),
     )
 
     # === State Parameter ===

@@ -91,7 +91,6 @@ class APIKey(BaseModel, table=True):
         Index("ix_api_keys_owner_id", "owner_id"),
         Index("ix_api_keys_status", "status"),
         Index("ix_api_keys_expires_at", "expires_at"),
-        Index("ix_api_keys_tenant_id", "tenant_id"),
     )
 
     # === Key Information ===
