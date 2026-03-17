@@ -69,6 +69,13 @@ def get_permissions_router(
     """
     router = APIRouter(prefix=prefix, tags=tags or ["permissions"])
 
+    def _require_mutable_permission(permission) -> None:
+        if permission.is_system:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot modify system permission",
+            )
+
     @router.get(
         "/",
         response_model=PaginatedResponse[PermissionResponse],
@@ -423,6 +430,7 @@ def get_permissions_router(
         )
         if not perm:
             raise HTTPException(status_code=404, detail="Permission not found")
+        _require_mutable_permission(perm)
 
         group = ConditionGroup(
             permission_id=permission_id,
@@ -452,6 +460,13 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
+        perm = await auth.permission_service.get_permission_by_id(
+            session, permission_id
+        )
+        if not perm:
+            raise HTTPException(status_code=404, detail="Permission not found")
+        _require_mutable_permission(perm)
+
         group = await session.get(ConditionGroup, group_id)
         if not group or group.permission_id != permission_id:
             raise HTTPException(status_code=404, detail="Condition group not found")
@@ -483,6 +498,13 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
+        perm = await auth.permission_service.get_permission_by_id(
+            session, permission_id
+        )
+        if not perm:
+            raise HTTPException(status_code=404, detail="Permission not found")
+        _require_mutable_permission(perm)
+
         group = await session.get(ConditionGroup, group_id)
         if not group or group.permission_id != permission_id:
             raise HTTPException(status_code=404, detail="Condition group not found")
@@ -540,6 +562,7 @@ def get_permissions_router(
         )
         if not perm:
             raise HTTPException(status_code=404, detail="Permission not found")
+        _require_mutable_permission(perm)
 
         group_id = parse_uuid(data.condition_group_id)
         if group_id is not None:
@@ -585,6 +608,13 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
+        perm = await auth.permission_service.get_permission_by_id(
+            session, permission_id
+        )
+        if not perm:
+            raise HTTPException(status_code=404, detail="Permission not found")
+        _require_mutable_permission(perm)
+
         cond = await session.get(PermissionCondition, condition_id)
         if not cond or cond.permission_id != permission_id:
             raise HTTPException(status_code=404, detail="Condition not found")
@@ -639,6 +669,13 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
+        perm = await auth.permission_service.get_permission_by_id(
+            session, permission_id
+        )
+        if not perm:
+            raise HTTPException(status_code=404, detail="Permission not found")
+        _require_mutable_permission(perm)
+
         cond = await session.get(PermissionCondition, condition_id)
         if not cond or cond.permission_id != permission_id:
             raise HTTPException(status_code=404, detail="Condition not found")

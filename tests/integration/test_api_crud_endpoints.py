@@ -245,6 +245,7 @@ async def test_permissions_and_roles_crud(client: httpx.AsyncClient, admin_token
         json={"display_name": "Demo Permission Updated", "is_active": True},
     )
     assert r_perm_update.status_code == 200, r_perm_update.text
+    assert r_perm_update.json()["display_name"] == "Demo Permission Updated"
 
     root_name = f"role-root-{uuid.uuid4().hex[:8]}"
     r_root_create = await client.post(
@@ -297,6 +298,9 @@ async def test_permissions_and_roles_crud(client: httpx.AsyncClient, admin_token
 
     r_perm_delete = await client.delete(f"/v1/permissions/{perm_id}")
     assert r_perm_delete.status_code == 204, r_perm_delete.text
+
+    r_perm_missing = await client.get(f"/v1/permissions/{perm_id}")
+    assert r_perm_missing.status_code == 404, r_perm_missing.text
 
 
 @pytest.mark.integration

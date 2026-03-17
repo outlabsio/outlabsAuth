@@ -39,6 +39,7 @@ from outlabs_auth import (
 )
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.models.sql.enums import ConditionOperator, EntityClass, RoleScope
+from outlabs_auth.models.sql.permission import PermissionCondition
 from outlabs_auth.models.sql.role import ConditionGroup, RoleCondition, RolePermission
 from outlabs_auth.services.membership import MembershipService
 from outlabs_auth.services.user import UserService
@@ -208,6 +209,12 @@ async def reset_database():
                 "resource": "permission",
                 "action": "update",
             },
+            {
+                "name": "permission:delete",
+                "display_name": "Permission Delete",
+                "resource": "permission",
+                "action": "delete",
+            },
             # Entity permissions
             {
                 "name": "entity:read",
@@ -270,6 +277,14 @@ async def reset_database():
                 "resource": "lead",
                 "action": "delete",
             },
+            {
+                "name": "lead:escalate_after_hours",
+                "display_name": "Lead Escalate After Hours",
+                "resource": "lead",
+                "action": "escalate_after_hours",
+                "description": "Custom permission for emergency lead escalation workflows after standard operating hours.",
+                "is_system": False,
+            },
             # API Key permissions
             {
                 "name": "apikey:read",
@@ -298,8 +313,11 @@ async def reset_database():
                 display_name=perm_data["display_name"],
                 resource=perm_data["resource"],
                 action=perm_data["action"],
-                description=f"Permission to {perm_data['action']} {perm_data['resource']}",
-                is_system=True,
+                description=perm_data.get(
+                    "description",
+                    f"Permission to {perm_data['action']} {perm_data['resource']}",
+                ),
+                is_system=perm_data.get("is_system", True),
                 is_active=True,
             )
             session.add(perm)
@@ -725,6 +743,21 @@ async def reset_database():
                 "is_system_role": False,
             },
             {
+                "name": "permission_catalog_admin",
+                "display_name": "Permission Catalog Admin",
+                "description": "Global permission administrator who can mint custom permissions and manage permission-level ABAC without full superuser access.",
+                "permission_names": [
+                    "permission:read",
+                    "permission:create",
+                    "permission:update",
+                    "permission:delete",
+                    "role:read",
+                    "user:read",
+                ],
+                "is_global": True,
+                "is_system_role": False,
+            },
+            {
                 "name": "acme_org_admin",
                 "display_name": "ACME Org Admin",
                 "description": "Top-level ACME admin role. Intended for organization operators who manage roles across the full root scope.",
@@ -862,6 +895,7 @@ async def reset_database():
                 "permission_names": [
                     "lead:read",
                     "lead:update",
+                    "lead:escalate_after_hours",
                 ],
                 "is_global": False,
                 "is_system_role": False,
@@ -977,6 +1011,18 @@ async def reset_database():
                 "entity_memberships": [
                     {"entity_key": "org", "role_names": ["admin"]},
                 ],
+            },
+            {
+                "email": "permissions-admin@acme.com",
+                "password": "Testpass1!",
+                "first_name": "Priya",
+                "last_name": "Permissions",
+                "persona": "Permission catalog admin",
+                "notes": "Can create custom permissions and manage permission-level ABAC globally, without superuser access.",
+                "is_superuser": False,
+                "root_entity_key": "org",
+                "direct_roles": ["permission_catalog_admin"],
+                "entity_memberships": [],
             },
             {
                 "email": "org-admin@acme.com",
@@ -1313,6 +1359,37 @@ async def reset_database():
             )
         )
         print("   Added ABAC condition group to West Coast After Hours Override\n")
+
+        permission_group = ConditionGroup(
+            permission_id=permissions_map["lead:escalate_after_hours"].id,
+            operator="AND",
+            description="Only allow emergency escalation for urgent, on-call workflows.",
+        )
+        session.add(permission_group)
+        await session.flush()
+        session.add(
+            PermissionCondition(
+                permission_id=permissions_map["lead:escalate_after_hours"].id,
+                condition_group_id=permission_group.id,
+                attribute="env.on_call",
+                operator=ConditionOperator.IS_TRUE,
+                value=None,
+                value_type="boolean",
+                description="Require an on-call session context.",
+            )
+        )
+        session.add(
+            PermissionCondition(
+                permission_id=permissions_map["lead:escalate_after_hours"].id,
+                condition_group_id=permission_group.id,
+                attribute="resource.priority",
+                operator=ConditionOperator.EQUALS,
+                value="urgent",
+                value_type="string",
+                description="Restrict escalation to urgent leads only.",
+            )
+        )
+        print("   Added ABAC condition group to Lead Escalate After Hours\n")
 
         await session.commit()
 

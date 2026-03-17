@@ -373,3 +373,40 @@ async def test_permission_abac_updates_allow_explicit_ungrouping_and_description
     payload = updated_condition.json()
     assert payload["condition_group_id"] is None
     assert payload["description"] is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_system_permissions_reject_permission_abac_mutations(
+    auth: OutlabsAuth, client: httpx.AsyncClient, abac_setup: dict
+):
+    admin_token = abac_setup["admin_token"]
+
+    async with auth.get_session() as session:
+        permission = await auth.permission_service.create_permission(
+            session=session,
+            name=f"system:{uuid.uuid4().hex[:6]}",
+            display_name="System Permission",
+            description="System permission for ABAC protection tests",
+            is_system=True,
+        )
+        await session.commit()
+
+    create_group_response = await client.post(
+        f"/v1/permissions/{permission.id}/condition-groups",
+        json={"operator": "AND", "description": "should fail"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert create_group_response.status_code == 400, create_group_response.text
+
+    create_condition_response = await client.post(
+        f"/v1/permissions/{permission.id}/conditions",
+        json={
+            "attribute": "env.method",
+            "operator": "equals",
+            "value": "POST",
+            "value_type": "string",
+        },
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert create_condition_response.status_code == 400, create_condition_response.text
