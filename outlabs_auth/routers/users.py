@@ -12,7 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.models.sql.enums import UserStatus
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
-from outlabs_auth.response_builders import build_role_response, build_user_response
+from outlabs_auth.response_builders import (
+    build_role_response,
+    build_user_response_async,
+    build_user_responses,
+)
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.permission import PermissionResponse, UserPermissionSource
 from outlabs_auth.schemas.role import RoleResponse
@@ -168,16 +172,7 @@ def get_users_router(
                     created_by=obs.user_id,
                 )
 
-            # Get root entity name for convenience
-            root_entity_name = None
-            if user.root_entity_id:
-                from outlabs_auth.models.sql.entity import Entity
-
-                root_entity = await session.get(Entity, user.root_entity_id)
-                if root_entity:
-                    root_entity_name = root_entity.display_name
-
-            return build_user_response(user, root_entity_name=root_entity_name)
+            return await build_user_response_async(session, user)
         except HTTPException:
             raise
         except Exception as e:
@@ -256,7 +251,7 @@ def get_users_router(
             pages = (total + limit - 1) // limit if total > 0 else 0
 
             # Convert to response schema
-            items = [build_user_response(user) for user in users]
+            items = await build_user_responses(session, users)
 
             return PaginatedResponse(items=items, total=total, page=page, limit=limit, pages=pages)
 
@@ -273,11 +268,12 @@ def get_users_router(
         description="Get the authenticated user's profile",
     )
     async def get_me(
+        session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
     ):
         """Get current user profile."""
         user = auth_result["user"]
-        return build_user_response(user)
+        return await build_user_response_async(session, user)
 
     @router.patch(
         "/me",
@@ -311,7 +307,7 @@ def get_users_router(
             )
             obs.log_event("user_updated", user_id=obs.user_id)
             await auth.user_service.on_after_update(user, update_dict, None)
-            return build_user_response(user)
+            return await build_user_response_async(session, user)
         except HTTPException:
             raise
         except Exception as e:
@@ -380,7 +376,7 @@ def get_users_router(
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
             user = await _get_target_user_or_404(session, user_id, actor_user)
 
-            return build_user_response(user)
+            return await build_user_response_async(session, user)
         except HTTPException:
             raise
         except Exception as e:
@@ -423,7 +419,7 @@ def get_users_router(
             )
             await auth.user_service.on_after_update(user, update_data, None)
             # TODO: Add proper observability logging for user updates
-            return build_user_response(user)
+            return await build_user_response_async(session, user)
         except HTTPException:
             raise
         except Exception as e:
@@ -557,7 +553,7 @@ def get_users_router(
                     changed_by=obs.user_id,
                 )
 
-            return build_user_response(user)
+            return await build_user_response_async(session, user)
 
         except HTTPException:
             raise
@@ -645,7 +641,7 @@ def get_users_router(
                     resent_by=obs.user_id,
                 )
 
-            return build_user_response(user)
+            return await build_user_response_async(session, user)
 
         except HTTPException:
             raise

@@ -15,7 +15,7 @@ from outlabs_auth.observability import (
     get_observability_dependency,
     get_observability_with_auth,
 )
-from outlabs_auth.response_builders import build_user_response
+from outlabs_auth.response_builders import build_user_response_async
 from outlabs_auth.schemas.auth import (
     AcceptInviteRequest,
     AuthConfigResponse,
@@ -144,7 +144,7 @@ def get_auth_router(
                 last_name=data.last_name,
             )
             obs.log_event("user_registered", user_id=str(user.id), email=data.email)
-            return build_user_response(user)
+            return await build_user_response_async(session, user)
         except HTTPException:
             raise
         except OutlabsAuthException:
@@ -436,7 +436,7 @@ def get_auth_router(
 
             obs.log_event("user_invited", invited_user_id=str(user.id), email=data.email)
 
-            return build_user_response(user)
+            return await build_user_response_async(session, user)
         except HTTPException:
             raise
         except OutlabsAuthException:

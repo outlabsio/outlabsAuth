@@ -403,6 +403,15 @@ async def test_admin_user_details_entity_membership_contract(
     assert created["effective_status"] == "active"
     assert created["role_ids"] == [setup["role_a_id"]]
 
+    detail_resp = await client.get(
+        f"/v1/users/{target_user['id']}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert detail_resp.status_code == 200
+    detail_payload = detail_resp.json()
+    assert detail_payload["root_entity_id"] == setup["root_id"]
+    assert detail_payload["root_entity_name"] == "Contract Root"
+
     update_resp = await client.patch(
         f"/v1/memberships/{setup['child_id']}/{target_user['id']}",
         headers={"Authorization": f"Bearer {admin_user['token']}"},

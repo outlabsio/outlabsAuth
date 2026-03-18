@@ -2,6 +2,7 @@
 
 from typing import Any, Optional
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.models.sql.enums import RoleScope
@@ -44,6 +45,50 @@ def build_user_response(user: Any, root_entity_name: Optional[str] = None) -> Us
         locked_until=getattr(user, "locked_until", None),
         deleted_at=getattr(user, "deleted_at", None),
     )
+
+
+async def build_user_responses(
+    session: AsyncSession,
+    users: list[Any],
+) -> list[UserResponse]:
+    """Build user responses and hydrate root entity names when only IDs are loaded."""
+    from outlabs_auth.models.sql.entity import Entity
+
+    missing_root_entity_ids = {
+        user.root_entity_id
+        for user in users
+        if getattr(user, "root_entity_id", None)
+        and getattr(getattr(user, "__dict__", {}).get("root_entity"), "display_name", None) is None
+    }
+
+    root_entity_names: dict[Any, str] = {}
+    if missing_root_entity_ids:
+        result = await session.execute(
+            select(Entity.id, Entity.display_name).where(Entity.id.in_(missing_root_entity_ids))
+        )
+        root_entity_names = {
+            entity_id: display_name
+            for entity_id, display_name in result.all()
+        }
+
+    return [
+        build_user_response(
+            user,
+            root_entity_name=(
+                getattr(getattr(user, "__dict__", {}).get("root_entity"), "display_name", None)
+                or root_entity_names.get(getattr(user, "root_entity_id", None))
+            ),
+        )
+        for user in users
+    ]
+
+
+async def build_user_response_async(
+    session: AsyncSession,
+    user: Any,
+) -> UserResponse:
+    """Build a single user response with a resolved root entity name."""
+    return (await build_user_responses(session, [user]))[0]
 
 
 async def build_role_response(
