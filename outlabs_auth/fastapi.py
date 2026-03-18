@@ -19,6 +19,34 @@ from outlabs_auth.core.exceptions import OutlabsAuthException
 ExceptionHandlerMode = Literal["auth_only", "global"]
 
 
+def _extract_error_message(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        message = value.strip()
+        return message or None
+
+    if isinstance(value, dict):
+        for key in ("message", "detail", "error"):
+            candidate = value.get(key)
+            if isinstance(candidate, str):
+                message = candidate.strip()
+                if message:
+                    return message
+
+        return _extract_error_message(value.get("errors"))
+
+    if isinstance(value, list) and value:
+        first_error = value[0]
+        if isinstance(first_error, dict):
+            for key in ("message", "msg"):
+                candidate = first_error.get(key)
+                if isinstance(candidate, str):
+                    message = candidate.strip()
+                    if message:
+                        return message
+
+    return None
+
+
 def register_outlabs_exception_handler(app: FastAPI) -> None:
     """Register only the OutlabsAuthException handler on a FastAPI app."""
 
@@ -79,11 +107,12 @@ def register_exception_handlers(
         details: dict[str, Any] = {}
         if debug:
             details["error"] = str(exc)
+        message = str(exc).strip() or "Invalid input"
         return JSONResponse(
             status_code=422,
             content={
                 "error": "INVALID_INPUT",
-                "message": "Invalid input",
+                "message": message,
                 "details": details,
             },
         )
@@ -95,11 +124,12 @@ def register_exception_handlers(
             details = exc.detail
         elif exc.detail is not None:
             details = {"detail": exc.detail}
+        message = _extract_error_message(exc.detail) or "Request failed"
         return JSONResponse(
             status_code=exc.status_code,
             content={
                 "error": "HTTP_ERROR",
-                "message": "Request failed",
+                "message": message,
                 "details": details,
             },
         )

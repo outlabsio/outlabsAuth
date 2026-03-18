@@ -17,9 +17,12 @@ See REQUIREMENTS.md for complete use case documentation.
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Optional
+from urllib.parse import urlencode, urlparse
 from uuid import UUID
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from models import Lead, LeadNote
@@ -28,10 +31,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import SQLModel
 
-from outlabs_auth import EnterpriseRBAC
+from outlabs_auth import EnterpriseRBAC, register_exception_handlers
 from outlabs_auth.middleware.resource_context import ResourceContextMiddleware
 from outlabs_auth.models.sql.user import User
-from outlabs_auth.observability import ObservabilityPresets
+from outlabs_auth.observability import ObservabilityPresets, create_metrics_router
 from outlabs_auth.routers import (
     get_api_keys_router,
     get_auth_router,
@@ -48,12 +51,52 @@ from outlabs_auth.services.user import UserService
 # Configuration
 # ============================================================================
 
+EXAMPLE_DIR = Path(__file__).parent
+
+
+def _load_example_env() -> None:
+    env_path = EXAMPLE_DIR / ".env"
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+def _trim_trailing_slash(value: str) -> str:
+    return value.rstrip("/")
+
+
+def _extract_origin(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return value
+
+
+_load_example_env()
+
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac",
 )
 SECRET_KEY = os.getenv("SECRET_KEY", "enterprise-rbac-secret-change-in-production-please")
 REDIS_URL = os.getenv("REDIS_URL", None)
+ENV = os.getenv("ENV", "development")
+DEBUG_MODE = ENV != "production"
+FRONTEND_URL = _trim_trailing_slash(os.getenv("FRONTEND_URL", "http://localhost:3000"))
+MAILGUN_API_BASE_URL = _trim_trailing_slash(os.getenv("MAILGUN_API_BASE_URL", "https://api.mailgun.net"))
+MAILGUN_DOMAIN = os.getenv("MAILGUN_DOMAIN")
+MAILGUN_API_KEY = os.getenv("MAILGUN_API_KEY")
+MAILGUN_FROM_EMAIL = os.getenv("MAILGUN_FROM_EMAIL")
+MAILGUN_FROM_NAME = os.getenv("MAILGUN_FROM_NAME", "Outlabs Auth")
+MAILGUN_RECIPIENT_OVERRIDE = os.getenv("MAILGUN_RECIPIENT_OVERRIDE")
+FRONTEND_ORIGIN = _extract_origin(FRONTEND_URL)
 
 
 # ============================================================================
@@ -66,33 +109,143 @@ class RealEstateUserService(UserService):
     Custom UserService with password reset hooks for email notifications.
 
     In a production app, these hooks would send actual emails.
-    For development, we just print the reset links to console.
+    For development, the service uses Mailgun when configured and falls back to
+    printing the links to console if delivery is unavailable.
     """
+
+    def __init__(
+        self,
+        *,
+        config,
+        frontend_url: str,
+        mailgun_api_base_url: Optional[str] = None,
+        mailgun_domain: Optional[str] = None,
+        mailgun_api_key: Optional[str] = None,
+        mailgun_from_email: Optional[str] = None,
+        mailgun_from_name: str = "Outlabs Auth",
+        mailgun_recipient_override: Optional[str] = None,
+    ):
+        super().__init__(config=config)
+        self.frontend_url = _trim_trailing_slash(frontend_url)
+        self.mailgun_api_base_url = _trim_trailing_slash(
+            mailgun_api_base_url or "https://api.mailgun.net"
+        )
+        self.mailgun_domain = mailgun_domain
+        self.mailgun_api_key = mailgun_api_key
+        self.mailgun_from_email = mailgun_from_email
+        self.mailgun_from_name = mailgun_from_name
+        self.mailgun_recipient_override = mailgun_recipient_override
+
+    def _build_frontend_link(self, path: str, token: str) -> str:
+        query = urlencode({"token": token})
+        return f"{self.frontend_url}{path}?{query}"
+
+    def _format_from_address(self) -> str:
+        if self.mailgun_from_name:
+            return f"{self.mailgun_from_name} <{self.mailgun_from_email}>"
+        return self.mailgun_from_email or "Outlabs Auth"
+
+    async def _send_notification_email(
+        self,
+        *,
+        intended_recipient: str,
+        subject: str,
+        text: str,
+        fallback_title: str,
+    ) -> None:
+        actual_recipient = self.mailgun_recipient_override or intended_recipient
+        message_text = text
+
+        if actual_recipient != intended_recipient:
+            message_text = (
+                f"Intended recipient: {intended_recipient}\n"
+                f"Sandbox override recipient: {actual_recipient}\n\n{text}"
+            )
+
+        if self.mailgun_domain and self.mailgun_api_key and self.mailgun_from_email:
+            try:
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    response = await client.post(
+                        f"{self.mailgun_api_base_url}/v3/{self.mailgun_domain}/messages",
+                        auth=("api", self.mailgun_api_key),
+                        data={
+                            "from": self._format_from_address(),
+                            "to": actual_recipient,
+                            "subject": subject,
+                            "text": message_text,
+                        },
+                    )
+                    response.raise_for_status()
+
+                print("\n" + "=" * 80)
+                print("MAILGUN EMAIL SENT")
+                print("=" * 80)
+                print(f"Subject: {subject}")
+                print(f"Intended recipient: {intended_recipient}")
+                print(f"Delivered to: {actual_recipient}")
+                print("=" * 80 + "\n")
+                return
+            except Exception as exc:
+                print("\n" + "=" * 80)
+                print("MAILGUN DELIVERY FAILED - FALLING BACK TO CONSOLE OUTPUT")
+                print("=" * 80)
+                print(f"Subject: {subject}")
+                print(f"Intended recipient: {intended_recipient}")
+                print(f"Attempted recipient: {actual_recipient}")
+                print(f"Error: {exc}")
+                print("=" * 80 + "\n")
+
+        print("\n" + "=" * 80)
+        print(fallback_title)
+        print("=" * 80)
+        print(f"To: {intended_recipient}")
+        print(f"Subject: {subject}")
+        print(f"\n{message_text}")
+        print("=" * 80 + "\n")
 
     async def on_after_forgot_password(self, user: User, token: str, request: Optional[any] = None) -> None:
         """Send password reset email to user."""
-        reset_link = f"http://localhost:3000/reset-password?token={token}"
-
-        print("\n" + "=" * 80)
-        print("PASSWORD RESET EMAIL (Development Mode)")
-        print("=" * 80)
-        print(f"To: {user.email}")
-        print(f"Subject: Reset your password")
-        print(f"\nClick the link below to reset your password:")
-        print(f"\n{reset_link}")
-        print(f"\nThis link will expire in 1 hour.")
-        print("=" * 80 + "\n")
+        reset_link = self._build_frontend_link("/auth/reset-password", token)
+        await self._send_notification_email(
+            intended_recipient=user.email,
+            subject="Reset your password",
+            text=(
+                "Click the link below to reset your password:\n\n"
+                f"{reset_link}\n\n"
+                "This link will expire in 1 hour."
+            ),
+            fallback_title="PASSWORD RESET EMAIL (Development Mode)",
+        )
 
     async def on_after_reset_password(self, user: User, request: Optional[any] = None) -> None:
         """Send password reset confirmation email."""
-        print("\n" + "=" * 80)
-        print("PASSWORD RESET CONFIRMATION (Development Mode)")
-        print("=" * 80)
-        print(f"To: {user.email}")
-        print(f"Subject: Password reset successful")
-        print(f"\nYour password has been successfully reset.")
-        print(f"If you didn't make this change, please contact support immediately.")
-        print("=" * 80 + "\n")
+        await self._send_notification_email(
+            intended_recipient=user.email,
+            subject="Password reset successful",
+            text=(
+                "Your password has been successfully reset.\n\n"
+                "If you didn't make this change, please contact support immediately."
+            ),
+            fallback_title="PASSWORD RESET CONFIRMATION (Development Mode)",
+        )
+
+    async def on_after_invite(self, user: User, token: str, request: Optional[Request] = None) -> None:
+        """Send invite email with accept-invite link."""
+        accept_link = self._build_frontend_link("/auth/accept-invite", token)
+        recipient_name = " ".join(part for part in [user.first_name, user.last_name] if part) or user.email
+
+        await self._send_notification_email(
+            intended_recipient=user.email,
+            subject="You're invited to Outlabs Auth",
+            text=(
+                f"Hello {recipient_name},\n\n"
+                "You've been invited to Outlabs Auth.\n\n"
+                "Click the link below to accept your invitation and set your password:\n\n"
+                f"{accept_link}\n\n"
+                "This invite link will expire in 7 days."
+            ),
+            fallback_title="INVITE EMAIL (Development Mode)",
+        )
 
 
 # ============================================================================
@@ -197,8 +350,7 @@ async def lifespan(app: FastAPI):
 
     # Initialize EnterpriseRBAC
     print("Initializing OutlabsAuth EnterpriseRBAC...")
-    env = os.getenv("ENV", "development")
-    if env == "production":
+    if ENV == "production":
         obs_config = ObservabilityPresets.production()
     else:
         obs_config = ObservabilityPresets.development()
@@ -227,18 +379,25 @@ async def lifespan(app: FastAPI):
     print("Database tables created")
 
     # Replace user service with custom one
-    auth.user_service = RealEstateUserService(config=auth.config)
-    print("Custom user service with password reset hooks enabled")
-
-    # Install observability middleware, exception handlers, and /metrics (if enabled)
-    auth.instrument_fastapi(
-        app,
-        debug=(env != "production"),
-        exception_handler_mode="global",
-        include_metrics=True,
-        include_correlation_id=True,
-        include_resource_context=True,
+    auth.user_service = RealEstateUserService(
+        config=auth.config,
+        frontend_url=FRONTEND_URL,
+        mailgun_api_base_url=MAILGUN_API_BASE_URL,
+        mailgun_domain=MAILGUN_DOMAIN,
+        mailgun_api_key=MAILGUN_API_KEY,
+        mailgun_from_email=MAILGUN_FROM_EMAIL,
+        mailgun_from_name=MAILGUN_FROM_NAME,
+        mailgun_recipient_override=MAILGUN_RECIPIENT_OVERRIDE,
     )
+    print("Custom user service with invite/reset email hooks enabled")
+
+    if auth.observability and auth.observability.config.enable_metrics:
+        app.include_router(
+            create_metrics_router(
+                auth.observability,
+                path=auth.observability.config.metrics_path,
+            )
+        )
 
     # Include standard OutlabsAuth routers with /v1 prefix
     print("Including API routers...")
@@ -256,6 +415,13 @@ async def lifespan(app: FastAPI):
     print(f"Database: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else DATABASE_URL}")
     print(f"API: http://localhost:8004")
     print(f"Docs: http://localhost:8004/docs")
+    print(f"Frontend URL: {FRONTEND_URL}")
+    if MAILGUN_DOMAIN and MAILGUN_API_KEY and MAILGUN_FROM_EMAIL:
+        print(f"Mailgun domain: {MAILGUN_DOMAIN}")
+        if MAILGUN_RECIPIENT_OVERRIDE:
+            print(f"Mailgun sandbox override recipient: {MAILGUN_RECIPIENT_OVERRIDE}")
+    else:
+        print("Mailgun: not configured, falling back to console email output")
 
     yield
 
@@ -272,6 +438,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Register consistent JSON error envelopes before the app starts serving requests.
+register_exception_handlers(app, debug=DEBUG_MODE, mode="global")
+
 # CORS for development
 app.add_middleware(
     CORSMiddleware,
@@ -279,6 +448,7 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:3001",
         "http://localhost:8000",
+        FRONTEND_ORIGIN,
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -565,14 +735,12 @@ async def health_check():
 # ============================================================================
 
 if __name__ == "__main__":
-    from pathlib import Path
-
     import uvicorn
 
     # Watch both the example directory and the library code
-    project_root = Path(__file__).parent.parent.parent
+    project_root = EXAMPLE_DIR.parent.parent
     reload_dirs = [
-        str(Path(__file__).parent),  # examples/enterprise_rbac
+        str(EXAMPLE_DIR),  # examples/enterprise_rbac
         str(project_root / "outlabs_auth"),  # library code
     ]
 

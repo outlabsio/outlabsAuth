@@ -207,14 +207,18 @@ class ObservabilityContext:
         if not self.observability or not self.observability.logger:
             return
 
-        self.observability.logger.info(
-            event,
-            endpoint=self.endpoint,
-            method=self.method,
-            user_id=self.user_id,
-            request_id=self.correlation_id,
-            **fields,
-        )
+        payload = {
+            "endpoint": self.endpoint,
+            "method": self.method,
+            "request_id": self.correlation_id,
+        }
+
+        if self.user_id is not None and "user_id" not in fields:
+            payload["user_id"] = self.user_id
+
+        payload.update(fields)
+
+        self.observability.logger.info(event, **payload)
 
 
 def get_observability_dependency(observability_service: Optional[ObservabilityService]):
