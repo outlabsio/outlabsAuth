@@ -18,7 +18,10 @@ from outlabs_auth.models.sql import (
     PermissionTag,
     PermissionTagLink,
     PermissionCondition,
+    PermissionDefinitionHistory,
     RefreshToken,
+    RoleDefinitionHistory,
+    UserAuditEvent,
     # SimpleRBAC
     Role,
     RolePermission,
@@ -65,7 +68,10 @@ __all__ = [
     "PermissionTag",
     "PermissionTagLink",
     "PermissionCondition",
+    "PermissionDefinitionHistory",
     "RefreshToken",
+    "RoleDefinitionHistory",
+    "UserAuditEvent",
     # SimpleRBAC
     "Role",
     "RolePermission",

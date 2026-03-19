@@ -1,76 +1,95 @@
 """Tests for Transport classes (DD-038)."""
 
 import pytest
-from fastapi import Request
+from starlette.requests import Request
 from outlabs_auth.authentication.transport import (
-    BearerTransport,
     ApiKeyTransport,
-    HeaderTransport,
+    BearerTransport,
     CookieTransport,
+    HeaderTransport,
+    QueryParamTransport,
 )
 
 
+def _make_request(
+    *,
+    headers: list[tuple[bytes, bytes]] | None = None,
+    query_string: bytes = b"",
+) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": headers or [],
+            "query_string": query_string,
+        }
+    )
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
-class TestBearerTransport:
-    """Test BearerTransport class."""
+async def test_bearer_transport_extracts_token_and_returns_none_without_header():
+    transport = BearerTransport()
 
-    async def test_bearer_transport_extracts_token(self):
-        """Test that BearerTransport extracts Bearer token from Authorization header."""
-        transport = BearerTransport()
+    request = _make_request(headers=[(b"authorization", b"Bearer test_token_123")])
+    missing_request = _make_request()
 
-        # Mock request with Bearer token
-        class MockRequest:
-            def __init__(self):
-                self.headers = {"authorization": "Bearer test_token_123"}
-
-        request = MockRequest()
-        # Note: This is a simplified test. In real tests, use FastAPI's TestClient
-        # For now, just verify the transport class exists
-        assert transport is not None
+    assert await transport.get_credentials(request) == "test_token_123"
+    assert await transport.get_credentials(missing_request) is None
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
-class TestApiKeyTransport:
-    """Test ApiKeyTransport class."""
+async def test_api_key_transport_reads_default_and_custom_headers():
+    default_transport = ApiKeyTransport()
+    custom_transport = ApiKeyTransport(header_name="X-Custom-Key")
+    request = _make_request(
+        headers=[
+            (b"x-api-key", b"default-key"),
+            (b"x-custom-key", b"custom-key"),
+        ]
+    )
 
-    async def test_api_key_transport_default_header(self):
-        """Test that ApiKeyTransport uses X-API-Key header by default."""
-        transport = ApiKeyTransport()
-        assert transport.header_name == "X-API-Key"
-
-    async def test_api_key_transport_custom_header(self):
-        """Test that ApiKeyTransport can use custom header."""
-        transport = ApiKeyTransport(header_name="X-Custom-Key")
-        assert transport.header_name == "X-Custom-Key"
+    assert default_transport.header_name == "X-API-Key"
+    assert custom_transport.header_name == "X-Custom-Key"
+    assert await default_transport.get_credentials(request) == "default-key"
+    assert await custom_transport.get_credentials(request) == "custom-key"
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
-class TestHeaderTransport:
-    """Test HeaderTransport class."""
+async def test_header_transport_strips_prefix_and_rejects_mismatch():
+    prefixed_transport = HeaderTransport(header_name="X-Auth", prefix="Token ")
+    raw_transport = HeaderTransport(header_name="X-Auth")
+    prefixed_request = _make_request(headers=[(b"x-auth", b"Token abc123")])
+    wrong_prefix_request = _make_request(headers=[(b"x-auth", b"Bearer abc123")])
 
-    async def test_header_transport_with_prefix(self):
-        """Test HeaderTransport with prefix stripping."""
-        transport = HeaderTransport(header_name="X-Auth", prefix="Token ")
-        assert transport.header_name == "X-Auth"
-        assert transport.prefix == "Token "
-
-    async def test_header_transport_without_prefix(self):
-        """Test HeaderTransport without prefix."""
-        transport = HeaderTransport(header_name="X-Auth")
-        assert transport.header_name == "X-Auth"
-        assert transport.prefix is None
+    assert prefixed_transport.header_name == "X-Auth"
+    assert prefixed_transport.prefix == "Token "
+    assert await prefixed_transport.get_credentials(prefixed_request) == "abc123"
+    assert await prefixed_transport.get_credentials(wrong_prefix_request) is None
+    assert await raw_transport.get_credentials(prefixed_request) == "Token abc123"
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
-class TestCookieTransport:
-    """Test CookieTransport class."""
+async def test_cookie_and_query_param_transports_extract_credentials():
+    cookie_transport = CookieTransport()
+    custom_cookie_transport = CookieTransport(cookie_name="session_token")
+    query_transport = QueryParamTransport()
+    custom_query_transport = QueryParamTransport(param_name="api_key")
 
-    async def test_cookie_transport_default_name(self):
-        """Test that CookieTransport uses 'access_token' cookie by default."""
-        transport = CookieTransport()
-        assert transport.cookie_name == "access_token"
+    request = _make_request(
+        headers=[(b"cookie", b"access_token=cookie-123; session_token=session-456")],
+        query_string=b"token=query-token&api_key=query-key",
+    )
 
-    async def test_cookie_transport_custom_name(self):
-        """Test that CookieTransport can use custom cookie name."""
-        transport = CookieTransport(cookie_name="session_token")
-        assert transport.cookie_name == "session_token"
+    assert cookie_transport.cookie_name == "access_token"
+    assert custom_cookie_transport.cookie_name == "session_token"
+    assert query_transport.param_name == "token"
+    assert custom_query_transport.param_name == "api_key"
+    assert await cookie_transport.get_credentials(request) == "cookie-123"
+    assert await custom_cookie_transport.get_credentials(request) == "session-456"
+    assert await query_transport.get_credentials(request) == "query-token"
+    assert await custom_query_transport.get_credentials(request) == "query-key"

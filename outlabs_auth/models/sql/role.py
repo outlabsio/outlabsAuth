@@ -17,7 +17,7 @@ from sqlmodel import Field, Relationship, SQLModel
 
 from outlabs_auth.database.base import BaseModel
 
-from .enums import ConditionOperator, RoleScope
+from .enums import ConditionOperator, DefinitionStatus, RoleScope
 
 if TYPE_CHECKING:
     from .entity import Entity
@@ -242,6 +242,7 @@ class Role(BaseModel, table=True):
     __table_args__ = (
         Index("ix_roles_name", "name"),
         Index("ix_roles_is_global", "is_global"),
+        Index("ix_roles_status", "status"),
         Index("ix_roles_root_entity_id", "root_entity_id"),
         Index("ix_roles_scope_entity_id", "scope_entity_id"),
         Index("ix_roles_is_auto_assigned", "is_auto_assigned"),
@@ -282,6 +283,11 @@ class Role(BaseModel, table=True):
         default=False,
         sa_column=Column(Boolean, nullable=False, default=False),
         description="Global roles can be assigned anywhere in hierarchy",
+    )
+    status: DefinitionStatus = Field(
+        default=DefinitionStatus.ACTIVE,
+        sa_column=Column(String(20), nullable=False, default=DefinitionStatus.ACTIVE.value),
+        description="Lifecycle status for retained role definitions.",
     )
 
     # === Entity-Local Role Configuration (DD-053) ===
@@ -361,3 +367,7 @@ class Role(BaseModel, table=True):
     def is_entity_only_scoped(self) -> bool:
         """Check if role permissions are limited to the scope entity only."""
         return self.scope == RoleScope.ENTITY_ONLY
+
+    def can_grant_permissions(self) -> bool:
+        """Only active role definitions grant access."""
+        return self.status == DefinitionStatus.ACTIVE

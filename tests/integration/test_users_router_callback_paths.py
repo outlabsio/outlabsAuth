@@ -8,7 +8,7 @@ from fastapi import HTTPException
 
 import outlabs_auth.routers.users as users_router_module
 from outlabs_auth import EnterpriseRBAC
-from outlabs_auth.models.sql.enums import EntityClass, MembershipStatus, RoleScope
+from outlabs_auth.models.sql.enums import EntityClass, MembershipStatus, RoleScope, UserStatus
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
 from outlabs_auth.routers import get_users_router
 from outlabs_auth.schemas.user import (
@@ -347,6 +347,7 @@ async def test_users_router_callback_crud_status_delete_and_invite_paths(
     update_user = _endpoint(users_router, "/v1/users/{user_id}", "PATCH")
     admin_reset_password = _endpoint(users_router, "/v1/users/{user_id}/password", "PATCH")
     update_status = _endpoint(users_router, "/v1/users/{user_id}/status", "PATCH")
+    restore_user = _endpoint(users_router, "/v1/users/{user_id}/restore", "POST")
     delete_user = _endpoint(users_router, "/v1/users/{user_id}", "DELETE")
     resend_invite = _endpoint(users_router, "/v1/users/{user_id}/resend-invite", "POST")
 
@@ -481,10 +482,32 @@ async def test_users_router_callback_crud_status_delete_and_invite_paths(
             obs=DummyObs(str(actor.id)),
         )
         assert deleted is None
-        assert await auth_instance.user_service.get_user_by_id(session, doomed.id) is None
+        retained = await auth_instance.user_service.get_user_by_id(session, doomed.id)
+        assert retained is not None
+        assert retained.status == UserStatus.DELETED
+        assert retained.deleted_at is not None
+
+        with pytest.raises(HTTPException) as exc:
+            await update_status(
+                user_id=doomed.id,
+                data=UserStatusUpdateRequest(status="active"),
+                session=session,
+                obs=DummyObs(str(actor.id)),
+            )
+        assert exc.value.status_code == 400
+        assert "restore endpoint" in exc.value.detail
+
+        restored = await restore_user(
+            user_id=doomed.id,
+            session=session,
+            obs=DummyObs(str(actor.id)),
+        )
+        assert restored.id == str(doomed.id)
+        assert restored.status == "active"
+        assert restored.deleted_at is None
 
         logged_events = {event for event, _fields in auth_instance.observability.records}
-        assert {"admin_password_reset", "user_status_changed", "invite_resent", "user_deleted"} <= logged_events
+        assert {"admin_password_reset", "user_status_changed", "invite_resent", "user_deleted", "user_restored"} <= logged_events
 
 
 @pytest.mark.integration
@@ -910,12 +933,12 @@ async def test_users_router_callback_remaining_generic_error_paths(
                 )
         assert obs.errors[-1][0] == "RuntimeError"
 
-        def _build_fail(*args, **kwargs):
+        async def _build_fail(*args, **kwargs):
             raise RuntimeError("build exploded")
 
         obs = DummyObs(str(actor.id))
         with monkeypatch.context() as m:
-            m.setattr(users_router_module, "build_user_response", _build_fail)
+            m.setattr(users_router_module, "build_user_response_async", _build_fail)
             with pytest.raises(RuntimeError):
                 await get_user(
                     user_id=target.id,

@@ -6,7 +6,9 @@ import pytest_asyncio
 from fastapi import FastAPI
 
 from outlabs_auth import EnterpriseRBAC
-from outlabs_auth.models.sql.enums import EntityClass
+from outlabs_auth.models.sql.enums import DefinitionStatus, EntityClass
+from outlabs_auth.models.sql.permission import Permission
+from outlabs_auth.models.sql.role import Role
 from outlabs_auth.routers import (
     get_api_keys_router,
     get_auth_router,
@@ -236,6 +238,7 @@ async def test_permissions_and_roles_crud(client: httpx.AsyncClient, admin_token
     assert r_perm_create.status_code == 201, r_perm_create.text
     perm = r_perm_create.json()
     perm_id = perm["id"]
+    assert perm["status"] == "active"
 
     r_perm_get = await client.get(f"/v1/permissions/{perm_id}")
     assert r_perm_get.status_code == 200, r_perm_get.text
@@ -278,6 +281,7 @@ async def test_permissions_and_roles_crud(client: httpx.AsyncClient, admin_token
     role = r_role_create.json()
     role_id = role["id"]
     assert role["assignable_at_types"] == ["department"]
+    assert role["status"] == "active"
     assert "entity_type_permissions" not in role
 
     r_role_get = await client.get(f"/v1/roles/{role_id}")
@@ -301,6 +305,62 @@ async def test_permissions_and_roles_crud(client: httpx.AsyncClient, admin_token
 
     r_perm_missing = await client.get(f"/v1/permissions/{perm_id}")
     assert r_perm_missing.status_code == 404, r_perm_missing.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_deleted_roles_and_permissions_are_retained_but_hidden(
+    client: httpx.AsyncClient,
+    admin_token: str,
+    enterprise_auth: EnterpriseRBAC,
+):
+    client.headers.update({"Authorization": f"Bearer {admin_token}"})
+
+    permission_name = f"retained:{uuid.uuid4().hex[:6]}"
+    create_permission_response = await client.post(
+        "/v1/permissions/",
+        json={
+            "name": permission_name,
+            "display_name": "Retained Permission",
+            "description": "retained delete contract",
+            "is_system": False,
+            "is_active": True,
+            "tags": [],
+        },
+    )
+    assert create_permission_response.status_code == 201, create_permission_response.text
+    permission_id = create_permission_response.json()["id"]
+
+    create_role_response = await client.post(
+        "/v1/roles/",
+        json={
+            "name": f"retained-role-{uuid.uuid4().hex[:6]}",
+            "display_name": "Retained Role",
+            "permissions": [permission_name],
+            "is_global": True,
+        },
+    )
+    assert create_role_response.status_code == 201, create_role_response.text
+    role_id = create_role_response.json()["id"]
+
+    delete_role_response = await client.delete(f"/v1/roles/{role_id}")
+    assert delete_role_response.status_code == 204, delete_role_response.text
+    delete_permission_response = await client.delete(f"/v1/permissions/{permission_id}")
+    assert delete_permission_response.status_code == 204, delete_permission_response.text
+
+    hidden_role_response = await client.get(f"/v1/roles/{role_id}")
+    assert hidden_role_response.status_code == 404, hidden_role_response.text
+    hidden_permission_response = await client.get(f"/v1/permissions/{permission_id}")
+    assert hidden_permission_response.status_code == 404, hidden_permission_response.text
+
+    async with enterprise_auth.get_session() as session:
+        archived_role = await session.get(Role, uuid.UUID(role_id))
+        archived_permission = await session.get(Permission, uuid.UUID(permission_id))
+        assert archived_role is not None
+        assert archived_permission is not None
+        assert archived_role.status == DefinitionStatus.ARCHIVED
+        assert archived_permission.status == DefinitionStatus.ARCHIVED
+        assert archived_permission.is_active is False
 
 
 @pytest.mark.integration

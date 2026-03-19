@@ -171,11 +171,10 @@ class NotificationService:
             }
 
             # Send to all enabled channels that want this event
-            tasks = [
-                channel.send(event)
-                for channel in self.channels
-                if channel.should_handle(event_type)
+            handled_channels = [
+                channel for channel in self.channels if channel.should_handle(event_type)
             ]
+            tasks = [channel.send(event) for channel in handled_channels]
 
             if tasks:
                 # Fire all channels concurrently, capture exceptions
@@ -185,7 +184,7 @@ class NotificationService:
                 if self.observability:
                     for i, result in enumerate(results):
                         if isinstance(result, Exception):
-                            channel_name = self.channels[i].__class__.__name__
+                            channel_name = handled_channels[i].__class__.__name__
                             self.observability.log_notification_delivery_failure(
                                 event_type=event_type,
                                 channel=channel_name,

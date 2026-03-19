@@ -228,6 +228,88 @@ async def test_admin_can_delete_role(client: httpx.AsyncClient, admin_user: dict
     assert get_resp.status_code == 404
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_inactive_and_archived_roles_stop_granting_access_and_cannot_be_assigned(
+    client: httpx.AsyncClient,
+    auth_instance: SimpleRBAC,
+    admin_user: dict,
+    regular_user: dict,
+):
+    async with auth_instance.get_session() as session:
+        permission = await auth_instance.permission_service.create_permission(
+            session=session,
+            name="user:read",
+            display_name="User Read",
+            description="Can read users",
+        )
+        role = await auth_instance.role_service.create_role(
+            session=session,
+            name=f"lifecycle-role-{uuid.uuid4().hex[:8]}",
+            display_name="Lifecycle Role",
+            permission_names=[permission.name],
+        )
+        await auth_instance.role_service.assign_role_to_user(
+            session=session,
+            user_id=uuid.UUID(regular_user["id"]),
+            role_id=role.id,
+        )
+        extra_user = await auth_instance.user_service.create_user(
+            session=session,
+            email=f"extra-{uuid.uuid4().hex[:8]}@example.com",
+            password="ExtraPass123!",
+            first_name="Extra",
+            last_name="User",
+        )
+        await session.commit()
+
+    allowed_response = await client.get(
+        "/v1/users/",
+        headers={"Authorization": f"Bearer {regular_user['token']}"},
+    )
+    assert allowed_response.status_code == 200, allowed_response.text
+
+    deactivate_response = await client.patch(
+        f"/v1/roles/{role.id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"status": "inactive"},
+    )
+    assert deactivate_response.status_code == 200, deactivate_response.text
+    assert deactivate_response.json()["status"] == "inactive"
+
+    denied_response = await client.get(
+        "/v1/users/",
+        headers={"Authorization": f"Bearer {regular_user['token']}"},
+    )
+    assert denied_response.status_code == 403, denied_response.text
+
+    assign_inactive_response = await client.post(
+        f"/v1/users/{extra_user.id}/roles",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"role_id": str(role.id)},
+    )
+    assert assign_inactive_response.status_code == 422, assign_inactive_response.text
+
+    delete_response = await client.delete(
+        f"/v1/roles/{role.id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert delete_response.status_code == 204, delete_response.text
+
+    hidden_response = await client.get(
+        f"/v1/roles/{role.id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert hidden_response.status_code == 404, hidden_response.text
+
+    assign_archived_response = await client.post(
+        f"/v1/users/{extra_user.id}/roles",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"role_id": str(role.id)},
+    )
+    assert assign_archived_response.status_code == 404, assign_archived_response.text
+
+
 # ============================================================================
 # Role Assignment Tests (via API)
 # ============================================================================
@@ -265,6 +347,88 @@ async def test_admin_can_assign_role_to_user(
     roles = user_resp.json()
     # Response is list of RoleResponse, not wrapped memberships
     assert any(r["id"] == role_id for r in roles)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_inactive_and_archived_permissions_stop_granting_access(
+    client: httpx.AsyncClient,
+    auth_instance: SimpleRBAC,
+    admin_user: dict,
+    regular_user: dict,
+):
+    async with auth_instance.get_session() as session:
+        permission = await auth_instance.permission_service.create_permission(
+            session=session,
+            name="user:read",
+            display_name="User Read",
+            description="Can read users",
+        )
+        role = await auth_instance.role_service.create_role(
+            session=session,
+            name=f"permission-lifecycle-{uuid.uuid4().hex[:8]}",
+            display_name="Permission Lifecycle Role",
+            permission_names=[permission.name],
+        )
+        await auth_instance.role_service.assign_role_to_user(
+            session=session,
+            user_id=uuid.UUID(regular_user["id"]),
+            role_id=role.id,
+        )
+        await session.commit()
+
+    allowed_response = await client.get(
+        "/v1/users/",
+        headers={"Authorization": f"Bearer {regular_user['token']}"},
+    )
+    assert allowed_response.status_code == 200, allowed_response.text
+
+    deactivate_response = await client.patch(
+        f"/v1/permissions/{permission.id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"is_active": False},
+    )
+    assert deactivate_response.status_code == 200, deactivate_response.text
+    assert deactivate_response.json()["status"] == "inactive"
+    assert deactivate_response.json()["is_active"] is False
+
+    denied_response = await client.get(
+        "/v1/users/",
+        headers={"Authorization": f"Bearer {regular_user['token']}"},
+    )
+    assert denied_response.status_code == 403, denied_response.text
+
+    reactivate_response = await client.patch(
+        f"/v1/permissions/{permission.id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"is_active": True},
+    )
+    assert reactivate_response.status_code == 200, reactivate_response.text
+    assert reactivate_response.json()["status"] == "active"
+
+    restored_response = await client.get(
+        "/v1/users/",
+        headers={"Authorization": f"Bearer {regular_user['token']}"},
+    )
+    assert restored_response.status_code == 200, restored_response.text
+
+    delete_response = await client.delete(
+        f"/v1/permissions/{permission.id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert delete_response.status_code == 204, delete_response.text
+
+    archived_denied_response = await client.get(
+        "/v1/users/",
+        headers={"Authorization": f"Bearer {regular_user['token']}"},
+    )
+    assert archived_denied_response.status_code == 403, archived_denied_response.text
+
+    hidden_permission_response = await client.get(
+        f"/v1/permissions/{permission.id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert hidden_permission_response.status_code == 404, hidden_permission_response.text
 
 
 @pytest.mark.integration
@@ -748,6 +912,7 @@ async def test_simple_rbac_rejects_entity_local_role_assignment(
             session=session,
             name=f"local-role-{uuid.uuid4().hex[:8]}",
             display_name="Local Role",
+            is_global=False,
             scope_entity_id=entity.id,
         )
         await session.commit()

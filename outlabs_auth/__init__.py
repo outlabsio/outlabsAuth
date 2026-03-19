@@ -87,6 +87,8 @@ from outlabs_auth.models.sql.entity_membership import (
     EntityMembership,
     EntityMembershipRole,
 )
+from outlabs_auth.models.sql.role_definition_history import RoleDefinitionHistory
+from outlabs_auth.models.sql.user_audit_event import UserAuditEvent
 
 # SQL Models - Enums
 from outlabs_auth.models.sql.enums import (
@@ -102,6 +104,9 @@ from outlabs_auth.models.sql.permission import (
     PermissionCondition,
     PermissionTag,
     PermissionTagLink,
+)
+from outlabs_auth.models.sql.permission_definition_history import (
+    PermissionDefinitionHistory,
 )
 from outlabs_auth.models.sql.role import (
     ConditionGroup,
@@ -127,10 +132,13 @@ from outlabs_auth.services import (
     AuthService,
     BaseService,
     CacheService,
+    PermissionHistoryService,
     PermissionService,
+    RoleHistoryService,
     RoleService,
     ServiceTokenService,
     TokenPair,
+    UserAuditService,
     UserService,
 )
 
@@ -158,9 +166,12 @@ __all__ = [
     "UserService",
     "RoleService",
     "PermissionService",
+    "RoleHistoryService",
+    "PermissionHistoryService",
     "AuthService",
     "ServiceTokenService",
     "TokenPair",
+    "UserAuditService",
     # Database
     "DatabaseConfig",
     "create_engine",
@@ -180,7 +191,10 @@ __all__ = [
     "PermissionTag",
     "PermissionTagLink",
     "PermissionCondition",
+    "PermissionDefinitionHistory",
     "RefreshToken",
+    "RoleDefinitionHistory",
+    "UserAuditEvent",
     "Role",
     "RolePermission",
     "RoleCondition",

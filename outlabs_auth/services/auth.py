@@ -78,6 +78,7 @@ class AuthService:
         notification_service: Optional[Any] = None,
         activity_tracker: Optional[Any] = None,
         observability: Optional[Any] = None,
+        user_audit_service: Optional[Any] = None,
     ):
         """
         Initialize AuthService.
@@ -87,11 +88,13 @@ class AuthService:
             notification_service: Optional notification service for events
             activity_tracker: Optional activity tracker for DAU/MAU tracking
             observability: Optional observability service for logging/metrics
+            user_audit_service: Optional user audit service for durable events
         """
         self.config = config
         self.notifications = notification_service
         self.activity_tracker = activity_tracker
         self.observability = observability
+        self.user_audit_service = user_audit_service
 
     async def login(
         self,
@@ -159,14 +162,47 @@ class AuthService:
             is_valid_password, upgraded_hash = verify_and_upgrade_password(password, user.hashed_password)
 
         if not is_valid_password:
+            previous_failed_attempts = user.failed_login_attempts or 0
+            previous_locked_until = user.locked_until
+            failure_recorded_at = datetime.now(timezone.utc)
+
             # Increment failed login attempts
-            user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+            user.failed_login_attempts = previous_failed_attempts + 1
 
             # Check if account should be locked
             was_locked = False
             if user.failed_login_attempts >= self.config.max_login_attempts:
-                user.locked_until = datetime.now(timezone.utc) + timedelta(minutes=self.config.lockout_duration_minutes)
+                user.locked_until = failure_recorded_at + timedelta(
+                    minutes=self.config.lockout_duration_minutes
+                )
                 was_locked = True
+
+            if self.user_audit_service is not None:
+                await self.user_audit_service.record_event(
+                    session,
+                    event_category="authentication",
+                    event_type="user.login_failed",
+                    event_source="auth_service.login",
+                    subject_user_id=user.id,
+                    subject_email_snapshot=user.email,
+                    root_entity_id=user.root_entity_id,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    before={
+                        "failed_login_attempts": previous_failed_attempts,
+                        "locked_until": previous_locked_until,
+                    },
+                    after={
+                        "failed_login_attempts": user.failed_login_attempts,
+                        "locked_until": user.locked_until,
+                    },
+                    metadata={
+                        "failure_reason": "invalid_password",
+                        "max_attempts": self.config.max_login_attempts,
+                        "was_locked": was_locked,
+                    },
+                    occurred_at=failure_recorded_at,
+                )
 
             await session.flush()
             await session.commit()
@@ -201,9 +237,13 @@ class AuthService:
             user.hashed_password = upgraded_hash
 
         # Successful login - reset failed attempts
+        previous_last_login = user.last_login
+        previous_failed_attempts = user.failed_login_attempts
+        previous_locked_until = user.locked_until
         user.failed_login_attempts = 0
         user.locked_until = None
-        user.last_login = datetime.now(timezone.utc)
+        login_recorded_at = datetime.now(timezone.utc)
+        user.last_login = login_recorded_at
         await session.flush()
 
         # Log successful login
@@ -255,6 +295,35 @@ class AuthService:
             session.add(refresh_token_model)
             await session.flush()
 
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="authentication",
+                event_type="user.login",
+                event_source="auth_service.login",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                before={
+                    "last_login": previous_last_login,
+                    "failed_login_attempts": previous_failed_attempts,
+                    "locked_until": previous_locked_until,
+                },
+                after={
+                    "last_login": user.last_login,
+                    "failed_login_attempts": user.failed_login_attempts,
+                    "locked_until": user.locked_until,
+                },
+                metadata={
+                    "auth_method": "password",
+                    "device_name": device_name,
+                    "refresh_token_stored": self.config.store_refresh_tokens,
+                },
+                occurred_at=login_recorded_at,
+            )
+
         # Return user and tokens
         token_pair = TokenPair(
             access_token=access_token,
@@ -272,6 +341,7 @@ class AuthService:
         device_name: Optional[str] = None,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
+        auth_method: Optional[str] = None,
     ) -> TokenPair:
         """
         Create a token pair for an already-authenticated user.
@@ -279,7 +349,22 @@ class AuthService:
         This is intended for non-password authentication flows
         (for example, OAuth callbacks).
         """
+        if user.is_locked:
+            raise AccountLockedError(
+                message=(
+                    "Account is locked until "
+                    f"{user.locked_until.isoformat() if user.locked_until else 'unknown'}"
+                ),
+                details={
+                    "locked_until": user.locked_until.isoformat() if user.locked_until else None,
+                    "reason": "Too many failed login attempts",
+                },
+            )
         self._check_user_status(user)
+
+        previous_last_login = user.last_login
+        login_recorded_at = datetime.now(timezone.utc)
+        user.last_login = login_recorded_at
 
         access_token, refresh_token_value = create_token_pair(
             user_id=str(user.id),
@@ -302,6 +387,27 @@ class AuthService:
             )
             session.add(refresh_token_model)
             await session.flush()
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="authentication",
+                event_type="user.login",
+                event_source="auth_service.create_tokens_for_user",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                before={"last_login": previous_last_login},
+                after={"last_login": user.last_login},
+                metadata={
+                    "auth_method": auth_method or device_name or "token_exchange",
+                    "device_name": device_name,
+                    "refresh_token_stored": self.config.store_refresh_tokens,
+                },
+                occurred_at=login_recorded_at,
+            )
 
         return TokenPair(
             access_token=access_token,
@@ -659,9 +765,31 @@ class AuthService:
         expires = datetime.now(timezone.utc) + timedelta(hours=1)
 
         # Store hashed token
+        previous_reset_expires = user.password_reset_expires
         user.password_reset_token = hashed_token
         user.password_reset_expires = expires
         await session.flush()
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="credential",
+                event_type="user.password_reset_requested",
+                event_source="auth_service.generate_reset_token",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                before={
+                    "password_reset_requested": previous_reset_expires is not None,
+                    "password_reset_expires": previous_reset_expires,
+                },
+                after={
+                    "password_reset_requested": True,
+                    "password_reset_expires": user.password_reset_expires,
+                },
+                metadata={"delivery_channel": "email"},
+                occurred_at=datetime.now(timezone.utc),
+            )
 
         return plain_token
 
@@ -713,9 +841,14 @@ class AuthService:
             )
 
         # Change password
+        previous_last_password_change = user.last_password_change
+        previous_failed_attempts = user.failed_login_attempts
+        previous_locked_until = user.locked_until
+        previous_reset_expires = user.password_reset_expires
         hashed_password = generate_password_hash(new_password, self.config)
         user.hashed_password = hashed_password
-        user.last_password_change = datetime.now(timezone.utc)
+        reset_recorded_at = datetime.now(timezone.utc)
+        user.last_password_change = reset_recorded_at
 
         # Reset failed login attempts
         user.failed_login_attempts = 0
@@ -725,7 +858,7 @@ class AuthService:
         user.password_reset_token = None
         user.password_reset_expires = None
 
-        await self.revoke_all_user_tokens(
+        revoked_token_count = await self.revoke_all_user_tokens(
             session,
             user.id,
             reason="Password reset",
@@ -739,8 +872,33 @@ class AuthService:
                 data={
                     "user_id": str(user.id),
                     "email": user.email,
-                    "reset_at": datetime.now(timezone.utc).isoformat(),
+                    "reset_at": reset_recorded_at.isoformat(),
                 },
+            )
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="credential",
+                event_type="user.password_reset_completed",
+                event_source="auth_service.reset_password",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                before={
+                    "last_password_change": previous_last_password_change,
+                    "failed_login_attempts": previous_failed_attempts,
+                    "locked_until": previous_locked_until,
+                    "password_reset_expires": previous_reset_expires,
+                },
+                after={
+                    "last_password_change": user.last_password_change,
+                    "failed_login_attempts": user.failed_login_attempts,
+                    "locked_until": user.locked_until,
+                    "password_reset_expires": user.password_reset_expires,
+                },
+                metadata={"revoked_refresh_token_count": revoked_token_count},
+                occurred_at=reset_recorded_at,
             )
 
         return user
@@ -864,11 +1022,15 @@ class AuthService:
             )
 
         # Set password and activate
+        previous_status = user.status
+        previous_email_verified = user.email_verified
+        previous_invite_expires = user.invite_token_expires
         hashed_password = generate_password_hash(new_password, self.config)
         user.hashed_password = hashed_password
         user.status = UserStatus.ACTIVE
         user.email_verified = True
-        user.last_password_change = datetime.now(timezone.utc)
+        accepted_at = datetime.now(timezone.utc)
+        user.last_password_change = accepted_at
 
         # Clear invite token fields
         user.invite_token = None
@@ -883,8 +1045,30 @@ class AuthService:
                 data={
                     "user_id": str(user.id),
                     "email": user.email,
-                    "accepted_at": datetime.now(timezone.utc).isoformat(),
+                    "accepted_at": accepted_at.isoformat(),
                 },
+            )
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="invitation",
+                event_type="user.invite_accepted",
+                event_source="auth_service.accept_invite",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                before={
+                    "status": previous_status,
+                    "email_verified": previous_email_verified,
+                    "invite_token_expires": previous_invite_expires,
+                },
+                after={
+                    "status": user.status,
+                    "email_verified": user.email_verified,
+                    "invite_token_expires": user.invite_token_expires,
+                },
+                occurred_at=accepted_at,
             )
 
         return user

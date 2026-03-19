@@ -7,14 +7,15 @@ Uses SQLAlchemy for PostgreSQL backend.
 """
 
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
 if TYPE_CHECKING:
     from outlabs_auth.observability import ObservabilityService
 
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy import delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -33,10 +34,24 @@ from outlabs_auth.models.sql.entity_membership import (
     EntityMembership,
     EntityMembershipRole,
 )
-from outlabs_auth.models.sql.enums import MembershipStatus, RoleScope
+from outlabs_auth.models.sql.entity_membership_history import EntityMembershipHistory
+from outlabs_auth.models.sql.enums import DefinitionStatus, MembershipStatus, RoleScope
 from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.services.base import BaseService
+
+
+@dataclass
+class OrphanedUserRecord:
+    """Projected orphaned-user discovery row."""
+
+    user: User
+    active_membership_count: int
+    total_membership_count: int
+    last_event_type: Optional[str]
+    last_event_at: Optional[datetime]
+    last_entity_id: Optional[UUID]
+    last_entity_name: Optional[str]
 
 
 class MembershipService(BaseService[EntityMembership]):
@@ -54,6 +69,7 @@ class MembershipService(BaseService[EntityMembership]):
         self,
         config: AuthConfig,
         observability: Optional["ObservabilityService"] = None,
+        user_audit_service: Optional[Any] = None,
     ):
         """
         Initialize MembershipService.
@@ -65,6 +81,7 @@ class MembershipService(BaseService[EntityMembership]):
         super().__init__(EntityMembership)
         self.config = config
         self.observability = observability
+        self.user_audit_service = user_audit_service
 
     async def add_member(
         self,
@@ -206,6 +223,9 @@ class MembershipService(BaseService[EntityMembership]):
                 )
 
         if existing:
+            previous_snapshot = await self._build_membership_history_snapshot(session, existing)
+            previous_reason = existing.revocation_reason
+
             # Update existing membership
             existing.status = status
             existing.valid_from = valid_from
@@ -232,6 +252,22 @@ class MembershipService(BaseService[EntityMembership]):
 
             await session.flush()
             await session.refresh(existing, ["roles"])
+            current_snapshot = await self._build_membership_history_snapshot(session, existing)
+            event_type = self._determine_membership_event_type(
+                previous_snapshot,
+                current_snapshot,
+                reason_changed=previous_reason != existing.revocation_reason,
+            )
+            if event_type is not None:
+                await self._record_membership_history(
+                    session,
+                    membership=existing,
+                    event_type=event_type,
+                    previous_snapshot=previous_snapshot,
+                    actor_user_id=joined_by_id,
+                    reason=existing.revocation_reason,
+                    event_source="membership_service.add_member",
+                )
 
             # Log observability for update
             if self.observability:
@@ -272,6 +308,14 @@ class MembershipService(BaseService[EntityMembership]):
 
         await session.flush()
         await session.refresh(membership, ["roles"])
+        await self._record_membership_history(
+            session,
+            membership=membership,
+            event_type="created",
+            actor_user_id=joined_by_id,
+            reason=membership.revocation_reason,
+            event_source="membership_service.add_member",
+        )
 
         # Log observability for add
         if self.observability:
@@ -319,6 +363,7 @@ class MembershipService(BaseService[EntityMembership]):
             session,
             EntityMembership.user_id == user_id,
             EntityMembership.entity_id == entity_id,
+            options=[selectinload(EntityMembership.roles)],
         )
 
         if not membership:
@@ -327,19 +372,22 @@ class MembershipService(BaseService[EntityMembership]):
                 details={"entity_id": str(entity_id), "user_id": str(user_id)},
             )
 
-        await session.execute(
-            update(EntityMembership)
-            .where(EntityMembership.id == membership.id)
-            .values(
-                status=MembershipStatus.REVOKED,
-                revoked_at=func.now(),
-                revoked_by_id=revoked_by_id,
-                revocation_reason=reason,
-                updated_at=func.now(),
-            )
-        )
+        previous_snapshot = await self._build_membership_history_snapshot(session, membership)
+        membership.status = MembershipStatus.REVOKED
+        membership.revoked_at = datetime.now(timezone.utc)
+        membership.revoked_by_id = revoked_by_id
+        membership.revocation_reason = reason
 
         await session.flush()
+        await self._record_membership_history(
+            session,
+            membership=membership,
+            event_type="revoked",
+            previous_snapshot=previous_snapshot,
+            actor_user_id=revoked_by_id,
+            reason=reason,
+            event_source="membership_service.remove_member",
+        )
 
         # Log observability
         if self.observability:
@@ -408,6 +456,8 @@ class MembershipService(BaseService[EntityMembership]):
                 details={"entity_id": str(entity_id), "user_id": str(user_id)},
             )
 
+        previous_snapshot = await self._build_membership_history_snapshot(session, membership)
+        previous_reason = membership.revocation_reason
         next_valid_from = valid_from if update_valid_from else membership.valid_from
         next_valid_until = valid_until if update_valid_until else membership.valid_until
         if next_valid_from and next_valid_until and next_valid_until < next_valid_from:
@@ -482,6 +532,22 @@ class MembershipService(BaseService[EntityMembership]):
 
         await session.flush()
         await session.refresh(membership, ["roles"])
+        current_snapshot = await self._build_membership_history_snapshot(session, membership)
+        event_type = self._determine_membership_event_type(
+            previous_snapshot,
+            current_snapshot,
+            reason_changed=previous_reason != membership.revocation_reason,
+        )
+        if event_type is not None:
+            await self._record_membership_history(
+                session,
+                membership=membership,
+                event_type=event_type,
+                previous_snapshot=previous_snapshot,
+                actor_user_id=changed_by_id,
+                reason=membership.revocation_reason,
+                event_source="membership_service.update_membership",
+            )
         await self._invalidate_membership_permissions_cache(user_id)
 
         return membership
@@ -859,6 +925,7 @@ class MembershipService(BaseService[EntityMembership]):
             session,
             EntityMembership.user_id == user_id,
             EntityMembership.entity_id == entity_id,
+            options=[selectinload(EntityMembership.roles)],
         )
 
         if not membership:
@@ -867,10 +934,19 @@ class MembershipService(BaseService[EntityMembership]):
                 details={"entity_id": str(entity_id), "user_id": str(user_id)},
             )
 
+        previous_snapshot = await self._build_membership_history_snapshot(session, membership)
         membership.status = MembershipStatus.SUSPENDED
         membership.revocation_reason = reason
 
         await session.flush()
+        await self._record_membership_history(
+            session,
+            membership=membership,
+            event_type="suspended",
+            previous_snapshot=previous_snapshot,
+            reason=reason,
+            event_source="membership_service.suspend_membership",
+        )
 
         # Log observability
         if self.observability:
@@ -912,6 +988,7 @@ class MembershipService(BaseService[EntityMembership]):
             session,
             EntityMembership.user_id == user_id,
             EntityMembership.entity_id == entity_id,
+            options=[selectinload(EntityMembership.roles)],
         )
 
         if not membership:
@@ -920,12 +997,20 @@ class MembershipService(BaseService[EntityMembership]):
                 details={"entity_id": str(entity_id), "user_id": str(user_id)},
             )
 
+        previous_snapshot = await self._build_membership_history_snapshot(session, membership)
         membership.status = MembershipStatus.ACTIVE
         membership.revocation_reason = None
         membership.revoked_at = None
         membership.revoked_by_id = None
 
         await session.flush()
+        await self._record_membership_history(
+            session,
+            membership=membership,
+            event_type="reactivated",
+            previous_snapshot=previous_snapshot,
+            event_source="membership_service.reactivate_membership",
+        )
 
         # Log observability
         if self.observability:
@@ -941,11 +1026,461 @@ class MembershipService(BaseService[EntityMembership]):
         await self._invalidate_membership_permissions_cache(user_id)
         return membership
 
+    async def revoke_memberships_for_user(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        *,
+        revoked_by_id: Optional[UUID] = None,
+        reason: Optional[str] = None,
+        event_source: str = "user_service.delete_user",
+    ) -> List[EntityMembership]:
+        """Revoke all non-revoked memberships for a user and record history."""
+        stmt = (
+            select(EntityMembership)
+            .where(
+                EntityMembership.user_id == user_id,
+                EntityMembership.status != MembershipStatus.REVOKED,
+            )
+            .options(selectinload(EntityMembership.roles))
+        )
+        result = await session.execute(stmt)
+        memberships = list(result.scalars().all())
+        if not memberships:
+            return []
+
+        event_at = datetime.now(timezone.utc)
+        previous_snapshots: Dict[UUID, Dict[str, Any]] = {}
+
+        for membership in memberships:
+            previous_snapshots[membership.id] = await self._build_membership_history_snapshot(
+                session,
+                membership,
+            )
+            membership.status = MembershipStatus.REVOKED
+            membership.revoked_at = event_at
+            membership.revoked_by_id = revoked_by_id
+            membership.revocation_reason = reason
+
+        await session.flush()
+
+        for membership in memberships:
+            await self._record_membership_history(
+                session,
+                membership=membership,
+                event_type="revoked",
+                previous_snapshot=previous_snapshots[membership.id],
+                actor_user_id=revoked_by_id,
+                reason=reason,
+                event_source=event_source,
+                event_at=event_at,
+            )
+
+        await self._invalidate_membership_permissions_cache(user_id)
+        return memberships
+
+    async def archive_memberships_for_entity(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        *,
+        revoked_by_id: Optional[UUID] = None,
+        reason: Optional[str] = None,
+        event_source: str = "entity_service.delete_entity",
+    ) -> List[EntityMembership]:
+        """Revoke non-revoked memberships on an archived entity and record history."""
+        stmt = (
+            select(EntityMembership)
+            .where(
+                EntityMembership.entity_id == entity_id,
+                EntityMembership.status != MembershipStatus.REVOKED,
+            )
+            .options(selectinload(EntityMembership.roles))
+        )
+        result = await session.execute(stmt)
+        memberships = list(result.scalars().all())
+        if not memberships:
+            return []
+
+        event_at = datetime.now(timezone.utc)
+        previous_snapshots: Dict[UUID, Dict[str, Any]] = {}
+        affected_user_ids: set[UUID] = set()
+
+        for membership in memberships:
+            previous_snapshots[membership.id] = await self._build_membership_history_snapshot(session, membership)
+            membership.status = MembershipStatus.REVOKED
+            membership.revoked_at = event_at
+            membership.revoked_by_id = revoked_by_id
+            membership.revocation_reason = reason
+            affected_user_ids.add(membership.user_id)
+
+        await session.flush()
+
+        for membership in memberships:
+            await self._record_membership_history(
+                session,
+                membership=membership,
+                event_type="entity_archived",
+                previous_snapshot=previous_snapshots[membership.id],
+                actor_user_id=revoked_by_id,
+                reason=reason,
+                event_source=event_source,
+                event_at=event_at,
+            )
+
+        for user_id in affected_user_ids:
+            await self._invalidate_membership_permissions_cache(user_id)
+
+        return memberships
+
+    async def get_user_membership_history(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        *,
+        page: int = 1,
+        limit: int = 50,
+        entity_id: Optional[UUID] = None,
+        event_type: Optional[str] = None,
+    ) -> Tuple[List[EntityMembershipHistory], int]:
+        """Return paginated membership lifecycle history for a user."""
+        filters = [EntityMembershipHistory.user_id == user_id]
+        if entity_id is not None:
+            filters.append(EntityMembershipHistory.entity_id == entity_id)
+        if event_type:
+            filters.append(EntityMembershipHistory.event_type == event_type)
+
+        count_stmt = select(func.count()).select_from(EntityMembershipHistory).where(*filters)
+        count_result = await session.execute(count_stmt)
+        total_count = count_result.scalar() or 0
+
+        skip = (page - 1) * limit
+        stmt = (
+            select(EntityMembershipHistory)
+            .where(*filters)
+            .order_by(EntityMembershipHistory.event_at.desc(), EntityMembershipHistory.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all()), total_count
+
+    async def list_orphaned_users(
+        self,
+        session: AsyncSession,
+        *,
+        page: int = 1,
+        limit: int = 20,
+        search: Optional[str] = None,
+        root_entity_id: Optional[UUID] = None,
+    ) -> Tuple[List[OrphanedUserRecord], int]:
+        """List users with no active memberships but historical assignment rows."""
+        active_memberships = (
+            select(func.count(EntityMembership.id))
+            .where(
+                EntityMembership.user_id == User.id,
+                EntityMembership.status == MembershipStatus.ACTIVE,
+            )
+            .correlate(User)
+            .scalar_subquery()
+        )
+        any_memberships = (
+            select(func.count(EntityMembership.id))
+            .where(EntityMembership.user_id == User.id)
+            .correlate(User)
+            .scalar_subquery()
+        )
+
+        filters = [active_memberships == 0, any_memberships > 0]
+        if root_entity_id is not None:
+            filters.append(User.root_entity_id == root_entity_id)
+        if search:
+            pattern = f"%{search}%"
+            filters.append(
+                or_(
+                    User.email.ilike(pattern),
+                    User.first_name.ilike(pattern),
+                    User.last_name.ilike(pattern),
+                )
+            )
+
+        count_stmt = select(func.count()).select_from(User).where(*filters)
+        count_result = await session.execute(count_stmt)
+        total_count = count_result.scalar() or 0
+
+        skip = (page - 1) * limit
+        users_stmt = (
+            select(User)
+            .where(*filters)
+            .order_by(User.updated_at.desc(), User.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        users_result = await session.execute(users_stmt)
+        users = list(users_result.scalars().all())
+        if not users:
+            return [], total_count
+
+        user_ids = [user.id for user in users]
+
+        membership_count_stmt = (
+            select(
+                EntityMembership.user_id,
+                func.count(EntityMembership.id),
+            )
+            .where(EntityMembership.user_id.in_(user_ids))
+            .group_by(EntityMembership.user_id)
+        )
+        membership_count_result = await session.execute(membership_count_stmt)
+        membership_counts = {user_id: count for user_id, count in membership_count_result.all()}
+
+        history_stmt = (
+            select(EntityMembershipHistory)
+            .where(EntityMembershipHistory.user_id.in_(user_ids))
+            .order_by(
+                EntityMembershipHistory.user_id,
+                EntityMembershipHistory.event_at.desc(),
+                EntityMembershipHistory.created_at.desc(),
+            )
+        )
+        history_result = await session.execute(history_stmt)
+        history_rows = list(history_result.scalars().all())
+        latest_history_by_user: Dict[UUID, EntityMembershipHistory] = {}
+        for row in history_rows:
+            latest_history_by_user.setdefault(row.user_id, row)
+
+        records = [
+            OrphanedUserRecord(
+                user=user,
+                active_membership_count=0,
+                total_membership_count=int(membership_counts.get(user.id, 0) or 0),
+                last_event_type=(
+                    latest_history_by_user[user.id].event_type
+                    if user.id in latest_history_by_user
+                    else None
+                ),
+                last_event_at=(
+                    latest_history_by_user[user.id].event_at
+                    if user.id in latest_history_by_user
+                    else None
+                ),
+                last_entity_id=(
+                    latest_history_by_user[user.id].entity_id
+                    if user.id in latest_history_by_user
+                    else None
+                ),
+                last_entity_name=(
+                    latest_history_by_user[user.id].entity_display_name
+                    if user.id in latest_history_by_user
+                    else None
+                ),
+            )
+            for user in users
+        ]
+        return records, total_count
+
     async def _invalidate_membership_permissions_cache(self, user_id: UUID) -> None:
         cache_service = getattr(self, "cache_service", None)
         if cache_service is None:
             return
         await cache_service.publish_user_permissions_invalidation(str(user_id))
+
+    async def _record_membership_history(
+        self,
+        session: AsyncSession,
+        *,
+        membership: EntityMembership,
+        event_type: str,
+        previous_snapshot: Optional[Dict[str, Any]] = None,
+        actor_user_id: Optional[UUID] = None,
+        reason: Optional[str] = None,
+        event_source: str = "membership_service",
+        event_at: Optional[datetime] = None,
+    ) -> EntityMembershipHistory:
+        """Append one membership lifecycle history event."""
+        current_snapshot = await self._build_membership_history_snapshot(session, membership)
+        history = EntityMembershipHistory(
+            membership_id=membership.id,
+            user_id=membership.user_id,
+            entity_id=membership.entity_id,
+            root_entity_id=current_snapshot["root_entity_id"],
+            actor_user_id=actor_user_id,
+            event_type=event_type,
+            event_source=event_source,
+            event_at=event_at or datetime.now(timezone.utc),
+            reason=reason,
+            status=current_snapshot["status"],
+            previous_status=previous_snapshot["status"] if previous_snapshot else None,
+            valid_from=current_snapshot["valid_from"],
+            valid_until=current_snapshot["valid_until"],
+            previous_valid_from=previous_snapshot["valid_from"] if previous_snapshot else None,
+            previous_valid_until=previous_snapshot["valid_until"] if previous_snapshot else None,
+            role_ids=current_snapshot["role_ids"],
+            previous_role_ids=previous_snapshot["role_ids"] if previous_snapshot else [],
+            role_names=current_snapshot["role_names"],
+            previous_role_names=previous_snapshot["role_names"] if previous_snapshot else [],
+            entity_display_name=current_snapshot["entity_display_name"],
+            entity_path=current_snapshot["entity_path"],
+            root_entity_name=current_snapshot["root_entity_name"],
+        )
+        session.add(history)
+        await session.flush()
+        await self._record_user_membership_audit_event(
+            session,
+            membership=membership,
+            history_event_type=event_type,
+            event_source=event_source,
+            actor_user_id=actor_user_id,
+            reason=reason,
+            previous_snapshot=previous_snapshot,
+            current_snapshot=current_snapshot,
+            occurred_at=history.event_at,
+        )
+        return history
+
+    async def _record_user_membership_audit_event(
+        self,
+        session: AsyncSession,
+        *,
+        membership: EntityMembership,
+        history_event_type: str,
+        event_source: str,
+        actor_user_id: Optional[UUID] = None,
+        reason: Optional[str] = None,
+        previous_snapshot: Optional[Dict[str, Any]] = None,
+        current_snapshot: Dict[str, Any],
+        occurred_at: Optional[datetime] = None,
+    ) -> None:
+        if self.user_audit_service is None:
+            return
+
+        audit_event_type = self._map_membership_event_type_to_user_audit_type(history_event_type)
+        if audit_event_type is None:
+            return
+
+        user = await session.get(User, membership.user_id)
+        if user is None:
+            return
+
+        await self.user_audit_service.record_event(
+            session,
+            event_category="membership",
+            event_type=audit_event_type,
+            event_source=event_source,
+            actor_user_id=actor_user_id,
+            subject_user_id=user.id,
+            subject_email_snapshot=user.email,
+            root_entity_id=current_snapshot["root_entity_id"] or user.root_entity_id,
+            entity_id=membership.entity_id,
+            reason=reason,
+            before=previous_snapshot,
+            after=current_snapshot,
+            metadata={
+                "membership_id": membership.id,
+                "history_event_type": history_event_type,
+                "entity_display_name": current_snapshot["entity_display_name"],
+                "entity_path": current_snapshot["entity_path"],
+                "root_entity_name": current_snapshot["root_entity_name"],
+            },
+            occurred_at=occurred_at,
+        )
+
+    async def _build_membership_history_snapshot(
+        self,
+        session: AsyncSession,
+        membership: EntityMembership,
+    ) -> Dict[str, Any]:
+        """Build a serializable snapshot of the current membership state."""
+        roles = list(getattr(membership, "roles", []) or [])
+        if not roles:
+            await session.refresh(membership, ["roles"])
+            roles = list(getattr(membership, "roles", []) or [])
+
+        roles = sorted(roles, key=lambda role: str(role.id))
+        entity = await session.get(Entity, membership.entity_id)
+        entity_path = await self._get_entity_path_display_names(session, membership.entity_id)
+        root_entity_id = await self._get_root_entity_id(session, membership.entity_id)
+        root_entity = await session.get(Entity, root_entity_id) if root_entity_id else None
+
+        return {
+            "status": self._membership_status_value(membership.status),
+            "valid_from": membership.valid_from,
+            "valid_until": membership.valid_until,
+            "role_ids": [role.id for role in roles],
+            "role_names": [
+                (getattr(role, "display_name", None) or role.name)
+                for role in roles
+                if getattr(role, "name", None)
+            ],
+            "entity_display_name": entity.display_name if entity else None,
+            "entity_path": entity_path,
+            "root_entity_id": root_entity_id,
+            "root_entity_name": (
+                root_entity.display_name
+                if root_entity is not None
+                else (entity_path[0] if entity_path else None)
+            ),
+        }
+
+    async def _get_entity_path_display_names(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+    ) -> List[str]:
+        """Resolve the display path from root to entity."""
+        stmt = (
+            select(Entity.display_name)
+            .join(EntityClosure, EntityClosure.ancestor_id == Entity.id)
+            .where(EntityClosure.descendant_id == entity_id)
+            .order_by(EntityClosure.depth.desc())
+        )
+        result = await session.execute(stmt)
+        return [display_name for (display_name,) in result.all() if display_name]
+
+    def _determine_membership_event_type(
+        self,
+        previous_snapshot: Dict[str, Any],
+        current_snapshot: Dict[str, Any],
+        *,
+        reason_changed: bool = False,
+    ) -> Optional[str]:
+        """Classify the lifecycle event from before/after snapshots."""
+        previous_status = previous_snapshot["status"]
+        current_status = current_snapshot["status"]
+
+        if previous_status != current_status:
+            if current_status == MembershipStatus.REVOKED.value:
+                return "revoked"
+            if current_status == MembershipStatus.SUSPENDED.value:
+                return "suspended"
+            if current_status == MembershipStatus.ACTIVE.value:
+                return "reactivated"
+            return "updated"
+
+        if previous_snapshot["role_ids"] != current_snapshot["role_ids"]:
+            return "updated"
+        if previous_snapshot["valid_from"] != current_snapshot["valid_from"]:
+            return "updated"
+        if previous_snapshot["valid_until"] != current_snapshot["valid_until"]:
+            return "updated"
+        if reason_changed:
+            return "updated"
+
+        return None
+
+    def _map_membership_event_type_to_user_audit_type(self, history_event_type: str) -> Optional[str]:
+        return {
+            "created": "user.membership_created",
+            "updated": "user.membership_updated",
+            "suspended": "user.membership_suspended",
+            "reactivated": "user.membership_reactivated",
+            "revoked": "user.membership_revoked",
+            "entity_archived": "user.membership_entity_archived",
+        }.get(history_event_type)
+
+    def _membership_status_value(self, value: Any) -> str:
+        """Normalize enum-or-string membership values into API-safe strings."""
+        return getattr(value, "value", value)
 
     # =========================================================================
     # Helper Methods for Root Entity Validation
@@ -1005,6 +1540,9 @@ class MembershipService(BaseService[EntityMembership]):
         Returns:
             bool: True if role can be used in this entity's context
         """
+        if getattr(role, "status", DefinitionStatus.ACTIVE) != DefinitionStatus.ACTIVE:
+            return False
+
         if not self._allows_entity_type(role, entity_type):
             return False
 
@@ -1085,6 +1623,7 @@ class MembershipService(BaseService[EntityMembership]):
         from sqlalchemy import and_, or_
 
         role_filter = and_(
+            Role.status == DefinitionStatus.ACTIVE,
             Role.is_auto_assigned == True,
             or_(
                 # Entity-only auto-assigned for this specific entity
@@ -1135,6 +1674,15 @@ class MembershipService(BaseService[EntityMembership]):
             raise RoleNotFoundError(
                 message="Role not found",
                 details={"role_id": str(role_id)},
+            )
+
+        if getattr(role, "status", DefinitionStatus.ACTIVE) != DefinitionStatus.ACTIVE:
+            raise InvalidInputError(
+                message="Only active roles can be auto-assigned",
+                details={
+                    "role_id": str(role_id),
+                    "status": getattr(role.status, "value", role.status),
+                },
             )
 
         if not role.is_auto_assigned:

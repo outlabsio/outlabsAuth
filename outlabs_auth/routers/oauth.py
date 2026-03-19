@@ -13,10 +13,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from outlabs_auth.core.exceptions import InvalidInputError
 from outlabs_auth.models.sql.social_account import SocialAccount
 from outlabs_auth.oauth.state import decode_state_token, generate_state_token
 from outlabs_auth.routers.oauth_utils import encrypt_provider_token, get_oauth_user_info
 from outlabs_auth.schemas.oauth import OAuthAuthorizeResponse
+from outlabs_auth.utils.validation import validate_email
 
 
 def _normalize_expires_at(expires_at: Optional[Any]) -> Optional[datetime]:
@@ -65,6 +67,16 @@ def _append_auth_method(user: Any, provider: str) -> None:
     if provider_method not in methods:
         methods.append(provider_method)
         user.auth_methods = methods
+
+
+def _normalize_oauth_email(email: Optional[str]) -> Optional[str]:
+    """Return a normalized usable OAuth email or None when absent/invalid."""
+    if email is None:
+        return None
+    try:
+        return validate_email(email)
+    except InvalidInputError:
+        return None
 
 
 def get_oauth_router(
@@ -194,6 +206,7 @@ def get_oauth_router(
             device_name=f"oauth:{oauth_client.name}",
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
+            auth_method=f"oauth:{oauth_client.name}",
         )
 
         await auth.user_service.on_after_login(user, request)
@@ -214,7 +227,7 @@ async def oauth_callback(
     provider: str,
     access_token: str,
     account_id: str,
-    account_email: str,
+    account_email: Optional[str],
     account_email_verified: bool,
     refresh_token: Optional[str] = None,
     expires_at: Optional[int] = None,
@@ -226,6 +239,8 @@ async def oauth_callback(
     token_expires_at = _normalize_expires_at(expires_at)
     now = datetime.now(timezone.utc)
     store_provider_tokens = bool(getattr(auth.config, "store_oauth_provider_tokens", False))
+    normalized_email = _normalize_oauth_email(account_email)
+
     if associate_by_email and not account_email_verified:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -259,7 +274,8 @@ async def oauth_callback(
                 detail="OAuth account is linked to an invalid user",
             )
 
-        social_account.provider_email = account_email
+        if normalized_email is not None:
+            social_account.provider_email = normalized_email
         social_account.provider_email_verified = account_email_verified
         social_account.update_tokens(
             access_token=provider_access_token,
@@ -271,15 +287,21 @@ async def oauth_callback(
         await session.flush()
         return user
 
+    if normalized_email is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email not available from OAuth provider",
+        )
+
     # 2) Existing local user by email.
-    user = await auth.user_service.get_user_by_email(session, account_email)
+    user = await auth.user_service.get_user_by_email(session, normalized_email)
     created_user = False
 
     if user is None:
         random_password = _generate_oauth_placeholder_password(auth.config)
         user = await auth.user_service.create_user(
             session=session,
-            email=account_email,
+            email=normalized_email,
             password=random_password,
         )
         user.email_verified = account_email_verified if is_verified_by_default else False
@@ -304,7 +326,7 @@ async def oauth_callback(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="This provider is already linked to a different account",
             )
-        existing_provider_link.provider_email = account_email
+        existing_provider_link.provider_email = normalized_email
         existing_provider_link.provider_email_verified = account_email_verified
         existing_provider_link.update_tokens(
             access_token=provider_access_token,
@@ -318,7 +340,7 @@ async def oauth_callback(
                 user_id=user.id,
                 provider=provider,
                 provider_user_id=account_id,
-                provider_email=account_email,
+                provider_email=normalized_email,
                 provider_email_verified=account_email_verified,
                 access_token=provider_access_token,
                 refresh_token=provider_refresh_token,

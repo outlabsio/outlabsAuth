@@ -40,6 +40,10 @@ from outlabs_auth.schemas.membership import (
     MembershipResponse,
     MembershipUpdateRequest,
 )
+from outlabs_auth.schemas.membership_history import (
+    MembershipHistoryEventResponse,
+    OrphanedUserResponse,
+)
 
 # OAuth schemas
 from outlabs_auth.schemas.oauth import (
@@ -70,6 +74,7 @@ from outlabs_auth.schemas.user import (
     UserResponse,
     UserUpdateRequest,
 )
+from outlabs_auth.schemas.user_audit import UserAuditEventResponse
 
 # UserRoleMembership schemas (SimpleRBAC)
 from outlabs_auth.schemas.user_role_membership import (
@@ -98,6 +103,7 @@ __all__ = [
     "UserCreateRequest",
     "UserUpdateRequest",
     "ChangePasswordRequest",
+    "UserAuditEventResponse",
     # Role
     "RoleResponse",
     "RoleCreateRequest",
@@ -120,6 +126,8 @@ __all__ = [
     "MembershipResponse",
     "MembershipCreateRequest",
     "MembershipUpdateRequest",
+    "MembershipHistoryEventResponse",
+    "OrphanedUserResponse",
     # API Key
     "ApiKeyResponse",
     "ApiKeyCreateRequest",

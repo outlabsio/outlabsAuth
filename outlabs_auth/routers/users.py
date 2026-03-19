@@ -18,8 +18,13 @@ from outlabs_auth.response_builders import (
     build_user_responses,
 )
 from outlabs_auth.schemas.common import PaginatedResponse
+from outlabs_auth.schemas.membership_history import (
+    MembershipHistoryEventResponse,
+    OrphanedUserResponse,
+)
 from outlabs_auth.schemas.permission import PermissionResponse, UserPermissionSource
 from outlabs_auth.schemas.role import RoleResponse
+from outlabs_auth.schemas.user_audit import UserAuditEventResponse
 from outlabs_auth.schemas.user import (
     AdminResetPasswordRequest,
     ChangePasswordRequest,
@@ -109,6 +114,55 @@ def get_users_router(
             )
 
         return target_user
+
+    def _serialize_membership_history_event(event: Any) -> MembershipHistoryEventResponse:
+        return MembershipHistoryEventResponse(
+            id=str(event.id),
+            membership_id=str(event.membership_id),
+            user_id=str(event.user_id),
+            entity_id=str(event.entity_id),
+            root_entity_id=str(event.root_entity_id) if event.root_entity_id else None,
+            actor_user_id=str(event.actor_user_id) if event.actor_user_id else None,
+            event_type=event.event_type,
+            event_source=event.event_source,
+            event_at=event.event_at,
+            reason=event.reason,
+            status=event.status,
+            previous_status=event.previous_status,
+            valid_from=event.valid_from,
+            valid_until=event.valid_until,
+            previous_valid_from=event.previous_valid_from,
+            previous_valid_until=event.previous_valid_until,
+            role_ids=[str(role_id) for role_id in (event.role_ids or [])],
+            previous_role_ids=[str(role_id) for role_id in (event.previous_role_ids or [])],
+            role_names=list(event.role_names or []),
+            previous_role_names=list(event.previous_role_names or []),
+            entity_display_name=event.entity_display_name,
+            entity_path=list(event.entity_path or []),
+            root_entity_name=event.root_entity_name,
+        )
+
+    def _serialize_user_audit_event(event: Any) -> UserAuditEventResponse:
+        return UserAuditEventResponse(
+            id=str(event.id),
+            occurred_at=event.occurred_at,
+            event_category=event.event_category,
+            event_type=event.event_type,
+            event_source=event.event_source,
+            actor_user_id=str(event.actor_user_id) if event.actor_user_id else None,
+            subject_user_id=str(event.subject_user_id) if event.subject_user_id else None,
+            subject_email_snapshot=event.subject_email_snapshot,
+            root_entity_id=str(event.root_entity_id) if event.root_entity_id else None,
+            entity_id=str(event.entity_id) if event.entity_id else None,
+            role_id=str(event.role_id) if event.role_id else None,
+            request_id=event.request_id,
+            ip_address=event.ip_address,
+            user_agent=event.user_agent,
+            reason=event.reason,
+            before=event.before,
+            after=event.after,
+            metadata=event.event_metadata,
+        )
 
     @router.post(
         "/",
@@ -304,6 +358,7 @@ def get_users_router(
                 email=update_dict.get("email"),
                 first_name=update_dict.get("first_name"),
                 last_name=update_dict.get("last_name"),
+                changed_by_id=UUID(obs.user_id),
             )
             obs.log_event("user_updated", user_id=obs.user_id)
             await auth.user_service.on_after_update(user, update_dict, None)
@@ -354,6 +409,167 @@ def get_users_router(
             raise
 
         return None
+
+    @router.get(
+        "/orphaned",
+        response_model=PaginatedResponse[OrphanedUserResponse],
+        summary="List orphaned users",
+        description="List users with no active entity memberships but historical assignments (requires user:read permission)",
+    )
+    async def list_orphaned_users(
+        page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+        limit: int = Query(20, ge=1, le=100, description="Results per page"),
+        search: Optional[str] = Query(None, description="Search by email, first name, or last name"),
+        root_entity_id: Optional[UUID] = Query(None, description="Filter by root entity assignment"),
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
+    ):
+        """List orphaned users with latest membership history context."""
+        try:
+            await _get_actor_user_or_401(session, obs.user_id)
+
+            if not getattr(auth, "membership_service", None):
+                return PaginatedResponse(items=[], total=0, page=page, limit=limit, pages=0)
+
+            orphaned_records, total = await auth.membership_service.list_orphaned_users(
+                session,
+                page=page,
+                limit=limit,
+                search=search,
+                root_entity_id=root_entity_id,
+            )
+
+            user_payloads = await build_user_responses(session, [record.user for record in orphaned_records])
+            user_by_id = {payload.id: payload for payload in user_payloads}
+            items = [
+                OrphanedUserResponse(
+                    user=user_by_id[str(record.user.id)],
+                    active_membership_count=record.active_membership_count,
+                    total_membership_count=record.total_membership_count,
+                    last_membership_event_type=record.last_event_type,
+                    last_membership_event_at=record.last_event_at,
+                    last_entity_id=str(record.last_entity_id) if record.last_entity_id else None,
+                    last_entity_name=record.last_entity_name,
+                )
+                for record in orphaned_records
+            ]
+            pages = (total + limit - 1) // limit if total > 0 else 0
+            return PaginatedResponse(items=items, total=total, page=page, limit=limit, pages=pages)
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, page=page, limit=limit, search=search)
+            raise
+
+    @router.get(
+        "/{user_id}/membership-history",
+        response_model=PaginatedResponse[MembershipHistoryEventResponse],
+        summary="Get user membership history",
+        description="Get append-only entity membership lifecycle history for a user (requires user:read permission)",
+    )
+    async def get_user_membership_history(
+        user_id: UUID,
+        page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+        limit: int = Query(50, ge=1, le=100, description="Results per page"),
+        entity_id: Optional[UUID] = Query(None, description="Filter to one entity"),
+        event_type: Optional[str] = Query(None, description="Filter by event type"),
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
+    ):
+        """Get paginated entity membership history for a user."""
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
+
+            if not getattr(auth, "membership_service", None):
+                return PaginatedResponse(items=[], total=0, page=page, limit=limit, pages=0)
+
+            events, total = await auth.membership_service.get_user_membership_history(
+                session,
+                user_id,
+                page=page,
+                limit=limit,
+                entity_id=entity_id,
+                event_type=event_type,
+            )
+            items = [_serialize_membership_history_event(event) for event in events]
+            pages = (total + limit - 1) // limit if total > 0 else 0
+            return PaginatedResponse(items=items, total=total, page=page, limit=limit, pages=pages)
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(
+                e,
+                target_user_id=str(user_id),
+                page=page,
+                limit=limit,
+                event_type=event_type,
+            )
+            raise
+
+    @router.get(
+        "/{user_id}/audit-events",
+        response_model=PaginatedResponse[UserAuditEventResponse],
+        summary="Get user audit events",
+        description="Get high-signal user lifecycle audit events (requires user:read permission)",
+    )
+    async def get_user_audit_events(
+        user_id: UUID,
+        page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+        limit: int = Query(50, ge=1, le=100, description="Results per page"),
+        category: Optional[str] = Query(None, description="Filter by audit event category"),
+        event_type: Optional[str] = Query(None, description="Filter by audit event type"),
+        entity_id: Optional[UUID] = Query(None, description="Filter by related entity"),
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
+    ):
+        """Get paginated user-centric audit events."""
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
+
+            if not getattr(auth, "user_audit_service", None):
+                return PaginatedResponse(items=[], total=0, page=page, limit=limit, pages=0)
+
+            events, total = await auth.user_audit_service.list_user_events(
+                session,
+                user_id,
+                page=page,
+                limit=limit,
+                event_category=category,
+                event_type=event_type,
+                entity_id=entity_id,
+            )
+            items = [_serialize_user_audit_event(event) for event in events]
+            pages = (total + limit - 1) // limit if total > 0 else 0
+            return PaginatedResponse(items=items, total=total, page=page, limit=limit, pages=pages)
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(
+                e,
+                target_user_id=str(user_id),
+                page=page,
+                limit=limit,
+                category=category,
+                event_type=event_type,
+            )
+            raise
 
     @router.get(
         "/{user_id}",
@@ -416,6 +632,7 @@ def get_users_router(
                 email=update_data.get("email"),
                 first_name=update_data.get("first_name"),
                 last_name=update_data.get("last_name"),
+                changed_by_id=actor_user.id,
             )
             await auth.user_service.on_after_update(user, update_data, None)
             # TODO: Add proper observability logging for user updates
@@ -460,6 +677,7 @@ def get_users_router(
                 session,
                 user_id=user_id,
                 new_password=data.new_password,
+                changed_by_id=actor_user.id,
             )
 
             # Log admin password reset
@@ -504,7 +722,7 @@ def get_users_router(
         """
         try:
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
-            await _get_target_user_or_404(session, user_id, actor_user)
+            target_user = await _get_target_user_or_404(session, user_id, actor_user)
 
             # Convert string status to enum
             try:
@@ -520,6 +738,11 @@ def get_users_router(
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Cannot set status to 'deleted'. Use DELETE endpoint instead.",
+                )
+            if target_user.status == UserStatus.DELETED:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot change status for a deleted user. Use the restore endpoint instead.",
                 )
 
             # Parse suspended_until if provided
@@ -540,6 +763,8 @@ def get_users_router(
                 user_id=user_id,
                 status=new_status,
                 suspended_until=suspended_until,
+                changed_by_id=actor_user.id,
+                reason=data.reason,
             )
 
             # Log status change
@@ -555,6 +780,47 @@ def get_users_router(
 
             return await build_user_response_async(session, user)
 
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+    @router.post(
+        "/{user_id}/restore",
+        response_model=UserResponse,
+        summary="Restore user",
+        description="Restore a deleted user identity only (requires user:update permission)",
+    )
+    async def restore_user(
+        user_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        """Restore a deleted user without restoring access grants or credentials."""
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
+
+            user = await auth.user_service.restore_user(
+                session,
+                user_id=user_id,
+                restored_by_id=actor_user.id,
+            )
+
+            if auth.observability:
+                auth.observability.logger.info(
+                    "user_restored",
+                    target_user_id=str(user_id),
+                    restored_by=obs.user_id,
+                )
+
+            return await build_user_response_async(session, user)
         except HTTPException:
             raise
         except Exception as e:
@@ -587,7 +853,11 @@ def get_users_router(
             user = await _get_target_user_or_404(session, user_id, actor_user)
 
             await auth.user_service.on_before_delete(user, None)
-            deleted = await auth.user_service.delete_user(session, user_id)
+            deleted = await auth.user_service.delete_user(
+                session,
+                user_id,
+                deleted_by_id=actor_user.id,
+            )
             if not deleted:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
             await auth.user_service.on_after_delete(user, None)
@@ -629,7 +899,11 @@ def get_users_router(
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
             await _get_target_user_or_404(session, user_id, actor_user)
 
-            user, plain_token = await auth.user_service.resend_invite(session, user_id)
+            user, plain_token = await auth.user_service.resend_invite(
+                session,
+                user_id,
+                resent_by_id=actor_user.id,
+            )
 
             # Trigger hook
             await auth.user_service.on_after_invite(user, plain_token)

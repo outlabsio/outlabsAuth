@@ -15,9 +15,11 @@ from uuid import UUID
 if TYPE_CHECKING:
     from outlabs_auth.observability import ObservabilityService
     from outlabs_auth.services.config import ConfigService
+    from outlabs_auth.services.membership import MembershipService
     from outlabs_auth.services.redis_client import RedisClient
+    from outlabs_auth.services.role import RoleService
 
-from sqlalchemy import and_, insert, or_, select, update
+from sqlalchemy import and_, insert, or_, select
 from sqlalchemy import delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -29,8 +31,7 @@ from outlabs_auth.core.exceptions import (
 )
 from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.entity import Entity
-from outlabs_auth.models.sql.entity_membership import EntityMembership
-from outlabs_auth.models.sql.enums import EntityClass, MembershipStatus
+from outlabs_auth.models.sql.enums import EntityClass
 from outlabs_auth.services.base import BaseService
 
 
@@ -68,6 +69,8 @@ class EntityService(BaseService[Entity]):
         self.redis_client = redis_client
         self.observability = observability
         self.config_service = config_service
+        self.membership_service: Optional["MembershipService"] = None
+        self.role_service: Optional["RoleService"] = None
 
     async def create_entity(
         self,
@@ -420,7 +423,13 @@ class EntityService(BaseService[Entity]):
         await self._invalidate_permission_cache(entity.id)
         return entity
 
-    async def delete_entity(self, session: AsyncSession, entity_id: UUID, cascade: bool = False) -> bool:
+    async def delete_entity(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        cascade: bool = False,
+        deleted_by_id: Optional[UUID] = None,
+    ) -> bool:
         """
         Delete entity (soft delete by setting status to 'archived').
 
@@ -428,6 +437,7 @@ class EntityService(BaseService[Entity]):
             session: Database session
             entity_id: Entity ID
             cascade: Whether to cascade delete children
+            deleted_by_id: Optional actor performing the archive
 
         Returns:
             bool: True if deleted
@@ -462,22 +472,38 @@ class EntityService(BaseService[Entity]):
             )
 
             for child in children:
-                await self.delete_entity(session, child.id, cascade=True)
+                await self.delete_entity(
+                    session,
+                    child.id,
+                    cascade=True,
+                    deleted_by_id=deleted_by_id,
+                )
 
         # Soft delete
         entity.status = "archived"
         await session.flush()
 
+        archive_reason = f"Entity '{entity.display_name}' archived"
+
+        if self.membership_service is not None:
+            await self.membership_service.archive_memberships_for_entity(
+                session,
+                entity.id,
+                revoked_by_id=deleted_by_id,
+                reason=archive_reason,
+                event_source="entity_service.delete_entity",
+            )
+
+        if self.role_service is not None:
+            await self.role_service.revoke_memberships_for_archived_entities(
+                session,
+                [entity.id],
+                revoked_by_id=deleted_by_id,
+                reason=archive_reason,
+            )
+
         # Delete closure records
         await self._delete_closure_records(session, entity)
-
-        # Archive memberships
-        stmt = (
-            update(EntityMembership)
-            .where(EntityMembership.entity_id == entity.id)
-            .values(status=MembershipStatus.REVOKED)
-        )
-        await session.execute(stmt)
 
         # Log observability
         if self.observability:

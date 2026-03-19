@@ -510,6 +510,13 @@ async def test_user_with_role_update_can_update_role_permissions(
 ):
     """Test that user with role:update can assign permissions to roles."""
     async with auth_instance.get_session() as session:
+        root = await auth_instance.entity_service.create_entity(
+            session=session,
+            name=f"role-update-root-{uuid.uuid4().hex[:8]}",
+            display_name="Role Update Root",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
         perm = await auth_instance.permission_service.create_permission(
             session,
             name="role:update",
@@ -520,6 +527,8 @@ async def test_user_with_role_update_can_update_role_permissions(
             session,
             name="role_updater",
             display_name="Role Updater",
+            is_global=False,
+            root_entity_id=root.id,
         )
         await auth_instance.role_service.add_permissions(session, role.id, [perm.id])
 
@@ -530,6 +539,7 @@ async def test_user_with_role_update_can_update_role_permissions(
             first_name="Role",
             last_name="Updater",
             is_superuser=False,
+            root_entity_id=root.id,
         )
         await auth_instance.role_service.assign_role_to_user(session, user.id, role.id)
         await session.commit()
@@ -546,6 +556,8 @@ async def test_user_with_role_update_can_update_role_permissions(
         json={
             "name": f"perm-target-{uuid.uuid4().hex[:8]}",
             "display_name": "Perm Target Role",
+            "is_global": False,
+            "root_entity_id": str(root.id),
         },
     )
     target_role_id = create_resp.json()["id"]
@@ -950,6 +962,7 @@ async def test_entity_local_role_does_not_grant_global_role_list_with_header(
             session,
             name="local_role_reader",
             display_name="Local Role Reader",
+            is_global=False,
             scope_entity_id=uuid.UUID(entity_setup["parent_id"]),
         )
         await auth_instance.role_service.add_permissions(session, role.id, [perm.id])
@@ -1097,6 +1110,7 @@ async def test_membership_update_rejects_entity_only_role_from_ancestor(
             session=session,
             name="parent_entity_only_role",
             display_name="Parent Entity Only Role",
+            is_global=False,
             scope_entity_id=parent.id,
             scope=RoleScope.ENTITY_ONLY,
         )
@@ -1319,6 +1333,7 @@ async def test_membership_update_allows_hierarchy_role_from_ancestor(
             session=session,
             name="parent_hierarchy_role_local",
             display_name="Parent Hierarchy Role Local",
+            is_global=False,
             scope_entity_id=parent.id,
             scope=RoleScope.HIERARCHY,
         )

@@ -72,6 +72,18 @@ class APIKeyStatus(str, Enum):
     EXPIRED = "expired"  # Past expiration date
 
 
+class DefinitionStatus(str, Enum):
+    """Lifecycle status for retained role and permission definitions."""
+
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    ARCHIVED = "archived"
+
+    def can_grant_permissions(self) -> bool:
+        """Only active definitions participate in access resolution."""
+        return self == DefinitionStatus.ACTIVE
+
+
 class RoleScope(str, Enum):
     """
     Scope of an entity-local role.

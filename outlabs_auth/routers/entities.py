@@ -299,6 +299,7 @@ def get_entities_router(
             session=session,
             entity_id=entity_id,
             cascade=cascade,
+            deleted_by_id=UUID(auth_result["user_id"]) if auth_result.get("user_id") else None,
         )
         return None
 

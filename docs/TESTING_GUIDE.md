@@ -17,6 +17,7 @@
 - membership lifecycle API coverage exists in `tests/integration/test_membership_lifecycle_api.py`
 - direct role membership lifecycle read coverage exists in `tests/integration/test_role_assignment.py`
 - comprehensive admin user-details contract coverage now exists in `tests/integration/test_admin_user_details_contract.py`
+- entity deletion, orphan discovery, reassignment, and membership history coverage now exists in `tests/integration/test_entity_deletion_history_api.py`
 
 That suite covers the combined contract used by the admin frontend record page:
 

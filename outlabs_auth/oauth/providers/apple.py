@@ -1,12 +1,15 @@
 """Apple Sign In provider implementation."""
 
-import time
-import jwt
-from typing import Optional
 from pathlib import Path
+import time
+
+import jwt
+
+from typing import Any, Optional
+
 from outlabs_auth.oauth.provider import OAuthProvider
-from outlabs_auth.oauth.models import OAuthTokenResponse, OAuthUserInfo
 from outlabs_auth.oauth.exceptions import InvalidCodeError, ProviderError
+from outlabs_auth.oauth.models import OAuthTokenResponse, OAuthUserInfo
 
 
 class AppleProvider(OAuthProvider):
@@ -103,6 +106,22 @@ class AppleProvider(OAuthProvider):
             raise ValueError(
                 "Either private_key or private_key_path must be provided"
             )
+        self._jwk_client: Optional[jwt.PyJWKClient] = None
+
+    def _get_jwk_client(self) -> jwt.PyJWKClient:
+        """Create or reuse the Apple JWKS client."""
+        if self._jwk_client is None:
+            self._jwk_client = jwt.PyJWKClient(self.jwks_uri)
+        return self._jwk_client
+
+    @staticmethod
+    def _coerce_email_verified(value: Any) -> bool:
+        """Normalize Apple email_verified into a bool."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.lower() == "true"
+        return bool(value)
     
     def _generate_client_secret(self) -> str:
         """
@@ -233,9 +252,8 @@ class AppleProvider(OAuthProvider):
             Standardized user info
         
         Note:
-            This method should be called with the full token response so we can
-            access the id_token. For now, we decode without verification.
-            TODO: Add proper JWT verification using JWKS.
+            Apple does not expose a userinfo endpoint. Callers should use the
+            ID token path via `parse_id_token()`.
         """
         # Apple doesn't have a user info endpoint
         # User info comes from the ID token
@@ -261,20 +279,32 @@ class AppleProvider(OAuthProvider):
             Standardized user info
         
         Note:
-            If verify=True, you need to fetch and verify against Apple's JWKS.
-            For now, we decode without verification (not recommended for production).
+            If verify=True, signature, issuer, and audience are validated against
+            Apple's JWKS metadata.
         """
-        if verify:
-            # TODO: Implement JWKS verification
-            raise NotImplementedError("JWT verification not yet implemented")
-        
-        # Decode without verification (NOT SECURE - for development only)
-        payload = jwt.decode(id_token, options={"verify_signature": False})
-        
+        try:
+            if verify:
+                signing_key = self._get_jwk_client().get_signing_key_from_jwt(id_token)
+                payload = jwt.decode(
+                    id_token,
+                    signing_key.key,
+                    algorithms=["RS256"],
+                    audience=self.client_id,
+                    issuer="https://appleid.apple.com",
+                )
+            else:
+                payload = jwt.decode(id_token, options={"verify_signature": False})
+        except Exception as exc:
+            raise ProviderError(
+                provider=self.name,
+                error="invalid_id_token",
+                error_description=str(exc),
+            ) from exc
+
         return OAuthUserInfo(
             provider_user_id=payload["sub"],
             email=payload.get("email", ""),
-            email_verified=payload.get("email_verified", False),
+            email_verified=self._coerce_email_verified(payload.get("email_verified", False)),
             name=None,  # Name not in ID token (only in initial auth response)
             provider_data=payload
         )

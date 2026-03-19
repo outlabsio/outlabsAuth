@@ -11,9 +11,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from outlabs_auth.core.exceptions import InvalidInputError, PermissionNotFoundError
 from outlabs_auth.models.sql.permission import PermissionCondition
 from outlabs_auth.models.sql.role import ConditionGroup
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
+from outlabs_auth.response_builders import build_permission_response
 from outlabs_auth.schemas.abac import (
     AbacConditionCreateRequest,
     AbacConditionResponse,
@@ -22,7 +24,6 @@ from outlabs_auth.schemas.abac import (
     ConditionGroupResponse,
     ConditionGroupUpdateRequest,
     parse_uuid,
-    serialize_condition_value,
 )
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.permission import (
@@ -69,13 +70,6 @@ def get_permissions_router(
     """
     router = APIRouter(prefix=prefix, tags=tags or ["permissions"])
 
-    def _require_mutable_permission(permission) -> None:
-        if permission.is_system:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot modify system permission",
-            )
-
     @router.get(
         "/",
         response_model=PaginatedResponse[PermissionResponse],
@@ -104,22 +98,7 @@ def get_permissions_router(
             pages = (total + limit - 1) // limit if total > 0 else 0
 
             # Convert to response schema
-            items = [
-                PermissionResponse(
-                    id=str(perm.id),
-                    name=perm.name,
-                    display_name=perm.display_name,
-                    description=perm.description,
-                    resource=perm.resource,
-                    action=perm.action,
-                    scope=perm.scope,
-                    is_system=perm.is_system,
-                    is_active=perm.is_active,
-                    tags=[],
-                    metadata={},
-                )
-                for perm in permissions
-            ]
+            items = [build_permission_response(perm) for perm in permissions]
 
             return PaginatedResponse(
                 items=items, total=total, page=page, limit=limit, pages=pages
@@ -168,8 +147,10 @@ def get_permissions_router(
             display_name=data.display_name,
             description=data.description or "",
             is_system=data.is_system,
-            is_active=data.is_active,
+            status=data.status,
+            is_active=data.is_active if "is_active" in data.model_fields_set else None,
             tags=data.tags,
+            created_by_id=UUID(auth_result["user_id"]),
         )
 
         permission = await auth.permission_service.get_permission_by_id(
@@ -181,19 +162,7 @@ def get_permissions_router(
                 detail="Failed to load created permission",
             )
 
-        return PermissionResponse(
-            id=str(permission.id),
-            name=permission.name,
-            display_name=permission.display_name,
-            description=permission.description,
-            resource=permission.resource,
-            action=permission.action,
-            scope=permission.scope,
-            is_system=permission.is_system,
-            is_active=permission.is_active,
-            tags=[t.name for t in permission.tags] if permission.tags else [],
-            metadata={},
-        )
+        return build_permission_response(permission)
 
     @router.get(
         "/{permission_id}",
@@ -215,19 +184,7 @@ def get_permissions_router(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Permission not found"
             )
 
-        return PermissionResponse(
-            id=str(permission.id),
-            name=permission.name,
-            display_name=permission.display_name,
-            description=permission.description,
-            resource=permission.resource,
-            action=permission.action,
-            scope=permission.scope,
-            is_system=permission.is_system,
-            is_active=permission.is_active,
-            tags=[tag.name for tag in permission.tags] if permission.tags else [],
-            metadata={},
-        )
+        return build_permission_response(permission)
 
     @router.patch(
         "/{permission_id}",
@@ -247,8 +204,10 @@ def get_permissions_router(
             permission_id,
             display_name=data.display_name,
             description=data.description,
+            status=data.status,
             is_active=data.is_active,
             tags=data.tags,
+            changed_by_id=UUID(auth_result["user_id"]),
         )
 
         permission = await auth.permission_service.get_permission_by_id(
@@ -267,19 +226,7 @@ def get_permissions_router(
                 permission_name=permission.name,
             )
 
-        return PermissionResponse(
-            id=str(permission.id),
-            name=permission.name,
-            display_name=permission.display_name,
-            description=permission.description,
-            resource=permission.resource,
-            action=permission.action,
-            scope=permission.scope,
-            is_system=permission.is_system,
-            is_active=permission.is_active,
-            tags=[t.name for t in permission.tags] if permission.tags else [],
-            metadata={},
-        )
+        return build_permission_response(permission)
 
     @router.delete(
         "/{permission_id}",
@@ -294,7 +241,9 @@ def get_permissions_router(
     ):
         """Delete permission by ID."""
         deleted = await auth.permission_service.delete_permission(
-            session, permission_id
+            session,
+            permission_id,
+            deleted_by_id=UUID(auth_result["user_id"]),
         )
 
         if not deleted:
@@ -425,20 +374,18 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
-        perm = await auth.permission_service.get_permission_by_id(
-            session, permission_id
-        )
-        if not perm:
-            raise HTTPException(status_code=404, detail="Permission not found")
-        _require_mutable_permission(perm)
-
-        group = ConditionGroup(
-            permission_id=permission_id,
-            operator=data.operator,
-            description=data.description,
-        )
-        session.add(group)
-        await session.flush()
+        try:
+            group = await auth.permission_service.create_permission_condition_group(
+                session,
+                permission_id,
+                operator=data.operator,
+                description=data.description,
+                changed_by_id=UUID(auth_result["user_id"]),
+            )
+        except PermissionNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.message)) from exc
+        except InvalidInputError as exc:
+            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
         return ConditionGroupResponse(
             id=str(group.id),
             operator=group.operator,
@@ -460,24 +407,23 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
-        perm = await auth.permission_service.get_permission_by_id(
-            session, permission_id
-        )
-        if not perm:
-            raise HTTPException(status_code=404, detail="Permission not found")
-        _require_mutable_permission(perm)
+        try:
+            group = await auth.permission_service.update_permission_condition_group(
+                session,
+                permission_id,
+                group_id,
+                fields_set=set(data.model_fields_set),
+                operator=data.operator,
+                description=data.description,
+                changed_by_id=UUID(auth_result["user_id"]),
+            )
+        except PermissionNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.message)) from exc
+        except InvalidInputError as exc:
+            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
 
-        group = await session.get(ConditionGroup, group_id)
-        if not group or group.permission_id != permission_id:
+        if group is None:
             raise HTTPException(status_code=404, detail="Condition group not found")
-
-        fields_set = data.model_fields_set
-
-        if "operator" in fields_set and data.operator is not None:
-            group.operator = data.operator
-        if "description" in fields_set:
-            group.description = data.description
-        await session.flush()
         return ConditionGroupResponse(
             id=str(group.id),
             operator=group.operator,
@@ -498,18 +444,20 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
-        perm = await auth.permission_service.get_permission_by_id(
-            session, permission_id
-        )
-        if not perm:
-            raise HTTPException(status_code=404, detail="Permission not found")
-        _require_mutable_permission(perm)
+        try:
+            deleted = await auth.permission_service.delete_permission_condition_group(
+                session,
+                permission_id,
+                group_id,
+                changed_by_id=UUID(auth_result["user_id"]),
+            )
+        except PermissionNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.message)) from exc
+        except InvalidInputError as exc:
+            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
 
-        group = await session.get(ConditionGroup, group_id)
-        if not group or group.permission_id != permission_id:
+        if not deleted:
             raise HTTPException(status_code=404, detail="Condition group not found")
-        await session.delete(group)
-        await session.flush()
         return None
 
     @router.get(
@@ -557,32 +505,22 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
-        perm = await auth.permission_service.get_permission_by_id(
-            session, permission_id
-        )
-        if not perm:
-            raise HTTPException(status_code=404, detail="Permission not found")
-        _require_mutable_permission(perm)
-
-        group_id = parse_uuid(data.condition_group_id)
-        if group_id is not None:
-            group = await session.get(ConditionGroup, group_id)
-            if not group or group.permission_id != permission_id:
-                raise HTTPException(
-                    status_code=400, detail="Invalid condition_group_id"
-                )
-
-        cond = PermissionCondition(
-            permission_id=permission_id,
-            condition_group_id=group_id,
-            attribute=data.attribute,
-            operator=data.operator,
-            value=serialize_condition_value(data.value, data.value_type),
-            value_type=data.value_type,
-            description=data.description,
-        )
-        session.add(cond)
-        await session.flush()
+        try:
+            cond = await auth.permission_service.create_permission_condition(
+                session,
+                permission_id,
+                condition_group_id=parse_uuid(data.condition_group_id),
+                attribute=data.attribute,
+                operator=data.operator,
+                value=data.value,
+                value_type=data.value_type,
+                description=data.description,
+                changed_by_id=UUID(auth_result["user_id"]),
+            )
+        except PermissionNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.message)) from exc
+        except InvalidInputError as exc:
+            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
         return AbacConditionResponse(
             id=str(cond.id),
             attribute=cond.attribute,
@@ -608,43 +546,29 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
-        perm = await auth.permission_service.get_permission_by_id(
-            session, permission_id
-        )
-        if not perm:
-            raise HTTPException(status_code=404, detail="Permission not found")
-        _require_mutable_permission(perm)
-
-        cond = await session.get(PermissionCondition, condition_id)
-        if not cond or cond.permission_id != permission_id:
-            raise HTTPException(status_code=404, detail="Condition not found")
-
-        fields_set = data.model_fields_set
-
-        if "condition_group_id" in fields_set:
-            group_id = parse_uuid(data.condition_group_id)
-            if group_id is not None:
-                group = await session.get(ConditionGroup, group_id)
-                if not group or group.permission_id != permission_id:
-                    raise HTTPException(
-                        status_code=400, detail="Invalid condition_group_id"
-                    )
-            cond.condition_group_id = group_id
-
-        if "attribute" in fields_set and data.attribute is not None:
-            cond.attribute = data.attribute
-        if "operator" in fields_set and data.operator is not None:
-            cond.operator = data.operator
-        if "value_type" in fields_set and data.value_type is not None:
-            cond.value_type = data.value_type
-        if "value" in fields_set or "value_type" in fields_set:
-            cond.value = serialize_condition_value(
-                data.value, data.value_type or cond.value_type
+        try:
+            cond = await auth.permission_service.update_permission_condition(
+                session,
+                permission_id,
+                condition_id,
+                fields_set=set(data.model_fields_set),
+                condition_group_id=parse_uuid(data.condition_group_id)
+                if "condition_group_id" in data.model_fields_set
+                else None,
+                attribute=data.attribute,
+                operator=data.operator,
+                value=data.value,
+                value_type=data.value_type,
+                description=data.description,
+                changed_by_id=UUID(auth_result["user_id"]),
             )
-        if "description" in fields_set:
-            cond.description = data.description
+        except PermissionNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.message)) from exc
+        except InvalidInputError as exc:
+            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
 
-        await session.flush()
+        if cond is None:
+            raise HTTPException(status_code=404, detail="Condition not found")
         return AbacConditionResponse(
             id=str(cond.id),
             attribute=cond.attribute,
@@ -669,18 +593,20 @@ def get_permissions_router(
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("permission:update")),
     ):
-        perm = await auth.permission_service.get_permission_by_id(
-            session, permission_id
-        )
-        if not perm:
-            raise HTTPException(status_code=404, detail="Permission not found")
-        _require_mutable_permission(perm)
+        try:
+            deleted = await auth.permission_service.delete_permission_condition(
+                session,
+                permission_id,
+                condition_id,
+                changed_by_id=UUID(auth_result["user_id"]),
+            )
+        except PermissionNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.message)) from exc
+        except InvalidInputError as exc:
+            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
 
-        cond = await session.get(PermissionCondition, condition_id)
-        if not cond or cond.permission_id != permission_id:
+        if not deleted:
             raise HTTPException(status_code=404, detail="Condition not found")
-        await session.delete(cond)
-        await session.flush()
         return None
 
     return router

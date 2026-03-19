@@ -5,6 +5,7 @@ SQLModel/SQLAlchemy models for PostgreSQL database.
 
 This module exports all database models organized by feature:
 - Core: User, Permission, RefreshToken
+- Audit: UserAuditEvent
 - SimpleRBAC: Role, UserRoleMembership
 - EnterpriseRBAC: Entity, EntityClosure, EntityMembership
 - API Keys: APIKey, APIKeyScope, APIKeyIPWhitelist
@@ -35,6 +36,7 @@ from .entity_membership import (
     EntityMembership,
     EntityMembershipRole,
 )
+from .entity_membership_history import EntityMembershipHistory
 from .enums import (
     APIKeyStatus,
     ConditionOperator,
@@ -49,6 +51,7 @@ from .permission import (
     PermissionTag,
     PermissionTagLink,
 )
+from .permission_definition_history import PermissionDefinitionHistory
 
 # === SimpleRBAC Models ===
 from .role import (
@@ -71,6 +74,8 @@ from .system_config import (
 from .token import RefreshToken
 
 # === Core Models ===
+from .role_definition_history import RoleDefinitionHistory
+from .user_audit_event import UserAuditEvent
 from .user import User
 from .user_role_membership import UserRoleMembership
 
@@ -88,7 +93,10 @@ __all__ = [
     "PermissionTag",
     "PermissionTagLink",
     "PermissionCondition",
+    "PermissionDefinitionHistory",
     "RefreshToken",
+    "RoleDefinitionHistory",
+    "UserAuditEvent",
     # SimpleRBAC
     "Role",
     "RolePermission",
@@ -101,6 +109,7 @@ __all__ = [
     "EntityClosure",
     "EntityMembership",
     "EntityMembershipRole",
+    "EntityMembershipHistory",
     # API Keys
     "APIKey",
     "APIKeyScope",
@@ -125,7 +134,10 @@ CORE_MODELS = [
     PermissionTag,
     PermissionTagLink,
     PermissionCondition,
+    PermissionDefinitionHistory,
     RefreshToken,
+    RoleDefinitionHistory,
+    UserAuditEvent,
 ]
 
 SIMPLE_RBAC_MODELS = [
@@ -142,6 +154,7 @@ ENTERPRISE_RBAC_MODELS = [
     EntityClosure,
     EntityMembership,
     EntityMembershipRole,
+    EntityMembershipHistory,
 ]
 
 API_KEY_MODELS = [

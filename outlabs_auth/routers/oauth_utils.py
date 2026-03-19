@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import HTTPException, status
 
+from outlabs_auth.oauth.exceptions import ProviderError
 from outlabs_auth.oauth.models import OAuthUserInfo
 
 
@@ -21,7 +22,15 @@ async def get_oauth_user_info(
     id_token = token.get("id_token")
     parse_id_token = getattr(oauth_client, "parse_id_token", None)
     if id_token and callable(parse_id_token):
-        return parse_id_token(id_token, verify=False)
+        try:
+            return parse_id_token(id_token, verify=True)
+        except NotImplementedError:
+            pass
+        except ProviderError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid OAuth provider ID token",
+            ) from exc
 
     get_id_email = getattr(oauth_client, "get_id_email", None)
     if callable(get_id_email):

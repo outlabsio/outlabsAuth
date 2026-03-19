@@ -223,6 +223,9 @@ class OutlabsAuth:
         self.access_scope_service = None
         self.api_key_service = None
         self.service_token_service = None
+        self.role_history_service = None
+        self.permission_history_service = None
+        self.user_audit_service = None
         self.entity_service = None
         self.membership_service = None
         self.config_service = None
@@ -347,28 +350,41 @@ class OutlabsAuth:
         from outlabs_auth.services.api_key import APIKeyService
         from outlabs_auth.services.auth import AuthService
         from outlabs_auth.services.cache import CacheService
+        from outlabs_auth.services.permission_history import PermissionHistoryService
         from outlabs_auth.services.permission import PermissionService
+        from outlabs_auth.services.role_history import RoleHistoryService
         from outlabs_auth.services.role import RoleService
         from outlabs_auth.services.service_token import ServiceTokenService
+        from outlabs_auth.services.user_audit import UserAuditService
         from outlabs_auth.services.user import UserService
         from outlabs_auth.utils.crypto import FernetCipher
 
         # Core services
+        self.role_history_service = RoleHistoryService(self.config)
+        self.permission_history_service = PermissionHistoryService(self.config)
+        self.user_audit_service = UserAuditService(self.config)
         self.auth_service = AuthService(
             self.config,
             notification_service=self.notification_service,
             activity_tracker=None,  # Set later if activity tracking enabled
             observability=self.observability,
+            user_audit_service=self.user_audit_service,
         )
         self.user_service = UserService(
             self.config,
             notification_service=self.notification_service,
             auth_service=self.auth_service,
+            user_audit_service=self.user_audit_service,
         )
-        self.role_service = RoleService(self.config)
+        self.role_service = RoleService(
+            self.config,
+            role_history_service=self.role_history_service,
+            user_audit_service=self.user_audit_service,
+        )
         self.permission_service = PermissionService(
             self.config,
             observability=self.observability,
+            permission_history_service=self.permission_history_service,
         )
         self.access_scope_service = AccessScopeService(self.config)
 
@@ -400,10 +416,16 @@ class OutlabsAuth:
             self.membership_service = MembershipService(
                 self.config,
                 observability=self.observability,
+                user_audit_service=self.user_audit_service,
             )
+            self.entity_service.membership_service = self.membership_service
+            self.entity_service.role_service = self.role_service
 
         # API Key service
         self.api_key_service = APIKeyService(self.config, redis_client=self.redis_client)
+        self.user_service.membership_service = self.membership_service
+        self.user_service.role_service = self.role_service
+        self.user_service.api_key_service = self.api_key_service
 
         # Service Token service
         self.service_token_service = ServiceTokenService(self.config)

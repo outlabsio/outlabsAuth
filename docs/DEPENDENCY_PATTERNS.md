@@ -940,13 +940,8 @@ class APIKeyService:
 
         await api_key.save()
 
-        # Log key creation
-        await self.audit_service.log(
-            action="api_key.created",
-            actor=created_by,
-            target=str(api_key.id),
-            metadata={"name": name, "service": service_name}
-        )
+        # If durable history is needed here, prefer a narrow lifecycle recorder
+        # dependency over a generic audit_service facade.
 
         return raw_key, api_key
 
@@ -1025,13 +1020,8 @@ class APIKeyService:
         api_key.revoked_reason = reason
         await api_key.save()
 
-        # Log revocation
-        await self.audit_service.log(
-            action="api_key.revoked",
-            actor=revoked_by,
-            target=key_id,
-            metadata={"reason": reason}
-        )
+        # If durable history is needed here, prefer a narrow lifecycle recorder
+        # dependency over a generic audit_service facade.
 
         return True
 

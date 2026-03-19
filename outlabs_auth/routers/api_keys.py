@@ -119,7 +119,7 @@ def get_api_keys_router(auth: Any, prefix: str = "", tags: Optional[list[str]] =
                 entity_id = UUID(data.entity_ids[0])
             except ValueError as e:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=str(e),
                 )
 

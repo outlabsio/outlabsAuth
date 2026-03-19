@@ -748,8 +748,7 @@ auth = EnterpriseRBAC(
     redis_url="redis://localhost:6379",
     enable_context_aware_roles=True,  # Opt-in
     enable_abac=True,                 # Opt-in
-    enable_caching=True,              # Opt-in
-    enable_audit_log=True             # Opt-in
+    enable_caching=True               # Opt-in
 )
 ```
 
@@ -802,7 +801,7 @@ Optional features in EnterpriseRBAC via feature flags (opt-in):
 - `enable_context_aware_roles`: Context-aware role permissions
 - `enable_abac`: Attribute-based access control
 - `enable_caching`: Redis caching (requires Redis)
-- `enable_audit_log`: Comprehensive audit logging
+- `enable_audit_log`: Reserved for future extended/compliance capture; core lifecycle history is now built into the runtime instead of being behind this flag
 
 **Design Principle**: Start with basic EnterpriseRBAC (entity hierarchy), enable features as needed.
 
@@ -1907,7 +1906,7 @@ Use argon2id for API key hashing with specific parameters.
 - [ ] Optional expiration configured (recommended ≤90 days)
 - [ ] IP whitelisting enabled for production keys
 - [ ] Rate limiting per key configured
-- [ ] Audit logging captures all key operations
+- [ ] Key lifecycle operations are operationally visible and reviewable
 - [ ] Temporary lock on repeated failures (10 in 10 min → 30-min cooldown)
 - [ ] Keys scoped to minimum required permissions
 ```

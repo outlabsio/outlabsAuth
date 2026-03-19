@@ -12,7 +12,7 @@ from sqlalchemy import Column, Index, UniqueConstraint, ForeignKey, String, Bool
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 from outlabs_auth.database.base import BaseModel
-from .enums import ConditionOperator
+from .enums import ConditionOperator, DefinitionStatus
 
 if TYPE_CHECKING:
     from .role import Role, RolePermission
@@ -140,6 +140,7 @@ class Permission(BaseModel, table=True):
         Index("ix_permissions_name", "name"),
         Index("ix_permissions_resource", "resource"),
         Index("ix_permissions_is_system", "is_system"),
+        Index("ix_permissions_status", "status"),
         Index("ix_permissions_is_active", "is_active"),
     )
 
@@ -178,6 +179,10 @@ class Permission(BaseModel, table=True):
         default=False,
         sa_column=Column(Boolean, nullable=False, default=False),
     )
+    status: DefinitionStatus = Field(
+        default=DefinitionStatus.ACTIVE,
+        sa_column=Column(String(20), nullable=False, default=DefinitionStatus.ACTIVE.value),
+    )
     is_active: bool = Field(
         default=True,
         sa_column=Column(Boolean, nullable=False, default=True),
@@ -196,6 +201,18 @@ class Permission(BaseModel, table=True):
 
     def __init__(self, **data):
         """Auto-populate resource, action, scope from name."""
+        status = data.get("status")
+        is_active = data.get("is_active")
+        if status is None and is_active is not None:
+            data["status"] = (
+                DefinitionStatus.ACTIVE if bool(is_active) else DefinitionStatus.INACTIVE
+            )
+        elif status is not None:
+            normalized_status = (
+                status if isinstance(status, DefinitionStatus) else DefinitionStatus(str(status))
+            )
+            data["status"] = normalized_status
+            data["is_active"] = normalized_status == DefinitionStatus.ACTIVE
         super().__init__(**data)
         self._parse_name()
 
@@ -242,3 +259,7 @@ class Permission(BaseModel, table=True):
             if self.resource == req_resource and self.action == "*":
                 return True
         return False
+
+    def can_grant_permissions(self) -> bool:
+        """Only active permission definitions grant access."""
+        return self.status == DefinitionStatus.ACTIVE

@@ -299,7 +299,12 @@ def get_memberships_router(auth: Any, prefix: str = "", tags: Optional[list[str]
         auth_result=Depends(auth.require_tree_permission("membership:delete", "entity_id", source="path")),
     ):
         """Remove a user from an entity."""
-        await auth.membership_service.remove_member(session=session, entity_id=entity_id, user_id=user_id)
+        await auth.membership_service.remove_member(
+            session=session,
+            entity_id=entity_id,
+            user_id=user_id,
+            revoked_by_id=UUID(auth_result["user_id"]),
+        )
         return None
 
     return router

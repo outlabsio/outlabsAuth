@@ -5,6 +5,8 @@ from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from outlabs_auth.models.sql.enums import DefinitionStatus
+
 
 class RoleScopeEnum(str, Enum):
     """Role scope for API schemas."""
@@ -33,6 +35,10 @@ class RoleResponse(BaseModel):
     permissions: List[str] = Field(default_factory=list)
     is_system_role: bool = False
     is_global: bool = False
+    status: DefinitionStatus = Field(
+        default=DefinitionStatus.ACTIVE,
+        description="Lifecycle status for the role definition.",
+    )
     root_entity_id: Optional[str] = Field(
         None,
         description="Root entity (organization) that owns this role. NULL for system-wide roles.",
@@ -75,6 +81,10 @@ class RoleCreateRequest(BaseModel):
         default=True,
         description="If True with no root_entity_id, role is available system-wide.",
     )
+    status: Optional[DefinitionStatus] = Field(
+        default=None,
+        description="Lifecycle status for the role definition. Use active/inactive; delete archives it.",
+    )
     root_entity_id: Optional[str] = Field(
         None,
         description="Root entity (organization) that owns this role. Must be a root entity. Omit for system-wide roles.",
@@ -108,6 +118,7 @@ class RoleUpdateRequest(BaseModel):
     description: Optional[str] = None
     permissions: Optional[List[str]] = None
     is_global: Optional[bool] = None
+    status: Optional[DefinitionStatus] = None
     assignable_at_types: Optional[List[str]] = None
 
     # Entity-local role fields (DD-053)

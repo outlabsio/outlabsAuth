@@ -537,6 +537,23 @@ class APIKeyService(BaseService[APIKey]):
         logger.info(f"Revoked API key: {api_key.prefix}")
         return True
 
+    async def revoke_user_api_keys(self, session: AsyncSession, user_id: UUID) -> int:
+        """Revoke all non-revoked API keys owned by a user."""
+        stmt = select(APIKey).where(
+            APIKey.owner_id == user_id,
+            APIKey.status != APIKeyStatus.REVOKED,
+        )
+        result = await session.execute(stmt)
+        api_keys = list(result.scalars().all())
+        if not api_keys:
+            return 0
+
+        for api_key in api_keys:
+            api_key.status = APIKeyStatus.REVOKED
+
+        await session.flush()
+        return len(api_keys)
+
     async def update_api_key(self, session: AsyncSession, key_id: UUID, **updates) -> Optional[APIKey]:
         """
         Update API key fields.

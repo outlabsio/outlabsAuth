@@ -135,7 +135,7 @@ class OutlabsAuth:
         enable_context_aware_roles: bool = False,
         enable_abac: bool = False,
         enable_caching: bool = False,
-        enable_audit_log: bool = False,
+        enable_audit_log: bool = False,  # Reserved for future extended/compliance capture
         # Optional dependencies
         redis_url: Optional[str] = None,
         redis_enabled: bool = False,
@@ -338,7 +338,11 @@ class EnterpriseRBAC(OutlabsAuth):
 - ABAC conditions (attribute-based access control) - `enable_abac=True`
 - Permission caching (Redis) - `enable_caching=True` (requires `redis_url`)
 - Entity-isolated operation via root-entity scoping
-- Advanced audit logging - `enable_audit_log=True`
+
+**Core History Surfaces** (included in current runtime):
+- User lifecycle timeline via `user_audit_events`
+- Entity membership lifecycle via `entity_membership_history`
+- Role/permission definition history via dedicated history tables
 
 **Example - Basic Configuration** (entity hierarchy only):
 ```python
@@ -396,7 +400,7 @@ auth = EnterpriseRBAC(
     redis_enabled=True,
     enable_context_aware_roles=True,  # Opt-in
     enable_abac=True,                 # Opt-in
-    enable_audit_log=True             # Opt-in
+    enable_caching=True               # Opt-in
 )
 
 # Context-aware role
@@ -1020,13 +1024,9 @@ class APIKeyService:
 
         await api_key.save()
 
-        # Audit log
-        await self.audit_service.log(
-            action="api_key.created",
-            actor=created_by,
-            target=str(api_key.id),
-            metadata={"name": name}
-        )
+        # Current runtime does not expose a generic audit_service here.
+        # API key lifecycle is retained through status changes plus
+        # service-level notification/observability hooks.
 
         return raw_key, api_key
 
@@ -1121,12 +1121,8 @@ class APIKeyService:
         api_key.revoked_reason = reason
         await api_key.save()
 
-        await self.audit_service.log(
-            action="api_key.revoked",
-            actor=revoked_by,
-            target=key_id,
-            metadata={"reason": reason}
-        )
+        # Current runtime does not expose a generic audit_service here.
+        # API key revocation is represented by status lifecycle on the key.
 
         return True
 ```
@@ -1492,7 +1488,7 @@ See [SECURITY.md](SECURITY.md) for comprehensive security guidelines.
 4. **IP whitelisting** strictly enforced
 5. **Temporary locks** after 10 failed attempts in 10 minutes (30-min cooldown)
 6. **Rate limiting** per key and per source via Redis counters
-7. **Audit logging** for all key operations
+7. **Operational visibility** for key lifecycle operations
 
 **API Key Security Checklist**:
 - [ ] Keys use argon2id hashing
@@ -1500,7 +1496,7 @@ See [SECURITY.md](SECURITY.md) for comprehensive security guidelines.
 - [ ] Optional expiration configured (recommended ≤90 days)
 - [ ] IP whitelisting enabled for production
 - [ ] Rate limiting configured per key (Redis counters)
-- [ ] Audit logging captures all operations
+- [ ] Key create/revoke procedures are observable and operationally reviewable
 - [ ] Temporary locks on repeated failures (not permanent revocation)
 - [ ] Keys scoped to minimum permissions
 
@@ -2242,7 +2238,7 @@ class EnterpriseConfig(AuthConfig):
     enable_context_aware_roles: bool = False
     enable_abac: bool = False
     enable_caching: bool = False
-    enable_audit_log: bool = False
+    enable_audit_log: bool = False  # Reserved for future extended/compliance capture
 
     # Caching settings (only used when enable_caching=True)
     redis_url: Optional[str] = None

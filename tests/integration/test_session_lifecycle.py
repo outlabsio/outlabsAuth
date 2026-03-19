@@ -902,6 +902,83 @@ async def test_cannot_set_status_to_deleted_via_endpoint(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_deleted_user_must_use_restore_endpoint(
+    auth_instance: SimpleRBAC, client: httpx.AsyncClient, admin_user: dict
+):
+    """Deleted users cannot be reactivated through the generic status endpoint."""
+    async with auth_instance.get_session() as session:
+        target_user = await auth_instance.user_service.create_user(
+            session,
+            email=f"deleted-status-{uuid.uuid4().hex[:8]}@example.com",
+            password="TestPass123!",
+            first_name="Deleted",
+            last_name="Status",
+        )
+        await session.commit()
+        target_id = str(target_user.id)
+
+    delete_resp = await client.delete(
+        f"/v1/users/{target_id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert delete_resp.status_code == 204
+
+    status_resp = await client.patch(
+        f"/v1/users/{target_id}/status",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"status": "active"},
+    )
+    assert status_resp.status_code == 400
+    assert "restore endpoint" in status_resp.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_admin_can_restore_deleted_user_via_restore_endpoint(
+    auth_instance: SimpleRBAC, client: httpx.AsyncClient, admin_user: dict
+):
+    """Restore endpoint reactivates identity without requiring a new account."""
+    password = "TestPass123!"
+    async with auth_instance.get_session() as session:
+        target_user = await auth_instance.user_service.create_user(
+            session,
+            email=f"restore-endpoint-{uuid.uuid4().hex[:8]}@example.com",
+            password=password,
+            first_name="Restore",
+            last_name="Endpoint",
+        )
+        await session.commit()
+        target_id = str(target_user.id)
+        target_email = target_user.email
+
+    delete_resp = await client.delete(
+        f"/v1/users/{target_id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert delete_resp.status_code == 204
+
+    restore_resp = await client.post(
+        f"/v1/users/{target_id}/restore",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert restore_resp.status_code == 200
+    restored = restore_resp.json()
+    assert restored["status"] == "active"
+    assert restored["deleted_at"] is None
+
+    login_resp = await client.post(
+        "/v1/auth/login",
+        json={
+            "email": target_email,
+            "password": password,
+        },
+    )
+    assert login_resp.status_code == 200
+    assert login_resp.json()["access_token"]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_regular_user_cannot_change_status(
     auth_instance: SimpleRBAC, client: httpx.AsyncClient, registered_user: dict
 ):

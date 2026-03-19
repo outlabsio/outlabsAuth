@@ -24,9 +24,10 @@ from outlabs_auth.core.exceptions import (
 from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.entity_membership import EntityMembership
-from outlabs_auth.models.sql.enums import MembershipStatus, RoleScope
+from outlabs_auth.models.sql.enums import DefinitionStatus, MembershipStatus, RoleScope
 from outlabs_auth.models.sql.permission import (
     Permission,
+    PermissionCondition,
     PermissionTag,
     PermissionTagLink,
 )
@@ -36,6 +37,7 @@ from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
 from outlabs_auth.services.base import BaseService
 from outlabs_auth.services.policy_engine import PolicyEvaluationEngine
+from outlabs_auth.schemas.abac import serialize_condition_value
 from outlabs_auth.utils.validation import validate_permission_name
 
 
@@ -54,6 +56,7 @@ class PermissionService(BaseService[Permission]):
         self,
         config: AuthConfig,
         observability: Optional[Any] = None,
+        permission_history_service: Optional[Any] = None,
     ):
         """
         Initialize PermissionService.
@@ -65,6 +68,64 @@ class PermissionService(BaseService[Permission]):
         super().__init__(Permission)
         self.config = config
         self.observability = observability
+        self.permission_history_service = permission_history_service
+
+    @staticmethod
+    def _coerce_definition_status(value: DefinitionStatus | str) -> DefinitionStatus:
+        if isinstance(value, DefinitionStatus):
+            return value
+        return DefinitionStatus(str(value))
+
+    def _resolve_permission_status(
+        self,
+        *,
+        current_status: Optional[DefinitionStatus] = None,
+        status: Optional[DefinitionStatus | str] = None,
+        is_active: Optional[bool] = None,
+        allow_archived: bool = False,
+    ) -> DefinitionStatus:
+        resolved_status = current_status or DefinitionStatus.ACTIVE
+        requested_status: Optional[DefinitionStatus] = None
+
+        if status is not None:
+            requested_status = self._coerce_definition_status(status)
+
+        if is_active is not None:
+            status_from_is_active = (
+                DefinitionStatus.ACTIVE if is_active else DefinitionStatus.INACTIVE
+            )
+            if requested_status is not None and requested_status != status_from_is_active:
+                raise InvalidInputError(
+                    message="status and is_active cannot conflict",
+                    details={
+                        "status": requested_status.value,
+                        "is_active": is_active,
+                    },
+                )
+            requested_status = status_from_is_active
+
+        if requested_status is None:
+            return resolved_status
+
+        if requested_status == DefinitionStatus.ARCHIVED and not allow_archived:
+            raise InvalidInputError(
+                message="Use delete to archive permissions",
+                details={"status": requested_status.value},
+            )
+
+        return requested_status
+
+    @staticmethod
+    def _role_definition_is_live(role: Optional[Role]) -> bool:
+        return bool(role and getattr(role, "status", DefinitionStatus.ACTIVE) == DefinitionStatus.ACTIVE)
+
+    @staticmethod
+    def _permission_definition_is_live(permission: Optional[Permission]) -> bool:
+        return bool(
+            permission
+            and getattr(permission, "status", DefinitionStatus.ACTIVE)
+            == DefinitionStatus.ACTIVE
+        )
 
     # =========================================================================
     # Permission Checking
@@ -386,7 +447,7 @@ class PermissionService(BaseService[Permission]):
             is_direct_membership = membership_depth == 0
 
             for role in membership.roles:
-                if not role:
+                if not self._role_definition_is_live(role):
                     continue
 
                 # Check if entity-local role scope allows granting at this entity
@@ -508,7 +569,7 @@ class PermissionService(BaseService[Permission]):
                 continue
 
             role = membership.role
-            if not role:
+            if not self._role_definition_is_live(role):
                 continue
 
             # DD-054: Filter out entity-local roles when include_entity_local=False
@@ -633,7 +694,7 @@ class PermissionService(BaseService[Permission]):
             if not membership.is_currently_valid():
                 continue
             role = membership.role
-            if not role:
+            if not self._role_definition_is_live(role):
                 continue
             if not include_entity_local and role.scope_entity_id is not None:
                 continue
@@ -729,7 +790,7 @@ class PermissionService(BaseService[Permission]):
                 continue
 
             role = membership.role
-            if not role:
+            if not self._role_definition_is_live(role):
                 continue
 
             # DD-054: Filter out entity-local roles when include_entity_local=False
@@ -767,7 +828,7 @@ class PermissionService(BaseService[Permission]):
                 continue
 
             for role in membership.roles:
-                if not role:
+                if not self._role_definition_is_live(role):
                     continue
 
                 # DD-054: Filter out entity-local roles when include_entity_local=False
@@ -811,18 +872,36 @@ class PermissionService(BaseService[Permission]):
         role: Role,
         entity_type: Optional[str] = None,
     ) -> List[Permission]:
+        if not self._role_definition_is_live(role):
+            return []
+
         if not self.config.enable_context_aware_roles or not entity_type:
-            return list(role.permissions or [])
+            return [
+                permission
+                for permission in (role.permissions or [])
+                if self._permission_definition_is_live(permission)
+            ]
 
         normalized_entity_type = entity_type.lower()
-        overrides = [
+        matching_overrides = [
             entry.permission
             for entry in (role.entity_type_permissions or [])
             if entry.permission and entry.entity_type.lower() == normalized_entity_type
         ]
+        overrides = [
+            permission
+            for permission in matching_overrides
+            if self._permission_definition_is_live(permission)
+        ]
+        if matching_overrides:
+            return overrides
         if overrides:
             return overrides
-        return list(role.permissions or [])
+        return [
+            permission
+            for permission in (role.permissions or [])
+            if self._permission_definition_is_live(permission)
+        ]
 
     def _get_role_permission_names_for_context(
         self,
@@ -981,8 +1060,10 @@ class PermissionService(BaseService[Permission]):
         display_name: str,
         description: Optional[str] = None,
         is_system: bool = False,
-        is_active: bool = True,
+        status: Optional[DefinitionStatus | str] = None,
+        is_active: Optional[bool] = None,
         tags: Optional[List[str]] = None,
+        created_by_id: Optional[UUID] = None,
     ) -> Permission:
         """
         Create a new permission.
@@ -1007,29 +1088,61 @@ class PermissionService(BaseService[Permission]):
                 details={"name": name},
             )
 
+        resolved_status = self._resolve_permission_status(
+            status=status,
+            is_active=is_active,
+        )
+
         # Create permission (auto-parses resource/action/scope in __init__)
         permission = Permission(
             name=name,
             display_name=display_name,
             description=description,
             is_system=is_system,
-            is_active=is_active,
+            status=resolved_status,
+            is_active=resolved_status == DefinitionStatus.ACTIVE,
         )
 
         await self.create(session, permission)
 
         if tags:
-            await self.set_permission_tags(session, permission.id, tags)
+            await self.set_permission_tags(
+                session,
+                permission.id,
+                tags,
+                changed_by_id=created_by_id,
+                record_history=False,
+            )
 
         await self._invalidate_all_permissions_cache()
-
-        return permission
+        current_permission = (
+            await self.get_permission_by_id(
+                session,
+                permission.id,
+                load_tags=True,
+                include_archived=True,
+            )
+            or permission
+        )
+        await self._record_permission_definition_history_event(
+            session,
+            permission=current_permission,
+            event_type="created",
+            event_source="permission_service.create_permission",
+            actor_user_id=created_by_id,
+            after=await self._build_permission_definition_snapshot(
+                session,
+                current_permission,
+            ),
+        )
+        return current_permission
 
     async def get_permission_by_id(
         self,
         session: AsyncSession,
         permission_id: UUID,
         load_tags: bool = False,
+        include_archived: bool = False,
     ) -> Optional[Permission]:
         """
         Get permission by ID.
@@ -1042,15 +1155,23 @@ class PermissionService(BaseService[Permission]):
         Returns:
             Permission if found, None otherwise
         """
+        stmt = select(Permission).where(Permission.id == permission_id)
+        if not include_archived:
+            stmt = stmt.where(Permission.status != DefinitionStatus.ARCHIVED)
+
         options = []
         if load_tags:
             options.append(selectinload(Permission.tags))
-        return await self.get_by_id(session, permission_id, options=options)
+        if options:
+            stmt = stmt.options(*options)
+        result = await session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def get_permission_by_name(
         self,
         session: AsyncSession,
         name: str,
+        include_archived: bool = True,
     ) -> Optional[Permission]:
         """
         Get permission by name.
@@ -1063,7 +1184,10 @@ class PermissionService(BaseService[Permission]):
             Permission if found, None otherwise
         """
         name = validate_permission_name(name)
-        return await self.get_one(session, Permission.name == name)
+        filters = [Permission.name == name]
+        if not include_archived:
+            filters.append(Permission.status != DefinitionStatus.ARCHIVED)
+        return await self.get_one(session, *filters)
 
     async def update_permission(
         self,
@@ -1071,8 +1195,10 @@ class PermissionService(BaseService[Permission]):
         permission_id: UUID,
         display_name: Optional[str] = None,
         description: Optional[str] = None,
+        status: Optional[DefinitionStatus | str] = None,
         is_active: Optional[bool] = None,
         tags: Optional[List[str]] = None,
+        changed_by_id: Optional[UUID] = None,
     ) -> Permission:
         """
         Update permission.
@@ -1090,12 +1216,21 @@ class PermissionService(BaseService[Permission]):
             PermissionNotFoundError: If permission doesn't exist
             InvalidInputError: If trying to modify system permission
         """
-        permission = await self.get_by_id(session, permission_id)
+        permission = await self.get_permission_by_id(
+            session,
+            permission_id,
+            load_tags=True,
+        )
         if not permission:
             raise PermissionNotFoundError(
                 message="Permission not found",
                 details={"permission_id": str(permission_id)},
             )
+
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
 
         if permission.is_system:
             raise InvalidInputError(
@@ -1112,22 +1247,59 @@ class PermissionService(BaseService[Permission]):
         if description is not None:
             permission.description = description
 
-        if is_active is not None:
-            permission.is_active = is_active
+        next_status = self._resolve_permission_status(
+            current_status=permission.status,
+            status=status,
+            is_active=is_active,
+        )
+        permission.status = next_status
+        permission.is_active = next_status == DefinitionStatus.ACTIVE
 
         await self.update(session, permission)
 
         if tags is not None:
-            await self.set_permission_tags(session, permission_id, tags)
+            await self.set_permission_tags(
+                session,
+                permission_id,
+                tags,
+                changed_by_id=changed_by_id,
+                record_history=False,
+            )
 
         await self._invalidate_all_permissions_cache()
-        return permission
+        current_permission = (
+            await self.get_permission_by_id(session, permission_id, load_tags=True)
+            or permission
+        )
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            current_permission,
+        )
+        changed_fields = self._changed_permission_definition_fields(
+            previous_snapshot,
+            current_snapshot,
+        )
+        if changed_fields:
+            await self._record_permission_definition_history_event(
+                session,
+                permission=current_permission,
+                event_type="updated",
+                event_source="permission_service.update_permission",
+                actor_user_id=changed_by_id,
+                before=previous_snapshot,
+                after=current_snapshot,
+                metadata={"changed_fields": changed_fields},
+            )
+        return current_permission
 
     async def set_permission_tags(
         self,
         session: AsyncSession,
         permission_id: UUID,
         tags: List[str],
+        changed_by_id: Optional[UUID] = None,
+        record_history: bool = True,
+        event_source: str = "permission_service.set_permission_tags",
     ) -> Permission:
         """
         Replace a permission's tag set, creating tags if needed.
@@ -1138,6 +1310,11 @@ class PermissionService(BaseService[Permission]):
                 message="Permission not found",
                 details={"permission_id": str(permission_id)},
             )
+
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
 
         if permission.is_system:
             raise InvalidInputError(
@@ -1155,7 +1332,31 @@ class PermissionService(BaseService[Permission]):
         if not normalized:
             permission.tags = []
             await self.update(session, permission)
-            return permission
+            await self._invalidate_all_permissions_cache()
+            current_permission = (
+                await self.get_permission_by_id(session, permission_id, load_tags=True)
+                or permission
+            )
+            current_snapshot = await self._build_permission_definition_snapshot(
+                session,
+                current_permission,
+            )
+            changed_fields = self._changed_permission_definition_fields(
+                previous_snapshot,
+                current_snapshot,
+            )
+            if record_history and changed_fields:
+                await self._record_permission_definition_history_event(
+                    session,
+                    permission=current_permission,
+                    event_type="updated",
+                    event_source=event_source,
+                    actor_user_id=changed_by_id,
+                    before=previous_snapshot,
+                    after=current_snapshot,
+                    metadata={"changed_fields": changed_fields},
+                )
+            return current_permission
 
         # Load/create tag models
         stmt = select(PermissionTag).where(PermissionTag.name.in_(normalized))
@@ -1174,12 +1375,36 @@ class PermissionService(BaseService[Permission]):
         permission.tags = tag_models
         await self.update(session, permission)
         await self._invalidate_all_permissions_cache()
-        return permission
+        current_permission = (
+            await self.get_permission_by_id(session, permission_id, load_tags=True)
+            or permission
+        )
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            current_permission,
+        )
+        changed_fields = self._changed_permission_definition_fields(
+            previous_snapshot,
+            current_snapshot,
+        )
+        if record_history and changed_fields:
+            await self._record_permission_definition_history_event(
+                session,
+                permission=current_permission,
+                event_type="updated",
+                event_source=event_source,
+                actor_user_id=changed_by_id,
+                before=previous_snapshot,
+                after=current_snapshot,
+                metadata={"changed_fields": changed_fields},
+            )
+        return current_permission
 
     async def delete_permission(
         self,
         session: AsyncSession,
         permission_id: UUID,
+        deleted_by_id: Optional[UUID] = None,
     ) -> bool:
         """
         Delete permission.
@@ -1194,9 +1419,19 @@ class PermissionService(BaseService[Permission]):
         Raises:
             InvalidInputError: If trying to delete system permission
         """
-        permission = await self.get_by_id(session, permission_id)
-        if not permission:
+        permission = await self.get_permission_by_id(
+            session,
+            permission_id,
+            load_tags=True,
+            include_archived=True,
+        )
+        if not permission or permission.status == DefinitionStatus.ARCHIVED:
             return False
+
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
 
         if permission.is_system:
             raise InvalidInputError(
@@ -1207,8 +1442,389 @@ class PermissionService(BaseService[Permission]):
                 },
             )
 
-        await self.delete(session, permission)
+        permission.status = DefinitionStatus.ARCHIVED
+        permission.is_active = False
+        await self.update(session, permission)
+
+        current_permission = (
+            await self.get_permission_by_id(
+                session,
+                permission_id,
+                load_tags=True,
+                include_archived=True,
+            )
+            or permission
+        )
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            current_permission,
+        )
+        await self._record_permission_definition_history_event(
+            session,
+            permission=current_permission,
+            event_type="deleted",
+            event_source="permission_service.delete_permission",
+            actor_user_id=deleted_by_id,
+            before=previous_snapshot,
+            after=current_snapshot,
+            metadata={"archived": True},
+        )
         await self._invalidate_all_permissions_cache()
+        return True
+
+    async def create_permission_condition_group(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        *,
+        operator: str = "AND",
+        description: Optional[str] = None,
+        changed_by_id: Optional[UUID] = None,
+    ) -> SqlConditionGroup:
+        permission = await self._get_mutable_permission_for_definition_edit(
+            session,
+            permission_id,
+        )
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+
+        group = SqlConditionGroup(
+            permission_id=permission_id,
+            operator=operator,
+            description=description,
+        )
+        session.add(group)
+        await session.flush()
+
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        await self._record_permission_definition_history_event(
+            session,
+            permission=permission,
+            event_type="condition_group_created",
+            event_source="permission_service.create_condition_group",
+            actor_user_id=changed_by_id,
+            before=previous_snapshot,
+            after=current_snapshot,
+            metadata={
+                "condition_group": self._build_condition_group_snapshot(group),
+            },
+        )
+        return group
+
+    async def update_permission_condition_group(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        group_id: UUID,
+        *,
+        fields_set: Set[str],
+        operator: Optional[str] = None,
+        description: Optional[str] = None,
+        changed_by_id: Optional[UUID] = None,
+    ) -> Optional[SqlConditionGroup]:
+        permission = await self._get_mutable_permission_for_definition_edit(
+            session,
+            permission_id,
+        )
+        group = await session.get(SqlConditionGroup, group_id)
+        if not group or group.permission_id != permission_id:
+            return None
+
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        previous_group_snapshot = self._build_condition_group_snapshot(group)
+
+        if "operator" in fields_set and operator is not None:
+            group.operator = operator
+        if "description" in fields_set:
+            group.description = description
+
+        await session.flush()
+
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        current_group_snapshot = self._build_condition_group_snapshot(group)
+        changed_fields = self._changed_snapshot_fields(
+            previous_group_snapshot,
+            current_group_snapshot,
+            ["operator", "description"],
+        )
+        if changed_fields:
+            await self._record_permission_definition_history_event(
+                session,
+                permission=permission,
+                event_type="condition_group_updated",
+                event_source="permission_service.update_condition_group",
+                actor_user_id=changed_by_id,
+                before=previous_snapshot,
+                after=current_snapshot,
+                metadata={
+                    "changed_fields": changed_fields,
+                    "before_group": previous_group_snapshot,
+                    "after_group": current_group_snapshot,
+                },
+            )
+        return group
+
+    async def delete_permission_condition_group(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        group_id: UUID,
+        *,
+        changed_by_id: Optional[UUID] = None,
+    ) -> bool:
+        permission = await self._get_mutable_permission_for_definition_edit(
+            session,
+            permission_id,
+        )
+        group = await session.get(SqlConditionGroup, group_id)
+        if not group or group.permission_id != permission_id:
+            return False
+
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        deleted_group_snapshot = self._build_condition_group_snapshot(group)
+
+        condition_stmt = select(PermissionCondition).where(
+            PermissionCondition.permission_id == permission_id,
+            PermissionCondition.condition_group_id == group_id,
+        )
+        condition_result = await session.execute(condition_stmt)
+        deleted_conditions = [
+            self._build_permission_condition_snapshot(condition)
+            for condition in condition_result.scalars().all()
+        ]
+
+        await session.delete(group)
+        await session.flush()
+
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        await self._record_permission_definition_history_event(
+            session,
+            permission=permission,
+            event_type="condition_group_deleted",
+            event_source="permission_service.delete_condition_group",
+            actor_user_id=changed_by_id,
+            before=previous_snapshot,
+            after=current_snapshot,
+            metadata={
+                "deleted_group": deleted_group_snapshot,
+                "deleted_conditions": deleted_conditions,
+            },
+        )
+        return True
+
+    async def create_permission_condition(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        *,
+        attribute: str,
+        operator: str,
+        value: Optional[Any],
+        value_type: str,
+        description: Optional[str] = None,
+        condition_group_id: Optional[UUID] = None,
+        changed_by_id: Optional[UUID] = None,
+    ) -> PermissionCondition:
+        permission = await self._get_mutable_permission_for_definition_edit(
+            session,
+            permission_id,
+        )
+        if condition_group_id is not None:
+            group = await session.get(SqlConditionGroup, condition_group_id)
+            if not group or group.permission_id != permission_id:
+                raise InvalidInputError(
+                    message="Invalid condition_group_id",
+                    details={
+                        "permission_id": str(permission_id),
+                        "condition_group_id": str(condition_group_id),
+                    },
+                )
+
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+
+        condition = PermissionCondition(
+            permission_id=permission_id,
+            condition_group_id=condition_group_id,
+            attribute=attribute,
+            operator=operator,
+            value=serialize_condition_value(value, value_type),
+            value_type=value_type,
+            description=description,
+        )
+        session.add(condition)
+        await session.flush()
+
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        await self._record_permission_definition_history_event(
+            session,
+            permission=permission,
+            event_type="condition_created",
+            event_source="permission_service.create_condition",
+            actor_user_id=changed_by_id,
+            before=previous_snapshot,
+            after=current_snapshot,
+            metadata={
+                "condition": self._build_permission_condition_snapshot(condition),
+            },
+        )
+        return condition
+
+    async def update_permission_condition(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        condition_id: UUID,
+        *,
+        fields_set: Set[str],
+        condition_group_id: Optional[UUID] = None,
+        attribute: Optional[str] = None,
+        operator: Optional[str] = None,
+        value: Optional[Any] = None,
+        value_type: Optional[str] = None,
+        description: Optional[str] = None,
+        changed_by_id: Optional[UUID] = None,
+    ) -> Optional[PermissionCondition]:
+        permission = await self._get_mutable_permission_for_definition_edit(
+            session,
+            permission_id,
+        )
+        condition = await session.get(PermissionCondition, condition_id)
+        if not condition or condition.permission_id != permission_id:
+            return None
+
+        if "condition_group_id" in fields_set and condition_group_id is not None:
+            group = await session.get(SqlConditionGroup, condition_group_id)
+            if not group or group.permission_id != permission_id:
+                raise InvalidInputError(
+                    message="Invalid condition_group_id",
+                    details={
+                        "permission_id": str(permission_id),
+                        "condition_group_id": str(condition_group_id),
+                    },
+                )
+
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        previous_condition_snapshot = self._build_permission_condition_snapshot(condition)
+
+        if "condition_group_id" in fields_set:
+            condition.condition_group_id = condition_group_id
+        if "attribute" in fields_set and attribute is not None:
+            condition.attribute = attribute
+        if "operator" in fields_set and operator is not None:
+            condition.operator = operator
+        if "value_type" in fields_set and value_type is not None:
+            condition.value_type = value_type
+        if "value" in fields_set or "value_type" in fields_set:
+            condition.value = serialize_condition_value(
+                value,
+                value_type or condition.value_type,
+            )
+        if "description" in fields_set:
+            condition.description = description
+
+        await session.flush()
+
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        current_condition_snapshot = self._build_permission_condition_snapshot(condition)
+        changed_fields = self._changed_snapshot_fields(
+            previous_condition_snapshot,
+            current_condition_snapshot,
+            [
+                "condition_group_id",
+                "attribute",
+                "operator",
+                "value",
+                "value_type",
+                "description",
+            ],
+        )
+        if changed_fields:
+            await self._record_permission_definition_history_event(
+                session,
+                permission=permission,
+                event_type="condition_updated",
+                event_source="permission_service.update_condition",
+                actor_user_id=changed_by_id,
+                before=previous_snapshot,
+                after=current_snapshot,
+                metadata={
+                    "changed_fields": changed_fields,
+                    "before_condition": previous_condition_snapshot,
+                    "after_condition": current_condition_snapshot,
+                },
+            )
+        return condition
+
+    async def delete_permission_condition(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+        condition_id: UUID,
+        *,
+        changed_by_id: Optional[UUID] = None,
+    ) -> bool:
+        permission = await self._get_mutable_permission_for_definition_edit(
+            session,
+            permission_id,
+        )
+        condition = await session.get(PermissionCondition, condition_id)
+        if not condition or condition.permission_id != permission_id:
+            return False
+
+        previous_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        deleted_condition_snapshot = self._build_permission_condition_snapshot(condition)
+
+        await session.delete(condition)
+        await session.flush()
+
+        current_snapshot = await self._build_permission_definition_snapshot(
+            session,
+            permission,
+        )
+        await self._record_permission_definition_history_event(
+            session,
+            permission=permission,
+            event_type="condition_deleted",
+            event_source="permission_service.delete_condition",
+            actor_user_id=changed_by_id,
+            before=previous_snapshot,
+            after=current_snapshot,
+            metadata={
+                "deleted_condition": deleted_condition_snapshot,
+            },
+        )
         return True
 
     async def list_permissions(
@@ -1231,11 +1847,14 @@ class PermissionService(BaseService[Permission]):
         Returns:
             Tuple of (permissions, total_count)
         """
-        filters = []
+        filters = [Permission.status != DefinitionStatus.ARCHIVED]
         if resource:
             filters.append(Permission.resource == resource)
         if is_active is not None:
-            filters.append(Permission.is_active == is_active)
+            filters.append(
+                Permission.status
+                == (DefinitionStatus.ACTIVE if is_active else DefinitionStatus.INACTIVE)
+            )
 
         total_count = await self.count(session, *filters)
 
@@ -1270,6 +1889,7 @@ class PermissionService(BaseService[Permission]):
         pattern = f"%{search_term}%"
         permissions = await self.get_many(
             session,
+            Permission.status != DefinitionStatus.ARCHIVED,
             or_(
                 Permission.name.ilike(pattern),
                 Permission.display_name.ilike(pattern),
@@ -1355,7 +1975,15 @@ class PermissionService(BaseService[Permission]):
         Returns:
             List of permissions
         """
-        stmt = select(Permission).join(PermissionTagLink).join(PermissionTag).where(PermissionTag.name == tag_name)
+        stmt = (
+            select(Permission)
+            .join(PermissionTagLink)
+            .join(PermissionTag)
+            .where(
+                PermissionTag.name == tag_name,
+                Permission.status != DefinitionStatus.ARCHIVED,
+            )
+        )
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
@@ -1378,7 +2006,14 @@ class PermissionService(BaseService[Permission]):
         Returns:
             List of Permission objects
         """
-        stmt = select(Permission).join(RolePermission).where(RolePermission.role_id == role_id)
+        stmt = (
+            select(Permission)
+            .join(RolePermission)
+            .where(
+                RolePermission.role_id == role_id,
+                Permission.status != DefinitionStatus.ARCHIVED,
+            )
+        )
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
@@ -1446,3 +2081,170 @@ class PermissionService(BaseService[Permission]):
         cache_service = getattr(self, "cache_service", None)
         if cache_service is not None:
             await cache_service.publish_all_permissions_invalidation()
+
+    async def _record_permission_definition_history_event(
+        self,
+        session: AsyncSession,
+        *,
+        permission: Permission,
+        event_type: str,
+        event_source: str,
+        actor_user_id: Optional[UUID] = None,
+        before: Optional[Dict[str, Any]] = None,
+        after: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        occurred_at: Optional[datetime] = None,
+    ) -> None:
+        if self.permission_history_service is None:
+            return
+
+        snapshot = await self._build_permission_definition_snapshot(session, permission)
+        await self.permission_history_service.record_event(
+            session,
+            permission_id=permission.id,
+            event_type=event_type,
+            event_source=event_source,
+            actor_user_id=actor_user_id,
+            snapshot=snapshot,
+            before=before,
+            after=after,
+            metadata=metadata,
+            occurred_at=occurred_at,
+        )
+
+    async def _build_permission_definition_snapshot(
+        self,
+        session: AsyncSession,
+        permission: Permission,
+    ) -> Dict[str, Any]:
+        current_permission = (
+            await self.get_permission_by_id(session, permission.id, load_tags=True)
+            or permission
+        )
+        tags = sorted(
+            list(getattr(current_permission, "tags", []) or []),
+            key=lambda tag: (tag.name, str(tag.id)),
+        )
+        group_stmt = select(SqlConditionGroup).where(
+            SqlConditionGroup.permission_id == current_permission.id
+        )
+        group_result = await session.execute(group_stmt)
+        groups = sorted(
+            list(group_result.scalars().all()),
+            key=lambda group: (group.operator, group.description or "", str(group.id)),
+        )
+        condition_stmt = select(PermissionCondition).where(
+            PermissionCondition.permission_id == current_permission.id
+        )
+        condition_result = await session.execute(condition_stmt)
+        conditions = sorted(
+            list(condition_result.scalars().all()),
+            key=lambda condition: (
+                condition.attribute,
+                str(condition.condition_group_id or ""),
+                str(condition.id),
+            ),
+        )
+        return {
+            "permission_name": current_permission.name,
+            "permission_display_name": current_permission.display_name,
+            "permission_description": current_permission.description,
+            "resource": current_permission.resource,
+            "action": current_permission.action,
+            "scope": current_permission.scope,
+            "is_system": current_permission.is_system,
+            "status": getattr(current_permission.status, "value", current_permission.status),
+            "is_active": current_permission.is_active,
+            "tag_names": [tag.name for tag in tags],
+            "condition_groups": [
+                self._build_condition_group_snapshot(group) for group in groups
+            ],
+            "conditions": [
+                self._build_permission_condition_snapshot(condition)
+                for condition in conditions
+            ],
+        }
+
+    def _changed_permission_definition_fields(
+        self,
+        previous_snapshot: Dict[str, Any],
+        current_snapshot: Dict[str, Any],
+    ) -> List[str]:
+        field_names = [
+            "permission_name",
+            "permission_display_name",
+            "permission_description",
+            "resource",
+            "action",
+            "scope",
+            "is_system",
+            "status",
+            "is_active",
+            "tag_names",
+            "condition_groups",
+            "conditions",
+        ]
+        return [
+            field_name
+            for field_name in field_names
+            if previous_snapshot.get(field_name) != current_snapshot.get(field_name)
+        ]
+
+    async def _get_mutable_permission_for_definition_edit(
+        self,
+        session: AsyncSession,
+        permission_id: UUID,
+    ) -> Permission:
+        permission = await self.get_permission_by_id(
+            session,
+            permission_id,
+            load_tags=True,
+        )
+        if not permission:
+            raise PermissionNotFoundError(
+                message="Permission not found",
+                details={"permission_id": str(permission_id)},
+            )
+        if permission.is_system:
+            raise InvalidInputError(
+                message="Cannot modify system permission",
+                details={
+                    "permission_id": str(permission_id),
+                    "permission_name": permission.name,
+                },
+            )
+        return permission
+
+    @staticmethod
+    def _build_condition_group_snapshot(group: SqlConditionGroup) -> Dict[str, Any]:
+        return {
+            "id": group.id,
+            "operator": group.operator,
+            "description": group.description,
+        }
+
+    @staticmethod
+    def _build_permission_condition_snapshot(
+        condition: PermissionCondition,
+    ) -> Dict[str, Any]:
+        return {
+            "id": condition.id,
+            "condition_group_id": condition.condition_group_id,
+            "attribute": condition.attribute,
+            "operator": condition.operator,
+            "value": condition.value,
+            "value_type": condition.value_type,
+            "description": condition.description,
+        }
+
+    @staticmethod
+    def _changed_snapshot_fields(
+        previous_snapshot: Dict[str, Any],
+        current_snapshot: Dict[str, Any],
+        field_names: List[str],
+    ) -> List[str]:
+        return [
+            field_name
+            for field_name in field_names
+            if previous_snapshot.get(field_name) != current_snapshot.get(field_name)
+        ]

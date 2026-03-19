@@ -1642,7 +1642,6 @@ config = EnterpriseConfig(
     enable_context_aware_roles=True,
     enable_abac=True,
     enable_caching=True,
-    enable_audit_log=True,
 
     # Caching settings (only used when enable_caching=True)
     redis_url="redis://localhost:6379",

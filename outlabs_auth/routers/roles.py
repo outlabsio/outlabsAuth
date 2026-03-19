@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from outlabs_auth.core.exceptions import InvalidInputError, RoleNotFoundError
 from outlabs_auth.models.sql.enums import RoleScope
 from outlabs_auth.models.sql.role import ConditionGroup, Role, RoleCondition
 from outlabs_auth.observability import (
@@ -26,7 +27,6 @@ from outlabs_auth.schemas.abac import (
     ConditionGroupResponse,
     ConditionGroupUpdateRequest,
     parse_uuid,
-    serialize_condition_value,
 )
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.role import (
@@ -181,13 +181,6 @@ def get_roles_router(
     def _parse_scope_uuid_list(scope: dict[str, Any], key: str) -> list[UUID]:
         return [UUID(str(value)) for value in (scope.get(key) or [])]
 
-    def _require_mutable_role(role: Role) -> None:
-        if role.is_system_role:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot modify system role",
-            )
-
     @router.get(
         "/",
         response_model=PaginatedResponse[RoleResponse],
@@ -327,6 +320,7 @@ def get_roles_router(
             description=data.description,
             permission_names=data.permissions,
             is_global=data.is_global,
+            status=data.status,
             root_entity_id=UUID(data.root_entity_id) if data.root_entity_id else None,
             scope_entity_id=UUID(data.scope_entity_id)
             if data.scope_entity_id
@@ -334,6 +328,7 @@ def get_roles_router(
             scope=scope,
             is_auto_assigned=data.is_auto_assigned,
             assignable_at_types=data.assignable_at_types,
+            created_by_id=UUID(auth_result["user_id"]),
         )
 
         if role.is_auto_assigned:
@@ -359,7 +354,8 @@ def get_roles_router(
         """Get role details by ID."""
         role = await _get_role_or_404(session, role_id, load_permissions=True)
         await _require_role_visibility(session, auth_result, role)
-        return await build_role_response(session, role, role.get_permission_names())
+        permission_names = await auth.role_service.get_role_permission_names(session, role.id)
+        return await build_role_response(session, role, permission_names)
 
     @router.patch(
         "/{role_id}",
@@ -395,17 +391,14 @@ def get_roles_router(
             display_name=update_dict.get("display_name"),
             description=update_dict.get("description"),
             is_global=update_dict.get("is_global"),
+            status=update_dict.get("status"),
             scope=scope,
             is_auto_assigned=update_dict.get("is_auto_assigned"),
             assignable_at_types=update_dict.get("assignable_at_types"),
+            permission_names=update_dict.get("permissions"),
+            update_permissions="permissions" in update_dict,
+            changed_by_id=UUID(auth_result["user_id"]),
         )
-
-        if "permissions" in update_dict and update_dict["permissions"] is not None:
-            role = await auth.role_service.set_permissions_by_name(
-                session,
-                role_id=role_id,
-                permission_names=update_dict["permissions"],
-            )
 
         if not was_auto_assigned and role.is_auto_assigned:
             await auth.membership_service.apply_auto_assigned_role(session, role.id)
@@ -431,7 +424,11 @@ def get_roles_router(
         role = await _get_role_or_404(session, role_id)
         await _require_role_visibility(session, auth_result, role)
 
-        deleted = await auth.role_service.delete_role(session, role_id)
+        deleted = await auth.role_service.delete_role(
+            session,
+            role_id,
+            deleted_by_id=UUID(auth_result["user_id"]),
+        )
         if not deleted:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Role not found"
@@ -458,6 +455,7 @@ def get_roles_router(
             session,
             role_id=role_id,
             permission_names=permissions,
+            changed_by_id=UUID(auth_result["user_id"]),
         )
         return await build_role_response(session, role, role.get_permission_names())
 
@@ -481,6 +479,7 @@ def get_roles_router(
             session,
             role_id=role_id,
             permission_names=permissions,
+            changed_by_id=UUID(auth_result["user_id"]),
         )
         return await build_role_response(session, role, role.get_permission_names())
 
@@ -531,13 +530,18 @@ def get_roles_router(
     ):
         role = await _get_role_or_404(session, role_id)
         await _require_role_visibility(session, auth_result, role)
-        _require_mutable_role(role)
-
-        group = ConditionGroup(
-            role_id=role_id, operator=data.operator, description=data.description
-        )
-        session.add(group)
-        await session.flush()
+        try:
+            group = await auth.role_service.create_role_condition_group(
+                session,
+                role_id,
+                operator=data.operator,
+                description=data.description,
+                changed_by_id=UUID(auth_result["user_id"]),
+            )
+        except RoleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.message)) from exc
+        except InvalidInputError as exc:
+            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
         return ConditionGroupResponse(
             id=str(group.id),
             operator=group.operator,
@@ -561,20 +565,23 @@ def get_roles_router(
     ):
         role = await _get_role_or_404(session, role_id)
         await _require_role_visibility(session, auth_result, role)
-        _require_mutable_role(role)
+        try:
+            group = await auth.role_service.update_role_condition_group(
+                session,
+                role_id,
+                group_id,
+                fields_set=set(data.model_fields_set),
+                operator=data.operator,
+                description=data.description,
+                changed_by_id=UUID(auth_result["user_id"]),
+            )
+        except RoleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.message)) from exc
+        except InvalidInputError as exc:
+            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
 
-        group = await session.get(ConditionGroup, group_id)
-        if not group or group.role_id != role_id:
+        if group is None:
             raise HTTPException(status_code=404, detail="Condition group not found")
-
-        fields_set = data.model_fields_set
-
-        if "operator" in fields_set and data.operator is not None:
-            group.operator = data.operator
-        if "description" in fields_set:
-            group.description = data.description
-
-        await session.flush()
         return ConditionGroupResponse(
             id=str(group.id),
             operator=group.operator,
@@ -597,13 +604,20 @@ def get_roles_router(
     ):
         role = await _get_role_or_404(session, role_id)
         await _require_role_visibility(session, auth_result, role)
-        _require_mutable_role(role)
+        try:
+            deleted = await auth.role_service.delete_role_condition_group(
+                session,
+                role_id,
+                group_id,
+                changed_by_id=UUID(auth_result["user_id"]),
+            )
+        except RoleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.message)) from exc
+        except InvalidInputError as exc:
+            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
 
-        group = await session.get(ConditionGroup, group_id)
-        if not group or group.role_id != role_id:
+        if not deleted:
             raise HTTPException(status_code=404, detail="Condition group not found")
-        await session.delete(group)
-        await session.flush()
         return None
 
     @router.get(
@@ -654,27 +668,22 @@ def get_roles_router(
     ):
         role = await _get_role_or_404(session, role_id)
         await _require_role_visibility(session, auth_result, role)
-        _require_mutable_role(role)
-
-        group_id = parse_uuid(data.condition_group_id)
-        if group_id is not None:
-            group = await session.get(ConditionGroup, group_id)
-            if not group or group.role_id != role_id:
-                raise HTTPException(
-                    status_code=400, detail="Invalid condition_group_id"
-                )
-
-        cond = RoleCondition(
-            role_id=role_id,
-            condition_group_id=group_id,
-            attribute=data.attribute,
-            operator=data.operator,
-            value=serialize_condition_value(data.value, data.value_type),
-            value_type=data.value_type,
-            description=data.description,
-        )
-        session.add(cond)
-        await session.flush()
+        try:
+            cond = await auth.role_service.create_role_condition(
+                session,
+                role_id,
+                condition_group_id=parse_uuid(data.condition_group_id),
+                attribute=data.attribute,
+                operator=data.operator,
+                value=data.value,
+                value_type=data.value_type,
+                description=data.description,
+                changed_by_id=UUID(auth_result["user_id"]),
+            )
+        except RoleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.message)) from exc
+        except InvalidInputError as exc:
+            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
         return AbacConditionResponse(
             id=str(cond.id),
             attribute=cond.attribute,
@@ -702,38 +711,29 @@ def get_roles_router(
     ):
         role = await _get_role_or_404(session, role_id)
         await _require_role_visibility(session, auth_result, role)
-        _require_mutable_role(role)
-
-        cond = await session.get(RoleCondition, condition_id)
-        if not cond or cond.role_id != role_id:
-            raise HTTPException(status_code=404, detail="Condition not found")
-
-        fields_set = data.model_fields_set
-
-        if "condition_group_id" in fields_set:
-            group_id = parse_uuid(data.condition_group_id)
-            if group_id is not None:
-                group = await session.get(ConditionGroup, group_id)
-                if not group or group.role_id != role_id:
-                    raise HTTPException(
-                        status_code=400, detail="Invalid condition_group_id"
-                    )
-            cond.condition_group_id = group_id
-
-        if "attribute" in fields_set and data.attribute is not None:
-            cond.attribute = data.attribute
-        if "operator" in fields_set and data.operator is not None:
-            cond.operator = data.operator
-        if "value_type" in fields_set and data.value_type is not None:
-            cond.value_type = data.value_type
-        if "value" in fields_set or "value_type" in fields_set:
-            cond.value = serialize_condition_value(
-                data.value, data.value_type or cond.value_type
+        try:
+            cond = await auth.role_service.update_role_condition(
+                session,
+                role_id,
+                condition_id,
+                fields_set=set(data.model_fields_set),
+                condition_group_id=parse_uuid(data.condition_group_id)
+                if "condition_group_id" in data.model_fields_set
+                else None,
+                attribute=data.attribute,
+                operator=data.operator,
+                value=data.value,
+                value_type=data.value_type,
+                description=data.description,
+                changed_by_id=UUID(auth_result["user_id"]),
             )
-        if "description" in fields_set:
-            cond.description = data.description
+        except RoleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.message)) from exc
+        except InvalidInputError as exc:
+            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
 
-        await session.flush()
+        if cond is None:
+            raise HTTPException(status_code=404, detail="Condition not found")
         return AbacConditionResponse(
             id=str(cond.id),
             attribute=cond.attribute,
@@ -760,13 +760,20 @@ def get_roles_router(
     ):
         role = await _get_role_or_404(session, role_id)
         await _require_role_visibility(session, auth_result, role)
-        _require_mutable_role(role)
+        try:
+            deleted = await auth.role_service.delete_role_condition(
+                session,
+                role_id,
+                condition_id,
+                changed_by_id=UUID(auth_result["user_id"]),
+            )
+        except RoleNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc.message)) from exc
+        except InvalidInputError as exc:
+            raise HTTPException(status_code=400, detail=str(exc.message)) from exc
 
-        cond = await session.get(RoleCondition, condition_id)
-        if not cond or cond.role_id != role_id:
+        if not deleted:
             raise HTTPException(status_code=404, detail="Condition not found")
-        await session.delete(cond)
-        await session.flush()
         return None
 
     return router

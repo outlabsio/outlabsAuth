@@ -86,7 +86,7 @@ Start here: Do you need organizational hierarchy (departments/teams)?
 | Redis caching | ❌ | ⭕ `enable_caching=True` (requires Redis) |
 | Redis Pub/Sub cache invalidation | ❌ | ⭕ `enable_caching=True` (DD-037) |
 | Tenant isolation mode | ❌ | ❌ (removed; use entity/root scoping) |
-| Audit logging | ❌ | ⭕ `enable_audit_log=True` |
+| Core lifecycle history | ✅ user/definition history | ✅ user/membership/definition history |
 | **Performance (Updated v1.4)** |
 | Permission check | ~10ms | ~10ms (uncached)<br>~5ms (cached) |
 | Tree permission check | N/A | ~10ms (O(1) via closure table) |
@@ -435,7 +435,6 @@ auth = EnterpriseRBAC(
     enable_context_aware_roles=True,  # Opt-in
     enable_abac=True,                 # Opt-in
     enable_caching=True,              # Opt-in (requires Redis)
-    enable_audit_log=True             # Opt-in
 )
 
 # Context-aware roles (opt-in feature)
@@ -472,7 +471,11 @@ invoice_approval = await auth.permission_service.create_permission(
 - ABAC conditions (`enable_abac=True`)
 - Redis caching (`enable_caching=True`, requires Redis)
 - Entity/root scoping isolation
-- Audit logging (`enable_audit_log=True`)
+
+**Core History (Current Runtime):**
+- User lifecycle timeline via `user_audit_events`
+- Entity membership lifecycle via `entity_membership_history`
+- Role/permission definition history via dedicated history tables
 
 **Limitations:**
 - More complex than SimpleRBAC
@@ -628,7 +631,7 @@ EnterpriseRBAC with optional features:
 - Entity hierarchy ✅ (core)
 - Context-aware roles ⭕ (enable_context_aware_roles=True)
 - ABAC conditions ⭕ (enable_abac=True)
-- Audit logging ⭕ (enable_audit_log=True)
+- Core lifecycle history ✅
 - Redis caching ⭕ (enable_caching=True)
 ```
 
@@ -706,7 +709,7 @@ await auth.membership_service.add_member(
 - **ABAC conditions**: Need attribute-based access control
 - **Redis caching**: Performance is critical (high traffic)
 - **Entity isolation**: Need strict root-entity boundaries
-- **Audit logging**: Need comprehensive audit trails
+- **Additional compliance overlays**: Core lifecycle history is included; add host-specific compliance/export handling only if needed
 
 **Migration Steps:**
 1. Add feature flags to existing `EnterpriseRBAC` configuration
@@ -728,8 +731,7 @@ auth = EnterpriseRBAC(
     redis_url="redis://localhost:6379",
     enable_context_aware_roles=True,  # Enable as needed
     enable_abac=True,                 # Enable as needed
-    enable_caching=True,              # Enable as needed
-    enable_audit_log=True             # Enable as needed
+    enable_caching=True               # Enable as needed
 )
 
 # Context-aware role (optional feature)
@@ -845,7 +847,7 @@ manager_role = await auth.role_service.create_role(
 | Performance critical | EnterpriseRBAC | + caching (requires Redis) |
 | Context-dependent roles | EnterpriseRBAC | + context-aware roles |
 | Entity-isolated SaaS | EnterpriseRBAC | + root-entity scoping + caching |
-| Audit requirements | EnterpriseRBAC | + audit logging |
+| Audit requirements | EnterpriseRBAC | Core history + any host-specific compliance layer |
 
 ---
 
@@ -870,7 +872,9 @@ manager_role = await auth.role_service.create_role(
 - ⭕ **ABAC conditions**: Complex access rules based on attributes
 - ⭕ **Redis caching**: Performance is critical (high traffic)
 - ✅ **Entity isolation**: Use root-entity scoping
-- ⭕ **Audit logging**: Compliance or audit trail requirements
+
+### Use Core History when:
+- ✅ **Audit or investigation needs**: User lifecycle history, membership history, and definition history are already part of the runtime contract
 
 **Pro Tip**: Start with basic EnterpriseRBAC (just hierarchy) and enable optional features incrementally as needed!
 

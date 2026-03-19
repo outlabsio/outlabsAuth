@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.models.sql.enums import RoleScope
+from outlabs_auth.schemas.permission import PermissionResponse
 from outlabs_auth.schemas.role import RoleResponse, RoleScopeEnum
 from outlabs_auth.schemas.user import UserResponse
 
@@ -113,11 +114,13 @@ async def build_role_response(
 
     resolved_permissions = permission_names
     if resolved_permissions is None:
-        resolved_permissions = (
-            role.get_permission_names()
-            if hasattr(role, "get_permission_names")
-            else []
-        )
+        resolved_permissions = [
+            permission.name
+            for permission in (getattr(role, "permissions", []) or [])
+            if getattr(getattr(permission, "status", None), "value", getattr(permission, "status", None))
+            != "archived"
+            and getattr(permission, "name", None)
+        ]
 
     scope_value = RoleScopeEnum.HIERARCHY
     if getattr(role, "scope", None) == RoleScope.ENTITY_ONLY:
@@ -131,6 +134,7 @@ async def build_role_response(
         permissions=resolved_permissions,
         is_system_role=role.is_system_role,
         is_global=role.is_global,
+        status=serialize_status(getattr(role, "status", None)),
         root_entity_id=str(role.root_entity_id) if role.root_entity_id else None,
         root_entity_name=root_entity_name,
         assignable_at_types=list(getattr(role, "assignable_at_types", []) or []),
@@ -138,4 +142,22 @@ async def build_role_response(
         scope_entity_name=scope_entity_name,
         scope=scope_value,
         is_auto_assigned=role.is_auto_assigned,
+    )
+
+
+def build_permission_response(permission: Any) -> PermissionResponse:
+    """Build a consistent permission response from a SQL model."""
+    return PermissionResponse(
+        id=str(permission.id),
+        name=permission.name,
+        display_name=permission.display_name,
+        description=permission.description,
+        resource=permission.resource,
+        action=permission.action,
+        scope=permission.scope,
+        is_system=permission.is_system,
+        status=serialize_status(getattr(permission, "status", None)),
+        is_active=bool(getattr(permission, "is_active", False)),
+        tags=[tag.name for tag in permission.tags] if getattr(permission, "tags", None) else [],
+        metadata={},
     )

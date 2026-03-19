@@ -469,7 +469,11 @@ def get_auth_router(
             )
 
             # Auto-login: create tokens
-            tokens = await auth.auth_service.create_tokens_for_user(session, user)
+            tokens = await auth.auth_service.create_tokens_for_user(
+                session,
+                user,
+                auth_method="invite_accept",
+            )
 
             obs.log_event("invite_accepted", user_id=str(user.id))
 

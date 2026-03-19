@@ -39,6 +39,9 @@ class ModelRegistry:
         "SocialAccount",
         "OAuthState",
         "ActivityMetric",
+        "RoleDefinitionHistory",
+        "PermissionDefinitionHistory",
+        "UserAuditEvent",
     ]
 
     # SimpleRBAC-specific models (flat role structure)
@@ -52,6 +55,7 @@ class ModelRegistry:
         "EntityMembership",
         "EntityMembershipRole",  # Junction table
         "EntityClosure",
+        "EntityMembershipHistory",
     ]
 
     @classmethod
@@ -108,24 +112,47 @@ class ModelRegistry:
         models: List[Type[SQLModel]] = []
 
         # Core models (always included)
+        from outlabs_auth.models.sql.activity_metric import ActivityMetric
         from outlabs_auth.models.sql.api_key import APIKey
+        from outlabs_auth.models.sql.oauth_state import OAuthState
         from outlabs_auth.models.sql.permission import Permission
+        from outlabs_auth.models.sql.permission_definition_history import (
+            PermissionDefinitionHistory,
+        )
+        from outlabs_auth.models.sql.role_definition_history import RoleDefinitionHistory
         from outlabs_auth.models.sql.role import Role
+        from outlabs_auth.models.sql.social_account import SocialAccount
         from outlabs_auth.models.sql.token import RefreshToken
+        from outlabs_auth.models.sql.user_audit_event import UserAuditEvent
         from outlabs_auth.models.sql.user import User
 
-        models.extend([User, Role, Permission, RefreshToken, APIKey])
+        models.extend(
+            [
+                User,
+                Role,
+                Permission,
+                RefreshToken,
+                APIKey,
+                SocialAccount,
+                OAuthState,
+                ActivityMetric,
+                RoleDefinitionHistory,
+                PermissionDefinitionHistory,
+                UserAuditEvent,
+            ]
+        )
 
         if enable_entity_hierarchy:
             # EnterpriseRBAC models
             from outlabs_auth.models.sql.closure import EntityClosure
             from outlabs_auth.models.sql.entity import Entity
             from outlabs_auth.models.sql.entity_membership import EntityMembership
+            from outlabs_auth.models.sql.entity_membership_history import EntityMembershipHistory
 
-            models.extend([Entity, EntityMembership, EntityClosure])
+            models.extend([Entity, EntityMembership, EntityClosure, EntityMembershipHistory])
         else:
             # SimpleRBAC models
-            from outlabs_auth.models.sql.membership import UserRoleMembership
+            from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
 
             models.append(UserRoleMembership)
 
@@ -175,6 +202,9 @@ class ModelRegistry:
             "social_accounts",
             "oauth_states",
             "activity_metrics",
+            "role_definition_history",
+            "permission_definition_history",
+            "user_audit_events",
         ]
 
         if enable_entity_hierarchy:
@@ -184,6 +214,7 @@ class ModelRegistry:
                     "entity_memberships",
                     "entity_membership_roles",
                     "entity_closure",
+                    "entity_membership_history",
                 ]
             )
         else:

@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from outlabs_auth.models.sql.enums import DefinitionStatus
+
 
 class PermissionResponse(BaseModel):
     """Permission response schema for API endpoints."""
@@ -16,6 +18,7 @@ class PermissionResponse(BaseModel):
     action: Optional[str] = None
     scope: Optional[str] = None
     is_system: bool = False
+    status: DefinitionStatus = DefinitionStatus.ACTIVE
     is_active: bool = True
     tags: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -43,6 +46,10 @@ class PermissionCreateRequest(BaseModel):
     is_system: bool = Field(
         default=False,
         description="Whether this is a system permission (cannot be deleted)",
+    )
+    status: Optional[DefinitionStatus] = Field(
+        default=None,
+        description="Lifecycle status for the permission. Use active/inactive; delete archives it.",
     )
     is_active: bool = Field(
         default=True, description="Whether this permission is currently active"
@@ -89,6 +96,7 @@ class PermissionUpdateRequest(BaseModel):
 
     display_name: Optional[str] = Field(None, min_length=1, max_length=200)
     description: Optional[str] = Field(None, max_length=1000)
+    status: Optional[DefinitionStatus] = None
     is_active: Optional[bool] = None
     tags: Optional[List[str]] = None
     metadata: Optional[Dict[str, Any]] = None

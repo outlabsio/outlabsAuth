@@ -15,6 +15,7 @@ Looking for usage documentation? See **[docs-library/](../docs-library/)** inste
 
 ### Design Decisions
 - **DESIGN_DECISIONS.md** - Complete record of architectural decisions (DD-001 to DD-037+)
+- **CURRENT_IMPLEMENTATION_STATUS.md** - Current delivered slices, accepted implementation nuances, and known remaining gaps
 - **COMPARISON_MATRIX.md** - SimpleRBAC vs EnterpriseRBAC feature comparison
 
 ### API & Integration

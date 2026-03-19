@@ -284,7 +284,12 @@ async def test_admin_user_details_invite_resend_and_delete_contract(
         f"/v1/users/{invited['id']}",
         headers={"Authorization": f"Bearer {admin_user['token']}"},
     )
-    assert readback_resp.status_code == 404
+    assert readback_resp.status_code == 200
+    deleted_user = readback_resp.json()
+    assert deleted_user["id"] == invited["id"]
+    assert deleted_user["email"] == invite_email
+    assert deleted_user["status"] == "deleted"
+    assert deleted_user["deleted_at"] is not None
 
 
 @pytest.mark.integration

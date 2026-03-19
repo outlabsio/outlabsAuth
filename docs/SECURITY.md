@@ -1619,71 +1619,51 @@ async def forgot_password(email: EmailStr):
 
 ---
 
-## Audit Logging
+## User And Security History
 
-### Enable Audit Logging
+Current runtime history is not exposed through a generic `auth.audit_service`,
+and it is not primarily gated by `enable_audit_log`. The core library now
+ships with typed, queryable history surfaces:
 
-**Configuration**:
-```python
-from outlabs_auth import EnterpriseRBAC
+- `user_audit_events` for profile/email/password/status/invite/direct-role/login/password-reset events
+- `entity_membership_history` for append-only membership lifecycle changes
+- `login_history` for authentication-attempt telemetry and security metadata
 
-auth = EnterpriseRBAC(
-    database=db,
-    enable_audit_log=True  # Enable comprehensive logging
-)
-```
+### What Is Recorded In The User-Centric Timeline
 
-### What Gets Logged
-
-**Security Events**:
+**High-signal lifecycle events**:
 - ✅ Login attempts (success and failure)
-- ✅ Logout events
-- ✅ Token refresh
 - ✅ Password changes
-- ✅ Password reset requests
-- ✅ Permission checks (failed only)
-- ✅ Role assignments/removals
-- ✅ Entity membership changes
-- ✅ User creation/deletion
-- ✅ Admin actions
+- ✅ Password reset request/completion
+- ✅ Invite create/resend/accept
+- ✅ User status change, delete, and restore
+- ✅ Direct-role assignment/revocation
+- ✅ Entity membership lifecycle mirrored into the same user timeline
 
-**Log Format**:
-```python
-{
-    "event_type": "login_failed",
-    "timestamp": "2025-01-14T10:30:00Z",
-    "user_email": "user@example.com",
-    "ip_address": "192.168.1.1",
-    "user_agent": "Mozilla/5.0...",
-    "reason": "invalid_password",
-    "metadata": {
-        "attempt_count": 3
-    }
-}
-```
-
-### Querying Audit Logs
+### Querying Current History Surfaces
 
 ```python
-# Get user's login history
-logs = await auth.audit_service.get_user_events(
-    user_id=user.id,
-    event_types=["login_success", "login_failed"],
-    start_date=datetime.now() - timedelta(days=30)
-)
+async with auth.get_session() as session:
+    user_events, total = await auth.user_audit_service.list_user_events(
+        session,
+        user.id,
+        event_category="authentication",
+        page=1,
+        limit=50,
+    )
 
-# Get failed permission checks
-logs = await auth.audit_service.get_events(
-    event_type="permission_denied",
-    start_date=datetime.now() - timedelta(days=7)
-)
-
-# Get admin actions
-logs = await auth.audit_service.get_events(
-    event_type="role_assigned",
-    actor_role="platform_admin"
-)
+    membership_events, membership_total = await auth.membership_service.get_user_membership_history(
+        session,
+        user.id,
+        page=1,
+        limit=50,
+    )
 ```
+
+For HTTP consumers, the admin-facing routes are:
+
+- `GET /v1/users/{user_id}/audit-events`
+- `GET /v1/users/{user_id}/membership-history`
 
 ### Log Retention
 
@@ -1710,7 +1690,7 @@ config = EnterpriseConfig(
 - [ ] Security headers configured
 - [ ] CORS configured restrictively
 - [ ] Rate limiting enabled
-- [ ] Audit logging enabled
+- [ ] Core history endpoints and security review process documented
 
 #### Authentication
 - [ ] Password requirements enforced (12+ chars)
@@ -1926,33 +1906,44 @@ async def update_user(user_id: str, update_data: UpdateUserRequest):
 
 **2. Containment**
 ```python
-# Immediately lock compromised account
-await auth.user_service.lock_account(user_id=compromised_user.id)
+async with auth.get_session() as session:
+    # Immediately suspend compromised account
+    await auth.user_service.update_user_status(
+        session,
+        compromised_user.id,
+        UserStatus.SUSPENDED,
+    )
 
-# Revoke all tokens
-await auth.auth_service.revoke_all_tokens(user_id=compromised_user.id)
+    # Revoke active refresh tokens
+    await auth.auth_service.revoke_all_user_tokens(
+        session,
+        compromised_user.id,
+        reason="Security incident",
+    )
 
-# Disable compromised API keys
-await auth.api_key_service.revoke_keys(user_id=compromised_user.id)
+    # Revoke user-owned API keys
+    await auth.api_key_service.revoke_user_api_keys(
+        session,
+        compromised_user.id,
+    )
 ```
 
 **3. Investigation**
 ```python
-# Get user's recent activity
-activity = await auth.audit_service.get_user_events(
-    user_id=compromised_user.id,
-    start_date=datetime.now() - timedelta(days=7)
-)
+async with auth.get_session() as session:
+    activity, total = await auth.user_audit_service.list_user_events(
+        session,
+        compromised_user.id,
+        page=1,
+        limit=100,
+    )
 
-# Check permission grants
-permissions = await auth.permission_service.get_user_permissions(
-    user_id=compromised_user.id
-)
-
-# Review entity access
-entities = await auth.membership_service.get_user_entities(
-    user_id=compromised_user.id
-)
+    membership_events, membership_total = await auth.membership_service.get_user_membership_history(
+        session,
+        compromised_user.id,
+        page=1,
+        limit=100,
+    )
 ```
 
 **4. Recovery**

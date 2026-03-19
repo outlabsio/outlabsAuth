@@ -259,6 +259,73 @@ async def test_role_entity_catalog_and_membership_updates_respect_assignable_at_
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_inactive_roles_are_hidden_from_entity_catalog_and_membership_assignment(
+    client: httpx.AsyncClient,
+    auth_instance: EnterpriseRBAC,
+    admin_user: dict[str, str],
+):
+    async with auth_instance.get_session() as session:
+        root = await auth_instance.entity_service.create_entity(
+            session,
+            name=f"root-{uuid.uuid4().hex[:8]}",
+            display_name="Lifecycle Root",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
+        team = await auth_instance.entity_service.create_entity(
+            session,
+            name=f"team-{uuid.uuid4().hex[:8]}",
+            display_name="Lifecycle Team",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="team",
+            parent_id=root.id,
+        )
+        member = await auth_instance.user_service.create_user(
+            session=session,
+            email=f"lifecycle-member-{uuid.uuid4().hex[:8]}@example.com",
+            password="TestPass123!",
+            first_name="Lifecycle",
+            last_name="Member",
+        )
+        role = await auth_instance.role_service.create_role(
+            session=session,
+            name=f"lifecycle-role-{uuid.uuid4().hex[:8]}",
+            display_name="Lifecycle Role",
+            root_entity_id=root.id,
+            is_global=False,
+        )
+        await session.commit()
+
+    deactivate_response = await client.patch(
+        f"/v1/roles/{role.id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"status": "inactive"},
+    )
+    assert deactivate_response.status_code == 200, deactivate_response.text
+    assert deactivate_response.json()["status"] == "inactive"
+
+    entity_roles_response = await client.get(
+        f"/v1/roles/entity/{team.id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert entity_roles_response.status_code == 200, entity_roles_response.text
+    entity_role_ids = {item["id"] for item in entity_roles_response.json()["items"]}
+    assert str(role.id) not in entity_role_ids
+
+    create_membership_response = await client.post(
+        "/v1/memberships/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "entity_id": str(team.id),
+            "user_id": str(member.id),
+            "role_ids": [str(role.id)],
+        },
+    )
+    assert create_membership_response.status_code == 422, create_membership_response.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_scoped_admin_role_management_is_limited_to_access_scope(
     client: httpx.AsyncClient,
     auth_instance: EnterpriseRBAC,
@@ -545,6 +612,80 @@ async def test_auto_assigned_roles_apply_retroactively_on_create_and_toggle(
         )
         assert membership is not None
         assert toggled_role_id in {str(role.id) for role in membership.roles}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_inactive_auto_assigned_roles_do_not_apply_to_new_members(
+    client: httpx.AsyncClient,
+    auth_instance: EnterpriseRBAC,
+    admin_user: dict[str, str],
+):
+    async with auth_instance.get_session() as session:
+        root = await auth_instance.entity_service.create_entity(
+            session,
+            name=f"root-{uuid.uuid4().hex[:8]}",
+            display_name="Inactive Auto Root",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
+        department = await auth_instance.entity_service.create_entity(
+            session,
+            name=f"department-{uuid.uuid4().hex[:8]}",
+            display_name="Inactive Auto Department",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="department",
+            parent_id=root.id,
+        )
+        team = await auth_instance.entity_service.create_entity(
+            session,
+            name=f"team-{uuid.uuid4().hex[:8]}",
+            display_name="Inactive Auto Team",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="team",
+            parent_id=department.id,
+        )
+        role = await auth_instance.role_service.create_role(
+            session=session,
+            name=f"inactive-auto-role-{uuid.uuid4().hex[:8]}",
+            display_name="Inactive Auto Role",
+            scope_entity_id=department.id,
+            scope=RoleScope.HIERARCHY,
+            is_global=False,
+            is_auto_assigned=True,
+        )
+        member = await auth_instance.user_service.create_user(
+            session=session,
+            email=f"inactive-auto-member-{uuid.uuid4().hex[:8]}@example.com",
+            password="TestPass123!",
+            first_name="Inactive",
+            last_name="Auto",
+        )
+        await session.commit()
+
+    deactivate_response = await client.patch(
+        f"/v1/roles/{role.id}",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"status": "inactive"},
+    )
+    assert deactivate_response.status_code == 200, deactivate_response.text
+
+    async with auth_instance.get_session() as session:
+        await auth_instance.membership_service.add_member(
+            session=session,
+            entity_id=team.id,
+            user_id=member.id,
+            role_ids=[],
+        )
+        await session.commit()
+
+        membership = await auth_instance.membership_service.get_member(
+            session,
+            entity_id=team.id,
+            user_id=member.id,
+        )
+        assert membership is not None
+        assert str(role.id) not in {str(assigned_role.id) for assigned_role in membership.roles}
 
 
 @pytest.mark.integration

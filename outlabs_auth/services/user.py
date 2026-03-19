@@ -47,6 +47,10 @@ class UserService(BaseService[User]):
         config: AuthConfig,
         notification_service: Optional[Any] = None,
         auth_service: Optional[Any] = None,
+        membership_service: Optional[Any] = None,
+        role_service: Optional[Any] = None,
+        api_key_service: Optional[Any] = None,
+        user_audit_service: Optional[Any] = None,
     ):
         """
         Initialize UserService.
@@ -59,6 +63,10 @@ class UserService(BaseService[User]):
         self.config = config
         self.notifications = notification_service
         self.auth_service = auth_service
+        self.membership_service = membership_service
+        self.role_service = role_service
+        self.api_key_service = api_key_service
+        self.user_audit_service = user_audit_service
 
     # =========================================================================
     # Lifecycle hooks (override in subclasses)
@@ -296,6 +304,7 @@ class UserService(BaseService[User]):
         email: Optional[str] = None,
         first_name: Optional[str] = None,
         last_name: Optional[str] = None,
+        changed_by_id: Optional[UUID] = None,
     ) -> User:
         """
         Update user fields (email and/or profile).
@@ -308,6 +317,13 @@ class UserService(BaseService[User]):
                 message="User not found",
                 details={"user_id": str(user_id)},
             )
+
+        previous_email = user.email
+        previous_email_verified = user.email_verified
+        previous_first_name = user.first_name
+        previous_last_name = user.last_name
+        email_changed = False
+        changed_profile_fields: List[str] = []
 
         if email is not None:
             normalized_email = validate_email(email)
@@ -323,14 +339,64 @@ class UserService(BaseService[User]):
                     )
                 user.email = normalized_email
                 user.email_verified = False
+                email_changed = True
 
         if first_name is not None:
-            user.first_name = validate_name(first_name, "first_name")
+            validated_first_name = validate_name(first_name, "first_name")
+            if validated_first_name != user.first_name:
+                changed_profile_fields.append("first_name")
+            user.first_name = validated_first_name
 
         if last_name is not None:
-            user.last_name = validate_name(last_name, "last_name")
+            validated_last_name = validate_name(last_name, "last_name")
+            if validated_last_name != user.last_name:
+                changed_profile_fields.append("last_name")
+            user.last_name = validated_last_name
 
         await self.update(session, user)
+
+        if self.user_audit_service and email_changed:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="profile",
+                event_type="user.email_changed",
+                event_source="user_service.update_user_fields",
+                actor_user_id=changed_by_id,
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                before={
+                    "email": previous_email,
+                    "email_verified": previous_email_verified,
+                },
+                after={
+                    "email": user.email,
+                    "email_verified": user.email_verified,
+                },
+                metadata={"changed_fields": ["email"]},
+            )
+
+        if self.user_audit_service and changed_profile_fields:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="profile",
+                event_type="user.profile_updated",
+                event_source="user_service.update_user_fields",
+                actor_user_id=changed_by_id,
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                before={
+                    "first_name": previous_first_name,
+                    "last_name": previous_last_name,
+                },
+                after={
+                    "first_name": user.first_name,
+                    "last_name": user.last_name,
+                },
+                metadata={"changed_fields": changed_profile_fields},
+            )
+
         return user
 
     async def change_password_with_current(
@@ -354,13 +420,19 @@ class UserService(BaseService[User]):
         if not user.hashed_password or not verify_password(current_password, user.hashed_password):
             raise InvalidCredentialsError(message="Current password is incorrect")
 
-        return await self.change_password(session, user_id=user_id, new_password=new_password)
+        return await self.change_password(
+            session,
+            user_id=user_id,
+            new_password=new_password,
+            changed_by_id=user_id,
+        )
 
     async def change_password(
         self,
         session: AsyncSession,
         user_id: UUID,
         new_password: str,
+        changed_by_id: Optional[UUID] = None,
     ) -> User:
         """
         Change user password.
@@ -383,10 +455,15 @@ class UserService(BaseService[User]):
                 details={"user_id": str(user_id)},
             )
 
+        previous_last_password_change = user.last_password_change
+        previous_failed_attempts = user.failed_login_attempts
+        previous_locked_until = user.locked_until
+        changed_at = datetime.now(timezone.utc)
+
         # Hash new password (with validation)
         hashed_password = generate_password_hash(new_password, self.config)
         user.hashed_password = hashed_password
-        user.last_password_change = datetime.now(timezone.utc)
+        user.last_password_change = changed_at
 
         # Reset failed login attempts
         user.failed_login_attempts = 0
@@ -394,8 +471,9 @@ class UserService(BaseService[User]):
 
         await self.update(session, user)
 
+        revoked_token_count = 0
         if self.auth_service is not None:
-            await self.auth_service.revoke_all_user_tokens(
+            revoked_token_count = await self.auth_service.revoke_all_user_tokens(
                 session,
                 user.id,
                 reason="Password changed",
@@ -408,8 +486,32 @@ class UserService(BaseService[User]):
                 data={
                     "user_id": str(user.id),
                     "email": user.email,
-                    "changed_at": datetime.now(timezone.utc).isoformat(),
+                    "changed_at": changed_at.isoformat(),
                 },
+            )
+
+        if self.user_audit_service:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="credential",
+                event_type="user.password_changed",
+                event_source="user_service.change_password",
+                actor_user_id=changed_by_id,
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                before={
+                    "last_password_change": previous_last_password_change,
+                    "failed_login_attempts": previous_failed_attempts,
+                    "locked_until": previous_locked_until,
+                },
+                after={
+                    "last_password_change": user.last_password_change,
+                    "failed_login_attempts": user.failed_login_attempts,
+                    "locked_until": user.locked_until,
+                },
+                metadata={"revoked_refresh_token_count": revoked_token_count},
+                occurred_at=changed_at,
             )
 
         return user
@@ -420,6 +522,8 @@ class UserService(BaseService[User]):
         user_id: UUID,
         status: UserStatus,
         suspended_until: Optional[datetime] = None,
+        changed_by_id: Optional[UUID] = None,
+        reason: Optional[str] = None,
     ) -> User:
         """
         Update user status.
@@ -442,8 +546,17 @@ class UserService(BaseService[User]):
                 message="User not found",
                 details={"user_id": str(user_id)},
             )
+        if user.status == UserStatus.DELETED:
+            raise InvalidInputError(
+                message="Deleted users must be restored via the restore workflow",
+                details={
+                    "user_id": str(user_id),
+                    "status": user.status.value if hasattr(user.status, "value") else user.status,
+                },
+            )
 
         old_status = user.status
+        old_suspended_until = user.suspended_until
         user.status = status
 
         # Handle suspended_until field
@@ -468,15 +581,108 @@ class UserService(BaseService[User]):
                 },
             )
 
+        if self.user_audit_service:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="status",
+                event_type="user.status_changed",
+                event_source="user_service.update_user_status",
+                actor_user_id=changed_by_id,
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                reason=reason,
+                before={
+                    "status": old_status,
+                    "suspended_until": old_suspended_until,
+                },
+                after={
+                    "status": user.status,
+                    "suspended_until": user.suspended_until,
+                },
+            )
+
+        return user
+
+    async def restore_user(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        *,
+        restored_by_id: Optional[UUID] = None,
+    ) -> User:
+        """
+        Restore a deleted user identity only.
+
+        This intentionally restores only the retained user row. Memberships,
+        direct roles, refresh tokens, and API keys remain revoked and require
+        explicit re-grant or re-issuance.
+        """
+        user = await self.get_by_id(session, user_id)
+        if not user:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": str(user_id)},
+            )
+
+        if user.status != UserStatus.DELETED:
+            raise InvalidInputError(
+                message="Only deleted users can be restored",
+                details={
+                    "user_id": str(user_id),
+                    "status": user.status.value if hasattr(user.status, "value") else user.status,
+                },
+            )
+
+        previous_deleted_at = user.deleted_at
+        user.status = UserStatus.ACTIVE
+        user.deleted_at = None
+        user.suspended_until = None
+        user.locked_until = None
+
+        await self.update(session, user)
+
+        if self.notifications:
+            await self.notifications.emit(
+                "user.restored",
+                data={
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "restored_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+
+        if self.user_audit_service:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="status",
+                event_type="user.restored",
+                event_source="user_service.restore_user",
+                actor_user_id=restored_by_id,
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                before={
+                    "status": UserStatus.DELETED,
+                    "deleted_at": previous_deleted_at,
+                },
+                after={
+                    "status": user.status,
+                    "deleted_at": user.deleted_at,
+                },
+            )
+
         return user
 
     async def delete_user(
         self,
         session: AsyncSession,
         user_id: UUID,
+        *,
+        deleted_by_id: Optional[UUID] = None,
     ) -> bool:
         """
-        Delete user.
+        Retain-delete a user and revoke active access artifacts.
 
         Args:
             session: Database session
@@ -488,12 +694,57 @@ class UserService(BaseService[User]):
         user = await self.get_by_id(session, user_id)
         if not user:
             return False
+        if user.status == UserStatus.DELETED:
+            return False
 
-        # Store user data before deletion for notification
+        deleted_at = datetime.now(timezone.utc)
+
+        revoked_membership_count = 0
+        revoked_role_count = 0
+        revoked_token_count = 0
+        revoked_api_key_count = 0
+
+        if self.membership_service is not None:
+            revoked_memberships = await self.membership_service.revoke_memberships_for_user(
+                session,
+                user.id,
+                revoked_by_id=deleted_by_id,
+                reason="User deleted",
+                event_source="user_service.delete_user",
+            )
+            revoked_membership_count = len(revoked_memberships)
+
+        if self.role_service is not None:
+            revoked_role_count = await self.role_service.revoke_all_roles_for_user(
+                session,
+                user.id,
+                revoked_by_id=deleted_by_id,
+                reason="User deleted",
+            )
+
+        if self.auth_service is not None:
+            revoked_token_count = await self.auth_service.revoke_all_user_tokens(
+                session,
+                user.id,
+                reason="User deleted",
+            )
+
+        if self.api_key_service is not None:
+            revoked_api_key_count = await self.api_key_service.revoke_user_api_keys(
+                session,
+                user.id,
+            )
+
+        previous_status = user.status
+        user.status = UserStatus.DELETED
+        user.deleted_at = deleted_at
+        user.suspended_until = None
+        user.locked_until = None
+
+        await self.update(session, user)
+
         user_email = user.email
         user_id_str = str(user.id)
-
-        await self.delete(session, user)
 
         # Emit notification
         if self.notifications:
@@ -502,8 +753,35 @@ class UserService(BaseService[User]):
                 data={
                     "user_id": user_id_str,
                     "email": user_email,
-                    "deleted_at": datetime.now(timezone.utc).isoformat(),
+                    "deleted_at": deleted_at.isoformat(),
                 },
+            )
+
+        if self.user_audit_service:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="status",
+                event_type="user.deleted",
+                event_source="user_service.delete_user",
+                actor_user_id=deleted_by_id,
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                before={
+                    "status": previous_status,
+                    "deleted_at": None,
+                },
+                after={
+                    "status": user.status,
+                    "deleted_at": user.deleted_at,
+                },
+                metadata={
+                    "revoked_membership_count": revoked_membership_count,
+                    "revoked_direct_role_count": revoked_role_count,
+                    "revoked_refresh_token_count": revoked_token_count,
+                    "revoked_api_key_count": revoked_api_key_count,
+                },
+                occurred_at=deleted_at,
             )
 
         return True
@@ -742,12 +1020,37 @@ class UserService(BaseService[User]):
                 },
             )
 
+        if self.user_audit_service:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="invitation",
+                event_type="user.invited",
+                event_source="user_service.invite_user",
+                actor_user_id=invited_by_id,
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                before=None,
+                after={
+                    "status": user.status,
+                    "invite_token_expires": user.invite_token_expires,
+                    "email_verified": user.email_verified,
+                },
+                metadata={
+                    "invited_by_id": invited_by_id,
+                    "root_entity_id": user.root_entity_id,
+                },
+                occurred_at=user.created_at,
+            )
+
         return user, plain_token
 
     async def resend_invite(
         self,
         session: AsyncSession,
         user_id: UUID,
+        *,
+        resent_by_id: Optional[UUID] = None,
     ) -> Tuple[User, str]:
         """
         Resend invitation by regenerating the invite token.
@@ -776,10 +1079,31 @@ class UserService(BaseService[User]):
         plain_token = secrets.token_urlsafe(32)
         hashed_token = hashlib.sha256(plain_token.encode()).hexdigest()
         expires = datetime.now(timezone.utc) + timedelta(days=self.config.invite_token_expire_days)
+        previous_invite_token_expires = user.invite_token_expires
 
         user.invite_token = hashed_token
         user.invite_token_expires = expires
 
         await self.update(session, user)
+
+        if self.user_audit_service:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="invitation",
+                event_type="user.invite_resent",
+                event_source="user_service.resend_invite",
+                actor_user_id=resent_by_id,
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                before={
+                    "status": user.status,
+                    "invite_token_expires": previous_invite_token_expires,
+                },
+                after={
+                    "status": user.status,
+                    "invite_token_expires": user.invite_token_expires,
+                },
+            )
 
         return user, plain_token

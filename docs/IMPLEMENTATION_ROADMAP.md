@@ -1906,9 +1906,9 @@ From `PHASE_5_TEST_PLAN.md`, need to create:
   - Challenge expiration (magic link: 15 min, OTP: 5 min)
   - One-time use (challenge invalidated after verification)
   - Prevent enumeration attacks (same response for valid/invalid recipient)
-- [ ] Audit logging:
-  - Log all challenge requests
-  - Log verification attempts (success and failure)
+- [ ] Security history / observability:
+  - Record all challenge requests in an explicit security-history or observability surface
+  - Record verification attempts (success and failure)
 
 **Deliverable**: Security hardening complete
 

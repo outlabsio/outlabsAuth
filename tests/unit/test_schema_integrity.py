@@ -84,6 +84,54 @@ def test_user_role_membership_constraints():
     assert _fk_ondelete(urm, "role_id") == "CASCADE"
 
 
+def test_user_audit_event_constraints_and_indexes():
+    table = _get_table("user_audit_events")
+
+    assert _fk_ondelete(table, "actor_user_id") == "SET NULL"
+    assert _fk_ondelete(table, "subject_user_id") == "SET NULL"
+    assert _fk_ondelete(table, "root_entity_id") == "SET NULL"
+    assert _fk_ondelete(table, "entity_id") == "SET NULL"
+    assert _fk_ondelete(table, "role_id") == "SET NULL"
+
+    assert _has_index(table, "ix_uae_subject_occurred_at", "subject_user_id", "occurred_at")
+    assert _has_index(table, "ix_uae_root_occurred_at", "root_entity_id", "occurred_at")
+    assert _has_index(table, "ix_uae_entity_occurred_at", "entity_id", "occurred_at")
+    assert _has_index(table, "ix_uae_role_occurred_at", "role_id", "occurred_at")
+    assert _has_index(table, "ix_uae_event_category", "event_category")
+    assert _has_index(table, "ix_uae_event_type", "event_type")
+    assert not _has_column(table, "tenant_id")
+
+
+def test_role_definition_history_constraints_and_indexes():
+    table = _get_table("role_definition_history")
+
+    assert _fk_ondelete(table, "role_id") is None
+    assert _fk_ondelete(table, "actor_user_id") == "SET NULL"
+    assert _fk_ondelete(table, "root_entity_id") == "SET NULL"
+    assert _fk_ondelete(table, "scope_entity_id") == "SET NULL"
+
+    assert _has_index(table, "ix_rdh_role_occurred_at", "role_id", "occurred_at")
+    assert _has_index(table, "ix_rdh_actor_occurred_at", "actor_user_id", "occurred_at")
+    assert _has_index(table, "ix_rdh_root_occurred_at", "root_entity_id", "occurred_at")
+    assert _has_index(table, "ix_rdh_scope_occurred_at", "scope_entity_id", "occurred_at")
+    assert _has_index(table, "ix_rdh_event_type", "event_type")
+    assert _has_column(table, "status_snapshot")
+    assert not _has_column(table, "tenant_id")
+
+
+def test_permission_definition_history_constraints_and_indexes():
+    table = _get_table("permission_definition_history")
+
+    assert _fk_ondelete(table, "permission_id") is None
+    assert _fk_ondelete(table, "actor_user_id") == "SET NULL"
+
+    assert _has_index(table, "ix_pdh_permission_occurred_at", "permission_id", "occurred_at")
+    assert _has_index(table, "ix_pdh_actor_occurred_at", "actor_user_id", "occurred_at")
+    assert _has_index(table, "ix_pdh_event_type", "event_type")
+    assert _has_column(table, "status_snapshot")
+    assert not _has_column(table, "tenant_id")
+
+
 def test_role_permissions_join_table_cascades():
     rp = _get_table("role_permissions")
     assert _fk_ondelete(rp, "role_id") == "CASCADE"
@@ -94,6 +142,8 @@ def test_roles_table_includes_assignable_entity_type_restrictions():
     roles = _get_table("roles")
 
     assert _has_column(roles, "assignable_at_types")
+    assert _has_column(roles, "status")
+    assert _has_index(roles, "ix_roles_status", "status")
     assert not _has_column(roles, "tenant_id")
 
 
@@ -111,6 +161,8 @@ def test_user_and_permission_tables_are_global_and_tenantless():
 
     assert _has_unique(users, "email")
     assert _has_unique(permissions, "name")
+    assert _has_column(permissions, "status")
+    assert _has_index(permissions, "ix_permissions_status", "status")
     assert _has_unique(tags, "name")
     assert _has_unique(metrics, "metric_date", "metric_type")
 

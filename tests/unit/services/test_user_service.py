@@ -25,6 +25,24 @@ class NotificationRecorder:
         self.events.append((event, data))
 
 
+class AuditRecorder:
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+
+    async def record_event(self, session, **kwargs) -> None:
+        self.events.append(kwargs)
+
+
+class AuthRecorder:
+    def __init__(self, revoked_count: int = 0) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self.revoked_count = revoked_count
+
+    async def revoke_all_user_tokens(self, session, user_id, reason: str = "Revoke all sessions") -> int:
+        self.calls.append((str(user_id), reason))
+        return self.revoked_count
+
+
 def _entity(
     *,
     name: str,
@@ -128,7 +146,9 @@ async def test_update_user_fields_and_verify_email_handle_duplicate_and_missing_
     test_session,
     auth_config: AuthConfig,
 ):
-    service = UserService(config=auth_config)
+    audit = AuditRecorder()
+    actor_id = uuid4()
+    service = UserService(config=auth_config, user_audit_service=audit)
 
     primary = await service.create_user(
         test_session,
@@ -151,10 +171,20 @@ async def test_update_user_fields_and_verify_email_handle_duplicate_and_missing_
         email="Renamed@Example.COM",
         first_name="Renamed",
         last_name="Person",
+        changed_by_id=actor_id,
     )
     assert updated.email == "renamed@example.com"
     assert updated.first_name == "Renamed"
     assert updated.last_name == "Person"
+    assert [event["event_type"] for event in audit.events] == [
+        "user.email_changed",
+        "user.profile_updated",
+    ]
+    assert audit.events[0]["actor_user_id"] == actor_id
+    assert audit.events[0]["before"]["email"] == "primary@example.com"
+    assert audit.events[0]["after"]["email"] == "renamed@example.com"
+    assert audit.events[1]["metadata"]["changed_fields"] == ["first_name", "last_name"]
+    assert audit.events[1]["after"]["first_name"] == "Renamed"
 
     with pytest.raises(UserAlreadyExistsError):
         await service.update_user_fields(
@@ -231,7 +261,14 @@ async def test_change_password_and_record_login_reset_security_state_and_emit_no
     auth_config: AuthConfig,
 ):
     recorder = NotificationRecorder()
-    service = UserService(config=auth_config, notification_service=recorder)
+    audit = AuditRecorder()
+    auth_recorder = AuthRecorder(revoked_count=2)
+    service = UserService(
+        config=auth_config,
+        notification_service=recorder,
+        auth_service=auth_recorder,
+        user_audit_service=audit,
+    )
 
     user = await service.create_user(
         test_session,
@@ -249,12 +286,17 @@ async def test_change_password_and_record_login_reset_security_state_and_emit_no
         test_session,
         user_id=user.id,
         new_password="NewPass123!",
+        changed_by_id=user.id,
     )
     assert verify_password("NewPass123!", changed.hashed_password)
     assert changed.last_password_change is not None
     assert changed.failed_login_attempts == 0
     assert changed.locked_until is None
     assert recorder.events[-1][0] == "user.password_changed"
+    assert auth_recorder.calls == [(str(user.id), "Password changed")]
+    assert audit.events[-1]["event_type"] == "user.password_changed"
+    assert audit.events[-1]["actor_user_id"] == user.id
+    assert audit.events[-1]["metadata"]["revoked_refresh_token_count"] == 2
 
     with pytest.raises(InvalidCredentialsError):
         await service.change_password_with_current(
@@ -357,6 +399,10 @@ async def test_status_list_search_and_delete_cover_filters_and_notifications(
 
     assert await service.delete_user(test_session, other.id) is True
     assert recorder.events[-1][0] == "user.deleted"
+    deleted_user = await service.get_user_by_id(test_session, other.id)
+    assert deleted_user is not None
+    assert deleted_user.status == UserStatus.DELETED
+    assert deleted_user.deleted_at is not None
     assert await service.delete_user(test_session, other.id) is False
 
     with pytest.raises(UserNotFoundError):
@@ -370,7 +416,12 @@ async def test_invite_user_and_resend_invite_validate_lifecycle_constraints(
     auth_config: AuthConfig,
 ):
     recorder = NotificationRecorder()
-    service = UserService(config=auth_config, notification_service=recorder)
+    audit = AuditRecorder()
+    service = UserService(
+        config=auth_config,
+        notification_service=recorder,
+        user_audit_service=audit,
+    )
 
     root = _entity(name="invite root", slug="invite-root", path="/invite-root/")
     test_session.add(root)
@@ -409,12 +460,20 @@ async def test_invite_user_and_resend_invite_validate_lifecycle_constraints(
     assert invited.invite_token != plain_token
     assert invited.root_entity_id == root.id
     assert recorder.events[-1][0] == "user.invited"
+    assert audit.events[-1]["event_type"] == "user.invited"
+    assert audit.events[-1]["actor_user_id"] == inviter.id
 
-    resent, resent_token = await service.resend_invite(test_session, invited.id)
+    resent, resent_token = await service.resend_invite(
+        test_session,
+        invited.id,
+        resent_by_id=inviter.id,
+    )
     assert resent.id == invited.id
     assert resent_token != plain_token
     assert resent.invite_token != original_hashed_token
     assert resent.invite_token_expires > original_expiry
+    assert audit.events[-1]["event_type"] == "user.invite_resent"
+    assert audit.events[-1]["actor_user_id"] == inviter.id
 
     with pytest.raises(EntityNotFoundError):
         await service.invite_user(
@@ -444,3 +503,67 @@ async def test_invite_user_and_resend_invite_validate_lifecycle_constraints(
 
     with pytest.raises(UserNotFoundError):
         await service.resend_invite(test_session, uuid4())
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_deleted_email_remains_reserved_for_create_and_invite_flows(
+    test_session,
+    auth_config: AuthConfig,
+):
+    service = UserService(config=auth_config)
+
+    deleted_user = await service.create_user(
+        test_session,
+        email="deleted-user@example.com",
+        password="TestPass123!",
+        first_name="Deleted",
+        last_name="User",
+    )
+
+    assert await service.delete_user(test_session, deleted_user.id) is True
+
+    retained = await service.get_user_by_id(test_session, deleted_user.id)
+    assert retained is not None
+    assert retained.status == UserStatus.DELETED
+    assert retained.deleted_at is not None
+
+    with pytest.raises(UserAlreadyExistsError):
+        await service.create_user(
+            test_session,
+            email="deleted-user@example.com",
+            password="TestPass123!",
+        )
+
+    with pytest.raises(UserAlreadyExistsError):
+        await service.invite_user(
+            test_session,
+            email="deleted-user@example.com",
+        )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_restore_user_clears_deleted_state_and_emits_notification(
+    test_session,
+    auth_config: AuthConfig,
+):
+    recorder = NotificationRecorder()
+    service = UserService(config=auth_config, notification_service=recorder)
+
+    user = await service.create_user(
+        test_session,
+        email="restore-user@example.com",
+        password="TestPass123!",
+        first_name="Restore",
+        last_name="User",
+    )
+    assert await service.delete_user(test_session, user.id) is True
+
+    restored = await service.restore_user(test_session, user.id)
+    assert restored.status == UserStatus.ACTIVE
+    assert restored.deleted_at is None
+    assert recorder.events[-1][0] == "user.restored"
+
+    with pytest.raises(InvalidInputError):
+        await service.restore_user(test_session, user.id)
