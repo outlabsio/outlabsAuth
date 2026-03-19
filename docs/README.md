@@ -21,7 +21,7 @@ Looking for usage documentation? See **[docs-library/](../docs-library/)** inste
 ### API & Integration
 - **API_DESIGN.md** - Library API design and developer experience
 - **DEPENDENCY_PATTERNS.md** - FastAPI dependency injection patterns
-- **AUTH_UI_PARITY_GAPS.md** - Remaining agnostic admin UI vs backend contract gaps
+- **AUTH_UI.md** - External admin UI repository location and repo boundary
 
 ### Operational
 - **SECURITY.md** - Security hardening requirements

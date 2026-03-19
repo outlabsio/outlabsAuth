@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
@@ -11,8 +10,6 @@ from outlabs_auth.release_versioning import parse_release_version
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILE = ROOT / "outlabs_auth" / "_version.py"
-PACKAGE_JSON = ROOT / "auth-ui" / "package.json"
-AUTH_UI_README = ROOT / "auth-ui" / "README.md"
 README = ROOT / "README.md"
 PRIVATE_RELEASE_DOC = ROOT / "docs" / "PRIVATE_RELEASE.md"
 
@@ -43,7 +40,6 @@ def _expected_readme_fragments(version: str) -> dict[str, str]:
         "dependency_example": f'dependencies = ["outlabs-auth{release.dependency_specifier}"]',
         "git_tag_example": f'tag = "{release.git_tag}"',
         "library_version": f"**Current Library Version**: {release.python_version}",
-        "ui_version": f"**Current Admin UI Version**: {release.ui_version}",
         "release_stage": f"**Release Stage**: {release.stage_display}",
     }
 
@@ -63,17 +59,6 @@ def _write_version_file(version: str) -> None:
             ]
         )
     )
-
-
-def _write_package_json(version: str) -> None:
-    release = parse_release_version(version)
-    package_data = json.loads(PACKAGE_JSON.read_text())
-    package_data["version"] = release.ui_version
-    package_data["packageManager"] = "bun@1.3.3"
-    package_data.setdefault("outlabsAuth", {})
-    package_data["outlabsAuth"]["libraryVersion"] = release.python_version
-    package_data["outlabsAuth"]["releaseStage"] = release.release_stage
-    PACKAGE_JSON.write_text(f"{json.dumps(package_data, indent=2)}\n")
 
 
 def _write_readme(version: str) -> None:
@@ -105,12 +90,6 @@ def _write_readme(version: str) -> None:
     )
     readme = _replace_once(
         readme,
-        r"^\*\*Current Admin UI Version\*\*: .+$",
-        _expected_readme_fragments(version)["ui_version"],
-        description="README admin UI version",
-    )
-    readme = _replace_once(
-        readme,
         r"^\*\*Release Stage\*\*: .+$",
         _expected_readme_fragments(version)["release_stage"],
         description="README release stage",
@@ -122,19 +101,6 @@ def _write_readme(version: str) -> None:
         description="README release banner",
     )
     README.write_text(readme)
-
-
-def _write_auth_ui_readme(version: str) -> None:
-    release = parse_release_version(version)
-    auth_ui_readme = AUTH_UI_README.read_text()
-    auth_ui_readme = _replace_once(
-        auth_ui_readme,
-        r"^Current tracked UI version: `[^`]+`$",
-        f"Current tracked UI version: `{release.ui_version}`",
-        description="auth-ui README UI version",
-    )
-    AUTH_UI_README.write_text(auth_ui_readme)
-
 
 def _check_private_release_doc() -> list[str]:
     issues: list[str] = []
@@ -159,21 +125,6 @@ def check_release_metadata(version: str) -> list[str]:
     if f'__version__ = "{release.python_version}"' not in version_file_text:
         issues.append("`outlabs_auth/_version.py` version is out of sync")
 
-    package_data = json.loads(PACKAGE_JSON.read_text())
-    if package_data.get("version") != release.ui_version:
-        issues.append("`auth-ui/package.json` UI version is out of sync")
-    if package_data.get("packageManager") != "bun@1.3.3":
-        issues.append("`auth-ui/package.json` packageManager is missing or unexpected")
-    outlabs_auth_meta = package_data.get("outlabsAuth", {})
-    if outlabs_auth_meta.get("libraryVersion") != release.python_version:
-        issues.append("`auth-ui/package.json` linked library version is out of sync")
-    if outlabs_auth_meta.get("releaseStage") != release.release_stage:
-        issues.append("`auth-ui/package.json` release stage is out of sync")
-
-    auth_ui_readme = AUTH_UI_README.read_text()
-    if f"Current tracked UI version: `{release.ui_version}`" not in auth_ui_readme:
-        issues.append("`auth-ui/README.md` tracked UI version is out of sync")
-
     readme = README.read_text()
     for description, fragment in _expected_readme_fragments(version).items():
         if fragment not in readme:
@@ -185,8 +136,6 @@ def check_release_metadata(version: str) -> list[str]:
 
 def _set_version(version: str) -> None:
     _write_version_file(version)
-    _write_package_json(version)
-    _write_auth_ui_readme(version)
     _write_readme(version)
 
 
@@ -214,7 +163,6 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         release = parse_release_version(args.version)
         print(f"Set library version to {release.python_version}")
-        print(f"Set admin UI version to {release.ui_version}")
         print(f"Set release stage to {release.stage_display}")
         return 0
 

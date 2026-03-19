@@ -12,7 +12,6 @@ This package is intended for private distribution across internal projects.
    - `uv run --extra test python -m pytest tests/unit/test_release_packaging.py tests/unit/test_bootstrap.py -q`
    - `TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test uv run --extra test python -m pytest tests/integration/test_packaged_cli_migrations.py -q`
    - `uv build --no-sources`
-   - `cd auth-ui && bun ci && bun run build`
 3. Push the branch and wait for the `Release Readiness` GitHub Actions workflow to pass.
 4. Verify the wheel contains:
    - `outlabs_auth/alembic.ini`
@@ -24,6 +23,13 @@ This package is intended for private distribution across internal projects.
 6. Tag the release:
    - `git tag vX.Y.ZaN`
    - `git push origin vX.Y.ZaN`
+
+## External Admin UI
+
+The Nuxt admin UI is no longer shipped from this repository. If the external UI
+also needs a release validation pass, run that separately in the sibling repo
+`../OutlabsAuthUI` (local workspace:
+`/Users/macbookm3/Documents/projects/OutlabsAuthUI`).
 
 ## Library-Owned Schema Lifecycle
 

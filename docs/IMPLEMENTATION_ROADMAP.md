@@ -25,7 +25,7 @@
 | Phase 1 | ✅ Complete | 2025-01-23 | Core foundation + SimpleRBAC |
 | Phase 2 | ✅ Complete | 2025-01-24 | API Keys, Testing, Examples |
 | Phase 1.5 | ✅ Complete | 2025-01-25 | Beyond plan: MembershipStatus, User Status, Activity Tracking, Logout, Observability docs |
-| Frontend Integration | ✅ Verified | 2025-01-26 | SimpleRBAC login working with auth-ui frontend |
+| Frontend Integration | ✅ Verified | 2025-01-26 | SimpleRBAC login working with the admin UI that now lives in `OutlabsAuthUI` |
 | Observability Implementation | ✅ Complete | 2025-11-08 | Full stack: Prometheus, Grafana, structured logging, metrics |
 | Docker Stack | ✅ Complete | 2025-11-08 | Unified compose with PostgreSQL, Redis, Prometheus, Grafana |
 | **Phase 3** | ✅ Complete | 2025-11-10 | **EnterpriseRBAC: Entity system, tree permissions, entity-scoped API keys** |
@@ -381,7 +381,7 @@ These features address real production needs that would have been retrofitted la
 
 #### 3. Frontend Configuration ✅
 **Problem**: Frontend pointing to wrong backend port (8002 vs 8003)
-**Solution**: Updated `auth-ui/.env` from port 8002 → 8003
+**Solution**: Updated the admin UI environment from port 8002 → 8003
 
 #### 4. Local Development Infrastructure ✅
 **Problem**: Documentation unclear about using local-mongodb and local-redis containers
@@ -422,7 +422,7 @@ These features address real production needs that would have been retrofitted la
 ### Impact
 This verification confirms that:
 1. Phase 1-2 implementation is production-ready for SimpleRBAC use cases
-2. Frontend integration patterns are correct
+2. Frontend integration patterns are correct in the external admin UI repository
 3. JWT authentication flow works end-to-end
 4. Schema definitions match API contracts
 5. Multi-source authentication infrastructure is functional
@@ -431,7 +431,7 @@ This verification confirms that:
 - `outlabs_auth/schemas/__init__.py` - Fixed all schema imports
 - `examples/simple_rbac/main.py` - Added memberships router
 - `examples/simple_rbac/seed_data.py` - Changed admin email to system@outlabs.io
-- `auth-ui/.env` - Updated API base URL to port 8003
+- External admin UI environment - Updated API base URL to port 8003
 - `CLAUDE.md` - Documented local development infrastructure
 
 ### Next Steps

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import tomllib
 from pathlib import Path
 
@@ -46,33 +45,15 @@ def test_cli_can_resolve_local_alembic_config_for_maintainers(tmp_path, monkeypa
     assert resolved == local_alembic
 
 
-def test_auth_ui_package_tracks_its_own_version_and_library_version():
-    package_json = Path(__file__).resolve().parents[2] / "auth-ui" / "package.json"
-    data = json.loads(package_json.read_text())
-    release = parse_release_version(__version__)
-
-    assert data["version"] == release.ui_version
-    assert data["packageManager"] == "bun@1.3.3"
-    assert data["outlabsAuth"]["libraryVersion"] == __version__
-    assert data["outlabsAuth"]["releaseStage"] == __release_stage__
-
-
-def test_auth_ui_readme_tracks_current_ui_version():
-    auth_ui_readme = (Path(__file__).resolve().parents[2] / "auth-ui" / "README.md").read_text()
-    release = parse_release_version(__version__)
-
-    assert f"Current tracked UI version: `{release.ui_version}`" in auth_ui_readme
-
-
 def test_readme_tracks_current_release_metadata():
     readme = (Path(__file__).resolve().parents[2] / "README.md").read_text()
     release = parse_release_version(__version__)
 
     assert f"**Current Library Version**: {__version__}" in readme
-    assert f"**Current Admin UI Version**: {release.ui_version}" in readme
     assert f"**Release Stage**: {release.stage_display}" in readme
     assert f'dependencies = ["outlabs-auth{release.dependency_specifier}"]' in readme
     assert f'tag = "{release.git_tag}"' in readme
+    assert "OutlabsAuthUI" in readme
 
 
 def test_private_release_doc_references_release_helper_and_ci():

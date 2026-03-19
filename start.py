@@ -14,38 +14,11 @@ import questionary
 SERVICES = [
     {"name": "simple      - SimpleRBAC API (port 8000)", "value": "simple"},
     {"name": "enterprise  - EnterpriseRBAC API (port 8000)", "value": "enterprise"},
-    {"name": "ui          - Admin UI (port 3000)", "value": "ui"},
     {
         "name": "obs         - Observability stack (Grafana, Prometheus, Loki)",
         "value": "obs",
     },
 ]
-
-
-def kill_port_range(start_port: int, end_port: int):
-    """Kill all processes using ports in the given range."""
-    killed = []
-    for port in range(start_port, end_port + 1):
-        try:
-            # Get PIDs using this port
-            result = subprocess.run(
-                ["lsof", "-ti", f":{port}"],
-                capture_output=True,
-                text=True,
-            )
-            if result.stdout.strip():
-                pids = result.stdout.strip().split("\n")
-                for pid in pids:
-                    if pid:
-                        try:
-                            os.kill(int(pid), signal.SIGKILL)
-                            killed.append((port, pid))
-                        except (ProcessLookupError, PermissionError):
-                            pass
-        except Exception:
-            pass
-    return killed
-
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 OBSERVABILITY_DIR = os.path.join(ROOT, "observability")
@@ -70,11 +43,6 @@ CONFIGS = {
             "REDIS_URL": "redis://localhost:6380",
         },
         "port": 8000,
-    },
-    "ui": {
-        "cwd": os.path.join(ROOT, "auth-ui"),
-        "cmd": ["bun", "run", "dev"],
-        "env": {},
     },
     "obs": {
         "cwd": OBSERVABILITY_DIR,
@@ -160,25 +128,12 @@ def main():
     if not foreground:
         return
 
-    # Kill any processes on UI ports before starting
-    if "ui" in foreground:
-        killed = kill_port_range(3000, 3009)
-        if killed:
-            print(
-                f"\n→ Killed processes on ports: {', '.join(str(p) for p, _ in killed)}"
-            )
-
     # Start foreground services
     processes = []
     for svc in foreground:
         cfg = CONFIGS[svc]
         print(f"\n→ Starting {svc}...")
         env = {**os.environ, **cfg["env"]}
-
-        # If starting UI and we have an API, set the API URL
-        if svc == "ui" and api_port:
-            env["NUXT_PUBLIC_API_BASE_URL"] = f"http://localhost:{api_port}"
-            print(f"  (connecting to API on port {api_port})")
 
         p = subprocess.Popen(cfg["cmd"], cwd=cfg["cwd"], env=env)
         processes.append((svc, p))

@@ -52,21 +52,3 @@ jobs:
 
       - name: Verify CLI version command
         run: uv run outlabs-auth --version
-
-  auth-ui:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: auth-ui
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Install UI dependencies
-        run: bun ci
-
-      - name: Build admin UI
-        run: bun run build

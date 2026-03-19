@@ -87,7 +87,7 @@ See [REQUIREMENTS.md](./REQUIREMENTS.md) for complete use case documentation.
 ### 🚧 Frontend (Nuxt 4 Admin UI)
 
 **Current State**: Built and working in mock mode
-**Location**: `../../auth-ui/`
+**Location**: `../../../OutlabsAuthUI`
 **Port**: 3000
 **Status**: Switching from mock data to real API
 
@@ -203,7 +203,7 @@ Need to create comprehensive seed data:
 
 ### 2. Switch Frontend to Real API 🚧 IN PROGRESS
 
-Currently updating auth-ui to connect to real backend:
+Currently updating the external `OutlabsAuthUI` repo to connect to the real backend:
 - Change `.env`: `NUXT_PUBLIC_USE_REAL_API=true`
 - Set API URL: `NUXT_PUBLIC_API_BASE_URL=http://localhost:8002`
 - Test login flow
@@ -243,7 +243,7 @@ API Documentation: http://localhost:8002/docs
 ### Frontend (Port 3000)
 
 ```bash
-cd ../../auth-ui
+cd ../../../OutlabsAuthUI
 
 # Install dependencies
 bun install

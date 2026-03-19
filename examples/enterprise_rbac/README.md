@@ -322,11 +322,11 @@ Mike's Properties (ACCESS_GROUP) ← Single entity, leads stored here
 
 ## 🔗 Connect Admin UI
 
-The universal Nuxt admin UI can connect to this example:
+The external `OutlabsAuthUI` repo can connect to this example:
 
 ```bash
-# In auth-ui directory
-cd ../../auth-ui
+# In the external UI repo
+cd ../../../OutlabsAuthUI
 
 # The .env is already configured to point to port 8002
 

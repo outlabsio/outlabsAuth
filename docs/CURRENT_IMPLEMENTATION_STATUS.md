@@ -87,6 +87,12 @@ These are intentional implementation details that are slightly more specific tha
 - The factory implementation lives in `outlabs_auth.oauth.provider_factories`.
 - Reason: the earlier sibling module name `oauth/providers.py` was shadowed by the `oauth/providers/` package, which made the documented factory-helper import path effectively unreachable.
 
+### Admin UI Repository Boundary
+
+- The Nuxt admin UI no longer lives inside this Python repository.
+- The active frontend codebase now lives in the sibling repository `../OutlabsAuthUI` (local workspace `/Users/macbookm3/Documents/projects/OutlabsAuthUI`).
+- Reason: backend and frontend lifecycle now move independently, and keeping the UI in its own repository removes stale in-repo build/release assumptions from this package.
+
 ## Known Remaining Gaps
 
 ### Runtime / Product Gaps
@@ -156,6 +162,7 @@ These are intentional implementation details that are slightly more specific tha
 ### Documentation Gaps
 
 - Several major docs have now been reconciled (`CURRENT_IMPLEMENTATION_STATUS.md`, `USER_AUDIT_LOG_STRATEGY.md`, `SECURITY.md`, `LIBRARY_ARCHITECTURE.md`, `COMPARISON_MATRIX.md`, `API_DESIGN.md`, `DESIGN_DECISIONS.md`, `DEPENDENCY_PATTERNS.md`, `ENTITY_DELETION_AND_MEMBERSHIP_HISTORY.md`).
+- The in-repo `auth-ui/` subtree has been removed and the repo now documents the external admin UI boundary through `README.md`, `AUTH_UI.md`, `AUTH_UI_PARITY_GAPS.md`, and related release/maintainer docs.
 - Remaining stale content is mostly in broader roadmap/design collections rather than the operational and lifecycle docs.
 - The docs index now includes this status file, but the broader planning docs are not yet fully reconciled with current retained-lifecycle behavior.
 

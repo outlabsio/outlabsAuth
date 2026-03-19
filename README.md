@@ -69,7 +69,7 @@ dependencies = ["outlabs-auth"]
 outlabs-auth = { git = "ssh://git@github.com/<org>/outlabsAuth.git", tag = "v0.1.0a5" }
 ```
 
-See [docs/PRIVATE_RELEASE.md](./docs/PRIVATE_RELEASE.md) for the release workflow. Run `uv run python scripts/release_version.py check` to verify the library version, UI version, and release docs stay aligned before you tag a release.
+See [docs/PRIVATE_RELEASE.md](./docs/PRIVATE_RELEASE.md) for the release workflow. Run `uv run python scripts/release_version.py check` to verify the library version and release docs stay aligned before you tag a release.
 
 ### Consumer Database Bootstrap
 
@@ -172,8 +172,11 @@ uv run start.py
 Select services with arrow keys, space to toggle, enter to start:
 - **simple** - SimpleRBAC API (port 8000)
 - **enterprise** - EnterpriseRBAC API (port 8000)
-- **ui** - Admin UI (port 3000)
 - **obs** - Observability stack (Grafana, Prometheus, Loki)
+
+The Nuxt admin UI is no longer stored in this repository. Use the sibling repo
+`../OutlabsAuthUI` instead. In the current local workspace that resolves to
+`/Users/macbookm3/Documents/projects/OutlabsAuthUI`.
 
 ### Code Quality
 
@@ -495,9 +498,11 @@ Implementation-specific documentation (9 files):
 ## Development Status
 
 **Current Library Version**: 0.1.0a5
-**Current Admin UI Version**: 0.1.0-alpha.5
 **Release Stage**: Alpha
 **Database**: PostgreSQL (via SQLAlchemy async)
+
+**Admin UI Repository**: `../OutlabsAuthUI` (local workspace:
+`/Users/macbookm3/Documents/projects/OutlabsAuthUI`)
 
 ### Delivery Status
 

@@ -148,7 +148,7 @@ docker run -d --name outlabs-redis -p 6380:6379 redis:latest
 - Backend API: `http://localhost:8003`
 - PostgreSQL: `postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac`
 - Redis: `redis://localhost:6380`
-- Admin UI: `http://localhost:3000` (when running `auth-ui`)
+- Admin UI: `http://localhost:3000` (when running the external `OutlabsAuthUI` repo)
 
 **EnterpriseRBAC Example** (`examples/enterprise_rbac/`):
 - Backend API: `http://localhost:8004`
@@ -183,7 +183,6 @@ uv run start.py
 This opens an interactive menu where you can select multiple services to start:
 - **simple** - SimpleRBAC API (port 8000)
 - **enterprise** - EnterpriseRBAC API (port 8000)
-- **ui** - Admin UI (port 3000)
 - **obs** - Start observability stack (Grafana, Prometheus, Loki)
 - **obs-stop** - Stop observability stack
 
@@ -246,7 +245,7 @@ python reset_test_env.py
 
 **When to use this:**
 - 🔄 After breaking auth/permissions during development
-- 🧪 Before running integration tests on the frontend (auth-ui)
+- 🧪 Before running integration tests against the external admin UI repo
 - 🚀 Setting up a demo environment
 - 🐛 Debugging auth issues with known-good credentials
 - 🎨 Testing the admin UI with a fresh slate
@@ -269,7 +268,7 @@ outlabsAuth/
 │   ├── API_DESIGN.md               # API design patterns
 │   ├── COMPARISON_MATRIX.md        # SimpleRBAC vs EnterpriseRBAC
 │   ├── IMPLEMENTATION_ROADMAP.md   # Development phases
-│   ├── AUTH_UI.md                  # Admin UI documentation (NEW)
+│   ├── AUTH_UI.md                  # External admin UI repo location and boundary
 │   └── ... (14 design spec files)
 │
 ├── docs-library/                   # 📚 USER DOCS (implementation-specific)
@@ -284,18 +283,9 @@ outlabsAuth/
 │   └── 99-Log-Events-Reference.md  # Log events catalog
 │   # Note: Only 9 files - user docs being rebuilt from scratch
 │
-├── auth-ui/                        # 🎨 ADMIN UI (pluggable Nuxt 4 SPA)
-│   ├── app/
-│   │   ├── components/             # UI components (modals, forms)
-│   │   ├── stores/                 # Pinia stores (auth, users, roles, etc.)
-│   │   ├── pages/                  # Routes (users, roles, entities, etc.)
-│   │   └── types/                  # TypeScript types
-│   ├── nuxt.config.ts              # Nuxt configuration
-│   ├── .env                        # API URL configuration
-│   └── package.json                # Nuxt UI v4.0.1
-│   # Pluggable admin interface for any OutlabsAuth-powered app
-│   # Auto-detects SimpleRBAC vs EnterpriseRBAC mode
-│   # See docs/AUTH_UI.md for full documentation
+├── ../OutlabsAuthUI                # 🎨 EXTERNAL ADMIN UI REPOSITORY
+│   # Nuxt-based admin UI now maintained outside this repo
+│   # See docs/AUTH_UI.md for the handoff location
 │
 ├── _reference/                     # 📁 Archived reference code
 │   ├── models/                     # Old Beanie models from centralized API
@@ -570,77 +560,15 @@ All 37 design decisions documented in **DESIGN_DECISIONS.md**:
 - **DD-005**: Entity hierarchy always in Enterprise
 - **DD-008**: No cross-app SSO (each app is independent)
 
-## Admin UI (`auth-ui/`)
+## Admin UI
 
-**IMPORTANT**: The admin UI is NOT part of the core library - it's a **separate pluggable component** that can be integrated into any app using OutlabsAuth.
+The Nuxt admin UI is no longer stored in this repository.
 
-### What It Is
-- **Nuxt 4 SPA** (not part of the Python package)
-- **Nuxt UI v4** components (Radix UI primitives)
-- **Pinia state management** with auto-syncing to backend
-- **Preset-aware**: Auto-detects SimpleRBAC vs EnterpriseRBAC
+- Repository: `../OutlabsAuthUI`
+- Local workspace path: `/Users/macbookm3/Documents/projects/OutlabsAuthUI`
+- Runs separately from this backend repo
 
-### Key Features
-- ✅ Full CRUD for users, roles, permissions, entities, API keys
-- ✅ Context switching (EnterpriseRBAC)
-- ✅ JWT authentication with auto-refresh
-- ✅ Keyboard shortcuts (`g-u` for users, `g-r` for roles, etc.)
-- ✅ Mock data mode for UI development
-
-### Location & Structure
-```
-auth-ui/
-├── app/
-│   ├── components/    # Modals, forms (RoleCreateModal.vue, etc.)
-│   ├── stores/        # auth.store.ts, users.store.ts, roles.store.ts
-│   ├── pages/         # Routes: /users, /roles, /entities
-│   └── types/         # TypeScript types
-├── .env               # NUXT_PUBLIC_API_BASE_URL=http://localhost:8003
-└── package.json       # Nuxt UI v4.0.1
-```
-
-### Running the Admin UI
-```bash
-cd auth-ui
-bun install
-bun run dev  # Runs on http://localhost:3000
-```
-
-**Must point to a running OutlabsAuth API** (SimpleRBAC or EnterpriseRBAC example)
-
-### Config Detection (NEW - In Progress)
-The UI fetches `/v1/auth/config` to determine:
-- Which preset is running (SimpleRBAC vs EnterpriseRBAC)
-- Which features are enabled (entity_hierarchy, context_aware_roles, etc.)
-- Available permissions for that preset
-
-This allows the UI to **hide/show features** based on backend capabilities.
-
-### Testing with Examples
-```bash
-# First, ensure PostgreSQL is running
-docker run -d --name postgres -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16
-
-# Create databases for examples
-docker exec postgres psql -U postgres -c "CREATE DATABASE blog_simple_rbac;"
-docker exec postgres psql -U postgres -c "CREATE DATABASE realestate_enterprise_rbac;"
-docker exec postgres psql -U postgres -c "CREATE DATABASE outlabs_auth_notifications;"
-
-# Terminal 1: Run SimpleRBAC example
-cd examples/simple_rbac
-python reset_test_env.py  # Create test data
-uv run uvicorn main:app --port 8003 --reload
-
-# Terminal 2: Run admin UI
-cd auth-ui
-bun run dev
-
-# Login at http://localhost:3000
-# admin@test.com / Testpass1
-```
-
-### Full Documentation
-See **`docs/AUTH_UI.md`** for complete architecture, stores, API integration, and customization.
+See **`docs/AUTH_UI.md`** for the current handoff note and repo boundary.
 
 ---
 
@@ -648,7 +576,7 @@ See **`docs/AUTH_UI.md`** for complete architecture, stores, API integration, an
 
 1. **Don't reference old centralized API docs** - Use `docs/` only
 2. **Reference code is for inspiration** - Don't copy-paste without adapting
-3. **Admin UI is separate** - It's NOT in the Python package (it's a Nuxt app in `auth-ui/`)
+3. **Admin UI is separate** - It's NOT in the Python package and now lives in `../OutlabsAuthUI`
 4. **Each app is independent** - No multi-platform/multi-tenant by default
 5. **Start simple** - SimpleRBAC first, then EnterpriseRBAC features
 6. **Getting auth errors during testing?** - Use `python reset_test_env.py` to quickly reset to known-good state with test users

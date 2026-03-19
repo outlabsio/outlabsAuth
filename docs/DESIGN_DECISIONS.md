@@ -3405,12 +3405,9 @@ A role is available for assignment at entity X if:
 - `outlabs_auth/routers/memberships.py` - Added `/entity/{id}/details` endpoint
 
 **Frontend Changes**:
-- `auth-ui/app/types/role.ts` - Added `RoleScope`, `RoleSummary` types
-- `auth-ui/app/types/membership.ts` - New file with `EntityMember` type
-- `auth-ui/app/api/memberships.ts` - New API functions
-- `auth-ui/app/queries/memberships.ts` - New query definitions
-- `auth-ui/app/pages/entities/index.vue` - Added "Members" tab with member list
-- `auth-ui/app/components/EntityMemberAddModal.vue` - New modal for adding members
+- External UI repo (`OutlabsAuthUI`) received the matching frontend changes
+  for role scope types, membership types, membership API/query wiring, the
+  entity members tab, and the add-member modal.
 
 **Migration**: New columns with safe defaults (`scope_entity_id=NULL`, `scope=hierarchy`, `is_auto_assigned=false`)
 
