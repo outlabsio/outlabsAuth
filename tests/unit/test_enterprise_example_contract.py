@@ -8,3 +8,26 @@ def test_enterprise_example_does_not_shadow_auth_config_route():
     example_main = (ROOT / "examples/enterprise_rbac/main.py").read_text()
 
     assert '@app.get("/v1/auth/config"' not in example_main
+
+
+def test_enterprise_example_preserves_user_service_collaborators():
+    example_main = (ROOT / "examples/enterprise_rbac/main.py").read_text()
+
+    assert "notification_service=base_user_service.notifications" in example_main
+    assert "auth_service=base_user_service.auth_service" in example_main
+    assert "membership_service=base_user_service.membership_service" in example_main
+    assert "role_service=base_user_service.role_service" in example_main
+    assert "api_key_service=base_user_service.api_key_service" in example_main
+    assert "user_audit_service=base_user_service.user_audit_service" in example_main
+    assert "auth.deps.user_service = auth.user_service" in example_main
+    assert "tables=[Lead.__table__, LeadNote.__table__]" in example_main
+
+
+def test_enterprise_example_reset_script_uses_migrations_and_full_data_clear():
+    reset_script = (ROOT / "examples/enterprise_rbac/reset_test_env.py").read_text()
+
+    assert "EnterpriseRBAC(" in reset_script
+    assert "auto_migrate=True" in reset_script
+    assert "TRUNCATE TABLE" in reset_script
+    assert "outlabs_auth_alembic_version" in reset_script
+    assert "tables=[Lead.__table__, LeadNote.__table__]" in reset_script

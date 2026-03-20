@@ -28,21 +28,19 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlmodel import SQLModel
 
+from models import Lead, LeadNote
 from outlabs_auth import (
+    EnterpriseRBAC,
     Entity,
     EntityClosure,
     MembershipStatus,
     Permission,
     Role,
-    UserRoleMembership,
     UserStatus,
 )
-from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.models.sql.enums import ConditionOperator, EntityClass, RoleScope
 from outlabs_auth.models.sql.permission import PermissionCondition
 from outlabs_auth.models.sql.role import ConditionGroup, RoleCondition, RolePermission
-from outlabs_auth.services.membership import MembershipService
-from outlabs_auth.services.user import UserService
 
 # Configuration
 DATABASE_URL = os.getenv(
@@ -85,45 +83,52 @@ async def reset_database():
 
     await _ensure_database_exists(DATABASE_URL)
 
-    # Create engine
-    engine = create_async_engine(DATABASE_URL, echo=False)
+    auth = EnterpriseRBAC(
+        database_url=DATABASE_URL,
+        secret_key="example-reset-secret-key",
+        auto_migrate=True,
+        enable_context_aware_roles=True,
+        enable_abac=True,
+        enable_token_cleanup=False,
+    )
+    await auth.initialize()
+    engine = auth.engine
 
     # Create session factory
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-    # Create all tables
-    print("Creating tables...")
+    # Create example-owned tables only. Auth tables are managed by migrations.
+    print("Ensuring tables...")
     async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-    print("Tables created")
+        await conn.run_sync(
+            lambda sync_conn: SQLModel.metadata.create_all(
+                sync_conn,
+                tables=[Lead.__table__, LeadNote.__table__],
+            )
+        )
+    print("Tables ready")
 
-    async with async_session() as session:
-        # Drop existing test data (in correct order for foreign keys)
-        print("Dropping existing test data...")
-
-        # Delete in order respecting foreign keys
-        # Use TRUNCATE ... CASCADE for efficiency, with IF EXISTS to handle first run
-        tables_to_clear = [
-            "entity_membership_roles",
-            "entity_memberships",
-            "entity_closure",
-            "user_role_memberships",
-            "role_permissions",
-            "lead_notes",
-            "leads",
-            "entities",
-            "roles",
-            "permissions",
-            "users",
-        ]
-        for table in tables_to_clear:
-            try:
-                await session.execute(text(f"DELETE FROM {table}"))
-            except Exception:
-                # Table might not exist on first run
-                pass
-        await session.commit()
-        print("Test data cleared\n")
+    try:
+        async with async_session() as session:
+            print("Dropping existing test data...")
+            table_names_result = await session.execute(
+                text(
+                    """
+                    SELECT quote_ident(tablename)
+                    FROM pg_tables
+                    WHERE schemaname = current_schema()
+                      AND tablename != 'outlabs_auth_alembic_version'
+                    ORDER BY tablename
+                    """
+                )
+            )
+            table_names = [str(row[0]) for row in table_names_result]
+            if table_names:
+                await session.execute(
+                    text(f"TRUNCATE TABLE {', '.join(table_names)} RESTART IDENTITY CASCADE")
+                )
+            await session.commit()
+            print("Test data cleared\n")
 
         # Create permissions
         print("Creating permissions...")
@@ -990,10 +995,9 @@ async def reset_database():
             f"({len(base_roles_data)} system + {len(demo_roles_data)} demo)\n"
         )
 
-        # Create config for password hashing
-        config = AuthConfig(secret_key="test-secret-key")
-        user_service = UserService(config)
-        membership_service = MembershipService(config)
+        user_service = auth.user_service
+        membership_service = auth.membership_service
+        role_service = auth.role_service
 
         # Create test users with review-friendly personas.
         print("Creating test users...")
@@ -1301,14 +1305,14 @@ async def reset_database():
             await session.flush()
             users_map[user_data["email"]] = user
 
+            assigned_by_email = user_data.get("assigned_by_email", "admin@acme.com")
+            assigned_by = users_map.get(assigned_by_email)
             for role_name in user_data["direct_roles"]:
-                session.add(
-                    UserRoleMembership(
-                        user_id=user.id,
-                        role_id=roles_map[role_name].id,
-                        status=MembershipStatus.ACTIVE,
-                        assigned_at=seed_now,
-                    )
+                await role_service.assign_role_to_user(
+                    session,
+                    user_id=user.id,
+                    role_id=roles_map[role_name].id,
+                    assigned_by_id=assigned_by.id if assigned_by else None,
                 )
 
             joined_by_email = user_data.get("joined_by_email", "admin@acme.com")
@@ -1393,85 +1397,84 @@ async def reset_database():
 
         await session.commit()
 
-    # Close engine
-    await engine.dispose()
+        entity_display_by_id = {str(entity.id): entity.display_name for entity in entities_map.values()}
 
-    entity_display_by_id = {str(entity.id): entity.display_name for entity in entities_map.values()}
+        # Print credentials and starter manifest
+        print("=" * 60)
+        print("Test Environment Reset Complete!")
+        print("=" * 60)
+        print("\nReview Personas:\n")
 
-    # Print credentials and starter manifest
-    print("=" * 60)
-    print("Test Environment Reset Complete!")
-    print("=" * 60)
-    print("\nReview Personas:\n")
-
-    for user_data in users_data:
-        print(f"   {user_data['persona']}: {user_data['first_name']} {user_data['last_name']}")
-        print(f"   Email:    {user_data['email']}")
-        print(f"   Password: {user_data['password'] or 'Invite flow only'}")
-        print(
-            f"   Status:   {user_data.get('status', UserStatus.ACTIVE).value if isinstance(user_data.get('status'), UserStatus) else user_data.get('status', 'active')}"
-        )
-        print(
-            f"   Direct Roles: {', '.join(user_data['direct_roles']) or 'None'}"
-        )
-        print(
-            "   Entity Scope: "
-            + ", ".join(
-                f"{membership['entity_key']} ({', '.join(membership['role_names'])})"
-                for membership in user_data["entity_memberships"]
-            )
-        )
-        if user_data.get("root_entity_key"):
+        for user_data in users_data:
+            print(f"   {user_data['persona']}: {user_data['first_name']} {user_data['last_name']}")
+            print(f"   Email:    {user_data['email']}")
+            print(f"   Password: {user_data['password'] or 'Invite flow only'}")
             print(
-                "   Root Scope: "
-                + entities_map[user_data["root_entity_key"]].display_name
+                f"   Status:   {user_data.get('status', UserStatus.ACTIVE).value if isinstance(user_data.get('status'), UserStatus) else user_data.get('status', 'active')}"
             )
-        print(f"   Notes:    {user_data['notes']}")
+            print(
+                f"   Direct Roles: {', '.join(user_data['direct_roles']) or 'None'}"
+            )
+            print(
+                "   Entity Scope: "
+                + ", ".join(
+                    f"{membership['entity_key']} ({', '.join(membership['role_names'])})"
+                    for membership in user_data["entity_memberships"]
+                )
+            )
+            if user_data.get("root_entity_key"):
+                print(
+                    "   Root Scope: "
+                    + entities_map[user_data["root_entity_key"]].display_name
+                )
+            print(f"   Notes:    {user_data['notes']}")
+            print()
+
+        print("Seeded Roles Workspace Examples:\n")
+        for role in seeded_roles_for_manifest:
+            if role.is_global and role.root_entity_id is None and role.scope_entity_id is None:
+                role_type = "Global"
+                defined_at = "System"
+                scope_label = "system-wide"
+            elif role.scope_entity_id is None:
+                role_type = "Organization-scoped"
+                defined_at = entity_display_by_id.get(str(role.root_entity_id), "Unknown root")
+                scope_label = "root"
+            else:
+                role_type = "Entity-defined"
+                defined_at = entity_display_by_id.get(str(role.scope_entity_id), "Unknown entity")
+                scope_label = role.scope.value
+
+            flags = []
+            if role.is_system_role:
+                flags.append("system")
+            if role.is_auto_assigned:
+                flags.append("auto-assigned")
+            if role.name == "west_coast_after_hours":
+                flags.append("abac")
+
+            assignable = ", ".join(role.assignable_at_types) if role.assignable_at_types else "any entity type"
+            flag_summary = f" [{', '.join(flags)}]" if flags else ""
+            print(
+                f"   - {role.display_name}{flag_summary}: {role_type}, defined at {defined_at}, "
+                f"scope={scope_label}, assignable_at={assignable}"
+            )
         print()
 
-    print("Seeded Roles Workspace Examples:\n")
-    for role in seeded_roles_for_manifest:
-        if role.is_global and role.root_entity_id is None and role.scope_entity_id is None:
-            role_type = "Global"
-            defined_at = "System"
-            scope_label = "system-wide"
-        elif role.scope_entity_id is None:
-            role_type = "Organization-scoped"
-            defined_at = entity_display_by_id.get(str(role.root_entity_id), "Unknown root")
-            scope_label = "root"
-        else:
-            role_type = "Entity-defined"
-            defined_at = entity_display_by_id.get(str(role.scope_entity_id), "Unknown entity")
-            scope_label = role.scope.value
+        print("Seed Summary:")
+        print(f"   Root entities: {sum(1 for entity in entities_map.values() if entity.parent_id is None)}")
+        print(f"   Total entities: {len(entities_map)}")
+        print(f"   Total roles: {len(seeded_roles_for_manifest)}")
+        print(f"   Total personas: {len(users_data)}")
+        print()
 
-        flags = []
-        if role.is_system_role:
-            flags.append("system")
-        if role.is_auto_assigned:
-            flags.append("auto-assigned")
-        if role.name == "west_coast_after_hours":
-            flags.append("abac")
-
-        assignable = ", ".join(role.assignable_at_types) if role.assignable_at_types else "any entity type"
-        flag_summary = f" [{', '.join(flags)}]" if flags else ""
-        print(
-            f"   - {role.display_name}{flag_summary}: {role_type}, defined at {defined_at}, "
-            f"scope={scope_label}, assignable_at={assignable}"
-        )
-    print()
-
-    print("Seed Summary:")
-    print(f"   Root entities: {sum(1 for entity in entities_map.values() if entity.parent_id is None)}")
-    print(f"   Total entities: {len(entities_map)}")
-    print(f"   Total roles: {len(seeded_roles_for_manifest)}")
-    print(f"   Total personas: {len(users_data)}")
-    print()
-
-    print("URLs:")
-    print(f"   Backend:  http://localhost:8004")
-    print(f"   API Docs: http://localhost:8004/docs")
-    print(f"   Admin UI: http://localhost:3000")
-    print("\n" + "=" * 60)
+        print("URLs:")
+        print(f"   Backend:  http://localhost:8004")
+        print(f"   API Docs: http://localhost:8004/docs")
+        print(f"   Admin UI: http://localhost:3000")
+        print("\n" + "=" * 60)
+    finally:
+        await auth.shutdown()
 
 
 if __name__ == "__main__":

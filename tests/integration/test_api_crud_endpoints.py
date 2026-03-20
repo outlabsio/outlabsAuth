@@ -232,16 +232,23 @@ async def test_permissions_and_roles_crud(client: httpx.AsyncClient, admin_token
             "description": "integration test",
             "is_system": False,
             "is_active": True,
-            "tags": [],
+            "tags": ["frontend", "contract"],
         },
     )
     assert r_perm_create.status_code == 201, r_perm_create.text
     perm = r_perm_create.json()
     perm_id = perm["id"]
     assert perm["status"] == "active"
+    assert perm["tags"] == ["frontend", "contract"]
 
     r_perm_get = await client.get(f"/v1/permissions/{perm_id}")
     assert r_perm_get.status_code == 200, r_perm_get.text
+    assert r_perm_get.json()["tags"] == ["frontend", "contract"]
+
+    r_perm_list = await client.get("/v1/permissions/", params={"page": 1, "limit": 1000})
+    assert r_perm_list.status_code == 200, r_perm_list.text
+    listed_perm = next(item for item in r_perm_list.json()["items"] if item["id"] == perm_id)
+    assert listed_perm["tags"] == ["frontend", "contract"]
 
     r_perm_update = await client.patch(
         f"/v1/permissions/{perm_id}",

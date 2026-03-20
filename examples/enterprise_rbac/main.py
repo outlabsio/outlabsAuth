@@ -118,6 +118,12 @@ class RealEstateUserService(UserService):
         *,
         config,
         frontend_url: str,
+        notification_service=None,
+        auth_service=None,
+        membership_service=None,
+        role_service=None,
+        api_key_service=None,
+        user_audit_service=None,
         mailgun_api_base_url: Optional[str] = None,
         mailgun_domain: Optional[str] = None,
         mailgun_api_key: Optional[str] = None,
@@ -125,7 +131,15 @@ class RealEstateUserService(UserService):
         mailgun_from_name: str = "Outlabs Auth",
         mailgun_recipient_override: Optional[str] = None,
     ):
-        super().__init__(config=config)
+        super().__init__(
+            config=config,
+            notification_service=notification_service,
+            auth_service=auth_service,
+            membership_service=membership_service,
+            role_service=role_service,
+            api_key_service=api_key_service,
+            user_audit_service=user_audit_service,
+        )
         self.frontend_url = _trim_trailing_slash(frontend_url)
         self.mailgun_api_base_url = _trim_trailing_slash(
             mailgun_api_base_url or "https://api.mailgun.net"
@@ -324,6 +338,14 @@ auth: Optional[EnterpriseRBAC] = None
 # ============================================================================
 
 
+def _ensure_example_tables(sync_conn) -> None:
+    """Create example-owned tables without re-touching migrated auth tables."""
+    SQLModel.metadata.create_all(
+        sync_conn,
+        tables=[Lead.__table__, LeadNote.__table__],
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
@@ -372,16 +394,23 @@ async def lifespan(app: FastAPI):
 
     await auth.initialize()
 
-    # Create tables (including domain models)
-    print("Creating database tables...")
+    # Create example-owned domain tables only. Auth tables come from migrations.
+    print("Ensuring example domain tables exist...")
     async with auth.engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-    print("Database tables created")
+        await conn.run_sync(_ensure_example_tables)
+    print("Example domain tables ready")
 
     # Replace user service with custom one
+    base_user_service = auth.user_service
     auth.user_service = RealEstateUserService(
         config=auth.config,
         frontend_url=FRONTEND_URL,
+        notification_service=base_user_service.notifications if base_user_service else None,
+        auth_service=base_user_service.auth_service if base_user_service else None,
+        membership_service=base_user_service.membership_service if base_user_service else None,
+        role_service=base_user_service.role_service if base_user_service else None,
+        api_key_service=base_user_service.api_key_service if base_user_service else None,
+        user_audit_service=base_user_service.user_audit_service if base_user_service else None,
         mailgun_api_base_url=MAILGUN_API_BASE_URL,
         mailgun_domain=MAILGUN_DOMAIN,
         mailgun_api_key=MAILGUN_API_KEY,
@@ -389,6 +418,8 @@ async def lifespan(app: FastAPI):
         mailgun_from_name=MAILGUN_FROM_NAME,
         mailgun_recipient_override=MAILGUN_RECIPIENT_OVERRIDE,
     )
+    if auth.deps is not None:
+        auth.deps.user_service = auth.user_service
     print("Custom user service with invite/reset email hooks enabled")
 
     if auth.observability and auth.observability.config.enable_metrics:

@@ -1865,6 +1865,7 @@ class PermissionService(BaseService[Permission]):
             skip=skip,
             limit=limit,
             order_by=Permission.name,
+            options=[selectinload(Permission.tags)],
         )
 
         return permissions, total_count
