@@ -7,6 +7,8 @@ import pytest
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import EntityNotFoundError, InvalidInputError
 from outlabs_auth.models.sql.enums import EntityClass
+from outlabs_auth.schemas.config import AllowedRootTypes, DefaultChildTypes, EntityTypeConfig
+from outlabs_auth.services.config import ConfigService
 from outlabs_auth.services.entity import EntityService
 
 
@@ -395,3 +397,130 @@ async def test_entity_service_hierarchy_validation_helpers(
     allowed_types = await service._get_allowed_child_types(test_session, dept, EntityClass.STRUCTURAL)
     assert allowed_types == ["department"]
     assert await service._get_root_entity(test_session, root) == root
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_entity_service_enforces_configured_root_types_for_structural_roots(
+    test_session,
+    auth_config: AuthConfig,
+):
+    config_service = ConfigService()
+    await config_service.set_entity_type_config(
+        test_session,
+        EntityTypeConfig(
+            allowed_root_types=AllowedRootTypes(
+                structural=["workspace"],
+                access_group=["project"],
+            ),
+            default_child_types=DefaultChildTypes(
+                structural=["department", "team"],
+                access_group=["permission_group"],
+            ),
+        ),
+    )
+
+    service = EntityService(
+        config=auth_config,
+        redis_client=None,
+        config_service=config_service,
+    )
+
+    with pytest.raises(InvalidInputError, match="structural root entities"):
+        await service.create_entity(
+            session=test_session,
+            name="org-root",
+            display_name="Org Root",
+            slug="org-root",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
+
+    created_root = await service.create_entity(
+        session=test_session,
+        name="workspace-root",
+        display_name="Workspace Root",
+        slug="workspace-root",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="workspace",
+    )
+    with pytest.raises(InvalidInputError, match="access-group root entities"):
+        await service.create_entity(
+            session=test_session,
+            name="root-team",
+            display_name="Root Team",
+            slug="root-team",
+            entity_class=EntityClass.ACCESS_GROUP,
+            entity_type="team",
+        )
+
+    access_group_root = await service.create_entity(
+        session=test_session,
+        name="project-group",
+        display_name="Project Group",
+        slug="project-group",
+        entity_class=EntityClass.ACCESS_GROUP,
+        entity_type="project",
+    )
+
+    assert created_root.entity_type == "workspace"
+    assert access_group_root.entity_type == "project"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_entity_service_enforces_root_naming_rules_for_descendants(
+    test_session,
+    auth_config: AuthConfig,
+):
+    service = EntityService(config=auth_config, redis_client=None)
+    root = await service.create_entity(
+        session=test_session,
+        name="governed-root",
+        display_name="Governed Root",
+        slug="governed-root",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="organization",
+        child_name_pattern=r"^(east|west)_[a-z0-9_]+$",
+        child_display_name_pattern=r"^(East|West) .+$",
+        child_slug_pattern=r"^(east|west)-[a-z0-9-]+$",
+        child_naming_guidance="Use East/West prefixes for branch naming.",
+    )
+
+    with pytest.raises(InvalidInputError, match="system name 'branch_alpha'"):
+        await service.create_entity(
+            session=test_session,
+            name="branch_alpha",
+            display_name="East Branch Alpha",
+            slug="east-branch-alpha",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="department",
+            parent_id=root.id,
+        )
+
+    created_child = await service.create_entity(
+        session=test_session,
+        name="east_branch_alpha",
+        display_name="East Branch Alpha",
+        slug="east-branch-alpha",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="department",
+        parent_id=root.id,
+    )
+
+    with pytest.raises(InvalidInputError, match="display name 'Branch Alpha'"):
+        await service.update_entity(
+            test_session,
+            created_child.id,
+            display_name="Branch Alpha",
+        )
+
+    with pytest.raises(
+        InvalidInputError,
+        match="Root naming governance can only be configured on root entities",
+    ):
+        await service.update_entity(
+            test_session,
+            created_child.id,
+            child_display_name_pattern=r"^Team .+$",
+        )

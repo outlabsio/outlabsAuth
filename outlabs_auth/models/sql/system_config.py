@@ -82,8 +82,21 @@ class ConfigKeys:
 
 
 # === Default Values ===
+DEFAULT_STRUCTURAL_ROOT_TYPES = ["organization"]
+DEFAULT_ACCESS_GROUP_ROOT_TYPES = [
+    "permission_group",
+    "admin_group",
+    "team",
+    "department",
+    "project",
+    "agent_workspace",
+]
+
 DEFAULT_ENTITY_TYPE_CONFIG = {
-    "allowed_root_types": ["organization"],
+    "allowed_root_types": {
+        "structural": list(DEFAULT_STRUCTURAL_ROOT_TYPES),
+        "access_group": list(DEFAULT_ACCESS_GROUP_ROOT_TYPES),
+    },
     "default_child_types": {
         "structural": ["department", "team", "branch"],
         "access_group": ["permission_group", "admin_group"],

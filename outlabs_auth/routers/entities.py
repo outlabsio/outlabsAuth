@@ -16,6 +16,7 @@ from outlabs_auth.schemas.entity import (
     EntityCreateRequest,
     EntityMoveRequest,
     EntityResponse,
+    EntityTypeSuggestionsResponse,
     EntityUpdateRequest,
     MemberResponse,
 )
@@ -44,6 +45,10 @@ def _entity_to_response(entity: Any) -> EntityResponse:
         allowed_child_classes=entity.allowed_child_classes or [],
         allowed_child_types=entity.allowed_child_types or [],
         max_members=entity.max_members,
+        child_name_pattern=entity.child_name_pattern,
+        child_display_name_pattern=entity.child_display_name_pattern,
+        child_slug_pattern=entity.child_slug_pattern,
+        child_naming_guidance=entity.child_naming_guidance,
     )
 
 
@@ -200,8 +205,48 @@ def get_entities_router(
             allowed_child_classes=data.allowed_child_classes,
             allowed_child_types=data.allowed_child_types,
             max_members=data.max_members,
+            child_name_pattern=data.child_name_pattern,
+            child_display_name_pattern=data.child_display_name_pattern,
+            child_slug_pattern=data.child_slug_pattern,
+            child_naming_guidance=data.child_naming_guidance,
         )
         return _entity_to_response(entity)
+
+    @router.get(
+        "/type-suggestions",
+        response_model=EntityTypeSuggestionsResponse,
+        summary="Get entity type suggestions",
+        description="Get suggested entity types for a root scope or parent scope during entity creation",
+    )
+    async def get_entity_type_suggestions(
+        parent_id: Optional[UUID] = Query(
+            None,
+            description="Parent entity ID. Omit for root-level suggestions.",
+        ),
+        entity_class: Optional[str] = Query(
+            None,
+            pattern="^(structural|access_group)$",
+            description="Optional entity class filter for suggestions.",
+        ),
+        auth_result=Depends(
+            auth.require_tree_permission("entity:create", "parent_id", source="query")
+        ),
+        session: AsyncSession = Depends(auth.uow),
+    ):
+        """Return sibling-based entity type suggestions for create flows."""
+        from outlabs_auth.models.sql.enums import EntityClass
+
+        parsed_entity_class = (
+            EntityClass(entity_class)
+            if isinstance(entity_class, str)
+            else entity_class
+        )
+        suggestions = await auth.entity_service.get_suggested_entity_types(
+            session,
+            parent_id=parent_id,
+            entity_class=parsed_entity_class,
+        )
+        return EntityTypeSuggestionsResponse.model_validate(suggestions)
 
     @router.get(
         "/{entity_id}",

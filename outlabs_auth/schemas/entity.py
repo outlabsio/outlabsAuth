@@ -23,6 +23,10 @@ class EntityResponse(BaseModel):
     allowed_child_classes: List[str] = Field(default_factory=list)
     allowed_child_types: List[str] = Field(default_factory=list)
     max_members: Optional[int] = None
+    child_name_pattern: Optional[str] = None
+    child_display_name_pattern: Optional[str] = None
+    child_slug_pattern: Optional[str] = None
+    child_naming_guidance: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -43,6 +47,10 @@ class EntityCreateRequest(BaseModel):
     allowed_child_classes: List[str] = Field(default_factory=list)
     allowed_child_types: List[str] = Field(default_factory=list)
     max_members: Optional[int] = None
+    child_name_pattern: Optional[str] = Field(None, max_length=255)
+    child_display_name_pattern: Optional[str] = Field(None, max_length=255)
+    child_slug_pattern: Optional[str] = Field(None, max_length=255)
+    child_naming_guidance: Optional[str] = Field(None, max_length=1000)
 
 
 class EntityUpdateRequest(BaseModel):
@@ -56,6 +64,10 @@ class EntityUpdateRequest(BaseModel):
     allowed_child_classes: Optional[List[str]] = None
     allowed_child_types: Optional[List[str]] = None
     max_members: Optional[int] = None
+    child_name_pattern: Optional[str] = Field(None, max_length=255)
+    child_display_name_pattern: Optional[str] = Field(None, max_length=255)
+    child_slug_pattern: Optional[str] = Field(None, max_length=255)
+    child_naming_guidance: Optional[str] = Field(None, max_length=1000)
 
 
 class EntityMoveRequest(BaseModel):
@@ -75,3 +87,29 @@ class MemberResponse(BaseModel):
     role_names: List[str] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class EntityTypeSuggestion(BaseModel):
+    """Suggested entity type based on sibling usage."""
+
+    entity_type: str
+    count: int
+    examples: List[str] = Field(default_factory=list)
+
+
+class EntityTypeSuggestionParent(BaseModel):
+    """Parent entity context for type suggestions."""
+
+    id: str
+    name: str
+    display_name: str
+    entity_type: str
+    entity_class: str
+
+
+class EntityTypeSuggestionsResponse(BaseModel):
+    """Entity type suggestion response."""
+
+    suggestions: List[EntityTypeSuggestion] = Field(default_factory=list)
+    parent_entity: Optional[EntityTypeSuggestionParent] = None
+    total_children: int = 0

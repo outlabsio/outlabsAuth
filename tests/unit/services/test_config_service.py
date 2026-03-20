@@ -6,7 +6,7 @@ import pytest
 
 from outlabs_auth.models.sql.system_config import ConfigKeys, DEFAULT_ENTITY_TYPE_CONFIG
 from outlabs_auth.models.sql.user import User
-from outlabs_auth.schemas.config import DefaultChildTypes, EntityTypeConfig
+from outlabs_auth.schemas.config import AllowedRootTypes, DefaultChildTypes, EntityTypeConfig
 from outlabs_auth.services.config import ConfigService
 
 
@@ -63,11 +63,17 @@ async def test_config_service_entity_type_defaults_setters_and_seed_defaults(tes
     actor = await _create_actor(test_session, email_prefix="entity-config-actor")
 
     default_config = await service.get_entity_type_config(test_session)
-    assert default_config.allowed_root_types == DEFAULT_ENTITY_TYPE_CONFIG["allowed_root_types"]
+    assert (
+        default_config.allowed_root_types.model_dump()
+        == DEFAULT_ENTITY_TYPE_CONFIG["allowed_root_types"]
+    )
     assert default_config.default_child_types.model_dump() == DEFAULT_ENTITY_TYPE_CONFIG["default_child_types"]
 
     updated_config = EntityTypeConfig(
-        allowed_root_types=["organization", "workspace"],
+        allowed_root_types=AllowedRootTypes(
+            structural=["organization", "workspace"],
+            access_group=["permission_group"],
+        ),
         default_child_types=DefaultChildTypes(
             structural=["division"],
             access_group=["reviewers"],
@@ -83,7 +89,8 @@ async def test_config_service_entity_type_defaults_setters_and_seed_defaults(tes
 
     assert persisted == updated_config
     loaded = await service.get_entity_type_config(test_session)
-    assert loaded.allowed_root_types == ["organization", "workspace"]
+    assert loaded.allowed_root_types.structural == ["organization", "workspace"]
+    assert loaded.allowed_root_types.access_group == ["permission_group"]
     assert loaded.default_child_types.structural == ["division"]
     assert loaded.default_child_types.access_group == ["reviewers"]
 
@@ -91,5 +98,6 @@ async def test_config_service_entity_type_defaults_setters_and_seed_defaults(tes
     await test_session.commit()
 
     seeded = await service.get_entity_type_config(test_session)
-    assert seeded.allowed_root_types == ["organization", "workspace"]
+    assert seeded.allowed_root_types.structural == ["organization", "workspace"]
+    assert seeded.allowed_root_types.access_group == ["permission_group"]
     assert seeded.default_child_types.structural == ["division"]

@@ -25,12 +25,14 @@ from outlabs_auth.fastapi import register_exception_handlers
 from outlabs_auth.models.sql.enums import EntityClass, MembershipStatus
 from outlabs_auth.routers import (
     get_auth_router,
+    get_config_router,
     get_entities_router,
     get_memberships_router,
     get_permissions_router,
     get_roles_router,
     get_users_router,
 )
+from outlabs_auth.schemas.config import AllowedRootTypes, DefaultChildTypes, EntityTypeConfig
 from outlabs_auth.utils.jwt import create_access_token
 
 # ============================================================================
@@ -59,6 +61,7 @@ async def app(auth_instance: EnterpriseRBAC) -> FastAPI:
     app = FastAPI()
     register_exception_handlers(app, debug=True)
     app.include_router(get_auth_router(auth_instance, prefix="/v1/auth"))
+    app.include_router(get_config_router(auth_instance, prefix="/v1/config"))
     app.include_router(get_users_router(auth_instance, prefix="/v1/users"))
     app.include_router(get_roles_router(auth_instance, prefix="/v1/roles"))
     app.include_router(get_permissions_router(auth_instance, prefix="/v1/permissions"))
@@ -238,6 +241,203 @@ async def test_admin_can_create_child_entity(
     assert child_resp.status_code == 201
     data = child_resp.json()
     assert data["parent_entity_id"] == parent_id
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_root_entity_type_config_is_enforced_for_structural_roots(
+    client: httpx.AsyncClient,
+    auth_instance: EnterpriseRBAC,
+    admin_user: dict,
+):
+    async with auth_instance.get_session() as session:
+        await auth_instance.config_service.set_entity_type_config(
+            session,
+            EntityTypeConfig(
+                allowed_root_types=AllowedRootTypes(
+                    structural=["workspace"],
+                    access_group=["project"],
+                ),
+                default_child_types=DefaultChildTypes(
+                    structural=["department", "team", "branch"],
+                    access_group=["permission_group", "admin_group"],
+                ),
+            ),
+        )
+        await session.commit()
+
+    rejected_name = f"org-{uuid.uuid4().hex[:8]}"
+    rejected = await client.post(
+        "/v1/entities/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "name": rejected_name,
+            "display_name": "Rejected Organization Root",
+            "slug": rejected_name,
+            "entity_class": "structural",
+            "entity_type": "organization",
+        },
+    )
+
+    assert rejected.status_code == 422
+    assert "structural root entities" in rejected.json()["message"]
+
+    allowed_name = f"workspace-{uuid.uuid4().hex[:8]}"
+    allowed = await client.post(
+        "/v1/entities/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "name": allowed_name,
+            "display_name": "Workspace Root",
+            "slug": allowed_name,
+            "entity_class": "structural",
+            "entity_type": "workspace",
+        },
+    )
+
+    assert allowed.status_code == 201
+    assert allowed.json()["entity_type"] == "workspace"
+
+    rejected_access_group = await client.post(
+        "/v1/entities/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "name": f"root-team-{uuid.uuid4().hex[:8]}",
+            "display_name": "Rejected Access Root",
+            "slug": f"root-team-{uuid.uuid4().hex[:8]}",
+            "entity_class": "access_group",
+            "entity_type": "team",
+        },
+    )
+
+    assert rejected_access_group.status_code == 422
+    assert "access-group root entities" in rejected_access_group.json()["message"]
+
+    allowed_access_group = await client.post(
+        "/v1/entities/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "name": f"root-project-{uuid.uuid4().hex[:8]}",
+            "display_name": "Project Root Group",
+            "slug": f"root-project-{uuid.uuid4().hex[:8]}",
+            "entity_class": "access_group",
+            "entity_type": "project",
+        },
+    )
+
+    assert allowed_access_group.status_code == 201
+    assert allowed_access_group.json()["entity_type"] == "project"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_admin_can_get_entity_type_suggestions_for_a_parent_scope(
+    client: httpx.AsyncClient,
+    admin_user: dict,
+):
+    root_name = f"root-{uuid.uuid4().hex[:8]}"
+    root_resp = await client.post(
+        "/v1/entities/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "name": root_name,
+            "display_name": "Suggestion Root",
+            "slug": root_name,
+            "entity_class": "structural",
+            "entity_type": "organization",
+        },
+    )
+    assert root_resp.status_code == 201
+    root_id = root_resp.json()["id"]
+
+    for index, child_type in enumerate(["department", "department", "team"], start=1):
+        child_name = f"{child_type}-{uuid.uuid4().hex[:8]}"
+        child_resp = await client.post(
+            "/v1/entities/",
+            headers={"Authorization": f"Bearer {admin_user['token']}"},
+            json={
+                "name": child_name,
+                "display_name": f"{child_type.title()} {index}",
+                "slug": child_name,
+                "entity_class": "structural",
+                "entity_type": child_type,
+                "parent_entity_id": root_id,
+            },
+        )
+        assert child_resp.status_code == 201
+
+    suggestions_resp = await client.get(
+        f"/v1/entities/type-suggestions?parent_id={root_id}&entity_class=structural",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+
+    assert suggestions_resp.status_code == 200
+    payload = suggestions_resp.json()
+    assert payload["total_children"] == 3
+    assert payload["parent_entity"]["id"] == root_id
+    assert payload["suggestions"][0]["entity_type"] == "department"
+    assert payload["suggestions"][0]["count"] == 2
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_root_naming_governance_is_exposed_and_enforced_for_descendants(
+    client: httpx.AsyncClient,
+    admin_user: dict,
+):
+    root_name = f"governed-root-{uuid.uuid4().hex[:8]}"
+    root_resp = await client.post(
+        "/v1/entities/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "name": root_name,
+            "display_name": "Governed Root",
+            "slug": root_name,
+            "entity_class": "structural",
+            "entity_type": "organization",
+            "child_name_pattern": r"^(east|west)_[a-z0-9_]+$",
+            "child_display_name_pattern": r"^(East|West) .+$",
+            "child_slug_pattern": r"^(east|west)-[a-z0-9-]+$",
+            "child_naming_guidance": "Use East/West prefixes for branch naming.",
+        },
+    )
+
+    assert root_resp.status_code == 201, root_resp.text
+    root_payload = root_resp.json()
+    assert root_payload["child_name_pattern"] == r"^(east|west)_[a-z0-9_]+$"
+    assert root_payload["child_naming_guidance"] == "Use East/West prefixes for branch naming."
+
+    rejected_child = await client.post(
+        "/v1/entities/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "name": f"branch_{uuid.uuid4().hex[:8]}",
+            "display_name": "East Branch Alpha",
+            "slug": f"east-branch-{uuid.uuid4().hex[:8]}",
+            "entity_class": "structural",
+            "entity_type": "department",
+            "parent_entity_id": root_payload["id"],
+        },
+    )
+
+    assert rejected_child.status_code == 422, rejected_child.text
+    assert "does not match the root naming rule" in rejected_child.json()["message"]
+
+    allowed_suffix = uuid.uuid4().hex[:8]
+    allowed_child = await client.post(
+        "/v1/entities/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "name": f"east_branch_{allowed_suffix}",
+            "display_name": "East Branch Alpha",
+            "slug": f"east-branch-{allowed_suffix}",
+            "entity_class": "structural",
+            "entity_type": "department",
+            "parent_entity_id": root_payload["id"],
+        },
+    )
+
+    assert allowed_child.status_code == 201, allowed_child.text
 
 
 @pytest.mark.integration

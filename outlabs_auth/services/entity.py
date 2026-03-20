@@ -34,6 +34,13 @@ from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.enums import EntityClass
 from outlabs_auth.services.base import BaseService
 
+ROOT_NAMING_PATTERN_FIELDS = (
+    "child_name_pattern",
+    "child_display_name_pattern",
+    "child_slug_pattern",
+)
+ROOT_ONLY_GOVERNANCE_FIELDS = ROOT_NAMING_PATTERN_FIELDS + ("child_naming_guidance",)
+
 
 class EntityService(BaseService[Entity]):
     """
@@ -106,6 +113,14 @@ class EntityService(BaseService[Entity]):
             InvalidInputError: If hierarchy validation fails or entity with same slug exists
         """
         start_time = time.perf_counter()
+        normalized_name = name.lower()
+        normalized_entity_type = entity_type.lower()
+        normalized_kwargs = dict(kwargs)
+        self._normalize_root_governance_values(normalized_kwargs)
+
+        # Generate slug before validation so descendant naming rules can inspect it.
+        if not slug:
+            slug = self._generate_slug(name)
 
         # Validate and fetch parent if provided
         parent_entity = None
@@ -113,6 +128,12 @@ class EntityService(BaseService[Entity]):
         parent_path = None
 
         if parent_id:
+            if self._has_root_governance_values(normalized_kwargs):
+                raise InvalidInputError(
+                    message="Root naming governance can only be configured on root entities",
+                    details={"fields": list(ROOT_ONLY_GOVERNANCE_FIELDS)},
+                )
+
             parent_entity = await self.get_by_id(session, parent_id)
             if not parent_entity:
                 raise EntityNotFoundError(
@@ -121,13 +142,28 @@ class EntityService(BaseService[Entity]):
                 )
 
             # Validate hierarchy rules
-            await self._validate_hierarchy(session, parent_entity, entity_class, entity_type)
+            await self._validate_hierarchy(
+                session,
+                parent_entity,
+                entity_class,
+                normalized_entity_type,
+            )
+            await self._validate_root_naming_rules(
+                session,
+                parent_entity,
+                name=normalized_name,
+                display_name=display_name,
+                slug=slug,
+            )
             parent_depth = parent_entity.depth
             parent_path = parent_entity.path
-
-        # Generate slug if not provided
-        if not slug:
-            slug = self._generate_slug(name)
+        else:
+            await self._validate_root_entity_type(
+                session,
+                entity_class=entity_class,
+                entity_type=normalized_entity_type,
+            )
+            self._validate_root_governance_values(normalized_kwargs)
 
         # Check for duplicate slug.
         existing = await self.get_one(
@@ -142,15 +178,15 @@ class EntityService(BaseService[Entity]):
 
         # Create entity
         entity = Entity(
-            name=name.lower(),
+            name=normalized_name,
             display_name=display_name,
             slug=slug,
             description=description,
             entity_class=entity_class,
-            entity_type=entity_type.lower(),
+            entity_type=normalized_entity_type,
             parent_id=parent_id,
             depth=parent_depth + 1,
-            **kwargs,
+            **normalized_kwargs,
         )
 
         # Set materialized path
@@ -229,9 +265,29 @@ class EntityService(BaseService[Entity]):
         start_time = time.perf_counter()
 
         entity = await self.get_entity(session, entity_id)
+        normalized_updates = dict(updates)
+        self._normalize_root_governance_values(normalized_updates)
+
+        if entity.parent_id is not None and self._has_root_governance_values(normalized_updates):
+            raise InvalidInputError(
+                message="Root naming governance can only be configured on root entities",
+                details={"entity_id": str(entity_id), "fields": list(ROOT_ONLY_GOVERNANCE_FIELDS)},
+            )
+
+        if entity.parent_id is None:
+            self._validate_root_governance_values(normalized_updates)
+        elif "display_name" in normalized_updates and normalized_updates["display_name"] is not None:
+            parent_entity = await self.get_entity(session, entity.parent_id)
+            await self._validate_root_naming_rules(
+                session,
+                parent_entity,
+                name=entity.name,
+                display_name=normalized_updates["display_name"],
+                slug=entity.slug,
+            )
 
         # Update fields
-        for field, value in updates.items():
+        for field, value in normalized_updates.items():
             if hasattr(entity, field):
                 setattr(entity, field, value)
 
@@ -721,6 +777,114 @@ class EntityService(BaseService[Entity]):
             "parent_entity": parent_entity_data,
             "total_children": len(entities),
         }
+
+    async def _validate_root_entity_type(
+        self,
+        session: AsyncSession,
+        *,
+        entity_class: EntityClass,
+        entity_type: str,
+    ) -> None:
+        """
+        Validate configured root entity type restrictions.
+        """
+        if self.config_service is None:
+            return
+
+        config = await self.config_service.get_entity_type_config(session)
+        root_type_config = getattr(config.allowed_root_types, entity_class.value, [])
+        allowed_root_types = [
+            value.strip().lower()
+            for value in root_type_config
+            if value and value.strip()
+        ]
+
+        if not allowed_root_types:
+            class_label = entity_class.value.replace("_", "-")
+            raise InvalidInputError(
+                message=f"No {class_label} root entity types are configured",
+                details={"entity_class": entity_class.value},
+            )
+
+        if entity_type.lower() not in allowed_root_types:
+            class_label = entity_class.value.replace("_", "-")
+            raise InvalidInputError(
+                message=f"Entity type '{entity_type}' is not allowed for {class_label} root entities",
+                details={
+                    "entity_class": entity_class.value,
+                    "allowed_root_types": allowed_root_types,
+                    "requested_type": entity_type,
+                },
+            )
+
+    def _normalize_root_governance_values(self, payload: Dict[str, Any]) -> None:
+        """Normalize optional root-governance strings to trimmed values or None."""
+        for field in ROOT_ONLY_GOVERNANCE_FIELDS:
+            if field not in payload:
+                continue
+
+            value = payload[field]
+            if value is None:
+                continue
+
+            if isinstance(value, str):
+                trimmed_value = value.strip()
+                payload[field] = trimmed_value or None
+
+    def _has_root_governance_values(self, payload: Dict[str, Any]) -> bool:
+        """Check whether a payload includes any populated root-only governance values."""
+        return any(payload.get(field) is not None for field in ROOT_ONLY_GOVERNANCE_FIELDS)
+
+    def _validate_root_governance_values(self, payload: Dict[str, Any]) -> None:
+        """Ensure configured regex patterns are valid before persisting them."""
+        for field in ROOT_NAMING_PATTERN_FIELDS:
+            pattern = payload.get(field)
+            if not pattern:
+                continue
+
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise InvalidInputError(
+                    message=f"{field.replace('_', ' ')} must be a valid regular expression",
+                    details={"field": field, "pattern": pattern, "error": str(exc)},
+                ) from exc
+
+    async def _validate_root_naming_rules(
+        self,
+        session: AsyncSession,
+        parent: Entity,
+        *,
+        name: str,
+        display_name: str,
+        slug: str,
+    ) -> None:
+        """Validate descendant naming against the root entity's configured rules."""
+        root_entity = await self._get_root_entity(session, parent)
+        if not root_entity:
+            return
+
+        values_to_validate = (
+            ("child_name_pattern", name, "system name"),
+            ("child_display_name_pattern", display_name, "display name"),
+            ("child_slug_pattern", slug, "slug"),
+        )
+
+        for field, value, label in values_to_validate:
+            pattern = getattr(root_entity, field, None)
+            if not pattern:
+                continue
+
+            if re.fullmatch(pattern, value) is None:
+                raise InvalidInputError(
+                    message=f"{label} '{value}' does not match the root naming rule",
+                    details={
+                        "field": label,
+                        "pattern": pattern,
+                        "root_entity_id": str(root_entity.id),
+                        "root_entity_name": root_entity.display_name,
+                    },
+                )
 
     # Closure table maintenance
 

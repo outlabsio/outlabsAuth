@@ -145,6 +145,26 @@ class Entity(BaseModel, table=True):
         ),
         description="Entity classes allowed as children (structural, access_group). Empty = all allowed.",
     )
+    child_name_pattern: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255), nullable=True),
+        description="Optional regex pattern used to validate descendant system names within this root hierarchy.",
+    )
+    child_display_name_pattern: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255), nullable=True),
+        description="Optional regex pattern used to validate descendant display names within this root hierarchy.",
+    )
+    child_slug_pattern: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255), nullable=True),
+        description="Optional regex pattern used to validate descendant slugs within this root hierarchy.",
+    )
+    child_naming_guidance: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(1000), nullable=True),
+        description="Optional operator guidance for descendant naming within this root hierarchy.",
+    )
 
     # === Relationships ===
     parent: Optional["Entity"] = Relationship(

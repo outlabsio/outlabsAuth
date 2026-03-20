@@ -98,8 +98,11 @@ def get_config_router(
             else current.default_child_types,
         )
 
-        # Validate at least one root type
-        if len(new_config.allowed_root_types) == 0:
+        # Validate at least one root type across all classes
+        if (
+            len(new_config.allowed_root_types.structural) == 0
+            and len(new_config.allowed_root_types.access_group) == 0
+        ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="At least one root entity type must be configured",
@@ -120,7 +123,7 @@ def get_config_router(
         if auth.observability:
             auth.observability.logger.info(
                 "entity_type_config_updated",
-                allowed_root_types=new_config.allowed_root_types,
+                allowed_root_types=new_config.allowed_root_types.model_dump(),
                 updated_by=str(user_id) if user_id else None,
             )
 

@@ -92,7 +92,10 @@ async def test_config_router_put_requires_superuser(
         "/v1/config/entity-types",
         headers={"Authorization": f"Bearer {regular_user['token']}"},
         json={
-            "allowed_root_types": ["organization", "workspace"],
+            "allowed_root_types": {
+                "structural": ["organization", "workspace"],
+                "access_group": ["permission_group"],
+            },
         },
     )
 
@@ -142,7 +145,7 @@ async def test_config_router_rejects_empty_allowed_root_types_payload(
     response = await client.put(
         "/v1/config/entity-types",
         headers={"Authorization": f"Bearer {admin_user['token']}"},
-        json={"allowed_root_types": []},
+        json={"allowed_root_types": {"structural": [], "access_group": []}},
     )
 
-    assert response.status_code == 422, response.text
+    assert response.status_code == 400, response.text

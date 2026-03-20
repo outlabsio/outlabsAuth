@@ -72,6 +72,11 @@ async def test_entities_router_callback_list_and_crud_paths(
 ):
     list_entities = _endpoint(entities_router, "/v1/entities/", "GET")
     create_entity = _endpoint(entities_router, "/v1/entities/", "POST")
+    get_entity_type_suggestions = _endpoint(
+        entities_router,
+        "/v1/entities/type-suggestions",
+        "GET",
+    )
     get_entity = _endpoint(entities_router, "/v1/entities/{entity_id}", "GET")
     update_entity = _endpoint(entities_router, "/v1/entities/{entity_id}", "PATCH")
     delete_entity = _endpoint(entities_router, "/v1/entities/{entity_id}", "DELETE")
@@ -158,6 +163,16 @@ async def test_entities_router_callback_list_and_crud_paths(
         )
         assert invalid_class.total == 0
         assert invalid_class.pages == 0
+
+        suggestions = await get_entity_type_suggestions(
+            parent_id=root.id,
+            entity_class="structural",
+            session=session,
+            auth_result={"user_id": str(actor.id)},
+        )
+        assert suggestions.total_children == 1
+        assert suggestions.parent_entity.id == str(root.id)
+        assert suggestions.suggestions[0].entity_type == "department"
 
         fetched = await get_entity(
             entity_id=dept.id,

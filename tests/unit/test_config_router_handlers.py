@@ -9,7 +9,12 @@ from fastapi import HTTPException
 
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.routers.config import get_config_router
-from outlabs_auth.schemas.config import DefaultChildTypes, EntityTypeConfigResponse, EntityTypeConfigUpdateRequest
+from outlabs_auth.schemas.config import (
+    AllowedRootTypes,
+    DefaultChildTypes,
+    EntityTypeConfigResponse,
+    EntityTypeConfigUpdateRequest,
+)
 
 
 def _build_auth_stub(observability=None):
@@ -58,7 +63,7 @@ async def test_config_router_get_and_update_handlers_cover_merge_logging_and_gua
     get_response = await get_endpoint(session=test_session)
 
     assert isinstance(get_response, EntityTypeConfigResponse)
-    assert get_response.allowed_root_types == ["organization"]
+    assert get_response.allowed_root_types.structural == ["organization"]
 
     update_payload = EntityTypeConfigUpdateRequest.model_construct(
         allowed_root_types=None,
@@ -74,7 +79,7 @@ async def test_config_router_get_and_update_handlers_cover_merge_logging_and_gua
         auth_result={"user_id": str(actor.id)},
     )
 
-    assert update_response.allowed_root_types == ["organization"]
+    assert update_response.allowed_root_types.structural == ["organization"]
     assert update_response.default_child_types.structural == [
         "department",
         "team",
@@ -82,12 +87,15 @@ async def test_config_router_get_and_update_handlers_cover_merge_logging_and_gua
     ]
     logger.info.assert_called_once_with(
         "entity_type_config_updated",
-        allowed_root_types=["organization"],
+        allowed_root_types={
+            "structural": ["organization"],
+            "access_group": get_response.allowed_root_types.access_group,
+        },
         updated_by=str(actor.id),
     )
 
     invalid_payload = EntityTypeConfigUpdateRequest.model_construct(
-        allowed_root_types=[],
+        allowed_root_types=AllowedRootTypes(structural=[], access_group=[]),
         default_child_types=None,
     )
 
