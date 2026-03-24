@@ -4,6 +4,7 @@ OutlabsAuth Services
 SQLAlchemy-based service layer for authentication and authorization.
 """
 
+from outlabs_auth.mail.service import ComposedAuthMailService
 from outlabs_auth.services.api_key import APIKeyService
 from outlabs_auth.services.access_scope import AccessScopeService, PrincipalEntityScope
 from outlabs_auth.services.auth import AuthService, TokenPair
@@ -36,6 +37,7 @@ __all__ = [
     "TokenPair",
     "ServiceTokenService",
     "UserAuditService",
+    "ComposedAuthMailService",
     # EnterpriseRBAC services
     "EntityService",
     "MembershipService",

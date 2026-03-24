@@ -19,10 +19,9 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlparse
 from uuid import UUID
 
-import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from models import Lead, LeadNote
@@ -34,7 +33,6 @@ from team_directory import get_team_directory_router
 
 from outlabs_auth import EnterpriseRBAC, register_exception_handlers
 from outlabs_auth.middleware.resource_context import ResourceContextMiddleware
-from outlabs_auth.models.sql.user import User
 from outlabs_auth.observability import ObservabilityPresets, create_metrics_router
 from outlabs_auth.routers import (
     get_api_keys_router,
@@ -46,7 +44,11 @@ from outlabs_auth.routers import (
     get_roles_router,
     get_users_router,
 )
-from outlabs_auth.services.user import UserService
+
+try:
+    from .transactional_mail import build_enterprise_example_transactional_mail_service
+except ImportError:
+    from transactional_mail import build_enterprise_example_transactional_mail_service
 
 # ============================================================================
 # Configuration
@@ -98,169 +100,6 @@ MAILGUN_FROM_EMAIL = os.getenv("MAILGUN_FROM_EMAIL")
 MAILGUN_FROM_NAME = os.getenv("MAILGUN_FROM_NAME", "Outlabs Auth")
 MAILGUN_RECIPIENT_OVERRIDE = os.getenv("MAILGUN_RECIPIENT_OVERRIDE")
 FRONTEND_ORIGIN = _extract_origin(FRONTEND_URL)
-
-
-# ============================================================================
-# Custom User Service with Password Reset Hooks
-# ============================================================================
-
-
-class RealEstateUserService(UserService):
-    """
-    Custom UserService with password reset hooks for email notifications.
-
-    In a production app, these hooks would send actual emails.
-    For development, the service uses Mailgun when configured and falls back to
-    printing the links to console if delivery is unavailable.
-    """
-
-    def __init__(
-        self,
-        *,
-        config,
-        frontend_url: str,
-        notification_service=None,
-        auth_service=None,
-        membership_service=None,
-        role_service=None,
-        api_key_service=None,
-        user_audit_service=None,
-        mailgun_api_base_url: Optional[str] = None,
-        mailgun_domain: Optional[str] = None,
-        mailgun_api_key: Optional[str] = None,
-        mailgun_from_email: Optional[str] = None,
-        mailgun_from_name: str = "Outlabs Auth",
-        mailgun_recipient_override: Optional[str] = None,
-    ):
-        super().__init__(
-            config=config,
-            notification_service=notification_service,
-            auth_service=auth_service,
-            membership_service=membership_service,
-            role_service=role_service,
-            api_key_service=api_key_service,
-            user_audit_service=user_audit_service,
-        )
-        self.frontend_url = _trim_trailing_slash(frontend_url)
-        self.mailgun_api_base_url = _trim_trailing_slash(
-            mailgun_api_base_url or "https://api.mailgun.net"
-        )
-        self.mailgun_domain = mailgun_domain
-        self.mailgun_api_key = mailgun_api_key
-        self.mailgun_from_email = mailgun_from_email
-        self.mailgun_from_name = mailgun_from_name
-        self.mailgun_recipient_override = mailgun_recipient_override
-
-    def _build_frontend_link(self, path: str, token: str) -> str:
-        query = urlencode({"token": token})
-        return f"{self.frontend_url}{path}?{query}"
-
-    def _format_from_address(self) -> str:
-        if self.mailgun_from_name:
-            return f"{self.mailgun_from_name} <{self.mailgun_from_email}>"
-        return self.mailgun_from_email or "Outlabs Auth"
-
-    async def _send_notification_email(
-        self,
-        *,
-        intended_recipient: str,
-        subject: str,
-        text: str,
-        fallback_title: str,
-    ) -> None:
-        actual_recipient = self.mailgun_recipient_override or intended_recipient
-        message_text = text
-
-        if actual_recipient != intended_recipient:
-            message_text = (
-                f"Intended recipient: {intended_recipient}\n"
-                f"Sandbox override recipient: {actual_recipient}\n\n{text}"
-            )
-
-        if self.mailgun_domain and self.mailgun_api_key and self.mailgun_from_email:
-            try:
-                async with httpx.AsyncClient(timeout=20.0) as client:
-                    response = await client.post(
-                        f"{self.mailgun_api_base_url}/v3/{self.mailgun_domain}/messages",
-                        auth=("api", self.mailgun_api_key),
-                        data={
-                            "from": self._format_from_address(),
-                            "to": actual_recipient,
-                            "subject": subject,
-                            "text": message_text,
-                        },
-                    )
-                    response.raise_for_status()
-
-                print("\n" + "=" * 80)
-                print("MAILGUN EMAIL SENT")
-                print("=" * 80)
-                print(f"Subject: {subject}")
-                print(f"Intended recipient: {intended_recipient}")
-                print(f"Delivered to: {actual_recipient}")
-                print("=" * 80 + "\n")
-                return
-            except Exception as exc:
-                print("\n" + "=" * 80)
-                print("MAILGUN DELIVERY FAILED - FALLING BACK TO CONSOLE OUTPUT")
-                print("=" * 80)
-                print(f"Subject: {subject}")
-                print(f"Intended recipient: {intended_recipient}")
-                print(f"Attempted recipient: {actual_recipient}")
-                print(f"Error: {exc}")
-                print("=" * 80 + "\n")
-
-        print("\n" + "=" * 80)
-        print(fallback_title)
-        print("=" * 80)
-        print(f"To: {intended_recipient}")
-        print(f"Subject: {subject}")
-        print(f"\n{message_text}")
-        print("=" * 80 + "\n")
-
-    async def on_after_forgot_password(self, user: User, token: str, request: Optional[any] = None) -> None:
-        """Send password reset email to user."""
-        reset_link = self._build_frontend_link("/auth/reset-password", token)
-        await self._send_notification_email(
-            intended_recipient=user.email,
-            subject="Reset your password",
-            text=(
-                "Click the link below to reset your password:\n\n"
-                f"{reset_link}\n\n"
-                "This link will expire in 1 hour."
-            ),
-            fallback_title="PASSWORD RESET EMAIL (Development Mode)",
-        )
-
-    async def on_after_reset_password(self, user: User, request: Optional[any] = None) -> None:
-        """Send password reset confirmation email."""
-        await self._send_notification_email(
-            intended_recipient=user.email,
-            subject="Password reset successful",
-            text=(
-                "Your password has been successfully reset.\n\n"
-                "If you didn't make this change, please contact support immediately."
-            ),
-            fallback_title="PASSWORD RESET CONFIRMATION (Development Mode)",
-        )
-
-    async def on_after_invite(self, user: User, token: str, request: Optional[Request] = None) -> None:
-        """Send invite email with accept-invite link."""
-        accept_link = self._build_frontend_link("/auth/accept-invite", token)
-        recipient_name = " ".join(part for part in [user.first_name, user.last_name] if part) or user.email
-
-        await self._send_notification_email(
-            intended_recipient=user.email,
-            subject="You're invited to Outlabs Auth",
-            text=(
-                f"Hello {recipient_name},\n\n"
-                "You've been invited to Outlabs Auth.\n\n"
-                "Click the link below to accept your invitation and set your password:\n\n"
-                f"{accept_link}\n\n"
-                "This invite link will expire in 7 days."
-            ),
-            fallback_title="INVITE EMAIL (Development Mode)",
-        )
 
 
 # ============================================================================
@@ -391,6 +230,15 @@ async def lifespan(app: FastAPI):
         enable_context_aware_roles=True,
         enable_abac=True,
         observability_config=obs_config,
+        transactional_mail_service=build_enterprise_example_transactional_mail_service(
+            frontend_url=FRONTEND_URL,
+            mailgun_api_base_url=MAILGUN_API_BASE_URL,
+            mailgun_domain=MAILGUN_DOMAIN,
+            mailgun_api_key=MAILGUN_API_KEY,
+            mailgun_from_email=MAILGUN_FROM_EMAIL,
+            mailgun_from_name=MAILGUN_FROM_NAME,
+            mailgun_recipient_override=MAILGUN_RECIPIENT_OVERRIDE,
+        ),
     )
 
     await auth.initialize()
@@ -400,28 +248,7 @@ async def lifespan(app: FastAPI):
     async with auth.engine.begin() as conn:
         await conn.run_sync(_ensure_example_tables)
     print("Example domain tables ready")
-
-    # Replace user service with custom one
-    base_user_service = auth.user_service
-    auth.user_service = RealEstateUserService(
-        config=auth.config,
-        frontend_url=FRONTEND_URL,
-        notification_service=base_user_service.notifications if base_user_service else None,
-        auth_service=base_user_service.auth_service if base_user_service else None,
-        membership_service=base_user_service.membership_service if base_user_service else None,
-        role_service=base_user_service.role_service if base_user_service else None,
-        api_key_service=base_user_service.api_key_service if base_user_service else None,
-        user_audit_service=base_user_service.user_audit_service if base_user_service else None,
-        mailgun_api_base_url=MAILGUN_API_BASE_URL,
-        mailgun_domain=MAILGUN_DOMAIN,
-        mailgun_api_key=MAILGUN_API_KEY,
-        mailgun_from_email=MAILGUN_FROM_EMAIL,
-        mailgun_from_name=MAILGUN_FROM_NAME,
-        mailgun_recipient_override=MAILGUN_RECIPIENT_OVERRIDE,
-    )
-    if auth.deps is not None:
-        auth.deps.user_service = auth.user_service
-    print("Custom user service with invite/reset email hooks enabled")
+    print("Transactional auth mail service enabled")
 
     if auth.observability and auth.observability.config.enable_metrics:
         app.include_router(

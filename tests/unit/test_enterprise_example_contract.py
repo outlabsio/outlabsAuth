@@ -10,18 +10,14 @@ def test_enterprise_example_does_not_shadow_auth_config_route():
     assert '@app.get("/v1/auth/config"' not in example_main
 
 
-def test_enterprise_example_preserves_user_service_collaborators():
+def test_enterprise_example_wires_transactional_mail_service():
     example_main = (ROOT / "examples/enterprise_rbac/main.py").read_text()
 
-    assert "notification_service=base_user_service.notifications" in example_main
-    assert "auth_service=base_user_service.auth_service" in example_main
-    assert "membership_service=base_user_service.membership_service" in example_main
-    assert "role_service=base_user_service.role_service" in example_main
-    assert "api_key_service=base_user_service.api_key_service" in example_main
-    assert "user_audit_service=base_user_service.user_audit_service" in example_main
-    assert "auth.deps.user_service = auth.user_service" in example_main
+    assert "transactional_mail_service=build_enterprise_example_transactional_mail_service(" in example_main
+    assert "auth.user_service = RealEstateUserService(" not in example_main
+    assert "Custom user service with invite/reset email hooks enabled" not in example_main
     assert "tables=[Lead.__table__, LeadNote.__table__]" in example_main
-    assert "get_team_directory_router(auth, prefix=\"/v1\")" in example_main
+    assert 'get_team_directory_router(auth, prefix="/v1")' in example_main
 
 
 def test_enterprise_example_documents_host_query_integration_route():

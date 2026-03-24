@@ -22,6 +22,14 @@ from outlabs_auth.core.exceptions import (
     UserAlreadyExistsError,
     UserNotFoundError,
 )
+from outlabs_auth.mail.types import (
+    AccessGrantedMailIntent,
+    ForgotPasswordMailIntent,
+    InviteMailIntent,
+    MailRecipient,
+    PasswordResetConfirmationMailIntent,
+    coerce_metadata,
+)
 from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.enums import UserStatus
 from outlabs_auth.models.sql.user import User
@@ -51,6 +59,7 @@ class UserService(BaseService[User]):
         role_service: Optional[Any] = None,
         api_key_service: Optional[Any] = None,
         user_audit_service: Optional[Any] = None,
+        transactional_mail_service: Optional[Any] = None,
     ):
         """
         Initialize UserService.
@@ -67,6 +76,7 @@ class UserService(BaseService[User]):
         self.role_service = role_service
         self.api_key_service = api_key_service
         self.user_audit_service = user_audit_service
+        self.transactional_mail_service = transactional_mail_service
 
     # =========================================================================
     # Lifecycle hooks (override in subclasses)
@@ -99,14 +109,14 @@ class UserService(BaseService[User]):
         pass
 
     async def on_after_forgot_password(self, user: User, token: str, request: Optional[Request] = None) -> None:
-        pass
+        await self.send_forgot_password_email(user, token, request=request)
 
     async def on_after_reset_password(self, user: User, request: Optional[Request] = None) -> None:
-        pass
+        await self.send_password_reset_confirmation_email(user, request=request)
 
     async def on_after_invite(self, user: User, token: str, request: Optional[Request] = None) -> None:
         """Hook called after user invitation. Override to send invite link via preferred channel."""
-        pass
+        await self.send_invitation_email(user, token, request=request)
 
     async def on_failed_login(
         self,
@@ -125,6 +135,89 @@ class UserService(BaseService[User]):
 
     async def on_after_oauth_associate(self, user: User, provider: str, request: Optional[Request] = None) -> None:
         pass
+
+    async def send_invitation_email(
+        self,
+        user: User,
+        token: str,
+        *,
+        request: Optional[Request] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        **extra_metadata: Any,
+    ) -> bool:
+        """Send an invite email via the configured transactional mail service."""
+        if self.transactional_mail_service is None:
+            return False
+        intent = InviteMailIntent(
+            recipient=self._build_mail_recipient(user),
+            token=token,
+            expires_at=user.invite_token_expires,
+            request_base_url=self._request_base_url(request),
+            metadata=self._merge_mail_metadata(metadata, extra_metadata),
+        )
+        result = await self.transactional_mail_service.send_invite(intent)
+        return bool(result.accepted)
+
+    async def send_forgot_password_email(
+        self,
+        user: User,
+        token: str,
+        *,
+        request: Optional[Request] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        **extra_metadata: Any,
+    ) -> bool:
+        """Send a password-reset email via the configured transactional mail service."""
+        if self.transactional_mail_service is None:
+            return False
+        intent = ForgotPasswordMailIntent(
+            recipient=self._build_mail_recipient(user),
+            token=token,
+            expires_at=user.password_reset_expires,
+            request_base_url=self._request_base_url(request),
+            metadata=self._merge_mail_metadata(metadata, extra_metadata),
+        )
+        result = await self.transactional_mail_service.send_forgot_password(intent)
+        return bool(result.accepted)
+
+    async def send_password_reset_confirmation_email(
+        self,
+        user: User,
+        *,
+        request: Optional[Request] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        **extra_metadata: Any,
+    ) -> bool:
+        """Send a password-reset confirmation email via the configured transactional mail service."""
+        if self.transactional_mail_service is None:
+            return False
+        intent = PasswordResetConfirmationMailIntent(
+            recipient=self._build_mail_recipient(user),
+            changed_at=user.last_password_change,
+            request_base_url=self._request_base_url(request),
+            metadata=self._merge_mail_metadata(metadata, extra_metadata),
+        )
+        result = await self.transactional_mail_service.send_password_reset_confirmation(intent)
+        return bool(result.accepted)
+
+    async def send_entity_access_granted_email(
+        self,
+        user: User,
+        *,
+        request: Optional[Request] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        **extra_metadata: Any,
+    ) -> bool:
+        """Send an access-granted email via the configured transactional mail service."""
+        if self.transactional_mail_service is None:
+            return False
+        intent = AccessGrantedMailIntent(
+            recipient=self._build_mail_recipient(user),
+            request_base_url=self._request_base_url(request),
+            metadata=self._merge_mail_metadata(metadata, extra_metadata),
+        )
+        result = await self.transactional_mail_service.send_access_granted(intent)
+        return bool(result.accepted)
 
     async def create_user(
         self,
@@ -1107,3 +1200,27 @@ class UserService(BaseService[User]):
             )
 
         return user, plain_token
+
+    @staticmethod
+    def _build_mail_recipient(user: User) -> MailRecipient:
+        return MailRecipient(
+            user_id=str(user.id),
+            email=user.email,
+            first_name=user.first_name,
+            last_name=user.last_name,
+        )
+
+    @staticmethod
+    def _request_base_url(request: Optional[Request]) -> Optional[str]:
+        if request is None:
+            return None
+        return str(request.base_url).rstrip("/")
+
+    @staticmethod
+    def _merge_mail_metadata(
+        metadata: Optional[dict[str, Any]],
+        extra_metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        merged = coerce_metadata(metadata)
+        merged.update({key: value for key, value in extra_metadata.items() if value is not None})
+        return merged

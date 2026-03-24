@@ -81,6 +81,7 @@ class OutlabsAuth:
         redis_url: Optional[str] = None,
         cache_ttl_seconds: int = 300,
         notification_service: Optional[Any] = None,
+        transactional_mail_service: Optional[Any] = None,
         # Observability
         observability_config: Optional[Any] = None,
         observability_logger: Optional[Any] = None,
@@ -119,6 +120,7 @@ class OutlabsAuth:
             redis_enabled: Enable Redis features (caching, counters, activity tracking)
             redis_url: Redis connection URL (required if redis_enabled=True)
             notification_service: NotificationService instance (optional)
+            transactional_mail_service: Optional transactional auth mail service
             observability_logger: Optional host-managed logger adapter for auth events
             observability_metrics_registry: Optional Prometheus registry for auth metrics
             observability_instrument_external_engine: Allow DB query instrumentation when the engine is host-owned
@@ -188,6 +190,7 @@ class OutlabsAuth:
 
         # Store notification service
         self.notification_service = notification_service
+        self.transactional_mail_service = transactional_mail_service
 
         # Initialize observability
         self.observability_config = observability_config
@@ -376,6 +379,7 @@ class OutlabsAuth:
             notification_service=self.notification_service,
             auth_service=self.auth_service,
             user_audit_service=self.user_audit_service,
+            transactional_mail_service=self.transactional_mail_service,
         )
         self.role_service = RoleService(
             self.config,

@@ -43,6 +43,27 @@ class AuthRecorder:
         return self.revoked_count
 
 
+class MailRecorder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, object]] = []
+
+    async def send_invite(self, intent) -> object:
+        self.calls.append(("invite", intent))
+        return type("MailResult", (), {"accepted": True})()
+
+    async def send_forgot_password(self, intent) -> object:
+        self.calls.append(("forgot_password", intent))
+        return type("MailResult", (), {"accepted": True})()
+
+    async def send_password_reset_confirmation(self, intent) -> object:
+        self.calls.append(("password_reset_confirmation", intent))
+        return type("MailResult", (), {"accepted": True})()
+
+    async def send_access_granted(self, intent) -> object:
+        self.calls.append(("access_granted", intent))
+        return type("MailResult", (), {"accepted": True})()
+
+
 def _entity(
     *,
     name: str,
@@ -252,6 +273,45 @@ async def test_update_user_change_password_missing_and_default_hooks_are_noops(
     assert await service.on_after_oauth_register(user, "github") is None
     assert await service.on_after_oauth_login(user, "github") is None
     assert await service.on_after_oauth_associate(user, "github") is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_default_mail_hooks_delegate_to_transactional_mail_service(
+    test_session,
+    auth_config: AuthConfig,
+):
+    mail_recorder = MailRecorder()
+    service = UserService(config=auth_config, transactional_mail_service=mail_recorder)
+    user = await service.create_user(
+        test_session,
+        email="mail-hooks@example.com",
+        password="TestPass123!",
+        first_name="Mail",
+        last_name="Hooks",
+    )
+    user.invite_token_expires = datetime.now(timezone.utc) + timedelta(days=1)
+    user.password_reset_expires = datetime.now(timezone.utc) + timedelta(hours=1)
+    user.last_password_change = datetime.now(timezone.utc)
+
+    assert await service.send_invitation_email(user, "invite-token", target_entity_name="Internal Admin") is True
+    assert await service.send_forgot_password_email(user, "reset-token") is True
+    assert await service.send_password_reset_confirmation_email(user) is True
+    assert await service.send_entity_access_granted_email(user, role_names=["internal_admin"]) is True
+    assert await service.on_after_invite(user, "invite-token") is None
+    assert await service.on_after_forgot_password(user, "reset-token") is None
+    assert await service.on_after_reset_password(user) is None
+
+    event_types = [event_type for event_type, _intent in mail_recorder.calls]
+    assert event_types == [
+        "invite",
+        "forgot_password",
+        "password_reset_confirmation",
+        "access_granted",
+        "invite",
+        "forgot_password",
+        "password_reset_confirmation",
+    ]
 
 
 @pytest.mark.unit
