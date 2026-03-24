@@ -17,8 +17,9 @@
 6. [Authentication System (API Keys & Multi-Source Auth)](#authentication-system-api-keys--multi-source-auth)
 7. [Authentication Extensions (v1.1-v1.4, Optional)](#authentication-extensions-v11-v14-optional)
 8. [Dependency Injection](#dependency-injection)
-9. [Configuration System](#configuration-system)
-10. [Testing Strategy](#testing-strategy)
+9. [Host Integration Queries](#host-integration-queries)
+10. [Configuration System](#configuration-system)
+11. [Testing Strategy](#testing-strategy)
 
 ---
 
@@ -83,6 +84,9 @@ outlabs_auth/
 │   ├── auth.py                 # FastAPI auth dependencies
 │   ├── permissions.py          # Permission checking dependencies
 │   └── entities.py             # Entity context dependencies (enterprise only)
+├── integrations/
+│   ├── __init__.py
+│   └── host_queries.py         # Host-facing read facade for embedded apps
 ├── middleware/
 │   ├── __init__.py
 │   ├── auth.py                 # JWT middleware
@@ -448,6 +452,7 @@ result = await auth.permission_service.check_permission_with_context(
 - `auth.service_token_service` - JWT service tokens
 - `auth.entity_service` - ✅ Entity hierarchy management
 - `auth.membership_service` - ✅ Entity membership management
+- `auth.host_query_service` - ✅ Host-facing read facade for embedded app integrations
 - `auth.cache_service` - ✅ Available if `enable_caching=True` and `redis_url` provided
 
 ---
@@ -2191,6 +2196,28 @@ def require_entity_permission(
 
     return _check_entity_permission
 ```
+
+---
+
+## Host Integration Queries
+
+When OutlabsAuth is embedded into a larger FastAPI product, the host app often
+needs some in-process read access to auth-owned data such as:
+
+- entity members with user details
+- roles available in one entity context
+- memberships for a linked user
+
+The supported path for that is the auth-owned query facade:
+
+- `auth.host_query_service`
+
+This keeps auth table ownership and filtering rules inside the library instead
+of forcing each host app to invent direct SQL joins into auth tables.
+
+For details and examples, see:
+
+- [HOST_INTEGRATION_QUERIES.md](./HOST_INTEGRATION_QUERIES.md)
 
 ---
 

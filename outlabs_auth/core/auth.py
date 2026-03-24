@@ -233,6 +233,7 @@ class OutlabsAuth:
         self.cache = None
         self.activity_tracker = None
         self.oauth_token_cipher = None
+        self.host_query_service = None
 
         # Redis client
         self.redis_client = None
@@ -404,6 +405,7 @@ class OutlabsAuth:
         if self.config.enable_entity_hierarchy:
             from outlabs_auth.services.config import ConfigService
             from outlabs_auth.services.entity import EntityService
+            from outlabs_auth.integrations import HostQueryService
             from outlabs_auth.services.membership import MembershipService
 
             self.config_service = ConfigService()
@@ -417,6 +419,10 @@ class OutlabsAuth:
                 self.config,
                 observability=self.observability,
                 user_audit_service=self.user_audit_service,
+            )
+            self.host_query_service = HostQueryService(
+                membership_service=self.membership_service,
+                role_service=self.role_service,
             )
             self.entity_service.membership_service = self.membership_service
             self.entity_service.role_service = self.role_service

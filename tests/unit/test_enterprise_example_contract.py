@@ -21,6 +21,15 @@ def test_enterprise_example_preserves_user_service_collaborators():
     assert "user_audit_service=base_user_service.user_audit_service" in example_main
     assert "auth.deps.user_service = auth.user_service" in example_main
     assert "tables=[Lead.__table__, LeadNote.__table__]" in example_main
+    assert "get_team_directory_router(auth, prefix=\"/v1\")" in example_main
+
+
+def test_enterprise_example_documents_host_query_integration_route():
+    team_directory = (ROOT / "examples/enterprise_rbac/team_directory.py").read_text()
+
+    assert "auth.host_query_service" in team_directory
+    assert '"/entities/{entity_id}/team-directory"' in team_directory
+    assert "without joining" in team_directory
 
 
 def test_enterprise_example_reset_script_uses_migrations_and_full_data_clear():

@@ -34,6 +34,7 @@ This example demonstrates OutlabsAuth's **EnterpriseRBAC** preset with real-worl
 - ✅ Entity hierarchy with flexible naming
 - ✅ Tree permissions (`lead:read_tree`, `lead:update_tree`)
 - ✅ Entity type suggestions API
+- ✅ Host app team directory via `auth.host_query_service`
 - ✅ Granular permissions (buyer vs seller specialists)
 - ✅ Multiple organizational structures
 - ✅ Internal teams with global access
@@ -209,6 +210,7 @@ All implementations include these standardized routes:
 - `DELETE /api/leads/{lead_id}` - Delete lead
 - `POST /api/leads/{lead_id}/assign` - Assign lead to agent
 - `POST /api/leads/{lead_id}/notes` - Add note to lead
+- `GET /v1/entities/{entity_id}/team-directory` - Example host-side team directory using `auth.host_query_service`
 
 ## 🧪 Test Scenarios
 

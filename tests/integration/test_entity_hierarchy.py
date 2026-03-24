@@ -641,13 +641,21 @@ async def test_add_user_as_member_to_entity(auth_instance: EnterpriseRBAC):
             last_name="User",
         )
 
-        # Create entity
+        # Create valid root + child entity hierarchy
+        org = await auth_instance.entity_service.create_entity(
+            session,
+            name=f"org-{uuid.uuid4().hex[:8]}",
+            display_name="Test Org",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
         entity = await auth_instance.entity_service.create_entity(
             session,
             name=f"team-{uuid.uuid4().hex[:8]}",
             display_name="Test Team",
             entity_class=EntityClass.STRUCTURAL,
             entity_type="team",
+            parent_id=org.id,
         )
 
         # Create a role for the membership
@@ -677,13 +685,21 @@ async def test_add_user_as_member_to_entity(auth_instance: EnterpriseRBAC):
 async def test_get_entity_members(auth_instance: EnterpriseRBAC):
     """Test getting all members of an entity."""
     async with auth_instance.get_session() as session:
-        # Create entity
+        # Create valid root + child entity hierarchy
+        org = await auth_instance.entity_service.create_entity(
+            session,
+            name=f"org-{uuid.uuid4().hex[:8]}",
+            display_name="Test Org",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
         entity = await auth_instance.entity_service.create_entity(
             session,
             name=f"team-{uuid.uuid4().hex[:8]}",
             display_name="Test Team",
             entity_class=EntityClass.STRUCTURAL,
             entity_type="team",
+            parent_id=org.id,
         )
 
         # Create a role for the memberships
@@ -737,12 +753,20 @@ async def test_remove_member_from_entity(auth_instance: EnterpriseRBAC):
             first_name="Removable",
             last_name="User",
         )
+        org = await auth_instance.entity_service.create_entity(
+            session,
+            name=f"org-{uuid.uuid4().hex[:8]}",
+            display_name="Test Org",
+            entity_class=EntityClass.STRUCTURAL,
+            entity_type="organization",
+        )
         entity = await auth_instance.entity_service.create_entity(
             session,
             name=f"team-{uuid.uuid4().hex[:8]}",
             display_name="Test Team",
             entity_class=EntityClass.STRUCTURAL,
             entity_type="team",
+            parent_id=org.id,
         )
 
         # Create a role for the membership

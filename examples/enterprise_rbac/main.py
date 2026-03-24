@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import SQLModel
+from team_directory import get_team_directory_router
 
 from outlabs_auth import EnterpriseRBAC, register_exception_handlers
 from outlabs_auth.middleware.resource_context import ResourceContextMiddleware
@@ -440,6 +441,7 @@ async def lifespan(app: FastAPI):
     app.include_router(get_entities_router(auth, prefix="/v1/entities"))
     app.include_router(get_memberships_router(auth, prefix="/v1/memberships"))
     app.include_router(get_config_router(auth, prefix="/v1/config"))
+    app.include_router(get_team_directory_router(auth, prefix="/v1"))
 
     print("Routers included (including /metrics for Prometheus)")
     print("Real Estate API (EnterpriseRBAC) started successfully")

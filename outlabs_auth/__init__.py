@@ -54,6 +54,13 @@ from outlabs_auth.fastapi import (
     register_exception_handlers,
     register_outlabs_exception_handler,
 )
+from outlabs_auth.integrations import (
+    HostEntityMembershipProjection,
+    HostEntityProjection,
+    HostQueryService,
+    HostRoleProjection,
+    HostUserProjection,
+)
 
 # Model groups for convenience
 from outlabs_auth.models.sql import (
@@ -157,6 +164,11 @@ __all__ = [
     "AuthConfig",
     "register_exception_handlers",
     "register_outlabs_exception_handler",
+    "HostQueryService",
+    "HostUserProjection",
+    "HostEntityProjection",
+    "HostRoleProjection",
+    "HostEntityMembershipProjection",
     # Presets
     "SimpleRBAC",
     "EnterpriseRBAC",
