@@ -35,6 +35,7 @@ This example demonstrates OutlabsAuth's **EnterpriseRBAC** preset with real-worl
 - ✅ Tree permissions (`lead:read_tree`, `lead:update_tree`)
 - ✅ Entity type suggestions API
 - ✅ Host app team directory via `auth.host_query_service`
+- ✅ Host-owned transactional auth mail wiring
 - ✅ Granular permissions (buyer vs seller specialists)
 - ✅ Multiple organizational structures
 - ✅ Internal teams with global access
@@ -70,6 +71,32 @@ The API will be available at `http://localhost:8002` with auto-reload enabled.
 - Redis running locally (port 6379) - optional
 
 The Docker setup connects to your existing MongoDB and Redis instances on the host machine.
+
+### Transactional Auth Mail
+
+This example now demonstrates the recommended auth-mail integration model:
+
+- `OutlabsAuth` emits typed invite/reset/access-granted intents
+- the example app composes branded messages
+- delivery is selected by the host app
+
+The wiring lives in `examples/enterprise_rbac/transactional_mail.py`.
+
+Current behavior:
+
+- if Mailgun env vars are configured, the example sends through Mailgun
+- if `MAILGUN_RECIPIENT_OVERRIDE` is set, all mail is redirected to that sandbox address
+- if Mailgun is not configured, the example falls back to a console provider for local development
+
+Relevant env vars from `.env.example`:
+
+- `FRONTEND_URL`
+- `MAILGUN_API_BASE_URL`
+- `MAILGUN_DOMAIN`
+- `MAILGUN_API_KEY`
+- `MAILGUN_FROM_EMAIL`
+- `MAILGUN_FROM_NAME`
+- `MAILGUN_RECIPIENT_OVERRIDE`
 
 ### Option 2: Local Development
 

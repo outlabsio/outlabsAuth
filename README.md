@@ -175,8 +175,7 @@ Select services with arrow keys, space to toggle, enter to start:
 - **obs** - Observability stack (Grafana, Prometheus, Loki)
 
 The Nuxt admin UI is no longer stored in this repository. Use the sibling repo
-`../OutlabsAuthUI` instead. In the current local workspace that resolves to
-`/Users/macbookm3/Documents/projects/OutlabsAuthUI`.
+`../OutlabsAuthUI` instead.
 
 ### Code Quality
 
@@ -501,8 +500,7 @@ Implementation-specific documentation (9 files):
 **Release Stage**: Alpha
 **Database**: PostgreSQL (via SQLAlchemy async)
 
-**Admin UI Repository**: `../OutlabsAuthUI` (local workspace:
-`/Users/macbookm3/Documents/projects/OutlabsAuthUI`)
+**Admin UI Repository**: `../OutlabsAuthUI`
 
 ### Delivery Status
 
@@ -521,7 +519,34 @@ Implementation-specific documentation (9 files):
 ✅ **Role & Permission System** - Assignment, checking, audit trails
 ✅ **PostgreSQL** - All services use SQLAlchemy async
 ✅ **Observability** - Prometheus metrics, structured logging
+✅ **Transactional Auth Mail** - Host-owned invite/reset composition with SMTP, SendGrid, Mailgun, or webhook delivery
 ✅ **104 Unit Tests Passing** - Core functionality verified
+
+### Transactional Auth Mail
+
+OutlabsAuth now supports a first-class transactional mail surface for token-bearing auth flows such as:
+
+- user invitations
+- forgot-password emails
+- password-reset confirmations
+- access-granted notifications
+
+The design split is:
+
+- `OutlabsAuth` owns the auth event and token lifecycle
+- the host app owns branding, copy, and template selection
+- the configured provider owns delivery
+
+Built-in primitives live under `outlabs_auth.mail`:
+
+- `ComposedAuthMailService`
+- `AuthMailComposer` / `DefaultAuthMailComposer`
+- `SMTPMailProvider`
+- `SendGridMailProvider`
+- `MailgunMailProvider`
+- `WebhookMailProvider`
+
+See [docs-library/24-User-Invitations.md](docs-library/24-User-Invitations.md) for the full invitation flow and [examples/enterprise_rbac/transactional_mail.py](examples/enterprise_rbac/transactional_mail.py) for a host-owned example.
 
 ## Roadmap
 

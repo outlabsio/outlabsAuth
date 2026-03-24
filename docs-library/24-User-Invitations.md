@@ -14,7 +14,7 @@ The invitation system lets admins onboard users by email without setting a passw
 - Invited users are created with `status=INVITED` and no password
 - Invite tokens use SHA-256 hashing (same security pattern as password reset tokens)
 - Token expiry is configurable (default: 7 days)
-- Provider-agnostic delivery — the library generates the token; your app decides how to send it (email, SMS, Slack, etc.)
+- Provider-agnostic delivery — the library generates the token and emits a typed mail intent; your app decides how to brand and send it
 - Works with both SimpleRBAC and EnterpriseRBAC presets
 
 ---
@@ -73,7 +73,10 @@ Admin calls POST /invite
 User created (status=INVITED, no password)
     |
     v
-on_after_invite hook fires with plain token
+Transactional mail service receives invite intent
+    |
+    v
+Host app composes branded message + chooses provider
     |
     v
 App sends link: {base_url}/accept-invite?token={token}
@@ -149,7 +152,7 @@ Create an invited user account.
 
 **Notes**:
 - If `entity_id` is provided, the user is added as a member of that entity with the specified roles
-- The plain invite token is **not** returned in the HTTP response — it is passed to the `on_after_invite` hook instead (see [Sending the Invite](#sending-the-invite))
+- The plain invite token is **not** returned in the HTTP response — it is passed to the configured transactional mail service (or, if you keep custom hooks, to `on_after_invite`) instead
 
 ---
 
@@ -224,40 +227,93 @@ Regenerate the invite token for a user who hasn't accepted yet.
 
 **Notes**:
 - Invalidates the previous token (only the latest token works)
-- Triggers the `on_after_invite` hook again with the new token
+- Triggers the transactional mail service again with the new token
 - Only works for users with `status=INVITED`
 
 ---
 
 ## Sending the Invite
 
-The library generates tokens but **does not send emails**. Your application decides how to deliver the invite link using the `on_after_invite` lifecycle hook.
+The library generates tokens but **does not own your branded email copy or delivery provider**. The recommended integration is to inject a transactional mail service into `OutlabsAuth`, let the host app compose the message, and let a provider adapter deliver it.
 
-### Using the Lifecycle Hook
+### Recommended Model
 
-Override `on_after_invite` on your UserService subclass:
+Split responsibilities this way:
+
+- **OutlabsAuth** owns the auth event, token lifecycle, and typed invite/reset intents
+- **Host app** owns copy, branding, template selection, and provider policy
+- **Provider adapter** owns the actual delivery transport
+
+OutlabsAuth ships the primitives for this under `outlabs_auth.mail`:
+
+- `AuthMailComposer`
+- `DefaultAuthMailComposer`
+- `ComposedAuthMailService`
+- `SMTPMailProvider`
+- `SendGridMailProvider`
+- `MailgunMailProvider`
+- `WebhookMailProvider`
+
+### Example: Inject a Transactional Mail Service
 
 ```python
-from outlabs_auth import SimpleRBAC
+from outlabs_auth import EnterpriseRBAC
+from outlabs_auth.mail import (
+    ComposedAuthMailService,
+    DefaultAuthMailComposer,
+    MailgunMailProvider,
+)
 
-class MyUserService(SimpleRBAC.user_service.__class__):
-    async def on_after_invite(self, user, token, request=None):
-        invite_url = f"https://myapp.com/accept-invite?token={token}"
+mail_service = ComposedAuthMailService(
+    provider=MailgunMailProvider(
+        api_key="mailgun-api-key",
+        domain="mg.example.com",
+        from_email="auth@example.com",
+        from_name="Example Auth",
+    ),
+    composer=DefaultAuthMailComposer(
+        app_name="Example Auth",
+        invite_url_builder=lambda token: f"https://app.example.com/accept-invite?token={token}",
+        password_reset_url_builder=lambda token: f"https://app.example.com/reset-password?token={token}",
+        login_url_builder=lambda: "https://app.example.com/login",
+        support_email="support@example.com",
+    ),
+)
 
-        # Option 1: Send via email
-        await send_email(
-            to=user.email,
-            subject="You've been invited!",
-            body=f"Click here to join: {invite_url}",
-        )
-
-        # Option 2: Log for development
-        print(f"Invite link for {user.email}: {invite_url}")
+auth = EnterpriseRBAC(
+    database_url="postgresql+asyncpg://...",
+    secret_key="your-secret",
+    transactional_mail_service=mail_service,
+)
 ```
 
-### Using the Notification Service
+### Host-Owned Branding
 
-If you have a `NotificationService` configured, the `user.invited` event is automatically emitted. Any channel subscribed to that event will receive it:
+For production apps, it is common to replace `DefaultAuthMailComposer` with a host-specific composer that:
+
+- renders local Jinja/React/provider templates
+- chooses subjects and copy
+- injects tenant or product branding
+- uses provider-hosted template IDs when appropriate
+
+The Enterprise example demonstrates this pattern in:
+
+- [examples/enterprise_rbac/transactional_mail.py](../examples/enterprise_rbac/transactional_mail.py)
+
+### Provider-Hosted Templates
+
+`AuthMailMessage` supports both rendered bodies and provider-hosted templates:
+
+- rendered mode: `subject`, `text_body`, `html_body`
+- provider-template mode: `provider_template_id` + `template_data`
+
+That allows one host app to use SMTP with locally rendered HTML, another to use SendGrid dynamic templates, and another to use Mailgun templates, all without changing auth logic.
+
+### Notification Service vs Transactional Mail
+
+If you have a `NotificationService` configured, the `user.invited` event is still emitted. That event is useful for analytics, audit, or fan-out workflows, but it does **not** carry the plain invite token, so it is not enough on its own to generate the invite URL.
+
+Any notification channel subscribed to `user.invited` will receive:
 
 ```python
 auth = SimpleRBAC(
@@ -272,6 +328,10 @@ auth = SimpleRBAC(
 ```
 
 Configure your notification channels to handle `user.invited` and `user.invite_accepted` events.
+
+### Lifecycle Hooks Are Still Available
+
+You can still override `on_after_invite` or `send_invitation_email()` if you need a custom path, but that is now the escape hatch, not the primary integration model. The default `UserService` will call the configured transactional mail service when one is present.
 
 ---
 
@@ -354,13 +414,37 @@ The admin UI automatically detects the invitations feature via `/v1/auth/config`
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from outlabs_auth import SimpleRBAC
+from outlabs_auth.mail import (
+    ComposedAuthMailService,
+    DefaultAuthMailComposer,
+    SMTPMailProvider,
+)
 from outlabs_auth.routers import get_auth_router, get_users_router
+
+mail_service = ComposedAuthMailService(
+    provider=SMTPMailProvider(
+        host="smtp.example.com",
+        port=587,
+        user="apikey",
+        password="smtp-or-provider-api-key",
+        from_email="auth@example.com",
+        from_name="Example Auth",
+    ),
+    composer=DefaultAuthMailComposer(
+        app_name="Example Auth",
+        invite_url_builder=lambda token: f"https://app.example.com/accept-invite?token={token}",
+        password_reset_url_builder=lambda token: f"https://app.example.com/reset-password?token={token}",
+        login_url_builder=lambda: "https://app.example.com/login",
+        support_email="support@example.com",
+    ),
+)
 
 auth = SimpleRBAC(
     database_url="postgresql+asyncpg://...",
     secret_key="your-secret",
     enable_invitations=True,          # Default
     invite_token_expire_days=7,       # Default
+    transactional_mail_service=mail_service,
 )
 
 @asynccontextmanager
@@ -396,12 +480,12 @@ curl -X POST http://localhost:8000/v1/auth/invite \
   -d '{"email": "newuser@example.com", "first_name": "Jane"}'
 
 # Response: { "id": "...", "status": "invited", ... }
-# The on_after_invite hook fires with the plain token
+# The configured transactional mail service receives the plain token
 
 # 2. Accept the invite (public endpoint)
 curl -X POST http://localhost:8000/v1/auth/accept-invite \
   -H "Content-Type: application/json" \
-  -d '{"token": "the-token-from-hook", "new_password": "SecurePass123!"}'
+  -d '{"token": "the-token-from-email", "new_password": "SecurePass123!"}'
 
 # Response: { "access_token": "...", "refresh_token": "...", ... }
 
@@ -412,17 +496,30 @@ curl -X POST http://localhost:8000/v1/users/{user_id}/resend-invite \
 
 ### Development Tip
 
-During development, log the invite token to the console:
+During development, use a console provider instead of a real mail vendor:
 
 ```python
-class DevUserService(auth.user_service.__class__):
-    async def on_after_invite(self, user, token, request=None):
-        print(f"\n{'='*60}")
-        print(f"INVITE TOKEN for {user.email}")
-        print(f"URL: http://localhost:3000/accept-invite?token={token}")
-        print(f"{'='*60}\n")
+from outlabs_auth.mail import ComposedAuthMailService
 
-auth.user_service.__class__ = DevUserService
+class ConsoleProvider:
+    provider_name = "console"
+
+    async def send(self, message):
+        print(f"\n{'='*60}")
+        print(f"TO: {message.to_email}")
+        print(f"SUBJECT: {message.subject}")
+        print(message.text_body)
+        print(f"{'='*60}\n")
+        return type("Result", (), {"accepted": True})()
+
+mail_service = ComposedAuthMailService(
+    provider=ConsoleProvider(),
+    composer=DefaultAuthMailComposer(
+        app_name="Example Auth",
+        invite_url_builder=lambda token: f"http://localhost:3000/accept-invite?token={token}",
+        password_reset_url_builder=lambda token: f"http://localhost:3000/reset-password?token={token}",
+    ),
+)
 ```
 
 ---
