@@ -69,24 +69,32 @@ class RedisClient:
             return False
 
         try:
-            self._client = redis.Redis(
-                host=self.config.redis_host,
-                port=self.config.redis_port,
-                db=self.config.redis_db,
-                password=self.config.redis_password,
-                decode_responses=True,
-                socket_connect_timeout=2,
-                socket_timeout=2,
-                retry_on_timeout=True,
-                max_connections=50,
-            )
+            client_kwargs = {
+                "decode_responses": True,
+                "socket_connect_timeout": 2,
+                "socket_timeout": 2,
+                "retry_on_timeout": True,
+                "max_connections": 50,
+            }
+            if self.config.redis_url:
+                self._client = redis.Redis.from_url(
+                    self.config.redis_url,
+                    **client_kwargs,
+                )
+            else:
+                self._client = redis.Redis(
+                    host=self.config.redis_host,
+                    port=self.config.redis_port,
+                    db=self.config.redis_db,
+                    password=self.config.redis_password,
+                    **client_kwargs,
+                )
 
             # Test connection
             await self._client.ping()
             self._available = True
-            logger.info(
-                f"Connected to Redis at {self.config.redis_host}:{self.config.redis_port}"
-            )
+            location = self.config.redis_url or f"{self.config.redis_host}:{self.config.redis_port}"
+            logger.info(f"Connected to Redis at {location}")
             return True
 
         except (RedisConnectionError, RedisError) as e:

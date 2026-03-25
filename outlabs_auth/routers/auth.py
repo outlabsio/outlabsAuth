@@ -325,6 +325,7 @@ def get_auth_router(
                     "retry_after_seconds": seconds_until_reset,
                     "retry_after_minutes": round(seconds_until_reset / 60, 1),
                 },
+                headers={"Retry-After": str(max(seconds_until_reset, 1))},
             )
 
         try:
