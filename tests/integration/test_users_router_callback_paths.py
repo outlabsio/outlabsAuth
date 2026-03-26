@@ -638,6 +638,44 @@ async def test_users_router_callback_role_and_permission_paths(
         assert scoped_memberships[0].role.scope_entity_name == child_a.display_name
         assert scoped_memberships[0].role.scope.value == "entity_only"
 
+        membership_permission = await auth_instance.permission_service.create_permission(
+            session,
+            name=f"membership_reports:{_suffix()}",
+            display_name="Membership Reports View",
+        )
+        membership_role = await auth_instance.role_service.create_role(
+            session=session,
+            name=f"membership_role_{_suffix()}",
+            display_name="Membership Role",
+            permission_names=[membership_permission.name],
+            is_global=False,
+            root_entity_id=root_a.id,
+            scope_entity_id=child_a.id,
+            scope=RoleScope.ENTITY_ONLY,
+        )
+        membership_user = await _create_user(
+            auth_instance,
+            session,
+            email_prefix="membership-role-user",
+            root_entity_id=root_a.id,
+        )
+        await auth_instance.membership_service.add_member(
+            session,
+            entity_id=child_a.id,
+            user_id=membership_user.id,
+            role_ids=[membership_role.id],
+            joined_by_id=actor.id,
+        )
+
+        membership_permission_sources = await get_permissions(
+            user_id=membership_user.id,
+            session=session,
+            obs=DummyObs(str(actor.id)),
+        )
+        assert len(membership_permission_sources) == 1
+        assert membership_permission_sources[0].permission.name == membership_permission.name
+        assert membership_permission_sources[0].source_name == membership_role.name
+
         logged_events = {event for event, _fields in auth_instance.observability.records}
         assert {"role_assigned", "role_revoked"} <= logged_events
 

@@ -8,9 +8,12 @@ from typing import Any, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from outlabs_auth.models.sql.enums import UserStatus
+from outlabs_auth.models.sql.entity_membership import EntityMembership
+from outlabs_auth.models.sql.enums import DefinitionStatus, UserStatus
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
 from outlabs_auth.response_builders import (
     build_role_response,
@@ -1181,39 +1184,63 @@ def get_users_router(
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
             await _get_target_user_or_404(session, user_id, actor_user)
 
-            # Get user's roles
-            roles = await auth.role_service.get_user_roles(session, user_id=user_id)
-
-            # Collect permissions with their sources
             permission_sources = []
             seen_permissions = set()
 
-            for role in roles:
-                # Get permissions for this role
+            async def _append_role_permissions(role: Any) -> None:
+                if role is None:
+                    return
+                if getattr(role, "status", DefinitionStatus.ACTIVE) != DefinitionStatus.ACTIVE:
+                    return
+
                 role_permissions = await auth.permission_service.get_permissions_for_role(session, role.id)
                 for perm in role_permissions:
-                    if perm.name not in seen_permissions:
-                        permission_sources.append(
-                            UserPermissionSource(
-                                permission=PermissionResponse(
-                                    id=str(perm.id),
-                                    name=perm.name,
-                                    display_name=perm.display_name,
-                                    description=perm.description,
-                                    resource=perm.resource,
-                                    action=perm.action,
-                                    scope=perm.scope,
-                                    is_system=perm.is_system,
-                                    is_active=perm.is_active,
-                                    tags=[],
-                                    metadata={},
-                                ),
-                                source="role",
-                                source_id=str(role.id),
-                                source_name=role.name,
-                            )
+                    if perm.name in seen_permissions:
+                        continue
+                    permission_sources.append(
+                        UserPermissionSource(
+                            permission=PermissionResponse(
+                                id=str(perm.id),
+                                name=perm.name,
+                                display_name=perm.display_name,
+                                description=perm.description,
+                                resource=perm.resource,
+                                action=perm.action,
+                                scope=perm.scope,
+                                is_system=perm.is_system,
+                                is_active=perm.is_active,
+                                tags=[],
+                                metadata={},
+                            ),
+                            source="role",
+                            source_id=str(role.id),
+                            source_name=role.name,
                         )
-                        seen_permissions.add(perm.name)
+                    )
+                    seen_permissions.add(perm.name)
+
+            # Direct user role memberships.
+            roles = await auth.role_service.get_user_roles(session, user_id=user_id)
+            for role in roles:
+                await _append_role_permissions(role)
+
+            # Enterprise entity memberships also grant permissions and must be
+            # reflected here so host/UI permission gates match runtime behavior.
+            entity_memberships_stmt = (
+                select(EntityMembership)
+                .options(selectinload(EntityMembership.roles))
+                .where(
+                    EntityMembership.user_id == user_id,
+                )
+            )
+            entity_memberships_result = await session.execute(entity_memberships_stmt)
+            entity_memberships = entity_memberships_result.scalars().all()
+
+            for membership in entity_memberships:
+                if not membership.can_grant_permissions():
+                    continue
+                for role in membership.roles:
+                    await _append_role_permissions(role)
 
             # Sort by permission name
             permission_sources.sort(key=lambda x: x.permission.name)
