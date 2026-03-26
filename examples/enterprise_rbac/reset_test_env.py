@@ -309,6 +309,55 @@ async def reset_database():
                 "resource": "apikey",
                 "action": "revoke",
             },
+            # API Key permissions used by the current admin surface
+            {
+                "name": "api_key:read",
+                "display_name": "API Key Read",
+                "resource": "api_key",
+                "action": "read",
+            },
+            {
+                "name": "api_key:create",
+                "display_name": "API Key Create",
+                "resource": "api_key",
+                "action": "create",
+            },
+            {
+                "name": "api_key:read_tree",
+                "display_name": "API Key Read Tree",
+                "resource": "api_key",
+                "action": "read_tree",
+            },
+            {
+                "name": "api_key:create_tree",
+                "display_name": "API Key Create Tree",
+                "resource": "api_key",
+                "action": "create_tree",
+            },
+            {
+                "name": "api_key:update",
+                "display_name": "API Key Update",
+                "resource": "api_key",
+                "action": "update",
+            },
+            {
+                "name": "api_key:delete",
+                "display_name": "API Key Delete",
+                "resource": "api_key",
+                "action": "delete",
+            },
+            {
+                "name": "api_key:update_tree",
+                "display_name": "API Key Update Tree",
+                "resource": "api_key",
+                "action": "update_tree",
+            },
+            {
+                "name": "api_key:delete_tree",
+                "display_name": "API Key Delete Tree",
+                "resource": "api_key",
+                "action": "delete_tree",
+            },
         ]
 
         permissions_map = {}
