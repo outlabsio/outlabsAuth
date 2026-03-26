@@ -20,6 +20,7 @@ Looking for usage documentation? See **[docs-library/](../docs-library/)** inste
 
 ### API & Integration
 - **API_DESIGN.md** - Library API design and developer experience
+- **API_KEY_SCOPE_AND_GRANT_POLICY_EPIC.md** - Planned entity-scoped API key grant model, lifecycle rules, and open design questions
 - **DEPENDENCY_PATTERNS.md** - FastAPI dependency injection patterns
 - **AUTH_UI.md** - External admin UI repository location and repo boundary
 

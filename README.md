@@ -368,6 +368,8 @@ api_key, usage = await auth.api_key_service.verify_api_key(
 headers = {"X-API-Key": raw_key}
 ```
 
+For the planned entity-scoped admin API key model, including grant policy, runtime permission reduction, lifecycle invalidation, and open design questions, see [docs/API_KEY_SCOPE_AND_GRANT_POLICY_EPIC.md](docs/API_KEY_SCOPE_AND_GRANT_POLICY_EPIC.md).
+
 ### JWT Service Tokens
 ```python
 # For internal microservices (~0.5ms authentication)
@@ -471,6 +473,7 @@ System design and architectural decisions for maintainers:
 - **[REDESIGN_VISION.md](docs/REDESIGN_VISION.md)** - Project vision and goals
 - **[LIBRARY_ARCHITECTURE.md](docs/LIBRARY_ARCHITECTURE.md)** - Technical architecture
 - **[API_DESIGN.md](docs/API_DESIGN.md)** - Code examples and patterns
+- **[API_KEY_SCOPE_AND_GRANT_POLICY_EPIC.md](docs/API_KEY_SCOPE_AND_GRANT_POLICY_EPIC.md)** - Planned scoped API key design and enhancement epic
 - **[COMPARISON_MATRIX.md](docs/COMPARISON_MATRIX.md)** - Feature comparison
 - **[DEPENDENCY_PATTERNS.md](docs/DEPENDENCY_PATTERNS.md)** - FastAPI dependencies
 - **[SECURITY.md](docs/SECURITY.md)** - Security hardening
