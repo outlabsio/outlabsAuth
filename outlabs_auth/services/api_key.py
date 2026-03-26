@@ -551,6 +551,22 @@ class APIKeyService(BaseService[APIKey]):
 
         return await self.get_many(session, *filters, limit=1000)
 
+    async def list_entity_api_keys(
+        self,
+        session: AsyncSession,
+        *,
+        entity_id: UUID,
+        owner_id: Optional[UUID] = None,
+        status: Optional[APIKeyStatus] = None,
+    ) -> List[APIKey]:
+        """List API keys anchored to a specific entity."""
+        filters = [APIKey.entity_id == entity_id]
+        if owner_id is not None:
+            filters.append(APIKey.owner_id == owner_id)
+        if status is not None:
+            filters.append(APIKey.status == status)
+        return await self.get_many(session, *filters, limit=1000)
+
     async def revoke_api_key(
         self,
         session: AsyncSession,

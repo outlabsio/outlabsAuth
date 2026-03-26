@@ -5,6 +5,7 @@ Pre-built FastAPI routers for quick setup (DD-041).
 """
 
 from outlabs_auth.routers.api_keys import get_api_keys_router
+from outlabs_auth.routers.api_key_admin import get_api_key_admin_router
 from outlabs_auth.routers.auth import get_auth_router
 from outlabs_auth.routers.config import get_config_router
 from outlabs_auth.routers.entities import get_entities_router
@@ -17,6 +18,7 @@ __all__ = [
     "get_auth_router",
     "get_users_router",
     "get_api_keys_router",
+    "get_api_key_admin_router",
     "get_entities_router",
     "get_roles_router",
     "get_permissions_router",

@@ -111,6 +111,18 @@ class AuthConfig(BaseModel):
     api_key_prefix_length: int = Field(default=12, description="API key prefix length")
     api_key_rate_limit_per_minute: int = Field(default=60, description="Default rate limit per API key")
     api_key_temporary_lock_minutes: int = Field(default=30, description="Temporary lock duration after failures")
+    api_key_personal_allowed_action_prefixes: list[str] = Field(
+        default_factory=lambda: ["read", "list", "search", "view", "get", "update"],
+        description="Action prefixes allowed for personal API keys in EnterpriseRBAC v1",
+    )
+    api_key_personal_excluded_resources: list[str] = Field(
+        default_factory=lambda: ["api_key", "service_token"],
+        description="Permission resources that personal API keys may never request",
+    )
+    api_key_personal_allow_inherit_from_tree: bool = Field(
+        default=True,
+        description="Whether personal API keys may inherit anchor access to descendant entities",
+    )
 
     # Activity Tracking Settings (DD-049 - requires Redis)
     enable_activity_tracking: bool = Field(
