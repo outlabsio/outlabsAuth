@@ -120,6 +120,35 @@ async def _create_user(
     )
 
 
+async def _grant_user_read_permission(
+    auth: EnterpriseRBAC,
+    session,
+    *,
+    actor_user_id,
+    target_user_id,
+) -> None:
+    existing_permission = await auth.permission_service.get_permission_by_name(session, "user:read")
+    if not existing_permission:
+        await auth.permission_service.create_permission(
+            session,
+            name="user:read",
+            display_name="User Read",
+        )
+    role = await auth.role_service.create_role(
+        session=session,
+        name=f"user_read_role_{_suffix()}",
+        display_name="User Read Role",
+        permission_names=["user:read"],
+        is_global=True,
+    )
+    await auth.role_service.assign_role_to_user(
+        session,
+        user_id=target_user_id,
+        role_id=role.id,
+        assigned_by_id=actor_user_id,
+    )
+
+
 @pytest_asyncio.fixture
 async def auth_instance(test_engine) -> EnterpriseRBAC:
     auth = EnterpriseRBAC(
@@ -537,6 +566,12 @@ async def test_users_router_callback_role_and_permission_paths(
             password="ActorPass123!",
             root_entity_id=root_a.id,
         )
+        await _grant_user_read_permission(
+            auth_instance,
+            session,
+            actor_user_id=actor.id,
+            target_user_id=actor.id,
+        )
         target = await _create_user(
             auth_instance,
             session,
@@ -675,6 +710,24 @@ async def test_users_router_callback_role_and_permission_paths(
         assert len(membership_permission_sources) == 1
         assert membership_permission_sources[0].permission.name == membership_permission.name
         assert membership_permission_sources[0].source_name == membership_role.name
+
+        self_permission_sources = await get_permissions(
+            user_id=membership_user.id,
+            session=session,
+            obs=DummyObs(str(membership_user.id)),
+        )
+        assert len(self_permission_sources) == 1
+        assert self_permission_sources[0].permission.name == membership_permission.name
+        assert self_permission_sources[0].source_name == membership_role.name
+
+        with pytest.raises(HTTPException) as exc:
+            await get_permissions(
+                user_id=actor.id,
+                session=session,
+                obs=DummyObs(str(membership_user.id)),
+            )
+        assert exc.value.status_code == 403
+        assert exc.value.detail == "Not enough permissions"
 
         logged_events = {event for event, _fields in auth_instance.observability.records}
         assert {"role_assigned", "role_revoked"} <= logged_events
@@ -875,6 +928,12 @@ async def test_users_router_callback_remaining_generic_error_paths(
             email_prefix="generic-actor",
             password="ActorPass123!",
             root_entity_id=root.id,
+        )
+        await _grant_user_read_permission(
+            auth_instance,
+            session,
+            actor_user_id=actor.id,
+            target_user_id=actor.id,
         )
         target = await _create_user(
             auth_instance,

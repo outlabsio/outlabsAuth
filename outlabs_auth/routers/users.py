@@ -1163,14 +1163,18 @@ def get_users_router(
         "/{user_id}/permissions",
         response_model=List[UserPermissionSource],
         summary="Get user's permissions",
-        description="Get all effective permissions for a user with source information (requires user:read permission)",
+        description=(
+            "Get all effective permissions for a user with source information. "
+            "Users may read their own permissions; reading another user's permissions "
+            "requires user:read permission."
+        ),
     )
     async def get_user_permissions(
         user_id: UUID,
         obs: ObservabilityContext = Depends(
             get_observability_with_auth(
                 auth.observability,
-                auth.deps.require_permission("user:read"),
+                auth.deps.require_auth(verified=requires_verification),
             )
         ),
         session: AsyncSession = Depends(auth.uow),
@@ -1183,6 +1187,19 @@ def get_users_router(
         try:
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
             await _get_target_user_or_404(session, user_id, actor_user)
+
+            is_self_request = actor_user.id == user_id
+            if not is_self_request and not actor_user.is_superuser:
+                can_read_users = await auth.permission_service.check_permission(
+                    session,
+                    user_id=UUID(str(actor_user.id)),
+                    permission="user:read",
+                )
+                if not can_read_users:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Not enough permissions",
+                    )
 
             permission_sources = []
             seen_permissions = set()
