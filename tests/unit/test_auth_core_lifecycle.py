@@ -4,12 +4,14 @@ import asyncio
 import warnings
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
 
 from outlabs_auth.core.auth import OutlabsAuth
 from outlabs_auth.core.exceptions import ConfigurationError
+from outlabs_auth.models.sql.enums import APIKeyKind
 
 
 class _FakeSession:
@@ -295,6 +297,72 @@ async def test_outlabs_auth_session_uow_and_property_guards():
     assert auth.session_factory is fake_session_factory
     assert auth.backends == ["backend"]
     assert auth.deps == "deps"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_outlabs_auth_authorize_api_key_returns_host_safe_auth_result():
+    auth = OutlabsAuth(
+        database_url="postgresql+asyncpg://example:example@localhost:5432/test",
+        secret_key="test-secret",
+    )
+    owner_id = uuid4()
+    entity_id = uuid4()
+    api_key = SimpleNamespace(
+        id=uuid4(),
+        prefix="sk_live_12345678",
+        owner_id=owner_id,
+        key_kind=APIKeyKind.PERSONAL,
+        entity_id=entity_id,
+    )
+    user = SimpleNamespace(id=owner_id, can_authenticate=lambda: True)
+    auth._initialized = True
+    auth.api_key_service = SimpleNamespace(
+        verify_api_key=AsyncMock(return_value=(api_key, 7)),
+        get_api_key_scopes=AsyncMock(return_value=["contacts:read"]),
+    )
+    auth.user_service = SimpleNamespace(get_user_by_id=AsyncMock(return_value=user))
+    auth.api_key_policy_service = SimpleNamespace(
+        evaluate_effectiveness=AsyncMock(
+            return_value=SimpleNamespace(
+                is_currently_effective=True,
+                ineffective_reasons=[],
+            )
+        )
+    )
+
+    result = await auth.authorize_api_key(
+        "db-session",
+        "sk_live_secret",
+        required_scope="contacts:read",
+        entity_id=entity_id,
+        ip_address="127.0.0.1",
+    )
+
+    assert result is not None
+    assert result["user"] is user
+    assert result["user_id"] == str(owner_id)
+    assert result["source"] == "api_key"
+    assert result["api_key"] is api_key
+    assert result["metadata"] == {
+        "key_id": str(api_key.id),
+        "key_prefix": "sk_live_12345678",
+        "key_kind": "personal",
+        "scopes": ["contacts:read"],
+        "usage_count": 7,
+        "entity_id": str(entity_id),
+        "is_currently_effective": True,
+        "ineffective_reasons": [],
+    }
+    auth.api_key_service.verify_api_key.assert_awaited_once_with(
+        "db-session",
+        "sk_live_secret",
+        required_scope="contacts:read",
+        entity_id=entity_id,
+        ip_address="127.0.0.1",
+    )
+    auth.api_key_service.get_api_key_scopes.assert_awaited_once_with("db-session", api_key.id)
+    auth.user_service.get_user_by_id.assert_awaited_once_with("db-session", owner_id)
 
 
 @pytest.mark.unit

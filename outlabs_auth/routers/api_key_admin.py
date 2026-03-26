@@ -1,10 +1,6 @@
-"""
-Enterprise admin API key router factory.
+"""Enterprise admin API key router factory."""
 
-Provides entity-first API key management routes for EnterpriseRBAC hosts.
-"""
-
-from typing import Any, List, Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -20,6 +16,7 @@ from outlabs_auth.schemas.api_key import (
     ApiKeyGrantableScopesResponse,
     ApiKeyResponse,
 )
+from outlabs_auth.schemas.common import PaginatedResponse
 
 
 def get_api_key_admin_router(auth: Any, prefix: str = "", tags: Optional[list[str]] = None) -> APIRouter:
@@ -34,6 +31,16 @@ def get_api_key_admin_router(auth: Any, prefix: str = "", tags: Optional[list[st
     async def _to_response(session: AsyncSession, api_key) -> ApiKeyResponse:
         scopes = await auth.api_key_service.get_api_key_scopes(session, api_key.id)
         ip_whitelist = await auth.api_key_service.get_api_key_ip_whitelist(session, api_key.id)
+        is_currently_effective = None
+        ineffective_reasons = None
+        if getattr(auth, "api_key_policy_service", None) is not None:
+            effectiveness = await auth.api_key_policy_service.evaluate_effectiveness(
+                session,
+                api_key=api_key,
+                scopes=scopes,
+            )
+            is_currently_effective = effectiveness.is_currently_effective
+            ineffective_reasons = effectiveness.ineffective_reasons
         return ApiKeyResponse(
             id=str(api_key.id),
             prefix=api_key.prefix,
@@ -51,6 +58,8 @@ def get_api_key_admin_router(auth: Any, prefix: str = "", tags: Optional[list[st
             entity_ids=[str(api_key.entity_id)] if api_key.entity_id else None,
             inherit_from_tree=api_key.inherit_from_tree,
             owner_id=str(api_key.owner_id) if api_key.owner_id else None,
+            is_currently_effective=is_currently_effective,
+            ineffective_reasons=ineffective_reasons,
         )
 
     async def _get_entity_api_key(session: AsyncSession, entity_id: UUID, key_id: UUID):
@@ -111,25 +120,40 @@ def get_api_key_admin_router(auth: Any, prefix: str = "", tags: Optional[list[st
 
     @router.get(
         "/{entity_id}/api-keys",
-        response_model=List[ApiKeyResponse],
+        response_model=PaginatedResponse[ApiKeyResponse],
         summary="List entity API keys",
-        description="List API keys anchored to a specific entity.",
+        description="List API keys anchored to a specific entity with pagination and filters.",
     )
     async def list_entity_api_keys(
         entity_id: UUID,
+        page: int = Query(default=1, ge=1, description="Page number (1-indexed)"),
+        limit: int = Query(default=20, ge=1, le=100, description="Results per page"),
         owner_id: Optional[UUID] = Query(default=None),
         status_filter: Optional[APIKeyStatus] = Query(default=None, alias="status"),
+        key_kind: Optional[APIKeyKind] = Query(default=None),
+        search: Optional[str] = Query(default=None, min_length=1),
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.require_tree_permission("api_key:read", "entity_id", source="path")),
     ):
         del auth_result
-        api_keys = await auth.api_key_service.list_entity_api_keys(
+        api_keys, total = await auth.api_key_service.list_entity_api_keys_paginated(
             session,
             entity_id=entity_id,
             owner_id=owner_id,
             status=status_filter,
+            key_kind=key_kind,
+            search=search,
+            page=page,
+            limit=limit,
         )
-        return [await _to_response(session, api_key) for api_key in api_keys]
+        pages = (total + limit - 1) // limit if total > 0 else 0
+        return PaginatedResponse(
+            items=[await _to_response(session, api_key) for api_key in api_keys],
+            total=total,
+            page=page,
+            limit=limit,
+            pages=pages,
+        )
 
     @router.post(
         "/{entity_id}/api-keys",
@@ -243,5 +267,27 @@ def get_api_key_admin_router(auth: Any, prefix: str = "", tags: Optional[list[st
             event_source="api_key_admin_router.delete_entity_api_key",
         )
         return None
+
+    @router.post(
+        "/{entity_id}/api-keys/{key_id}/rotate",
+        response_model=ApiKeyCreateResponse,
+        summary="Rotate entity API key",
+        description="Rotate an API key anchored to the specified entity.",
+    )
+    async def rotate_entity_api_key(
+        entity_id: UUID,
+        key_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.require_tree_permission("api_key:update", "entity_id", source="path")),
+    ):
+        await _get_entity_api_key(session, entity_id, key_id)
+        full_key, new_key = await auth.api_key_service.rotate_api_key(
+            session,
+            key_id,
+            actor_user_id=UUID(auth_result["user_id"]),
+            event_source="api_key_admin_router.rotate_entity_api_key",
+        )
+        api_key_response = await _to_response(session, new_key)
+        return ApiKeyCreateResponse(**api_key_response.model_dump(), api_key=full_key)
 
     return router

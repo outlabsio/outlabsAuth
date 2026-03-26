@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 from uuid import UUID
 
 from sqlalchemy import delete as sql_delete
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -558,14 +558,59 @@ class APIKeyService(BaseService[APIKey]):
         entity_id: UUID,
         owner_id: Optional[UUID] = None,
         status: Optional[APIKeyStatus] = None,
+        key_kind: Optional[APIKeyKind] = None,
     ) -> List[APIKey]:
         """List API keys anchored to a specific entity."""
+        api_keys, _ = await self.list_entity_api_keys_paginated(
+            session,
+            entity_id=entity_id,
+            owner_id=owner_id,
+            status=status,
+            key_kind=key_kind,
+            page=1,
+            limit=1000,
+        )
+        return api_keys
+
+    async def list_entity_api_keys_paginated(
+        self,
+        session: AsyncSession,
+        *,
+        entity_id: UUID,
+        owner_id: Optional[UUID] = None,
+        status: Optional[APIKeyStatus] = None,
+        key_kind: Optional[APIKeyKind] = None,
+        search: Optional[str] = None,
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[List[APIKey], int]:
+        """List API keys anchored to a specific entity with pagination and filtering."""
         filters = [APIKey.entity_id == entity_id]
         if owner_id is not None:
             filters.append(APIKey.owner_id == owner_id)
         if status is not None:
             filters.append(APIKey.status == status)
-        return await self.get_many(session, *filters, limit=1000)
+        if key_kind is not None:
+            filters.append(APIKey.key_kind == key_kind)
+        if search:
+            pattern = f"%{search.strip()}%"
+            filters.append(
+                or_(
+                    APIKey.name.ilike(pattern),
+                    APIKey.description.ilike(pattern),
+                    APIKey.prefix.ilike(pattern),
+                )
+            )
+
+        total = await self.count(session, *filters)
+        api_keys = await self.get_many(
+            session,
+            *filters,
+            skip=(page - 1) * limit,
+            limit=limit,
+            order_by=APIKey.created_at.desc(),
+        )
+        return api_keys, total
 
     async def revoke_api_key(
         self,

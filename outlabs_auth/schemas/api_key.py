@@ -51,6 +51,8 @@ class ApiKeyResponse(BaseModel):
     entity_ids: Optional[List[str]] = None
     inherit_from_tree: bool = False
     owner_id: Optional[str] = None  # String representation of owner ID
+    is_currently_effective: Optional[bool] = None
+    ineffective_reasons: Optional[List[str]] = None
 
     model_config = ConfigDict(from_attributes=True)
 

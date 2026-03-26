@@ -53,6 +53,16 @@ def get_api_keys_router(auth: Any, prefix: str = "", tags: Optional[list[str]] =
     async def _to_response(session: AsyncSession, api_key) -> ApiKeyResponse:
         scopes = await auth.api_key_service.get_api_key_scopes(session, api_key.id)
         ip_whitelist = await auth.api_key_service.get_api_key_ip_whitelist(session, api_key.id)
+        is_currently_effective = None
+        ineffective_reasons = None
+        if getattr(auth, "api_key_policy_service", None) is not None:
+            effectiveness = await auth.api_key_policy_service.evaluate_effectiveness(
+                session,
+                api_key=api_key,
+                scopes=scopes,
+            )
+            is_currently_effective = effectiveness.is_currently_effective
+            ineffective_reasons = effectiveness.ineffective_reasons
         return ApiKeyResponse(
             id=str(api_key.id),
             prefix=api_key.prefix,
@@ -70,6 +80,8 @@ def get_api_keys_router(auth: Any, prefix: str = "", tags: Optional[list[str]] =
             entity_ids=[str(api_key.entity_id)] if api_key.entity_id else None,
             inherit_from_tree=api_key.inherit_from_tree,
             owner_id=str(api_key.owner_id) if api_key.owner_id else None,
+            is_currently_effective=is_currently_effective,
+            ineffective_reasons=ineffective_reasons,
         )
 
     @router.get(

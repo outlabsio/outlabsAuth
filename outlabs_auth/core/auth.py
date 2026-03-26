@@ -8,6 +8,7 @@ All features are controlled by configuration flags.
 
 import asyncio
 from typing import Any, AsyncGenerator, Dict, Optional
+from uuid import UUID
 
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -633,6 +634,68 @@ class OutlabsAuth:
             raise ConfigurationError("OutlabsAuth not initialized. Call await auth.initialize() first.")
 
         return await self.auth_service.get_current_user(session, token)
+
+    async def authorize_api_key(
+        self,
+        session: AsyncSession,
+        api_key_string: str,
+        *,
+        required_scope: Optional[str] = None,
+        entity_id: Optional[UUID] = None,
+        ip_address: Optional[str] = None,
+    ) -> Optional[dict]:
+        """
+        Validate an API key for host code without exposing service internals.
+
+        Returns the same high-level auth shape used by the API key backend, or
+        ``None`` when the key cannot be used for the requested access.
+        """
+        if not self._initialized:
+            raise ConfigurationError("OutlabsAuth not initialized. Call await auth.initialize() first.")
+        if self.api_key_service is None:
+            raise ConfigurationError("API key support is not initialized for this auth instance.")
+        if self.user_service is None:
+            raise ConfigurationError("User service is not initialized for this auth instance.")
+
+        api_key, usage_count = await self.api_key_service.verify_api_key(
+            session,
+            api_key_string,
+            required_scope=required_scope,
+            entity_id=entity_id,
+            ip_address=ip_address,
+        )
+        if api_key is None:
+            return None
+
+        user = await self.user_service.get_user_by_id(session, api_key.owner_id)
+        if user is None or not user.can_authenticate():
+            return None
+
+        key_scopes = await self.api_key_service.get_api_key_scopes(session, api_key.id)
+        metadata: dict[str, Any] = {
+            "key_id": str(api_key.id),
+            "key_prefix": api_key.prefix,
+            "key_kind": api_key.key_kind.value if hasattr(api_key.key_kind, "value") else str(api_key.key_kind),
+            "scopes": key_scopes,
+            "usage_count": usage_count,
+            "entity_id": str(api_key.entity_id) if api_key.entity_id else None,
+        }
+        if self.api_key_policy_service is not None:
+            effectiveness = await self.api_key_policy_service.evaluate_effectiveness(
+                session,
+                api_key=api_key,
+                scopes=key_scopes,
+            )
+            metadata["is_currently_effective"] = effectiveness.is_currently_effective
+            metadata["ineffective_reasons"] = effectiveness.ineffective_reasons
+
+        return {
+            "user": user,
+            "user_id": str(user.id),
+            "source": "api_key",
+            "api_key": api_key,
+            "metadata": metadata,
+        }
 
     @property
     def engine(self) -> AsyncEngine:

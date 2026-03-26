@@ -10,6 +10,9 @@ from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.enums import APIKeyKind, APIKeyStatus, EntityClass, UserStatus
 from outlabs_auth.services.api_key import APIKeyService
 from outlabs_auth.services.api_key_policy import APIKeyPolicyService
+from outlabs_auth.services.membership import MembershipService
+from outlabs_auth.services.permission import PermissionService
+from outlabs_auth.services.role import RoleService
 from outlabs_auth.services.user import UserService
 
 
@@ -343,3 +346,86 @@ async def test_api_key_service_can_revoke_keys_for_an_archived_entity(
     assert anchored_key.status == APIKeyStatus.REVOKED
     assert other_key.status == APIKeyStatus.ACTIVE
     assert global_key.status == APIKeyStatus.ACTIVE
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_api_key_policy_evaluates_current_effectiveness_after_owner_permission_loss(
+    test_session,
+):
+    enterprise_config = AuthConfig(
+        database_url="postgresql+asyncpg://example:example@localhost:5432/test",
+        secret_key="test-secret",
+        enable_entity_hierarchy=True,
+    )
+    user_service = UserService(config=enterprise_config)
+    permission_service = PermissionService(config=enterprise_config)
+    role_service = RoleService(config=enterprise_config)
+    membership_service = MembershipService(config=enterprise_config)
+    policy_service = APIKeyPolicyService(
+        config=enterprise_config,
+        permission_service=permission_service,
+    )
+    service = APIKeyService(config=enterprise_config, policy_service=policy_service)
+
+    owner = await user_service.create_user(
+        test_session,
+        email="effectiveness-owner@example.com",
+        password="TestPass123!",
+        first_name="Effectiveness",
+        last_name="Owner",
+    )
+    root = _entity(name="effectiveness-root", slug="effectiveness-root")
+    test_session.add(root)
+    await test_session.flush()
+    owner.root_entity_id = root.id
+    test_session.add(EntityClosure(ancestor_id=root.id, descendant_id=root.id, depth=0))
+    await test_session.flush()
+
+    permission = await permission_service.create_permission(
+        test_session,
+        name="contacts:read",
+        display_name="contacts:read",
+        description="Effectiveness test permission",
+    )
+    role = await role_service.create_role(
+        session=test_session,
+        name="effectiveness-role",
+        display_name="Effectiveness Role",
+        is_global=False,
+        root_entity_id=root.id,
+    )
+    await role_service.add_permissions(test_session, role.id, [permission.id], changed_by_id=owner.id)
+    await membership_service.add_member(
+        session=test_session,
+        entity_id=root.id,
+        user_id=owner.id,
+        role_ids=[role.id],
+        joined_by_id=owner.id,
+    )
+
+    _, api_key = await service.create_api_key(
+        test_session,
+        owner_id=owner.id,
+        name="Effective Key",
+        scopes=["contacts:read"],
+        entity_id=root.id,
+    )
+
+    effective = await policy_service.evaluate_effectiveness(
+        test_session,
+        api_key=api_key,
+        scopes=["contacts:read"],
+    )
+    assert effective.is_currently_effective is True
+    assert effective.ineffective_reasons == []
+
+    await role_service.remove_permissions(test_session, role.id, [permission.id], changed_by_id=owner.id)
+
+    ineffective = await policy_service.evaluate_effectiveness(
+        test_session,
+        api_key=api_key,
+        scopes=["contacts:read"],
+    )
+    assert ineffective.is_currently_effective is False
+    assert ineffective.ineffective_reasons == ["no_effective_scopes"]

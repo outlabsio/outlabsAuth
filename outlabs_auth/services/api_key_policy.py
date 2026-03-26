@@ -7,6 +7,8 @@ personal keys without duplicating rules across routers and auth backends.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import logging
 from typing import TYPE_CHECKING, List, Optional
 from uuid import UUID
@@ -16,10 +18,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import InvalidInputError
-from outlabs_auth.models.sql.api_key import APIKey
+from outlabs_auth.models.sql.api_key import APIKey, APIKeyScope
 from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.entity import Entity
-from outlabs_auth.models.sql.enums import APIKeyKind, DefinitionStatus
+from outlabs_auth.models.sql.enums import APIKeyKind, APIKeyStatus, DefinitionStatus
 from outlabs_auth.models.sql.permission import Permission
 from outlabs_auth.models.sql.user import User
 
@@ -27,6 +29,14 @@ if TYPE_CHECKING:
     from outlabs_auth.services.permission import PermissionService
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class APIKeyEffectivenessResult:
+    """Derived runtime effectiveness for a stored API key."""
+
+    is_currently_effective: bool
+    ineffective_reasons: list[str] = field(default_factory=list)
 
 
 class APIKeyPolicyService:
@@ -148,6 +158,85 @@ class APIKeyPolicyService:
             entity_id=entity_id,
         )
 
+    async def evaluate_effectiveness(
+        self,
+        session: AsyncSession,
+        *,
+        api_key: APIKey,
+        scopes: Optional[List[str]] = None,
+    ) -> APIKeyEffectivenessResult:
+        """Return derived runtime effectiveness and the reasons when a key is ineffective."""
+        reasons: list[str] = []
+
+        if api_key.status == APIKeyStatus.SUSPENDED:
+            reasons.append("key_suspended")
+        elif api_key.status == APIKeyStatus.REVOKED:
+            reasons.append("key_revoked")
+        elif api_key.status == APIKeyStatus.EXPIRED:
+            reasons.append("key_expired")
+        elif api_key.expires_at and datetime.now(timezone.utc) > api_key.expires_at:
+            reasons.append("key_expired")
+
+        owner = await session.get(User, api_key.owner_id)
+        if owner is None:
+            reasons.append("owner_missing")
+        elif not owner.can_authenticate():
+            reasons.append("owner_inactive")
+
+        if api_key.entity_id is not None:
+            entity = await session.get(Entity, api_key.entity_id)
+            if entity is None:
+                reasons.append("anchor_missing")
+            elif not entity.is_active():
+                reasons.append("anchor_inactive")
+
+        if reasons:
+            return APIKeyEffectivenessResult(
+                is_currently_effective=False,
+                ineffective_reasons=reasons,
+            )
+
+        if not self.config.enable_entity_hierarchy:
+            return APIKeyEffectivenessResult(
+                is_currently_effective=True,
+                ineffective_reasons=[],
+            )
+
+        stored_scopes = scopes
+        if stored_scopes is None:
+            stmt = select(APIKeyScope.scope).where(APIKeyScope.api_key_id == api_key.id)
+            result = await session.execute(stmt)
+            stored_scopes = [row[0] for row in result.all()]
+
+        try:
+            owner_grantable_scopes = await self.calculate_owner_grantable_scopes(
+                session,
+                owner=owner,
+                key_kind=api_key.key_kind,
+                entity_id=api_key.entity_id,
+                inherit_from_tree=api_key.inherit_from_tree,
+            )
+        except InvalidInputError:
+            reasons.append("policy_invalid")
+            return APIKeyEffectivenessResult(
+                is_currently_effective=False,
+                ineffective_reasons=reasons,
+            )
+
+        from outlabs_auth.services.api_key import APIKeyService
+
+        has_effective_scope = any(
+            APIKeyService.scopes_allow_permission(stored_scopes, permission_name)
+            for permission_name in owner_grantable_scopes
+        )
+        if not has_effective_scope:
+            reasons.append("no_effective_scopes")
+
+        return APIKeyEffectivenessResult(
+            is_currently_effective=not reasons,
+            ineffective_reasons=reasons,
+        )
+
     def get_allowed_key_kinds(self) -> List[APIKeyKind]:
         """Return the key kinds available in the current implementation slice."""
         return [APIKeyKind.PERSONAL]
@@ -266,6 +355,9 @@ class APIKeyPolicyService:
             entity_id=entity_id,
             inherit_from_tree=inherit_from_tree,
         )
+
+        if not self.config.enable_entity_hierarchy:
+            return
 
         if not scopes:
             raise InvalidInputError(

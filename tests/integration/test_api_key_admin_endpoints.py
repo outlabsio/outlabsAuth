@@ -169,23 +169,74 @@ async def test_admin_api_key_router_returns_grantable_scopes_and_manages_entity_
     assert created_data["key_kind"] == "personal"
     assert created_data["entity_ids"] == [department_id]
     assert created_data["owner_id"] == user_id
+    assert created_data["is_currently_effective"] is True
+    assert created_data["ineffective_reasons"] == []
+
+    second_created = await client.post(
+        f"/v1/admin/entities/{department_id}/api-keys",
+        json={
+            "owner_id": user_id,
+            "name": "Viewer Search Key",
+            "scopes": [update_scope],
+        },
+    )
+    assert second_created.status_code == 201, second_created.text
+    second_key_id = second_created.json()["id"]
 
     listed = await client.get(f"/v1/admin/entities/{department_id}/api-keys")
     assert listed.status_code == 200, listed.text
-    assert [item["id"] for item in listed.json()] == [key_id]
+    listed_data = listed.json()
+    assert listed_data["total"] == 2
+    assert listed_data["page"] == 1
+    assert listed_data["limit"] == 20
+    assert listed_data["pages"] == 1
+    assert {item["id"] for item in listed_data["items"]} == {key_id, second_key_id}
+
+    paginated = await client.get(
+        f"/v1/admin/entities/{department_id}/api-keys",
+        params={
+            "page": 1,
+            "limit": 1,
+            "owner_id": user_id,
+            "key_kind": "personal",
+            "status": "active",
+        },
+    )
+    assert paginated.status_code == 200, paginated.text
+    paginated_data = paginated.json()
+    assert paginated_data["total"] == 2
+    assert paginated_data["page"] == 1
+    assert paginated_data["limit"] == 1
+    assert paginated_data["pages"] == 2
+    assert len(paginated_data["items"]) == 1
+
+    searched = await client.get(
+        f"/v1/admin/entities/{department_id}/api-keys",
+        params={"search": "Viewer"},
+    )
+    assert searched.status_code == 200, searched.text
+    searched_data = searched.json()
+    assert searched_data["total"] == 1
+    assert searched_data["items"][0]["id"] == second_key_id
 
     fetched = await client.get(f"/v1/admin/entities/{department_id}/api-keys/{key_id}")
     assert fetched.status_code == 200, fetched.text
     assert fetched.json()["id"] == key_id
+    assert fetched.json()["is_currently_effective"] is True
+    assert fetched.json()["ineffective_reasons"] == []
 
     async with enterprise_auth.get_session() as session:
-        verified, _ = await enterprise_auth.api_key_service.verify_api_key(
+        verified = await enterprise_auth.authorize_api_key(
             session,
             full_api_key,
             required_scope=read_scope.replace("_tree", ""),
             entity_id=team_id,
         )
         assert verified is not None
+        assert verified["metadata"]["key_id"] == key_id
+        assert verified["metadata"]["key_kind"] == "personal"
+        assert verified["metadata"]["is_currently_effective"] is True
+        assert verified["metadata"]["ineffective_reasons"] == []
 
     updated = await client.patch(
         f"/v1/admin/entities/{department_id}/api-keys/{key_id}",
@@ -199,28 +250,73 @@ async def test_admin_api_key_router_returns_grantable_scopes_and_manages_entity_
     assert updated.json()["scopes"] == [update_scope]
 
     async with enterprise_auth.get_session() as session:
-        denied, _ = await enterprise_auth.api_key_service.verify_api_key(
+        denied = await enterprise_auth.authorize_api_key(
             session,
             full_api_key,
             required_scope=read_scope.replace("_tree", ""),
             entity_id=team_id,
         )
         assert denied is None
-        updated_verified, _ = await enterprise_auth.api_key_service.verify_api_key(
+        updated_verified = await enterprise_auth.authorize_api_key(
             session,
             full_api_key,
             required_scope=update_scope,
             entity_id=department_uuid,
         )
         assert updated_verified is not None
+        assert updated_verified["metadata"]["scopes"] == [update_scope]
 
-    deleted = await client.delete(f"/v1/admin/entities/{department_id}/api-keys/{key_id}")
+    rotated = await client.post(f"/v1/admin/entities/{department_id}/api-keys/{key_id}/rotate")
+    assert rotated.status_code == 200, rotated.text
+    rotated_data = rotated.json()
+    rotated_key_id = rotated_data["id"]
+    rotated_full_key = rotated_data["api_key"]
+    assert rotated_key_id != key_id
+    assert rotated_data["is_currently_effective"] is True
+
+    async with enterprise_auth.get_session() as session:
+        revoked = await enterprise_auth.authorize_api_key(
+            session,
+            full_api_key,
+            required_scope=update_scope,
+            entity_id=department_uuid,
+        )
+        assert revoked is None
+        rotated_verified = await enterprise_auth.authorize_api_key(
+            session,
+            rotated_full_key,
+            required_scope=update_scope,
+            entity_id=department_uuid,
+        )
+        assert rotated_verified is not None
+
+    revoked_list = await client.get(
+        f"/v1/admin/entities/{department_id}/api-keys",
+        params={"status": "revoked"},
+    )
+    assert revoked_list.status_code == 200, revoked_list.text
+    revoked_data = revoked_list.json()
+    assert revoked_data["total"] == 1
+    assert revoked_data["items"][0]["id"] == key_id
+    assert revoked_data["items"][0]["is_currently_effective"] is False
+    assert "key_revoked" in revoked_data["items"][0]["ineffective_reasons"]
+
+    rotated_search = await client.get(
+        f"/v1/admin/entities/{department_id}/api-keys",
+        params={"search": "rotated"},
+    )
+    assert rotated_search.status_code == 200, rotated_search.text
+    rotated_search_data = rotated_search.json()
+    assert rotated_search_data["total"] == 1
+    assert rotated_search_data["items"][0]["id"] == rotated_key_id
+
+    deleted = await client.delete(f"/v1/admin/entities/{department_id}/api-keys/{rotated_key_id}")
     assert deleted.status_code == 204, deleted.text
 
     async with enterprise_auth.get_session() as session:
-        revoked, _ = await enterprise_auth.api_key_service.verify_api_key(
+        revoked = await enterprise_auth.authorize_api_key(
             session,
-            full_api_key,
+            rotated_full_key,
             required_scope=update_scope,
             entity_id=department_uuid,
         )
