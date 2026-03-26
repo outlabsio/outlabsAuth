@@ -99,6 +99,7 @@ from outlabs_auth.models.sql.user_audit_event import UserAuditEvent
 
 # SQL Models - Enums
 from outlabs_auth.models.sql.enums import (
+    APIKeyKind,
     APIKeyStatus,
     ConditionOperator,
     EntityClass,
@@ -195,6 +196,7 @@ __all__ = [
     "UserStatus",
     "MembershipStatus",
     "EntityClass",
+    "APIKeyKind",
     "APIKeyStatus",
     "ConditionOperator",
     # Core Models

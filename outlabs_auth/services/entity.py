@@ -14,6 +14,7 @@ from uuid import UUID
 
 if TYPE_CHECKING:
     from outlabs_auth.observability import ObservabilityService
+    from outlabs_auth.services.api_key import APIKeyService
     from outlabs_auth.services.config import ConfigService
     from outlabs_auth.services.membership import MembershipService
     from outlabs_auth.services.redis_client import RedisClient
@@ -78,6 +79,7 @@ class EntityService(BaseService[Entity]):
         self.config_service = config_service
         self.membership_service: Optional["MembershipService"] = None
         self.role_service: Optional["RoleService"] = None
+        self.api_key_service: Optional["APIKeyService"] = None
 
     async def create_entity(
         self,
@@ -233,9 +235,7 @@ class EntityService(BaseService[Entity]):
             raise EntityNotFoundError(message="Entity not found", details={"entity_id": str(entity_id)})
         return entity
 
-    async def get_entity_by_slug(
-        self, session: AsyncSession, slug: str
-    ) -> Optional[Entity]:
+    async def get_entity_by_slug(self, session: AsyncSession, slug: str) -> Optional[Entity]:
         """
         Get entity by slug.
 
@@ -558,6 +558,15 @@ class EntityService(BaseService[Entity]):
                 reason=archive_reason,
             )
 
+        if self.api_key_service is not None:
+            await self.api_key_service.revoke_entity_api_keys(
+                session,
+                entity.id,
+                revoked_by_id=deleted_by_id,
+                reason=archive_reason,
+                event_source="entity_service.delete_entity",
+            )
+
         # Delete closure records
         await self._delete_closure_records(session, entity)
 
@@ -793,11 +802,7 @@ class EntityService(BaseService[Entity]):
 
         config = await self.config_service.get_entity_type_config(session)
         root_type_config = getattr(config.allowed_root_types, entity_class.value, [])
-        allowed_root_types = [
-            value.strip().lower()
-            for value in root_type_config
-            if value and value.strip()
-        ]
+        allowed_root_types = [value.strip().lower() for value in root_type_config if value and value.strip()]
 
         if not allowed_root_types:
             class_label = entity_class.value.replace("_", "-")

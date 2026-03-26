@@ -1400,12 +1400,28 @@ async def test_superuser_can_list_api_keys(client: httpx.AsyncClient, admin_user
 @pytest.mark.asyncio
 async def test_superuser_can_create_api_key(client: httpx.AsyncClient, admin_user: dict):
     """Test that superuser can create API keys."""
+    entity_resp = await client.post(
+        "/v1/entities/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "name": f"api-key-entity-{uuid.uuid4().hex[:8]}",
+            "display_name": "API Key Entity",
+            "slug": f"api-key-entity-{uuid.uuid4().hex[:8]}",
+            "entity_class": EntityClass.STRUCTURAL.value,
+            "entity_type": "organization",
+        },
+    )
+    assert entity_resp.status_code == 201, entity_resp.text
+    entity_id = entity_resp.json()["id"]
+
     resp = await client.post(
         "/v1/api-keys/",
         headers={"Authorization": f"Bearer {admin_user['token']}"},
         json={
             "name": f"test-key-{uuid.uuid4().hex[:8]}",
             "description": "Test API key",
+            "scopes": ["user:read"],
+            "entity_ids": [entity_id],
         },
     )
     assert resp.status_code == 201

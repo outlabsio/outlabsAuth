@@ -7,8 +7,9 @@ from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import InvalidInputError
 from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.entity import Entity
-from outlabs_auth.models.sql.enums import APIKeyStatus, EntityClass
+from outlabs_auth.models.sql.enums import APIKeyKind, APIKeyStatus, EntityClass, UserStatus
 from outlabs_auth.services.api_key import APIKeyService
+from outlabs_auth.services.api_key_policy import APIKeyPolicyService
 from outlabs_auth.services.user import UserService
 
 
@@ -81,6 +82,7 @@ async def test_api_key_service_scope_ip_update_and_delete_helpers(
 
     assert APIKeyService.scopes_allow_permission(["user:*"], "user:read") is True
     assert APIKeyService.scopes_allow_permission(["*"], "role:update") is True
+    assert APIKeyService.scopes_allow_permission(["user:read_tree"], "user:read") is True
     assert APIKeyService.scopes_allow_permission(None, "role:update") is True
     assert APIKeyService.scopes_allow_permission(["user:read"], "role:update") is False
 
@@ -221,3 +223,123 @@ async def test_api_key_service_tree_access_rate_limits_and_counter_sync(
     assert refreshed.usage_count == 3
     assert refreshed.last_used_at is not None
     assert good_counter in fake_redis.deleted
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_api_key_policy_enforces_enterprise_personal_key_rules_and_runtime_state(
+    test_session,
+):
+    enterprise_config = AuthConfig(
+        database_url="postgresql+asyncpg://example:example@localhost:5432/test",
+        secret_key="test-secret",
+        enable_entity_hierarchy=True,
+    )
+    user_service = UserService(config=enterprise_config)
+    policy_service = APIKeyPolicyService(config=enterprise_config)
+    service = APIKeyService(config=enterprise_config, policy_service=policy_service)
+
+    owner = await user_service.create_user(
+        test_session,
+        email="enterprise-api-owner@example.com",
+        password="TestPass123!",
+        first_name="Enterprise",
+        last_name="Owner",
+    )
+    root = _entity(name="enterprise-root", slug="enterprise-root")
+    test_session.add(root)
+    await test_session.flush()
+    owner.root_entity_id = root.id
+    await test_session.flush()
+
+    with pytest.raises(InvalidInputError, match="entity anchor"):
+        await service.create_api_key(
+            test_session,
+            owner_id=owner.id,
+            name="Missing Anchor",
+            scopes=["user:read"],
+        )
+
+    with pytest.raises(InvalidInputError, match="explicit scope"):
+        await service.create_api_key(
+            test_session,
+            owner_id=owner.id,
+            name="Missing Scope",
+            entity_id=root.id,
+        )
+
+    full_key, key = await service.create_api_key(
+        test_session,
+        owner_id=owner.id,
+        name="Personal Enterprise Key",
+        scopes=["user:read"],
+        entity_id=root.id,
+    )
+    assert key.key_kind == APIKeyKind.PERSONAL
+
+    owner.status = UserStatus.SUSPENDED
+    await test_session.flush()
+    suspended_key, _ = await service.verify_api_key(test_session, full_key)
+    assert suspended_key is None
+
+    owner.status = UserStatus.ACTIVE
+    root.status = "archived"
+    await test_session.flush()
+    archived_anchor_key, _ = await service.verify_api_key(test_session, full_key)
+    assert archived_anchor_key is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_api_key_service_can_revoke_keys_for_an_archived_entity(
+    test_session,
+    auth_config: AuthConfig,
+):
+    user_service = UserService(config=auth_config)
+    service = APIKeyService(config=auth_config)
+
+    owner = await user_service.create_user(
+        test_session,
+        email="entity-revoke-owner@example.com",
+        password="TestPass123!",
+        first_name="Entity",
+        last_name="Owner",
+    )
+
+    root = _entity(name="entity-revoke-root", slug="entity-revoke-root")
+    other = _entity(name="entity-revoke-other", slug="entity-revoke-other")
+    test_session.add(root)
+    test_session.add(other)
+    await test_session.flush()
+
+    _, anchored_key = await service.create_api_key(
+        test_session,
+        owner_id=owner.id,
+        name="Anchored Key",
+        scopes=["user:read"],
+        entity_id=root.id,
+    )
+    _, other_key = await service.create_api_key(
+        test_session,
+        owner_id=owner.id,
+        name="Other Anchored Key",
+        scopes=["user:read"],
+        entity_id=other.id,
+    )
+    _, global_key = await service.create_api_key(
+        test_session,
+        owner_id=owner.id,
+        name="Global Key",
+        scopes=["user:read"],
+    )
+
+    revoked = await service.revoke_entity_api_keys(
+        test_session,
+        root.id,
+        reason="Entity archived",
+    )
+
+    assert revoked == 1
+    assert anchored_key.status == APIKeyStatus.REVOKED
+    assert other_key.status == APIKeyStatus.ACTIVE
+    assert global_key.status == APIKeyStatus.ACTIVE

@@ -826,6 +826,9 @@ class UserService(BaseService[User]):
             revoked_api_key_count = await self.api_key_service.revoke_user_api_keys(
                 session,
                 user.id,
+                revoked_by_id=deleted_by_id,
+                reason="User deleted",
+                event_source="user_service.delete_user",
             )
 
         previous_status = user.status

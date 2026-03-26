@@ -38,6 +38,7 @@ from .entity_membership import (
 )
 from .entity_membership_history import EntityMembershipHistory
 from .enums import (
+    APIKeyKind,
     APIKeyStatus,
     ConditionOperator,
     EntityClass,
@@ -85,6 +86,7 @@ __all__ = [
     "UserStatus",
     "MembershipStatus",
     "EntityClass",
+    "APIKeyKind",
     "APIKeyStatus",
     "ConditionOperator",
     # Core

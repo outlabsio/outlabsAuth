@@ -165,9 +165,7 @@ async def test_outlabs_auth_initialize_builds_engine_runs_migrations_and_starts_
 
     assert auth._initialized is True
     assert len(engine_calls) == 1
-    assert engine_calls[0].connect_args == {
-        "server_settings": {"search_path": "auth_schema,public"}
-    }
+    assert engine_calls[0].connect_args == {"server_settings": {"search_path": "auth_schema,public"}}
     auth._run_migrations.assert_awaited_once_with()
     fake_observability.initialize.assert_awaited_once_with()
     fake_observability.instrument_sqlalchemy.assert_called_once_with(fake_engine)
@@ -366,8 +364,11 @@ async def test_outlabs_auth_init_services_wires_redis_cache_enterprise_and_activ
     assert auth.membership_service is not None
     assert auth.entity_service.membership_service is auth.membership_service
     assert auth.entity_service.role_service is auth.role_service
+    assert auth.entity_service.api_key_service is auth.api_key_service
     assert auth.user_service.membership_service is auth.membership_service
     assert auth.user_service.role_service is auth.role_service
+    assert auth.api_key_policy_service is not None
+    assert auth.api_key_service.policy_service is auth.api_key_policy_service
     assert auth.user_service.api_key_service is auth.api_key_service
     assert auth.role_service.cache_service is auth.cache_service
     assert auth.permission_service.cache_service is auth.cache_service
@@ -537,9 +538,7 @@ def test_outlabs_auth_instrument_fastapi_registers_integrations_and_warns(
         (correlation_middleware, {"obs_service": auth.observability}),
         (resource_context_middleware, {"trust_client_header": True}),
     ]
-    assert app.routers == [
-        {"observability": auth.observability, "path": "/metrics"}
-    ]
+    assert app.routers == [{"observability": auth.observability, "path": "/metrics"}]
 
     warning_app = _FakeApp(fail_middleware=True)
     with warnings.catch_warnings(record=True) as caught:

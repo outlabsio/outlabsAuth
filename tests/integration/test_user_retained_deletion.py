@@ -58,6 +58,13 @@ async def test_delete_user_retains_row_and_revokes_access_artifacts(auth_instanc
             is_global=False,
             root_entity_id=root.id,
         )
+        permission = await auth_instance.permission_service.create_permission(
+            session,
+            name=f"users{unique}:read",
+            display_name="User Delete Read",
+            description="Delete flow permission",
+        )
+        await auth_instance.role_service.add_permissions(session, direct_role.id, [permission.id])
         admin = await auth_instance.user_service.create_user(
             session=session,
             email=f"delete-admin-{unique}@example.com",
@@ -79,7 +86,7 @@ async def test_delete_user_retains_row_and_revokes_access_artifacts(auth_instanc
             session=session,
             entity_id=team.id,
             user_id=target.id,
-            role_ids=[],
+            role_ids=[direct_role.id],
             joined_by_id=admin.id,
         )
         await auth_instance.role_service.assign_role_to_user(
@@ -92,6 +99,8 @@ async def test_delete_user_retains_row_and_revokes_access_artifacts(auth_instanc
             session=session,
             owner_id=target.id,
             name=f"user-delete-key-{unique}",
+            scopes=[permission.name],
+            entity_id=team.id,
         )
         await session.commit()
 
@@ -156,19 +165,13 @@ async def test_delete_user_retains_row_and_revokes_access_artifacts(auth_instanc
         assert direct_membership.revocation_reason == "User deleted"
 
         refresh_tokens = (
-            await session.execute(
-                select(RefreshToken).where(RefreshToken.user_id == target_id)
-            )
-        ).scalars().all()
+            (await session.execute(select(RefreshToken).where(RefreshToken.user_id == target_id))).scalars().all()
+        )
         assert refresh_tokens
         assert all(token.is_revoked for token in refresh_tokens)
         assert all(token.revoked_reason == "User deleted" for token in refresh_tokens)
 
-        stored_api_key = (
-            await session.execute(
-                select(APIKey).where(APIKey.id == api_key_id)
-            )
-        ).scalar_one()
+        stored_api_key = (await session.execute(select(APIKey).where(APIKey.id == api_key_id))).scalar_one()
         assert stored_api_key.status == APIKeyStatus.REVOKED
 
         verified_key, _ = await auth_instance.api_key_service.verify_api_key(session, full_api_key)
@@ -253,6 +256,13 @@ async def test_restore_user_is_identity_only_and_keeps_access_artifacts_revoked(
             is_global=False,
             root_entity_id=root.id,
         )
+        permission = await auth_instance.permission_service.create_permission(
+            session,
+            name=f"users_restore_{unique}:read",
+            display_name="User Restore Read",
+            description="Restore flow permission",
+        )
+        await auth_instance.role_service.add_permissions(session, direct_role.id, [permission.id])
         admin = await auth_instance.user_service.create_user(
             session=session,
             email=f"restore-admin-{unique}@example.com",
@@ -274,7 +284,7 @@ async def test_restore_user_is_identity_only_and_keeps_access_artifacts_revoked(
             session=session,
             entity_id=team.id,
             user_id=target.id,
-            role_ids=[],
+            role_ids=[direct_role.id],
             joined_by_id=admin.id,
         )
         await auth_instance.role_service.assign_role_to_user(
@@ -287,6 +297,8 @@ async def test_restore_user_is_identity_only_and_keeps_access_artifacts_revoked(
             session=session,
             owner_id=target.id,
             name=f"user-restore-key-{unique}",
+            scopes=[permission.name],
+            entity_id=team.id,
         )
         _, tokens = await auth_instance.auth_service.login(
             session,
@@ -340,18 +352,12 @@ async def test_restore_user_is_identity_only_and_keeps_access_artifacts_revoked(
         assert direct_membership.status == MembershipStatus.REVOKED
 
         refresh_tokens = (
-            await session.execute(
-                select(RefreshToken).where(RefreshToken.user_id == target_id)
-            )
-        ).scalars().all()
+            (await session.execute(select(RefreshToken).where(RefreshToken.user_id == target_id))).scalars().all()
+        )
         assert refresh_tokens
         assert all(token.is_revoked for token in refresh_tokens)
 
-        stored_api_key = (
-            await session.execute(
-                select(APIKey).where(APIKey.id == api_key_id)
-            )
-        ).scalar_one()
+        stored_api_key = (await session.execute(select(APIKey).where(APIKey.id == api_key_id))).scalar_one()
         assert stored_api_key.status == APIKeyStatus.REVOKED
 
         with pytest.raises(RefreshTokenInvalidError):

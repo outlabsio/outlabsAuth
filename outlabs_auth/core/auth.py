@@ -224,6 +224,7 @@ class OutlabsAuth:
         self.role_service = None
         self.permission_service = None
         self.access_scope_service = None
+        self.api_key_policy_service = None
         self.api_key_service = None
         self.service_token_service = None
         self.role_history_service = None
@@ -352,6 +353,7 @@ class OutlabsAuth:
         """Initialize all services based on configuration."""
         from outlabs_auth.services.access_scope import AccessScopeService
         from outlabs_auth.services.api_key import APIKeyService
+        from outlabs_auth.services.api_key_policy import APIKeyPolicyService
         from outlabs_auth.services.auth import AuthService
         from outlabs_auth.services.cache import CacheService
         from outlabs_auth.services.permission_history import PermissionHistoryService
@@ -392,6 +394,10 @@ class OutlabsAuth:
             permission_history_service=self.permission_history_service,
         )
         self.access_scope_service = AccessScopeService(self.config)
+        self.api_key_policy_service = APIKeyPolicyService(
+            self.config,
+            permission_service=self.permission_service,
+        )
 
         # Initialize Redis client if enabled
         if self.config.redis_enabled and self.config.redis_url:
@@ -432,7 +438,14 @@ class OutlabsAuth:
             self.entity_service.role_service = self.role_service
 
         # API Key service
-        self.api_key_service = APIKeyService(self.config, redis_client=self.redis_client)
+        self.api_key_service = APIKeyService(
+            self.config,
+            redis_client=self.redis_client,
+            policy_service=self.api_key_policy_service,
+            user_audit_service=self.user_audit_service,
+        )
+        if self.entity_service is not None:
+            self.entity_service.api_key_service = self.api_key_service
         self.user_service.membership_service = self.membership_service
         self.user_service.role_service = self.role_service
         self.user_service.api_key_service = self.api_key_service

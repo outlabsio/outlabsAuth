@@ -72,6 +72,13 @@ class APIKeyStatus(str, Enum):
     EXPIRED = "expired"  # Past expiration date
 
 
+class APIKeyKind(str, Enum):
+    """Intent classification for API keys."""
+
+    PERSONAL = "personal"
+    SYSTEM_INTEGRATION = "system_integration"
+
+
 class DefinitionStatus(str, Enum):
     """Lifecycle status for retained role and permission definitions."""
 

@@ -15,7 +15,7 @@ from sqlalchemy import Column, Index, UniqueConstraint, ForeignKey, String, Bool
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 from outlabs_auth.database.base import BaseModel
-from .enums import APIKeyStatus
+from .enums import APIKeyKind, APIKeyStatus
 
 if TYPE_CHECKING:
     from .user import User
@@ -28,10 +28,9 @@ class APIKeyScope(SQLModel, table=True):
 
     Table: api_key_scopes
     """
+
     __tablename__ = "api_key_scopes"
-    __table_args__ = (
-        Index("ix_api_key_scopes_key_id", "api_key_id"),
-    )
+    __table_args__ = (Index("ix_api_key_scopes_key_id", "api_key_id"),)
 
     api_key_id: UUID = Field(
         sa_column=Column(
@@ -53,10 +52,9 @@ class APIKeyIPWhitelist(SQLModel, table=True):
 
     Table: api_key_ip_whitelist
     """
+
     __tablename__ = "api_key_ip_whitelist"
-    __table_args__ = (
-        Index("ix_api_key_ip_key_id", "api_key_id"),
-    )
+    __table_args__ = (Index("ix_api_key_ip_key_id", "api_key_id"),)
 
     api_key_id: UUID = Field(
         sa_column=Column(
@@ -84,11 +82,13 @@ class APIKey(BaseModel, table=True):
 
     Table: api_keys
     """
+
     __tablename__ = "api_keys"
     __table_args__ = (
         UniqueConstraint("prefix", name="uq_api_keys_prefix"),
         Index("ix_api_keys_prefix", "prefix"),
         Index("ix_api_keys_owner_id", "owner_id"),
+        Index("ix_api_keys_key_kind", "key_kind"),
         Index("ix_api_keys_status", "status"),
         Index("ix_api_keys_expires_at", "expires_at"),
     )
@@ -118,6 +118,11 @@ class APIKey(BaseModel, table=True):
             ForeignKey("users.id", ondelete="CASCADE"),
             nullable=False,
         ),
+    )
+    key_kind: APIKeyKind = Field(
+        default=APIKeyKind.PERSONAL,
+        sa_column=Column(String(40), nullable=False, default=APIKeyKind.PERSONAL.value),
+        description="Intent classification for this key",
     )
 
     # === Status & Lifecycle ===

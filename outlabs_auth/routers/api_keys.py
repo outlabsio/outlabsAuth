@@ -4,14 +4,13 @@ API Keys router factory.
 Provides ready-to-use API key management routes (DD-041).
 """
 
-import math
-from datetime import datetime, timezone
 from typing import Any, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from outlabs_auth.core.exceptions import InvalidInputError
 from outlabs_auth.schemas.api_key import (
     ApiKeyCreateRequest,
     ApiKeyCreateResponse,
@@ -58,6 +57,7 @@ def get_api_keys_router(auth: Any, prefix: str = "", tags: Optional[list[str]] =
             id=str(api_key.id),
             prefix=api_key.prefix,
             name=api_key.name,
+            key_kind=api_key.key_kind,
             scopes=scopes,
             ip_whitelist=ip_whitelist or None,
             rate_limit_per_minute=api_key.rate_limit_per_minute,
@@ -68,6 +68,7 @@ def get_api_keys_router(auth: Any, prefix: str = "", tags: Optional[list[str]] =
             last_used_at=api_key.last_used_at,
             description=api_key.description,
             entity_ids=[str(api_key.entity_id)] if api_key.entity_id else None,
+            inherit_from_tree=api_key.inherit_from_tree,
             owner_id=str(api_key.owner_id) if api_key.owner_id else None,
         )
 
@@ -124,18 +125,28 @@ def get_api_keys_router(auth: Any, prefix: str = "", tags: Optional[list[str]] =
                 )
 
         # create_api_key returns tuple: (full_key, api_key_model)
-        full_key, api_key_model = await auth.api_key_service.create_api_key(
-            session,
-            owner_id=owner_id,
-            name=data.name,
-            scopes=data.scopes,
-            prefix_type=data.prefix_type,
-            ip_whitelist=data.ip_whitelist,
-            rate_limit_per_minute=data.rate_limit_per_minute,
-            expires_in_days=data.expires_in_days,
-            description=data.description,
-            entity_id=entity_id,
-        )
+        try:
+            full_key, api_key_model = await auth.api_key_service.create_api_key(
+                session,
+                owner_id=owner_id,
+                name=data.name,
+                scopes=data.scopes,
+                prefix_type=data.prefix_type,
+                ip_whitelist=data.ip_whitelist,
+                rate_limit_per_minute=data.rate_limit_per_minute,
+                expires_in_days=data.expires_in_days,
+                description=data.description,
+                key_kind=data.key_kind,
+                entity_id=entity_id,
+                inherit_from_tree=data.inherit_from_tree,
+                actor_user_id=owner_id,
+                event_source="api_keys_router.create_api_key",
+            )
+        except InvalidInputError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=exc.message,
+            ) from exc
 
         api_key_response = await _to_response(session, api_key_model)
         return ApiKeyCreateResponse(**api_key_response.model_dump(), api_key=full_key)
@@ -195,7 +206,19 @@ def get_api_keys_router(auth: Any, prefix: str = "", tags: Optional[list[str]] =
                 updates["entity_id"] = None
 
         # Update
-        updated_key = await auth.api_key_service.update_api_key(session, key_id=key_id, **updates)
+        try:
+            updated_key = await auth.api_key_service.update_api_key(
+                session,
+                key_id=key_id,
+                actor_user_id=UUID(auth_result["user_id"]),
+                event_source="api_keys_router.update_api_key",
+                **updates,
+            )
+        except InvalidInputError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=exc.message,
+            ) from exc
 
         if not updated_key:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
@@ -223,7 +246,13 @@ def get_api_keys_router(auth: Any, prefix: str = "", tags: Optional[list[str]] =
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
 
         # Delete (revoke)
-        await auth.api_key_service.revoke_api_key(session, key_id)
+        await auth.api_key_service.revoke_api_key(
+            session,
+            key_id,
+            actor_user_id=UUID(auth_result["user_id"]),
+            reason="API key revoked by owner",
+            event_source="api_keys_router.delete_api_key",
+        )
 
         return None
 
@@ -250,40 +279,12 @@ def get_api_keys_router(auth: Any, prefix: str = "", tags: Optional[list[str]] =
         if not api_key or str(api_key.owner_id) != auth_result["user_id"]:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
 
-        scopes = await auth.api_key_service.get_api_key_scopes(session, api_key.id)
-        ip_whitelist = await auth.api_key_service.get_api_key_ip_whitelist(session, api_key.id)
-
-        expires_in_days = None
-        if api_key.expires_at:
-            remaining_seconds = (api_key.expires_at - datetime.now(timezone.utc)).total_seconds()
-            if remaining_seconds > 0:
-                expires_in_days = max(1, math.ceil(remaining_seconds / 86400))
-
-        prefix_type = "sk_live"
-        if api_key.prefix.startswith("sk_test_"):
-            prefix_type = "sk_test"
-        elif api_key.prefix.startswith("sk_live_"):
-            prefix_type = "sk_live"
-
-        # Create new key with same settings
-        full_key, new_key = await auth.api_key_service.create_api_key(
-            session=session,
-            owner_id=api_key.owner_id,
-            name=f"{api_key.name} (rotated)",
-            scopes=scopes or None,
-            prefix_type=prefix_type,
-            ip_whitelist=ip_whitelist or None,
-            rate_limit_per_minute=api_key.rate_limit_per_minute,
-            rate_limit_per_hour=api_key.rate_limit_per_hour,
-            rate_limit_per_day=api_key.rate_limit_per_day,
-            expires_in_days=expires_in_days,
-            description=api_key.description,
-            entity_id=api_key.entity_id,
-            inherit_from_tree=api_key.inherit_from_tree,
+        full_key, new_key = await auth.api_key_service.rotate_api_key(
+            session,
+            key_id,
+            actor_user_id=UUID(auth_result["user_id"]),
+            event_source="api_keys_router.rotate_api_key",
         )
-
-        # Revoke old key
-        await auth.api_key_service.revoke_api_key(session, key_id)
 
         api_key_response = await _to_response(session, new_key)
         return ApiKeyCreateResponse(**api_key_response.model_dump(), api_key=full_key)

@@ -5,32 +5,30 @@ from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from outlabs_auth.models.sql.enums import APIKeyStatus
+from outlabs_auth.models.sql.enums import APIKeyKind, APIKeyStatus
 
 
 class ApiKeyCreateRequest(BaseModel):
     """API key creation request schema."""
 
     name: str = Field(..., description="Friendly name for the API key")
-    scopes: List[str] = Field(
-        default_factory=list, description="List of allowed permissions/scopes"
-    )
-    prefix_type: str = Field(
-        default="sk_live", description="Key prefix type: sk_live, sk_test, etc."
-    )
-    ip_whitelist: Optional[List[str]] = Field(
-        default=None, description="IP whitelist (optional)"
-    )
+    scopes: List[str] = Field(default_factory=list, description="List of allowed permissions/scopes")
+    prefix_type: str = Field(default="sk_live", description="Key prefix type: sk_live, sk_test, etc.")
+    ip_whitelist: Optional[List[str]] = Field(default=None, description="IP whitelist (optional)")
     rate_limit_per_minute: int = Field(default=60, description="Rate limit per minute")
     expires_in_days: Optional[int] = Field(
         default=None,
         description="Days until expiration (service converts to expires_at)",
     )
-    description: Optional[str] = Field(
-        default=None, description="Optional key description"
+    description: Optional[str] = Field(default=None, description="Optional key description")
+    key_kind: APIKeyKind = Field(
+        default=APIKeyKind.PERSONAL,
+        description="Intent classification for the API key",
     )
-    entity_ids: Optional[List[str]] = Field(
-        default=None, description="Restrict to specific entities (None = all)"
+    entity_ids: Optional[List[str]] = Field(default=None, description="Restrict to specific entities (None = all)")
+    inherit_from_tree: bool = Field(
+        default=False,
+        description="Allow access to descendant entities from the anchor",
     )
 
 
@@ -40,6 +38,7 @@ class ApiKeyResponse(BaseModel):
     id: str
     prefix: str  # First 12 chars only
     name: str
+    key_kind: APIKeyKind
     scopes: List[str]
     ip_whitelist: Optional[List[str]] = None
     rate_limit_per_minute: int
@@ -50,6 +49,7 @@ class ApiKeyResponse(BaseModel):
     last_used_at: Optional[datetime] = None
     description: Optional[str] = None
     entity_ids: Optional[List[str]] = None
+    inherit_from_tree: bool = False
     owner_id: Optional[str] = None  # String representation of owner ID
 
     model_config = ConfigDict(from_attributes=True)
@@ -71,3 +71,4 @@ class ApiKeyUpdateRequest(BaseModel):
     status: Optional[APIKeyStatus] = None
     description: Optional[str] = None
     entity_ids: Optional[List[str]] = None
+    inherit_from_tree: Optional[bool] = None
