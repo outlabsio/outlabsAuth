@@ -303,7 +303,7 @@ async def test_admin_api_key_router_returns_grantable_scopes_and_manages_entity_
 
     rotated_search = await client.get(
         f"/v1/admin/entities/{department_id}/api-keys",
-        params={"search": "rotated"},
+        params={"search": "Updated Entity Admin Key", "status": "active"},
     )
     assert rotated_search.status_code == 200, rotated_search.text
     rotated_search_data = rotated_search.json()

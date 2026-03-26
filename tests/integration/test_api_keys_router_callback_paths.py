@@ -223,7 +223,7 @@ async def test_api_keys_router_callback_rotate_paths(
             session=session,
             auth_result={"user_id": str(owner.id)},
         )
-        assert rotated.name == "Rotate Me (rotated)"
+        assert rotated.name == "Rotate Me"
         assert rotated.api_key.startswith(rotated.prefix)
         assert rotated.scopes == ["user:read"]
         assert rotated.ip_whitelist == ["10.0.0.8"]

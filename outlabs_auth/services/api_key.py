@@ -930,7 +930,7 @@ class APIKeyService(BaseService[APIKey]):
         full_key, new_key = await self.create_api_key(
             session=session,
             owner_id=api_key.owner_id,
-            name=f"{api_key.name} (rotated)",
+            name=api_key.name,
             scopes=scopes or None,
             prefix_type=prefix_type,
             ip_whitelist=ip_whitelist or None,
