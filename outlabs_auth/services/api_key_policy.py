@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import logging
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 from uuid import UUID
 
 from sqlalchemy import select
@@ -26,6 +26,7 @@ from outlabs_auth.models.sql.permission import Permission
 from outlabs_auth.models.sql.user import User
 
 if TYPE_CHECKING:
+    from outlabs_auth.observability.service import ObservabilityService
     from outlabs_auth.services.permission import PermissionService
 
 logger = logging.getLogger(__name__)
@@ -46,9 +47,11 @@ class APIKeyPolicyService:
         self,
         config: AuthConfig,
         permission_service: Optional["PermissionService"] = None,
+        observability: Optional["ObservabilityService"] = None,
     ):
         self.config = config
         self.permission_service = permission_service
+        self.observability = observability
         self._personal_allowed_action_prefixes = [
             prefix.lower()
             for prefix in getattr(
@@ -80,15 +83,27 @@ class APIKeyPolicyService:
         inherit_from_tree: bool,
     ) -> None:
         """Validate a new key before it is stored."""
-        await self._validate_key_policy(
-            session,
-            actor_user_id=actor_user_id,
-            owner=owner,
-            key_kind=key_kind,
-            scopes=scopes,
-            entity_id=entity_id,
-            inherit_from_tree=inherit_from_tree,
-        )
+        try:
+            await self._validate_key_policy(
+                session,
+                actor_user_id=actor_user_id,
+                owner=owner,
+                key_kind=key_kind,
+                scopes=scopes,
+                entity_id=entity_id,
+                inherit_from_tree=inherit_from_tree,
+            )
+        except InvalidInputError as exc:
+            self._log_policy_decision(
+                surface="grant_create",
+                outcome="denied",
+                reason=self._get_policy_reason(exc),
+                key_kind=key_kind,
+                actor_user_id=str(actor_user_id) if actor_user_id else None,
+                owner_id=str(owner.id),
+                entity_id=str(entity_id) if entity_id else None,
+            )
+            raise
 
     async def validate_update(
         self,
@@ -102,15 +117,28 @@ class APIKeyPolicyService:
         inherit_from_tree: bool,
     ) -> None:
         """Validate the effective state after an update."""
-        await self._validate_key_policy(
-            session,
-            actor_user_id=actor_user_id,
-            owner=owner,
-            key_kind=api_key.key_kind,
-            scopes=scopes,
-            entity_id=entity_id,
-            inherit_from_tree=inherit_from_tree,
-        )
+        try:
+            await self._validate_key_policy(
+                session,
+                actor_user_id=actor_user_id,
+                owner=owner,
+                key_kind=api_key.key_kind,
+                scopes=scopes,
+                entity_id=entity_id,
+                inherit_from_tree=inherit_from_tree,
+            )
+        except InvalidInputError as exc:
+            self._log_policy_decision(
+                surface="grant_update",
+                outcome="denied",
+                reason=self._get_policy_reason(exc),
+                key_kind=api_key.key_kind,
+                actor_user_id=str(actor_user_id) if actor_user_id else None,
+                owner_id=str(owner.id),
+                entity_id=str(entity_id) if entity_id else None,
+                prefix=api_key.prefix,
+            )
+            raise
 
     async def validate_runtime_use(
         self,
@@ -122,9 +150,24 @@ class APIKeyPolicyService:
         owner = await session.get(User, api_key.owner_id)
         if owner is None:
             logger.warning("API key %s rejected because owner is missing", api_key.prefix)
+            self._log_policy_decision(
+                surface="runtime_use",
+                outcome="denied",
+                reason="owner_missing",
+                key_kind=api_key.key_kind,
+                prefix=api_key.prefix,
+            )
             return False
         if not owner.can_authenticate():
             logger.warning("API key %s rejected because owner is inactive", api_key.prefix)
+            self._log_policy_decision(
+                surface="runtime_use",
+                outcome="denied",
+                reason="owner_inactive",
+                key_kind=api_key.key_kind,
+                prefix=api_key.prefix,
+                owner_id=str(owner.id),
+            )
             return False
 
         if api_key.entity_id is None:
@@ -133,9 +176,26 @@ class APIKeyPolicyService:
         entity = await session.get(Entity, api_key.entity_id)
         if entity is None:
             logger.warning("API key %s rejected because anchor entity is missing", api_key.prefix)
+            self._log_policy_decision(
+                surface="runtime_use",
+                outcome="denied",
+                reason="anchor_missing",
+                key_kind=api_key.key_kind,
+                prefix=api_key.prefix,
+                owner_id=str(api_key.owner_id),
+            )
             return False
         if not entity.is_active():
             logger.warning("API key %s rejected because anchor entity is inactive", api_key.prefix)
+            self._log_policy_decision(
+                surface="runtime_use",
+                outcome="denied",
+                reason="anchor_inactive",
+                key_kind=api_key.key_kind,
+                prefix=api_key.prefix,
+                owner_id=str(api_key.owner_id),
+                entity_id=str(api_key.entity_id),
+            )
             return False
         return True
 
@@ -309,32 +369,44 @@ class APIKeyPolicyService:
         inherit_from_tree: bool,
     ) -> List[str]:
         """Calculate the scopes grantable for an actor/owner/key/entity combination."""
-        await self._validate_grant_context(
-            session,
-            actor_user_id=actor_user_id,
-            owner=owner,
-            key_kind=key_kind,
-            entity_id=entity_id,
-            inherit_from_tree=inherit_from_tree,
-        )
+        try:
+            await self._validate_grant_context(
+                session,
+                actor_user_id=actor_user_id,
+                owner=owner,
+                key_kind=key_kind,
+                entity_id=entity_id,
+                inherit_from_tree=inherit_from_tree,
+            )
 
-        owner_scopes = set(
-            await self._calculate_user_grantable_scopes(
-                session,
-                user_id=owner.id,
-                key_kind=key_kind,
-                entity_id=entity_id,
+            owner_scopes = set(
+                await self._calculate_user_grantable_scopes(
+                    session,
+                    user_id=owner.id,
+                    key_kind=key_kind,
+                    entity_id=entity_id,
+                )
             )
-        )
-        actor_scopes = set(
-            await self._calculate_user_grantable_scopes(
-                session,
-                user_id=actor_user_id,
-                key_kind=key_kind,
-                entity_id=entity_id,
+            actor_scopes = set(
+                await self._calculate_user_grantable_scopes(
+                    session,
+                    user_id=actor_user_id,
+                    key_kind=key_kind,
+                    entity_id=entity_id,
+                )
             )
-        )
-        return sorted(owner_scopes & actor_scopes)
+            return sorted(owner_scopes & actor_scopes)
+        except InvalidInputError as exc:
+            self._log_policy_decision(
+                surface="grantable_scopes",
+                outcome="denied",
+                reason=self._get_policy_reason(exc),
+                key_kind=key_kind,
+                actor_user_id=str(actor_user_id),
+                owner_id=str(owner.id),
+                entity_id=str(entity_id) if entity_id else None,
+            )
+            raise
 
     async def _validate_key_policy(
         self,
@@ -360,7 +432,8 @@ class APIKeyPolicyService:
             return
 
         if not scopes:
-            raise InvalidInputError(
+            raise self._policy_error(
+                "explicit_scopes_required",
                 message="Personal API keys require at least one explicit scope in EnterpriseRBAC",
             )
 
@@ -373,6 +446,7 @@ class APIKeyPolicyService:
                 user_id=owner.id,
                 scope=scope,
                 entity_id=entity_id,
+                policy_reason="owner_scope_exceeded",
                 error_message="Requested scope exceeds the owner's current permissions",
                 details={
                     "owner_id": str(owner.id),
@@ -387,6 +461,7 @@ class APIKeyPolicyService:
                     user_id=actor_id_to_check,
                     scope=scope,
                     entity_id=entity_id,
+                    policy_reason="actor_scope_exceeded",
                     error_message="Requested scope exceeds the actor's current permissions",
                     details={
                         "actor_user_id": str(actor_id_to_check),
@@ -407,18 +482,21 @@ class APIKeyPolicyService:
         allow_cross_owner_for_calculation: bool = False,
     ) -> None:
         if key_kind != APIKeyKind.PERSONAL:
-            raise InvalidInputError(
+            raise self._policy_error(
+                "unsupported_key_kind",
                 message="Only personal API keys are supported in v1",
                 details={"key_kind": key_kind.value},
             )
 
         if inherit_from_tree and not self.config.api_key_personal_allow_inherit_from_tree:
-            raise InvalidInputError(
+            raise self._policy_error(
+                "inherit_from_tree_disallowed",
                 message="Personal API keys cannot inherit descendant entity access in this configuration",
             )
 
         if inherit_from_tree and entity_id is None:
-            raise InvalidInputError(
+            raise self._policy_error(
+                "inherit_from_tree_requires_anchor",
                 message="inherit_from_tree requires an entity anchor",
             )
 
@@ -426,24 +504,28 @@ class APIKeyPolicyService:
             return
 
         if entity_id is None:
-            raise InvalidInputError(
+            raise self._policy_error(
+                "entity_anchor_required",
                 message="Personal API keys require an entity anchor in EnterpriseRBAC",
             )
 
         entity = await session.get(Entity, entity_id)
         if entity is None:
-            raise InvalidInputError(
+            raise self._policy_error(
+                "entity_anchor_not_found",
                 message="Entity anchor not found",
                 details={"entity_id": str(entity_id)},
             )
         if not entity.is_active():
-            raise InvalidInputError(
+            raise self._policy_error(
+                "entity_anchor_inactive",
                 message="Entity anchor must be active",
                 details={"entity_id": str(entity_id)},
             )
 
         if actor_user_id is not None and actor_user_id != owner.id and not allow_cross_owner_for_calculation:
-            raise InvalidInputError(
+            raise self._policy_error(
+                "cross_owner_personal_key_forbidden",
                 message="Personal API keys can only be managed by their owner in v1",
                 details={
                     "actor_user_id": str(actor_user_id),
@@ -452,7 +534,8 @@ class APIKeyPolicyService:
             )
 
         if not owner.can_authenticate():
-            raise InvalidInputError(
+            raise self._policy_error(
+                "owner_inactive",
                 message="Personal API key owner must be active",
                 details={"owner_id": str(owner.id)},
             )
@@ -460,7 +543,8 @@ class APIKeyPolicyService:
         if not owner.is_superuser:
             root_entity_id = await self._get_root_entity_id(session, entity_id)
             if owner.root_entity_id is None or owner.root_entity_id != root_entity_id:
-                raise InvalidInputError(
+                raise self._policy_error(
+                    "root_entity_mismatch",
                     message="Personal API keys must stay within the owner's root entity",
                     details={
                         "owner_id": str(owner.id),
@@ -471,13 +555,15 @@ class APIKeyPolicyService:
 
     def _validate_scope_allowlist(self, scope: str, key_kind: APIKeyKind) -> None:
         if "*" in scope:
-            raise InvalidInputError(
+            raise self._policy_error(
+                "wildcard_scope_disallowed",
                 message="Personal API keys do not allow wildcard scopes in v1",
                 details={"scope": scope},
             )
 
         if key_kind == APIKeyKind.PERSONAL and not self._is_personal_scope_allowed(scope):
-            raise InvalidInputError(
+            raise self._policy_error(
+                "scope_not_allowed_for_personal",
                 message="Scope is not allowed for personal API keys in v1",
                 details={
                     "scope": scope,
@@ -522,6 +608,7 @@ class APIKeyPolicyService:
         user_id: UUID,
         scope: str,
         entity_id: Optional[UUID],
+        policy_reason: str,
         error_message: str,
         details: dict[str, Optional[str]],
     ) -> None:
@@ -535,7 +622,8 @@ class APIKeyPolicyService:
             entity_id=entity_id,
         )
         if not has_permission:
-            raise InvalidInputError(
+            raise self._policy_error(
+                policy_reason,
                 message=error_message,
                 details=details,
             )
@@ -549,6 +637,44 @@ class APIKeyPolicyService:
         )
         result = await session.execute(stmt)
         return [row[0] for row in result.all()]
+
+    def _policy_error(
+        self,
+        reason: str,
+        *,
+        message: str,
+        details: Optional[dict[str, Any]] = None,
+    ) -> InvalidInputError:
+        payload = dict(details or {})
+        payload.setdefault("policy_reason", reason)
+        return InvalidInputError(message=message, details=payload)
+
+    @staticmethod
+    def _get_policy_reason(exc: InvalidInputError) -> str:
+        reason = exc.details.get("policy_reason")
+        return str(reason) if reason else "invalid_input"
+
+    def _log_policy_decision(
+        self,
+        *,
+        surface: str,
+        outcome: str,
+        reason: str,
+        key_kind: Optional[APIKeyKind],
+        **extra: Any,
+    ) -> None:
+        if self.observability is None:
+            return
+        normalized_key_kind = None
+        if key_kind is not None:
+            normalized_key_kind = key_kind.value if hasattr(key_kind, "value") else str(key_kind)
+        self.observability.log_api_key_policy_decision(
+            surface=surface,
+            outcome=outcome,
+            reason=reason,
+            key_kind=normalized_key_kind,
+            **extra,
+        )
 
     def _is_scope_allowed_for_key_kind(
         self,

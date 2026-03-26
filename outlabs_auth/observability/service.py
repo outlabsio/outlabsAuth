@@ -369,7 +369,18 @@ class ObservabilityService:
         self.metrics["api_key_usage"] = Counter(
             "outlabs_auth_api_key_usage_total",
             "Total API key usage",
-            ["prefix"],
+            **registry_kwargs,
+        )
+        self.metrics["api_key_policy_decisions"] = Counter(
+            "outlabs_auth_api_key_policy_decisions_total",
+            "Total API key policy decisions",
+            ["surface", "outcome", "reason"],
+            **registry_kwargs,
+        )
+        self.metrics["api_key_lifecycle"] = Counter(
+            "outlabs_auth_api_key_lifecycle_total",
+            "Total API key lifecycle operations",
+            ["operation", "key_kind"],
             **registry_kwargs,
         )
 
@@ -796,7 +807,7 @@ class ObservabilityService:
 
         self._increment_counter("api_key_validations", {"status": status})
         if status == "valid":
-            self._increment_counter("api_key_usage", {"prefix": prefix})
+            self._increment_counter("api_key_usage")
 
     def log_api_key_rate_limited(
         self,
@@ -815,6 +826,63 @@ class ObservabilityService:
             **extra,
         )
         self._increment_counter("api_key_rate_limit_hits")
+
+    def log_api_key_policy_decision(
+        self,
+        *,
+        surface: str,
+        outcome: str,
+        reason: str,
+        key_kind: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """Log API key policy decisions with bounded reason codes."""
+        should_log = outcome != "allowed" or self.config.log_api_key_hits
+        if should_log:
+            level = "info" if outcome == "allowed" else "warning"
+            self._emit_log(
+                level,
+                f"api_key_policy_{outcome}",
+                surface=surface,
+                outcome=outcome,
+                reason=reason,
+                key_kind=key_kind,
+                **extra,
+            )
+
+        self._increment_counter(
+            "api_key_policy_decisions",
+            {
+                "surface": surface,
+                "outcome": outcome,
+                "reason": reason,
+            },
+        )
+
+    def log_api_key_lifecycle(
+        self,
+        *,
+        operation: str,
+        key_kind: str,
+        status: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        """Log API key lifecycle operations."""
+        self._emit_log(
+            "info",
+            f"api_key_{operation}",
+            operation=operation,
+            key_kind=key_kind,
+            status=status,
+            **extra,
+        )
+        self._increment_counter(
+            "api_key_lifecycle",
+            {
+                "operation": operation,
+                "key_kind": key_kind,
+            },
+        )
 
     # Public API - Security Events
 

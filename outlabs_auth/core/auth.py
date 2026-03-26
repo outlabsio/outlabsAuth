@@ -398,6 +398,7 @@ class OutlabsAuth:
         self.api_key_policy_service = APIKeyPolicyService(
             self.config,
             permission_service=self.permission_service,
+            observability=self.observability,
         )
 
         # Initialize Redis client if enabled
@@ -444,6 +445,7 @@ class OutlabsAuth:
             redis_client=self.redis_client,
             policy_service=self.api_key_policy_service,
             user_audit_service=self.user_audit_service,
+            observability=self.observability,
         )
         if self.entity_service is not None:
             self.entity_service.api_key_service = self.api_key_service

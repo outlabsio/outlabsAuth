@@ -8,7 +8,7 @@ Uses SQLAlchemy for PostgreSQL backend.
 import logging
 import math
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import UUID
 
 from sqlalchemy import delete as sql_delete
@@ -28,6 +28,7 @@ from outlabs_auth.models.sql.user import User
 from outlabs_auth.services.base import BaseService
 
 if TYPE_CHECKING:
+    from outlabs_auth.observability.service import ObservabilityService
     from outlabs_auth.services.api_key_policy import APIKeyPolicyService
     from outlabs_auth.services.redis_client import RedisClient
     from outlabs_auth.services.user_audit import UserAuditService
@@ -53,6 +54,7 @@ class APIKeyService(BaseService[APIKey]):
         redis_client: Optional["RedisClient"] = None,
         policy_service: Optional["APIKeyPolicyService"] = None,
         user_audit_service: Optional["UserAuditService"] = None,
+        observability: Optional["ObservabilityService"] = None,
     ):
         """
         Initialize APIKeyService.
@@ -66,6 +68,7 @@ class APIKeyService(BaseService[APIKey]):
         self.redis_client = redis_client
         self.policy_service = policy_service
         self.user_audit_service = user_audit_service
+        self.observability = observability
 
     async def create_api_key(
         self,
@@ -86,6 +89,7 @@ class APIKeyService(BaseService[APIKey]):
         actor_user_id: Optional[UUID] = None,
         event_source: str = "api_key_service.create_api_key",
         record_audit: bool = True,
+        record_observability: bool = True,
     ) -> tuple[str, APIKey]:
         """
         Create a new API key.
@@ -196,6 +200,13 @@ class APIKeyService(BaseService[APIKey]):
             )
 
         logger.info(f"Created API key '{name}' for user {owner_id} with prefix {prefix}")
+        if record_observability:
+            self._log_api_key_lifecycle(
+                operation="created",
+                api_key=api_key,
+                actor_user_id=actor_user_id or owner_id,
+                event_source=event_source,
+            )
 
         # Return full key (only time it's ever shown!)
         return full_key, api_key
@@ -229,6 +240,11 @@ class APIKeyService(BaseService[APIKey]):
         # Extract prefix from key string
         if not api_key_string or len(api_key_string) < 16:
             logger.warning("Invalid API key format")
+            self._log_api_key_validation(
+                prefix=api_key_string[:16] if api_key_string else "unknown",
+                status="invalid",
+                reason="invalid_format",
+            )
             return None, 0
 
         prefix = api_key_string[:16]
@@ -243,16 +259,27 @@ class APIKeyService(BaseService[APIKey]):
 
         if not api_key:
             logger.warning(f"Invalid API key: {api_key_string[:15]}...")
+            self._log_api_key_validation(prefix=prefix, status="invalid", reason="not_found")
             return None, 0
 
         # Check if key is active
         if not api_key.is_active():
             logger.warning(f"Inactive API key: {api_key.prefix} (status: {api_key.status})")
+            self._log_api_key_validation(
+                prefix=api_key.prefix,
+                status="invalid",
+                reason=f"status_{getattr(api_key.status, 'value', api_key.status)}",
+            )
             return None, 0
 
         if self.policy_service is not None:
             runtime_allowed = await self.policy_service.validate_runtime_use(session, api_key=api_key)
             if not runtime_allowed:
+                self._log_api_key_validation(
+                    prefix=api_key.prefix,
+                    status="invalid",
+                    reason="runtime_use_denied",
+                )
                 return None, 0
 
         # Check scope if required
@@ -270,10 +297,28 @@ class APIKeyService(BaseService[APIKey]):
                         api_key.prefix,
                         required_scope,
                     )
+                    self._log_api_key_validation(
+                        prefix=api_key.prefix,
+                        status="invalid",
+                        reason="owner_permission_missing",
+                    )
+                    self._log_policy_decision(
+                        surface="runtime_permission",
+                        outcome="denied",
+                        reason="owner_permission_missing",
+                        api_key=api_key,
+                        required_scope=required_scope,
+                        entity_id=str(entity_id or api_key.entity_id) if (entity_id or api_key.entity_id) else None,
+                    )
                     return None, 0
             has_scope = await self._check_scope(session, api_key.id, required_scope)
             if not has_scope:
                 logger.warning(f"API key {api_key.prefix} lacks required scope: {required_scope}")
+                self._log_api_key_validation(
+                    prefix=api_key.prefix,
+                    status="invalid",
+                    reason="scope_not_granted",
+                )
                 return None, 0
 
         # Check entity access if required (supports tree permissions)
@@ -281,6 +326,11 @@ class APIKeyService(BaseService[APIKey]):
             has_access = await self.check_entity_access_with_tree(session, api_key, entity_id)
             if not has_access:
                 logger.warning(f"API key {api_key.prefix} lacks access to entity: {entity_id}")
+                self._log_api_key_validation(
+                    prefix=api_key.prefix,
+                    status="invalid",
+                    reason="entity_access_denied",
+                )
                 return None, 0
 
         # Check IP whitelist if required
@@ -288,6 +338,12 @@ class APIKeyService(BaseService[APIKey]):
             is_allowed = await self._check_ip(session, api_key.id, ip_address)
             if not is_allowed:
                 logger.warning(f"API key {api_key.prefix} rejected IP: {ip_address}")
+                self._log_api_key_validation(
+                    prefix=api_key.prefix,
+                    status="invalid",
+                    reason="ip_not_allowed",
+                    ip_address=ip_address,
+                )
                 return None, 0
 
         # Increment usage counter in Redis (FAST - ~0.1ms)
@@ -314,6 +370,7 @@ class APIKeyService(BaseService[APIKey]):
         if self.redis_client and self.redis_client.is_available:
             await self._check_rate_limits(api_key)
 
+        self._log_api_key_validation(prefix=api_key.prefix, status="valid")
         return api_key, usage_count
 
     @staticmethod
@@ -375,6 +432,12 @@ class APIKeyService(BaseService[APIKey]):
             count = await self.redis_client.increment_with_ttl(minute_key, amount=1, ttl=60) or 0
 
             if count > api_key.rate_limit_per_minute:
+                self._log_api_key_rate_limited(
+                    api_key=api_key,
+                    current_count=count,
+                    limit=api_key.rate_limit_per_minute,
+                    window="minute",
+                )
                 raise InvalidInputError(
                     message=f"Rate limit exceeded: {api_key.rate_limit_per_minute} requests per minute",
                     details={
@@ -390,6 +453,12 @@ class APIKeyService(BaseService[APIKey]):
             count = await self.redis_client.increment_with_ttl(hour_key, amount=1, ttl=3600) or 0
 
             if count > api_key.rate_limit_per_hour:
+                self._log_api_key_rate_limited(
+                    api_key=api_key,
+                    current_count=count,
+                    limit=api_key.rate_limit_per_hour,
+                    window="hour",
+                )
                 raise InvalidInputError(
                     message=f"Rate limit exceeded: {api_key.rate_limit_per_hour} requests per hour",
                     details={
@@ -405,6 +474,12 @@ class APIKeyService(BaseService[APIKey]):
             count = await self.redis_client.increment_with_ttl(day_key, amount=1, ttl=86400) or 0
 
             if count > api_key.rate_limit_per_day:
+                self._log_api_key_rate_limited(
+                    api_key=api_key,
+                    current_count=count,
+                    limit=api_key.rate_limit_per_day,
+                    window="day",
+                )
                 raise InvalidInputError(
                     message=f"Rate limit exceeded: {api_key.rate_limit_per_day} requests per day",
                     details={
@@ -810,6 +885,13 @@ class APIKeyService(BaseService[APIKey]):
                 after=await self._build_api_key_audit_snapshot_from_db(session, api_key),
                 metadata={"updated_fields": sorted(updates.keys())},
             )
+        self._log_api_key_lifecycle(
+            operation="updated",
+            api_key=api_key,
+            actor_user_id=actor_user_id or api_key.owner_id,
+            event_source=event_source,
+            updated_fields=sorted(updates.keys()),
+        )
         return api_key
 
     async def rotate_api_key(
@@ -863,6 +945,7 @@ class APIKeyService(BaseService[APIKey]):
             actor_user_id=actor_user_id or api_key.owner_id,
             event_source=event_source,
             record_audit=False,
+            record_observability=False,
         )
         await self._revoke_api_key_model(
             session,
@@ -871,6 +954,7 @@ class APIKeyService(BaseService[APIKey]):
             reason="API key rotated",
             event_source=event_source,
             record_audit=False,
+            record_observability=False,
         )
 
         await self._record_api_key_audit_event(
@@ -889,6 +973,14 @@ class APIKeyService(BaseService[APIKey]):
                 "rotated_to_key_id": str(new_key.id),
                 "rotated_to_prefix": new_key.prefix,
             },
+        )
+        self._log_api_key_lifecycle(
+            operation="rotated",
+            api_key=new_key,
+            actor_user_id=actor_user_id or api_key.owner_id,
+            event_source=event_source,
+            rotated_from_key_id=str(api_key.id),
+            rotated_from_prefix=api_key.prefix,
         )
         return full_key, new_key
 
@@ -954,6 +1046,11 @@ class APIKeyService(BaseService[APIKey]):
         await session.flush()
 
         logger.info(f"Deleted API key: {api_key.prefix}")
+        self._log_api_key_lifecycle(
+            operation="deleted",
+            api_key=api_key,
+            event_source="api_key_service.delete_api_key",
+        )
         return True
 
     async def _revoke_api_key_model(
@@ -965,6 +1062,7 @@ class APIKeyService(BaseService[APIKey]):
         reason: Optional[str],
         event_source: str,
         record_audit: bool = True,
+        record_observability: bool = True,
     ) -> None:
         owner = await session.get(User, api_key.owner_id)
         previous_snapshot = None
@@ -984,6 +1082,14 @@ class APIKeyService(BaseService[APIKey]):
                 actor_user_id=actor_user_id,
                 before=previous_snapshot,
                 after=await self._build_api_key_audit_snapshot_from_db(session, api_key),
+                reason=reason,
+            )
+        if record_observability:
+            self._log_api_key_lifecycle(
+                operation="revoked",
+                api_key=api_key,
+                actor_user_id=actor_user_id,
+                event_source=event_source,
                 reason=reason,
             )
 
@@ -1021,6 +1127,92 @@ class APIKeyService(BaseService[APIKey]):
             "rate_limit_per_day": api_key.rate_limit_per_day,
             "expires_at": api_key.expires_at,
         }
+
+    def _log_api_key_validation(
+        self,
+        *,
+        prefix: str,
+        status: str,
+        reason: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        if self.observability is None:
+            return
+        self.observability.log_api_key_validated(
+            prefix=prefix,
+            status=status,
+            reason=reason,
+            ip_address=ip_address,
+            **extra,
+        )
+
+    def _log_api_key_rate_limited(
+        self,
+        *,
+        api_key: APIKey,
+        current_count: int,
+        limit: int,
+        window: str,
+    ) -> None:
+        if self.observability is None:
+            return
+        self.observability.log_api_key_rate_limited(
+            prefix=api_key.prefix,
+            current_count=current_count,
+            limit=limit,
+            window=window,
+            key_kind=self._normalize_enum(api_key.key_kind),
+        )
+
+    def _log_policy_decision(
+        self,
+        *,
+        surface: str,
+        outcome: str,
+        reason: str,
+        api_key: APIKey,
+        **extra: Any,
+    ) -> None:
+        if self.observability is None:
+            return
+        self.observability.log_api_key_policy_decision(
+            surface=surface,
+            outcome=outcome,
+            reason=reason,
+            key_kind=self._normalize_enum(api_key.key_kind),
+            prefix=api_key.prefix,
+            owner_id=str(api_key.owner_id),
+            **extra,
+        )
+
+    def _log_api_key_lifecycle(
+        self,
+        *,
+        operation: str,
+        api_key: APIKey,
+        actor_user_id: Optional[UUID] = None,
+        event_source: Optional[str] = None,
+        **extra: Any,
+    ) -> None:
+        if self.observability is None:
+            return
+        self.observability.log_api_key_lifecycle(
+            operation=operation,
+            key_kind=self._normalize_enum(api_key.key_kind),
+            status=self._normalize_enum(api_key.status),
+            prefix=api_key.prefix,
+            owner_id=str(api_key.owner_id),
+            actor_user_id=str(actor_user_id) if actor_user_id else None,
+            entity_id=str(api_key.entity_id) if api_key.entity_id else None,
+            entity_scoped=bool(api_key.entity_id),
+            event_source=event_source,
+            **extra,
+        )
+
+    @staticmethod
+    def _normalize_enum(value: Any) -> str:
+        return value.value if hasattr(value, "value") else str(value)
 
     async def _record_api_key_audit_event(
         self,

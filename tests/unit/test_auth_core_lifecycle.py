@@ -444,6 +444,8 @@ async def test_outlabs_auth_init_services_wires_redis_cache_enterprise_and_activ
     assert auth.membership_service.cache_service is auth.cache_service
     assert auth.activity_tracker is not None
     assert auth.auth_service.activity_tracker is auth.activity_tracker
+    assert auth.api_key_policy_service.observability is auth.observability
+    assert auth.api_key_service.observability is auth.observability
 
 
 @pytest.mark.unit

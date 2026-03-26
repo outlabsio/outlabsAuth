@@ -84,6 +84,8 @@ class TestObservabilityServiceInitialization:
         assert "login_duration" in service.metrics
         assert "permission_checks" in service.metrics
         assert "api_key_validations" in service.metrics
+        assert "api_key_policy_decisions" in service.metrics
+        assert "api_key_lifecycle" in service.metrics
 
         # Check new metrics for instrumented services
         assert "entity_operations_total" in service.metrics
@@ -213,6 +215,29 @@ class TestMembershipOperationLogging:
             user_id="user-123",
             entity_id="entity-456",
             reason="policy_violation",
+        )
+
+
+class TestApiKeyObservabilityLogging:
+    """Test API key observability logging methods."""
+
+    @pytest.mark.asyncio
+    async def test_log_api_key_policy_decision_emits_metrics(self, obs_service):
+        obs_service.log_api_key_policy_decision(
+            surface="runtime_use",
+            outcome="denied",
+            reason="owner_inactive",
+            key_kind="personal",
+            prefix="sk_live_12345678",
+        )
+
+    @pytest.mark.asyncio
+    async def test_log_api_key_lifecycle_emits_metrics(self, obs_service):
+        obs_service.log_api_key_lifecycle(
+            operation="rotated",
+            key_kind="personal",
+            status="active",
+            prefix="sk_live_12345678",
         )
 
 

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -350,6 +351,50 @@ async def test_api_key_service_can_revoke_keys_for_an_archived_entity(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_api_key_service_emits_observability_for_lifecycle_and_runtime_denials(
+    test_session,
+    auth_config: AuthConfig,
+):
+    observability = SimpleNamespace(
+        log_api_key_lifecycle=Mock(),
+        log_api_key_validated=Mock(),
+        log_api_key_policy_decision=Mock(),
+        log_api_key_rate_limited=Mock(),
+    )
+    user_service = UserService(config=auth_config)
+    service = APIKeyService(config=auth_config, observability=observability)
+
+    owner = await user_service.create_user(
+        test_session,
+        email="observability-owner@example.com",
+        password="TestPass123!",
+        first_name="Observability",
+        last_name="Owner",
+    )
+
+    full_key, key = await service.create_api_key(
+        test_session,
+        owner_id=owner.id,
+        name="Observable Key",
+        scopes=["user:read"],
+    )
+    assert observability.log_api_key_lifecycle.call_args_list[0].kwargs["operation"] == "created"
+    assert observability.log_api_key_lifecycle.call_args_list[0].kwargs["prefix"] == key.prefix
+
+    invalid_key, _ = await service.verify_api_key(test_session, "bad-key")
+    assert invalid_key is None
+    assert observability.log_api_key_validated.call_args_list[-1].kwargs["reason"] == "invalid_format"
+
+    await service.revoke_api_key(test_session, key.id, reason="test revoke")
+    assert any(call.kwargs["operation"] == "revoked" for call in observability.log_api_key_lifecycle.call_args_list)
+
+    valid_key, _ = await service.verify_api_key(test_session, full_key)
+    assert valid_key is None
+    assert observability.log_api_key_validated.call_args_list[-1].kwargs["reason"] == "status_revoked"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_api_key_policy_evaluates_current_effectiveness_after_owner_permission_loss(
     test_session,
 ):
@@ -429,3 +474,68 @@ async def test_api_key_policy_evaluates_current_effectiveness_after_owner_permis
     )
     assert ineffective.is_currently_effective is False
     assert ineffective.ineffective_reasons == ["no_effective_scopes"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_api_key_policy_and_service_emit_observability_for_enterprise_denials(
+    test_session,
+):
+    observability = SimpleNamespace(
+        log_api_key_lifecycle=Mock(),
+        log_api_key_validated=Mock(),
+        log_api_key_policy_decision=Mock(),
+        log_api_key_rate_limited=Mock(),
+    )
+    enterprise_config = AuthConfig(
+        database_url="postgresql+asyncpg://example:example@localhost:5432/test",
+        secret_key="test-secret",
+        enable_entity_hierarchy=True,
+    )
+    user_service = UserService(config=enterprise_config)
+    policy_service = APIKeyPolicyService(config=enterprise_config, observability=observability)
+    service = APIKeyService(
+        config=enterprise_config,
+        policy_service=policy_service,
+        observability=observability,
+    )
+
+    owner = await user_service.create_user(
+        test_session,
+        email="enterprise-observability-owner@example.com",
+        password="TestPass123!",
+        first_name="Enterprise",
+        last_name="Observability",
+    )
+    root = _entity(name="enterprise-observability-root", slug="enterprise-observability-root")
+    test_session.add(root)
+    await test_session.flush()
+    owner.root_entity_id = root.id
+    await test_session.flush()
+
+    with pytest.raises(InvalidInputError, match="entity anchor"):
+        await service.create_api_key(
+            test_session,
+            owner_id=owner.id,
+            name="Missing Anchor",
+            scopes=["user:read"],
+        )
+
+    assert observability.log_api_key_policy_decision.call_args_list[-1].kwargs["surface"] == "grant_create"
+    assert observability.log_api_key_policy_decision.call_args_list[-1].kwargs["reason"] == "entity_anchor_required"
+
+    full_key, _ = await service.create_api_key(
+        test_session,
+        owner_id=owner.id,
+        name="Valid Enterprise Key",
+        scopes=["user:read"],
+        entity_id=root.id,
+    )
+    owner.status = UserStatus.SUSPENDED
+    await test_session.flush()
+
+    denied, _ = await service.verify_api_key(test_session, full_key)
+    assert denied is None
+    assert observability.log_api_key_policy_decision.call_args_list[-1].kwargs["surface"] == "runtime_use"
+    assert observability.log_api_key_policy_decision.call_args_list[-1].kwargs["reason"] == "owner_inactive"
+    assert observability.log_api_key_validated.call_args_list[-1].kwargs["reason"] == "runtime_use_denied"
