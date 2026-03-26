@@ -35,6 +35,7 @@ from outlabs_auth import EnterpriseRBAC, register_exception_handlers
 from outlabs_auth.middleware.resource_context import ResourceContextMiddleware
 from outlabs_auth.observability import ObservabilityPresets, create_metrics_router
 from outlabs_auth.routers import (
+    get_api_key_admin_router,
     get_api_keys_router,
     get_auth_router,
     get_config_router,
@@ -263,6 +264,7 @@ async def lifespan(app: FastAPI):
     app.include_router(get_auth_router(auth, prefix="/v1/auth"))
     app.include_router(get_users_router(auth, prefix="/v1/users"))
     app.include_router(get_api_keys_router(auth, prefix="/v1/api-keys"))
+    app.include_router(get_api_key_admin_router(auth, prefix="/v1/admin/entities"))
     app.include_router(get_roles_router(auth, prefix="/v1/roles"))
     app.include_router(get_permissions_router(auth, prefix="/v1/permissions"))
     app.include_router(get_entities_router(auth, prefix="/v1/entities"))
