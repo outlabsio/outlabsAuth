@@ -20,8 +20,9 @@ Looking for usage documentation? See **[docs-library/](../docs-library/)** inste
 
 ### API & Integration
 - **API_DESIGN.md** - Library API design and developer experience
-- **API_KEY_SCOPE_AND_GRANT_POLICY_EPIC.md** - Planned entity-scoped API key grant model, lifecycle rules, and open design questions
+- **API_KEY_SCOPE_AND_GRANT_POLICY_EPIC.md** - In-progress entity-scoped API key grant model, current backend status, lifecycle rules, and remaining design follow-ups
 - **DEPENDENCY_PATTERNS.md** - FastAPI dependency injection patterns
+- **HOST_INTEGRATION_QUERIES.md** - Supported auth-owned query boundaries for embedded host applications
 - **AUTH_UI.md** - External admin UI repository location and repo boundary
 
 ### Operational

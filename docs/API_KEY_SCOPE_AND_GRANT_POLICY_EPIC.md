@@ -1,6 +1,6 @@
 # API Key Scope and Grant Policy Epic
 
-**Status**: Planned
+**Status**: In Progress
 **Updated**: 2026-03-26
 **Audience**: OutlabsAuth maintainers and host-application integrators
 
@@ -14,7 +14,9 @@ Define the next major enhancement for API key management in EnterpriseRBAC:
 - runtime policy so keys immediately lose access when the owner's effective access changes
 - proactive revocation on lifecycle changes that should invalidate keys entirely
 
-This is a design and planning document. It does not describe a completed implementation.
+This started as a design and planning document. It now also records the
+implemented backend surface, the remaining pre-UI gaps, and the future work
+that still sits beyond the current `personal`-key rollout.
 
 ## Why This Epic Exists
 
@@ -82,7 +84,11 @@ Relevant code:
 
 - `outlabs_auth/services/user.py`
 
-## Current Gaps
+## Original Gaps This Epic Was Addressing
+
+The sections below describe the original gaps that motivated this epic. Some of
+them are now partially or largely addressed in the backend implementation. See
+the implementation reality check for current state.
 
 ### Gap 1: The Stock Router Is Owner-Centric
 
@@ -131,46 +137,69 @@ This epic assumes the library should become the canonical source of API key poli
 
 ## Implementation Reality Check (2026-03-26)
 
-This section records what the current code actually does today so implementation
-planning can start from real behavior rather than from assumptions.
+This section records what the current code actually does today so the document
+describes the shipped backend surface rather than only the target design.
 
-### Confirmed Current Behavior
+### Implemented Backend Surface
 
-- `APIKey` already stores `entity_id` and `inherit_from_tree`
-- `APIKeyService.check_entity_access_with_tree(...)` already enforces direct or descendant entity access
-- mounted OutlabsAuth routes already enforce a hybrid runtime reduction model:
-  - check the owner's current permission in the requested entity context
-  - check the API key's stored scopes
-  - check the API key's entity or descendant access
-- mounted API key auth already respects owner authentication state because `ApiKeyStrategy` loads the owner and `AuthDeps.require_auth(active=True)` rejects users who cannot authenticate
-- user deletion already revokes user-owned API keys
+- `APIKey` now carries `key_kind`, and the current implemented v1 kind is
+  `personal`
+- EnterpriseRBAC `personal` keys now use grant-time policy:
+  - explicit scopes required
+  - entity anchor required on the admin-managed path
+  - requested scopes must fit the current `personal` rules
+- the packaged self-service router still exists, and EnterpriseRBAC now also
+  has a separate entity-first admin router
+- the admin API now exposes:
+  - `grantable-scopes`
+  - paginated and filterable entity key listing
+  - create, read, update, revoke, and rotate flows
+- API key responses now expose derived runtime state:
+  - `is_currently_effective`
+  - `ineffective_reasons`
+- runtime API key authorization is now available through an auth-owned host
+  helper:
+  - `auth.authorize_api_key(...)`
+- runtime API key checks now deny inactive owners and inactive or missing anchor
+  entities
+- archived anchor entities now revoke anchored API keys
+- auth-owned observability now emits bounded metrics/logging for validation,
+  policy denials, lifecycle operations, and rate-limit hits
 
-### Important Mismatches Against This Epic
+### Remaining Gaps Against The Full Epic
 
-- there is no `key_kind` concept in the model, schemas, router contract, or service layer yet
-- there is no grant-policy service yet:
-  - `create_api_key(...)` currently validates only that the owner exists
-  - update and rotation flows do not run actor/owner/key-kind policy checks
-- the packaged router is still self-service and owner-centric rather than entity-first and admin-oriented
-- the public API schemas do not expose `key_kind` or `inherit_from_tree`
-- the current API contract still allows `entity_ids=None`, which means newly created keys can remain effectively global
-- current key semantics still treat:
-  - empty scopes as unrestricted access
-  - missing entity anchor as global access
-  both behaviors conflict with the intended "anchor every admin-created key" model
-- `APIKeyService.verify_api_key(...)` verifies the secret, key status, stored scope, IP whitelist, and entity/tree access, but it does not by itself validate owner status or anchor-entity validity
-- this means mounted routes are safer than custom host routes that call `verify_api_key(...)` directly and stop there
-- user suspension or banning currently blocks mounted-route API key auth at runtime through normal user authentication checks, but does not proactively revoke or reconcile the user's stored keys
-- entity archival currently revokes memberships tied to the archived entity, but does not revoke or reconcile API keys anchored there
-- role and membership changes already reduce effective permissions immediately on mounted routes through live permission checks, but there is no API key reconciliation service yet for auditability or zero-scope cleanup
+- only `personal` keys are implemented today; `system_integration` remains
+  future work
+- service-account ownership is still future work
+- stored-but-ineffective keys are exposed through derived runtime state rather
+  than a dedicated persisted status
+- there is still no full reconciliation worker for role, membership, or
+  permission-definition churn
+- the backend host/admin surface is implemented, but UI adoption in
+  `../OutlabsAuthUI` has not started yet
+- migration remains intentionally out of scope for the current rollout because
+  the system is still pre-production and there are no existing API keys
 
-### Planning Implications
+### Current Backend Test Position
 
-- Phase 1 should start by centralizing grant-time and runtime policy in one auth-owned service that both mounted routes and host apps can call
-- the existing self-service router can remain for backwards compatibility, but the admin flow should land as a separate entity-first surface
-- legacy-key migration is not an immediate blocker for the current internal rollout because this system is still pre-production and there are no existing API keys today
-- if that changes before rollout, add a pre-launch migration step for any global or unrestricted legacy keys rather than treating migration as part of the initial implementation path
-- the initial implementation should avoid relying on "host apps will remember to copy the mounted-route checks"
+The backend implementation now has direct Python coverage across:
+
+- `tests/integration/test_api_key_admin_endpoints.py`
+- `tests/integration/test_api_key_lifecycle.py`
+- `tests/integration/test_api_keys_router_callback_paths.py`
+- `tests/integration/test_enterprise_api_key_policy_matrix.py`
+- `tests/unit/services/test_api_key_service.py`
+- `tests/unit/test_auth_core_lifecycle.py`
+- `tests/unit/observability/test_observability_integration.py`
+
+This is enough backend confidence to proceed to host/UI adoption, but the
+remaining backend test work is still worth tracking:
+
+- exhaustive denial-branch coverage through the actual admin HTTP surface
+- route-flow observability assertions on the new admin/runtime API key paths
+- more edge-case coverage for pagination, search, and filter combinations
+- more edge-case coverage for admin-created key IP-whitelist and rate-limit
+  behavior
 
 ## Audit and Observability Planning
 
@@ -549,6 +578,19 @@ The API key UI that exists in current host apps is not yet aligned with this mod
 - add non-human principals for durable integration ownership
 - migrate `system_integration` keys away from normal human ownership where appropriate
 
+### Phase Status Checkpoint
+
+- Phase 1 is largely complete for the current `personal`-key backend slice
+- Phase 2 is largely complete on the backend through the entity-first admin API
+- Phase 3 is partially complete:
+  - the backend host contract now exists through mounted routers and
+    `auth.authorize_api_key(...)`
+  - the UI adoption step in `../OutlabsAuthUI` is still pending
+- Phase 4 is partially complete:
+  - observability hooks are in place
+  - audit/reconciliation hardening can still expand later
+- Phase 5 has not started
+
 ### Validation Strategy
 
 This epic should be validated in two distinct testing phases rather than
@@ -697,26 +739,30 @@ Durable audit events should include at least:
 This keeps the durable event stream useful and queryable without turning it
 into a noisy runtime telemetry sink.
 
-## Final Pre-Implementation Checklist
+## Remaining Pre-UI Checklist
 
-Before backend implementation starts, narrow the remaining open items for the
-`personal`-key slice into the following concrete decisions and contracts.
+With the backend `personal`-key slice now in place, the remaining items are no
+longer broad architecture questions. They are mostly pre-UI contract and test
+follow-ups.
 
 ### Product and Policy Checklist
 
-- finalize the initial `personal` allowlist
-- confirm whether `personal` keys can request any write scopes in the first cut
-- confirm whether destructive operations stay fully excluded for `personal` keys
-- confirm whether descendant inheritance is allowed for `personal` keys in v1 or deferred behind a stricter policy gate
+- confirm whether the initial `personal` allowlist needs any expansion for the
+  first real admin-product use case
+- confirm whether destructive operations stay fully excluded for `personal`
+  keys
+- confirm whether descendant inheritance is exposed in the first UI workflow or
+  kept behind a stricter policy gate
 
 ### API and Runtime Contract Checklist
 
-- decide whether `inherit_from_tree` is an explicit public field in the first admin API contract
-- define the auth-owned runtime policy helper that host applications should use instead of calling `verify_api_key(...)` directly
-- define how a stored-but-ineffective key is exposed to operators:
-  - derived field only
-  - dedicated response field
-  - or admin-only diagnostic surface
+- document the exact host-facing response/denial contract around
+  `auth.authorize_api_key(...)` if host products need to render richer runtime
+  failure states
+- confirm whether `inherit_from_tree` should be exposed in the first admin UI
+  workflow or left implicit there
+- confirm whether the current derived effectiveness fields are sufficient for
+  operators or whether an additional admin diagnostic surface is needed
 
 ### Audit and Observability Checklist
 
@@ -727,9 +773,13 @@ Before backend implementation starts, narrow the remaining open items for the
 
 ### Validation Checklist
 
-- identify the Python integration/contract tests to add against the EnterpriseRBAC example API for the `personal` key slice
-- identify the Playwright end-to-end scenarios to add in `../OutlabsAuthUI` against that example backend
-- confirm the backend API behavior that must be stable before the UI phase begins
+- add the remaining Python edge-case coverage for denial branches,
+  observability-through-route-flow, pagination/filter extremes, and
+  admin-created key rate-limit/IP-whitelist behavior
+- identify the Playwright end-to-end scenarios to add in `../OutlabsAuthUI`
+  against the EnterpriseRBAC example backend
+- confirm the backend API behavior that must remain stable before the UI phase
+  begins
 
 ### Explicitly Open Questions
 

@@ -1,6 +1,6 @@
 # Current Implementation Status
 
-**Updated**: 2026-03-19
+**Updated**: 2026-03-26
 **Purpose**: Record what is already implemented in code, where implementation intentionally differs in small ways from earlier strategy docs, and which known gaps still remain.
 
 This document is a reality check for maintainers. It is not a roadmap and it is not a full changelog. When this document conflicts with older planning docs, the code and tests should be treated as the source of truth.
@@ -53,6 +53,28 @@ This document is a reality check for maintainers. It is not a roadmap and it is 
 - Archived or otherwise non-active roles cannot be assigned through memberships or direct user-role assignment.
 - Normal reads hide archived role and permission definitions.
 
+### Enterprise API Key Policy and Host Integration Surface
+
+- `key_kind` now exists in the API key model and service layer, with `personal`
+  as the current implemented v1 kind.
+- EnterpriseRBAC `personal` keys are now explicitly scoped and entity-anchored
+  on the admin-managed path.
+- Grant-time policy and derived runtime effectiveness now live in an auth-owned
+  API key policy layer rather than only in ad hoc route checks.
+- The Enterprise entity-first admin router now exists for API keys and exposes:
+  - grantable scopes
+  - paginated and filterable key listing
+  - create, read, update, revoke, and rotate flows
+- API key responses now include derived effectiveness fields:
+  - `is_currently_effective`
+  - `ineffective_reasons`
+- Host applications now have a supported runtime helper:
+  - `auth.authorize_api_key(...)`
+- Archived anchor entities now revoke anchored API keys, and runtime API key
+  authorization now denies inactive owners or inactive/missing anchor entities.
+- Auth-owned API key observability now emits bounded signals for validation,
+  policy denials, rate-limit hits, and lifecycle operations.
+
 ## Accepted Implementation Nuances
 
 These are intentional implementation details that are slightly more specific than the original strategy notes.
@@ -93,6 +115,17 @@ These are intentional implementation details that are slightly more specific tha
 - The active frontend codebase now lives in the sibling repository `../OutlabsAuthUI` (local workspace `/Users/macbookm3/Documents/projects/OutlabsAuthUI`).
 - Reason: backend and frontend lifecycle now move independently, and keeping the UI in its own repository removes stale in-repo build/release assumptions from this package.
 
+### API Key Host Boundary
+
+- `APIKeyService.verify_api_key(...)` still exists as a primitive service helper,
+  but it is no longer the intended host-application integration boundary.
+- The supported host boundary is now:
+  - mounted routers for self-service and Enterprise admin management
+  - `auth.authorize_api_key(...)` for custom host runtime checks
+- Reason: this keeps host-defined routes aligned with mounted-route policy,
+  derived effectiveness, and auth-owned observability without requiring direct
+  DB reads or host-side policy duplication.
+
 ## Known Remaining Gaps
 
 ### Runtime / Product Gaps
@@ -101,8 +134,35 @@ These are intentional implementation details that are slightly more specific tha
 - A broader provider-by-provider hardening review still remains for semantics and operational guidance, especially where provider metadata does not perfectly map to local identity policy.
 - The next concrete OAuth follow-up is provider-semantic hardening: define and codify exactly when bundled-provider email/verification metadata is trusted for auto-link and auto-create flows.
 - Some legacy API naming still suggests hard delete even where the implementation is now retained lifecycle.
+- The Enterprise API key policy surface currently supports `personal` keys only.
+  `system_integration`, service-account ownership, and broader org-automation
+  policy remain future work.
+- Stored-but-ineffective API keys are currently exposed through derived runtime
+  state rather than a dedicated persisted status.
+- The backend host/admin API key surface is implemented, but the external admin
+  UI in `../OutlabsAuthUI` has not adopted it yet.
 
 ### Test Coverage Gaps
+
+- The API key backend surface now has direct focused coverage in:
+  - `tests/integration/test_api_key_admin_endpoints.py`
+  - `tests/integration/test_api_key_lifecycle.py`
+  - `tests/integration/test_api_keys_router_callback_paths.py`
+  - `tests/integration/test_enterprise_api_key_policy_matrix.py`
+  - `tests/unit/services/test_api_key_service.py`
+  - `tests/unit/test_auth_core_lifecycle.py`
+  - `tests/unit/observability/test_observability_integration.py`
+- That backend coverage is strong enough to proceed to UI adoption, but the
+  remaining API key test work is still worth calling out explicitly:
+  - exhaust the remaining denial-reason branches through the actual admin HTTP
+    surface, especially `grantable-scopes`, create/update, and rotate failures
+  - add route-flow observability assertions for the new admin/runtime API key
+    paths rather than only unit-level observability assertions
+  - add a few more edge-case tests around pagination/search/filter extremes
+  - add backend tests for admin-created key IP-whitelist and rate-limit edge
+    cases
+  - add Playwright end-to-end coverage in `../OutlabsAuthUI` once the UI starts
+    consuming the new admin and host integration surfaces
 
 - A full-suite coverage audit on 2026-03-19 now passes with `664` tests green, `85%` total Python line coverage, and no warning output.
 - The recent lifecycle and auth-hardening slices are in comparatively good shape:

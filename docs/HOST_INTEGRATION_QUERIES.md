@@ -16,6 +16,12 @@ Use the auth-owned query facade instead:
 
 - `auth.host_query_service`
 
+For API key management and runtime API key authorization, use the separate
+auth-owned API key surfaces instead:
+
+- mounted routers such as `get_api_keys_router(...)` and `get_api_key_admin_router(...)`
+- `auth.authorize_api_key(...)` for custom host-defined runtime checks
+
 This keeps auth schema knowledge inside the library while still supporting the
 "mounted plugin in the same process" model.
 
@@ -25,7 +31,8 @@ For host-app integration:
 
 1. Use mounted routers for external/admin API surfaces.
 2. Use `auth.host_query_service` for in-process cross-domain reads.
-3. Avoid direct host-side joins into auth-owned tables unless there is no
+3. Use `auth.authorize_api_key(...)` for custom API key runtime authorization.
+4. Avoid direct host-side joins into auth-owned tables unless there is no
    supported facade yet.
 
 Direct joins are treated as a temporary compatibility fallback, not the
@@ -122,3 +129,6 @@ same problems:
 - ad hoc joins scattered through unrelated services
 
 `HostQueryService` is the supported internal boundary for those reads.
+
+For the API key-specific host boundary, see
+[`../docs-library/50-API-Key-Host-Integration.md`](../docs-library/50-API-Key-Host-Integration.md).

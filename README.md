@@ -346,29 +346,26 @@ await auth.auth_service.logout(refresh_token)
 
 ### API Keys
 ```python
-# Create API key
-raw_key, key_model = await auth.api_key_service.create_api_key(
-    name="production_api",
-    owner_id=user_id,
-    scopes=["user:read", "entity:read"],
-    rate_limit_per_minute=100,
-    ip_whitelist=["10.0.0.0/8"]  # Optional
-)
+# Self-service API key router
+app.include_router(get_api_keys_router(auth, prefix="/v1/api-keys"))
 
-# ⚠️ Save raw_key securely - it's only shown once!
+# Enterprise admin API key router
+app.include_router(get_api_key_admin_router(auth, prefix="/v1/admin/entities"))
 
-# Verify API key
-api_key, usage = await auth.api_key_service.verify_api_key(
-    raw_key,
+# Runtime authorization helper for host-defined routes
+auth_result = await auth.authorize_api_key(
+    session,
+    api_key_string,
     required_scope="user:read",
-    ip_address=request.client.host
+    entity_id=entity_id,
+    ip_address=request.client.host if request.client else None,
 )
-
-# Use in requests
-headers = {"X-API-Key": raw_key}
 ```
 
 For the planned entity-scoped admin API key model, including grant policy, runtime permission reduction, lifecycle invalidation, and open design questions, see [docs/API_KEY_SCOPE_AND_GRANT_POLICY_EPIC.md](docs/API_KEY_SCOPE_AND_GRANT_POLICY_EPIC.md).
+For the supported host integration boundary around mounted API key routers and
+`authorize_api_key(...)`, see
+[docs-library/50-API-Key-Host-Integration.md](docs-library/50-API-Key-Host-Integration.md).
 
 ### JWT Service Tokens
 ```python
@@ -489,6 +486,7 @@ Implementation-specific documentation (9 files):
 - **[22-JWT-Tokens.md](docs-library/22-JWT-Tokens.md)** - JWT authentication
 - **[48-User-Status-System.md](docs-library/48-User-Status-System.md)** - User status management
 - **[49-Activity-Tracking.md](docs-library/49-Activity-Tracking.md)** - DAU/MAU/WAU tracking
+- **[50-API-Key-Host-Integration.md](docs-library/50-API-Key-Host-Integration.md)** - Supported API key router and runtime host integration surface
 - **[95-Testing-Guide.md](docs-library/95-Testing-Guide.md)** - Testing implementation
 - **[96-Extending-UserModel.md](docs-library/96-Extending-UserModel.md)** - Custom user fields
 - **[97-Observability.md](docs-library/97-Observability.md)** - Logging and metrics
