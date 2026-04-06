@@ -1189,6 +1189,20 @@ class PermissionService(BaseService[Permission]):
             filters.append(Permission.status != DefinitionStatus.ARCHIVED)
         return await self.get_one(session, *filters)
 
+    async def permission_has_conditions(
+        self,
+        session: AsyncSession,
+        permission_name: str,
+    ) -> bool:
+        """Return whether a permission definition has ABAC conditions attached."""
+        permission_name = validate_permission_name(permission_name)
+        permission = await self.get_one(
+            session,
+            Permission.name == permission_name,
+            options=[selectinload(Permission.conditions)],
+        )
+        return bool(permission and permission.conditions)
+
     async def update_permission(
         self,
         session: AsyncSession,

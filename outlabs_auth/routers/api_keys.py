@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.exceptions import InvalidInputError
+from outlabs_auth.models.sql.enums import APIKeyKind
 from outlabs_auth.schemas.api_key import (
     ApiKeyCreateRequest,
     ApiKeyCreateResponse,
@@ -79,7 +80,8 @@ def get_api_keys_router(auth: Any, prefix: str = "", tags: Optional[list[str]] =
             description=api_key.description,
             entity_ids=[str(api_key.entity_id)] if api_key.entity_id else None,
             inherit_from_tree=api_key.inherit_from_tree,
-            owner_id=str(api_key.owner_id) if api_key.owner_id else None,
+            owner_id=str(api_key.resolved_owner_id) if api_key.resolved_owner_id else None,
+            owner_type=api_key.owner_type,
             is_currently_effective=is_currently_effective,
             ineffective_reasons=ineffective_reasons,
         )
@@ -120,6 +122,11 @@ def get_api_keys_router(auth: Any, prefix: str = "", tags: Optional[list[str]] =
         Triggers on_api_key_created hook (should email the key to user).
         """
         owner_id = UUID(auth_result["user_id"])
+        if data.key_kind != APIKeyKind.PERSONAL:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Self-service API keys only support personal keys",
+            )
 
         entity_id = None
         if data.entity_ids:

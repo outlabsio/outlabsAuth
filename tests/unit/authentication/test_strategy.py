@@ -325,6 +325,60 @@ async def test_api_key_strategy_uses_session_lookup_when_user_service_is_missing
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_api_key_strategy_returns_principal_backed_auth_result():
+    principal = SimpleNamespace(id="principal-123", allowed_scopes=["jobs:run"])
+    api_key = SimpleNamespace(
+        id="key-123",
+        owner_id=None,
+        integration_principal_id="principal-123",
+        prefix="olk_live",
+        key_kind="system_integration",
+        owner_type="integration_principal",
+        resolved_owner_id="principal-123",
+        entity_id=None,
+    )
+    resolved_owner = SimpleNamespace(
+        user=None,
+        integration_principal=principal,
+        owner_id="principal-123",
+    )
+    session = object()
+    api_key_service = SimpleNamespace(
+        verify_api_key=AsyncMock(return_value=(api_key, 5)),
+        get_api_key_scopes=AsyncMock(return_value=["jobs:run"]),
+        resolve_api_key_owner=AsyncMock(return_value=resolved_owner),
+    )
+    strategy = ApiKeyStrategy()
+
+    result = await strategy.authenticate(
+        "olk_live.secret",
+        api_key_service=api_key_service,
+        session=session,
+        request=SimpleNamespace(client=SimpleNamespace(host="203.0.113.20")),
+    )
+
+    assert result == {
+        "user": None,
+        "user_id": None,
+        "integration_principal": principal,
+        "integration_principal_id": "principal-123",
+        "source": "api_key",
+        "api_key": api_key,
+        "metadata": {
+            "key_id": "key-123",
+            "key_prefix": "olk_live",
+            "key_kind": "system_integration",
+            "owner_type": "integration_principal",
+            "owner_id": "principal-123",
+            "scopes": ["jobs:run"],
+            "principal_allowed_scopes": ["jobs:run"],
+            "usage_count": 5,
+        },
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_service_token_strategy_accepts_local_jwt_service_token():
     strategy = ServiceTokenStrategy(secret="service-secret")
     token = _make_service_token("service-secret")

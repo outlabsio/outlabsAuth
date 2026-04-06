@@ -9,8 +9,11 @@ Public exports for all Pydantic request/response schemas.
 from outlabs_auth.schemas.api_key import (
     ApiKeyCreateRequest,
     ApiKeyCreateResponse,
+    ApiKeyGrantableScopesResponse,
     ApiKeyResponse,
     ApiKeyUpdateRequest,
+    SystemIntegrationApiKeyCreateRequest,
+    SystemIntegrationApiKeyUpdateRequest,
 )
 
 # Auth schemas
@@ -43,6 +46,11 @@ from outlabs_auth.schemas.membership import (
 from outlabs_auth.schemas.membership_history import (
     MembershipHistoryEventResponse,
     OrphanedUserResponse,
+)
+from outlabs_auth.schemas.integration_principal import (
+    IntegrationPrincipalCreateRequest,
+    IntegrationPrincipalResponse,
+    IntegrationPrincipalUpdateRequest,
 )
 
 # OAuth schemas
@@ -128,11 +136,18 @@ __all__ = [
     "MembershipUpdateRequest",
     "MembershipHistoryEventResponse",
     "OrphanedUserResponse",
+    # Integration Principals
+    "IntegrationPrincipalResponse",
+    "IntegrationPrincipalCreateRequest",
+    "IntegrationPrincipalUpdateRequest",
     # API Key
     "ApiKeyResponse",
     "ApiKeyCreateRequest",
     "ApiKeyCreateResponse",
     "ApiKeyUpdateRequest",
+    "ApiKeyGrantableScopesResponse",
+    "SystemIntegrationApiKeyCreateRequest",
+    "SystemIntegrationApiKeyUpdateRequest",
     # OAuth
     "OAuthAuthorizeResponse",
     "OAuthCallbackError",

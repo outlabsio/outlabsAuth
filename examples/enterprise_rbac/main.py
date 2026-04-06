@@ -40,6 +40,7 @@ from outlabs_auth.routers import (
     get_auth_router,
     get_config_router,
     get_entities_router,
+    get_integration_principals_router,
     get_memberships_router,
     get_permissions_router,
     get_roles_router,
@@ -265,6 +266,7 @@ async def lifespan(app: FastAPI):
     app.include_router(get_users_router(auth, prefix="/v1/users"))
     app.include_router(get_api_keys_router(auth, prefix="/v1/api-keys"))
     app.include_router(get_api_key_admin_router(auth, prefix="/v1/admin/entities"))
+    app.include_router(get_integration_principals_router(auth, prefix="/v1/admin"))
     app.include_router(get_roles_router(auth, prefix="/v1/roles"))
     app.include_router(get_permissions_router(auth, prefix="/v1/permissions"))
     app.include_router(get_entities_router(auth, prefix="/v1/entities"))

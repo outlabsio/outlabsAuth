@@ -51,6 +51,7 @@ class ApiKeyResponse(BaseModel):
     entity_ids: Optional[List[str]] = None
     inherit_from_tree: bool = False
     owner_id: Optional[str] = None  # String representation of owner ID
+    owner_type: Optional[str] = None
     is_currently_effective: Optional[bool] = None
     ineffective_reasons: Optional[List[str]] = None
 
@@ -123,3 +124,29 @@ class ApiKeyGrantableScopesResponse(BaseModel):
     allowed_key_kinds: List[APIKeyKind]
     personal_allowed_action_prefixes: List[str]
     grantable_scopes: List[str]
+
+
+class SystemIntegrationApiKeyCreateRequest(BaseModel):
+    """Nested create request for integration-principal-owned system keys."""
+
+    name: str = Field(..., description="Friendly name for the API key")
+    scopes: List[str] = Field(default_factory=list, description="List of allowed permissions/scopes")
+    prefix_type: str = Field(default="sk_live", description="Key prefix type: sk_live, sk_test, etc.")
+    ip_whitelist: Optional[List[str]] = Field(default=None, description="IP whitelist (optional)")
+    rate_limit_per_minute: int = Field(default=60, description="Rate limit per minute")
+    expires_in_days: Optional[int] = Field(
+        default=None,
+        description="Days until expiration (service converts to expires_at)",
+    )
+    description: Optional[str] = Field(default=None, description="Optional key description")
+
+
+class SystemIntegrationApiKeyUpdateRequest(BaseModel):
+    """Nested update request for integration-principal-owned system keys."""
+
+    name: Optional[str] = None
+    scopes: Optional[List[str]] = None
+    ip_whitelist: Optional[List[str]] = None
+    rate_limit_per_minute: Optional[int] = None
+    status: Optional[APIKeyStatus] = None
+    description: Optional[str] = None

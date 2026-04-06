@@ -233,6 +233,7 @@ class OutlabsAuth:
         self.user_audit_service = None
         self.entity_service = None
         self.membership_service = None
+        self.integration_principal_service = None
         self.config_service = None
         self.cache_service = None
         self.cache = None
@@ -394,6 +395,7 @@ class OutlabsAuth:
         from outlabs_auth.services.permission import PermissionService
         from outlabs_auth.services.role_history import RoleHistoryService
         from outlabs_auth.services.role import RoleService
+        from outlabs_auth.services.integration_principal import IntegrationPrincipalService
         from outlabs_auth.services.service_token import ServiceTokenService
         from outlabs_auth.services.user_audit import UserAuditService
         from outlabs_auth.services.user import UserService
@@ -431,6 +433,11 @@ class OutlabsAuth:
         self.api_key_policy_service = APIKeyPolicyService(
             self.config,
             permission_service=self.permission_service,
+            observability=self.observability,
+        )
+        self.integration_principal_service = IntegrationPrincipalService(
+            self.config,
+            policy_service=self.api_key_policy_service,
             observability=self.observability,
         )
 
@@ -480,8 +487,10 @@ class OutlabsAuth:
             user_audit_service=self.user_audit_service,
             observability=self.observability,
         )
+        self.integration_principal_service.api_key_service = self.api_key_service
         if self.entity_service is not None:
             self.entity_service.api_key_service = self.api_key_service
+            self.entity_service.integration_principal_service = self.integration_principal_service
         self.user_service.membership_service = self.membership_service
         self.user_service.role_service = self.role_service
         self.user_service.api_key_service = self.api_key_service
@@ -705,19 +714,48 @@ class OutlabsAuth:
         if api_key is None:
             return None
 
-        user = await self.user_service.get_user_by_id(session, api_key.owner_id)
-        if user is None or not user.can_authenticate():
+        resolved_owner = None
+        if hasattr(self.api_key_service, "resolve_api_key_owner"):
+            resolved_owner = await self.api_key_service.resolve_api_key_owner(session, api_key)
+        elif getattr(api_key, "owner_id", None) is not None:
+            user = await self.user_service.get_user_by_id(session, api_key.owner_id)
+            if user is not None:
+                resolved_owner = {
+                    "user": user,
+                    "integration_principal": None,
+                    "owner_id": getattr(user, "id", api_key.owner_id),
+                }
+        if resolved_owner is None:
             return None
 
         key_scopes = await self.api_key_service.get_api_key_scopes(session, api_key.id)
         metadata: dict[str, Any] = {
             "key_id": str(api_key.id),
             "key_prefix": api_key.prefix,
-            "key_kind": api_key.key_kind.value if hasattr(api_key.key_kind, "value") else str(api_key.key_kind),
             "scopes": key_scopes,
             "usage_count": usage_count,
-            "entity_id": str(api_key.entity_id) if api_key.entity_id else None,
         }
+        key_kind = getattr(api_key, "key_kind", None)
+        if key_kind is not None:
+            metadata["key_kind"] = key_kind.value if hasattr(key_kind, "value") else str(key_kind)
+        owner_type = getattr(api_key, "owner_type", None)
+        if owner_type is not None:
+            metadata["owner_type"] = owner_type
+        resolved_owner_id = getattr(api_key, "resolved_owner_id", None)
+        if resolved_owner_id is not None:
+            metadata["owner_id"] = str(resolved_owner_id)
+        entity_id_value = getattr(api_key, "entity_id", None)
+        if entity_id_value is not None:
+            metadata["entity_id"] = str(entity_id_value)
+        principal = (
+            resolved_owner.integration_principal
+            if hasattr(resolved_owner, "integration_principal")
+            else resolved_owner.get("integration_principal")
+        )
+        user = resolved_owner.user if hasattr(resolved_owner, "user") else resolved_owner.get("user")
+        owner_id = resolved_owner.owner_id if hasattr(resolved_owner, "owner_id") else resolved_owner.get("owner_id")
+        if principal is not None:
+            metadata["principal_allowed_scopes"] = list(principal.allowed_scopes)
         if self.api_key_policy_service is not None:
             effectiveness = await self.api_key_policy_service.evaluate_effectiveness(
                 session,
@@ -727,9 +765,31 @@ class OutlabsAuth:
             metadata["is_currently_effective"] = effectiveness.is_currently_effective
             metadata["ineffective_reasons"] = effectiveness.ineffective_reasons
 
+        if (
+            required_scope
+            and principal is not None
+            and self.permission_service is not None
+            and getattr(self.permission_service.config, "enable_abac", False)
+        ):
+            if await self.permission_service.permission_has_conditions(session, required_scope):
+                return None
+
+        if user is not None:
+            if not user.can_authenticate():
+                return None
+            return {
+                "user": user,
+                "user_id": str(user.id),
+                "source": "api_key",
+                "api_key": api_key,
+                "metadata": metadata,
+            }
+
         return {
-            "user": user,
-            "user_id": str(user.id),
+            "user": None,
+            "user_id": None,
+            "integration_principal": principal,
+            "integration_principal_id": str(owner_id),
             "source": "api_key",
             "api_key": api_key,
             "metadata": metadata,

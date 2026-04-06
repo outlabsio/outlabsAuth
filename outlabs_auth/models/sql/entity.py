@@ -27,6 +27,7 @@ from .enums import EntityClass
 
 if TYPE_CHECKING:
     from .entity_membership import EntityMembership
+    from .integration_principal import IntegrationPrincipal
     from .role import Role
     from .user import User
 
@@ -189,6 +190,10 @@ class Entity(BaseModel, table=True):
     users: List["User"] = Relationship(
         back_populates="root_entity",
         sa_relationship_kwargs={"foreign_keys": "[User.root_entity_id]"},
+    )
+    integration_principals: List["IntegrationPrincipal"] = Relationship(
+        back_populates="anchor_entity",
+        sa_relationship_kwargs={"foreign_keys": "[IntegrationPrincipal.anchor_entity_id]"},
     )
 
     # === Properties ===

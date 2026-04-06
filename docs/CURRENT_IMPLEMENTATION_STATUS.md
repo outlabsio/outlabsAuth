@@ -1,6 +1,6 @@
 # Current Implementation Status
 
-**Updated**: 2026-03-26
+**Updated**: 2026-04-06
 **Purpose**: Record what is already implemented in code, where implementation intentionally differs in small ways from earlier strategy docs, and which known gaps still remain.
 
 This document is a reality check for maintainers. It is not a roadmap and it is not a full changelog. When this document conflicts with older planning docs, the code and tests should be treated as the source of truth.
@@ -53,25 +53,54 @@ This document is a reality check for maintainers. It is not a roadmap and it is 
 - Archived or otherwise non-active roles cannot be assigned through memberships or direct user-role assignment.
 - Normal reads hide archived role and permission definitions.
 
-### Enterprise API Key Policy and Host Integration Surface
+### API Key Ownership, Policy, and Host Integration Surface
 
-- `key_kind` now exists in the API key model and service layer, with `personal`
-  as the current implemented v1 kind.
-- EnterpriseRBAC `personal` keys are now explicitly scoped and entity-anchored
-  on the admin-managed path.
+- `key_kind` is now a real policy dimension in the API key model and service
+  layer.
+- Two API key kinds are now implemented in the backend:
+  - `personal`
+  - `system_integration`
+- API keys are no longer assumed to be human-owned only.
+- `APIKey` ownership now resolves to either:
+  - a human `User`
+  - an `IntegrationPrincipal` non-human owner
+- `IntegrationPrincipal` now exists as a first-class auth-owned model with:
+  - `entity` scope for EnterpriseRBAC durable integrations
+  - `platform_global` scope for superuser-managed global integrations
+- SimpleRBAC remains self-service `personal` only.
+- EnterpriseRBAC now supports both:
+  - self-service `personal` keys
+  - admin-managed `system_integration` keys owned by integration principals
+- Enterprise self-service `personal` keys may still be entity-anchored by the
+  owner through the packaged self-service router.
 - Grant-time policy and derived runtime effectiveness now live in an auth-owned
   API key policy layer rather than only in ad hoc route checks.
-- The Enterprise entity-first admin router now exists for API keys and exposes:
-  - grantable scopes
-  - paginated and filterable key listing
-  - create, read, update, revoke, and rotate flows
-- API key responses now include derived effectiveness fields:
+- The supported Enterprise router split is now:
+  - self-service `/api-keys` for `personal` keys
+  - entity/system `integration-principals` routes for create, update, rotate,
+    revoke, and lifecycle of `system_integration` keys
+  - entity inventory `/api-keys` admin routes for list, inspect, and incident
+    response revoke across anchored keys
+- API key responses now include ownership metadata:
+  - `owner_id`
+  - `owner_type`
   - `is_currently_effective`
   - `ineffective_reasons`
 - Host applications now have a supported runtime helper:
   - `auth.authorize_api_key(...)`
-- Archived anchor entities now revoke anchored API keys, and runtime API key
-  authorization now denies inactive owners or inactive/missing anchor entities.
+- Runtime API key auth no longer assumes every key yields a human `user_id`.
+  Principal-backed keys now authenticate with:
+  - `integration_principal`
+  - `integration_principal_id`
+  - `user = None`
+  - `user_id = None`
+- Archived anchor entities now revoke anchored integration principals and their
+  keys, and runtime API key authorization denies inactive owners or
+  inactive/missing anchor entities.
+- Reducing an integration principal's `allowed_scopes` immediately narrows the
+  effective power of its existing keys.
+- Principal-backed keys are RBAC-only in this slice. If ABAC is enabled and a
+  required permission has conditions, principal-backed API keys are denied.
 - Auth-owned API key observability now emits bounded signals for validation,
   policy denials, rate-limit hits, and lifecycle operations.
 
@@ -120,11 +149,12 @@ These are intentional implementation details that are slightly more specific tha
 - `APIKeyService.verify_api_key(...)` still exists as a primitive service helper,
   but it is no longer the intended host-application integration boundary.
 - The supported host boundary is now:
-  - mounted routers for self-service and Enterprise admin management
+  - mounted routers for self-service, Enterprise integration-principal
+    management, and entity inventory
   - `auth.authorize_api_key(...)` for custom host runtime checks
 - Reason: this keeps host-defined routes aligned with mounted-route policy,
-  derived effectiveness, and auth-owned observability without requiring direct
-  DB reads or host-side policy duplication.
+  derived effectiveness, owner-type semantics, and auth-owned observability
+  without requiring direct DB reads or host-side policy duplication.
 
 ## Known Remaining Gaps
 
@@ -134,13 +164,14 @@ These are intentional implementation details that are slightly more specific tha
 - A broader provider-by-provider hardening review still remains for semantics and operational guidance, especially where provider metadata does not perfectly map to local identity policy.
 - The next concrete OAuth follow-up is provider-semantic hardening: define and codify exactly when bundled-provider email/verification metadata is trusted for auto-link and auto-create flows.
 - Some legacy API naming still suggests hard delete even where the implementation is now retained lifecycle.
-- The Enterprise API key policy surface currently supports `personal` keys only.
-  `system_integration`, service-account ownership, and broader org-automation
-  policy remain future work.
 - Stored-but-ineffective API keys are currently exposed through derived runtime
   state rather than a dedicated persisted status.
 - The backend host/admin API key surface is implemented, but the external admin
   UI in `../OutlabsAuthUI` has not adopted it yet.
+- The new integration-principal and system-key backend surface is implemented,
+  but host-product UX and operational guidance for when to prefer
+  `system_integration` keys versus JWT service tokens still needs more product
+  documentation.
 
 ### Test Coverage Gaps
 
@@ -151,16 +182,17 @@ These are intentional implementation details that are slightly more specific tha
   - `tests/integration/test_enterprise_api_key_policy_matrix.py`
   - `tests/unit/services/test_api_key_service.py`
   - `tests/unit/test_auth_core_lifecycle.py`
+  - `tests/unit/test_auth_deps_permission_sources.py`
+  - `tests/unit/authentication/test_strategy.py`
   - `tests/unit/observability/test_observability_integration.py`
 - That backend coverage is strong enough to proceed to UI adoption, but the
   remaining API key test work is still worth calling out explicitly:
-  - exhaust the remaining denial-reason branches through the actual admin HTTP
-    surface, especially `grantable-scopes`, create/update, and rotate failures
-  - add route-flow observability assertions for the new admin/runtime API key
-    paths rather than only unit-level observability assertions
+  - add more route-flow observability assertions for the new
+    integration-principal and runtime API key paths rather than only unit-level
+    observability assertions
   - add a few more edge-case tests around pagination/search/filter extremes
-  - add backend tests for admin-created key IP-whitelist and rate-limit edge
-    cases
+  - add backend tests for IP-whitelist and rate-limit edge cases on both
+    personal and system-integration keys
   - add Playwright end-to-end coverage in `../OutlabsAuthUI` once the UI starts
     consuming the new admin and host integration surfaces
 

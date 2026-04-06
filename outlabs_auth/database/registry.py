@@ -35,6 +35,7 @@ class ModelRegistry:
         "Role",
         "Permission",
         "RefreshToken",
+        "IntegrationPrincipal",
         "APIKey",
         "SocialAccount",
         "OAuthState",
@@ -114,6 +115,7 @@ class ModelRegistry:
         # Core models (always included)
         from outlabs_auth.models.sql.activity_metric import ActivityMetric
         from outlabs_auth.models.sql.api_key import APIKey
+        from outlabs_auth.models.sql.integration_principal import IntegrationPrincipal
         from outlabs_auth.models.sql.oauth_state import OAuthState
         from outlabs_auth.models.sql.permission import Permission
         from outlabs_auth.models.sql.permission_definition_history import (
@@ -132,6 +134,7 @@ class ModelRegistry:
                 Role,
                 Permission,
                 RefreshToken,
+                IntegrationPrincipal,
                 APIKey,
                 SocialAccount,
                 OAuthState,
@@ -198,6 +201,7 @@ class ModelRegistry:
             "roles",
             "permissions",
             "refresh_tokens",
+            "integration_principals",
             "api_keys",
             "social_accounts",
             "oauth_states",

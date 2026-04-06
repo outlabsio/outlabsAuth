@@ -248,30 +248,71 @@ class ApiKeyStrategy:
             )
 
             if api_key:
-                # Fetch the key owner from the active request session.
-                if user_service is not None:
-                    user = await user_service.get_user_by_id(session, api_key.owner_id)
-                else:
-                    from outlabs_auth.models.sql.user import User
+                resolved_owner = None
+                if hasattr(api_key_service, "resolve_api_key_owner"):
+                    resolved_owner = await api_key_service.resolve_api_key_owner(session, api_key)
+                elif getattr(api_key, "owner_id", None) is not None:
+                    if user_service is not None:
+                        user = await user_service.get_user_by_id(session, api_key.owner_id)
+                    else:
+                        from outlabs_auth.models.sql.user import User
 
-                    user = await session.get(User, api_key.owner_id)
-
-                if not user:
+                        user = await session.get(User, api_key.owner_id)
+                    if user is not None:
+                        resolved_owner = {
+                            "user": user,
+                            "integration_principal": None,
+                            "owner_id": getattr(user, "id", api_key.owner_id),
+                        }
+                if resolved_owner is None:
                     return None
 
                 key_scopes = await api_key_service.get_api_key_scopes(session, api_key.id)
+                metadata = {
+                    "key_id": str(api_key.id),
+                    "key_prefix": api_key.prefix,
+                    "scopes": key_scopes,
+                    "usage_count": usage_count,
+                }
+                key_kind = getattr(api_key, "key_kind", None)
+                if key_kind is not None:
+                    metadata["key_kind"] = key_kind.value if hasattr(key_kind, "value") else str(key_kind)
+                owner_type = getattr(api_key, "owner_type", None)
+                if owner_type is not None:
+                    metadata["owner_type"] = owner_type
+                resolved_owner_id = getattr(api_key, "resolved_owner_id", None)
+                if resolved_owner_id is not None:
+                    metadata["owner_id"] = str(resolved_owner_id)
+                entity_id = getattr(api_key, "entity_id", None)
+                if entity_id is not None:
+                    metadata["entity_id"] = str(entity_id)
+                principal = (
+                    resolved_owner.integration_principal
+                    if hasattr(resolved_owner, "integration_principal")
+                    else resolved_owner.get("integration_principal")
+                )
+                user = resolved_owner.user if hasattr(resolved_owner, "user") else resolved_owner.get("user")
+                owner_id = resolved_owner.owner_id if hasattr(resolved_owner, "owner_id") else resolved_owner.get("owner_id")
+                if principal is not None:
+                    metadata["principal_allowed_scopes"] = list(principal.allowed_scopes)
+
+                if user is not None:
+                    return {
+                        "user": user,
+                        "user_id": str(user.id),
+                        "source": "api_key",
+                        "api_key": api_key,
+                        "metadata": metadata,
+                    }
 
                 return {
-                    "user": user,
-                    "user_id": str(user.id),
+                    "user": None,
+                    "user_id": None,
+                    "integration_principal": principal,
+                    "integration_principal_id": str(owner_id),
                     "source": "api_key",
                     "api_key": api_key,
-                    "metadata": {
-                        "key_id": str(api_key.id),
-                        "key_prefix": api_key.prefix,
-                        "scopes": key_scopes,
-                        "usage_count": usage_count,
-                    },
+                    "metadata": metadata,
                 }
 
             return None

@@ -21,7 +21,13 @@ from outlabs_auth.core.exceptions import InvalidInputError
 from outlabs_auth.models.sql.api_key import APIKey, APIKeyScope
 from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.entity import Entity
-from outlabs_auth.models.sql.enums import APIKeyKind, APIKeyStatus, DefinitionStatus
+from outlabs_auth.models.sql.enums import (
+    APIKeyKind,
+    APIKeyStatus,
+    DefinitionStatus,
+    IntegrationPrincipalScopeKind,
+)
+from outlabs_auth.models.sql.integration_principal import IntegrationPrincipal
 from outlabs_auth.models.sql.permission import Permission
 from outlabs_auth.models.sql.user import User
 
@@ -70,13 +76,51 @@ class APIKeyPolicyService:
             )
             if resource
         }
+        self._system_allowed_action_prefixes = [
+            prefix.lower()
+            for prefix in getattr(
+                config,
+                "api_key_system_allowed_action_prefixes",
+                [
+                    "create",
+                    "read",
+                    "list",
+                    "search",
+                    "view",
+                    "get",
+                    "update",
+                    "delete",
+                    "write",
+                    "run",
+                    "execute",
+                    "trigger",
+                    "control",
+                    "sync",
+                    "import",
+                    "export",
+                    "generate",
+                    "manage",
+                ],
+            )
+            if prefix
+        ]
+        self._system_excluded_resources = {
+            resource.lower()
+            for resource in getattr(
+                config,
+                "api_key_system_excluded_resources",
+                ["api_key", "service_token", "integration_principal"],
+            )
+            if resource
+        }
 
     async def validate_create(
         self,
         session: AsyncSession,
         *,
         actor_user_id: Optional[UUID],
-        owner: User,
+        owner: Optional[User] = None,
+        integration_principal: Optional[IntegrationPrincipal] = None,
         key_kind: APIKeyKind,
         scopes: Optional[List[str]],
         entity_id: Optional[UUID],
@@ -88,6 +132,7 @@ class APIKeyPolicyService:
                 session,
                 actor_user_id=actor_user_id,
                 owner=owner,
+                integration_principal=integration_principal,
                 key_kind=key_kind,
                 scopes=scopes,
                 entity_id=entity_id,
@@ -100,7 +145,8 @@ class APIKeyPolicyService:
                 reason=self._get_policy_reason(exc),
                 key_kind=key_kind,
                 actor_user_id=str(actor_user_id) if actor_user_id else None,
-                owner_id=str(owner.id),
+                owner_id=str(self._resolve_owner_id(owner=owner, integration_principal=integration_principal)),
+                owner_type=self._resolve_owner_type(owner=owner, integration_principal=integration_principal),
                 entity_id=str(entity_id) if entity_id else None,
             )
             raise
@@ -110,7 +156,8 @@ class APIKeyPolicyService:
         session: AsyncSession,
         *,
         actor_user_id: Optional[UUID],
-        owner: User,
+        owner: Optional[User] = None,
+        integration_principal: Optional[IntegrationPrincipal] = None,
         api_key: APIKey,
         scopes: Optional[List[str]],
         entity_id: Optional[UUID],
@@ -122,6 +169,7 @@ class APIKeyPolicyService:
                 session,
                 actor_user_id=actor_user_id,
                 owner=owner,
+                integration_principal=integration_principal,
                 key_kind=api_key.key_kind,
                 scopes=scopes,
                 entity_id=entity_id,
@@ -134,7 +182,8 @@ class APIKeyPolicyService:
                 reason=self._get_policy_reason(exc),
                 key_kind=api_key.key_kind,
                 actor_user_id=str(actor_user_id) if actor_user_id else None,
-                owner_id=str(owner.id),
+                owner_id=str(self._resolve_owner_id(owner=owner, integration_principal=integration_principal)),
+                owner_type=self._resolve_owner_type(owner=owner, integration_principal=integration_principal),
                 entity_id=str(entity_id) if entity_id else None,
                 prefix=api_key.prefix,
             )
@@ -147,28 +196,56 @@ class APIKeyPolicyService:
         api_key: APIKey,
     ) -> bool:
         """Check whether a stored API key is still usable right now."""
-        owner = await session.get(User, api_key.owner_id)
-        if owner is None:
-            logger.warning("API key %s rejected because owner is missing", api_key.prefix)
-            self._log_policy_decision(
-                surface="runtime_use",
-                outcome="denied",
-                reason="owner_missing",
-                key_kind=api_key.key_kind,
-                prefix=api_key.prefix,
-            )
-            return False
-        if not owner.can_authenticate():
-            logger.warning("API key %s rejected because owner is inactive", api_key.prefix)
-            self._log_policy_decision(
-                surface="runtime_use",
-                outcome="denied",
-                reason="owner_inactive",
-                key_kind=api_key.key_kind,
-                prefix=api_key.prefix,
-                owner_id=str(owner.id),
-            )
-            return False
+        if api_key.integration_principal_id is not None:
+            principal = await session.get(IntegrationPrincipal, api_key.integration_principal_id)
+            if principal is None:
+                logger.warning("API key %s rejected because principal is missing", api_key.prefix)
+                self._log_policy_decision(
+                    surface="runtime_use",
+                    outcome="denied",
+                    reason="integration_principal_missing",
+                    key_kind=api_key.key_kind,
+                    prefix=api_key.prefix,
+                    owner_type="integration_principal",
+                )
+                return False
+            if not principal.is_active():
+                logger.warning("API key %s rejected because principal is inactive", api_key.prefix)
+                self._log_policy_decision(
+                    surface="runtime_use",
+                    outcome="denied",
+                    reason="integration_principal_inactive",
+                    key_kind=api_key.key_kind,
+                    prefix=api_key.prefix,
+                    owner_id=str(principal.id),
+                    owner_type="integration_principal",
+                )
+                return False
+        else:
+            owner = await session.get(User, api_key.owner_id)
+            if owner is None:
+                logger.warning("API key %s rejected because owner is missing", api_key.prefix)
+                self._log_policy_decision(
+                    surface="runtime_use",
+                    outcome="denied",
+                    reason="owner_missing",
+                    key_kind=api_key.key_kind,
+                    prefix=api_key.prefix,
+                    owner_type="user",
+                )
+                return False
+            if not owner.can_authenticate():
+                logger.warning("API key %s rejected because owner is inactive", api_key.prefix)
+                self._log_policy_decision(
+                    surface="runtime_use",
+                    outcome="denied",
+                    reason="owner_inactive",
+                    key_kind=api_key.key_kind,
+                    prefix=api_key.prefix,
+                    owner_id=str(owner.id),
+                    owner_type="user",
+                )
+                return False
 
         if api_key.entity_id is None:
             return True
@@ -182,7 +259,8 @@ class APIKeyPolicyService:
                 reason="anchor_missing",
                 key_kind=api_key.key_kind,
                 prefix=api_key.prefix,
-                owner_id=str(api_key.owner_id),
+                owner_id=str(api_key.resolved_owner_id) if api_key.resolved_owner_id else None,
+                owner_type=api_key.owner_type,
             )
             return False
         if not entity.is_active():
@@ -193,7 +271,8 @@ class APIKeyPolicyService:
                 reason="anchor_inactive",
                 key_kind=api_key.key_kind,
                 prefix=api_key.prefix,
-                owner_id=str(api_key.owner_id),
+                owner_id=str(api_key.resolved_owner_id) if api_key.resolved_owner_id else None,
+                owner_type=api_key.owner_type,
                 entity_id=str(api_key.entity_id),
             )
             return False
@@ -203,17 +282,25 @@ class APIKeyPolicyService:
         self,
         session: AsyncSession,
         *,
-        owner_id: UUID,
+        api_key: APIKey,
         required_scope: str,
         entity_id: Optional[UUID],
     ) -> bool:
         """Check the current owner permission side of runtime intersection."""
-        if self.permission_service is None:
+        if api_key.integration_principal_id is not None:
+            principal = await session.get(IntegrationPrincipal, api_key.integration_principal_id)
+            if principal is None or not principal.is_active():
+                return False
+            from outlabs_auth.services.api_key import APIKeyService
+
+            return APIKeyService.scopes_allow_permission(principal.allowed_scopes, required_scope)
+
+        if self.permission_service is None or api_key.owner_id is None:
             return True
 
         return await self.permission_service.check_permission(
             session,
-            user_id=owner_id,
+            user_id=api_key.owner_id,
             permission=required_scope,
             entity_id=entity_id,
         )
@@ -237,11 +324,20 @@ class APIKeyPolicyService:
         elif api_key.expires_at and datetime.now(timezone.utc) > api_key.expires_at:
             reasons.append("key_expired")
 
-        owner = await session.get(User, api_key.owner_id)
-        if owner is None:
-            reasons.append("owner_missing")
-        elif not owner.can_authenticate():
-            reasons.append("owner_inactive")
+        principal = None
+        owner = None
+        if api_key.integration_principal_id is not None:
+            principal = await session.get(IntegrationPrincipal, api_key.integration_principal_id)
+            if principal is None:
+                reasons.append("integration_principal_missing")
+            elif not principal.is_active():
+                reasons.append("integration_principal_inactive")
+        else:
+            owner = await session.get(User, api_key.owner_id)
+            if owner is None:
+                reasons.append("owner_missing")
+            elif not owner.can_authenticate():
+                reasons.append("owner_inactive")
 
         if api_key.entity_id is not None:
             entity = await session.get(Entity, api_key.entity_id)
@@ -268,20 +364,23 @@ class APIKeyPolicyService:
             result = await session.execute(stmt)
             stored_scopes = [row[0] for row in result.all()]
 
-        try:
-            owner_grantable_scopes = await self.calculate_owner_grantable_scopes(
-                session,
-                owner=owner,
-                key_kind=api_key.key_kind,
-                entity_id=api_key.entity_id,
-                inherit_from_tree=api_key.inherit_from_tree,
-            )
-        except InvalidInputError:
-            reasons.append("policy_invalid")
-            return APIKeyEffectivenessResult(
-                is_currently_effective=False,
-                ineffective_reasons=reasons,
-            )
+        if principal is not None:
+            owner_grantable_scopes = list(principal.allowed_scopes)
+        else:
+            try:
+                owner_grantable_scopes = await self.calculate_owner_grantable_scopes(
+                    session,
+                    owner=owner,
+                    key_kind=api_key.key_kind,
+                    entity_id=api_key.entity_id,
+                    inherit_from_tree=api_key.inherit_from_tree,
+                )
+            except InvalidInputError:
+                reasons.append("policy_invalid")
+                return APIKeyEffectivenessResult(
+                    is_currently_effective=False,
+                    ineffective_reasons=reasons,
+                )
 
         from outlabs_auth.services.api_key import APIKeyService
 
@@ -299,26 +398,39 @@ class APIKeyPolicyService:
 
     def get_allowed_key_kinds(self) -> List[APIKeyKind]:
         """Return the key kinds available in the current implementation slice."""
+        if self.config.enable_entity_hierarchy:
+            return [APIKeyKind.PERSONAL, APIKeyKind.SYSTEM_INTEGRATION]
         return [APIKeyKind.PERSONAL]
 
     def get_personal_allowed_action_prefixes(self) -> List[str]:
         """Expose the configured action-prefix allowlist for personal keys."""
         return list(self._personal_allowed_action_prefixes)
 
+    def get_system_allowed_action_prefixes(self) -> List[str]:
+        """Expose the configured action-prefix allowlist for system integration keys."""
+        return list(self._system_allowed_action_prefixes)
+
     async def calculate_owner_grantable_scopes(
         self,
         session: AsyncSession,
         *,
-        owner: User,
+        owner: Optional[User] = None,
+        integration_principal: Optional[IntegrationPrincipal] = None,
         key_kind: APIKeyKind,
         entity_id: Optional[UUID],
         inherit_from_tree: bool,
     ) -> List[str]:
         """Calculate scopes the owner may currently delegate for a key."""
+        if owner is None:
+            raise self._policy_error(
+                "owner_required",
+                message="Personal grantable-scope calculation requires a user owner",
+            )
         await self._validate_grant_context(
             session,
             actor_user_id=owner.id,
             owner=owner,
+            integration_principal=integration_principal,
             key_kind=key_kind,
             entity_id=entity_id,
             inherit_from_tree=inherit_from_tree,
@@ -336,7 +448,8 @@ class APIKeyPolicyService:
         session: AsyncSession,
         *,
         actor_user_id: UUID,
-        owner: User,
+        owner: Optional[User] = None,
+        integration_principal: Optional[IntegrationPrincipal] = None,
         key_kind: APIKeyKind,
         entity_id: Optional[UUID],
         inherit_from_tree: bool,
@@ -346,6 +459,7 @@ class APIKeyPolicyService:
             session,
             actor_user_id=actor_user_id,
             owner=owner,
+            integration_principal=integration_principal,
             key_kind=key_kind,
             entity_id=entity_id,
             inherit_from_tree=inherit_from_tree,
@@ -363,17 +477,24 @@ class APIKeyPolicyService:
         session: AsyncSession,
         *,
         actor_user_id: UUID,
-        owner: User,
+        owner: Optional[User] = None,
+        integration_principal: Optional[IntegrationPrincipal] = None,
         key_kind: APIKeyKind,
         entity_id: Optional[UUID],
         inherit_from_tree: bool,
     ) -> List[str]:
         """Calculate the scopes grantable for an actor/owner/key/entity combination."""
+        if owner is None:
+            raise self._policy_error(
+                "owner_required",
+                message="Personal grantable-scope calculation requires a user owner",
+            )
         try:
             await self._validate_grant_context(
                 session,
                 actor_user_id=actor_user_id,
                 owner=owner,
+                integration_principal=integration_principal,
                 key_kind=key_kind,
                 entity_id=entity_id,
                 inherit_from_tree=inherit_from_tree,
@@ -403,17 +524,132 @@ class APIKeyPolicyService:
                 reason=self._get_policy_reason(exc),
                 key_kind=key_kind,
                 actor_user_id=str(actor_user_id),
-                owner_id=str(owner.id),
+                owner_id=str(self._resolve_owner_id(owner=owner, integration_principal=integration_principal)),
+                owner_type=self._resolve_owner_type(owner=owner, integration_principal=integration_principal),
                 entity_id=str(entity_id) if entity_id else None,
             )
             raise
+
+    async def calculate_system_integration_grantable_scopes(
+        self,
+        session: AsyncSession,
+        *,
+        actor_user_id: UUID,
+        anchor_entity_id: Optional[UUID],
+        scope_kind: IntegrationPrincipalScopeKind,
+    ) -> List[str]:
+        """List system-integration scopes an actor may currently grant."""
+        actor = await self._load_actor_user(session, actor_user_id)
+        if not actor.can_authenticate():
+            raise self._policy_error(
+                "actor_inactive",
+                message="Only active users may manage system integration credentials",
+                details={"actor_user_id": str(actor_user_id)},
+            )
+
+        permission_names = await self._list_active_permission_names(session)
+        allowed_names = [
+            permission_name
+            for permission_name in permission_names
+            if self._is_scope_allowed_for_key_kind(permission_name, APIKeyKind.SYSTEM_INTEGRATION)
+        ]
+
+        if scope_kind == IntegrationPrincipalScopeKind.PLATFORM_GLOBAL:
+            if not actor.is_superuser:
+                raise self._policy_error(
+                    "superuser_required",
+                    message="Platform-global integration principals require a superuser actor",
+                    details={"actor_user_id": str(actor_user_id)},
+                )
+            return sorted(allowed_names)
+
+        if anchor_entity_id is None:
+            raise self._policy_error(
+                "entity_anchor_required",
+                message="Entity-scoped integration principals require an anchor entity",
+            )
+
+        entity = await session.get(Entity, anchor_entity_id)
+        if entity is None or not entity.is_active():
+            raise self._policy_error(
+                "entity_anchor_invalid",
+                message="Entity anchor must exist and be active",
+                details={"entity_id": str(anchor_entity_id)},
+            )
+
+        root_entity_id = await self._get_root_entity_id(session, anchor_entity_id)
+        if not actor.is_superuser and actor.root_entity_id != root_entity_id:
+            raise self._policy_error(
+                "root_entity_mismatch",
+                message="Entity-scoped integration principals must stay within the actor's root entity",
+                details={
+                    "actor_user_id": str(actor_user_id),
+                    "actor_root_entity_id": str(actor.root_entity_id) if actor.root_entity_id else None,
+                    "entity_root_entity_id": str(root_entity_id),
+                },
+            )
+
+        if self.permission_service is None or actor.is_superuser:
+            return sorted(allowed_names)
+
+        grantable: list[str] = []
+        for permission_name in allowed_names:
+            if await self.permission_service.check_permission(
+                session,
+                user_id=actor_user_id,
+                permission=permission_name,
+                entity_id=anchor_entity_id,
+            ):
+                grantable.append(permission_name)
+        return sorted(grantable)
+
+    async def validate_integration_principal_allowed_scopes(
+        self,
+        session: AsyncSession,
+        *,
+        actor_user_id: UUID,
+        allowed_scopes: List[str],
+        anchor_entity_id: Optional[UUID],
+        scope_kind: IntegrationPrincipalScopeKind,
+    ) -> List[str]:
+        """Validate a principal scope envelope against actor authority and allowlists."""
+        normalized_scopes = sorted({scope for scope in allowed_scopes if scope})
+        if not normalized_scopes:
+            raise self._policy_error(
+                "explicit_scopes_required",
+                message="Integration principals require at least one explicit scope",
+            )
+
+        grantable_scopes = set(
+            await self.calculate_system_integration_grantable_scopes(
+                session,
+                actor_user_id=actor_user_id,
+                anchor_entity_id=anchor_entity_id,
+                scope_kind=scope_kind,
+            )
+        )
+        for scope in normalized_scopes:
+            self._validate_scope_allowlist(scope, APIKeyKind.SYSTEM_INTEGRATION)
+            if scope not in grantable_scopes:
+                raise self._policy_error(
+                    "actor_scope_exceeded",
+                    message="Requested scope exceeds the actor's current grantable system scopes",
+                    details={
+                        "actor_user_id": str(actor_user_id),
+                        "scope": scope,
+                        "anchor_entity_id": str(anchor_entity_id) if anchor_entity_id else None,
+                        "scope_kind": scope_kind.value,
+                    },
+                )
+        return normalized_scopes
 
     async def _validate_key_policy(
         self,
         session: AsyncSession,
         *,
         actor_user_id: Optional[UUID],
-        owner: User,
+        owner: Optional[User] = None,
+        integration_principal: Optional[IntegrationPrincipal] = None,
         key_kind: APIKeyKind,
         scopes: Optional[List[str]],
         entity_id: Optional[UUID],
@@ -423,10 +659,49 @@ class APIKeyPolicyService:
             session,
             actor_user_id=actor_user_id,
             owner=owner,
+            integration_principal=integration_principal,
             key_kind=key_kind,
             entity_id=entity_id,
             inherit_from_tree=inherit_from_tree,
         )
+
+        if key_kind == APIKeyKind.SYSTEM_INTEGRATION:
+            if integration_principal is None:
+                raise self._policy_error(
+                    "integration_principal_required",
+                    message="System integration API keys require an integration principal owner",
+                )
+            if not scopes:
+                raise self._policy_error(
+                    "explicit_scopes_required",
+                    message="System integration API keys require at least one explicit scope",
+                )
+            if actor_user_id is None:
+                raise self._policy_error(
+                    "actor_required",
+                    message="System integration API keys require an acting user",
+                )
+
+            normalized_scopes = await self.validate_integration_principal_allowed_scopes(
+                session,
+                actor_user_id=actor_user_id,
+                allowed_scopes=list(scopes),
+                anchor_entity_id=integration_principal.anchor_entity_id,
+                scope_kind=integration_principal.scope_kind,
+            )
+            from outlabs_auth.services.api_key import APIKeyService
+
+            for scope in normalized_scopes:
+                if not APIKeyService.scopes_allow_permission(integration_principal.allowed_scopes, scope):
+                    raise self._policy_error(
+                        "principal_scope_exceeded",
+                        message="Requested scope exceeds the integration principal's allowed scopes",
+                        details={
+                            "integration_principal_id": str(integration_principal.id),
+                            "scope": scope,
+                        },
+                    )
+            return
 
         if not self.config.enable_entity_hierarchy:
             return
@@ -435,6 +710,12 @@ class APIKeyPolicyService:
             raise self._policy_error(
                 "explicit_scopes_required",
                 message="Personal API keys require at least one explicit scope in EnterpriseRBAC",
+            )
+
+        if owner is None:
+            raise self._policy_error(
+                "owner_required",
+                message="Personal API keys require a user owner",
             )
 
         actor_id_to_check = actor_user_id or owner.id
@@ -475,87 +756,213 @@ class APIKeyPolicyService:
         session: AsyncSession,
         *,
         actor_user_id: Optional[UUID],
-        owner: User,
+        owner: Optional[User] = None,
+        integration_principal: Optional[IntegrationPrincipal] = None,
         key_kind: APIKeyKind,
         entity_id: Optional[UUID],
         inherit_from_tree: bool,
         allow_cross_owner_for_calculation: bool = False,
     ) -> None:
-        if key_kind != APIKeyKind.PERSONAL:
+        if (owner is None) == (integration_principal is None):
             raise self._policy_error(
-                "unsupported_key_kind",
-                message="Only personal API keys are supported in v1",
+                "invalid_owner_context",
+                message="Exactly one API key owner type must be provided",
                 details={"key_kind": key_kind.value},
             )
 
-        if inherit_from_tree and not self.config.api_key_personal_allow_inherit_from_tree:
-            raise self._policy_error(
-                "inherit_from_tree_disallowed",
-                message="Personal API keys cannot inherit descendant entity access in this configuration",
-            )
+        if key_kind == APIKeyKind.PERSONAL:
+            if owner is None:
+                raise self._policy_error(
+                    "owner_required",
+                    message="Personal API keys require a user owner",
+                )
+            if integration_principal is not None:
+                raise self._policy_error(
+                    "invalid_owner_context",
+                    message="Personal API keys cannot be owned by integration principals",
+                )
+            if inherit_from_tree and not self.config.api_key_personal_allow_inherit_from_tree:
+                raise self._policy_error(
+                    "inherit_from_tree_disallowed",
+                    message="Personal API keys cannot inherit descendant entity access in this configuration",
+                )
 
-        if inherit_from_tree and entity_id is None:
-            raise self._policy_error(
-                "inherit_from_tree_requires_anchor",
-                message="inherit_from_tree requires an entity anchor",
-            )
+            if inherit_from_tree and entity_id is None:
+                raise self._policy_error(
+                    "inherit_from_tree_requires_anchor",
+                    message="inherit_from_tree requires an entity anchor",
+                )
 
-        if entity_id is not None and not self.config.enable_entity_hierarchy:
+            if entity_id is not None and not self.config.enable_entity_hierarchy:
+                raise self._policy_error(
+                    "entity_anchor_unsupported",
+                    message="Entity anchors are not supported when entity hierarchy is disabled",
+                    details={"entity_id": str(entity_id)},
+                )
+
+            if not self.config.enable_entity_hierarchy:
+                return
+
+            if entity_id is None:
+                raise self._policy_error(
+                    "entity_anchor_required",
+                    message="Personal API keys require an entity anchor in EnterpriseRBAC",
+                )
+
+            entity = await session.get(Entity, entity_id)
+            if entity is None:
+                raise self._policy_error(
+                    "entity_anchor_not_found",
+                    message="Entity anchor not found",
+                    details={"entity_id": str(entity_id)},
+                )
+            if not entity.is_active():
+                raise self._policy_error(
+                    "entity_anchor_inactive",
+                    message="Entity anchor must be active",
+                    details={"entity_id": str(entity_id)},
+                )
+
+            if actor_user_id is not None and actor_user_id != owner.id and not allow_cross_owner_for_calculation:
+                raise self._policy_error(
+                    "cross_owner_personal_key_forbidden",
+                    message="Personal API keys can only be managed by their owner in v1",
+                    details={
+                        "actor_user_id": str(actor_user_id),
+                        "owner_id": str(owner.id),
+                    },
+                )
+
+            if not owner.can_authenticate():
+                raise self._policy_error(
+                    "owner_inactive",
+                    message="Personal API key owner must be active",
+                    details={"owner_id": str(owner.id)},
+                )
+
+            if not owner.is_superuser:
+                root_entity_id = await self._get_root_entity_id(session, entity_id)
+                if owner.root_entity_id is None or owner.root_entity_id != root_entity_id:
+                    raise self._policy_error(
+                        "root_entity_mismatch",
+                        message="Personal API keys must stay within the owner's root entity",
+                        details={
+                            "owner_id": str(owner.id),
+                            "owner_root_entity_id": (str(owner.root_entity_id) if owner.root_entity_id else None),
+                            "entity_root_entity_id": str(root_entity_id),
+                        },
+                    )
+            return
+
+        if key_kind != APIKeyKind.SYSTEM_INTEGRATION:
             raise self._policy_error(
-                "entity_anchor_unsupported",
-                message="Entity anchors are not supported when entity hierarchy is disabled",
-                details={"entity_id": str(entity_id)},
+                "unsupported_key_kind",
+                message="Unsupported API key kind",
+                details={"key_kind": key_kind.value},
             )
 
         if not self.config.enable_entity_hierarchy:
-            return
-
-        if entity_id is None:
             raise self._policy_error(
-                "entity_anchor_required",
-                message="Personal API keys require an entity anchor in EnterpriseRBAC",
+                "unsupported_key_kind",
+                message="System integration API keys require EnterpriseRBAC",
+                details={"key_kind": key_kind.value},
+            )
+        if owner is not None:
+            raise self._policy_error(
+                "invalid_owner_context",
+                message="System integration API keys cannot be owned by human users",
+            )
+        if integration_principal is None:
+            raise self._policy_error(
+                "integration_principal_required",
+                message="System integration API keys require an integration principal owner",
+            )
+        if actor_user_id is None:
+            raise self._policy_error(
+                "actor_required",
+                message="System integration API keys require an acting user",
             )
 
-        entity = await session.get(Entity, entity_id)
+        actor = await self._load_actor_user(session, actor_user_id)
+        if not actor.can_authenticate():
+            raise self._policy_error(
+                "actor_inactive",
+                message="Only active users may manage system integration credentials",
+                details={"actor_user_id": str(actor_user_id)},
+            )
+        if not integration_principal.is_active():
+            raise self._policy_error(
+                "integration_principal_inactive",
+                message="Integration principal must be active",
+                details={"integration_principal_id": str(integration_principal.id)},
+            )
+
+        if integration_principal.scope_kind == IntegrationPrincipalScopeKind.PLATFORM_GLOBAL:
+            if entity_id is not None:
+                raise self._policy_error(
+                    "entity_anchor_unsupported",
+                    message="Platform-global integration principals cannot issue entity-anchored keys",
+                    details={"entity_id": str(entity_id)},
+                )
+            if inherit_from_tree:
+                raise self._policy_error(
+                    "inherit_from_tree_disallowed",
+                    message="Platform-global integration principals cannot inherit tree scope",
+                )
+            if not actor.is_superuser:
+                raise self._policy_error(
+                    "superuser_required",
+                    message="Platform-global integration principals require a superuser actor",
+                    details={"actor_user_id": str(actor_user_id)},
+                )
+            return
+
+        if integration_principal.anchor_entity_id is None:
+            raise self._policy_error(
+                "entity_anchor_required",
+                message="Entity-scoped integration principals require an anchor entity",
+                details={"integration_principal_id": str(integration_principal.id)},
+            )
+        if entity_id != integration_principal.anchor_entity_id:
+            raise self._policy_error(
+                "entity_anchor_mismatch",
+                message="System integration API keys must use the principal's anchor entity",
+                details={
+                    "integration_principal_id": str(integration_principal.id),
+                    "entity_id": str(entity_id) if entity_id else None,
+                    "expected_entity_id": str(integration_principal.anchor_entity_id),
+                },
+            )
+        if inherit_from_tree != integration_principal.inherit_from_tree:
+            raise self._policy_error(
+                "inherit_from_tree_mismatch",
+                message="System integration API keys must mirror the principal tree-scope setting",
+                details={"integration_principal_id": str(integration_principal.id)},
+            )
+
+        entity = await session.get(Entity, integration_principal.anchor_entity_id)
         if entity is None:
             raise self._policy_error(
                 "entity_anchor_not_found",
                 message="Entity anchor not found",
-                details={"entity_id": str(entity_id)},
+                details={"entity_id": str(integration_principal.anchor_entity_id)},
             )
         if not entity.is_active():
             raise self._policy_error(
                 "entity_anchor_inactive",
                 message="Entity anchor must be active",
-                details={"entity_id": str(entity_id)},
+                details={"entity_id": str(integration_principal.anchor_entity_id)},
             )
 
-        if actor_user_id is not None and actor_user_id != owner.id and not allow_cross_owner_for_calculation:
-            raise self._policy_error(
-                "cross_owner_personal_key_forbidden",
-                message="Personal API keys can only be managed by their owner in v1",
-                details={
-                    "actor_user_id": str(actor_user_id),
-                    "owner_id": str(owner.id),
-                },
-            )
-
-        if not owner.can_authenticate():
-            raise self._policy_error(
-                "owner_inactive",
-                message="Personal API key owner must be active",
-                details={"owner_id": str(owner.id)},
-            )
-
-        if not owner.is_superuser:
-            root_entity_id = await self._get_root_entity_id(session, entity_id)
-            if owner.root_entity_id is None or owner.root_entity_id != root_entity_id:
+        if not actor.is_superuser:
+            root_entity_id = await self._get_root_entity_id(session, integration_principal.anchor_entity_id)
+            if actor.root_entity_id is None or actor.root_entity_id != root_entity_id:
                 raise self._policy_error(
                     "root_entity_mismatch",
-                    message="Personal API keys must stay within the owner's root entity",
+                    message="Entity-scoped integration principals must stay within the actor's root entity",
                     details={
-                        "owner_id": str(owner.id),
-                        "owner_root_entity_id": (str(owner.root_entity_id) if owner.root_entity_id else None),
+                        "actor_user_id": str(actor.id),
+                        "actor_root_entity_id": str(actor.root_entity_id) if actor.root_entity_id else None,
                         "entity_root_entity_id": str(root_entity_id),
                     },
                 )
@@ -564,7 +971,7 @@ class APIKeyPolicyService:
         if "*" in scope:
             raise self._policy_error(
                 "wildcard_scope_disallowed",
-                message="Personal API keys do not allow wildcard scopes in v1",
+                message="API keys do not allow wildcard scopes in this implementation slice",
                 details={"scope": scope},
             )
 
@@ -576,6 +983,16 @@ class APIKeyPolicyService:
                     "scope": scope,
                     "allowed_action_prefixes": self.get_personal_allowed_action_prefixes(),
                     "excluded_resources": sorted(self._personal_excluded_resources),
+                },
+            )
+        if key_kind == APIKeyKind.SYSTEM_INTEGRATION and not self._is_system_scope_allowed(scope):
+            raise self._policy_error(
+                "scope_not_allowed_for_system_integration",
+                message="Scope is not allowed for system integration API keys in this slice",
+                details={
+                    "scope": scope,
+                    "allowed_action_prefixes": self.get_system_allowed_action_prefixes(),
+                    "excluded_resources": sorted(self._system_excluded_resources),
                 },
             )
 
@@ -690,6 +1107,8 @@ class APIKeyPolicyService:
     ) -> bool:
         if key_kind == APIKeyKind.PERSONAL:
             return self._is_personal_scope_allowed(scope)
+        if key_kind == APIKeyKind.SYSTEM_INTEGRATION:
+            return self._is_system_scope_allowed(scope)
         return False
 
     def _is_personal_scope_allowed(self, scope: str) -> bool:
@@ -704,6 +1123,57 @@ class APIKeyPolicyService:
             normalized_action == prefix or normalized_action.startswith(f"{prefix}_")
             for prefix in self._personal_allowed_action_prefixes
         )
+
+    def _is_system_scope_allowed(self, scope: str) -> bool:
+        from outlabs_auth.services.permission import PermissionService
+
+        resource, action, _ = PermissionService._parse_permission_name(scope)
+        normalized_resource = resource.lower()
+        normalized_action = action.lower()
+        if normalized_resource in self._system_excluded_resources:
+            return False
+        return any(
+            normalized_action == prefix or normalized_action.startswith(f"{prefix}_")
+            for prefix in self._system_allowed_action_prefixes
+        )
+
+    @staticmethod
+    def _resolve_owner_id(
+        *,
+        owner: Optional[User],
+        integration_principal: Optional[IntegrationPrincipal],
+    ) -> Optional[UUID]:
+        if integration_principal is not None:
+            return integration_principal.id
+        if owner is not None:
+            return owner.id
+        return None
+
+    @staticmethod
+    def _resolve_owner_type(
+        *,
+        owner: Optional[User],
+        integration_principal: Optional[IntegrationPrincipal],
+    ) -> Optional[str]:
+        if integration_principal is not None:
+            return "integration_principal"
+        if owner is not None:
+            return "user"
+        return None
+
+    async def _load_actor_user(
+        self,
+        session: AsyncSession,
+        actor_user_id: UUID,
+    ) -> User:
+        actor = await session.get(User, actor_user_id)
+        if actor is None:
+            raise self._policy_error(
+                "actor_not_found",
+                message="Actor user not found",
+                details={"actor_user_id": str(actor_user_id)},
+            )
+        return actor
 
     async def _get_root_entity_id(
         self,

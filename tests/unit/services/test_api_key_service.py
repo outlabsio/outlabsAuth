@@ -8,9 +8,19 @@ from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import InvalidInputError
 from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.entity import Entity
-from outlabs_auth.models.sql.enums import APIKeyKind, APIKeyStatus, EntityClass, UserStatus
+from outlabs_auth.models.sql.enums import (
+    APIKeyKind,
+    APIKeyStatus,
+    EntityClass,
+    IntegrationPrincipalScopeKind,
+    IntegrationPrincipalStatus,
+    UserStatus,
+)
+from outlabs_auth.models.sql.integration_principal import IntegrationPrincipal
 from outlabs_auth.services.api_key import APIKeyService
 from outlabs_auth.services.api_key_policy import APIKeyPolicyService
+from outlabs_auth.services.entity import EntityService
+from outlabs_auth.services.integration_principal import IntegrationPrincipalService
 from outlabs_auth.services.membership import MembershipService
 from outlabs_auth.services.permission import PermissionService
 from outlabs_auth.services.role import RoleService
@@ -539,3 +549,250 @@ async def test_api_key_policy_and_service_emit_observability_for_enterprise_deni
     assert observability.log_api_key_policy_decision.call_args_list[-1].kwargs["surface"] == "runtime_use"
     assert observability.log_api_key_policy_decision.call_args_list[-1].kwargs["reason"] == "owner_inactive"
     assert observability.log_api_key_validated.call_args_list[-1].kwargs["reason"] == "runtime_use_denied"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_system_integration_keys_follow_principal_scope_and_entity_archive(
+    test_session,
+):
+    enterprise_config = AuthConfig(
+        database_url="postgresql+asyncpg://example:example@localhost:5432/test",
+        secret_key="test-secret",
+        enable_entity_hierarchy=True,
+    )
+    permission_service = PermissionService(config=enterprise_config)
+    policy_service = APIKeyPolicyService(config=enterprise_config)
+    api_key_service = APIKeyService(config=enterprise_config, policy_service=policy_service)
+    principal_service = IntegrationPrincipalService(config=enterprise_config, policy_service=policy_service)
+    entity_service = EntityService(config=enterprise_config)
+    principal_service.api_key_service = api_key_service
+    entity_service.api_key_service = api_key_service
+    entity_service.integration_principal_service = principal_service
+    user_service = UserService(config=enterprise_config)
+
+    actor = await user_service.create_user(
+        test_session,
+        email="system-integration-actor@example.com",
+        password="TestPass123!",
+        first_name="System",
+        last_name="Actor",
+    )
+    root = await entity_service.create_entity(
+        session=test_session,
+        name="system_integration_root",
+        display_name="System Integration Root",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="organization",
+    )
+    child = await entity_service.create_entity(
+        session=test_session,
+        name="system_integration_child",
+        display_name="System Integration Child",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="team",
+        parent_id=root.id,
+    )
+    actor.root_entity_id = root.id
+    await test_session.flush()
+
+    await permission_service.create_permission(
+        test_session,
+        name="workers:run",
+        display_name="workers:run",
+        description="system integration test permission",
+    )
+    await permission_service.create_permission(
+        test_session,
+        name="reports:update",
+        display_name="reports:update",
+        description="system integration test permission",
+    )
+
+    principal = await principal_service.create_principal(
+        test_session,
+        name="Worker Principal",
+        description="owns worker automation keys",
+        scope_kind=IntegrationPrincipalScopeKind.ENTITY,
+        anchor_entity_id=root.id,
+        inherit_from_tree=True,
+        allowed_scopes=["workers:run"],
+        created_by_user_id=actor.id,
+    )
+    assert principal.status == IntegrationPrincipalStatus.ACTIVE
+
+    full_key, api_key = await api_key_service.create_api_key(
+        test_session,
+        integration_principal_id=principal.id,
+        name="Worker Key",
+        scopes=["workers:run"],
+        key_kind=APIKeyKind.SYSTEM_INTEGRATION,
+        actor_user_id=actor.id,
+    )
+    assert api_key.owner_id is None
+    assert api_key.integration_principal_id == principal.id
+    assert api_key.entity_id == root.id
+    assert api_key.inherit_from_tree is True
+
+    verified, _ = await api_key_service.verify_api_key(
+        test_session,
+        full_key,
+        required_scope="workers:run",
+        entity_id=child.id,
+    )
+    assert verified is not None
+
+    updated_principal = await principal_service.update_principal(
+        test_session,
+        principal.id,
+        actor_user_id=actor.id,
+        allowed_scopes=["reports:update"],
+    )
+    assert updated_principal is not None
+    denied, _ = await api_key_service.verify_api_key(
+        test_session,
+        full_key,
+        required_scope="workers:run",
+        entity_id=child.id,
+    )
+    assert denied is None
+
+    await entity_service.delete_entity(
+        test_session,
+        root.id,
+        cascade=True,
+        deleted_by_id=actor.id,
+    )
+    refreshed_principal = await principal_service.get_principal(test_session, principal.id)
+    refreshed_key = await api_key_service.get_api_key(test_session, api_key.id)
+    assert refreshed_principal is not None
+    assert refreshed_principal.status == IntegrationPrincipalStatus.ARCHIVED
+    assert refreshed_key is not None
+    assert refreshed_key.status == APIKeyStatus.REVOKED
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_integration_principal_service_denies_cross_root_creation(
+    test_session,
+):
+    enterprise_config = AuthConfig(
+        database_url="postgresql+asyncpg://example:example@localhost:5432/test",
+        secret_key="test-secret",
+        enable_entity_hierarchy=True,
+    )
+    entity_service = EntityService(config=enterprise_config)
+    policy_service = APIKeyPolicyService(config=enterprise_config)
+    principal_service = IntegrationPrincipalService(config=enterprise_config, policy_service=policy_service)
+    permission_service = PermissionService(config=enterprise_config)
+    user_service = UserService(config=enterprise_config)
+
+    root_a = await entity_service.create_entity(
+        session=test_session,
+        name="cross_root_a",
+        display_name="Cross Root A",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="organization",
+    )
+    root_b = await entity_service.create_entity(
+        session=test_session,
+        name="cross_root_b",
+        display_name="Cross Root B",
+        entity_class=EntityClass.STRUCTURAL,
+        entity_type="organization",
+    )
+    actor = await user_service.create_user(
+        test_session,
+        email="cross-root-actor@example.com",
+        password="TestPass123!",
+        first_name="Cross",
+        last_name="Root",
+        root_entity_id=root_b.id,
+    )
+    await permission_service.create_permission(
+        test_session,
+        name="workers:run",
+        display_name="workers:run",
+        description="cross root validation permission",
+    )
+
+    with pytest.raises(InvalidInputError, match="root entity"):
+        await principal_service.create_principal(
+            test_session,
+            name="Denied Principal",
+            description="should not be created cross-root",
+            scope_kind=IntegrationPrincipalScopeKind.ENTITY,
+            anchor_entity_id=root_a.id,
+            inherit_from_tree=False,
+            allowed_scopes=["workers:run"],
+            created_by_user_id=actor.id,
+        )
+
+
+@pytest.mark.unit
+def test_integration_principal_model_normalizes_string_backed_enum_fields():
+    principal = IntegrationPrincipal(
+        name="String Backed Principal",
+        description="simulates ORM-loaded raw string enum fields",
+        scope_kind=IntegrationPrincipalScopeKind.ENTITY,
+        allowed_scopes=["entity:read_tree"],
+    )
+    principal.status = "active"
+    principal.scope_kind = "platform_global"
+
+    assert principal.status_enum == IntegrationPrincipalStatus.ACTIVE
+    assert principal.scope_kind_enum == IntegrationPrincipalScopeKind.PLATFORM_GLOBAL
+    assert principal.is_active() is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_integration_principal_service_logs_platform_global_creation_with_observability(
+    test_session,
+):
+    enterprise_config = AuthConfig(
+        database_url="postgresql+asyncpg://example:example@localhost:5432/test",
+        secret_key="test-secret",
+        enable_entity_hierarchy=True,
+    )
+    observability = Mock(log_api_key_lifecycle=Mock())
+    permission_service = PermissionService(config=enterprise_config)
+    policy_service = APIKeyPolicyService(config=enterprise_config)
+    principal_service = IntegrationPrincipalService(
+        config=enterprise_config,
+        policy_service=policy_service,
+        observability=observability,
+    )
+    user_service = UserService(config=enterprise_config)
+
+    actor = await user_service.create_user(
+        test_session,
+        email="platform-global-actor@example.com",
+        password="TestPass123!",
+        first_name="Platform",
+        last_name="Global",
+        is_superuser=True,
+    )
+    await permission_service.create_permission(
+        test_session,
+        name="entity:read_tree",
+        display_name="Entity Read Tree",
+        description="platform global integration scope",
+    )
+
+    principal = await principal_service.create_principal(
+        test_session,
+        name="Global Export Worker",
+        description="owns global export credentials",
+        scope_kind=IntegrationPrincipalScopeKind.PLATFORM_GLOBAL,
+        anchor_entity_id=None,
+        inherit_from_tree=False,
+        allowed_scopes=["entity:read_tree"],
+        created_by_user_id=actor.id,
+    )
+
+    assert principal.scope_kind_enum == IntegrationPrincipalScopeKind.PLATFORM_GLOBAL
+    assert principal.status_enum == IntegrationPrincipalStatus.ACTIVE
+    observability.log_api_key_lifecycle.assert_called_once()
+    assert observability.log_api_key_lifecycle.call_args.kwargs["status"] == "active"
+    assert observability.log_api_key_lifecycle.call_args.kwargs["scope_kind"] == "platform_global"

@@ -1,28 +1,35 @@
 # API Key Scope and Grant Policy Epic
 
-**Status**: In Progress
-**Updated**: 2026-03-26
+**Status**: Implemented in Backend
+**Updated**: 2026-04-06
 **Audience**: OutlabsAuth maintainers and host-application integrators
 
 ## Purpose
 
-Define the next major enhancement for API key management in EnterpriseRBAC:
+Define and record the API key ownership model for OutlabsAuth:
 
-- entity-anchored API keys for human users
-- root-entity integration keys for admin-managed org-wide automation
-- grant-time policy so users cannot mint keys beyond what they are allowed to grant
-- runtime policy so keys immediately lose access when the owner's effective access changes
-- proactive revocation on lifecycle changes that should invalidate keys entirely
+- `personal` API keys for human self-service automation
+- `system_integration` API keys for admin-managed durable integrations
+- service tokens for internal platform services
+- grant-time policy so actors cannot mint keys beyond what they are allowed to
+  grant
+- runtime policy so keys immediately lose access when effective access changes
+- proactive revocation on lifecycle changes that should invalidate keys
 
-This started as a design and planning document. It now also records the
-implemented backend surface, the remaining pre-UI gaps, and the future work
-that still sits beyond the current `personal`-key rollout.
+This began as a design/planning document. It now records the implemented
+backend surface, the final architecture choices for ownership and key kinds,
+and the product/documentation gaps that remain outside the core backend.
 
 ## Why This Epic Exists
 
-OutlabsAuth already has a strong API key primitive layer, but it does not yet provide the full policy model needed by admin products such as Diverse internal admin.
+OutlabsAuth already had a strong API key primitive layer, but it did not
+provide the full ownership and policy model needed by admin products such as
+Diverse internal admin.
 
-The missing piece is not "how to store or verify an API key." The missing piece is "what is this key allowed to represent, who is allowed to create it, and how does it stay safe when user, role, membership, or entity state changes over time?"
+The missing piece was not "how to store or verify an API key." The missing
+piece was "what is this key allowed to represent, who is allowed to create it,
+who owns it, and how does it stay safe when user, role, membership, principal,
+or entity state changes over time?"
 
 ## What Already Exists
 
@@ -135,50 +142,93 @@ Host applications may still have custom authorization code paths. Those paths mu
 
 This epic assumes the library should become the canonical source of API key policy rather than leaving host apps to reinvent it.
 
-## Implementation Reality Check (2026-03-26)
+## Implemented Model (2026-04-06)
 
-This section records what the current code actually does today so the document
-describes the shipped backend surface rather than only the target design.
+This section records what the code now does. Treat this section as the source
+of truth over older planning notes lower in this document.
 
 ### Implemented Backend Surface
 
-- `APIKey` now carries `key_kind`, and the current implemented v1 kind is
-  `personal`
-- EnterpriseRBAC `personal` keys now use grant-time policy:
-  - explicit scopes required
-  - entity anchor required on the admin-managed path
-  - requested scopes must fit the current `personal` rules
-- the packaged self-service router still exists, and EnterpriseRBAC now also
-  has a separate entity-first admin router
-- the admin API now exposes:
-  - `grantable-scopes`
-  - paginated and filterable entity key listing
-  - create, read, update, revoke, and rotate flows
-- API key responses now expose derived runtime state:
+- `APIKey` now supports two backend key kinds:
+  - `personal`
+  - `system_integration`
+- API key ownership now resolves to either:
+  - a human `User`
+  - an `IntegrationPrincipal` non-human owner
+- `IntegrationPrincipal` is now a first-class auth-owned model with:
+  - `entity` scope for EnterpriseRBAC durable integrations
+  - `platform_global` scope for superuser-managed global integrations
+  - `allowed_scopes`
+  - `inherit_from_tree`
+  - lifecycle status and audit fields
+- SimpleRBAC remains self-service `personal` only.
+- EnterpriseRBAC now supports:
+  - self-service human-owned `personal` keys
+  - entity-scoped `system_integration` keys owned by integration principals
+  - platform-global `system_integration` keys owned by superuser-managed
+    integration principals
+- The packaged router split is now:
+  - self-service `/api-keys` for owner-managed `personal` keys
+  - `integration-principals` routes for create, update, rotate, revoke, and
+    lifecycle of principal-backed `system_integration` keys
+  - entity admin `/api-keys` routes for inventory and incident-response revoke
+- API key responses now expose:
+  - `owner_id`
+  - `owner_type`
   - `is_currently_effective`
   - `ineffective_reasons`
-- runtime API key authorization is now available through an auth-owned host
-  helper:
+- Runtime API key authorization is available through:
   - `auth.authorize_api_key(...)`
-- runtime API key checks now deny inactive owners and inactive or missing anchor
-  entities
-- archived anchor entities now revoke anchored API keys
-- auth-owned observability now emits bounded metrics/logging for validation,
-  policy denials, lifecycle operations, and rate-limit hits
+- Runtime API key auth is now owner-type aware:
+  - personal keys intersect stored scopes with the human owner's current
+    permissions and entity reach
+  - system-integration keys intersect stored scopes with the integration
+    principal's `allowed_scopes` and principal scope
+- Runtime API key auth no longer assumes every key yields a human `user_id`.
+- Principal-backed keys are RBAC-only in this slice. If ABAC is enabled and the
+  required permission has conditions, principal-backed API keys are denied.
+- Runtime API key checks deny inactive owners, inactive principals, and inactive
+  or missing anchor entities.
+- Archived anchor entities now revoke anchored integration principals and their
+  keys.
+- Reducing a principal's `allowed_scopes` immediately narrows the effective
+  power of its existing keys.
+- Auth-owned observability now emits bounded metrics/logging for validation,
+  policy denials, lifecycle operations, and rate-limit hits.
 
-### Remaining Gaps Against The Full Epic
+### Ownership and Product Boundary Decisions
 
-- only `personal` keys are implemented today; `system_integration` remains
-  future work
-- service-account ownership is still future work
-- stored-but-ineffective keys are exposed through derived runtime state rather
-  than a dedicated persisted status
-- there is still no full reconciliation worker for role, membership, or
-  permission-definition churn
-- the backend host/admin surface is implemented, but UI adoption in
-  `../OutlabsAuthUI` has not started yet
-- migration remains intentionally out of scope for the current rollout because
-  the system is still pre-production and there are no existing API keys
+- Durable machine keys are no longer attached to humans.
+- OutlabsAuth uses `IntegrationPrincipal` instead of pseudo-users or
+  human-owned “system” keys.
+- Platform-global service tokens and platform-global DB-backed API keys remain
+  separate tools:
+  - service tokens for internal platform services
+  - platform-global `system_integration` keys for external/global integrations
+    that need DB-backed inventory, revoke, rotate, audit, rate limits, or IP
+    allowlists
+- Enterprise entity admins can create durable non-human integrations at any
+  entity where they have API-key admin authority, bounded to that entity tree
+  and root.
+- SimpleRBAC intentionally does not expose integration-principal management in
+  this slice.
+
+### Remaining Gaps Against The Full Product Rollout
+
+- Stored-but-ineffective keys are still exposed through derived runtime state
+  rather than a dedicated persisted status.
+- There is still no full reconciliation worker for role, membership, or
+  permission-definition churn because the runtime model already applies dynamic
+  narrowing and lifecycle denial.
+- The backend host/admin surface is implemented, but UI adoption in
+  `../OutlabsAuthUI` has not started yet.
+- Migration remains intentionally out of scope for the current rollout because
+  the system is still pre-production and there are no existing API keys.
+- The remaining work is primarily product and documentation work:
+  - operator guidance for when to choose service tokens vs
+    `system_integration`
+  - host UI adoption
+  - examples/docs refresh outside this epic
 
 ### Current Backend Test Position
 
@@ -190,6 +240,8 @@ The backend implementation now has direct Python coverage across:
 - `tests/integration/test_enterprise_api_key_policy_matrix.py`
 - `tests/unit/services/test_api_key_service.py`
 - `tests/unit/test_auth_core_lifecycle.py`
+- `tests/unit/test_auth_deps_permission_sources.py`
+- `tests/unit/authentication/test_strategy.py`
 - `tests/unit/observability/test_observability_integration.py`
 
 This is enough backend confidence to proceed to host/UI adoption, but the
@@ -200,6 +252,47 @@ remaining backend test work is still worth tracking:
 - more edge-case coverage for pagination, search, and filter combinations
 - more edge-case coverage for admin-created key IP-whitelist and rate-limit
   behavior
+
+## Current Policy Summary
+
+### `personal`
+
+- owner type: `user`
+- self-service in both presets
+- SimpleRBAC: flat, self-owned, no entity anchor
+- EnterpriseRBAC: self-owned, optionally entity-anchored when the owner creates
+  the key with an entity context
+- runtime effectiveness:
+  - stored scopes
+  - current human owner permissions
+  - personal-key allowlist
+  - entity scope
+
+### `system_integration`
+
+- owner type: `integration_principal`
+- EnterpriseRBAC only in this slice
+- entity-scoped or platform-global principal ownership
+- entity-scoped principals are bounded to one entity tree/root
+- platform-global principals are superuser-managed only
+- runtime effectiveness:
+  - stored scopes
+  - principal `allowed_scopes`
+  - system-key allowlist
+  - principal scope
+- no human-user ABAC inference
+- ABAC-conditioned required permissions are denied
+
+### Service Tokens
+
+- still the preferred primitive for internal platform services
+- remain separate from API keys
+- no DB-backed key inventory or rotation history
+
+## Historical Design Notes
+
+The remainder of this document is preserved as design history. Where it
+conflicts with the sections above, the implemented model above wins.
 
 ## Audit and Observability Planning
 

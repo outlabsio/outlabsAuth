@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from outlabs_auth.observability import ObservabilityService
     from outlabs_auth.services.api_key import APIKeyService
     from outlabs_auth.services.config import ConfigService
+    from outlabs_auth.services.integration_principal import IntegrationPrincipalService
     from outlabs_auth.services.membership import MembershipService
     from outlabs_auth.services.redis_client import RedisClient
     from outlabs_auth.services.role import RoleService
@@ -80,6 +81,7 @@ class EntityService(BaseService[Entity]):
         self.membership_service: Optional["MembershipService"] = None
         self.role_service: Optional["RoleService"] = None
         self.api_key_service: Optional["APIKeyService"] = None
+        self.integration_principal_service: Optional["IntegrationPrincipalService"] = None
 
     async def create_entity(
         self,
@@ -565,6 +567,13 @@ class EntityService(BaseService[Entity]):
                 revoked_by_id=deleted_by_id,
                 reason=archive_reason,
                 event_source="entity_service.delete_entity",
+            )
+        if self.integration_principal_service is not None:
+            await self.integration_principal_service.archive_entity_principals(
+                session,
+                entity.id,
+                archived_by_id=deleted_by_id,
+                reason=archive_reason,
             )
 
         # Delete closure records

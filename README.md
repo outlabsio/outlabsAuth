@@ -48,7 +48,7 @@ lowest-friction option for a small team.
 ```toml
 # Private package index (optional)
 [project]
-dependencies = ["outlabs-auth>=0.1.0a5,<0.2"]
+dependencies = ["outlabs-auth>=0.1.0a7,<0.2"]
 
 [tool.uv.sources]
 outlabs-auth = { index = "outlabs-private" }
@@ -66,7 +66,7 @@ explicit = true
 dependencies = ["outlabs-auth"]
 
 [tool.uv.sources]
-outlabs-auth = { git = "ssh://git@github.com/<org>/outlabsAuth.git", tag = "v0.1.0a5" }
+outlabs-auth = { git = "ssh://git@github.com/<org>/outlabsAuth.git", tag = "v0.1.0a7" }
 ```
 
 See [docs/PRIVATE_RELEASE.md](./docs/PRIVATE_RELEASE.md) for the release workflow. Run `uv run python scripts/release_version.py check` to verify the library version and release docs stay aligned before you tag a release.
@@ -497,7 +497,7 @@ Implementation-specific documentation (9 files):
 
 ## Development Status
 
-**Current Library Version**: 0.1.0a5
+**Current Library Version**: 0.1.0a7
 **Release Stage**: Alpha
 **Database**: PostgreSQL (via SQLAlchemy async)
 

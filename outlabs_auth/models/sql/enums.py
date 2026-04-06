@@ -79,6 +79,21 @@ class APIKeyKind(str, Enum):
     SYSTEM_INTEGRATION = "system_integration"
 
 
+class IntegrationPrincipalStatus(str, Enum):
+    """Lifecycle status for non-human integration principals."""
+
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    ARCHIVED = "archived"
+
+
+class IntegrationPrincipalScopeKind(str, Enum):
+    """Scope model for an integration principal."""
+
+    ENTITY = "entity"
+    PLATFORM_GLOBAL = "platform_global"
+
+
 class DefinitionStatus(str, Enum):
     """Lifecycle status for retained role and permission definitions."""
 

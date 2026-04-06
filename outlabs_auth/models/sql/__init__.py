@@ -37,11 +37,14 @@ from .entity_membership import (
     EntityMembershipRole,
 )
 from .entity_membership_history import EntityMembershipHistory
+from .integration_principal import IntegrationPrincipal
 from .enums import (
     APIKeyKind,
     APIKeyStatus,
     ConditionOperator,
     EntityClass,
+    IntegrationPrincipalScopeKind,
+    IntegrationPrincipalStatus,
     MembershipStatus,
     UserStatus,
 )
@@ -88,6 +91,8 @@ __all__ = [
     "EntityClass",
     "APIKeyKind",
     "APIKeyStatus",
+    "IntegrationPrincipalStatus",
+    "IntegrationPrincipalScopeKind",
     "ConditionOperator",
     # Core
     "User",
@@ -112,6 +117,7 @@ __all__ = [
     "EntityMembership",
     "EntityMembershipRole",
     "EntityMembershipHistory",
+    "IntegrationPrincipal",
     # API Keys
     "APIKey",
     "APIKeyScope",
@@ -160,6 +166,7 @@ ENTERPRISE_RBAC_MODELS = [
 ]
 
 API_KEY_MODELS = [
+    IntegrationPrincipal,
     APIKey,
     APIKeyScope,
     APIKeyIPWhitelist,

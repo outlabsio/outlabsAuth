@@ -94,6 +94,7 @@ from outlabs_auth.models.sql.entity_membership import (
     EntityMembership,
     EntityMembershipRole,
 )
+from outlabs_auth.models.sql.integration_principal import IntegrationPrincipal
 from outlabs_auth.models.sql.role_definition_history import RoleDefinitionHistory
 from outlabs_auth.models.sql.user_audit_event import UserAuditEvent
 
@@ -103,6 +104,8 @@ from outlabs_auth.models.sql.enums import (
     APIKeyStatus,
     ConditionOperator,
     EntityClass,
+    IntegrationPrincipalScopeKind,
+    IntegrationPrincipalStatus,
     MembershipStatus,
     UserStatus,
 )
@@ -140,6 +143,7 @@ from outlabs_auth.services import (
     AuthService,
     BaseService,
     CacheService,
+    IntegrationPrincipalService,
     PermissionHistoryService,
     PermissionService,
     RoleHistoryService,
@@ -183,6 +187,7 @@ __all__ = [
     "PermissionHistoryService",
     "AuthService",
     "ServiceTokenService",
+    "IntegrationPrincipalService",
     "TokenPair",
     "UserAuditService",
     # Database
@@ -198,6 +203,8 @@ __all__ = [
     "EntityClass",
     "APIKeyKind",
     "APIKeyStatus",
+    "IntegrationPrincipalStatus",
+    "IntegrationPrincipalScopeKind",
     "ConditionOperator",
     # Core Models
     "User",
@@ -218,6 +225,7 @@ __all__ = [
     # EnterpriseRBAC Models
     "Entity",
     "EntityClosure",
+    "IntegrationPrincipal",
     "EntityMembership",
     "EntityMembershipRole",
     # API Key Models

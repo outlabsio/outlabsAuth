@@ -13,6 +13,7 @@ from outlabs_auth.services.base import BaseService
 from outlabs_auth.services.cache import CacheService
 from outlabs_auth.services.config import ConfigService
 from outlabs_auth.services.entity import EntityService
+from outlabs_auth.services.integration_principal import IntegrationPrincipalService
 from outlabs_auth.services.membership import MembershipService
 from outlabs_auth.services.permission_history import PermissionHistoryService
 from outlabs_auth.services.permission import PermissionService
@@ -42,6 +43,7 @@ __all__ = [
     # EnterpriseRBAC services
     "EntityService",
     "MembershipService",
+    "IntegrationPrincipalService",
     # API Key service
     "APIKeyPolicyService",
     "APIKeyService",

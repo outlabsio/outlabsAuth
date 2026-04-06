@@ -123,6 +123,33 @@ class AuthConfig(BaseModel):
         default=True,
         description="Whether personal API keys may inherit anchor access to descendant entities",
     )
+    api_key_system_allowed_action_prefixes: list[str] = Field(
+        default_factory=lambda: [
+            "create",
+            "read",
+            "list",
+            "search",
+            "view",
+            "get",
+            "update",
+            "delete",
+            "write",
+            "run",
+            "execute",
+            "trigger",
+            "control",
+            "sync",
+            "import",
+            "export",
+            "generate",
+            "manage",
+        ],
+        description="Action prefixes allowed for system integration API keys in EnterpriseRBAC",
+    )
+    api_key_system_excluded_resources: list[str] = Field(
+        default_factory=lambda: ["api_key", "service_token", "integration_principal"],
+        description="Permission resources system integration API keys may never request",
+    )
 
     # Activity Tracking Settings (DD-049 - requires Redis)
     enable_activity_tracking: bool = Field(

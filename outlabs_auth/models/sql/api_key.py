@@ -11,13 +11,24 @@ from typing import List, Optional, TYPE_CHECKING
 from uuid import UUID
 
 from sqlmodel import Field, Relationship, SQLModel
-from sqlalchemy import Column, Index, UniqueConstraint, ForeignKey, String, Boolean, Integer, DateTime
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 from outlabs_auth.database.base import BaseModel
 from .enums import APIKeyKind, APIKeyStatus
 
 if TYPE_CHECKING:
+    from .integration_principal import IntegrationPrincipal
     from .user import User
 
 
@@ -88,9 +99,15 @@ class APIKey(BaseModel, table=True):
         UniqueConstraint("prefix", name="uq_api_keys_prefix"),
         Index("ix_api_keys_prefix", "prefix"),
         Index("ix_api_keys_owner_id", "owner_id"),
+        Index("ix_api_keys_integration_principal_id", "integration_principal_id"),
         Index("ix_api_keys_key_kind", "key_kind"),
         Index("ix_api_keys_status", "status"),
         Index("ix_api_keys_expires_at", "expires_at"),
+        CheckConstraint(
+            "(owner_id IS NOT NULL AND integration_principal_id IS NULL) OR "
+            "(owner_id IS NULL AND integration_principal_id IS NOT NULL)",
+            name="ck_api_keys_exactly_one_owner",
+        ),
     )
 
     # === Key Information ===
@@ -112,11 +129,20 @@ class APIKey(BaseModel, table=True):
     )
 
     # === Owner ===
-    owner_id: UUID = Field(
+    owner_id: Optional[UUID] = Field(
+        default=None,
         sa_column=Column(
             PG_UUID(as_uuid=True),
             ForeignKey("users.id", ondelete="CASCADE"),
-            nullable=False,
+            nullable=True,
+        ),
+    )
+    integration_principal_id: Optional[UUID] = Field(
+        default=None,
+        sa_column=Column(
+            PG_UUID(as_uuid=True),
+            ForeignKey("integration_principals.id", ondelete="CASCADE"),
+            nullable=True,
         ),
     )
     key_kind: APIKeyKind = Field(
@@ -178,7 +204,8 @@ class APIKey(BaseModel, table=True):
     )
 
     # === Relationships ===
-    owner: "User" = Relationship(back_populates="api_keys")
+    owner: Optional["User"] = Relationship(back_populates="api_keys")
+    integration_principal: Optional["IntegrationPrincipal"] = Relationship(back_populates="api_keys")
 
     # === Static Methods ===
     @staticmethod
@@ -228,3 +255,13 @@ class APIKey(BaseModel, table=True):
     def reactivate(self) -> None:
         """Reactivate this API key."""
         self.status = APIKeyStatus.ACTIVE
+
+    @property
+    def owner_type(self) -> str:
+        """Return the concrete owner type for this key."""
+        return "integration_principal" if self.integration_principal_id is not None else "user"
+
+    @property
+    def resolved_owner_id(self) -> Optional[UUID]:
+        """Return the concrete owner UUID regardless of owner type."""
+        return self.integration_principal_id or self.owner_id

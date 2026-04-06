@@ -43,6 +43,42 @@ This example demonstrates OutlabsAuth's **EnterpriseRBAC** preset with real-worl
 - ✅ Lead assignment workflow
 - ✅ Status pipeline tracking
 
+## 🔑 Machine Credentials (Current v1 Surface)
+
+The current EnterpriseRBAC example also demonstrates the OutlabsAuth machine
+credential model:
+
+- `personal` API keys remain self-service and user-owned
+- `system_integration` API keys are owned by `IntegrationPrincipal`
+- service tokens stay separate for internal platform-to-platform automation
+
+The example app mounts the auth-owned API-key surfaces under `/v1`:
+
+- `/v1/api-keys/*` for self-service `personal` keys
+- `/v1/admin/entities/{entity_id}/api-keys*` for anchored-key inventory and
+  incident-response revoke
+- `/v1/admin/entities/{entity_id}/integration-principals*` for entity-scoped
+  non-human integrations
+- `/v1/admin/system/integration-principals*` for platform-global
+  superuser-managed integrations
+
+Recommended review personas for this slice:
+
+- `admin@acme.com`: superuser, may create entity-scoped and platform-global
+  integration principals and keys
+- `org-admin@acme.com`: root-scoped admin for `ACME Realty`
+- `regional-admin@acme.com`: West Coast hierarchy admin only
+- `manager@sf.acme.com`: San Francisco office-local admin only
+- `east-admin@acme.com`: East Coast hierarchy admin only
+- `auditor@acme.com`: read-only and denied for API-key admin surfaces
+
+The example host route used for runtime key verification is:
+
+- `GET /v1/entities/{entity_id}/team-directory`
+
+That route is intentionally path-scoped, so it is useful for validating that a
+minted key works inside its allowed entity scope and stops working after revoke.
+
 ## 🚀 Quick Start
 
 ### Option 1: Docker Compose (Recommended)

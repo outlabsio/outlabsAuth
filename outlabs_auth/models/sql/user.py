@@ -29,6 +29,7 @@ from .enums import UserStatus
 if TYPE_CHECKING:
     from .api_key import APIKey
     from .entity import Entity
+    from .integration_principal import IntegrationPrincipal
     from .social_account import SocialAccount
     from .token import RefreshToken
     from .user_role_membership import UserRoleMembership
@@ -213,6 +214,10 @@ class User(BaseModel, table=True):
     api_keys: List["APIKey"] = Relationship(
         back_populates="owner",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+    created_integration_principals: List["IntegrationPrincipal"] = Relationship(
+        back_populates="created_by_user",
+        sa_relationship_kwargs={"foreign_keys": "[IntegrationPrincipal.created_by_user_id]"},
     )
     role_memberships: List["UserRoleMembership"] = Relationship(
         back_populates="user",

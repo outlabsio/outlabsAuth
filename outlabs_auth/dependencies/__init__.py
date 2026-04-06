@@ -81,6 +81,34 @@ class AuthDeps:
                 )
             return self._permission_set_allows(permission, granted_permissions)
 
+        if source == "api_key" and auth_result.get("integration_principal_id"):
+            api_key = auth_result.get("api_key")
+            api_key_scopes = (auth_result.get("metadata") or {}).get("scopes", [])
+            principal_allowed_scopes = (auth_result.get("metadata") or {}).get("principal_allowed_scopes", [])
+            if api_key is None or api_key_service is None:
+                return False
+
+            if not api_key_service.scopes_allow_permission(api_key_scopes, permission):
+                return False
+            if not api_key_service.scopes_allow_permission(principal_allowed_scopes, permission):
+                return False
+            if entity_id is not None:
+                has_entity_access = await api_key_service.check_entity_access_with_tree(
+                    session,
+                    api_key,
+                    entity_id,
+                )
+                if not has_entity_access:
+                    return False
+
+            if permission_service is None:
+                return True
+
+            if getattr(getattr(permission_service, "config", None), "enable_abac", False):
+                if await permission_service.permission_has_conditions(session, permission):
+                    return False
+            return True
+
         user_id = auth_result.get("user_id")
         if not user_id:
             raise HTTPException(
@@ -431,8 +459,11 @@ class AuthDeps:
         - `source="header"`: `request.headers[entity_id_field]`
         - `source="body"`: JSON body field `entity_id_field`
 
-        This helper enforces tree semantics by requiring the `*_tree` variant
-        when an entity context is present (e.g. `entity:create` -> `entity:create_tree`).
+        This helper delegates entity-context permission evaluation to
+        `permission_service.check_permission(...)`, which already allows:
+
+        - exact-entity non-scoped permissions at the target entity
+        - ancestor `*_tree` / `*_all` permissions across descendants
 
         If `source="body"` and the field is absent/null, this falls back to a
         global permission check (useful for root-level creates).
@@ -441,18 +472,6 @@ class AuthDeps:
             raise ValueError("source must be one of: path, query, header, body")
 
         signature = self._get_dependency_signature()
-
-        def _tree_required_permission(base: str) -> str:
-            if base in ("*:*", "*"):
-                return base
-            if ":" not in base:
-                return base
-            resource, action = base.split(":", 1)
-            if action == "*":
-                return base
-            if action.endswith(("_tree", "_all", "_own")):
-                return base
-            return f"{resource}:{action}_tree"
 
         def _parse_uuid_optional(raw: Any, *, invalid_detail: str) -> Optional[UUID]:
             if raw is None or raw == "":
@@ -510,11 +529,7 @@ class AuthDeps:
                 raw_entity_id, invalid_detail=f"Invalid {entity_id_field}"
             )
 
-            required_permission = (
-                _tree_required_permission(permission)
-                if entity_id is not None
-                else permission
-            )
+            required_permission = permission
 
             resource_context = None
             env_context = None

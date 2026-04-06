@@ -25,9 +25,11 @@ class _StaticAuthResultStrategy:
 
 
 class _PermissionServiceStub:
-    def __init__(self, result: bool) -> None:
+    def __init__(self, result: bool, *, abac_enabled: bool = False, condition_result: bool = False) -> None:
         self.result = result
+        self.condition_result = condition_result
         self.calls: list[dict] = []
+        self.config = SimpleNamespace(enable_abac=abac_enabled)
 
     async def check_permission(
         self,
@@ -47,6 +49,9 @@ class _PermissionServiceStub:
             }
         )
         return self.result
+
+    async def permission_has_conditions(self, session, permission_name):
+        return self.condition_result
 
 
 def _make_request(
@@ -256,6 +261,85 @@ async def test_require_permission_allows_service_token_with_embedded_permissions
     assert auth_result["source"] == "service_token"
     assert auth_result["service_id"] == "reporting-service"
     assert auth_result["service_name"] == "Reporting Service"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_require_permission_allows_principal_backed_api_key_without_user_id(
+    test_session,
+    auth_config,
+):
+    entity_id = uuid4()
+    auth_result = {
+        "user": None,
+        "user_id": None,
+        "integration_principal_id": str(uuid4()),
+        "source": "api_key",
+        "api_key": SimpleNamespace(id=uuid4(), entity_id=entity_id, inherit_from_tree=False),
+        "metadata": {
+            "scopes": ["jobs:run"],
+            "principal_allowed_scopes": ["jobs:run"],
+        },
+    }
+    backend = AuthBackend(
+        name="api_key",
+        transport=ApiKeyTransport(header_name="X-API-Key"),
+        strategy=_StaticAuthResultStrategy(auth_result),
+    )
+    permission_service = _PermissionServiceStub(result=False)
+    deps = AuthDeps(
+        backends=[backend],
+        permission_service=permission_service,
+        api_key_service=APIKeyService(auth_config),
+        get_session=lambda: None,
+    )
+
+    dep = deps.require_permission("jobs:run")
+    request = _make_request("GET", "/jobs", headers={"X-API-Key": "sk_test"})
+
+    resolved = await dep(request=request, session=test_session)
+
+    assert resolved["integration_principal_id"] == auth_result["integration_principal_id"]
+    assert permission_service.calls == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_require_permission_denies_principal_backed_api_key_for_abac_conditioned_permission(
+    test_session,
+    auth_config,
+):
+    auth_result = {
+        "user": None,
+        "user_id": None,
+        "integration_principal_id": str(uuid4()),
+        "source": "api_key",
+        "api_key": SimpleNamespace(id=uuid4(), entity_id=None, inherit_from_tree=False),
+        "metadata": {
+            "scopes": ["reports:read"],
+            "principal_allowed_scopes": ["reports:read"],
+        },
+    }
+    backend = AuthBackend(
+        name="api_key",
+        transport=ApiKeyTransport(header_name="X-API-Key"),
+        strategy=_StaticAuthResultStrategy(auth_result),
+    )
+    permission_service = _PermissionServiceStub(result=False, abac_enabled=True, condition_result=True)
+    deps = AuthDeps(
+        backends=[backend],
+        permission_service=permission_service,
+        api_key_service=APIKeyService(auth_config),
+        get_session=lambda: None,
+    )
+
+    dep = deps.require_permission("reports:read")
+    request = _make_request("GET", "/reports", headers={"X-API-Key": "sk_test"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dep(request=request, session=test_session)
+
+    assert exc_info.value.status_code == 403
 
 
 @pytest.mark.unit
