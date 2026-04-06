@@ -7,7 +7,7 @@ Provides ready-to-use API key management routes (DD-041).
 from typing import Any, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.exceptions import InvalidInputError
@@ -15,6 +15,7 @@ from outlabs_auth.models.sql.enums import APIKeyKind
 from outlabs_auth.schemas.api_key import (
     ApiKeyCreateRequest,
     ApiKeyCreateResponse,
+    ApiKeyGrantableScopesResponse,
     ApiKeyResponse,
     ApiKeyUpdateRequest,
 )
@@ -100,6 +101,57 @@ def get_api_keys_router(auth: Any, prefix: str = "", tags: Optional[list[str]] =
         user_id = UUID(auth_result["user_id"])
         api_keys = await auth.api_key_service.list_user_api_keys(session, user_id=user_id)
         return [await _to_response(session, key) for key in api_keys]
+
+    @router.get(
+        "/grantable-scopes",
+        response_model=ApiKeyGrantableScopesResponse,
+        summary="Get personal API key grantable scopes",
+        description="Get the mounted grant-policy result for the authenticated user's personal API keys.",
+    )
+    async def get_personal_key_grantable_scopes(
+        entity_id: Optional[UUID] = Query(default=None),
+        inherit_from_tree: bool = Query(default=False),
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_auth()),
+    ):
+        actor_user_id = auth_result.get("user_id")
+        owner = auth_result.get("user")
+        if actor_user_id is None or owner is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Authenticated user context is required for personal API key grantable scopes",
+            )
+        if getattr(auth, "api_key_policy_service", None) is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="API key policy service is unavailable",
+            )
+
+        try:
+            grantable_scopes = await auth.api_key_policy_service.calculate_grantable_scopes(
+                session,
+                actor_user_id=UUID(str(actor_user_id)),
+                owner=owner,
+                key_kind=APIKeyKind.PERSONAL,
+                entity_id=entity_id,
+                inherit_from_tree=inherit_from_tree,
+            )
+        except InvalidInputError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=exc.message,
+            ) from exc
+
+        return ApiKeyGrantableScopesResponse(
+            actor_user_id=str(actor_user_id),
+            owner_id=str(owner.id),
+            entity_id=str(entity_id) if entity_id else None,
+            key_kind=APIKeyKind.PERSONAL,
+            inherit_from_tree=inherit_from_tree,
+            allowed_key_kinds=[APIKeyKind.PERSONAL],
+            personal_allowed_action_prefixes=auth.api_key_policy_service.get_personal_allowed_action_prefixes(),
+            grantable_scopes=grantable_scopes,
+        )
 
     @router.post(
         "/",

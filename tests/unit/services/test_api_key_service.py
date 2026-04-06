@@ -266,12 +266,13 @@ async def test_api_key_policy_enforces_enterprise_personal_key_rules_and_runtime
     owner.root_entity_id = root.id
     await test_session.flush()
 
-    with pytest.raises(InvalidInputError, match="entity anchor"):
+    with pytest.raises(InvalidInputError, match="inherit_from_tree requires an entity anchor"):
         await service.create_api_key(
             test_session,
             owner_id=owner.id,
-            name="Missing Anchor",
+            name="Tree Without Anchor",
             scopes=["user:read"],
+            inherit_from_tree=True,
         )
 
     with pytest.raises(InvalidInputError, match="explicit scope"):
@@ -287,9 +288,9 @@ async def test_api_key_policy_enforces_enterprise_personal_key_rules_and_runtime
         owner_id=owner.id,
         name="Personal Enterprise Key",
         scopes=["user:read"],
-        entity_id=root.id,
     )
     assert key.key_kind == APIKeyKind.PERSONAL
+    assert key.entity_id is None
 
     owner.status = UserStatus.SUSPENDED
     await test_session.flush()
@@ -297,9 +298,20 @@ async def test_api_key_policy_enforces_enterprise_personal_key_rules_and_runtime
     assert suspended_key is None
 
     owner.status = UserStatus.ACTIVE
+    anchored_full_key, _ = await service.create_api_key(
+        test_session,
+        owner_id=owner.id,
+        name="Anchored Enterprise Key",
+        scopes=["user:read"],
+        entity_id=root.id,
+    )
     root.status = "archived"
     await test_session.flush()
-    archived_anchor_key, _ = await service.verify_api_key(test_session, full_key)
+
+    still_valid_key, _ = await service.verify_api_key(test_session, full_key)
+    assert still_valid_key is not None
+
+    archived_anchor_key, _ = await service.verify_api_key(test_session, anchored_full_key)
     assert archived_anchor_key is None
 
 
@@ -523,23 +535,23 @@ async def test_api_key_policy_and_service_emit_observability_for_enterprise_deni
     owner.root_entity_id = root.id
     await test_session.flush()
 
-    with pytest.raises(InvalidInputError, match="entity anchor"):
+    with pytest.raises(InvalidInputError, match="inherit_from_tree requires an entity anchor"):
         await service.create_api_key(
             test_session,
             owner_id=owner.id,
-            name="Missing Anchor",
+            name="Tree Without Anchor",
             scopes=["user:read"],
+            inherit_from_tree=True,
         )
 
     assert observability.log_api_key_policy_decision.call_args_list[-1].kwargs["surface"] == "grant_create"
-    assert observability.log_api_key_policy_decision.call_args_list[-1].kwargs["reason"] == "entity_anchor_required"
+    assert observability.log_api_key_policy_decision.call_args_list[-1].kwargs["reason"] == "inherit_from_tree_requires_anchor"
 
     full_key, _ = await service.create_api_key(
         test_session,
         owner_id=owner.id,
         name="Valid Enterprise Key",
         scopes=["user:read"],
-        entity_id=root.id,
     )
     owner.status = UserStatus.SUSPENDED
     await test_session.flush()

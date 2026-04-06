@@ -378,3 +378,27 @@ async def test_permission_definition_history_records_abac_condition_group_and_co
         assert created_permission_event.event_source == "permission_service.create_permission"
         assert created_permission_event.after["condition_groups"] == []
         assert created_permission_event.after["conditions"] == []
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_permission_static_routes_are_not_swallowed_by_permission_id_route(
+    client: httpx.AsyncClient,
+    admin_user: dict,
+):
+    headers = {"Authorization": f"Bearer {admin_user['token']}"}
+
+    my_permissions_response = await client.get("/v1/permissions/me", headers=headers)
+    assert my_permissions_response.status_code == 200, my_permissions_response.text
+    assert my_permissions_response.json() == ["*:*"]
+
+    check_response = await client.post(
+        "/v1/permissions/check",
+        headers=headers,
+        json={
+            "user_id": admin_user["id"],
+            "permissions": ["permission:read"],
+        },
+    )
+    assert check_response.status_code == 200, check_response.text
+    assert check_response.json()["results"] == {"permission:read": True}

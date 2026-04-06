@@ -804,10 +804,23 @@ class APIKeyPolicyService:
                 return
 
             if entity_id is None:
-                raise self._policy_error(
-                    "entity_anchor_required",
-                    message="Personal API keys require an entity anchor in EnterpriseRBAC",
-                )
+                if not owner.can_authenticate():
+                    raise self._policy_error(
+                        "owner_inactive",
+                        message="Personal API key owner must be active",
+                        details={"owner_id": str(owner.id)},
+                    )
+
+                if actor_user_id is not None and actor_user_id != owner.id and not allow_cross_owner_for_calculation:
+                    raise self._policy_error(
+                        "cross_owner_personal_key_forbidden",
+                        message="Personal API keys can only be managed by their owner in v1",
+                        details={
+                            "actor_user_id": str(actor_user_id),
+                            "owner_id": str(owner.id),
+                        },
+                    )
+                return
 
             entity = await session.get(Entity, entity_id)
             if entity is None:

@@ -165,6 +165,80 @@ def get_permissions_router(
         return build_permission_response(permission)
 
     @router.get(
+        "/me",
+        response_model=List[str],
+        summary="Get current user's permissions",
+        description="Get all permissions for the authenticated user",
+    )
+    async def get_my_permissions(
+        entity_id: Optional[str] = None,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_auth()),
+    ):
+        """
+        Get all permissions for the currently authenticated user.
+
+        Optionally filter by entity context (for EnterpriseRBAC).
+        """
+        user_id = UUID(auth_result["user_id"])
+        return await auth.permission_service.get_user_permissions(
+            session, user_id=user_id
+        )
+
+    @router.post(
+        "/check",
+        response_model=PermissionCheckResponse,
+        summary="Check permissions",
+        description="Check if user has specific permissions (requires permission:check permission)",
+    )
+    async def check_permissions(
+        data: PermissionCheckRequest,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_permission("permission:check")),
+    ):
+        """Check if a user has specific permissions."""
+        user = await auth.user_service.get_user_by_id(session, UUID(data.user_id))
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+            )
+
+        results = {}
+        for permission in data.permissions:
+            has_perm = await auth.permission_service.check_permission(
+                session, user_id=UUID(data.user_id), permission=permission
+            )
+            results[permission] = has_perm
+
+        has_all = all(results.values())
+        return PermissionCheckResponse(
+            user_id=data.user_id, has_all_permissions=has_all, results=results
+        )
+
+    @router.get(
+        "/user/{user_id}",
+        response_model=List[str],
+        summary="Get user permissions",
+        description="Get all permissions for a user (requires permission:read permission)",
+    )
+    async def get_user_permissions(
+        user_id: UUID,
+        entity_id: Optional[str] = None,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_permission("permission:read")),
+    ):
+        """Get all permissions for a user, optionally in a specific entity context."""
+        user = await auth.user_service.get_user_by_id(session, user_id)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+            )
+
+        return await auth.permission_service.get_user_permissions(
+            session, user_id=user_id
+        )
+
+    @router.get(
         "/{permission_id}",
         response_model=PermissionResponse,
         summary="Get permission",
@@ -257,80 +331,6 @@ def get_permissions_router(
             )
 
         return None  # 204 No Content
-
-    @router.get(
-        "/me",
-        response_model=List[str],
-        summary="Get current user's permissions",
-        description="Get all permissions for the authenticated user",
-    )
-    async def get_my_permissions(
-        entity_id: Optional[str] = None,
-        session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_auth()),
-    ):
-        """
-        Get all permissions for the currently authenticated user.
-
-        Optionally filter by entity context (for EnterpriseRBAC).
-        """
-        user_id = UUID(auth_result["user_id"])
-        return await auth.permission_service.get_user_permissions(
-            session, user_id=user_id
-        )
-
-    @router.post(
-        "/check",
-        response_model=PermissionCheckResponse,
-        summary="Check permissions",
-        description="Check if user has specific permissions (requires permission:check permission)",
-    )
-    async def check_permissions(
-        data: PermissionCheckRequest,
-        session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_permission("permission:check")),
-    ):
-        """Check if a user has specific permissions."""
-        user = await auth.user_service.get_user_by_id(session, UUID(data.user_id))
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
-            )
-
-        results = {}
-        for permission in data.permissions:
-            has_perm = await auth.permission_service.check_permission(
-                session, user_id=UUID(data.user_id), permission=permission
-            )
-            results[permission] = has_perm
-
-        has_all = all(results.values())
-        return PermissionCheckResponse(
-            user_id=data.user_id, has_all_permissions=has_all, results=results
-        )
-
-    @router.get(
-        "/user/{user_id}",
-        response_model=List[str],
-        summary="Get user permissions",
-        description="Get all permissions for a user (requires permission:read permission)",
-    )
-    async def get_user_permissions(
-        user_id: UUID,
-        entity_id: Optional[str] = None,
-        session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_permission("permission:read")),
-    ):
-        """Get all permissions for a user, optionally in a specific entity context."""
-        user = await auth.user_service.get_user_by_id(session, user_id)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
-            )
-
-        return await auth.permission_service.get_user_permissions(
-            session, user_id=user_id
-        )
 
     # ---------------------------------------------------------------------
     # ABAC: Permission condition groups + conditions

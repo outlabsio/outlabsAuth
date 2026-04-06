@@ -118,7 +118,7 @@ class ApiKeyGrantableScopesResponse(BaseModel):
 
     actor_user_id: str
     owner_id: str
-    entity_id: str
+    entity_id: Optional[str] = None
     key_kind: APIKeyKind
     inherit_from_tree: bool
     allowed_key_kinds: List[APIKeyKind]
