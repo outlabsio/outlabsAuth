@@ -21,6 +21,7 @@ import pytest_asyncio
 from fastapi import FastAPI
 
 from outlabs_auth import SimpleRBAC
+from outlabs_auth.core.exceptions import InvalidInputError
 from outlabs_auth.fastapi import register_exception_handlers
 from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.enums import EntityClass
@@ -531,8 +532,10 @@ async def test_service_verify_api_key_enforces_scope(auth_instance: SimpleRBAC, 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_service_verify_api_key_enforces_entity_access(auth_instance: SimpleRBAC, admin_user: dict):
-    """Verify API key rejects access to non-matching entity."""
+async def test_service_create_api_key_rejects_entity_anchor_in_simple_rbac(
+    auth_instance: SimpleRBAC, admin_user: dict
+):
+    """SimpleRBAC does not support entity-anchored API keys."""
     async with auth_instance.get_session() as session:
         entity_a = Entity(
             name="entity_a",
@@ -552,16 +555,13 @@ async def test_service_verify_api_key_enforces_entity_access(auth_instance: Simp
         session.add(entity_b)
         await session.flush()
 
-        full_key, _ = await auth_instance.api_key_service.create_api_key(
-            session,
-            owner_id=uuid.UUID(admin_user["id"]),
-            name=f"entity-key-{uuid.uuid4().hex[:8]}",
-            entity_id=entity_a.id,
-        )
-        await session.commit()
-
-        verified_key, _ = await auth_instance.api_key_service.verify_api_key(session, full_key, entity_id=entity_b.id)
-        assert verified_key is None
+        with pytest.raises(InvalidInputError, match="Entity anchors are not supported"):
+            await auth_instance.api_key_service.create_api_key(
+                session,
+                owner_id=uuid.UUID(admin_user["id"]),
+                name=f"entity-key-{uuid.uuid4().hex[:8]}",
+                entity_id=entity_a.id,
+            )
 
 
 @pytest.mark.integration

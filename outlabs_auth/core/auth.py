@@ -276,6 +276,39 @@ class OutlabsAuth:
         if store_oauth_provider_tokens and not oauth_token_encryption_key:
             raise ConfigurationError("store_oauth_provider_tokens=True requires oauth_token_encryption_key")
 
+    def prime_fastapi_routing(self) -> None:
+        """
+        Prepare router dependencies synchronously so FastAPI routers can be
+        mounted before the async runtime initialization phase.
+
+        This is intended for embedded hosts that want to bind OutlabsAuth-owned
+        routers at import time while still deferring migrations, Redis connects,
+        and other async startup work to ``initialize()``.
+        """
+        if self._engine is None:
+            connect_args: Dict[str, Any] = {}
+            if self.config.database_schema:
+                connect_args["server_settings"] = {"search_path": f"{self.config.database_schema},public"}
+
+            db_config = DatabaseConfig(
+                database_url=self.config.database_url,
+                echo=self.config.echo_sql,
+                connect_args=connect_args,
+            )
+            self._engine = create_engine(db_config)
+
+        if self._session_factory is None:
+            self._session_factory = create_session_factory(self._engine)
+
+        if self.auth_service is None:
+            self._init_services_sync()
+
+        if not self._backends:
+            self._init_backends()
+
+        if self._deps is None:
+            self._init_deps()
+
     async def initialize(self):
         """
         Initialize database and services.
@@ -350,7 +383,7 @@ class OutlabsAuth:
             schema=self.config.database_schema,
         )
 
-    async def _init_services(self):
+    def _init_services_sync(self):
         """Initialize all services based on configuration."""
         from outlabs_auth.services.access_scope import AccessScopeService
         from outlabs_auth.services.api_key import APIKeyService
@@ -484,6 +517,9 @@ class OutlabsAuth:
                 observability=self.observability,
             )
             self.auth_service.activity_tracker = self.activity_tracker
+
+    async def _init_services(self):
+        self._init_services_sync()
 
     def _init_backends(self):
         """Initialize authentication backends."""

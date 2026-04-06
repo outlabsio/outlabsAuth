@@ -500,6 +500,13 @@ class APIKeyPolicyService:
                 message="inherit_from_tree requires an entity anchor",
             )
 
+        if entity_id is not None and not self.config.enable_entity_hierarchy:
+            raise self._policy_error(
+                "entity_anchor_unsupported",
+                message="Entity anchors are not supported when entity hierarchy is disabled",
+                details={"entity_id": str(entity_id)},
+            )
+
         if not self.config.enable_entity_hierarchy:
             return
 
