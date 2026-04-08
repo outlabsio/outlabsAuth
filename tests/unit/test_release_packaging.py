@@ -26,6 +26,13 @@ def test_pyproject_exposes_public_package_metadata():
     assert data["project"]["urls"]["Repository"] == "https://github.com/outlabsio/outlabsAuth"
 
 
+def test_sdist_is_limited_to_library_files():
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text())
+
+    assert data["tool"]["hatch"]["build"]["targets"]["sdist"]["only-include"] == ["outlabs_auth"]
+
+
 def test_package_version_file_is_publicly_exposed():
     version_file = Path(__file__).resolve().parents[2] / "outlabs_auth" / "_version.py"
     assert f'__version__ = "{__version__}"' in version_file.read_text()

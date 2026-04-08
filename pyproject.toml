@@ -148,6 +148,9 @@ build-backend = "hatchling.build"
 [tool.hatch.version]
 path = "outlabs_auth/_version.py"
 
+[tool.hatch.build.targets.sdist]
+only-include = ["outlabs_auth"]
+
 [tool.hatch.build.targets.sdist.force-include]
 "outlabs_auth/alembic.ini" = "outlabs_auth/alembic.ini"
 
