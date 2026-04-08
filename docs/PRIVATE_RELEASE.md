@@ -1,106 +1,53 @@
-# Private Release Workflow
+# Maintainer Release Guide
 
-This package is intended for private distribution across internal projects.
+This repository now publishes `outlabs-auth` as a public alpha package on PyPI.
+
+## One-Time PyPI Setup
+
+1. Create or claim the `outlabs-auth` project on PyPI.
+2. In PyPI, configure a trusted publisher for:
+   - owner: `outlabsio`
+   - repository: `outlabsAuth`
+   - workflow: `publish-pypi.yml`
+   - environment: `pypi`
+3. In GitHub repository settings, create the `pypi` environment used by the publish workflow.
+
+Trusted publishing is the default path. No long-lived PyPI token is required for GitHub Actions once the publisher is configured.
 
 ## Release Checklist
 
 1. Set the new release version:
    - `uv run python scripts/release_version.py set X.Y.ZaN`
-   - Use `X.Y.Z` for a stable release, `X.Y.ZaN` for alpha, `X.Y.ZbN` for beta, and `X.Y.ZrcN` for release candidates.
-2. Run the release validation commands locally:
+   - Use `X.Y.Z` for stable, `X.Y.ZaN` for alpha, `X.Y.ZbN` for beta, and `X.Y.ZrcN` for release candidates.
+2. Verify release metadata:
    - `uv run python scripts/release_version.py check`
+3. Run packaging and bootstrap tests:
    - `uv run --extra test python -m pytest tests/unit/test_release_packaging.py tests/unit/test_bootstrap.py -q`
    - `TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test uv run --extra test python -m pytest tests/integration/test_packaged_cli_migrations.py -q`
+4. Build distributions locally:
    - `uv build --no-sources`
-3. Push the branch and wait for the `Release Readiness` GitHub Actions workflow to pass.
-4. Verify the wheel contains:
-   - `outlabs_auth/alembic.ini`
-   - `outlabs_auth/migrations/`
-5. Validate the packaged bootstrap flow explicitly:
-   - `DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test OUTLABS_AUTH_SCHEMA=release_smoke uv run python -m outlabs_auth.cli migrate`
-   - `DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test OUTLABS_AUTH_SCHEMA=release_smoke uv run python -m outlabs_auth.cli seed-system`
-   - `DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test OUTLABS_AUTH_SCHEMA=release_smoke uv run python -m outlabs_auth.cli bootstrap-admin --email admin@example.com --password 'ChangeMe123!'`
-6. Tag the release:
+5. Push the branch and wait for the `Release Readiness` workflow to pass.
+6. Merge to `main`.
+7. Create and push the version tag:
    - `git tag vX.Y.ZaN`
    - `git push origin vX.Y.ZaN`
+8. Confirm the `Publish PyPI` workflow completes and the release appears on PyPI.
 
-## External Admin UI
+## GitHub Actions Publish Flow
 
-The Nuxt admin UI is no longer shipped from this repository. If the external UI
-also needs a release validation pass, run that separately in the sibling repo
-`../OutlabsAuthUI` (local workspace:
-`/Users/macbookm3/Documents/projects/OutlabsAuthUI`).
+The public release workflow lives in [`.github/workflows/publish-pypi.yml`](/Users/macbookm3/Documents/projects/outlabsAuth/.github/workflows/publish-pypi.yml).
 
-## Library-Owned Schema Lifecycle
+- `Release Readiness` remains the branch/tag validation gate.
+- `Publish PyPI` runs on `v*` tags.
+- The publish job uses `pypa/gh-action-pypi-publish@release/v1` with GitHub OIDC trusted publishing.
 
-OutlabsAuth owns its schema lifecycle. Host applications should not vendor or merge
-the auth migrations into their own Alembic history.
+## Local Fallback Publish
 
-Use this sequence for a fresh install in a consuming application:
-
-1. `migrate`
-   - Applies the auth schema migrations into `OUTLABS_AUTH_SCHEMA` and records state in `outlabs_auth_alembic_version`.
-2. `seed-system`
-   - Seeds the library-owned permission catalog and default system config records.
-3. `bootstrap-admin`
-   - Creates the first superuser exactly once; rerunning with the same email is idempotent.
-
-Environment variables:
-
-- `DATABASE_URL`: target PostgreSQL database URL
-- `OUTLABS_AUTH_SCHEMA`: optional schema name for auth tables; defaults to `public` when unset
-- `OUTLABS_AUTH_BOOTSTRAP_EMAIL`: optional default email for `bootstrap-admin`
-- `OUTLABS_AUTH_BOOTSTRAP_PASSWORD`: optional default password for `bootstrap-admin`
-
-The bundled `outlabs_auth/alembic.ini` intentionally ships with a placeholder URL.
-Installed consumers must provide `DATABASE_URL`; there is no real fallback database target.
-
-Legacy installs that previously used `init-db` or another model-bootstrap path
-can be adopted into Alembic history with:
-
-- `DATABASE_URL=... OUTLABS_AUTH_SCHEMA=... uv run python -m outlabs_auth.cli adopt-existing-schema`
-
-The standard `migrate` command will also auto-adopt a fully bootstrapped legacy
-auth schema before attempting new DDL.
-
-## Publish To A Private Index
-
-Add the private index to `pyproject.toml` in consuming projects:
-
-```toml
-[project]
-dependencies = ["outlabs-auth>=X.Y.ZaN,<X.(Y+1)"]  # Example: >=0.1.0a1,<0.2
-
-[tool.uv.sources]
-outlabs-auth = { index = "outlabs-private" }
-
-[[tool.uv.index]]
-name = "outlabs-private"
-url = "https://<your-registry>/simple/"
-publish-url = "https://<your-registry>/"
-explicit = true
-```
-
-Authenticate and publish:
+If GitHub Actions is unavailable, publish manually after building distributions:
 
 ```bash
-uv auth login <your-registry-host>
 uv build --no-sources
-uv publish --index outlabs-private
+uvx twine upload dist/*
 ```
 
-## Consume Via Private Git
-
-If you are not ready to operate a private index yet, pin a Git tag instead:
-
-```toml
-[project]
-dependencies = ["outlabs-auth"]
-
-[tool.uv.sources]
-outlabs-auth = { git = "ssh://git@github.com/<org>/outlabsAuth.git", tag = "vX.Y.ZaN" }
-```
-
-This is acceptable for the first few projects, but a private index is the better
-long-term option because it decouples installability from Git checkout shape and
-gives you conventional version resolution.
+For the fallback path, create a PyPI API token on pypi.org and supply it to Twine using its standard environment variables or prompt flow.

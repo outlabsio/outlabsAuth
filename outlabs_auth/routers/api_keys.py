@@ -195,6 +195,57 @@ def get_api_keys_router(auth: Any, prefix: str = "", tags: Optional[list[str]] =
                     detail=str(e),
                 )
 
+        if (
+            getattr(auth, "api_key_policy_service", None) is not None
+            and getattr(auth.config, "enable_entity_hierarchy", False)
+            and data.key_kind == APIKeyKind.PERSONAL
+            and data.scopes
+            and entity_id is None
+        ):
+            actor_user_id = auth_result.get("user_id")
+            owner = auth_result.get("user")
+            if actor_user_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Authenticated user context is required for personal API keys",
+                )
+            if owner is None:
+                from outlabs_auth.models.sql.user import User
+
+                owner = await session.get(User, UUID(str(actor_user_id)))
+            if owner is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Authenticated user context is required for personal API keys",
+                )
+
+            try:
+                grantable_scopes = await auth.api_key_policy_service.calculate_grantable_scopes(
+                    session,
+                    actor_user_id=UUID(str(actor_user_id)),
+                    owner=owner,
+                    key_kind=APIKeyKind.PERSONAL,
+                    entity_id=entity_id,
+                    inherit_from_tree=data.inherit_from_tree,
+                )
+            except InvalidInputError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=exc.message,
+                ) from exc
+
+            missing_scopes = [
+                scope
+                for scope in data.scopes
+                if not grantable_scopes
+                or not auth.api_key_service.scopes_allow_permission(grantable_scopes, scope)
+            ]
+            if missing_scopes:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Requested scopes require an entity anchor in EnterpriseRBAC",
+                )
+
         # create_api_key returns tuple: (full_key, api_key_model)
         try:
             full_key, api_key_model = await auth.api_key_service.create_api_key(

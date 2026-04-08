@@ -11,7 +11,7 @@ from outlabs_auth.release_versioning import parse_release_version
 ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILE = ROOT / "outlabs_auth" / "_version.py"
 README = ROOT / "README.md"
-PRIVATE_RELEASE_DOC = ROOT / "docs" / "PRIVATE_RELEASE.md"
+RELEASE_GUIDE = ROOT / "docs" / "PRIVATE_RELEASE.md"
 
 
 def _read_current_version() -> str:
@@ -35,10 +35,8 @@ def _expected_readme_fragments(version: str) -> dict[str, str]:
         "stage_badge": (
             f"[![Stage: {release.stage_display}]"
             f"(https://img.shields.io/badge/stage-{release.release_stage}-{release.stage_badge_color}.svg)]"
-            "(#development-status)"
+            "(#status)"
         ),
-        "dependency_example": f'dependencies = ["outlabs-auth{release.dependency_specifier}"]',
-        "git_tag_example": f'tag = "{release.git_tag}"',
         "library_version": f"**Current Library Version**: {release.python_version}",
         "release_stage": f"**Release Stage**: {release.stage_display}",
     }
@@ -66,21 +64,9 @@ def _write_readme(version: str) -> None:
     readme = README.read_text()
     readme = _replace_once(
         readme,
-        r"\[!\[Stage: [^\]]+\]\(https://img\.shields\.io/badge/stage-[^)]+\)\]\(#development-status\)",
+        r"\[!\[Stage: [^\]]+\]\(https://img\.shields\.io/badge/stage-[^)]+\)\]\(#status\)",
         _expected_readme_fragments(version)["stage_badge"],
         description="README stage badge",
-    )
-    readme = _replace_once(
-        readme,
-        r'dependencies = \["outlabs-auth>=[^"]+"\]',
-        _expected_readme_fragments(version)["dependency_example"],
-        description="README dependency example",
-    )
-    readme = _replace_once(
-        readme,
-        r'tag = "v[^"]+"',
-        _expected_readme_fragments(version)["git_tag_example"],
-        description="README git tag example",
     )
     readme = _replace_once(
         readme,
@@ -102,13 +88,16 @@ def _write_readme(version: str) -> None:
     )
     README.write_text(readme)
 
-def _check_private_release_doc() -> list[str]:
+
+def _check_release_guide() -> list[str]:
     issues: list[str] = []
-    doc_text = PRIVATE_RELEASE_DOC.read_text()
+    doc_text = RELEASE_GUIDE.read_text()
     for fragment in (
         "uv run python scripts/release_version.py set X.Y.ZaN",
         "uv run python scripts/release_version.py check",
         "Release Readiness",
+        "Publish PyPI",
+        "pypa/gh-action-pypi-publish@release/v1",
     ):
         if fragment not in doc_text:
             issues.append(f"`docs/PRIVATE_RELEASE.md` is missing `{fragment}`")
@@ -130,7 +119,7 @@ def check_release_metadata(version: str) -> list[str]:
         if fragment not in readme:
             issues.append(f"`README.md` is missing the expected {description.replace('_', ' ')}")
 
-    issues.extend(_check_private_release_doc())
+    issues.extend(_check_release_guide())
     return issues
 
 

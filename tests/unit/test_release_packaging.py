@@ -16,10 +16,40 @@ def test_pyproject_uses_dynamic_version_file():
     assert data["tool"]["hatch"]["version"]["path"] == "outlabs_auth/_version.py"
 
 
+def test_pyproject_exposes_public_package_metadata():
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text())
+
+    assert data["project"]["name"] == "outlabs-auth"
+    assert data["project"]["authors"][0]["name"] == "OUTLABS LLC"
+    assert data["project"]["license"]["file"] == "LICENSE"
+    assert data["project"]["urls"]["Repository"] == "https://github.com/outlabsio/outlabsAuth"
+
+
 def test_package_version_file_is_publicly_exposed():
     version_file = Path(__file__).resolve().parents[2] / "outlabs_auth" / "_version.py"
     assert f'__version__ = "{__version__}"' in version_file.read_text()
     assert parse_release_version(__version__).release_stage == __release_stage__
+
+
+def test_public_root_exports_core_library_surface():
+    import outlabs_auth as package
+
+    assert package.__author__ == "OUTLABS LLC"
+    assert package.__license__ == "MIT"
+    for name in (
+        "OutlabsAuth",
+        "SimpleRBAC",
+        "EnterpriseRBAC",
+        "AuthConfig",
+        "SimpleConfig",
+        "EnterpriseConfig",
+        "AuthDeps",
+        "create_auth_deps",
+        "ResourceContextMiddleware",
+        "register_exception_handlers",
+    ):
+        assert hasattr(package, name)
 
 
 def test_cli_prefers_bundled_alembic_config():
@@ -51,14 +81,24 @@ def test_readme_tracks_current_release_metadata():
 
     assert f"**Current Library Version**: {__version__}" in readme
     assert f"**Release Stage**: {release.stage_display}" in readme
-    assert f'dependencies = ["outlabs-auth{release.dependency_specifier}"]' in readme
-    assert f'tag = "{release.git_tag}"' in readme
-    assert "OutlabsAuthUI" in readme
+    assert "pip install outlabs-auth" in readme
+    assert "https://github.com/outlabsio/outlabsAuth" in readme
+    assert "MIT" in readme
 
 
-def test_private_release_doc_references_release_helper_and_ci():
-    private_release_doc = (Path(__file__).resolve().parents[2] / "docs" / "PRIVATE_RELEASE.md").read_text()
+def test_release_guide_references_release_helper_ci_and_pypi_publish():
+    release_guide = (Path(__file__).resolve().parents[2] / "docs" / "PRIVATE_RELEASE.md").read_text()
 
-    assert "uv run python scripts/release_version.py set X.Y.ZaN" in private_release_doc
-    assert "uv run python scripts/release_version.py check" in private_release_doc
-    assert "Release Readiness" in private_release_doc
+    assert "uv run python scripts/release_version.py set X.Y.ZaN" in release_guide
+    assert "uv run python scripts/release_version.py check" in release_guide
+    assert "Release Readiness" in release_guide
+    assert "Publish PyPI" in release_guide
+    assert "pypa/gh-action-pypi-publish@release/v1" in release_guide
+
+
+def test_publish_workflow_uses_trusted_publishing():
+    workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "publish-pypi.yml").read_text()
+
+    assert 'tags:\n      - "v*"' in workflow
+    assert "id-token: write" in workflow
+    assert "pypa/gh-action-pypi-publish@release/v1" in workflow

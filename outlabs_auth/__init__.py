@@ -12,8 +12,8 @@ Quick Start:
     >>> await auth.initialize()
 """
 
-__author__ = "Outlabs"
-__license__ = "Proprietary"
+__author__ = "OUTLABS LLC"
+__license__ = "MIT"
 
 from outlabs_auth._version import __release_stage__, __version__
 from outlabs_auth.bootstrap import (
@@ -28,7 +28,7 @@ from outlabs_auth.bootstrap import (
 # Database infrastructure
 # Core Auth Classes
 from outlabs_auth.core.auth import OutlabsAuth
-from outlabs_auth.core.config import AuthConfig
+from outlabs_auth.core.config import AuthConfig, EnterpriseConfig, SimpleConfig
 
 # Exception classes
 from outlabs_auth.core.exceptions import (
@@ -50,6 +50,7 @@ from outlabs_auth.database import (
     create_engine,
     create_session_factory,
 )
+from outlabs_auth.dependencies import AuthDeps, create_auth_deps
 from outlabs_auth.fastapi import (
     register_exception_handlers,
     register_outlabs_exception_handler,
@@ -61,6 +62,7 @@ from outlabs_auth.integrations import (
     HostRoleProjection,
     HostUserProjection,
 )
+from outlabs_auth.middleware import ResourceContextMiddleware
 
 # Model groups for convenience
 from outlabs_auth.models.sql import (
@@ -167,6 +169,11 @@ __all__ = [
     # Core Auth Classes
     "OutlabsAuth",
     "AuthConfig",
+    "SimpleConfig",
+    "EnterpriseConfig",
+    "AuthDeps",
+    "create_auth_deps",
+    "ResourceContextMiddleware",
     "register_exception_handlers",
     "register_outlabs_exception_handler",
     "HostQueryService",

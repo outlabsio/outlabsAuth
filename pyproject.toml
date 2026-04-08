@@ -1,23 +1,29 @@
 [project]
 name = "outlabs-auth"
 dynamic = ["version"]
-description = "Private FastAPI authentication and authorization library with RBAC."
+description = "Open-source FastAPI authentication and authorization library with RBAC, ABAC, and Postgres-backed permissions."
 authors = [
-    {name = "Outlabs", email = "contact@outlabs.io"}
+    {name = "OUTLABS LLC", email = "contact@outlabs.io"}
+]
+maintainers = [
+    {name = "OUTLABS LLC", email = "contact@outlabs.io"}
 ]
 readme = "README.md"
-license = {text = "Proprietary"}
+license = {file = "LICENSE"}
 requires-python = ">=3.12"
-keywords = ["fastapi", "authentication", "authorization", "rbac", "jwt", "permissions", "hierarchical", "multi-tenant"]
+keywords = ["fastapi", "authentication", "authorization", "rbac", "abac", "jwt", "permissions", "postgresql", "sqlmodel"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Framework :: FastAPI",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Security",
 ]
+urls = {Homepage = "https://outlabs.io", Documentation = "https://github.com/outlabsio/outlabsAuth#readme", Repository = "https://github.com/outlabsio/outlabsAuth", Issues = "https://github.com/outlabsio/outlabsAuth/issues"}
 dependencies = [
     # Core FastAPI dependencies
     "fastapi>=0.104.0",
