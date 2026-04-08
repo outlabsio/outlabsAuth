@@ -31,6 +31,12 @@ pip install outlabs-auth
 
 You will also need a PostgreSQL database available to the consuming app.
 
+The consuming app owns its own configuration. In practice that means you provide:
+
+- a PostgreSQL connection URL
+- a JWT signing secret
+- any app-specific entity, membership, or host-query integrations you want on top of the base library
+
 ## Quickstart
 
 ```python
@@ -57,6 +63,21 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 register_exception_handlers(app)
 app.include_router(get_auth_router(auth, prefix="/auth"))
+```
+
+This example uses `auto_migrate=True` for convenience. For production, run migrations explicitly with the packaged CLI instead of relying on startup migration.
+
+## CLI Bootstrap
+
+After installation, the package exposes an `outlabs-auth` CLI for schema setup and initial seeding.
+
+```bash
+export DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/app
+# optional: export OUTLABS_AUTH_SCHEMA=auth
+
+outlabs-auth migrate
+outlabs-auth seed-system
+outlabs-auth bootstrap-admin --email admin@example.com --password change-me
 ```
 
 ## More
