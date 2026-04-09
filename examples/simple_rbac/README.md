@@ -20,7 +20,7 @@ cd examples/simple_rbac
 uv sync
 
 # Optional: validate a local wheel instead of the published package
-# uv pip install --reinstall ../../dist/outlabs_auth-0.1.0a10-py3-none-any.whl
+# uv pip install --reinstall ../../dist/outlabs_auth-<version>-py3-none-any.whl
 
 # Bootstrap auth schema
 uv run outlabs-auth migrate

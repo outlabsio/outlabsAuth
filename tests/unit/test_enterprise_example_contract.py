@@ -33,7 +33,8 @@ def test_enterprise_example_reset_script_uses_migrations_and_full_data_clear():
     reset_script = (ROOT / "examples/enterprise_rbac/reset_test_env.py").read_text()
 
     assert "EnterpriseRBAC(" in reset_script
-    assert "auto_migrate=True" in reset_script
+    assert "run_migrations(DATABASE_URL)" in reset_script
+    assert "auto_migrate=False" in reset_script
     assert "TRUNCATE TABLE" in reset_script
     assert "outlabs_auth_alembic_version" in reset_script
     assert "tables=[Lead.__table__, LeadNote.__table__]" in reset_script
