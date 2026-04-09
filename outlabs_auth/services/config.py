@@ -7,7 +7,7 @@ Only superusers should be able to modify these settings.
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from uuid import UUID
 
 from sqlalchemy import select
@@ -46,14 +46,14 @@ class ConfigService:
         Returns:
             Parsed JSON value or None if not found
         """
-        stmt = select(SystemConfig).where(SystemConfig.key == key)
+        stmt = select(SystemConfig).where(cast(Any, SystemConfig.key) == key)
         result = await session.execute(stmt)
         config = result.scalar_one_or_none()
 
         if config is None:
             return None
 
-        return json.loads(config.value)
+        return cast(Optional[Dict[str, Any]], json.loads(config.value))
 
     async def set_config(
         self,
@@ -78,7 +78,7 @@ class ConfigService:
         Returns:
             Updated SystemConfig record
         """
-        stmt = select(SystemConfig).where(SystemConfig.key == key)
+        stmt = select(SystemConfig).where(cast(Any, SystemConfig.key) == key)
         result = await session.execute(stmt)
         config = result.scalar_one_or_none()
 
@@ -119,7 +119,7 @@ class ConfigService:
         Returns:
             True if deleted, False if not found
         """
-        stmt = select(SystemConfig).where(SystemConfig.key == key)
+        stmt = select(SystemConfig).where(cast(Any, SystemConfig.key) == key)
         result = await session.execute(stmt)
         config = result.scalar_one_or_none()
 
@@ -151,9 +151,9 @@ class ConfigService:
 
         if value is None:
             # Return defaults
-            return EntityTypeConfig(**DEFAULT_ENTITY_TYPE_CONFIG)
+            return EntityTypeConfig.model_validate(DEFAULT_ENTITY_TYPE_CONFIG)
 
-        return EntityTypeConfig(**value)
+        return EntityTypeConfig.model_validate(value)
 
     async def set_entity_type_config(
         self,

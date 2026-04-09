@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Sequence
+from typing import Any, Literal, Sequence, cast
 from uuid import UUID
 
 from sqlalchemy import select
@@ -158,7 +158,7 @@ async def bootstrap_superuser(
             email=normalized_email,
         )
 
-    any_user_result = await session.execute(select(User.id).limit(1))
+    any_user_result = await session.execute(select(cast(Any, User.id)).limit(1))
     if any_user_result.scalar_one_or_none() is not None:
         raise RuntimeError(
             "bootstrap-admin refused because users already exist and the requested email is not present"

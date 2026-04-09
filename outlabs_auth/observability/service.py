@@ -10,7 +10,7 @@ import logging
 import socket
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from prometheus_client import REGISTRY, CollectorRegistry, Counter, Gauge, Histogram
 from sqlalchemy import event
@@ -150,8 +150,10 @@ class ObservabilityService:
         self.hostname = socket.gethostname()
         self.logger: Optional[_EventLogger] = None
         self._base_logger = logger
-        self._log_queue: Optional[asyncio.Queue] = None
-        self._log_worker_task: Optional[asyncio.Task] = None
+        self._log_queue: Optional[
+            asyncio.Queue[tuple[Callable[..., None], tuple[Any, ...], Dict[str, Any]]]
+        ] = None
+        self._log_worker_task: Optional[asyncio.Task[None]] = None
         self.metrics_registry = metrics_registry or REGISTRY
 
         # Prometheus metrics (will be initialized in initialize())
@@ -176,7 +178,11 @@ class ObservabilityService:
             self._log_queue = asyncio.Queue(maxsize=self.config.max_log_queue_size)
             self._log_worker_task = asyncio.create_task(self._log_worker())
 
-        self.logger.info(
+        logger = self.logger
+        if logger is None:
+            return
+
+        logger.info(
             "observability_initialized",
             logs_format=self.config.logs_format,
             logs_level=self.config.logs_level,
@@ -186,16 +192,21 @@ class ObservabilityService:
 
     async def shutdown(self) -> None:
         """Shutdown observability service gracefully."""
-        if self._log_worker_task:
+        log_worker_task = self._log_worker_task
+        if log_worker_task is not None:
             # Wait for queue to drain
-            await self._log_queue.join()
-            self._log_worker_task.cancel()
+            log_queue = self._log_queue
+            if log_queue is not None:
+                await log_queue.join()
+            log_worker_task.cancel()
             try:
-                await self._log_worker_task
+                await log_worker_task
             except asyncio.CancelledError:
                 pass
 
-        self.logger.info("observability_shutdown")
+        logger = self.logger
+        if logger is not None:
+            logger.info("observability_shutdown")
 
     def instrument_sqlalchemy(self, engine: Optional[AsyncEngine]) -> None:
         """
@@ -276,261 +287,277 @@ class ObservabilityService:
 
     def _initialize_metrics(self) -> None:
         """Initialize Prometheus metrics."""
-        registry_kwargs = {"registry": self.metrics_registry}
-
         # Authentication metrics
-        self.metrics["login_attempts"] = Counter(
+        self.metrics["login_attempts"] = self._counter(
             "outlabs_auth_login_attempts_total",
             "Total login attempts",
             ["status", "method"],
-            **registry_kwargs,
         )
-        self.metrics["login_duration"] = Histogram(
+        self.metrics["login_duration"] = self._histogram(
             "outlabs_auth_login_duration_seconds",
             "Login duration in seconds",
             ["method"],
             buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
-            **registry_kwargs,
         )
-        self.metrics["account_locked"] = Counter(
+        self.metrics["account_locked"] = self._counter(
             "outlabs_auth_account_locked_total",
             "Total account lockouts",
-            **registry_kwargs,
         )
-        self.metrics["password_reset_requests"] = Counter(
+        self.metrics["password_reset_requests"] = self._counter(
             "outlabs_auth_password_reset_requests_total",
             "Total password reset requests",
-            **registry_kwargs,
         )
-        self.metrics["email_verifications"] = Counter(
+        self.metrics["email_verifications"] = self._counter(
             "outlabs_auth_email_verifications_total",
             "Total email verifications",
             ["status"],
-            **registry_kwargs,
         )
 
         # Authorization metrics
-        self.metrics["permission_checks"] = Counter(
+        self.metrics["permission_checks"] = self._counter(
             "outlabs_auth_permission_checks_total",
             "Total permission checks",
             ["result", "permission"],
-            **registry_kwargs,
         )
-        self.metrics["permission_check_duration"] = Histogram(
+        self.metrics["permission_check_duration"] = self._histogram(
             "outlabs_auth_permission_check_duration_seconds",
             "Permission check duration in seconds",
+            labelnames=None,
             buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5],
-            **registry_kwargs,
         )
-        self.metrics["role_assignments"] = Counter(
+        self.metrics["role_assignments"] = self._counter(
             "outlabs_auth_role_assignments_total",
             "Total role assignments",
             ["operation"],
-            **registry_kwargs,
         )
 
         # Session metrics
-        self.metrics["active_sessions"] = Gauge(
+        self.metrics["active_sessions"] = self._gauge(
             "outlabs_auth_active_sessions",
             "Number of active sessions",
-            **registry_kwargs,
         )
-        self.metrics["session_duration"] = Histogram(
+        self.metrics["session_duration"] = self._histogram(
             "outlabs_auth_session_duration_seconds",
             "Session duration in seconds",
+            labelnames=None,
             buckets=[60, 300, 900, 1800, 3600, 7200, 14400, 28800],
-            **registry_kwargs,
         )
-        self.metrics["token_refreshes"] = Counter(
+        self.metrics["token_refreshes"] = self._counter(
             "outlabs_auth_token_refreshes_total",
             "Total token refresh operations",
             ["status"],
-            **registry_kwargs,
         )
-        self.metrics["token_blacklist_checks"] = Counter(
+        self.metrics["token_blacklist_checks"] = self._counter(
             "outlabs_auth_token_blacklist_checks_total",
             "Total token blacklist checks",
             ["result"],
-            **registry_kwargs,
         )
 
         # API key metrics
-        self.metrics["api_key_validations"] = Counter(
+        self.metrics["api_key_validations"] = self._counter(
             "outlabs_auth_api_key_validations_total",
             "Total API key validations",
             ["status"],
-            **registry_kwargs,
         )
-        self.metrics["api_key_rate_limit_hits"] = Counter(
+        self.metrics["api_key_rate_limit_hits"] = self._counter(
             "outlabs_auth_api_key_rate_limit_hits_total",
             "Total API key rate limit hits",
-            **registry_kwargs,
         )
-        self.metrics["api_key_usage"] = Counter(
+        self.metrics["api_key_usage"] = self._counter(
             "outlabs_auth_api_key_usage_total",
             "Total API key usage",
-            **registry_kwargs,
         )
-        self.metrics["api_key_policy_decisions"] = Counter(
+        self.metrics["api_key_policy_decisions"] = self._counter(
             "outlabs_auth_api_key_policy_decisions_total",
             "Total API key policy decisions",
             ["surface", "outcome", "reason"],
-            **registry_kwargs,
         )
-        self.metrics["api_key_lifecycle"] = Counter(
+        self.metrics["api_key_lifecycle"] = self._counter(
             "outlabs_auth_api_key_lifecycle_total",
             "Total API key lifecycle operations",
             ["operation", "key_kind"],
-            **registry_kwargs,
         )
 
         # Security metrics
-        self.metrics["suspicious_activity"] = Counter(
+        self.metrics["suspicious_activity"] = self._counter(
             "outlabs_auth_suspicious_activity_total",
             "Suspicious activity detected",
             ["type"],
-            **registry_kwargs,
         )
-        self.metrics["failed_login_attempts"] = Counter(
+        self.metrics["failed_login_attempts"] = self._counter(
             "outlabs_auth_failed_login_attempts_total",
             "Failed login attempts",
             ["reason"],
-            **registry_kwargs,
         )
 
         # Performance metrics
-        self.metrics["cache_hits"] = Counter(
+        self.metrics["cache_hits"] = self._counter(
             "outlabs_auth_cache_hits_total",
             "Cache hits",
             ["cache_type"],
-            **registry_kwargs,
         )
-        self.metrics["cache_misses"] = Counter(
+        self.metrics["cache_misses"] = self._counter(
             "outlabs_auth_cache_misses_total",
             "Cache misses",
             ["cache_type"],
-            **registry_kwargs,
         )
-        self.metrics["db_query_duration"] = Histogram(
+        self.metrics["db_query_duration"] = self._histogram(
             "outlabs_auth_db_query_duration_seconds",
             "Database query duration in seconds",
             ["operation"],
             buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5],
-            **registry_kwargs,
         )
 
         # Error metrics
-        self.metrics["errors_total"] = Counter(
+        self.metrics["errors_total"] = self._counter(
             "outlabs_auth_errors_total",
             "Total errors by type and location",
             ["error_type", "location"],
-            **registry_kwargs,
         )
-        self.metrics["500_errors_total"] = Counter(
+        self.metrics["500_errors_total"] = self._counter(
             "outlabs_auth_500_errors_total",
             "Total 500 Internal Server Errors",
             ["endpoint", "error_class"],
-            **registry_kwargs,
         )
-        self.metrics["router_errors_total"] = Counter(
+        self.metrics["router_errors_total"] = self._counter(
             "outlabs_auth_router_errors_total",
             "Total router-level errors",
             ["router", "endpoint"],
-            **registry_kwargs,
         )
-        self.metrics["service_errors_total"] = Counter(
+        self.metrics["service_errors_total"] = self._counter(
             "outlabs_auth_service_errors_total",
             "Total service-level errors",
             ["service", "operation"],
-            **registry_kwargs,
         )
 
         # Entity operations metrics
-        self.metrics["entity_operations_total"] = Counter(
+        self.metrics["entity_operations_total"] = self._counter(
             "outlabs_auth_entity_operations_total",
             "Entity operations",
             ["operation"],
-            **registry_kwargs,
         )
-        self.metrics["entity_operation_duration"] = Histogram(
+        self.metrics["entity_operation_duration"] = self._histogram(
             "outlabs_auth_entity_operation_duration_seconds",
             "Entity operation duration in seconds",
             ["operation"],
             buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
-            **registry_kwargs,
         )
 
         # Membership operations metrics
-        self.metrics["membership_operations_total"] = Counter(
+        self.metrics["membership_operations_total"] = self._counter(
             "outlabs_auth_membership_operations_total",
             "Membership operations",
             ["operation"],
-            **registry_kwargs,
         )
-        self.metrics["membership_operation_duration"] = Histogram(
+        self.metrics["membership_operation_duration"] = self._histogram(
             "outlabs_auth_membership_operation_duration_seconds",
             "Membership operation duration in seconds",
             ["operation"],
             buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0],
-            **registry_kwargs,
         )
 
         # Activity tracking metrics
-        self.metrics["activity_track_total"] = Counter(
+        self.metrics["activity_track_total"] = self._counter(
             "outlabs_auth_activity_track_total",
             "Activity tracking operations",
             ["period"],
-            **registry_kwargs,
         )
-        self.metrics["activity_sync_duration"] = Histogram(
+        self.metrics["activity_sync_duration"] = self._histogram(
             "outlabs_auth_activity_sync_duration_seconds",
             "Activity sync duration in seconds",
+            labelnames=None,
             buckets=[0.1, 0.5, 1.0, 2.5, 5.0, 10.0],
-            **registry_kwargs,
         )
-        self.metrics["activity_sync_records"] = Counter(
+        self.metrics["activity_sync_records"] = self._counter(
             "outlabs_auth_activity_sync_records_total",
             "Activity records synced",
             ["metric_type"],
-            **registry_kwargs,
         )
 
         # Redis operations metrics
-        self.metrics["redis_operation_duration"] = Histogram(
+        self.metrics["redis_operation_duration"] = self._histogram(
             "outlabs_auth_redis_operation_duration_seconds",
             "Redis operation duration in seconds",
             ["operation"],
             buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1],
-            **registry_kwargs,
         )
-        self.metrics["redis_errors_total"] = Counter(
+        self.metrics["redis_errors_total"] = self._counter(
             "outlabs_auth_redis_errors_total",
             "Redis operation errors",
             ["operation"],
-            **registry_kwargs,
         )
 
         # Notification metrics
-        self.metrics["notification_events_total"] = Counter(
+        self.metrics["notification_events_total"] = self._counter(
             "outlabs_auth_notification_events_total",
             "Notification events emitted",
             ["event_type"],
-            **registry_kwargs,
         )
-        self.metrics["notification_delivery_failures"] = Counter(
+        self.metrics["notification_delivery_failures"] = self._counter(
             "outlabs_auth_notification_delivery_failures_total",
             "Notification delivery failures",
             ["channel", "event_type"],
-            **registry_kwargs,
+        )
+
+    def _counter(
+        self,
+        name: str,
+        documentation: str,
+        labelnames: Optional[List[str]] = None,
+    ) -> Counter:
+        return Counter(
+            name,
+            documentation,
+            labelnames or (),
+            registry=self.metrics_registry,
+        )
+
+    def _histogram(
+        self,
+        name: str,
+        documentation: str,
+        labelnames: Optional[List[str]] = None,
+        *,
+        buckets: Optional[List[float]] = None,
+    ) -> Histogram:
+        if buckets is None:
+            return Histogram(
+                name,
+                documentation,
+                labelnames or (),
+                registry=self.metrics_registry,
+            )
+        return Histogram(
+            name,
+            documentation,
+            labelnames or (),
+            registry=self.metrics_registry,
+            buckets=buckets,
+        )
+
+    def _gauge(
+        self,
+        name: str,
+        documentation: str,
+        labelnames: Optional[List[str]] = None,
+    ) -> Gauge:
+        return Gauge(
+            name,
+            documentation,
+            labelnames or (),
+            registry=self.metrics_registry,
         )
 
     async def _log_worker(self) -> None:
         """Background worker for async logging."""
         while True:
             try:
-                log_func, args, kwargs = await self._log_queue.get()
+                log_queue = self._log_queue
+                if log_queue is None:
+                    return
+                log_func, args, kwargs = await log_queue.get()
                 log_func(*args, **kwargs)
-                self._log_queue.task_done()
+                log_queue.task_done()
             except asyncio.CancelledError:
                 break
             except Exception as e:

@@ -7,7 +7,7 @@ All features are controlled by configuration flags.
 """
 
 import asyncio
-from typing import Any, AsyncGenerator, Dict, Optional
+from typing import Any, AsyncGenerator, Dict, Optional, cast
 from uuid import UUID
 
 from fastapi import FastAPI
@@ -17,6 +17,7 @@ from starlette.requests import Request
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import ConfigurationError
 from outlabs_auth.database import DatabaseConfig, create_engine, create_session_factory
+from outlabs_auth.fastapi import ExceptionHandlerMode
 
 
 class OutlabsAuth:
@@ -245,7 +246,7 @@ class OutlabsAuth:
         self.redis_client = None
 
         # Authentication backends and dependency injection
-        self._backends = []
+        self._backends: list[Any] = []
         self._deps = None
 
         # Background task schedulers
@@ -291,8 +292,11 @@ class OutlabsAuth:
             if self.config.database_schema:
                 connect_args["server_settings"] = {"search_path": f"{self.config.database_schema},public"}
 
+            database_url = self.config.database_url
+            if database_url is None:
+                raise ConfigurationError("database_url is required to initialize the database engine")
             db_config = DatabaseConfig(
-                database_url=self.config.database_url,
+                database_url=database_url,
                 echo=self.config.echo_sql,
                 connect_args=connect_args,
             )
@@ -331,8 +335,11 @@ class OutlabsAuth:
             if self.config.database_schema:
                 connect_args["server_settings"] = {"search_path": f"{self.config.database_schema},public"}
 
+            database_url = self.config.database_url
+            if database_url is None:
+                raise ConfigurationError("database_url is required to initialize the database engine")
             db_config = DatabaseConfig(
-                database_url=self.config.database_url,
+                database_url=database_url,
                 echo=self.config.echo_sql,
                 connect_args=connect_args,
             )
@@ -679,6 +686,8 @@ class OutlabsAuth:
         """
         if not self._initialized:
             raise ConfigurationError("OutlabsAuth not initialized. Call await auth.initialize() first.")
+        if self.auth_service is None:
+            raise ConfigurationError("Auth service is not initialized for this auth instance.")
 
         return await self.auth_service.get_current_user(session, token)
 
@@ -958,7 +967,7 @@ class OutlabsAuth:
         app: FastAPI,
         *,
         debug: bool = False,
-        exception_handler_mode: str = "auth_only",
+        exception_handler_mode: ExceptionHandlerMode = "auth_only",
         include_metrics: bool = False,
         include_correlation_id: bool = False,
         include_resource_context: bool = False,
@@ -988,10 +997,10 @@ class OutlabsAuth:
             mode=exception_handler_mode,
         )
 
-        def _safe_add_middleware(middleware_class: type, **kwargs: object) -> bool:
+        def _safe_add_middleware(middleware_class: type[Any], **kwargs: object) -> bool:
             """Try to add middleware, return False if app already started."""
             try:
-                app.add_middleware(middleware_class, **kwargs)
+                app.add_middleware(cast(Any, middleware_class), **kwargs)
                 return True
             except RuntimeError as e:
                 if "Cannot add middleware after" in str(e):

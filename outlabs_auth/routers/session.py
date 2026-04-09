@@ -1,5 +1,6 @@
 """Minimal session auth router factory for embedded hosts."""
 
+from enum import Enum
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -22,7 +23,7 @@ from outlabs_auth.schemas.auth import (
 def get_session_router(
     auth: Any,
     prefix: str = "",
-    tags: Optional[list[str]] = None,
+    tags: Optional[list[str | Enum]] = None,
     requires_verification: bool = False,
 ) -> APIRouter:
     """

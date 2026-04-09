@@ -5,7 +5,8 @@ Provides ready-to-use entity hierarchy management routes for EnterpriseRBAC.
 Uses SQLAlchemy for PostgreSQL backend.
 """
 
-from typing import Any, List, Optional
+from enum import Enum
+from typing import Any, List, Optional, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -53,7 +54,7 @@ def _entity_to_response(entity: Any) -> EntityResponse:
 
 
 def get_entities_router(
-    auth: Any, prefix: str = "", tags: Optional[list[str]] = None
+    auth: Any, prefix: str = "", tags: Optional[list[str | Enum]] = None
 ) -> APIRouter:
     """
     Generate entity hierarchy management router.
@@ -109,33 +110,40 @@ def get_entities_router(
         from outlabs_auth.models.sql.enums import EntityClass
 
         # Build query filters
-        filters = [Entity.status == "active"]
+        status_col = cast(Any, Entity.status)
+        name_col = cast(Any, Entity.name)
+        display_name_col = cast(Any, Entity.display_name)
+        description_col = cast(Any, Entity.description)
+        entity_type_col = cast(Any, Entity.entity_type)
+        parent_id_col = cast(Any, Entity.parent_id)
+        entity_class_col = cast(Any, Entity.entity_class)
+        filters: list[Any] = [status_col == "active"]
 
         if search:
             pattern = f"%{search}%"
             filters.append(
                 or_(
-                    Entity.name.ilike(pattern),
-                    Entity.display_name.ilike(pattern),
-                    Entity.description.ilike(pattern),
-                    Entity.entity_type.ilike(pattern),
+                    name_col.ilike(pattern),
+                    display_name_col.ilike(pattern),
+                    description_col.ilike(pattern),
+                    entity_type_col.ilike(pattern),
                 )
             )
         if root_only:
-            filters.append(Entity.parent_id.is_(None))
+            filters.append(parent_id_col.is_(None))
 
         if entity_class:
             try:
                 ec = EntityClass(entity_class.upper())
-                filters.append(Entity.entity_class == ec)
+                filters.append(entity_class_col == ec)
             except ValueError:
-                filters.append(Entity.entity_class == entity_class)
+                filters.append(entity_class_col == entity_class)
 
         if entity_type:
-            filters.append(Entity.entity_type == entity_type.lower())
+            filters.append(entity_type_col == entity_type.lower())
 
         if parent_id:
-            filters.append(Entity.parent_id == parent_id)
+            filters.append(parent_id_col == parent_id)
 
         # Get total count
         count_stmt = select(func.count()).select_from(Entity).where(*filters)
@@ -150,7 +158,7 @@ def get_entities_router(
         stmt = (
             select(Entity)
             .where(*filters)
-            .order_by(Entity.name)
+            .order_by(name_col)
             .offset(skip)
             .limit(limit)
         )

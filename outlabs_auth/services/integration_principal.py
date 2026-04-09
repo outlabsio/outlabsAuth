@@ -6,7 +6,7 @@ Manages non-human principals that own durable system integration API keys.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, cast
 from uuid import UUID
 
 from sqlalchemy import or_
@@ -63,19 +63,25 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
         limit: int = 20,
     ) -> tuple[List[IntegrationPrincipal], int]:
         """List principals with simple pagination and filtering."""
-        filters = []
+        scope_kind_col = cast(Any, IntegrationPrincipal.scope_kind)
+        anchor_entity_id_col = cast(Any, IntegrationPrincipal.anchor_entity_id)
+        status_col = cast(Any, IntegrationPrincipal.status)
+        name_col = cast(Any, IntegrationPrincipal.name)
+        description_col = cast(Any, IntegrationPrincipal.description)
+        created_at_col = cast(Any, IntegrationPrincipal.created_at)
+        filters: list[Any] = []
         if scope_kind is not None:
-            filters.append(IntegrationPrincipal.scope_kind == scope_kind)
+            filters.append(scope_kind_col == scope_kind)
         if anchor_entity_id is not None:
-            filters.append(IntegrationPrincipal.anchor_entity_id == anchor_entity_id)
+            filters.append(anchor_entity_id_col == anchor_entity_id)
         if status is not None:
-            filters.append(IntegrationPrincipal.status == status)
+            filters.append(status_col == status)
         if search:
             pattern = f"%{search.strip()}%"
             filters.append(
                 or_(
-                    IntegrationPrincipal.name.ilike(pattern),
-                    IntegrationPrincipal.description.ilike(pattern),
+                    name_col.ilike(pattern),
+                    description_col.ilike(pattern),
                 )
             )
 
@@ -85,7 +91,7 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
             *filters,
             skip=(page - 1) * limit,
             limit=limit,
-            order_by=IntegrationPrincipal.created_at.desc(),
+            order_by=created_at_col.desc(),
         )
         return principals, total
 

@@ -154,8 +154,9 @@ def validate_password_with_config(password: str, config) -> None:
     )
 
     if not is_valid:
+        resolved_error_message = error_message or "Password does not meet the configured requirements"
         raise InvalidPasswordError(
-            message=error_message,
+            message=resolved_error_message,
             details={
                 "password_requirements": {
                     "min_length": config.password_min_length,

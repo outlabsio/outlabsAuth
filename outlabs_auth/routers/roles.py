@@ -4,7 +4,8 @@ Roles router factory.
 Provides ready-to-use role management routes (DD-041).
 """
 
-from typing import Any, List, Optional
+from enum import Enum
+from typing import Any, List, Optional, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -38,7 +39,7 @@ from outlabs_auth.schemas.role import (
 
 
 def get_roles_router(
-    auth: Any, prefix: str = "", tags: Optional[list[str]] = None
+    auth: Any, prefix: str = "", tags: Optional[list[str | Enum]] = None
 ) -> APIRouter:
     """
     Generate role management router.
@@ -83,9 +84,12 @@ def get_roles_router(
         session: AsyncSession,
         auth_result: dict[str, Any],
     ) -> dict[str, Any]:
-        return await auth.access_scope_service.resolve_for_auth_result(
-            session,
-            auth_result,
+        return cast(
+            dict[str, Any],
+            await auth.access_scope_service.resolve_for_auth_result(
+                session,
+                auth_result,
+            ),
         )
 
     async def _get_role_or_404(
@@ -104,7 +108,7 @@ def get_roles_router(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Role not found",
             )
-        return role
+        return cast(Role, role)
 
     def _role_is_visible_in_scope(role: Role, scope: dict[str, Any]) -> bool:
         if scope.get("is_global"):
@@ -492,7 +496,7 @@ def get_roles_router(
         await _require_role_visibility(session, auth_result, role)
 
         groups = await session.execute(
-            select(ConditionGroup).where(ConditionGroup.role_id == role_id)
+            select(ConditionGroup).where(cast(Any, ConditionGroup.role_id) == role_id)
         )
         return [
             ConditionGroupResponse(
@@ -625,7 +629,7 @@ def get_roles_router(
         await _require_role_visibility(session, auth_result, role)
 
         result = await session.execute(
-            select(RoleCondition).where(RoleCondition.role_id == role_id)
+            select(RoleCondition).where(cast(Any, RoleCondition.role_id) == role_id)
         )
         conditions = result.scalars().all()
         return [

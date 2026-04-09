@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -85,9 +85,14 @@ class PermissionHistoryService(BaseService[PermissionDefinitionHistory]):
         event_type: Optional[str] = None,
     ) -> Tuple[List[PermissionDefinitionHistory], int]:
         """Return paginated definition history rows for one permission."""
-        filters = [PermissionDefinitionHistory.permission_id == permission_id]
+        filters: list[Any] = [
+            cast(Any, PermissionDefinitionHistory.permission_id) == permission_id
+        ]
         if event_type:
-            filters.append(PermissionDefinitionHistory.event_type == event_type)
+            filters.append(cast(Any, PermissionDefinitionHistory.event_type) == event_type)
+
+        occurred_at_col = cast(Any, PermissionDefinitionHistory.occurred_at)
+        created_at_col = cast(Any, PermissionDefinitionHistory.created_at)
 
         count_stmt = (
             select(func.count())
@@ -100,8 +105,8 @@ class PermissionHistoryService(BaseService[PermissionDefinitionHistory]):
             select(PermissionDefinitionHistory)
             .where(*filters)
             .order_by(
-                PermissionDefinitionHistory.occurred_at.desc(),
-                PermissionDefinitionHistory.created_at.desc(),
+                occurred_at_col.desc(),
+                created_at_col.desc(),
             )
             .offset((page - 1) * limit)
             .limit(limit)

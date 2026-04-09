@@ -7,7 +7,7 @@ Handles user management operations with PostgreSQL/SQLAlchemy.
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import UUID
 
 from fastapi import Request, Response
@@ -905,13 +905,17 @@ class UserService(BaseService[User]):
             Tuple of (users, total_count)
         """
         # Build filters
-        filters = []
+        status_col = cast(Any, User.status)
+        is_superuser_col = cast(Any, User.is_superuser)
+        root_entity_id_col = cast(Any, User.root_entity_id)
+        created_at_col = cast(Any, User.created_at)
+        filters: list[Any] = []
         if status:
-            filters.append(User.status == status)
+            filters.append(status_col == status)
         if is_superuser is not None:
-            filters.append(User.is_superuser == is_superuser)
+            filters.append(is_superuser_col == is_superuser)
         if root_entity_id is not None:
-            filters.append(User.root_entity_id == root_entity_id)
+            filters.append(root_entity_id_col == root_entity_id)
 
         # Get total count
         total_count = await self.count(session, *filters)
@@ -923,7 +927,7 @@ class UserService(BaseService[User]):
             *filters,
             skip=skip,
             limit=limit,
-            order_by=User.created_at.desc(),
+            order_by=created_at_col.desc(),
         )
 
         return users, total_count
@@ -953,20 +957,26 @@ class UserService(BaseService[User]):
         """
         # Case-insensitive search using ILIKE
         pattern = f"%{search_term}%"
-        filters = []
+        status_col = cast(Any, User.status)
+        is_superuser_col = cast(Any, User.is_superuser)
+        root_entity_id_col = cast(Any, User.root_entity_id)
+        email_col = cast(Any, User.email)
+        first_name_col = cast(Any, User.first_name)
+        last_name_col = cast(Any, User.last_name)
+        filters: list[Any] = []
         if status:
-            filters.append(User.status == status)
+            filters.append(status_col == status)
         if is_superuser is not None:
-            filters.append(User.is_superuser == is_superuser)
+            filters.append(is_superuser_col == is_superuser)
         if root_entity_id is not None:
-            filters.append(User.root_entity_id == root_entity_id)
+            filters.append(root_entity_id_col == root_entity_id)
 
         users = await self.get_many(
             session,
             or_(
-                User.email.ilike(pattern),
-                User.first_name.ilike(pattern),
-                User.last_name.ilike(pattern),
+                email_col.ilike(pattern),
+                first_name_col.ilike(pattern),
+                last_name_col.ilike(pattern),
             ),
             *filters,
             limit=limit,

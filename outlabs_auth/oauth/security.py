@@ -1,9 +1,9 @@
 """Security utilities for OAuth flows (PKCE, state, nonce)."""
 
-import secrets
-import hashlib
 import base64
-from typing import Tuple
+import hashlib
+import secrets
+from typing import Optional, Tuple
 
 
 def generate_state() -> str:
@@ -99,9 +99,9 @@ def build_authorization_url(
     scope: str,
     state: str,
     response_type: str = "code",
-    code_challenge: str = None,
+    code_challenge: Optional[str] = None,
     code_challenge_method: str = "S256",
-    nonce: str = None,
+    nonce: Optional[str] = None,
     **extra_params
 ) -> str:
     """

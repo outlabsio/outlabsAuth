@@ -4,6 +4,7 @@ API Keys router factory.
 Provides ready-to-use API key management routes (DD-041).
 """
 
+from enum import Enum
 from typing import Any, List, Optional
 from uuid import UUID
 
@@ -21,7 +22,11 @@ from outlabs_auth.schemas.api_key import (
 )
 
 
-def get_api_keys_router(auth: Any, prefix: str = "", tags: Optional[list[str]] = None) -> APIRouter:
+def get_api_keys_router(
+    auth: Any,
+    prefix: str = "",
+    tags: Optional[list[str | Enum]] = None,
+) -> APIRouter:
     """
     Generate API key management router.
 

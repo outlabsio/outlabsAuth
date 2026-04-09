@@ -1,11 +1,11 @@
-import secrets
 """
 JWT token creation and verification utilities
 
 Uses python-jose for JWT operations with configurable algorithm and expiration.
 """
+import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 from jose import JWTError, jwt
 
@@ -63,7 +63,7 @@ def create_access_token(
     })
 
     encoded_jwt = jwt.encode(to_encode, secret_key, algorithm=algorithm)
-    return encoded_jwt
+    return cast(str, encoded_jwt)
 
 
 def create_refresh_token(
@@ -117,7 +117,7 @@ def create_refresh_token(
     })
 
     encoded_jwt = jwt.encode(to_encode, secret_key, algorithm=algorithm)
-    return encoded_jwt
+    return cast(str, encoded_jwt)
 
 
 def verify_token(
@@ -152,7 +152,7 @@ def verify_token(
     """
     try:
         # Decode with or without audience validation
-        decode_options = {"algorithms": [algorithm]}
+        decode_options: dict[str, Any] = {"algorithms": [algorithm]}
         if audience:
             decode_options["audience"] = audience
             payload = jwt.decode(token, secret_key, **decode_options)
@@ -168,7 +168,7 @@ def verify_token(
                     details={"expected_type": expected_type, "actual_type": token_type}
                 )
 
-        return payload
+        return cast(Dict[str, Any], payload)
 
     except jwt.ExpiredSignatureError:
         raise TokenExpiredError(
@@ -202,7 +202,7 @@ def decode_token_without_verification(token: str) -> Dict[str, Any]:
         'user_123'
     """
     try:
-        return jwt.get_unverified_claims(token)
+        return cast(Dict[str, Any], jwt.get_unverified_claims(token))
     except JWTError as e:
         raise TokenInvalidError(
             message=f"Cannot decode token: {str(e)}",

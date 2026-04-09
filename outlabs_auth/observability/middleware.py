@@ -5,7 +5,7 @@ Automatically extracts or generates correlation IDs for request tracing.
 """
 
 import uuid
-from typing import Callable
+from typing import Any, Callable, cast
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -41,7 +41,9 @@ class CorrelationIDMiddleware(BaseHTTPMiddleware):
         self.obs_service = obs_service
         self.config = obs_service.config
 
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+    async def dispatch(
+        self, request: Request, call_next: Callable[[Request], Any]
+    ) -> Response:
         """
         Process request and inject correlation ID.
 
@@ -64,7 +66,7 @@ class CorrelationIDMiddleware(BaseHTTPMiddleware):
 
         try:
             # Process request
-            response = await call_next(request)
+            response = cast(Response, await call_next(request))
 
             # Add correlation ID to response headers
             if correlation_id:

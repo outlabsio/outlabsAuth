@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import logging
 import math
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 from uuid import UUID
 
 from sqlalchemy import delete as sql_delete
@@ -481,7 +481,7 @@ class APIKeyService(BaseService[APIKey]):
     async def _check_scope(self, session: AsyncSession, api_key_id: UUID, required_scope: str) -> bool:
         """Check if API key has required scope."""
         stmt = select(APIKeyScope).where(
-            APIKeyScope.api_key_id == api_key_id,
+            cast(Any, APIKeyScope.api_key_id) == api_key_id,
         )
         result = await session.execute(stmt)
         scopes = [row.scope for row in result.scalars().all()]
@@ -489,8 +489,10 @@ class APIKeyService(BaseService[APIKey]):
         return self.scopes_allow_permission(scopes, required_scope)
 
     async def _check_ip(self, session: AsyncSession, api_key_id: UUID, ip_address: str) -> bool:
-        stmt = select(func.count()).select_from(APIKeyIPWhitelist).where(APIKeyIPWhitelist.api_key_id == api_key_id)
-        result = await session.execute(stmt)
+        count_stmt = select(func.count()).select_from(APIKeyIPWhitelist).where(
+            cast(Any, APIKeyIPWhitelist.api_key_id) == api_key_id
+        )
+        result = await session.execute(count_stmt)
         count = result.scalar() or 0
 
         # No whitelist = allow all
@@ -498,11 +500,11 @@ class APIKeyService(BaseService[APIKey]):
             return True
 
         # Check if IP is in whitelist
-        stmt = select(APIKeyIPWhitelist).where(
-            APIKeyIPWhitelist.api_key_id == api_key_id,
-            APIKeyIPWhitelist.ip_address == ip_address,
+        whitelist_stmt = select(APIKeyIPWhitelist).where(
+            cast(Any, APIKeyIPWhitelist.api_key_id) == api_key_id,
+            cast(Any, APIKeyIPWhitelist.ip_address) == ip_address,
         )
-        result = await session.execute(stmt)
+        result = await session.execute(whitelist_stmt)
         return result.scalar_one_or_none() is not None
 
     async def _check_rate_limits(self, api_key: APIKey) -> None:
@@ -686,21 +688,24 @@ class APIKeyService(BaseService[APIKey]):
             session,
             key_id,
             options=[
-                selectinload(APIKey.owner),
-                selectinload(APIKey.integration_principal),
+                selectinload(cast(Any, APIKey.owner)),
+                selectinload(cast(Any, APIKey.integration_principal)),
             ],
         )
 
     async def get_api_key_scopes(self, session: AsyncSession, key_id: UUID) -> List[str]:
         """Get scopes for an API key."""
-        stmt = select(APIKeyScope.scope).where(APIKeyScope.api_key_id == key_id)
+        stmt = select(cast(Any, APIKeyScope.scope)).where(
+            cast(Any, APIKeyScope.api_key_id) == key_id
+        )
         result = await session.execute(stmt)
         return [row[0] for row in result.all()]
 
     async def get_api_key_ip_whitelist(self, session: AsyncSession, key_id: UUID) -> List[str]:
         """Get IP whitelist entries for an API key."""
-        stmt = select(APIKeyIPWhitelist.ip_address).where(APIKeyIPWhitelist.api_key_id == key_id)
-        stmt = select(APIKeyIPWhitelist.ip_address).where(APIKeyIPWhitelist.api_key_id == key_id)
+        stmt = select(cast(Any, APIKeyIPWhitelist.ip_address)).where(
+            cast(Any, APIKeyIPWhitelist.api_key_id) == key_id
+        )
         result = await session.execute(stmt)
         return [row[0] for row in result.all()]
 
@@ -761,25 +766,25 @@ class APIKeyService(BaseService[APIKey]):
         limit: int = 20,
     ) -> tuple[List[APIKey], int]:
         """List API keys anchored to a specific entity with pagination and filtering."""
-        filters = [APIKey.entity_id == entity_id]
+        filters: list[Any] = [cast(Any, APIKey.entity_id) == entity_id]
         if owner_id is not None:
             filters.append(
                 or_(
-                    APIKey.owner_id == owner_id,
-                    APIKey.integration_principal_id == owner_id,
+                    cast(Any, APIKey.owner_id) == owner_id,
+                    cast(Any, APIKey.integration_principal_id) == owner_id,
                 )
             )
         if status is not None:
-            filters.append(APIKey.status == status)
+            filters.append(cast(Any, APIKey.status) == status)
         if key_kind is not None:
-            filters.append(APIKey.key_kind == key_kind)
+            filters.append(cast(Any, APIKey.key_kind) == key_kind)
         if search:
             pattern = f"%{search.strip()}%"
             filters.append(
                 or_(
-                    APIKey.name.ilike(pattern),
-                    APIKey.description.ilike(pattern),
-                    APIKey.prefix.ilike(pattern),
+                    cast(Any, APIKey.name).ilike(pattern),
+                    cast(Any, APIKey.description).ilike(pattern),
+                    cast(Any, APIKey.prefix).ilike(pattern),
                 )
             )
 
@@ -789,7 +794,7 @@ class APIKeyService(BaseService[APIKey]):
             *filters,
             skip=(page - 1) * limit,
             limit=limit,
-            order_by=APIKey.created_at.desc(),
+            order_by=cast(Any, APIKey.created_at).desc(),
         )
         return api_keys, total
 
@@ -821,16 +826,18 @@ class APIKeyService(BaseService[APIKey]):
         limit: int = 20,
     ) -> tuple[List[APIKey], int]:
         """List API keys owned by an integration principal with pagination."""
-        filters = [APIKey.integration_principal_id == integration_principal_id]
+        filters: list[Any] = [
+            cast(Any, APIKey.integration_principal_id) == integration_principal_id
+        ]
         if status is not None:
-            filters.append(APIKey.status == status)
+            filters.append(cast(Any, APIKey.status) == status)
         if search:
             pattern = f"%{search.strip()}%"
             filters.append(
                 or_(
-                    APIKey.name.ilike(pattern),
-                    APIKey.description.ilike(pattern),
-                    APIKey.prefix.ilike(pattern),
+                    cast(Any, APIKey.name).ilike(pattern),
+                    cast(Any, APIKey.description).ilike(pattern),
+                    cast(Any, APIKey.prefix).ilike(pattern),
                 )
             )
         total = await self.count(session, *filters)
@@ -839,7 +846,7 @@ class APIKeyService(BaseService[APIKey]):
             *filters,
             skip=(page - 1) * limit,
             limit=limit,
-            order_by=APIKey.created_at.desc(),
+            order_by=cast(Any, APIKey.created_at).desc(),
         )
         return api_keys, total
 
@@ -892,8 +899,8 @@ class APIKeyService(BaseService[APIKey]):
     ) -> int:
         """Revoke all non-revoked API keys owned by a user."""
         stmt = select(APIKey).where(
-            APIKey.owner_id == user_id,
-            APIKey.status != APIKeyStatus.REVOKED,
+            cast(Any, APIKey.owner_id) == user_id,
+            cast(Any, APIKey.status) != APIKeyStatus.REVOKED,
         )
         result = await session.execute(stmt)
         api_keys = list(result.scalars().all())
@@ -922,8 +929,8 @@ class APIKeyService(BaseService[APIKey]):
     ) -> int:
         """Revoke all non-revoked API keys owned by an integration principal."""
         stmt = select(APIKey).where(
-            APIKey.integration_principal_id == integration_principal_id,
-            APIKey.status != APIKeyStatus.REVOKED,
+            cast(Any, APIKey.integration_principal_id) == integration_principal_id,
+            cast(Any, APIKey.status) != APIKeyStatus.REVOKED,
         )
         result = await session.execute(stmt)
         api_keys = list(result.scalars().all())
@@ -952,8 +959,8 @@ class APIKeyService(BaseService[APIKey]):
     ) -> int:
         """Revoke all non-revoked API keys anchored to an entity."""
         stmt = select(APIKey).where(
-            APIKey.entity_id == entity_id,
-            APIKey.status != APIKeyStatus.REVOKED,
+            cast(Any, APIKey.entity_id) == entity_id,
+            cast(Any, APIKey.status) != APIKeyStatus.REVOKED,
         )
         result = await session.execute(stmt)
         api_keys = list(result.scalars().all())
@@ -1054,7 +1061,9 @@ class APIKeyService(BaseService[APIKey]):
         # Handle scopes separately
         if "scopes" in updates:
             # Clear existing scopes
-            stmt = sql_delete(APIKeyScope).where(APIKeyScope.api_key_id == key_id)
+            stmt = sql_delete(APIKeyScope).where(
+                cast(Any, APIKeyScope.api_key_id) == key_id
+            )
             await session.execute(stmt)
 
             # Add new scopes
@@ -1065,7 +1074,9 @@ class APIKeyService(BaseService[APIKey]):
         # Handle IP whitelist separately
         if "ip_whitelist" in updates:
             # Clear existing IPs
-            stmt = sql_delete(APIKeyIPWhitelist).where(APIKeyIPWhitelist.api_key_id == key_id)
+            stmt = sql_delete(APIKeyIPWhitelist).where(
+                cast(Any, APIKeyIPWhitelist.api_key_id) == key_id
+            )
             await session.execute(stmt)
 
             # Add new IPs
@@ -1226,9 +1237,9 @@ class APIKeyService(BaseService[APIKey]):
         if api_key.inherit_from_tree:
             # Check if target is a descendant of api_key's entity
             stmt = select(EntityClosure).where(
-                EntityClosure.ancestor_id == api_key.entity_id,
-                EntityClosure.descendant_id == target_entity_id,
-                EntityClosure.depth > 0,  # Exclude self
+                cast(Any, EntityClosure.ancestor_id) == api_key.entity_id,
+                cast(Any, EntityClosure.descendant_id) == target_entity_id,
+                cast(Any, EntityClosure.depth) > 0,  # Exclude self
             )
             result = await session.execute(stmt)
             closure = result.scalar_one_or_none()
@@ -1480,9 +1491,9 @@ class APIKeyService(BaseService[APIKey]):
         entity_id: UUID,
     ) -> UUID:
         stmt = (
-            select(EntityClosure.ancestor_id)
-            .where(EntityClosure.descendant_id == entity_id)
-            .order_by(EntityClosure.depth.desc())
+            select(cast(Any, EntityClosure.ancestor_id))
+            .where(cast(Any, EntityClosure.descendant_id) == entity_id)
+            .order_by(cast(Any, EntityClosure.depth).desc())
             .limit(1)
         )
         result = await session.execute(stmt)

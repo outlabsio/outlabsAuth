@@ -1,6 +1,6 @@
 """Shared helpers for OAuth routers."""
 
-from typing import Any
+from typing import Any, Optional, cast
 
 from fastapi import HTTPException, status
 
@@ -15,7 +15,7 @@ async def get_oauth_user_info(
     get_user_info = getattr(oauth_client, "get_user_info", None)
     if callable(get_user_info):
         try:
-            return await get_user_info(token["access_token"])
+            return cast(OAuthUserInfo, await get_user_info(token["access_token"]))
         except NotImplementedError:
             pass
 
@@ -23,7 +23,7 @@ async def get_oauth_user_info(
     parse_id_token = getattr(oauth_client, "parse_id_token", None)
     if id_token and callable(parse_id_token):
         try:
-            return parse_id_token(id_token, verify=True)
+            return cast(OAuthUserInfo, parse_id_token(id_token, verify=True))
         except NotImplementedError:
             pass
         except ProviderError as exc:
@@ -62,4 +62,4 @@ def encrypt_provider_token(auth: Any, token: str | None) -> str | None:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="OAuth token encryption is not configured",
         )
-    return cipher.encrypt(token)
+    return cast(Optional[str], cipher.encrypt(token))

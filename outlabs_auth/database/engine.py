@@ -4,7 +4,7 @@ Database Engine Factory and Session Management
 Provides async SQLAlchemy engine creation and session factories for PostgreSQL.
 """
 
-from typing import AsyncGenerator, Optional, Dict, Any
+from typing import Any, AsyncGenerator, Dict, Optional
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     AsyncEngine,
@@ -174,7 +174,7 @@ def create_engine(config: DatabaseConfig) -> AsyncEngine:
     """
     # Use NullPool for serverless, otherwise use connection pooling
     if config.pool_size == 0:
-        poolclass = NullPool
+        poolclass: type[Any] = NullPool
         pool_kwargs = {}
     else:
         poolclass = AsyncAdaptedQueuePool

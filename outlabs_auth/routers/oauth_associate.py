@@ -5,7 +5,8 @@ Allows authenticated users to link additional OAuth providers to their account.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Optional
+from enum import Enum
+from typing import Any, Optional, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -57,7 +58,7 @@ def get_oauth_associate_router(
     auth: Any,
     state_secret: str,
     prefix: str = "",
-    tags: Optional[list[str]] = None,
+    tags: Optional[list[str | Enum]] = None,
     redirect_url: Optional[str] = None,
     requires_verification: bool = False,
 ) -> APIRouter:
@@ -200,9 +201,11 @@ def get_oauth_associate_router(
         )
 
         # Ensure this provider-user account is not linked to another user.
+        provider_col = cast(Any, SocialAccount.provider)
+        provider_user_id_col = cast(Any, SocialAccount.provider_user_id)
         linked_stmt = select(SocialAccount).where(
-            SocialAccount.provider == oauth_client.name,
-            SocialAccount.provider_user_id == user_info.provider_user_id,
+            provider_col == oauth_client.name,
+            provider_user_id_col == user_info.provider_user_id,
         )
         linked_result = await session.execute(linked_stmt)
         linked_account = linked_result.scalar_one_or_none()

@@ -10,7 +10,17 @@ Provides various channels for sending auth notifications:
 - Telegram: Send messages via Telegram Bot API
 - WhatsApp: Send WhatsApp messages (via Twilio)
 """
+from typing import Any
+
 from outlabs_auth.services.channels.base import NotificationChannel
+
+RabbitMQChannel: Any
+SMTPChannel: Any
+WebhookChannel: Any
+TwilioChannel: Any
+SendGridChannel: Any
+TelegramChannel: Any
+WhatsAppChannel: Any
 
 # RabbitMQ channel
 try:

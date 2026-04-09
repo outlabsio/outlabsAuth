@@ -8,7 +8,7 @@ Provides caching operations with automatic serialization/deserialization.
 import json
 import logging
 from datetime import timedelta
-from typing import Any, List, Optional
+from typing import Any, List, Optional, cast
 
 try:
     import redis.asyncio as redis
@@ -120,7 +120,7 @@ class RedisClient:
         if not self._available or not self._client:
             return 0
         try:
-            return int(await self._client.sadd(key, *members))
+            return int(await cast(Any, self._client.sadd(key, *members)))
         except RedisError:
             return 0
 
@@ -128,7 +128,7 @@ class RedisClient:
         if not self._available or not self._client:
             return 0
         try:
-            return int(await self._client.scard(key))
+            return int(await cast(Any, self._client.scard(key)))
         except RedisError:
             return 0
 
@@ -136,7 +136,7 @@ class RedisClient:
         if not self._available or not self._client:
             return set()
         try:
-            members = await self._client.smembers(key)
+            members = await cast(Any, self._client.smembers(key))
             return set(members) if members else set()
         except RedisError:
             return set()
@@ -165,7 +165,7 @@ class RedisClient:
         if not self._available or not self._client:
             return None
         try:
-            return await self._client.get(key)
+            return cast(Optional[str], await self._client.get(key))
         except RedisError:
             return None
 
@@ -228,7 +228,7 @@ class RedisClient:
             else:
                 await self._client.set(key, serialized)
             return True
-        except (RedisError, TypeError, json.JSONEncodeError) as e:
+        except (RedisError, TypeError, ValueError) as e:
             logger.debug(f"Cache set failed for {key}: {e}")
             return False
 
@@ -313,7 +313,7 @@ class RedisClient:
             return None
 
         try:
-            return await self._client.incrby(key, amount)
+            return cast(Optional[int], await self._client.incrby(key, amount))
         except RedisError as e:
             logger.debug(f"Counter increment failed for {key}: {e}")
             return None
@@ -440,7 +440,7 @@ class RedisClient:
 
         try:
             # Increment counter
-            new_value = await self._client.incrby(key, amount)
+            new_value = cast(int, await self._client.incrby(key, amount))
 
             # Set TTL only if this is the first increment (value == amount)
             if ttl and new_value == amount:

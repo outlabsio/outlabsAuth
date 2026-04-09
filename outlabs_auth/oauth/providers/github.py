@@ -1,6 +1,6 @@
 """GitHub OAuth provider implementation."""
 
-from typing import Optional
+from typing import Any, Optional, cast
 from outlabs_auth.oauth.provider import OAuthProvider
 from outlabs_auth.oauth.models import OAuthTokenResponse, OAuthUserInfo
 from outlabs_auth.oauth.exceptions import InvalidCodeError, ProviderError
@@ -305,7 +305,7 @@ class GitHubProvider(OAuthProvider):
         url = self.revocation_url.format(client_id=self.client_id)
         
         try:
-            response = await client.delete(
+            response = await cast(Any, client).delete(
                 url,
                 json={"access_token": token},
                 auth=(self.client_id, self.client_secret),
@@ -319,4 +319,4 @@ class GitHubProvider(OAuthProvider):
             )
         
         # GitHub returns 204 on success
-        return response.status_code == 204
+        return bool(response.status_code == 204)

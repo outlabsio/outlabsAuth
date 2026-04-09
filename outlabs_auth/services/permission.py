@@ -7,7 +7,7 @@ Handles permission checking and management with PostgreSQL/SQLAlchemy:
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple, cast
 from uuid import UUID
 
 from sqlalchemy import inspect, or_, select
@@ -127,6 +127,44 @@ class PermissionService(BaseService[Permission]):
             == DefinitionStatus.ACTIVE
         )
 
+    @staticmethod
+    def _require_policy_engine(
+        engine: Optional[PolicyEvaluationEngine],
+    ) -> PolicyEvaluationEngine:
+        if engine is None:
+            raise RuntimeError("ABAC engine is required when ABAC evaluation is enabled")
+        return engine
+
+    @staticmethod
+    def _entity_membership_permission_options() -> list[Any]:
+        return [
+            selectinload(cast(Any, EntityMembership.roles))
+            .selectinload(cast(Any, Role.permissions))
+            .selectinload(cast(Any, Permission.conditions)),
+            selectinload(cast(Any, EntityMembership.roles)).selectinload(
+                cast(Any, Role.conditions)
+            ),
+            selectinload(cast(Any, EntityMembership.roles))
+            .selectinload(cast(Any, Role.entity_type_permissions))
+            .selectinload(cast(Any, RoleEntityTypePermission.permission))
+            .selectinload(cast(Any, Permission.conditions)),
+        ]
+
+    @staticmethod
+    def _user_role_membership_permission_options() -> list[Any]:
+        return [
+            selectinload(cast(Any, UserRoleMembership.role))
+            .selectinload(cast(Any, Role.permissions))
+            .selectinload(cast(Any, Permission.conditions)),
+            selectinload(cast(Any, UserRoleMembership.role)).selectinload(
+                cast(Any, Role.conditions)
+            ),
+            selectinload(cast(Any, UserRoleMembership.role))
+            .selectinload(cast(Any, Role.entity_type_permissions))
+            .selectinload(cast(Any, RoleEntityTypePermission.permission))
+            .selectinload(cast(Any, Permission.conditions)),
+        ]
+
     # =========================================================================
     # Permission Checking
     # =========================================================================
@@ -206,7 +244,8 @@ class PermissionService(BaseService[Permission]):
         engine: Optional[PolicyEvaluationEngine] = PolicyEvaluationEngine() if abac_enabled else None
         context: Optional[Dict[str, Any]] = None
         if abac_enabled:
-            context = engine.create_context(
+            abac_engine = self._require_policy_engine(engine)
+            context = abac_engine.create_context(
                 user={
                     "id": str(resolved_user.id),
                     "email": resolved_user.email,
@@ -265,7 +304,7 @@ class PermissionService(BaseService[Permission]):
                 user_id=user_id,
                 permission=permission,
                 context=context or {},
-                engine=engine,
+                engine=abac_engine,
                 include_entity_local=(entity_id is not None),
                 entity_type=target_entity_type,
             ):
@@ -401,38 +440,32 @@ class PermissionService(BaseService[Permission]):
         - respects entity-local role scope (entity_only vs hierarchy)
         """
         # Resolve ancestors (including self) via closure table.
-        ancestors_stmt = select(EntityClosure.ancestor_id, EntityClosure.depth).where(
-            EntityClosure.descendant_id == entity_id
-        )
+        ancestors_stmt = select(
+            cast(Any, EntityClosure.ancestor_id),
+            cast(Any, EntityClosure.depth),
+        ).where(cast(Any, EntityClosure.descendant_id) == entity_id)
         ancestors_result = await session.execute(ancestors_stmt)
         ancestor_rows = ancestors_result.all()
         if not ancestor_rows:
             return False
 
-        depth_by_ancestor: Dict[UUID, int] = {row[0]: row[1] for row in ancestor_rows}
+        depth_by_ancestor: Dict[UUID, int] = {
+            cast(UUID, row[0]): int(row[1]) for row in ancestor_rows
+        }
         ancestor_ids = list(depth_by_ancestor.keys())
 
         # Load memberships in any ancestor entity with roles+permissions.
         memberships_stmt = (
             select(EntityMembership)
-            .options(
-                selectinload(EntityMembership.roles)
-                .selectinload(Role.permissions)
-                .selectinload(Permission.conditions),
-                selectinload(EntityMembership.roles).selectinload(Role.conditions),
-                selectinload(EntityMembership.roles)
-                .selectinload(Role.entity_type_permissions)
-                .selectinload(RoleEntityTypePermission.permission)
-                .selectinload(Permission.conditions),
-            )
+            .options(*self._entity_membership_permission_options())
             .where(
-                EntityMembership.user_id == user_id,
-                EntityMembership.entity_id.in_(ancestor_ids),
-                EntityMembership.status == MembershipStatus.ACTIVE,
+                cast(Any, EntityMembership.user_id) == user_id,
+                cast(Any, EntityMembership.entity_id).in_(ancestor_ids),
+                cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
             )
         )
         memberships_result = await session.execute(memberships_stmt)
-        memberships = memberships_result.scalars().all()
+        memberships: list[EntityMembership] = list(memberships_result.scalars().all())
 
         for membership in memberships:
             if not membership.can_grant_permissions():
@@ -546,23 +579,14 @@ class PermissionService(BaseService[Permission]):
         """
         stmt = (
             select(UserRoleMembership)
-            .options(
-                selectinload(UserRoleMembership.role)
-                .selectinload(Role.permissions)
-                .selectinload(Permission.conditions),
-                selectinload(UserRoleMembership.role).selectinload(Role.conditions),
-                selectinload(UserRoleMembership.role)
-                .selectinload(Role.entity_type_permissions)
-                .selectinload(RoleEntityTypePermission.permission)
-                .selectinload(Permission.conditions),
-            )
+            .options(*self._user_role_membership_permission_options())
             .where(
-                UserRoleMembership.user_id == user_id,
-                UserRoleMembership.status == MembershipStatus.ACTIVE,
+                cast(Any, UserRoleMembership.user_id) == user_id,
+                cast(Any, UserRoleMembership.status) == MembershipStatus.ACTIVE,
             )
         )
         result = await session.execute(stmt)
-        memberships = result.scalars().all()
+        memberships: list[UserRoleMembership] = list(result.scalars().all())
 
         for membership in memberships:
             if not membership.can_grant_permissions():
@@ -614,8 +638,8 @@ class PermissionService(BaseService[Permission]):
         if unloaded_permission_ids:
             perm_stmt = (
                 select(Permission)
-                .options(selectinload(Permission.conditions))
-                .where(Permission.id.in_(unloaded_permission_ids))
+                .options(selectinload(cast(Any, Permission.conditions)))
+                .where(cast(Any, Permission.id).in_(unloaded_permission_ids))
             )
             perm_result = await session.execute(perm_stmt)
             permission_map = {permission.id: permission for permission in perm_result.scalars().all()}
@@ -630,16 +654,20 @@ class PermissionService(BaseService[Permission]):
 
         group_ids: Set[UUID] = set()
         for cond in role_conditions:
-            if getattr(cond, "condition_group_id", None):
-                group_ids.add(cond.condition_group_id)
+            group_id = getattr(cond, "condition_group_id", None)
+            if group_id is not None:
+                group_ids.add(cast(UUID, group_id))
         for p in matching_perms:
-            for cond in p.conditions or []:
-                if getattr(cond, "condition_group_id", None):
-                    group_ids.add(cond.condition_group_id)
+            for permission_condition in p.conditions or []:
+                group_id = getattr(permission_condition, "condition_group_id", None)
+                if group_id is not None:
+                    group_ids.add(cast(UUID, group_id))
 
         group_ops: Dict[Optional[str], str] = {}
         if group_ids:
-            groups_stmt = select(SqlConditionGroup).where(SqlConditionGroup.id.in_(list(group_ids)))
+            groups_stmt = select(SqlConditionGroup).where(
+                cast(Any, SqlConditionGroup.id).in_(list(group_ids))
+            )
             groups_result = await session.execute(groups_stmt)
             groups = groups_result.scalars().all()
             for g in groups:
@@ -673,21 +701,14 @@ class PermissionService(BaseService[Permission]):
         """
         stmt = (
             select(UserRoleMembership)
-            .options(
-                selectinload(UserRoleMembership.role)
-                .selectinload(Role.permissions)
-                .selectinload(Permission.conditions),
-                selectinload(UserRoleMembership.role)
-                .selectinload(Role.entity_type_permissions)
-                .selectinload(RoleEntityTypePermission.permission),
-            )
+            .options(*self._user_role_membership_permission_options())
             .where(
-                UserRoleMembership.user_id == user_id,
-                UserRoleMembership.status == MembershipStatus.ACTIVE,
+                cast(Any, UserRoleMembership.user_id) == user_id,
+                cast(Any, UserRoleMembership.status) == MembershipStatus.ACTIVE,
             )
         )
         result = await session.execute(stmt)
-        memberships = result.scalars().all()
+        memberships: list[UserRoleMembership] = list(result.scalars().all())
 
         permissions: Set[str] = set()
         for membership in memberships:
@@ -749,9 +770,9 @@ class PermissionService(BaseService[Permission]):
             UserNotFoundError: If user doesn't exist
         """
         # Get user
-        stmt = select(User).where(User.id == user_id)
-        result = await session.execute(stmt)
-        user = result.scalar_one_or_none()
+        user_stmt = select(User).where(cast(Any, User.id) == user_id)
+        user_result = await session.execute(user_stmt)
+        user = cast(Optional[User], user_result.scalar_one_or_none())
 
         if not user:
             raise UserNotFoundError(
@@ -766,23 +787,16 @@ class PermissionService(BaseService[Permission]):
         all_permissions: Set[str] = set()
 
         # Get active role memberships with roles eagerly loaded
-        stmt = (
+        membership_stmt = (
             select(UserRoleMembership)
-            .options(
-                selectinload(UserRoleMembership.role)
-                .selectinload(Role.permissions)
-                .selectinload(Permission.conditions),
-                selectinload(UserRoleMembership.role)
-                .selectinload(Role.entity_type_permissions)
-                .selectinload(RoleEntityTypePermission.permission),
-            )
+            .options(*self._user_role_membership_permission_options())
             .where(
-                UserRoleMembership.user_id == user_id,
-                UserRoleMembership.status == MembershipStatus.ACTIVE,
+                cast(Any, UserRoleMembership.user_id) == user_id,
+                cast(Any, UserRoleMembership.status) == MembershipStatus.ACTIVE,
             )
         )
-        result = await session.execute(stmt)
-        memberships = result.scalars().all()
+        membership_result = await session.execute(membership_stmt)
+        memberships: list[UserRoleMembership] = list(membership_result.scalars().all())
 
         for membership in memberships:
             # Check time-based validity
@@ -807,27 +821,20 @@ class PermissionService(BaseService[Permission]):
         # permissions must be included for effective user permission resolution.
         entity_stmt = (
             select(EntityMembership)
-            .options(
-                selectinload(EntityMembership.roles)
-                .selectinload(Role.permissions)
-                .selectinload(Permission.conditions),
-                selectinload(EntityMembership.roles)
-                .selectinload(Role.entity_type_permissions)
-                .selectinload(RoleEntityTypePermission.permission),
-            )
+            .options(*self._entity_membership_permission_options())
             .where(
-                EntityMembership.user_id == user_id,
-                EntityMembership.status == MembershipStatus.ACTIVE,
+                cast(Any, EntityMembership.user_id) == user_id,
+                cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
             )
         )
         entity_result = await session.execute(entity_stmt)
-        entity_memberships = entity_result.scalars().all()
+        entity_memberships: list[EntityMembership] = list(entity_result.scalars().all())
 
-        for membership in entity_memberships:
-            if not membership.can_grant_permissions():
+        for entity_membership in entity_memberships:
+            if not entity_membership.can_grant_permissions():
                 continue
 
-            for role in membership.roles:
+            for role in entity_membership.roles:
                 if not self._role_definition_is_live(role):
                     continue
 
@@ -941,10 +948,13 @@ class PermissionService(BaseService[Permission]):
         cache_service = getattr(self, "cache_service", None)
         if cache_service is None:
             return None
-        return await cache_service.get_permission_check(
-            str(user_id),
-            permission,
-            str(entity_id) if entity_id is not None else None,
+        return cast(
+            Optional[bool],
+            await cache_service.get_permission_check(
+                str(user_id),
+                permission,
+                str(entity_id) if entity_id is not None else None,
+            ),
         )
 
     async def _cache_permission_result(
@@ -1155,13 +1165,15 @@ class PermissionService(BaseService[Permission]):
         Returns:
             Permission if found, None otherwise
         """
-        stmt = select(Permission).where(Permission.id == permission_id)
+        stmt = select(Permission).where(cast(Any, Permission.id) == permission_id)
         if not include_archived:
-            stmt = stmt.where(Permission.status != DefinitionStatus.ARCHIVED)
+            stmt = stmt.where(
+                cast(Any, Permission.status) != DefinitionStatus.ARCHIVED
+            )
 
-        options = []
+        options: list[Any] = []
         if load_tags:
-            options.append(selectinload(Permission.tags))
+            options.append(selectinload(cast(Any, Permission.tags)))
         if options:
             stmt = stmt.options(*options)
         result = await session.execute(stmt)
@@ -1184,9 +1196,9 @@ class PermissionService(BaseService[Permission]):
             Permission if found, None otherwise
         """
         name = validate_permission_name(name)
-        filters = [Permission.name == name]
+        filters: list[Any] = [cast(Any, Permission.name) == name]
         if not include_archived:
-            filters.append(Permission.status != DefinitionStatus.ARCHIVED)
+            filters.append(cast(Any, Permission.status) != DefinitionStatus.ARCHIVED)
         return await self.get_one(session, *filters)
 
     async def permission_has_conditions(
@@ -1198,8 +1210,8 @@ class PermissionService(BaseService[Permission]):
         permission_name = validate_permission_name(permission_name)
         permission = await self.get_one(
             session,
-            Permission.name == permission_name,
-            options=[selectinload(Permission.conditions)],
+            cast(Any, Permission.name) == permission_name,
+            options=[selectinload(cast(Any, Permission.conditions))],
         )
         return bool(permission and permission.conditions)
 
@@ -1373,7 +1385,9 @@ class PermissionService(BaseService[Permission]):
             return current_permission
 
         # Load/create tag models
-        stmt = select(PermissionTag).where(PermissionTag.name.in_(normalized))
+        stmt = select(PermissionTag).where(
+            cast(Any, PermissionTag.name).in_(normalized)
+        )
         result = await session.execute(stmt)
         existing_tags = {t.name: t for t in result.scalars().all()}
 
@@ -1612,8 +1626,8 @@ class PermissionService(BaseService[Permission]):
         deleted_group_snapshot = self._build_condition_group_snapshot(group)
 
         condition_stmt = select(PermissionCondition).where(
-            PermissionCondition.permission_id == permission_id,
-            PermissionCondition.condition_group_id == group_id,
+            cast(Any, PermissionCondition.permission_id) == permission_id,
+            cast(Any, PermissionCondition.condition_group_id) == group_id,
         )
         condition_result = await session.execute(condition_stmt)
         deleted_conditions = [
@@ -1751,7 +1765,7 @@ class PermissionService(BaseService[Permission]):
         if "attribute" in fields_set and attribute is not None:
             condition.attribute = attribute
         if "operator" in fields_set and operator is not None:
-            condition.operator = operator
+            condition.operator = cast(Any, operator)
         if "value_type" in fields_set and value_type is not None:
             condition.value_type = value_type
         if "value" in fields_set or "value_type" in fields_set:
@@ -1878,8 +1892,8 @@ class PermissionService(BaseService[Permission]):
             *filters,
             skip=skip,
             limit=limit,
-            order_by=Permission.name,
-            options=[selectinload(Permission.tags)],
+            order_by=cast(Any, Permission.name),
+            options=[selectinload(cast(Any, Permission.tags))],
         )
 
         return permissions, total_count
@@ -1904,10 +1918,10 @@ class PermissionService(BaseService[Permission]):
         pattern = f"%{search_term}%"
         permissions = await self.get_many(
             session,
-            Permission.status != DefinitionStatus.ARCHIVED,
+            cast(Any, Permission.status) != DefinitionStatus.ARCHIVED,
             or_(
-                Permission.name.ilike(pattern),
-                Permission.display_name.ilike(pattern),
+                cast(Any, Permission.name).ilike(pattern),
+                cast(Any, Permission.display_name).ilike(pattern),
             ),
             limit=limit,
         )
@@ -1933,8 +1947,8 @@ class PermissionService(BaseService[Permission]):
         """
         # Check if link already exists
         stmt = select(PermissionTagLink).where(
-            PermissionTagLink.permission_id == permission_id,
-            PermissionTagLink.tag_id == tag_id,
+            cast(Any, PermissionTagLink.permission_id) == permission_id,
+            cast(Any, PermissionTagLink.tag_id) == tag_id,
         )
         result = await session.execute(stmt)
         if result.scalar_one_or_none():
@@ -1962,8 +1976,8 @@ class PermissionService(BaseService[Permission]):
             True if removed, False if not found
         """
         stmt = select(PermissionTagLink).where(
-            PermissionTagLink.permission_id == permission_id,
-            PermissionTagLink.tag_id == tag_id,
+            cast(Any, PermissionTagLink.permission_id) == permission_id,
+            cast(Any, PermissionTagLink.tag_id) == tag_id,
         )
         result = await session.execute(stmt)
         link = result.scalar_one_or_none()
@@ -1995,8 +2009,8 @@ class PermissionService(BaseService[Permission]):
             .join(PermissionTagLink)
             .join(PermissionTag)
             .where(
-                PermissionTag.name == tag_name,
-                Permission.status != DefinitionStatus.ARCHIVED,
+                cast(Any, PermissionTag.name) == tag_name,
+                cast(Any, Permission.status) != DefinitionStatus.ARCHIVED,
             )
         )
         result = await session.execute(stmt)
@@ -2025,8 +2039,8 @@ class PermissionService(BaseService[Permission]):
             select(Permission)
             .join(RolePermission)
             .where(
-                RolePermission.role_id == role_id,
-                Permission.status != DefinitionStatus.ARCHIVED,
+                cast(Any, RolePermission.role_id) == role_id,
+                cast(Any, Permission.status) != DefinitionStatus.ARCHIVED,
             )
         )
         result = await session.execute(stmt)
@@ -2141,7 +2155,7 @@ class PermissionService(BaseService[Permission]):
             key=lambda tag: (tag.name, str(tag.id)),
         )
         group_stmt = select(SqlConditionGroup).where(
-            SqlConditionGroup.permission_id == current_permission.id
+            cast(Any, SqlConditionGroup.permission_id) == current_permission.id
         )
         group_result = await session.execute(group_stmt)
         groups = sorted(
@@ -2149,7 +2163,7 @@ class PermissionService(BaseService[Permission]):
             key=lambda group: (group.operator, group.description or "", str(group.id)),
         )
         condition_stmt = select(PermissionCondition).where(
-            PermissionCondition.permission_id == current_permission.id
+            cast(Any, PermissionCondition.permission_id) == current_permission.id
         )
         condition_result = await session.execute(condition_stmt)
         conditions = sorted(

@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Sequence
+from typing import Any, Sequence, cast
 from uuid import UUID
 
 from sqlalchemy import func, or_, select, text
@@ -113,7 +113,8 @@ class HostQueryService:
         are currently valid, belong to active users, and sit on active entities.
         """
         async with self._auth_schema_context(session):
-            filters = [EntityMembership.entity_id == entity_id]
+            entity_id_col = cast(Any, EntityMembership.entity_id)
+            filters: list[Any] = [entity_id_col == entity_id]
             if active_only:
                 filters.extend(self._active_membership_filters())
 
@@ -145,11 +146,13 @@ class HostQueryService:
             return []
 
         async with self._auth_schema_context(session):
-            filters = [EntityMembership.user_id.in_(normalized_user_ids)]
+            user_id_col = cast(Any, EntityMembership.user_id)
+            entity_type_col = cast(Any, Entity.entity_type)
+            filters: list[Any] = [user_id_col.in_(normalized_user_ids)]
             if entity_types:
                 normalized_types = [entity_type.strip().lower() for entity_type in entity_types if entity_type.strip()]
                 if normalized_types:
-                    filters.append(Entity.entity_type.in_(normalized_types))
+                    filters.append(entity_type_col.in_(normalized_types))
             if active_only:
                 filters.extend(self._active_membership_filters())
 
@@ -179,10 +182,12 @@ class HostQueryService:
             return []
 
         async with self._auth_schema_context(session):
-            stmt = select(User).where(User.id.in_(normalized_user_ids))
+            user_id_col = cast(Any, User.id)
+            user_status_col = cast(Any, User.status)
+            stmt = select(User).where(user_id_col.in_(normalized_user_ids))
             if active_only:
-                stmt = stmt.where(User.status == UserStatus.ACTIVE)
-            stmt = stmt.order_by(User.id.asc())
+                stmt = stmt.where(user_status_col == UserStatus.ACTIVE)
+            stmt = stmt.order_by(user_id_col.asc())
             result = await session.execute(stmt)
             users = list(result.scalars().all())
             return [self._project_user(user) for user in users]
@@ -214,10 +219,15 @@ class HostQueryService:
         session: AsyncSession,
         *filters,
     ) -> int:
+        membership_id_col = cast(Any, EntityMembership.id)
+        membership_user_id_col = cast(Any, EntityMembership.user_id)
+        user_id_col = cast(Any, User.id)
+        membership_entity_id_col = cast(Any, EntityMembership.entity_id)
+        entity_id_col = cast(Any, Entity.id)
         membership_ids = (
-            select(EntityMembership.id)
-            .join(User, EntityMembership.user_id == User.id)
-            .join(Entity, EntityMembership.entity_id == Entity.id)
+            select(membership_id_col)
+            .join(User, membership_user_id_col == user_id_col)
+            .join(Entity, membership_entity_id_col == entity_id_col)
             .where(*filters)
             .subquery()
         )
@@ -233,19 +243,28 @@ class HostQueryService:
         page: int,
         limit: int | None,
     ) -> list[EntityMembership]:
+        membership_user_id_col = cast(Any, EntityMembership.user_id)
+        user_id_col = cast(Any, User.id)
+        membership_entity_id_col = cast(Any, EntityMembership.entity_id)
+        entity_id_col = cast(Any, Entity.id)
+        membership_user_rel = cast(Any, EntityMembership.user)
+        membership_entity_rel = cast(Any, EntityMembership.entity)
+        membership_roles_rel = cast(Any, EntityMembership.roles)
+        joined_at_col = cast(Any, EntityMembership.joined_at)
+        membership_id_col = cast(Any, EntityMembership.id)
         stmt = (
             select(EntityMembership)
-            .join(User, EntityMembership.user_id == User.id)
-            .join(Entity, EntityMembership.entity_id == Entity.id)
+            .join(User, membership_user_id_col == user_id_col)
+            .join(Entity, membership_entity_id_col == entity_id_col)
             .where(*filters)
             .options(
-                selectinload(EntityMembership.user),
-                selectinload(EntityMembership.entity),
-                selectinload(EntityMembership.roles),
+                selectinload(membership_user_rel),
+                selectinload(membership_entity_rel),
+                selectinload(membership_roles_rel),
             )
             .order_by(
-                EntityMembership.joined_at.desc(),
-                EntityMembership.id.asc(),
+                joined_at_col.desc(),
+                membership_id_col.asc(),
             )
         )
         if limit is not None:
@@ -255,14 +274,19 @@ class HostQueryService:
         return list(result.scalars().unique().all())
 
     @staticmethod
-    def _active_membership_filters() -> list:
+    def _active_membership_filters() -> list[Any]:
         now = datetime.now(timezone.utc)
+        membership_status_col = cast(Any, EntityMembership.status)
+        user_status_col = cast(Any, User.status)
+        entity_status_col = cast(Any, Entity.status)
+        valid_from_col = cast(Any, EntityMembership.valid_from)
+        valid_until_col = cast(Any, EntityMembership.valid_until)
         return [
-            EntityMembership.status == MembershipStatus.ACTIVE,
-            User.status == UserStatus.ACTIVE,
-            Entity.status == "active",
-            or_(EntityMembership.valid_from.is_(None), EntityMembership.valid_from <= now),
-            or_(EntityMembership.valid_until.is_(None), EntityMembership.valid_until >= now),
+            membership_status_col == MembershipStatus.ACTIVE,
+            user_status_col == UserStatus.ACTIVE,
+            entity_status_col == "active",
+            or_(valid_from_col.is_(None), valid_from_col <= now),
+            or_(valid_until_col.is_(None), valid_until_col >= now),
         ]
 
     def _project_membership(

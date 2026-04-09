@@ -107,7 +107,7 @@ class PermissionCheckRequest(BaseModel):
 
     user_id: str
     permissions: List[str]
-    entity_id: str = None  # Optional entity context
+    entity_id: Optional[str] = None  # Optional entity context
 
 
 class PermissionCheckResponse(BaseModel):

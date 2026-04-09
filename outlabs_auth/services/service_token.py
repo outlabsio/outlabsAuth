@@ -10,9 +10,10 @@ Key differences from user tokens:
 - For service accounts, not users
 - No refresh mechanism (recreate when expired)
 """
-from typing import List, Optional, Dict, Any
-from datetime import datetime, timedelta, timezone
+
 import logging
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, cast
 
 from jose import jwt, JWTError
 from outlabs_auth.core.config import AuthConfig
@@ -119,7 +120,7 @@ class ServiceTokenService:
             f"(expires: {expires_at.strftime('%Y-%m-%d')})"
         )
 
-        return token
+        return cast(str, token)
 
     def validate_service_token(self, token: str) -> Dict[str, Any]:
         """
@@ -160,7 +161,7 @@ class ServiceTokenService:
                     details={"token_type": payload.get("type")}
                 )
 
-            return payload
+            return cast(Dict[str, Any], payload)
 
         except jwt.ExpiredSignatureError:
             raise TokenInvalidError(
@@ -220,7 +221,7 @@ class ServiceTokenService:
             >>> print(permissions)
             ['report:generate', 'data:read', 'data:export']
         """
-        return token_payload.get("permissions", [])
+        return cast(List[str], token_payload.get("permissions", []))
 
     def get_service_metadata(self, token_payload: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -237,7 +238,7 @@ class ServiceTokenService:
             >>> metadata = service.get_service_metadata(payload)
             >>> environment = metadata.get("environment")
         """
-        return token_payload.get("metadata", {})
+        return cast(Dict[str, Any], token_payload.get("metadata", {}))
 
     def get_service_info(self, token_payload: Dict[str, Any]) -> Dict[str, Any]:
         """

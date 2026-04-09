@@ -4,7 +4,8 @@ Permissions router factory.
 Provides complete CRUD endpoints for permission management.
 """
 
-from typing import Any, List, Optional
+from enum import Enum
+from typing import Any, List, Optional, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -36,7 +37,7 @@ from outlabs_auth.schemas.permission import (
 
 
 def get_permissions_router(
-    auth: Any, prefix: str = "", tags: Optional[list[str]] = None
+    auth: Any, prefix: str = "", tags: Optional[list[str | Enum]] = None
 ) -> APIRouter:
     """
     Generate permissions management router.
@@ -348,7 +349,9 @@ def get_permissions_router(
         auth_result=Depends(auth.deps.require_permission("permission:read")),
     ):
         groups = await session.execute(
-            select(ConditionGroup).where(ConditionGroup.permission_id == permission_id)
+            select(ConditionGroup).where(
+                cast(Any, ConditionGroup.permission_id) == permission_id
+            )
         )
         return [
             ConditionGroupResponse(
@@ -473,7 +476,7 @@ def get_permissions_router(
     ):
         result = await session.execute(
             select(PermissionCondition).where(
-                PermissionCondition.permission_id == permission_id
+                cast(Any, PermissionCondition.permission_id) == permission_id
             )
         )
         conditions = result.scalars().all()

@@ -5,6 +5,7 @@ Provides endpoints for managing system-level configuration.
 Only superusers can modify these settings.
 """
 
+from enum import Enum
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -19,7 +20,7 @@ from outlabs_auth.services.config import ConfigService
 
 
 def get_config_router(
-    auth: Any, prefix: str = "", tags: Optional[list[str]] = None
+    auth: Any, prefix: str = "", tags: Optional[list[str | Enum]] = None
 ) -> APIRouter:
     """
     Generate configuration management router.

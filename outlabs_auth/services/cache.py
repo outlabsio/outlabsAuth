@@ -4,7 +4,7 @@ Redis-backed cache service for permission checks.
 
 import asyncio
 import contextlib
-from typing import Optional
+from typing import Any, Optional, cast
 
 from outlabs_auth.core.config import AuthConfig
 
@@ -15,8 +15,8 @@ class CacheService:
     def __init__(self, redis_client, config: AuthConfig):
         self.redis_client = redis_client
         self.config = config
-        self._pubsub = None
-        self._listener_task: Optional[asyncio.Task] = None
+        self._pubsub: Any = None
+        self._listener_task: Optional[asyncio.Task[None]] = None
 
     def make_permission_check_key(
         self,
@@ -25,12 +25,14 @@ class CacheService:
         entity_id: Optional[str] = None,
     ) -> str:
         scope = entity_id or "global"
-        return self.redis_client.make_key(
-            "auth",
-            "permission-check",
-            user_id,
-            scope,
-            permission,
+        return str(
+            self.redis_client.make_key(
+                "auth",
+                "permission-check",
+                user_id,
+                scope,
+                permission,
+            )
         )
 
     async def get_permission_check(
@@ -55,17 +57,19 @@ class CacheService:
     ) -> bool:
         if not self.redis_client or not self.redis_client.is_available:
             return False
-        return await self.redis_client.set(
-            self.make_permission_check_key(user_id, permission, entity_id),
-            result,
-            ttl=self.config.cache_permission_ttl,
+        return bool(
+            await self.redis_client.set(
+                self.make_permission_check_key(user_id, permission, entity_id),
+                result,
+                ttl=self.config.cache_permission_ttl,
+            )
         )
 
     async def invalidate_user_permissions(self, user_id: str) -> int:
         if not self.redis_client or not self.redis_client.is_available:
             return 0
         pattern = self.redis_client.make_key("auth", "permission-check", user_id, "*")
-        return await self.redis_client.delete_pattern(pattern)
+        return int(await self.redis_client.delete_pattern(pattern))
 
     async def invalidate_entity_permissions(self, entity_id: str) -> int:
         if not self.redis_client or not self.redis_client.is_available:
@@ -77,32 +81,34 @@ class CacheService:
             entity_id,
             "*",
         )
-        return await self.redis_client.delete_pattern(pattern)
+        return int(await self.redis_client.delete_pattern(pattern))
 
     async def invalidate_all_permissions(self) -> int:
         if not self.redis_client or not self.redis_client.is_available:
             return 0
         pattern = self.redis_client.make_key("auth", "permission-check", "*")
-        return await self.redis_client.delete_pattern(pattern)
+        return int(await self.redis_client.delete_pattern(pattern))
 
     async def publish_user_permissions_invalidation(self, user_id: str) -> bool:
-        return await self._publish(f"permissions:user:{user_id}")
+        return bool(await self._publish(f"permissions:user:{user_id}"))
 
     async def publish_entity_permissions_invalidation(self, entity_id: str) -> bool:
-        return await self._publish(f"permissions:entity:{entity_id}")
+        return bool(await self._publish(f"permissions:entity:{entity_id}"))
 
     async def publish_all_permissions_invalidation(self) -> bool:
-        return await self._publish("permissions:all")
+        return bool(await self._publish("permissions:all"))
 
     async def publish_role_permissions_invalidation(self, role_id: str) -> bool:
-        return await self.publish_all_permissions_invalidation()
+        return bool(await self.publish_all_permissions_invalidation())
 
     async def _publish(self, message: str) -> bool:
         if not self.redis_client or not self.redis_client.is_available:
             return False
-        return await self.redis_client.publish(
-            self.config.redis_invalidation_channel,
-            message,
+        return bool(
+            await self.redis_client.publish(
+                self.config.redis_invalidation_channel,
+                message,
+            )
         )
 
     async def start(self) -> None:
@@ -135,8 +141,12 @@ class CacheService:
             self._pubsub = None
 
     async def _listen(self) -> None:
+        if self._pubsub is None:
+            return
+
         while True:
-            message = await self._pubsub.get_message(  # type: ignore[union-attr]
+            pubsub = cast(Any, self._pubsub)
+            message = await pubsub.get_message(
                 ignore_subscribe_messages=True,
                 timeout=1.0,
             )

@@ -94,7 +94,7 @@ class OAuthProvider(ABC):
         redirect_uri: str,
         state: Optional[str] = None,
         use_pkce: bool = True,
-        use_nonce: bool = None,
+        use_nonce: Optional[bool] = None,
         **extra_params
     ) -> OAuthAuthorizationURL:
         """

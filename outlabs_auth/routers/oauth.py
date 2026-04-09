@@ -7,7 +7,8 @@ Provides ready-to-use OAuth routes for authentication with social providers
 
 import secrets
 from datetime import datetime, timezone
-from typing import Any, Optional
+from enum import Enum
+from typing import Any, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
@@ -84,7 +85,7 @@ def get_oauth_router(
     auth: Any,
     state_secret: str,
     prefix: str = "",
-    tags: Optional[list[str]] = None,
+    tags: Optional[list[str | Enum]] = None,
     redirect_url: Optional[str] = None,
     associate_by_email: bool = False,
     is_verified_by_default: bool = False,
@@ -261,8 +262,8 @@ async def oauth_callback(
 
     # 1) Existing provider account mapping.
     stmt = select(SocialAccount).where(
-        SocialAccount.provider == provider,
-        SocialAccount.provider_user_id == account_id,
+        cast(Any, SocialAccount.provider) == provider,
+        cast(Any, SocialAccount.provider_user_id) == account_id,
     )
     result = await session.execute(stmt)
     social_account = result.scalar_one_or_none()
@@ -314,8 +315,8 @@ async def oauth_callback(
 
     # 3) Link provider to user (or refresh existing same-provider mapping).
     existing_provider_stmt = select(SocialAccount).where(
-        SocialAccount.user_id == user.id,
-        SocialAccount.provider == provider,
+        cast(Any, SocialAccount.user_id) == user.id,
+        cast(Any, SocialAccount.provider) == provider,
     )
     existing_provider_result = await session.execute(existing_provider_stmt)
     existing_provider_link = existing_provider_result.scalar_one_or_none()

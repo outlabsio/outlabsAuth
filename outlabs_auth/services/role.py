@@ -5,7 +5,7 @@ Handles role management operations with PostgreSQL/SQLAlchemy.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, cast
 from uuid import UUID
 
 from sqlalchemy import and_, false, or_, select
@@ -66,6 +66,26 @@ class RoleService(BaseService[Role]):
         self.config = config
         self.role_history_service = role_history_service
         self.user_audit_service = user_audit_service
+
+    @staticmethod
+    def _role_permission_options() -> list[Any]:
+        return [
+            selectinload(cast(Any, Role.permissions)),
+            selectinload(cast(Any, Role.entity_type_permissions)).selectinload(
+                cast(Any, RoleEntityTypePermission.permission)
+            ),
+        ]
+
+    @staticmethod
+    def _user_role_membership_role_options() -> list[Any]:
+        return [
+            selectinload(cast(Any, UserRoleMembership.role)).selectinload(
+                cast(Any, Role.permissions)
+            ),
+            selectinload(cast(Any, UserRoleMembership.role))
+            .selectinload(cast(Any, Role.entity_type_permissions))
+            .selectinload(cast(Any, RoleEntityTypePermission.permission)),
+        ]
 
     @staticmethod
     def _coerce_definition_status(value: DefinitionStatus | str) -> DefinitionStatus:
@@ -179,23 +199,23 @@ class RoleService(BaseService[Role]):
         if scope_entity_id:
             existing = await self.get_one(
                 session,
-                Role.name == name,
-                Role.scope_entity_id == scope_entity_id,
+                cast(Any, Role.name) == name,
+                cast(Any, Role.scope_entity_id) == scope_entity_id,
             )
         elif root_entity_id:
             existing = await self.get_one(
                 session,
-                Role.name == name,
-                Role.root_entity_id == root_entity_id,
-                Role.scope_entity_id.is_(None),
+                cast(Any, Role.name) == name,
+                cast(Any, Role.root_entity_id) == root_entity_id,
+                cast(Any, Role.scope_entity_id).is_(None),
             )
         else:
             # System-wide roles must remain globally unique
             existing = await self.get_one(
                 session,
-                Role.name == name,
-                Role.root_entity_id.is_(None),
-                Role.scope_entity_id.is_(None),
+                cast(Any, Role.name) == name,
+                cast(Any, Role.root_entity_id).is_(None),
+                cast(Any, Role.scope_entity_id).is_(None),
             )
         if existing:
             raise InvalidInputError(
@@ -356,9 +376,9 @@ class RoleService(BaseService[Role]):
     ) -> UUID:
         """Get the root entity ID for any entity using closure table."""
         stmt = (
-            select(EntityClosure.ancestor_id)
-            .where(EntityClosure.descendant_id == entity_id)
-            .order_by(EntityClosure.depth.desc())
+            select(cast(Any, EntityClosure.ancestor_id))
+            .where(cast(Any, EntityClosure.descendant_id) == entity_id)
+            .order_by(cast(Any, EntityClosure.depth).desc())
             .limit(1)
         )
         result = await session.execute(stmt)
@@ -373,8 +393,8 @@ class RoleService(BaseService[Role]):
     ) -> bool:
         """Check if entity is within root_entity's hierarchy using closure table."""
         stmt = select(EntityClosure).where(
-            EntityClosure.ancestor_id == root_entity_id,
-            EntityClosure.descendant_id == entity_id,
+            cast(Any, EntityClosure.ancestor_id) == root_entity_id,
+            cast(Any, EntityClosure.descendant_id) == entity_id,
         )
         result = await session.execute(stmt)
         return result.scalar_one_or_none() is not None
@@ -398,17 +418,17 @@ class RoleService(BaseService[Role]):
         Returns:
             Role if found, None otherwise
         """
-        stmt = select(Role).where(Role.id == role_id)
+        stmt = select(Role).where(cast(Any, Role.id) == role_id)
         if not include_archived:
-            stmt = stmt.where(Role.status != DefinitionStatus.ARCHIVED)
+            stmt = stmt.where(cast(Any, Role.status) != DefinitionStatus.ARCHIVED)
 
-        options = []
+        options: list[Any] = []
         if load_permissions:
-            options.append(selectinload(Role.permissions))
+            options.append(selectinload(cast(Any, Role.permissions)))
         if load_entity_type_permissions:
             options.append(
-                selectinload(Role.entity_type_permissions).selectinload(
-                    RoleEntityTypePermission.permission
+                selectinload(cast(Any, Role.entity_type_permissions)).selectinload(
+                    cast(Any, RoleEntityTypePermission.permission)
                 )
             )
         if options:
@@ -728,8 +748,8 @@ class RoleService(BaseService[Role]):
         deleted_group_snapshot = self._build_condition_group_snapshot(group)
 
         condition_stmt = select(RoleCondition).where(
-            RoleCondition.role_id == role_id,
-            RoleCondition.condition_group_id == group_id,
+            cast(Any, RoleCondition.role_id) == role_id,
+            cast(Any, RoleCondition.condition_group_id) == group_id,
         )
         condition_result = await session.execute(condition_stmt)
         deleted_conditions = [
@@ -847,7 +867,7 @@ class RoleService(BaseService[Role]):
         if "attribute" in fields_set and attribute is not None:
             condition.attribute = attribute
         if "operator" in fields_set and operator is not None:
-            condition.operator = operator
+            condition.operator = cast(Any, operator)
         if "value_type" in fields_set and value_type is not None:
             condition.value_type = value_type
         if "value" in fields_set or "value_type" in fields_set:
@@ -951,39 +971,41 @@ class RoleService(BaseService[Role]):
         Returns:
             Tuple of (roles, total_count)
         """
-        filters = [Role.status != DefinitionStatus.ARCHIVED]
+        filters: list[Any] = [cast(Any, Role.status) != DefinitionStatus.ARCHIVED]
         if search:
             pattern = f"%{search}%"
             filters.append(
                 or_(
-                    Role.name.ilike(pattern),
-                    Role.display_name.ilike(pattern),
-                    Role.description.ilike(pattern),
+                    cast(Any, Role.name).ilike(pattern),
+                    cast(Any, Role.display_name).ilike(pattern),
+                    cast(Any, Role.description).ilike(pattern),
                 )
             )
         if is_global is not None:
-            filters.append(Role.is_global == is_global)
+            filters.append(cast(Any, Role.is_global) == is_global)
         if root_entity_id is not None:
-            filters.append(Role.root_entity_id == root_entity_id)
+            filters.append(cast(Any, Role.root_entity_id) == root_entity_id)
 
-        scope_filters = []
+        scope_filters: list[Any] = []
         if include_system_global:
             scope_filters.append(
                 and_(
-                    Role.is_global == True,
-                    Role.root_entity_id.is_(None),
-                    Role.scope_entity_id.is_(None),
+                    cast(Any, Role.is_global) == True,
+                    cast(Any, Role.root_entity_id).is_(None),
+                    cast(Any, Role.scope_entity_id).is_(None),
                 )
             )
         if manageable_root_entity_ids:
             scope_filters.append(
                 and_(
-                    Role.root_entity_id.in_(manageable_root_entity_ids),
-                    Role.scope_entity_id.is_(None),
+                    cast(Any, Role.root_entity_id).in_(manageable_root_entity_ids),
+                    cast(Any, Role.scope_entity_id).is_(None),
                 )
             )
         if manageable_entity_ids:
-            scope_filters.append(Role.scope_entity_id.in_(manageable_entity_ids))
+            scope_filters.append(
+                cast(Any, Role.scope_entity_id).in_(manageable_entity_ids)
+            )
 
         if (
             manageable_root_entity_ids is not None
@@ -1000,11 +1022,11 @@ class RoleService(BaseService[Role]):
             *filters,
             skip=skip,
             limit=limit,
-            order_by=Role.name,
+            order_by=cast(Any, Role.name),
             options=[
-                selectinload(Role.permissions),
-                selectinload(Role.root_entity),
-                selectinload(Role.scope_entity),
+                selectinload(cast(Any, Role.permissions)),
+                selectinload(cast(Any, Role.root_entity)),
+                selectinload(cast(Any, Role.scope_entity)),
             ],
         )
 
@@ -1044,9 +1066,10 @@ class RoleService(BaseService[Role]):
             return [], 0
 
         # Step 1: Get all ancestors (including self) using closure table
-        ancestors_stmt = select(EntityClosure.ancestor_id, EntityClosure.depth).where(
-            EntityClosure.descendant_id == entity_id
-        )
+        ancestors_stmt = select(
+            cast(Any, EntityClosure.ancestor_id),
+            cast(Any, EntityClosure.depth),
+        ).where(cast(Any, EntityClosure.descendant_id) == entity_id)
         ancestors_result = await session.execute(ancestors_stmt)
         ancestor_rows = ancestors_result.all()
 
@@ -1064,43 +1087,43 @@ class RoleService(BaseService[Role]):
         # 3. Entity-local (hierarchy): scope_entity_id is X or an ancestor AND scope=hierarchy
         # 4. Entity-local (entity_only): scope_entity_id = X AND scope=entity_only
 
-        conditions = []
+        conditions: list[Any] = []
 
         if include_global:
             # 1. System-wide global roles
             conditions.append(
                 and_(
-                    Role.status == DefinitionStatus.ACTIVE,
-                    Role.is_global == True,
-                    Role.root_entity_id.is_(None),
-                    Role.scope_entity_id.is_(None),
+                    cast(Any, Role.status) == DefinitionStatus.ACTIVE,
+                    cast(Any, Role.is_global) == True,
+                    cast(Any, Role.root_entity_id).is_(None),
+                    cast(Any, Role.scope_entity_id).is_(None),
                 )
             )
 
         # 2. Org-scoped roles (within our root, not entity-local)
         conditions.append(
             and_(
-                Role.status == DefinitionStatus.ACTIVE,
-                Role.root_entity_id == root_id,
-                Role.scope_entity_id.is_(None),
+                cast(Any, Role.status) == DefinitionStatus.ACTIVE,
+                cast(Any, Role.root_entity_id) == root_id,
+                cast(Any, Role.scope_entity_id).is_(None),
             )
         )
 
         # 3. Entity-local roles with hierarchy scope from any ancestor
         conditions.append(
             and_(
-                Role.status == DefinitionStatus.ACTIVE,
-                Role.scope_entity_id.in_(ancestor_ids),
-                Role.scope == RoleScope.HIERARCHY,
+                cast(Any, Role.status) == DefinitionStatus.ACTIVE,
+                cast(Any, Role.scope_entity_id).in_(ancestor_ids),
+                cast(Any, Role.scope) == RoleScope.HIERARCHY,
             )
         )
 
         # 4. Entity-local roles with entity_only scope from THIS entity only
         conditions.append(
             and_(
-                Role.status == DefinitionStatus.ACTIVE,
-                Role.scope_entity_id == entity_id,
-                Role.scope == RoleScope.ENTITY_ONLY,
+                cast(Any, Role.status) == DefinitionStatus.ACTIVE,
+                cast(Any, Role.scope_entity_id) == entity_id,
+                cast(Any, Role.scope) == RoleScope.ENTITY_ONLY,
             )
         )
 
@@ -1108,17 +1131,17 @@ class RoleService(BaseService[Role]):
 
         # Add auto-assigned filter if requested
         if include_auto_assigned_only:
-            role_filter = and_(role_filter, Role.is_auto_assigned == True)
+            role_filter = and_(role_filter, cast(Any, Role.is_auto_assigned) == True)
 
         stmt = (
             select(Role)
             .where(role_filter)
             .options(
-                selectinload(Role.permissions),
-                selectinload(Role.root_entity),
-                selectinload(Role.scope_entity),
+                selectinload(cast(Any, Role.permissions)),
+                selectinload(cast(Any, Role.root_entity)),
+                selectinload(cast(Any, Role.scope_entity)),
             )
-            .order_by(Role.name)
+            .order_by(cast(Any, Role.name))
         )
         result = await session.execute(stmt)
         roles = [
@@ -1151,8 +1174,8 @@ class RoleService(BaseService[Role]):
             List of Role objects that should be auto-assigned
         """
         # Get all ancestors (including self)
-        ancestors_stmt = select(EntityClosure.ancestor_id).where(
-            EntityClosure.descendant_id == entity_id
+        ancestors_stmt = select(cast(Any, EntityClosure.ancestor_id)).where(
+            cast(Any, EntityClosure.descendant_id) == entity_id
         )
         ancestors_result = await session.execute(ancestors_stmt)
         ancestor_ids = [row[0] for row in ancestors_result.all()]
@@ -1164,23 +1187,23 @@ class RoleService(BaseService[Role]):
         # 1. Entity-only roles defined at THIS entity
         # 2. Hierarchy roles defined at any ancestor (including self)
         role_filter = and_(
-            Role.status == DefinitionStatus.ACTIVE,
-            Role.is_auto_assigned == True,
+            cast(Any, Role.status) == DefinitionStatus.ACTIVE,
+            cast(Any, Role.is_auto_assigned).is_(True),
             or_(
                 # Entity-only auto-assigned for this specific entity
                 and_(
-                    Role.scope_entity_id == entity_id,
-                    Role.scope == RoleScope.ENTITY_ONLY,
+                    cast(Any, Role.scope_entity_id) == entity_id,
+                    cast(Any, Role.scope) == RoleScope.ENTITY_ONLY,
                 ),
                 # Hierarchy auto-assigned from any ancestor
                 and_(
-                    Role.scope_entity_id.in_(ancestor_ids),
-                    Role.scope == RoleScope.HIERARCHY,
+                    cast(Any, Role.scope_entity_id).in_(ancestor_ids),
+                    cast(Any, Role.scope) == RoleScope.HIERARCHY,
                 ),
             ),
         )
 
-        stmt = select(Role).where(role_filter).order_by(Role.name)
+        stmt = select(Role).where(role_filter).order_by(cast(Any, Role.name))
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
@@ -1226,17 +1249,21 @@ class RoleService(BaseService[Role]):
             return True
 
         # Get entity's ancestors for hierarchy checks
-        ancestors_stmt = select(EntityClosure.ancestor_id, EntityClosure.depth).where(
-            EntityClosure.descendant_id == entity_id
-        )
+        ancestors_stmt = select(
+            cast(Any, EntityClosure.ancestor_id),
+            cast(Any, EntityClosure.depth),
+        ).where(cast(Any, EntityClosure.descendant_id) == entity_id)
         ancestors_result = await session.execute(ancestors_stmt)
-        ancestor_rows = ancestors_result.all()
+        ancestor_rows: list[tuple[UUID, int]] = [
+            (cast(UUID, row[0]), cast(int, row[1]))
+            for row in ancestors_result.all()
+        ]
 
         if not ancestor_rows:
             return False
 
         ancestor_ids = {row[0] for row in ancestor_rows}
-        root_id = max(ancestor_rows, key=lambda x: x[1])[0]
+        root_id = cast(UUID, max(ancestor_rows, key=lambda x: x[1])[0])
 
         # 2. Org-scoped roles (not entity-local)
         if role.root_entity_id and role.scope_entity_id is None:
@@ -1411,14 +1438,16 @@ class RoleService(BaseService[Role]):
         previous_snapshot = await self._build_role_definition_snapshot(session, role)
 
         # Resolve permission IDs
-        stmt = select(Permission.id).where(Permission.name.in_(permission_names))
+        stmt = select(cast(Any, Permission.id)).where(
+            cast(Any, Permission.name).in_(permission_names)
+        )
         result = await session.execute(stmt)
         perm_ids = [row[0] for row in result.all()]
         if perm_ids:
             await session.execute(
                 sql_delete(RolePermission).where(
-                    RolePermission.role_id == role_id,
-                    RolePermission.permission_id.in_(perm_ids),
+                    cast(Any, RolePermission.role_id) == role_id,
+                    cast(Any, RolePermission.permission_id).in_(perm_ids),
                 )
             )
             await session.flush()
@@ -1477,7 +1506,7 @@ class RoleService(BaseService[Role]):
         if not normalized_names:
             return []
 
-        stmt = select(Permission).where(Permission.name.in_(normalized_names))
+        stmt = select(Permission).where(cast(Any, Permission.name).in_(normalized_names))
         result = await session.execute(stmt)
         permissions_by_name = {permission.name: permission for permission in result.scalars().all()}
         missing_names = [name for name in normalized_names if name not in permissions_by_name]
@@ -1532,7 +1561,7 @@ class RoleService(BaseService[Role]):
 
         await session.execute(
             sql_delete(RoleEntityTypePermission).where(
-                RoleEntityTypePermission.role_id == role_id
+                cast(Any, RoleEntityTypePermission.role_id) == role_id
             )
         )
         await session.flush()
@@ -1749,9 +1778,9 @@ class RoleService(BaseService[Role]):
             InvalidInputError: If membership already exists
         """
         # Validate user exists
-        stmt = select(User).where(User.id == user_id)
-        result = await session.execute(stmt)
-        user = result.scalar_one_or_none()
+        user_stmt = select(User).where(cast(Any, User.id) == user_id)
+        user_result = await session.execute(user_stmt)
+        user = cast(Optional[User], user_result.scalar_one_or_none())
         if not user:
             raise UserNotFoundError(
                 message="User not found",
@@ -1785,12 +1814,14 @@ class RoleService(BaseService[Role]):
             )
 
         # Keep one current-state row per (user, role) and reactivate it in place.
-        stmt = select(UserRoleMembership).where(
-            UserRoleMembership.user_id == user_id,
-            UserRoleMembership.role_id == role_id,
+        membership_stmt = select(UserRoleMembership).where(
+            cast(Any, UserRoleMembership.user_id) == user_id,
+            cast(Any, UserRoleMembership.role_id) == role_id,
         )
-        result = await session.execute(stmt)
-        existing_membership = result.scalar_one_or_none()
+        membership_result = await session.execute(membership_stmt)
+        existing_membership = cast(
+            Optional[UserRoleMembership], membership_result.scalar_one_or_none()
+        )
         if existing_membership and existing_membership.status == MembershipStatus.ACTIVE:
             raise InvalidInputError(
                 message="User already has this role assigned",
@@ -1881,9 +1912,9 @@ class RoleService(BaseService[Role]):
             True if revoked, False if no active membership found
         """
         stmt = select(UserRoleMembership).where(
-            UserRoleMembership.user_id == user_id,
-            UserRoleMembership.role_id == role_id,
-            UserRoleMembership.status == MembershipStatus.ACTIVE,
+            cast(Any, UserRoleMembership.user_id) == user_id,
+            cast(Any, UserRoleMembership.role_id) == role_id,
+            cast(Any, UserRoleMembership.status) == MembershipStatus.ACTIVE,
         )
         result = await session.execute(stmt)
         membership = result.scalar_one_or_none()
@@ -1934,8 +1965,8 @@ class RoleService(BaseService[Role]):
     ) -> int:
         """Revoke all non-revoked direct role memberships for a user."""
         stmt = select(UserRoleMembership).where(
-            UserRoleMembership.user_id == user_id,
-            UserRoleMembership.status != MembershipStatus.REVOKED,
+            cast(Any, UserRoleMembership.user_id) == user_id,
+            cast(Any, UserRoleMembership.status) != MembershipStatus.REVOKED,
         )
         result = await session.execute(stmt)
         memberships = list(result.scalars().all())
@@ -1994,12 +2025,12 @@ class RoleService(BaseService[Role]):
 
         stmt = (
             select(UserRoleMembership)
-            .join(Role, UserRoleMembership.role_id == Role.id)
+            .join(Role, cast(Any, UserRoleMembership.role_id) == Role.id)
             .where(
-                UserRoleMembership.status != MembershipStatus.REVOKED,
+                cast(Any, UserRoleMembership.status) != MembershipStatus.REVOKED,
                 or_(
-                    Role.root_entity_id.in_(entity_ids),
-                    Role.scope_entity_id.in_(entity_ids),
+                    cast(Any, Role.root_entity_id).in_(entity_ids),
+                    cast(Any, Role.scope_entity_id).in_(entity_ids),
                 ),
             )
         )
@@ -2064,22 +2095,17 @@ class RoleService(BaseService[Role]):
         Returns:
             List of Role objects
         """
-        filters = [UserRoleMembership.user_id == user_id]
+        filters: list[Any] = [cast(Any, UserRoleMembership.user_id) == user_id]
         if not include_inactive:
-            filters.append(UserRoleMembership.status == MembershipStatus.ACTIVE)
+            filters.append(cast(Any, UserRoleMembership.status) == MembershipStatus.ACTIVE)
 
         stmt = (
             select(UserRoleMembership)
-            .options(
-                selectinload(UserRoleMembership.role).selectinload(Role.permissions),
-                selectinload(UserRoleMembership.role)
-                .selectinload(Role.entity_type_permissions)
-                .selectinload(RoleEntityTypePermission.permission),
-            )
+            .options(*self._user_role_membership_role_options())
             .where(*filters)
         )
         result = await session.execute(stmt)
-        memberships = result.scalars().all()
+        memberships: list[UserRoleMembership] = list(result.scalars().all())
 
         # Filter by time-based validity and extract roles
         roles = []
@@ -2106,23 +2132,18 @@ class RoleService(BaseService[Role]):
         Returns:
             List of UserRoleMembership records with roles loaded
         """
-        filters = [UserRoleMembership.user_id == user_id]
+        filters: list[Any] = [cast(Any, UserRoleMembership.user_id) == user_id]
         if not include_inactive:
-            filters.append(UserRoleMembership.status == MembershipStatus.ACTIVE)
+            filters.append(cast(Any, UserRoleMembership.status) == MembershipStatus.ACTIVE)
 
         stmt = (
             select(UserRoleMembership)
-            .options(
-                selectinload(UserRoleMembership.role).selectinload(Role.permissions),
-                selectinload(UserRoleMembership.role)
-                .selectinload(Role.entity_type_permissions)
-                .selectinload(RoleEntityTypePermission.permission),
-            )
+            .options(*self._user_role_membership_role_options())
             .where(*filters)
-            .order_by(UserRoleMembership.assigned_at.desc())
+            .order_by(cast(Any, UserRoleMembership.assigned_at).desc())
         )
         result = await session.execute(stmt)
-        memberships = result.scalars().all()
+        memberships: list[UserRoleMembership] = list(result.scalars().all())
         return [
             membership
             for membership in memberships
@@ -2162,7 +2183,7 @@ class RoleService(BaseService[Role]):
     ) -> None:
         """Replace the direct permission set for a role."""
         await session.execute(
-            sql_delete(RolePermission).where(RolePermission.role_id == role_id)
+            sql_delete(RolePermission).where(cast(Any, RolePermission.role_id) == role_id)
         )
         await session.flush()
         await self._add_permissions_by_name(session, role_id, permission_names)
@@ -2176,7 +2197,7 @@ class RoleService(BaseService[Role]):
         if not permission_ids:
             return []
 
-        stmt = select(Permission).where(Permission.id.in_(permission_ids))
+        stmt = select(Permission).where(cast(Any, Permission.id).in_(permission_ids))
         result = await session.execute(stmt)
         permissions_by_id = {permission.id: permission for permission in result.scalars().all()}
         missing_ids = [str(permission_id) for permission_id in permission_ids if permission_id not in permissions_by_id]
@@ -2251,14 +2272,16 @@ class RoleService(BaseService[Role]):
             key=lambda item: (item.entity_type, str(item.permission_id)),
         )
         condition_group_stmt = select(SqlConditionGroup).where(
-            SqlConditionGroup.role_id == current_role.id
+            cast(Any, SqlConditionGroup.role_id) == current_role.id
         )
         condition_group_result = await session.execute(condition_group_stmt)
         condition_groups = sorted(
             list(condition_group_result.scalars().all()),
             key=lambda group: (group.operator, group.description or "", str(group.id)),
         )
-        condition_stmt = select(RoleCondition).where(RoleCondition.role_id == current_role.id)
+        condition_stmt = select(RoleCondition).where(
+            cast(Any, RoleCondition.role_id) == current_role.id
+        )
         condition_result = await session.execute(condition_stmt)
         conditions = sorted(
             list(condition_result.scalars().all()),

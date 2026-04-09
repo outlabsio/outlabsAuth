@@ -13,7 +13,7 @@ Key advantages:
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Union, cast
 
 import jwt
 
@@ -22,7 +22,7 @@ STATE_TOKEN_AUDIENCE = "outlabs-auth:oauth-state"
 
 def generate_state_token(
     data: Optional[Dict[str, Any]] = None,
-    secret: Union[str, bytes] = None,
+    secret: Optional[Union[str, bytes]] = None,
     lifetime_seconds: int = 600,  # 10 minutes
     algorithm: str = "HS256",
 ) -> str:
@@ -76,11 +76,13 @@ def generate_state_token(
     # Sign the token
     token = jwt.encode(payload, secret, algorithm=algorithm)
 
-    return token
+    return cast(str, token)
 
 
 def decode_state_token(
-    token: str, secret: Union[str, bytes] = None, algorithms: list[str] = None
+    token: str,
+    secret: Optional[Union[str, bytes]] = None,
+    algorithms: Optional[list[str]] = None,
 ) -> Dict[str, Any]:
     """
     Decode and validate an OAuth state JWT token.
@@ -145,7 +147,7 @@ def decode_state_token(
                 "verify_aud": True,  # Verify audience
             },
         )
-        return payload
+        return cast(Dict[str, Any], payload)
     except jwt.ExpiredSignatureError:
         # Token expired - user took too long to complete OAuth flow
         raise

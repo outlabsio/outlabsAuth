@@ -7,9 +7,9 @@ This engine evaluates conditions against a context to determine if access should
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
-from dateutil import parser as date_parser
+from dateutil import parser as date_parser  # type: ignore[import-untyped]
 
 from outlabs_auth.models.sql.condition import Condition, ConditionGroup
 from outlabs_auth.models.sql.enums import ConditionOperator
@@ -139,7 +139,7 @@ class PolicyEvaluationEngine:
             Attribute value or None if not found
         """
         parts = attribute_path.split(".")
-        current = context
+        current: Any = context
 
         for part in parts:
             if not isinstance(current, dict):
@@ -167,10 +167,10 @@ class PolicyEvaluationEngine:
         """
         # Equality
         if operator == ConditionOperator.EQUALS:
-            return attribute_value == expected_value
+            return bool(attribute_value == expected_value)
 
         if operator == ConditionOperator.NOT_EQUALS:
-            return attribute_value != expected_value
+            return bool(attribute_value != expected_value)
 
         # Numeric comparisons
         if operator == ConditionOperator.LESS_THAN:
@@ -255,7 +255,7 @@ class PolicyEvaluationEngine:
         # Unknown operator
         raise ValueError(f"Unknown operator: {operator}")
 
-    def _compare_numeric(self, a: Any, b: Any, comparator) -> bool:
+    def _compare_numeric(self, a: Any, b: Any, comparator: Callable[[float, float], bool]) -> bool:
         """
         Compare two values numerically.
 
@@ -275,7 +275,12 @@ class PolicyEvaluationEngine:
         except (ValueError, TypeError):
             return False
 
-    def _compare_datetime(self, a: Any, b: Any, comparator) -> bool:
+    def _compare_datetime(
+        self,
+        a: Any,
+        b: Any,
+        comparator: Callable[[datetime, datetime], bool],
+    ) -> bool:
         """
         Compare two values as datetimes.
 

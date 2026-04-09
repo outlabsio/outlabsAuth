@@ -4,6 +4,8 @@ FastAPI router for Prometheus metrics endpoint.
 Provides /metrics endpoint for Prometheus scraping.
 """
 
+from enum import Enum
+
 from fastapi import APIRouter, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
@@ -13,7 +15,7 @@ from .service import ObservabilityService
 def create_metrics_router(
     obs_service: ObservabilityService,
     path: str | None = None,
-    tags: list = None,
+    tags: list[str | Enum] | None = None,
 ) -> APIRouter:
     """
     Create FastAPI router for Prometheus metrics endpoint.

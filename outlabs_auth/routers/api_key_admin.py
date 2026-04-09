@@ -1,5 +1,6 @@
 """Enterprise admin API key inventory router factory."""
 
+from enum import Enum
 from typing import Any, Optional
 from uuid import UUID
 
@@ -11,7 +12,11 @@ from outlabs_auth.schemas.api_key import ApiKeyResponse
 from outlabs_auth.schemas.common import PaginatedResponse
 
 
-def get_api_key_admin_router(auth: Any, prefix: str = "", tags: Optional[list[str]] = None) -> APIRouter:
+def get_api_key_admin_router(
+    auth: Any,
+    prefix: str = "",
+    tags: Optional[list[str | Enum]] = None,
+) -> APIRouter:
     """
     Generate entity-first admin API key inventory routes for EnterpriseRBAC.
 

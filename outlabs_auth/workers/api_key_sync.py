@@ -12,6 +12,8 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
 from outlabs_auth.services.api_key import APIKeyService
 from outlabs_auth.core.config import AuthConfig
 
@@ -43,6 +45,7 @@ class APIKeyUsageSyncWorker:
         self,
         api_key_service: APIKeyService,
         config: AuthConfig,
+        session_factory: Optional[async_sessionmaker[AsyncSession]] = None,
         interval_seconds: int = 300,  # 5 minutes
     ):
         """
@@ -51,14 +54,21 @@ class APIKeyUsageSyncWorker:
         Args:
             api_key_service: APIKeyService instance
             config: AuthConfig instance
+            session_factory: Session factory used for sync DB writes
             interval_seconds: Sync interval in seconds (default: 300 = 5min)
         """
         self.api_key_service = api_key_service
         self.config = config
+        self.session_factory = session_factory
         self.interval_seconds = interval_seconds
         self._task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
         self._running = False
+
+    def _require_session_factory(self) -> async_sessionmaker[AsyncSession]:
+        if self.session_factory is None:
+            raise RuntimeError("APIKeyUsageSyncWorker requires a session_factory")
+        return self.session_factory
 
     async def start(self) -> None:
         """
@@ -147,7 +157,8 @@ class APIKeyUsageSyncWorker:
         try:
             logger.debug("Starting API key usage counter sync cycle...")
 
-            stats = await self.api_key_service.sync_usage_counters_to_db()
+            async with self._require_session_factory()() as session:
+                stats = await self.api_key_service.sync_usage_counters_to_db(session)
 
             elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
 
@@ -178,7 +189,8 @@ class APIKeyUsageSyncWorker:
             >>> print(f"Synced {stats['synced_keys']} keys")
         """
         logger.info("Manual sync triggered")
-        return await self.api_key_service.sync_usage_counters_to_db()
+        async with self._require_session_factory()() as session:
+            return await self.api_key_service.sync_usage_counters_to_db(session)
 
     @property
     def is_running(self) -> bool:
@@ -192,6 +204,7 @@ class APIKeyUsageSyncWorker:
 async def start_api_key_sync_worker(
     api_key_service: APIKeyService,
     config: AuthConfig,
+    session_factory: Optional[async_sessionmaker[AsyncSession]] = None,
     interval_seconds: int = 300,
 ) -> APIKeyUsageSyncWorker:
     """
@@ -200,6 +213,7 @@ async def start_api_key_sync_worker(
     Args:
         api_key_service: APIKeyService instance
         config: AuthConfig instance
+        session_factory: Session factory used for sync DB writes
         interval_seconds: Sync interval in seconds
 
     Returns:
@@ -209,6 +223,7 @@ async def start_api_key_sync_worker(
         >>> worker = await start_api_key_sync_worker(
         ...     api_key_service,
         ...     config,
+        ...     session_factory=session_factory,
         ...     interval_seconds=300
         ... )
         >>> # Worker is now running in background
@@ -218,6 +233,7 @@ async def start_api_key_sync_worker(
     worker = APIKeyUsageSyncWorker(
         api_key_service=api_key_service,
         config=config,
+        session_factory=session_factory,
         interval_seconds=interval_seconds,
     )
 

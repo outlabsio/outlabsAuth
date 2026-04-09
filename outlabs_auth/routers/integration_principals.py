@@ -1,5 +1,6 @@
 """Enterprise integration-principal router factory."""
 
+from enum import Enum
 from typing import Any, Optional
 from uuid import UUID
 
@@ -27,7 +28,11 @@ from outlabs_auth.schemas.integration_principal import (
 )
 
 
-def get_integration_principals_router(auth: Any, prefix: str = "", tags: Optional[list[str]] = None) -> APIRouter:
+def get_integration_principals_router(
+    auth: Any,
+    prefix: str = "",
+    tags: Optional[list[str | Enum]] = None,
+) -> APIRouter:
     """Generate EnterpriseRBAC routes for integration principals and owned system API keys."""
     if not getattr(auth.config, "enable_entity_hierarchy", False):
         raise ValueError("Integration principals require EnterpriseRBAC")

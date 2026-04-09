@@ -11,7 +11,7 @@ Handles user authentication operations with PostgreSQL/SQLAlchemy:
 
 import hashlib
 from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple, cast
 from uuid import UUID
 
 from sqlalchemy import select
@@ -130,7 +130,7 @@ class AuthService:
         email = validate_email(email)
 
         # Find user by email
-        stmt = select(User).where(User.email == email)
+        stmt = select(User).where(cast(Any, User.email) == email)
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 
@@ -452,7 +452,7 @@ class AuthService:
 
         # Find refresh token in database
         token_hash = self._hash_token(refresh_token)
-        stmt = select(RefreshToken).where(RefreshToken.token_hash == token_hash)
+        stmt = select(RefreshToken).where(cast(Any, RefreshToken.token_hash) == token_hash)
         result = await session.execute(stmt)
         token_model = result.scalar_one_or_none()
 
@@ -553,8 +553,10 @@ class AuthService:
         # If refresh token storage is enabled, check database
         if self.config.store_refresh_tokens:
             token_hash = self._hash_token(refresh_token)
-            stmt = select(RefreshToken).where(RefreshToken.token_hash == token_hash)
-            result = await session.execute(stmt)
+            refresh_token_stmt = select(RefreshToken).where(
+                cast(Any, RefreshToken.token_hash) == token_hash
+            )
+            result = await session.execute(refresh_token_stmt)
             token_model = result.scalar_one_or_none()
 
             if not token_model:
@@ -582,9 +584,9 @@ class AuthService:
                 )
 
         # Get user from database
-        stmt = select(User).where(User.id == UUID(user_id))
-        result = await session.execute(stmt)
-        user = result.scalar_one_or_none()
+        user_stmt = select(User).where(cast(Any, User.id) == UUID(user_id))
+        user_result = await session.execute(user_stmt)
+        user = cast(Optional[User], user_result.scalar_one_or_none())
 
         if not user:
             raise UserNotFoundError(
@@ -677,7 +679,7 @@ class AuthService:
             )
 
         # Get user from database
-        stmt = select(User).where(User.id == UUID(user_id))
+        stmt = select(User).where(cast(Any, User.id) == UUID(user_id))
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 
@@ -720,8 +722,8 @@ class AuthService:
 
         # Find all active tokens for user
         stmt = select(RefreshToken).where(
-            RefreshToken.user_id == user_id,
-            RefreshToken.is_revoked == False,
+            cast(Any, RefreshToken.user_id) == user_id,
+            cast(Any, RefreshToken.is_revoked).is_(False),
         )
         result = await session.execute(stmt)
         tokens = result.scalars().all()
@@ -817,7 +819,7 @@ class AuthService:
         hashed_token = hashlib.sha256(token.encode()).hexdigest()
 
         # Find user by hashed token
-        stmt = select(User).where(User.password_reset_token == hashed_token)
+        stmt = select(User).where(cast(Any, User.password_reset_token) == hashed_token)
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 
@@ -993,7 +995,7 @@ class AuthService:
         # Hash token to find user (same pattern as reset_password)
         hashed_token = hashlib.sha256(token.encode()).hexdigest()
 
-        stmt = select(User).where(User.invite_token == hashed_token)
+        stmt = select(User).where(cast(Any, User.invite_token) == hashed_token)
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 

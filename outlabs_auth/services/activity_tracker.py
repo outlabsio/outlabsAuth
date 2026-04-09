@@ -8,7 +8,7 @@ Background worker syncs to PostgreSQL for historical analytics.
 import logging
 import time
 from datetime import date, datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -307,9 +307,11 @@ class ActivityTracker:
             if count <= 0:
                 return 0
 
+            metric_type_col = cast(Any, ActivityMetric.metric_type)
+            metric_date_col = cast(Any, ActivityMetric.metric_date)
             stmt = select(ActivityMetric).where(
-                ActivityMetric.metric_type == metric_type,
-                ActivityMetric.metric_date == metric_date,
+                metric_type_col == metric_type,
+                metric_date_col == metric_date,
             )
             result = await session.execute(stmt)
             metric = result.scalar_one_or_none()
@@ -369,7 +371,7 @@ class ActivityTracker:
 
                         # Process batch when it reaches batch_size
                         if len(batch) >= batch_size:
-                            updated = await self._update_user_batch(batch)
+                            updated = await self._update_user_batch(session, batch)
                             users_updated += updated
                             batch = []
 
@@ -407,7 +409,7 @@ class ActivityTracker:
             except Exception:
                 continue
 
-            stmt = select(User).where(User.id == user_uuid)
+            stmt = select(User).where(cast(Any, User.id) == user_uuid)
             result = await session.execute(stmt)
             user = result.scalar_one_or_none()
             if not user:
@@ -429,10 +431,10 @@ class ActivityTracker:
             ttl_days = 90
             cutoff_date = datetime.now(timezone.utc) - timedelta(days=ttl_days)
             stmt = sql_delete(ActivityMetric).where(
-                ActivityMetric.created_at < cutoff_date
+                cast(Any, ActivityMetric.created_at) < cutoff_date
             )
             result = await session.execute(stmt)
-            deleted = result.rowcount or 0
+            deleted = int(getattr(result, "rowcount", 0) or 0)
             if deleted > 0:
                 logger.info(f"Cleaned up {deleted} old ActivityMetric records")
 

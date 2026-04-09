@@ -5,7 +5,7 @@ Publishes auth events to existing RabbitMQ exchange/queue.
 Does NOT declare queues - connects to existing infrastructure (N8n-style).
 """
 import json
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
 
 try:
     import aio_pika
@@ -108,8 +108,9 @@ class RabbitMQChannel(NotificationChannel):
         
         try:
             # connect_robust provides automatic reconnection
-            self.connection = await aio_pika.connect_robust(self.url)
-            self.channel = await self.connection.channel()
+            connection = await aio_pika.connect_robust(self.url)
+            self.connection = connection
+            self.channel = await connection.channel()
             return True
         except Exception as e:
             # Connection failed - disable this channel

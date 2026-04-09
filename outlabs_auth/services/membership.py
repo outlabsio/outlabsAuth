@@ -9,7 +9,7 @@ Uses SQLAlchemy for PostgreSQL backend.
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -82,6 +82,24 @@ class MembershipService(BaseService[EntityMembership]):
         self.config = config
         self.observability = observability
         self.user_audit_service = user_audit_service
+
+    @staticmethod
+    def _membership_roles_option() -> Any:
+        return selectinload(cast(Any, EntityMembership.roles))
+
+    @classmethod
+    def _membership_roles_user_options(cls) -> list[Any]:
+        return [
+            cls._membership_roles_option(),
+            selectinload(cast(Any, EntityMembership.user)),
+        ]
+
+    @classmethod
+    def _membership_roles_entity_options(cls) -> list[Any]:
+        return [
+            cls._membership_roles_option(),
+            selectinload(cast(Any, EntityMembership.entity)),
+        ]
 
     async def add_member(
         self,
@@ -204,9 +222,9 @@ class MembershipService(BaseService[EntityMembership]):
         # Check if membership already exists
         existing = await self.get_one(
             session,
-            EntityMembership.user_id == user_id,
-            EntityMembership.entity_id == entity_id,
-            options=[selectinload(EntityMembership.roles)],
+            cast(Any, EntityMembership.user_id) == user_id,
+            cast(Any, EntityMembership.entity_id) == entity_id,
+            options=[self._membership_roles_option()],
         )
 
         # Check max_members limit only for NEW memberships
@@ -239,7 +257,9 @@ class MembershipService(BaseService[EntityMembership]):
 
             # Update roles via junction table
             # First, clear existing roles
-            stmt = sql_delete(EntityMembershipRole).where(EntityMembershipRole.membership_id == existing.id)
+            stmt = sql_delete(EntityMembershipRole).where(
+                cast(Any, EntityMembershipRole.membership_id) == existing.id
+            )
             await session.execute(stmt)
 
             # Add new roles
@@ -361,9 +381,9 @@ class MembershipService(BaseService[EntityMembership]):
         # Find membership
         membership = await self.get_one(
             session,
-            EntityMembership.user_id == user_id,
-            EntityMembership.entity_id == entity_id,
-            options=[selectinload(EntityMembership.roles)],
+            cast(Any, EntityMembership.user_id) == user_id,
+            cast(Any, EntityMembership.entity_id) == entity_id,
+            options=[self._membership_roles_option()],
         )
 
         if not membership:
@@ -445,9 +465,9 @@ class MembershipService(BaseService[EntityMembership]):
         """
         membership = await self.get_one(
             session,
-            EntityMembership.user_id == user_id,
-            EntityMembership.entity_id == entity_id,
-            options=[selectinload(EntityMembership.roles)],
+            cast(Any, EntityMembership.user_id) == user_id,
+            cast(Any, EntityMembership.entity_id) == entity_id,
+            options=[self._membership_roles_option()],
         )
 
         if not membership:
@@ -503,7 +523,9 @@ class MembershipService(BaseService[EntityMembership]):
                         },
                     )
 
-            stmt = sql_delete(EntityMembershipRole).where(EntityMembershipRole.membership_id == membership.id)
+            stmt = sql_delete(EntityMembershipRole).where(
+                cast(Any, EntityMembershipRole.membership_id) == membership.id
+            )
             await session.execute(stmt)
 
             for role in roles:
@@ -605,9 +627,9 @@ class MembershipService(BaseService[EntityMembership]):
             Tuple[List[EntityMembership], int]: (memberships, total_count)
         """
         # Build filters
-        filters = [EntityMembership.entity_id == entity_id]
+        filters: list[Any] = [cast(Any, EntityMembership.entity_id) == entity_id]
         if active_only:
-            filters.append(EntityMembership.status == MembershipStatus.ACTIVE)
+            filters.append(cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE)
 
         # Get total count
         count_stmt = select(func.count()).select_from(EntityMembership).where(*filters)
@@ -619,7 +641,7 @@ class MembershipService(BaseService[EntityMembership]):
         stmt = (
             select(EntityMembership)
             .where(*filters)
-            .options(selectinload(EntityMembership.roles))
+            .options(self._membership_roles_option())
             .offset(skip)
             .limit(limit)
         )
@@ -650,9 +672,9 @@ class MembershipService(BaseService[EntityMembership]):
             Tuple[List[EntityMembership], int]: (memberships with user+roles, total_count)
         """
         # Build filters
-        filters = [EntityMembership.entity_id == entity_id]
+        filters: list[Any] = [cast(Any, EntityMembership.entity_id) == entity_id]
         if active_only:
-            filters.append(EntityMembership.status == MembershipStatus.ACTIVE)
+            filters.append(cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE)
 
         # Get total count
         count_stmt = select(func.count()).select_from(EntityMembership).where(*filters)
@@ -664,10 +686,7 @@ class MembershipService(BaseService[EntityMembership]):
         stmt = (
             select(EntityMembership)
             .where(*filters)
-            .options(
-                selectinload(EntityMembership.roles),
-                selectinload(EntityMembership.user),
-            )
+            .options(*self._membership_roles_user_options())
             .offset(skip)
             .limit(limit)
         )
@@ -693,9 +712,9 @@ class MembershipService(BaseService[EntityMembership]):
         Returns:
             int: Member count
         """
-        filters = [EntityMembership.entity_id == entity_id]
+        filters: list[Any] = [cast(Any, EntityMembership.entity_id) == entity_id]
         if active_only:
-            filters.append(EntityMembership.status == MembershipStatus.ACTIVE)
+            filters.append(cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE)
 
         return await self.count(session, *filters)
 
@@ -723,9 +742,9 @@ class MembershipService(BaseService[EntityMembership]):
             Tuple[List[EntityMembership], int]: (memberships, total_count)
         """
         # Build base query with join to Entity for filtering
-        filters = [EntityMembership.user_id == user_id]
+        filters: list[Any] = [cast(Any, EntityMembership.user_id) == user_id]
         if active_only:
-            filters.append(EntityMembership.status == MembershipStatus.ACTIVE)
+            filters.append(cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE)
 
         # If filtering by entity_type, join with Entity table
         if entity_type:
@@ -733,8 +752,8 @@ class MembershipService(BaseService[EntityMembership]):
             count_stmt = (
                 select(func.count())
                 .select_from(EntityMembership)
-                .join(Entity, EntityMembership.entity_id == Entity.id)
-                .where(*filters, Entity.entity_type == entity_type.lower())
+                .join(Entity, cast(Any, EntityMembership.entity_id) == Entity.id)
+                .where(*filters, cast(Any, Entity.entity_type) == entity_type.lower())
             )
             count_result = await session.execute(count_stmt)
             total_count = count_result.scalar() or 0
@@ -743,12 +762,9 @@ class MembershipService(BaseService[EntityMembership]):
             skip = (page - 1) * limit
             stmt = (
                 select(EntityMembership)
-                .join(Entity, EntityMembership.entity_id == Entity.id)
-                .where(*filters, Entity.entity_type == entity_type.lower())
-                .options(
-                    selectinload(EntityMembership.roles),
-                    selectinload(EntityMembership.entity),
-                )
+                .join(Entity, cast(Any, EntityMembership.entity_id) == Entity.id)
+                .where(*filters, cast(Any, Entity.entity_type) == entity_type.lower())
+                .options(*self._membership_roles_entity_options())
                 .offset(skip)
                 .limit(limit)
             )
@@ -763,10 +779,7 @@ class MembershipService(BaseService[EntityMembership]):
             stmt = (
                 select(EntityMembership)
                 .where(*filters)
-                .options(
-                    selectinload(EntityMembership.roles),
-                    selectinload(EntityMembership.entity),
-                )
+                .options(*self._membership_roles_entity_options())
                 .offset(skip)
                 .limit(limit)
             )
@@ -793,17 +806,14 @@ class MembershipService(BaseService[EntityMembership]):
         Returns:
             List[EntityMembership]: User's memberships with entities loaded
         """
-        filters = [EntityMembership.user_id == user_id]
+        filters: list[Any] = [cast(Any, EntityMembership.user_id) == user_id]
         if active_only:
-            filters.append(EntityMembership.status == MembershipStatus.ACTIVE)
+            filters.append(cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE)
 
         stmt = (
             select(EntityMembership)
             .where(*filters)
-            .options(
-                selectinload(EntityMembership.entity),
-                selectinload(EntityMembership.roles),
-            )
+            .options(*self._membership_roles_entity_options())
         )
         result = await session.execute(stmt)
         return list(result.scalars().all())
@@ -827,9 +837,9 @@ class MembershipService(BaseService[EntityMembership]):
         """
         return await self.get_one(
             session,
-            EntityMembership.user_id == user_id,
-            EntityMembership.entity_id == entity_id,
-            options=[selectinload(EntityMembership.roles)],
+            cast(Any, EntityMembership.user_id) == user_id,
+            cast(Any, EntityMembership.entity_id) == entity_id,
+            options=[self._membership_roles_option()],
         )
 
     async def is_member(
@@ -852,12 +862,12 @@ class MembershipService(BaseService[EntityMembership]):
             bool: True if user is member
         """
         filters = [
-            EntityMembership.user_id == user_id,
-            EntityMembership.entity_id == entity_id,
+            cast(Any, EntityMembership.user_id) == user_id,
+            cast(Any, EntityMembership.entity_id) == entity_id,
         ]
 
         if active_only:
-            filters.append(EntityMembership.status == MembershipStatus.ACTIVE)
+            filters.append(cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE)
 
         return await self.exists(session, *filters)
 
@@ -886,14 +896,18 @@ class MembershipService(BaseService[EntityMembership]):
             return []
 
         filters = [
-            EntityMembership.user_id == user_id,
-            EntityMembership.entity_id.in_(entity_ids),
+            cast(Any, EntityMembership.user_id) == user_id,
+            cast(Any, EntityMembership.entity_id).in_(entity_ids),
         ]
 
         if active_only:
-            filters.append(EntityMembership.status == MembershipStatus.ACTIVE)
+            filters.append(cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE)
 
-        stmt = select(EntityMembership).where(*filters).options(selectinload(EntityMembership.roles))
+        stmt = (
+            select(EntityMembership)
+            .where(*filters)
+            .options(self._membership_roles_option())
+        )
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
@@ -923,9 +937,9 @@ class MembershipService(BaseService[EntityMembership]):
 
         membership = await self.get_one(
             session,
-            EntityMembership.user_id == user_id,
-            EntityMembership.entity_id == entity_id,
-            options=[selectinload(EntityMembership.roles)],
+            cast(Any, EntityMembership.user_id) == user_id,
+            cast(Any, EntityMembership.entity_id) == entity_id,
+            options=[self._membership_roles_option()],
         )
 
         if not membership:
@@ -986,9 +1000,9 @@ class MembershipService(BaseService[EntityMembership]):
 
         membership = await self.get_one(
             session,
-            EntityMembership.user_id == user_id,
-            EntityMembership.entity_id == entity_id,
-            options=[selectinload(EntityMembership.roles)],
+            cast(Any, EntityMembership.user_id) == user_id,
+            cast(Any, EntityMembership.entity_id) == entity_id,
+            options=[self._membership_roles_option()],
         )
 
         if not membership:
@@ -1039,10 +1053,10 @@ class MembershipService(BaseService[EntityMembership]):
         stmt = (
             select(EntityMembership)
             .where(
-                EntityMembership.user_id == user_id,
-                EntityMembership.status != MembershipStatus.REVOKED,
+                cast(Any, EntityMembership.user_id) == user_id,
+                cast(Any, EntityMembership.status) != MembershipStatus.REVOKED,
             )
-            .options(selectinload(EntityMembership.roles))
+            .options(self._membership_roles_option())
         )
         result = await session.execute(stmt)
         memberships = list(result.scalars().all())
@@ -1092,10 +1106,10 @@ class MembershipService(BaseService[EntityMembership]):
         stmt = (
             select(EntityMembership)
             .where(
-                EntityMembership.entity_id == entity_id,
-                EntityMembership.status != MembershipStatus.REVOKED,
+                cast(Any, EntityMembership.entity_id) == entity_id,
+                cast(Any, EntityMembership.status) != MembershipStatus.REVOKED,
             )
-            .options(selectinload(EntityMembership.roles))
+            .options(self._membership_roles_option())
         )
         result = await session.execute(stmt)
         memberships = list(result.scalars().all())
@@ -1144,11 +1158,11 @@ class MembershipService(BaseService[EntityMembership]):
         event_type: Optional[str] = None,
     ) -> Tuple[List[EntityMembershipHistory], int]:
         """Return paginated membership lifecycle history for a user."""
-        filters = [EntityMembershipHistory.user_id == user_id]
+        filters: list[Any] = [cast(Any, EntityMembershipHistory.user_id) == user_id]
         if entity_id is not None:
-            filters.append(EntityMembershipHistory.entity_id == entity_id)
+            filters.append(cast(Any, EntityMembershipHistory.entity_id) == entity_id)
         if event_type:
-            filters.append(EntityMembershipHistory.event_type == event_type)
+            filters.append(cast(Any, EntityMembershipHistory.event_type) == event_type)
 
         count_stmt = select(func.count()).select_from(EntityMembershipHistory).where(*filters)
         count_result = await session.execute(count_stmt)
@@ -1158,7 +1172,10 @@ class MembershipService(BaseService[EntityMembership]):
         stmt = (
             select(EntityMembershipHistory)
             .where(*filters)
-            .order_by(EntityMembershipHistory.event_at.desc(), EntityMembershipHistory.created_at.desc())
+            .order_by(
+                cast(Any, EntityMembershipHistory.event_at).desc(),
+                cast(Any, EntityMembershipHistory.created_at).desc(),
+            )
             .offset(skip)
             .limit(limit)
         )
@@ -1176,31 +1193,31 @@ class MembershipService(BaseService[EntityMembership]):
     ) -> Tuple[List[OrphanedUserRecord], int]:
         """List users with no active memberships but historical assignment rows."""
         active_memberships = (
-            select(func.count(EntityMembership.id))
+            select(func.count(cast(Any, EntityMembership.id)))
             .where(
-                EntityMembership.user_id == User.id,
-                EntityMembership.status == MembershipStatus.ACTIVE,
+                cast(Any, EntityMembership.user_id) == User.id,
+                cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
             )
             .correlate(User)
             .scalar_subquery()
         )
         any_memberships = (
-            select(func.count(EntityMembership.id))
-            .where(EntityMembership.user_id == User.id)
+            select(func.count(cast(Any, EntityMembership.id)))
+            .where(cast(Any, EntityMembership.user_id) == User.id)
             .correlate(User)
             .scalar_subquery()
         )
 
-        filters = [active_memberships == 0, any_memberships > 0]
+        filters: list[Any] = [active_memberships == 0, any_memberships > 0]
         if root_entity_id is not None:
-            filters.append(User.root_entity_id == root_entity_id)
+            filters.append(cast(Any, User.root_entity_id) == root_entity_id)
         if search:
             pattern = f"%{search}%"
             filters.append(
                 or_(
-                    User.email.ilike(pattern),
-                    User.first_name.ilike(pattern),
-                    User.last_name.ilike(pattern),
+                    cast(Any, User.email).ilike(pattern),
+                    cast(Any, User.first_name).ilike(pattern),
+                    cast(Any, User.last_name).ilike(pattern),
                 )
             )
 
@@ -1212,7 +1229,10 @@ class MembershipService(BaseService[EntityMembership]):
         users_stmt = (
             select(User)
             .where(*filters)
-            .order_by(User.updated_at.desc(), User.created_at.desc())
+            .order_by(
+                cast(Any, User.updated_at).desc(),
+                cast(Any, User.created_at).desc(),
+            )
             .offset(skip)
             .limit(limit)
         )
@@ -1225,22 +1245,22 @@ class MembershipService(BaseService[EntityMembership]):
 
         membership_count_stmt = (
             select(
-                EntityMembership.user_id,
-                func.count(EntityMembership.id),
+                cast(Any, EntityMembership.user_id),
+                func.count(cast(Any, EntityMembership.id)),
             )
-            .where(EntityMembership.user_id.in_(user_ids))
-            .group_by(EntityMembership.user_id)
+            .where(cast(Any, EntityMembership.user_id).in_(user_ids))
+            .group_by(cast(Any, EntityMembership.user_id))
         )
         membership_count_result = await session.execute(membership_count_stmt)
         membership_counts = {user_id: count for user_id, count in membership_count_result.all()}
 
         history_stmt = (
             select(EntityMembershipHistory)
-            .where(EntityMembershipHistory.user_id.in_(user_ids))
+            .where(cast(Any, EntityMembershipHistory.user_id).in_(user_ids))
             .order_by(
-                EntityMembershipHistory.user_id,
-                EntityMembershipHistory.event_at.desc(),
-                EntityMembershipHistory.created_at.desc(),
+                cast(Any, EntityMembershipHistory.user_id),
+                cast(Any, EntityMembershipHistory.event_at).desc(),
+                cast(Any, EntityMembershipHistory.created_at).desc(),
             )
         )
         history_result = await session.execute(history_stmt)
@@ -1429,10 +1449,10 @@ class MembershipService(BaseService[EntityMembership]):
     ) -> List[str]:
         """Resolve the display path from root to entity."""
         stmt = (
-            select(Entity.display_name)
-            .join(EntityClosure, EntityClosure.ancestor_id == Entity.id)
-            .where(EntityClosure.descendant_id == entity_id)
-            .order_by(EntityClosure.depth.desc())
+            select(cast(Any, Entity.display_name))
+            .join(EntityClosure, cast(Any, EntityClosure.ancestor_id) == Entity.id)
+            .where(cast(Any, EntityClosure.descendant_id) == entity_id)
+            .order_by(cast(Any, EntityClosure.depth).desc())
         )
         result = await session.execute(stmt)
         return [display_name for (display_name,) in result.all() if display_name]
@@ -1480,7 +1500,7 @@ class MembershipService(BaseService[EntityMembership]):
 
     def _membership_status_value(self, value: Any) -> str:
         """Normalize enum-or-string membership values into API-safe strings."""
-        return getattr(value, "value", value)
+        return str(getattr(value, "value", value))
 
     # =========================================================================
     # Helper Methods for Root Entity Validation
@@ -1505,9 +1525,9 @@ class MembershipService(BaseService[EntityMembership]):
         """
         # The root has the highest depth value in the closure table for this descendant
         stmt = (
-            select(EntityClosure.ancestor_id)
-            .where(EntityClosure.descendant_id == entity_id)
-            .order_by(EntityClosure.depth.desc())
+            select(cast(Any, EntityClosure.ancestor_id))
+            .where(cast(Any, EntityClosure.descendant_id) == entity_id)
+            .order_by(cast(Any, EntityClosure.depth).desc())
             .limit(1)
         )
         result = await session.execute(stmt)
@@ -1563,7 +1583,9 @@ class MembershipService(BaseService[EntityMembership]):
             if role.scope == RoleScope.HIERARCHY:
                 # Hierarchy scope: available if scope_entity is this entity or an ancestor
                 # Get ancestors of entity_id
-                ancestors_stmt = select(EntityClosure.ancestor_id).where(EntityClosure.descendant_id == entity_id)
+                ancestors_stmt = select(cast(Any, EntityClosure.ancestor_id)).where(
+                    cast(Any, EntityClosure.descendant_id) == entity_id
+                )
                 ancestors_result = await session.execute(ancestors_stmt)
                 ancestor_ids = {row[0] for row in ancestors_result.all()}
                 return role.scope_entity_id in ancestor_ids
@@ -1610,7 +1632,9 @@ class MembershipService(BaseService[EntityMembership]):
             return []
 
         # Get all ancestors (including self)
-        ancestors_stmt = select(EntityClosure.ancestor_id).where(EntityClosure.descendant_id == entity_id)
+        ancestors_stmt = select(cast(Any, EntityClosure.ancestor_id)).where(
+            cast(Any, EntityClosure.descendant_id) == entity_id
+        )
         ancestors_result = await session.execute(ancestors_stmt)
         ancestor_ids = [row[0] for row in ancestors_result.all()]
 
@@ -1623,23 +1647,23 @@ class MembershipService(BaseService[EntityMembership]):
         from sqlalchemy import and_, or_
 
         role_filter = and_(
-            Role.status == DefinitionStatus.ACTIVE,
-            Role.is_auto_assigned == True,
+            cast(Any, Role.status) == DefinitionStatus.ACTIVE,
+            cast(Any, Role.is_auto_assigned) == True,
             or_(
                 # Entity-only auto-assigned for this specific entity
                 and_(
-                    Role.scope_entity_id == entity_id,
-                    Role.scope == RoleScope.ENTITY_ONLY,
+                    cast(Any, Role.scope_entity_id) == entity_id,
+                    cast(Any, Role.scope) == RoleScope.ENTITY_ONLY,
                 ),
                 # Hierarchy auto-assigned from any ancestor
                 and_(
-                    Role.scope_entity_id.in_(ancestor_ids),
-                    Role.scope == RoleScope.HIERARCHY,
+                    cast(Any, Role.scope_entity_id).in_(ancestor_ids),
+                    cast(Any, Role.scope) == RoleScope.HIERARCHY,
                 ),
             ),
         )
 
-        stmt = select(Role).where(role_filter).order_by(Role.name)
+        stmt = select(Role).where(role_filter).order_by(cast(Any, Role.name))
         result = await session.execute(stmt)
         return [
             role
@@ -1703,8 +1727,8 @@ class MembershipService(BaseService[EntityMembership]):
             target_entity_ids = [role.scope_entity_id]
         else:
             # Members of scope entity AND all descendants
-            descendants_stmt = select(EntityClosure.descendant_id).where(
-                EntityClosure.ancestor_id == role.scope_entity_id
+            descendants_stmt = select(cast(Any, EntityClosure.descendant_id)).where(
+                cast(Any, EntityClosure.ancestor_id) == role.scope_entity_id
             )
             descendants_result = await session.execute(descendants_stmt)
             target_entity_ids = [row[0] for row in descendants_result.all()]
@@ -1715,13 +1739,10 @@ class MembershipService(BaseService[EntityMembership]):
         # Get all active memberships in target entities
         memberships_stmt = (
             select(EntityMembership)
-            .options(
-                selectinload(EntityMembership.roles),
-                selectinload(EntityMembership.entity),
-            )
+            .options(*self._membership_roles_entity_options())
             .where(
-                EntityMembership.entity_id.in_(target_entity_ids),
-                EntityMembership.status == MembershipStatus.ACTIVE,
+                cast(Any, EntityMembership.entity_id).in_(target_entity_ids),
+                cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
             )
         )
         memberships_result = await session.execute(memberships_stmt)

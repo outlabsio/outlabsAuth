@@ -1,12 +1,12 @@
 """Helpers for building API responses from SQL models."""
 
 from collections.abc import Mapping
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from outlabs_auth.models.sql.enums import RoleScope
+from outlabs_auth.models.sql.enums import DefinitionStatus, RoleScope
 from outlabs_auth.schemas.permission import PermissionResponse
 from outlabs_auth.schemas.role import RoleResponse, RoleScopeEnum
 from outlabs_auth.schemas.user import UserResponse
@@ -65,8 +65,12 @@ async def build_user_responses(
 
     root_entity_names: dict[Any, str] = {}
     if missing_root_entity_ids:
+        entity_id_col = cast(Any, Entity.id)
+        entity_display_name_col = cast(Any, Entity.display_name)
         result = await session.execute(
-            select(Entity.id, Entity.display_name).where(Entity.id.in_(missing_root_entity_ids))
+            select(entity_id_col, entity_display_name_col).where(
+                entity_id_col.in_(missing_root_entity_ids)
+            )
         )
         root_entity_names = {
             entity_id: display_name
@@ -114,8 +118,12 @@ async def build_role_responses(
 
     entity_names: dict[Any, str] = {}
     if missing_entity_ids:
+        entity_id_col = cast(Any, Entity.id)
+        entity_display_name_col = cast(Any, Entity.display_name)
         result = await session.execute(
-            select(Entity.id, Entity.display_name).where(Entity.id.in_(missing_entity_ids))
+            select(entity_id_col, entity_display_name_col).where(
+                entity_id_col.in_(missing_entity_ids)
+            )
         )
         entity_names = {entity_id: display_name for entity_id, display_name in result.all()}
 
@@ -154,7 +162,7 @@ async def build_role_responses(
                 permissions=resolved_permissions or [],
                 is_system_role=role.is_system_role,
                 is_global=role.is_global,
-                status=serialize_status(getattr(role, "status", None)),
+                status=cast(Any, getattr(role, "status", DefinitionStatus.ACTIVE)),
                 root_entity_id=str(role.root_entity_id) if role.root_entity_id else None,
                 root_entity_name=root_entity_name,
                 assignable_at_types=list(getattr(role, "assignable_at_types", []) or []),
@@ -195,7 +203,7 @@ def build_permission_response(permission: Any) -> PermissionResponse:
         action=permission.action,
         scope=permission.scope,
         is_system=permission.is_system,
-        status=serialize_status(getattr(permission, "status", None)),
+        status=cast(Any, getattr(permission, "status", DefinitionStatus.ACTIVE)),
         is_active=bool(getattr(permission, "is_active", False)),
         tags=[tag.name for tag in permission.tags] if getattr(permission, "tags", None) else [],
         metadata={},

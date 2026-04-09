@@ -9,7 +9,7 @@ Uses SQLAlchemy for PostgreSQL backend.
 import re
 import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, cast
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -92,7 +92,7 @@ class EntityService(BaseService[Entity]):
         if not entity_ids:
             return {}
 
-        stmt = select(Entity).where(Entity.id.in_(entity_ids))
+        stmt = select(Entity).where(cast(Any, Entity.id).in_(entity_ids))
         result = await session.execute(stmt)
         return {entity.id: entity for entity in result.scalars().all()}
 
@@ -387,10 +387,10 @@ class EntityService(BaseService[Entity]):
 
         # Fetch subtree (descendants including self) and their depths-from-root via closure.
         subtree_stmt = (
-            select(Entity, EntityClosure.depth)
-            .join(EntityClosure, EntityClosure.descendant_id == Entity.id)
-            .where(EntityClosure.ancestor_id == entity.id)
-            .order_by(EntityClosure.depth.asc())
+            select(Entity, cast(Any, EntityClosure.depth))
+            .join(EntityClosure, cast(Any, EntityClosure.descendant_id) == Entity.id)
+            .where(cast(Any, EntityClosure.ancestor_id) == entity.id)
+            .order_by(cast(Any, EntityClosure.depth).asc())
         )
         subtree_result = await session.execute(subtree_stmt)
         subtree_rows = subtree_result.all()
@@ -446,15 +446,18 @@ class EntityService(BaseService[Entity]):
         # Closure maintenance:
         # 1) Remove links from old ancestors (outside subtree) to moved subtree.
         delete_stmt = sql_delete(EntityClosure).where(
-            EntityClosure.descendant_id.in_(subtree_ids),
-            EntityClosure.ancestor_id.notin_(subtree_ids),
+            cast(Any, EntityClosure.descendant_id).in_(subtree_ids),
+            cast(Any, EntityClosure.ancestor_id).notin_(subtree_ids),
         )
         await session.execute(delete_stmt)
 
         # 2) Insert links from new ancestors (outside subtree) to moved subtree.
         if new_parent is not None:
-            ancestors_stmt = select(EntityClosure.ancestor_id, EntityClosure.depth).where(
-                EntityClosure.descendant_id == new_parent.id
+            ancestors_stmt = select(
+                cast(Any, EntityClosure.ancestor_id),
+                cast(Any, EntityClosure.depth),
+            ).where(
+                cast(Any, EntityClosure.descendant_id) == new_parent.id
             )
             ancestors_result = await session.execute(ancestors_stmt)
             ancestor_rows = ancestors_result.all()  # (ancestor_id, depth_to_parent)
@@ -633,8 +636,8 @@ class EntityService(BaseService[Entity]):
         # Get all ancestors from closure table (sorted from root to entity)
         stmt = (
             select(EntityClosure)
-            .where(EntityClosure.descendant_id == entity_id)
-            .order_by(EntityClosure.depth.desc())  # Root first (highest depth)
+            .where(cast(Any, EntityClosure.descendant_id) == entity_id)
+            .order_by(cast(Any, EntityClosure.depth).desc())  # Root first (highest depth)
         )
         result = await session.execute(stmt)
         closures = result.scalars().all()
@@ -682,9 +685,9 @@ class EntityService(BaseService[Entity]):
                 return entities
 
         # Get all descendants from closure table (excluding self)
-        stmt = select(EntityClosure.descendant_id).where(
-            EntityClosure.ancestor_id == entity_id,
-            EntityClosure.depth > 0,
+        stmt = select(cast(Any, EntityClosure.descendant_id)).where(
+            cast(Any, EntityClosure.ancestor_id) == entity_id,
+            cast(Any, EntityClosure.depth) > 0,
         )
         result = await session.execute(stmt)
         descendant_ids = [row[0] for row in result.all()]
@@ -693,9 +696,9 @@ class EntityService(BaseService[Entity]):
             return []
 
         # Fetch entities with optional type filter
-        filters = [Entity.id.in_(descendant_ids)]
+        filters = [cast(Any, Entity.id).in_(descendant_ids)]
         if entity_type:
-            filters.append(Entity.entity_type == entity_type.lower())
+            filters.append(cast(Any, Entity.entity_type) == entity_type.lower())
 
         entities = await self.get_many(session, *filters, limit=10000)
 
@@ -720,8 +723,8 @@ class EntityService(BaseService[Entity]):
         """
         return await self.get_many(
             session,
-            Entity.parent_id == entity_id,
-            Entity.status == "active",
+            cast(Any, Entity.parent_id) == entity_id,
+            cast(Any, Entity.status) == "active",
             limit=1000,
         )
 
@@ -746,15 +749,15 @@ class EntityService(BaseService[Entity]):
             Dict with suggestions, parent info, and total count
         """
         # Build filters
-        filters = [Entity.status == "active"]
+        filters = [cast(Any, Entity.status) == "active"]
 
         if parent_id:
-            filters.append(Entity.parent_id == parent_id)
+            filters.append(cast(Any, Entity.parent_id) == parent_id)
         else:
-            filters.append(Entity.parent_id.is_(None))
+            filters.append(cast(Any, Entity.parent_id).is_(None))
 
         if entity_class:
-            filters.append(Entity.entity_class == entity_class)
+            filters.append(cast(Any, Entity.entity_class) == entity_class)
 
         # Query all siblings
         entities = await self.get_many(session, *filters, limit=10000)
@@ -931,7 +934,9 @@ class EntityService(BaseService[Entity]):
         # If has parent, copy parent's ancestors and add parent
         if entity.parent_id:
             # Get all ancestors of parent
-            stmt = select(EntityClosure).where(EntityClosure.descendant_id == entity.parent_id)
+            stmt = select(EntityClosure).where(
+                cast(Any, EntityClosure.descendant_id) == entity.parent_id
+            )
             result = await session.execute(stmt)
             parent_closures = result.scalars().all()
 
@@ -958,8 +963,8 @@ class EntityService(BaseService[Entity]):
         """
         stmt = sql_delete(EntityClosure).where(
             or_(
-                EntityClosure.ancestor_id == entity.id,
-                EntityClosure.descendant_id == entity.id,
+                cast(Any, EntityClosure.ancestor_id) == entity.id,
+                cast(Any, EntityClosure.descendant_id) == entity.id,
             )
         )
         await session.execute(stmt)
@@ -1216,9 +1221,9 @@ class EntityService(BaseService[Entity]):
             bool: True if ancestor_id is an ancestor of descendant_id
         """
         stmt = select(EntityClosure).where(
-            EntityClosure.ancestor_id == ancestor_id,
-            EntityClosure.descendant_id == descendant_id,
-            EntityClosure.depth > 0,  # Exclude self-reference
+            cast(Any, EntityClosure.ancestor_id) == ancestor_id,
+            cast(Any, EntityClosure.descendant_id) == descendant_id,
+            cast(Any, EntityClosure.depth) > 0,  # Exclude self-reference
         )
         result = await session.execute(stmt)
         return result.scalar_one_or_none() is not None
@@ -1244,12 +1249,12 @@ class EntityService(BaseService[Entity]):
         """
         min_depth = 0 if include_self else 1
         stmt = (
-            select(EntityClosure.ancestor_id, EntityClosure.depth)
+            select(cast(Any, EntityClosure.ancestor_id), cast(Any, EntityClosure.depth))
             .where(
-                EntityClosure.descendant_id == entity_id,
-                EntityClosure.depth >= min_depth,
+                cast(Any, EntityClosure.descendant_id) == entity_id,
+                cast(Any, EntityClosure.depth) >= min_depth,
             )
-            .order_by(EntityClosure.depth.asc())  # Parent first
+            .order_by(cast(Any, EntityClosure.depth).asc())  # Parent first
         )
         result = await session.execute(stmt)
         rows = result.all()

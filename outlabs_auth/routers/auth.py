@@ -4,6 +4,7 @@ Authentication router factory.
 Provides ready-to-use authentication routes (DD-041).
 """
 
+from enum import Enum
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -36,7 +37,7 @@ from outlabs_auth.utils.rate_limit import check_forgot_password_rate_limit
 def get_auth_router(
     auth: Any,
     prefix: str = "",
-    tags: Optional[list[str]] = None,
+    tags: Optional[list[str | Enum]] = None,
     requires_verification: bool = False,
 ) -> APIRouter:
     """

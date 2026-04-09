@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import logging
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, cast
 from uuid import UUID
 
 from sqlalchemy import select
@@ -360,7 +360,9 @@ class APIKeyPolicyService:
 
         stored_scopes = scopes
         if stored_scopes is None:
-            stmt = select(APIKeyScope.scope).where(APIKeyScope.api_key_id == api_key.id)
+            stmt = select(cast(Any, APIKeyScope.scope)).where(
+                cast(Any, APIKeyScope.api_key_id) == api_key.id
+            )
             result = await session.execute(stmt)
             stored_scopes = [row[0] for row in result.all()]
 
@@ -1070,7 +1072,9 @@ class APIKeyPolicyService:
         session: AsyncSession,
     ) -> List[str]:
         stmt = (
-            select(Permission.name).where(Permission.status == DefinitionStatus.ACTIVE).order_by(Permission.name.asc())
+            select(cast(Any, Permission.name))
+            .where(cast(Any, Permission.status) == DefinitionStatus.ACTIVE)
+            .order_by(cast(Any, Permission.name).asc())
         )
         result = await session.execute(stmt)
         return [row[0] for row in result.all()]
@@ -1194,9 +1198,9 @@ class APIKeyPolicyService:
         entity_id: UUID,
     ) -> UUID:
         stmt = (
-            select(EntityClosure.ancestor_id)
-            .where(EntityClosure.descendant_id == entity_id)
-            .order_by(EntityClosure.depth.desc())
+            select(cast(Any, EntityClosure.ancestor_id))
+            .where(cast(Any, EntityClosure.descendant_id) == entity_id)
+            .order_by(cast(Any, EntityClosure.depth).desc())
             .limit(1)
         )
         result = await session.execute(stmt)

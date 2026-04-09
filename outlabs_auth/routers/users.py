@@ -4,7 +4,8 @@ Users router factory.
 Provides ready-to-use user management routes (DD-041).
 """
 
-from typing import Any, List, Optional
+from enum import Enum
+from typing import Any, List, Optional, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -46,7 +47,7 @@ from outlabs_auth.schemas.user_role_membership import (
 def get_users_router(
     auth: Any,
     prefix: str = "",
-    tags: Optional[list[str]] = None,
+    tags: Optional[list[str | Enum]] = None,
     requires_verification: bool = False,
 ) -> APIRouter:
     """
@@ -1246,9 +1247,9 @@ def get_users_router(
             # reflected here so host/UI permission gates match runtime behavior.
             entity_memberships_stmt = (
                 select(EntityMembership)
-                .options(selectinload(EntityMembership.roles))
+                .options(selectinload(cast(Any, EntityMembership.roles)))
                 .where(
-                    EntityMembership.user_id == user_id,
+                    cast(Any, EntityMembership.user_id) == user_id,
                 )
             )
             entity_memberships_result = await session.execute(entity_memberships_stmt)

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Dict
+from typing import Any, Dict, cast
 from uuid import UUID
 
 from sqlalchemy import delete as sql_delete
@@ -34,21 +34,24 @@ async def cleanup_expired_refresh_tokens(
     Clean up expired and old revoked refresh tokens.
     """
     now = datetime.now(timezone.utc)
+    expires_at_col = cast(Any, RefreshToken.expires_at)
+    is_revoked_col = cast(Any, RefreshToken.is_revoked)
+    revoked_at_col = cast(Any, RefreshToken.revoked_at)
 
     # Delete expired tokens
-    expired_stmt = sql_delete(RefreshToken).where(RefreshToken.expires_at < now)
+    expired_stmt = sql_delete(RefreshToken).where(expires_at_col < now)
     expired_result = await session.execute(expired_stmt)
-    expired_count = expired_result.rowcount or 0
+    expired_count = int(getattr(expired_result, "rowcount", 0) or 0)
 
     # Delete old revoked tokens
     retention_cutoff = now - timedelta(days=revoked_retention_days)
     revoked_stmt = sql_delete(RefreshToken).where(
-        RefreshToken.is_revoked.is_(True),
-        RefreshToken.revoked_at.is_not(None),
-        RefreshToken.revoked_at < retention_cutoff,
+        is_revoked_col.is_(True),
+        revoked_at_col.is_not(None),
+        revoked_at_col < retention_cutoff,
     )
     revoked_result = await session.execute(revoked_stmt)
-    revoked_count = revoked_result.rowcount or 0
+    revoked_count = int(getattr(revoked_result, "rowcount", 0) or 0)
 
     total_count = expired_count + revoked_count
     logger.info(
@@ -71,9 +74,9 @@ async def cleanup_expired_oauth_states(
     Clean up expired OAuth state rows.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=retention_hours)
-    stmt = sql_delete(OAuthState).where(OAuthState.created_at < cutoff)
+    stmt = sql_delete(OAuthState).where(cast(Any, OAuthState.created_at) < cutoff)
     result = await session.execute(stmt)
-    deleted = result.rowcount or 0
+    deleted = int(getattr(result, "rowcount", 0) or 0)
     logger.info("oauth_state_cleanup_complete", extra={"deleted": deleted})
     return {"deleted": deleted}
 

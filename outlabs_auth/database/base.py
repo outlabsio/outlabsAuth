@@ -5,6 +5,7 @@ Provides base model with common fields (id, timestamps) for all tables.
 """
 
 from datetime import datetime, timezone
+from typing import ClassVar, cast
 from uuid import UUID, uuid4
 
 from pydantic import ConfigDict
@@ -12,6 +13,7 @@ from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlmodel import Field, SQLModel
+from sqlmodel.main import SQLModelConfig
 
 
 class BaseModel(SQLModel):
@@ -39,7 +41,7 @@ class BaseModel(SQLModel):
         primary_key=True,
         sa_type=PG_UUID(as_uuid=True),
         description="Unique identifier (UUID v4)",
-    )
+    )  # type: ignore[call-overload]
 
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
@@ -47,7 +49,7 @@ class BaseModel(SQLModel):
         nullable=False,
         sa_column_kwargs={"server_default": func.now()},
         description="Timestamp when record was created (UTC)",
-    )
+    )  # type: ignore[call-overload]
 
     updated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
@@ -55,9 +57,12 @@ class BaseModel(SQLModel):
         nullable=False,
         sa_column_kwargs={"server_default": func.now(), "onupdate": func.now()},
         description="Timestamp when record was last updated (UTC)",
-    )
+    )  # type: ignore[call-overload]
 
-    model_config = ConfigDict(
-        arbitrary_types_allowed=True,
-        use_enum_values=True,
+    model_config: ClassVar[SQLModelConfig] = cast(
+        SQLModelConfig,
+        ConfigDict(
+            arbitrary_types_allowed=True,
+            use_enum_values=True,
+        ),
     )

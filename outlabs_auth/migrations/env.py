@@ -12,6 +12,7 @@ import asyncio
 import os
 import re
 from logging.config import fileConfig
+from typing import Any, cast
 
 from sqlalchemy import pool, text
 from sqlalchemy.engine import Connection
@@ -56,7 +57,10 @@ def get_url() -> str:
             return env_url.replace("postgresql://", "postgresql+asyncpg://", 1)
         return env_url
 
-    return config.get_main_option("sqlalchemy.url")
+    fallback_url = config.get_main_option("sqlalchemy.url")
+    if not fallback_url:
+        raise RuntimeError("sqlalchemy.url must be configured for Alembic migrations")
+    return fallback_url
 
 
 def get_target_schema() -> str | None:
@@ -78,7 +82,7 @@ def get_version_table_name() -> str:
 
 def _configure_context(*, connection: Connection | None = None, url: str | None = None) -> None:
     schema = get_target_schema()
-    configure_kwargs = dict(
+    configure_kwargs: dict[str, Any] = dict(
         target_metadata=target_metadata,
         compare_type=True,
         compare_server_default=True,
@@ -96,7 +100,7 @@ def _configure_context(*, connection: Connection | None = None, url: str | None 
         configure_kwargs["include_schemas"] = True
         configure_kwargs["version_table_schema"] = schema
 
-    context.configure(**configure_kwargs)
+    context.configure(**cast(Any, configure_kwargs))
 
 
 def run_migrations_offline() -> None:

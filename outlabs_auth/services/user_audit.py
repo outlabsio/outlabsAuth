@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -80,13 +80,16 @@ class UserAuditService(BaseService[UserAuditEvent]):
         entity_id: Optional[UUID] = None,
     ) -> Tuple[List[UserAuditEvent], int]:
         """Return paginated audit events for one user."""
-        filters = [UserAuditEvent.subject_user_id == user_id]
+        filters: list[Any] = [cast(Any, UserAuditEvent.subject_user_id) == user_id]
         if event_category:
-            filters.append(UserAuditEvent.event_category == event_category)
+            filters.append(cast(Any, UserAuditEvent.event_category) == event_category)
         if event_type:
-            filters.append(UserAuditEvent.event_type == event_type)
+            filters.append(cast(Any, UserAuditEvent.event_type) == event_type)
         if entity_id:
-            filters.append(UserAuditEvent.entity_id == entity_id)
+            filters.append(cast(Any, UserAuditEvent.entity_id) == entity_id)
+
+        occurred_at_col = cast(Any, UserAuditEvent.occurred_at)
+        created_at_col = cast(Any, UserAuditEvent.created_at)
 
         count_stmt = select(func.count()).select_from(UserAuditEvent).where(*filters)
         total = int((await session.execute(count_stmt)).scalar_one())
@@ -94,7 +97,7 @@ class UserAuditService(BaseService[UserAuditEvent]):
         stmt = (
             select(UserAuditEvent)
             .where(*filters)
-            .order_by(UserAuditEvent.occurred_at.desc(), UserAuditEvent.created_at.desc())
+            .order_by(occurred_at_col.desc(), created_at_col.desc())
             .offset((page - 1) * limit)
             .limit(limit)
         )

@@ -1,5 +1,6 @@
 """Minimal self-service user router factory for embedded hosts."""
 
+from enum import Enum
 from typing import Any, List, Optional
 from uuid import UUID
 
@@ -13,7 +14,7 @@ from outlabs_auth.schemas.user import UserResponse
 def get_self_service_users_router(
     auth: Any,
     prefix: str = "",
-    tags: Optional[list[str]] = None,
+    tags: Optional[list[str | Enum]] = None,
     requires_verification: bool = False,
 ) -> APIRouter:
     """

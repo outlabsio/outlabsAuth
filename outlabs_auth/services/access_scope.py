@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, cast
 from uuid import UUID
 
 from sqlalchemy import or_, select
@@ -233,7 +233,9 @@ class AccessScopeService:
         if root_entity_ids:
             return root_entity_ids
 
-        root_stmt = select(User.root_entity_id).where(User.id == user_id)
+        root_stmt = select(cast(Any, User.root_entity_id)).where(
+            cast(Any, User.id) == user_id
+        )
         root_result = await session.execute(root_stmt)
         root_entity_id = root_result.scalar_one_or_none()
         if root_entity_id is not None:
@@ -246,9 +248,9 @@ class AccessScopeService:
         *,
         user_id: UUID,
     ) -> set[UUID]:
-        direct_stmt = select(EntityMembership.entity_id).where(
-            EntityMembership.user_id == user_id,
-            EntityMembership.status == MembershipStatus.ACTIVE,
+        direct_stmt = select(cast(Any, EntityMembership.entity_id)).where(
+            cast(Any, EntityMembership.user_id) == user_id,
+            cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
         )
         direct_result = await session.execute(direct_stmt)
         return {entity_id for (entity_id,) in direct_result.all() if entity_id is not None}
@@ -261,7 +263,9 @@ class AccessScopeService:
         if not ancestor_entity_ids:
             return set()
 
-        closure_stmt = select(EntityClosure.descendant_id).where(EntityClosure.ancestor_id.in_(ancestor_entity_ids))
+        closure_stmt = select(cast(Any, EntityClosure.descendant_id)).where(
+            cast(Any, EntityClosure.ancestor_id).in_(ancestor_entity_ids)
+        )
         closure_result = await session.execute(closure_stmt)
         return {descendant_id for (descendant_id,) in closure_result.all() if descendant_id is not None}
 
@@ -283,11 +287,17 @@ class AccessScopeService:
             return []
 
         now = datetime.now(timezone.utc)
-        stmt = select(EntityMembership.user_id).where(
-            EntityMembership.entity_id.in_(_sorted_uuid_list(scoped_entity_ids)),
-            EntityMembership.status == MembershipStatus.ACTIVE,
-            or_(EntityMembership.valid_from.is_(None), EntityMembership.valid_from <= now),
-            or_(EntityMembership.valid_until.is_(None), EntityMembership.valid_until >= now),
+        stmt = select(cast(Any, EntityMembership.user_id)).where(
+            cast(Any, EntityMembership.entity_id).in_(_sorted_uuid_list(scoped_entity_ids)),
+            cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
+            or_(
+                cast(Any, EntityMembership.valid_from).is_(None),
+                cast(Any, EntityMembership.valid_from) <= now,
+            ),
+            or_(
+                cast(Any, EntityMembership.valid_until).is_(None),
+                cast(Any, EntityMembership.valid_until) >= now,
+            ),
         )
         result = await session.execute(stmt)
         return _sorted_uuid_list(user_id for (user_id,) in result.all() if user_id is not None)

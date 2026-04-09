@@ -8,7 +8,7 @@ OpenAPI/Swagger.
 
 import inspect
 from inspect import Parameter, Signature
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence, cast
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
@@ -54,7 +54,9 @@ class AuthDeps:
             if permission
         }
         if permission_service and hasattr(permission_service, "_permission_set_allows"):
-            return permission_service._permission_set_allows(required_permission, normalized)
+            return bool(
+                permission_service._permission_set_allows(required_permission, normalized)
+            )
         return required_permission in normalized or "*:*" in normalized
 
     async def _auth_result_has_permission(
@@ -75,9 +77,11 @@ class AuthDeps:
         if source == "service_token":
             granted_permissions = (auth_result.get("metadata") or {}).get("permissions", [])
             if service_token_service is not None:
-                return service_token_service.check_service_permission(
-                    auth_result.get("metadata") or {},
-                    permission,
+                return bool(
+                    service_token_service.check_service_permission(
+                        auth_result.get("metadata") or {},
+                        permission,
+                    )
                 )
             return self._permission_set_allows(permission, granted_permissions)
 
@@ -124,6 +128,9 @@ class AuthDeps:
                 detail="Invalid user ID in auth result",
             )
 
+        if permission_service is None:
+            return False
+
         try:
             has_permission = await permission_service.check_permission(
                 session,
@@ -160,10 +167,12 @@ class AuthDeps:
             return False
 
         if entity_id is not None:
-            return await api_key_service.check_entity_access_with_tree(
-                session,
-                api_key,
-                entity_id,
+            return bool(
+                await api_key_service.check_entity_access_with_tree(
+                    session,
+                    api_key,
+                    entity_id,
+                )
             )
 
         return True
@@ -224,7 +233,7 @@ class AuthDeps:
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
             )
 
-        return dependency
+        return cast(Callable[..., Any], dependency)
 
     def require_permission(
         self,
@@ -358,9 +367,9 @@ class AuthDeps:
                         detail="Insufficient permissions",
                     )
 
-            return auth_result
+            return cast(dict[Any, Any], auth_result)
 
-        return dependency
+        return cast(Callable[..., Any], dependency)
 
     def require_entity_permission(
         self, permission: str, entity_id_param: str = "entity_id"
@@ -451,9 +460,9 @@ class AuthDeps:
                     detail="Insufficient permissions",
                 )
 
-            return auth_result
+            return cast(dict[Any, Any], auth_result)
 
-        return dependency
+        return cast(Callable[..., Any], dependency)
 
     def require_tree_permission(
         self,
@@ -583,9 +592,9 @@ class AuthDeps:
                     detail="Insufficient permissions",
                 )
 
-            return auth_result
+            return cast(dict[Any, Any], auth_result)
 
-        return dependency
+        return cast(Callable[..., Any], dependency)
 
     def require_source(self, source: str) -> Callable:
         signature = self._get_dependency_signature()
@@ -607,9 +616,9 @@ class AuthDeps:
                     detail=f"Authentication via {source} required",
                 )
 
-            return auth_result
+            return cast(dict[Any, Any], auth_result)
 
-        return dependency
+        return cast(Callable[..., Any], dependency)
 
     def require_superuser(self) -> Callable:
         """
@@ -653,9 +662,9 @@ class AuthDeps:
                     detail="Superuser privileges required",
                 )
 
-            return auth_result
+            return cast(dict[Any, Any], auth_result)
 
-        return dependency
+        return cast(Callable[..., Any], dependency)
 
     def _get_dependency_signature(self) -> Signature:
         parameters = [

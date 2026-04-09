@@ -6,7 +6,7 @@ without forcing each router to manually construct a resource context.
 """
 
 import json
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -42,7 +42,7 @@ class ResourceContextMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next) -> Response:
         if not self.trust_client_header:
-            return await call_next(request)
+            return cast(Response, await call_next(request))
 
         raw: Optional[str] = request.headers.get(self.header_name)
         if raw:
@@ -67,4 +67,4 @@ class ResourceContextMiddleware(BaseHTTPMiddleware):
 
             request.state.resource_context = parsed
 
-        return await call_next(request)
+        return cast(Response, await call_next(request))

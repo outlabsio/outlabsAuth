@@ -5,6 +5,7 @@ Provides entity membership management routes for EnterpriseRBAC.
 """
 
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, List, Optional
 from uuid import UUID
 
@@ -22,7 +23,11 @@ from outlabs_auth.schemas.membership import (
 from outlabs_auth.schemas.role import RoleSummary
 
 
-def get_memberships_router(auth: Any, prefix: str = "", tags: Optional[list[str]] = None) -> APIRouter:
+def get_memberships_router(
+    auth: Any,
+    prefix: str = "",
+    tags: Optional[list[str | Enum]] = None,
+) -> APIRouter:
     """
     Generate entity membership management router.
 
