@@ -80,6 +80,91 @@ outlabs-auth seed-system
 outlabs-auth bootstrap-admin --email admin@example.com --password change-me
 ```
 
+## Recommended Production Defaults
+
+For real deployments, use the library with explicit, optimized baseline
+settings rather than the convenience quickstart defaults.
+
+### App configuration baseline
+
+```python
+from outlabs_auth import EnterpriseRBAC
+
+auth = EnterpriseRBAC(
+    database_url="postgresql+asyncpg://user:password@db-host/app?ssl=require",
+    database_schema="outlabs_auth",
+    secret_key="replace-me",
+    auto_migrate=False,
+    enable_caching=True,
+    redis_url="redis://cache-host:6379/0",
+)
+```
+
+Recommended defaults:
+
+- use an explicit auth schema such as `outlabs_auth`
+- keep `auto_migrate=False` in normal runtime
+- enable Redis caching for enterprise/admin-heavy apps
+- mount the library under an app-owned prefix such as `/iam`
+
+### Database connection guidance
+
+For managed Postgres providers that offer both direct and transaction-pooler
+URLs, prefer the direct runtime URL for auth-heavy apps.
+
+Why:
+
+- OutlabsAuth already uses SQLAlchemy connection pooling
+- auth and permission checks often perform multiple small round trips
+- transaction-pooler endpoints add measurable latency for those query patterns
+- non-public auth schemas depend on reliable per-connection schema resolution
+
+Use:
+
+- `postgresql+asyncpg://...`
+
+Avoid as the primary runtime URL when you can:
+
+- transaction-pooler URLs such as provider `-pooler` endpoints
+
+### Bootstrap and worker startup
+
+Do not rely on `auto_migrate=True` inside a multi-worker application runtime.
+
+Recommended pattern:
+
+1. Run the packaged CLI in a single-process release or prestart step.
+2. Start the application workers only after that step succeeds.
+
+Example:
+
+```bash
+export DATABASE_URL='postgresql+asyncpg://user:password@db-host/app?ssl=require'
+export OUTLABS_AUTH_SCHEMA='outlabs_auth'
+
+outlabs-auth migrate
+outlabs-auth seed-system
+
+exec uvicorn myapp.main:app --host 0.0.0.0 --port 8000 --workers 2
+```
+
+This avoids worker races and keeps schema ownership explicit.
+
+### Current operator workflow
+
+Today, the recommended operational commands are:
+
+- `outlabs-auth migrate`
+- `outlabs-auth seed-system`
+- `outlabs-auth bootstrap-admin`
+- `outlabs-auth tables`
+- `outlabs-auth current`
+
+The intended next step for the library is a more explicit operator experience
+around first-boot and diagnosis, such as `outlabs-auth bootstrap` and
+`outlabs-auth doctor`. Until that exists, prefer explicit CLI-driven prestart
+or release-hook flows over implicit runtime bootstrap.
+
 ## More
 
 The repository includes deeper examples, packaged CLI flows, and design notes:

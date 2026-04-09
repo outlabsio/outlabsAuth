@@ -94,6 +94,20 @@ uv run python reset_test_env.py
 uv run uvicorn main:app --reload --port 8003
 ```
 
+### Production-style baseline
+
+Use the examples as consumer references, but keep production defaults explicit:
+
+- use a direct `postgresql+asyncpg://...` runtime URL instead of a transaction-pooler URL
+- set an explicit auth schema such as `OUTLABS_AUTH_SCHEMA=outlabs_auth`
+- keep runtime `auto_migrate=False`
+- run `uv run outlabs-auth migrate` and `uv run outlabs-auth seed-system` in a single-process prestart or release hook before starting multi-worker app processes
+- enable Redis caching for enterprise/admin-heavy apps
+
+If you are validating a packaged integration, prefer the library README's
+production baseline over the convenience local-demo settings used by the
+examples.
+
 ## Choosing an Example
 
 ### Use SimpleRBAC Example if:
