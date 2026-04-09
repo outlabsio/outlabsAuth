@@ -4,7 +4,7 @@ Reset Test Environment Script - EnterpriseRBAC Example
 Resets the database to a known good state for testing entity hierarchy.
 
 Usage:
-    python reset_test_env.py
+    uv run python reset_test_env.py
 
 Environment Variables:
     DATABASE_URL: PostgreSQL connection string
@@ -13,13 +13,6 @@ Environment Variables:
 
 import asyncio
 import os
-import sys
-from pathlib import Path
-
-# Add project root to path so we can import outlabs_auth
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
-
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, text
@@ -38,6 +31,7 @@ from outlabs_auth import (
     Role,
     UserStatus,
 )
+from outlabs_auth.cli import run_migrations
 from outlabs_auth.models.sql.enums import ConditionOperator, EntityClass, RoleScope
 from outlabs_auth.models.sql.permission import PermissionCondition
 from outlabs_auth.models.sql.role import ConditionGroup, RoleCondition, RolePermission
@@ -82,11 +76,12 @@ async def reset_database():
     print("Connecting to PostgreSQL...")
 
     await _ensure_database_exists(DATABASE_URL)
+    await run_migrations(DATABASE_URL)
 
     auth = EnterpriseRBAC(
         database_url=DATABASE_URL,
         secret_key="example-reset-secret-key",
-        auto_migrate=True,
+        auto_migrate=False,
         enable_context_aware_roles=True,
         enable_abac=True,
         enable_token_cleanup=False,

@@ -223,7 +223,7 @@ async def lifespan(app: FastAPI):
     auth = EnterpriseRBAC(
         database_url=DATABASE_URL,
         secret_key=SECRET_KEY,
-        auto_migrate=True,
+        auto_migrate=False,
         access_token_expire_minutes=480,  # 8 hours for dev (default: 15 min)
         refresh_token_expire_days=7,  # 7 days for dev (default: 30 days)
         redis_client=redis_client,
@@ -251,6 +251,7 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(_ensure_example_tables)
     print("Example domain tables ready")
     print("Transactional auth mail service enabled")
+    print("Auth schema bootstrap: uv run outlabs-auth migrate")
 
     if auth.observability and auth.observability.config.enable_metrics:
         app.include_router(

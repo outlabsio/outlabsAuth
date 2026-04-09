@@ -6,7 +6,7 @@ echo "======================================================================="
 echo ""
 
 # Reset environment
-python reset_test_env.py > /dev/null 2>&1
+uv run python reset_test_env.py > /dev/null 2>&1
 sleep 1
 
 # =============================================================================

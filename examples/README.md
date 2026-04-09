@@ -17,7 +17,7 @@ A blog API demonstrating:
 
 **Complexity**: ⭐️ Beginner
 **Lines of Code**: ~500
-**Running**: `cd simple_rbac && python main.py`
+**Running**: `cd simple_rbac && uv sync && uv run uvicorn main:app --reload --port 8003`
 
 [View Documentation →](./simple_rbac/README.md)
 
@@ -36,7 +36,7 @@ A project management system demonstrating:
 
 **Complexity**: ⭐️⭐️⭐️ Intermediate
 **Lines of Code**: ~700
-**Running**: `cd enterprise_rbac && python main.py`
+**Running**: `cd enterprise_rbac && uv sync && uv run uvicorn main:app --reload --port 8004`
 
 [View Documentation →](./enterprise_rbac/README.md)
 
@@ -72,20 +72,26 @@ docker run -d -p 6379:6379 --name redis redis:latest
 
 ```bash
 # Clone the repository
-git clone https://github.com/outlabs/outlabs-auth.git
-cd outlabs-auth
+git clone https://github.com/outlabsio/outlabsAuth.git
+cd outlabsAuth
 
-# Install OutlabsAuth in development mode
-pip install -e .
-
-# Navigate to an example
+# Navigate to an example app
 cd examples/simple_rbac
 
-# Install example-specific dependencies
-pip install -r requirements.txt
+# Install the example as a real consumer app
+uv sync
+
+# Optional: validate a local release candidate wheel instead of PyPI
+# uv pip install --reinstall ../../dist/outlabs_auth-0.1.0a10-py3-none-any.whl
+
+# Bootstrap auth schema
+uv run outlabs-auth migrate
+
+# Seed/reset example-owned data
+uv run python reset_test_env.py
 
 # Run the example
-python main.py
+uv run uvicorn main:app --reload --port 8003
 ```
 
 ## Choosing an Example
@@ -265,8 +271,8 @@ async def update_entity(
 ### Tip 1: Use API Documentation
 
 All examples include OpenAPI/Swagger documentation:
-- **SimpleRBAC**: http://localhost:8000/docs
-- **EnterpriseRBAC**: http://localhost:8001/docs
+- **SimpleRBAC**: http://localhost:8003/docs
+- **EnterpriseRBAC**: http://localhost:8004/docs
 
 ### Tip 2: Check Logs
 

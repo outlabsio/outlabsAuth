@@ -27,7 +27,7 @@ def test_user_registration():
     """Test user registration"""
     timestamp = int(time.time())
     response = requests.post(
-        f"{BASE_URL}/auth/register",
+        f"{BASE_URL}/v1/auth/register",
         json={
             "email": f"testuser_{timestamp}@example.com",
             "password": "TestPassword123!",
@@ -49,14 +49,14 @@ def test_login():
     password = "TestPassword123!"
 
     register_response = requests.post(
-        f"{BASE_URL}/auth/register",
+        f"{BASE_URL}/v1/auth/register",
         json={"email": email, "password": password}
     )
     assert register_response.status_code == 201
 
     # Then login
     login_response = requests.post(
-        f"{BASE_URL}/auth/login",
+        f"{BASE_URL}/v1/auth/login",
         json={"email": email, "password": password}
     )
     assert login_response.status_code == 200
@@ -71,7 +71,7 @@ def test_get_current_user():
     token = test_login()
 
     response = requests.get(
-        f"{BASE_URL}/users/me",
+        f"{BASE_URL}/v1/users/me",
         headers={"Authorization": f"Bearer {token}"}
     )
     assert response.status_code == 200
@@ -85,7 +85,7 @@ def test_logout():
     token = test_login()
 
     response = requests.post(
-        f"{BASE_URL}/auth/logout",
+        f"{BASE_URL}/v1/auth/logout",
         headers={"Authorization": f"Bearer {token}"}
     )
     assert response.status_code == 200
@@ -100,7 +100,7 @@ def test_create_post_with_writer_role():
     password = "TestPassword123!"
 
     register_response = requests.post(
-        f"{BASE_URL}/auth/register",
+        f"{BASE_URL}/v1/auth/register",
         json={"email": email, "password": password}
     )
     assert register_response.status_code == 201
@@ -134,7 +134,7 @@ def test_create_post_without_permission():
     password = "TestPassword123!"
 
     register_response = requests.post(
-        f"{BASE_URL}/auth/register",
+        f"{BASE_URL}/v1/auth/register",
         json={"email": email, "password": password}
     )
     assert register_response.status_code == 201
@@ -168,7 +168,7 @@ def test_list_posts():
 def test_invalid_login():
     """Test login with wrong credentials"""
     response = requests.post(
-        f"{BASE_URL}/auth/login",
+        f"{BASE_URL}/v1/auth/login",
         json={
             "email": "nonexistent@example.com",
             "password": "WrongPassword123!"
@@ -180,7 +180,7 @@ def test_invalid_login():
 
 def test_unauthorized_access():
     """Test that protected routes require authentication"""
-    response = requests.get(f"{BASE_URL}/users/me")
+    response = requests.get(f"{BASE_URL}/v1/users/me")
     assert response.status_code == 401
     print("✅ Unauthorized access blocked")
 

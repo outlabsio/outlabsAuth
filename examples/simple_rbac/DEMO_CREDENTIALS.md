@@ -14,14 +14,14 @@ docker compose up -d
 cd examples/simple_rbac
 MONGODB_URL="mongodb://localhost:27018" \
 DATABASE_NAME="blog_simple_rbac" \
-python seed_data.py
+uv run python reset_test_env.py
 ```
 
 ### For Local MongoDB
 
 ```bash
 cd examples/simple_rbac
-python seed_data.py
+uv run python reset_test_env.py
 ```
 
 ## Demo Users
@@ -108,12 +108,12 @@ All users share the same password: **`Asd123$$$`**
 ### Authentication
 ```bash
 # Login
-curl -X POST http://localhost:8003/auth/login \
+curl -X POST http://localhost:8003/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email": "system@outlabs.io", "password": "Asd123$$$"}'
 
 # Get current user
-curl http://localhost:8003/users/me \
+curl http://localhost:8003/v1/users/me \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
@@ -137,7 +137,7 @@ curl -X POST http://localhost:8003/posts \
 ### Roles & Permissions
 ```bash
 # List roles
-curl http://localhost:8003/roles
+curl http://localhost:8003/v1/roles
 
 # View my memberships
 curl http://localhost:8003/memberships/me \
@@ -160,7 +160,7 @@ docker compose up -d
 cd examples/simple_rbac
 MONGODB_URL="mongodb://localhost:27018" \
 DATABASE_NAME="blog_simple_rbac" \
-python seed_data.py
+uv run python reset_test_env.py
 ```
 
 ## Observability

@@ -83,30 +83,30 @@ minted key works inside its allowed entity scope and stops working after revoke.
 
 ### Option 1: Docker Compose (Recommended)
 
-The easiest way to run the example is with Docker Compose:
+The cleanest way to run the example is as a standalone consumer app:
 
 ```bash
-# Navigate to example directory
 cd examples/enterprise_rbac
+uv sync
 
-# Start the API (builds automatically)
-docker compose up -d
+# Optional: validate a local wheel instead of the published package
+# uv pip install --reinstall ../../dist/outlabs_auth-0.1.0a10-py3-none-any.whl
 
-# View logs
-docker compose logs -f
+# Bootstrap auth schema
+uv run outlabs-auth migrate
 
-# Stop the API
-docker compose down
+# Seed example-owned data
+uv run python reset_test_env.py
+
+# Start the API
+uv run uvicorn main:app --reload --port 8004
 ```
 
-The API will be available at `http://localhost:8002` with auto-reload enabled.
+The API will be available at `http://localhost:8004` with auto-reload enabled.
 
 **Requirements:**
-- Docker Desktop running
-- MongoDB running locally (port 27017)
-- Redis running locally (port 6379) - optional
-
-The Docker setup connects to your existing MongoDB and Redis instances on the host machine.
+- PostgreSQL running locally
+- Redis running locally (optional, but recommended)
 
 ### Transactional Auth Mail
 
@@ -134,36 +134,22 @@ Relevant env vars from `.env.example`:
 - `MAILGUN_FROM_NAME`
 - `MAILGUN_RECIPIENT_OVERRIDE`
 
-### Option 2: Local Development
+### Environment
+
+Set the standard consumer-app environment before first boot:
 
 ```bash
-# Navigate to example directory
-cd examples/enterprise_rbac
-
-# Install dependencies (from root)
-cd ../..
-uv sync
-
-# Start the API
-cd examples/enterprise_rbac
-uv run uvicorn main:app --reload --port 8002
-```
-
-### Prerequisites (Local Development Only)
-
-```bash
-# MongoDB required
-docker run -d -p 27017:27017 --name mongodb mongo:latest
-
-# Optional: Redis for caching
-docker run -d -p 6379:6379 --name redis redis:latest
+export DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac
+export SECRET_KEY=enterprise-rbac-secret-change-in-production-please
+# Optional
+export REDIS_URL=redis://localhost:6379/0
 ```
 
 ### Seed Demo Data
 
 ```bash
-# Create all 5 scenarios with demo users and leads
-python seed_data.py
+# Create all scenarios with demo users, entities, roles, and leads
+uv run python reset_test_env.py
 ```
 
 This creates:
@@ -175,8 +161,8 @@ This creates:
 ### Explore the API
 
 Visit the interactive documentation:
-- **Swagger UI**: http://localhost:8002/docs
-- **Health Check**: http://localhost:8002/
+- **Swagger UI**: http://localhost:8004/docs
+- **Health Check**: http://localhost:8004/health
 
 ## 🔐 Demo Credentials
 
@@ -238,21 +224,21 @@ System Admin:         ceo@outlabs.com         / password123
 All implementations include these standardized routes:
 
 #### Authentication
-- `POST /api/auth/register` - Register new user
-- `POST /api/auth/login` - Login with email/password
-- `POST /api/auth/refresh` - Refresh access token
-- `POST /api/auth/logout` - Logout
-- `GET /api/auth/me` - Get current user info
+- `POST /v1/auth/register` - Register new user
+- `POST /v1/auth/login` - Login with email/password
+- `POST /v1/auth/refresh` - Refresh access token
+- `POST /v1/auth/logout` - Logout
+- `GET /v1/auth/me` - Get current user info
 
 #### Entity Management ⭐
-- `GET /api/entities` - List entities
-- `POST /api/entities` - Create entity
-- `GET /api/entities/suggestions` - **Get entity type suggestions** ⭐
-- `GET /api/entities/{entity_id}` - Get entity details
-- `GET /api/entities/{entity_id}/children` - Get child entities
-- `GET /api/entities/{entity_id}/descendants` - Get descendant tree
-- `PUT /api/entities/{entity_id}` - Update entity
-- `DELETE /api/entities/{entity_id}` - Delete entity
+- `GET /v1/entities` - List entities
+- `POST /v1/entities` - Create entity
+- `GET /v1/entities/suggestions` - **Get entity type suggestions** ⭐
+- `GET /v1/entities/{entity_id}` - Get entity details
+- `GET /v1/entities/{entity_id}/children` - Get child entities
+- `GET /v1/entities/{entity_id}/descendants` - Get descendant tree
+- `PUT /v1/entities/{entity_id}` - Update entity
+- `DELETE /v1/entities/{entity_id}` - Delete entity
 
 #### User, Role, Membership, Permission Management
 - Full CRUD for users, roles, memberships
@@ -266,13 +252,13 @@ All implementations include these standardized routes:
 
 ### Domain-Specific Routes (Lead Management)
 
-- `POST /api/leads` - Create new lead
-- `GET /api/leads` - List leads (filtered by permissions)
-- `GET /api/leads/{lead_id}` - Get lead details
-- `PUT /api/leads/{lead_id}` - Update lead
-- `DELETE /api/leads/{lead_id}` - Delete lead
-- `POST /api/leads/{lead_id}/assign` - Assign lead to agent
-- `POST /api/leads/{lead_id}/notes` - Add note to lead
+- `POST /v1/leads` - Create new lead
+- `GET /v1/leads` - List leads (filtered by permissions)
+- `GET /v1/leads/{lead_id}` - Get lead details
+- `PUT /v1/leads/{lead_id}` - Update lead
+- `DELETE /v1/leads/{lead_id}` - Delete lead
+- `POST /v1/leads/{lead_id}/assign` - Assign lead to agent
+- `POST /v1/leads/{lead_id}/notes` - Add note to lead
 - `GET /v1/entities/{entity_id}/team-directory` - Example host-side team directory using `auth.host_query_service`
 
 ## 🧪 Test Scenarios
@@ -281,7 +267,7 @@ All implementations include these standardized routes:
 
 ```bash
 # Get suggestions for entities under RE/MAX California
-curl -X GET "http://localhost:8002/entities/suggestions?parent_id={remax_ca_id}" \
+curl -X GET "http://localhost:8004/v1/entities/suggestions?parent_id={remax_ca_id}" \
   -H "Authorization: Bearer {TOKEN}"
 ```
 
@@ -295,7 +281,7 @@ curl -X GET "http://localhost:8002/entities/suggestions?parent_id={remax_ca_id}"
 
 ```bash
 # Login as exec@remax.com
-# GET /api/leads
+# GET /v1/leads
 ```
 
 **Expected**: Sees leads from all teams in entire franchise
@@ -304,14 +290,14 @@ curl -X GET "http://localhost:8002/entities/suggestions?parent_id={remax_ca_id}"
 
 ```bash
 # Login as agent1@remax-sv.com
-# GET /api/leads
+# GET /v1/leads
 ```
 
 **Expected**: Sees only Downtown Team leads
 
 ### 3. Test Entity Hierarchy Differences
 
-Compare RE/MAX vs Keller Williams entity structures via `/api/entities/{id}/children`
+Compare RE/MAX vs Keller Williams entity structures via `/v1/entities/{id}/children`
 
 **Key Insight**: Different organizations use different terminology, but the system handles it seamlessly
 
@@ -319,7 +305,7 @@ Compare RE/MAX vs Keller Williams entity structures via `/api/entities/{id}/chil
 
 ```bash
 # Login as support@outlabs.com
-# GET /api/leads
+# GET /v1/leads
 ```
 
 **Expected**: Sees ALL leads from all clients (RE/MAX, Keller Williams, solo agents)
@@ -451,23 +437,23 @@ REDIS_URL=redis://localhost:6379
 
 ### Adding New Scenarios
 
-1. Create function in `seed_data.py`
+1. Extend `reset_test_env.py`
 2. Add entities with `create_entity()`
 3. Create users and memberships
 4. Create sample leads
-5. Call from `seed_all()`
+5. Add it to the reset manifest output
 
 ## 🐛 Troubleshooting
 
-### MongoDB Connection Failed
+### PostgreSQL Connection Failed
 ```bash
-docker ps | grep mongodb
-docker start mongodb
+docker ps | grep postgres
+docker start postgres
 ```
 
 ### "Entity not found" errors
 ```bash
-python seed_data.py  # Re-seed
+uv run python reset_test_env.py  # Re-seed
 ```
 
 ### Permission denied

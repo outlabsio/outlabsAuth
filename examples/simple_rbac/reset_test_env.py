@@ -4,7 +4,7 @@ Reset Test Environment Script
 Quickly resets the SimpleRBAC example database to a known good state for testing.
 
 Usage:
-    python reset_test_env.py
+    uv run python reset_test_env.py
 
 Environment Variables:
     DATABASE_URL: PostgreSQL connection string
@@ -13,16 +13,10 @@ Environment Variables:
 
 import asyncio
 import os
-import sys
-from pathlib import Path
-
-# Add project root to path so we can import outlabs_auth
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
-
 from datetime import datetime, timezone
 
 from sqlalchemy import text
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlmodel import SQLModel
@@ -35,6 +29,7 @@ from outlabs_auth import (
     MembershipStatus,
     UserStatus,
 )
+from outlabs_auth.cli import run_migrations
 from outlabs_auth.models.sql.role import RolePermission
 from outlabs_auth.utils.password import generate_password_hash
 from outlabs_auth.core.config import AuthConfig
@@ -49,9 +44,40 @@ DATABASE_URL = os.getenv(
 )
 
 
+async def _ensure_database_exists(database_url: str) -> None:
+    url = make_url(database_url)
+    if url.get_backend_name() != "postgresql":
+        return
+
+    db_name = url.database
+    if not db_name:
+        return
+
+    if not all(c.isalnum() or c == "_" for c in db_name):
+        raise RuntimeError(f"Unsafe database name in DATABASE_URL: {db_name!r}")
+
+    admin_url = url.set(database="postgres")
+    admin_engine = create_async_engine(
+        admin_url, echo=False, isolation_level="AUTOCOMMIT"
+    )
+    try:
+        async with admin_engine.connect() as conn:
+            exists = await conn.execute(
+                text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                {"name": db_name},
+            )
+            if exists.scalar_one_or_none() is None:
+                await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    finally:
+        await admin_engine.dispose()
+
+
 async def reset_database():
     """Reset database to clean test state using SQLAlchemy."""
     print("🔄 Connecting to PostgreSQL...")
+
+    await _ensure_database_exists(DATABASE_URL)
+    await run_migrations(DATABASE_URL)
 
     # Create engine
     engine = create_async_engine(DATABASE_URL, echo=False)
@@ -64,7 +90,12 @@ async def reset_database():
     # Create all tables
     print("📝 Creating tables...")
     async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
+        await conn.run_sync(
+            lambda sync_conn: SQLModel.metadata.create_all(
+                sync_conn,
+                tables=[BlogPost.__table__, Comment.__table__],
+            )
+        )
     print("✅ Tables created")
 
     async with async_session() as session:

@@ -6,48 +6,44 @@ A complete blog application demonstrating **OutlabsAuth's SimpleRBAC** preset fo
 
 ### Prerequisites
 
-- Docker and Docker Compose
-- Ports available: 8003, 5432, 6379, 9090, 3000
+- Python 3.12+
+- PostgreSQL running locally
+- Redis optional, but recommended for cache-backed auth flows
 
-### Start the API (Recommended - Unified Stack)
+### Start the API (Installed Dependency Path)
 
-**Use the unified Docker Compose stack** from the project root - it includes PostgreSQL, Redis, Prometheus, and Grafana:
+This example is set up as a standalone consumer app. Run it from the example
+directory with `outlabs-auth` installed as a normal dependency:
 
 ```bash
-# From the project root
-docker-compose up -d postgres redis simple-rbac
+cd examples/simple_rbac
+uv sync
 
-# Or start everything (including observability)
-docker-compose up -d
+# Optional: validate a local wheel instead of the published package
+# uv pip install --reinstall ../../dist/outlabs_auth-0.1.0a10-py3-none-any.whl
+
+# Bootstrap auth schema
+uv run outlabs-auth migrate
+
+# Seed example-owned demo data
+uv run python reset_test_env.py
+
+# Start the API
+uv run uvicorn main:app --reload --port 8003
 ```
 
 The API will be available at:
 - **API**: http://localhost:8003
 - **OpenAPI Docs**: http://localhost:8003/docs
 - **Health Check**: http://localhost:8003/health
-- **Metrics**: http://localhost:8003/metrics
-- **Grafana Dashboard**: http://localhost:3000 (admin/admin)
 
-See **[DOCKER.md](../../DOCKER.md)** for complete documentation on the unified stack.
-
-### Alternative: Local Development
-
-If you have PostgreSQL and Redis running locally, you can use the example's local docker-compose:
+### Required Environment
 
 ```bash
-cd examples/simple_rbac
-docker compose up --build
-```
-
-### Stop the API
-
-```bash
-# If using unified stack (from project root)
-docker-compose down
-
-# If using local docker-compose
-cd examples/simple_rbac
-docker compose down
+export DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac
+export SECRET_KEY=development-secret-key-change-in-production
+# Optional
+export REDIS_URL=redis://localhost:6379/0
 ```
 
 ## Development & Testing
@@ -58,7 +54,7 @@ When testing auth features, you'll often need a clean database with known test u
 
 ```bash
 cd examples/simple_rbac
-python reset_test_env.py
+uv run python reset_test_env.py
 ```
 
 This script:
@@ -112,43 +108,43 @@ Created automatically on startup:
 
 OutlabsAuth routers give you **20+ routes** for free:
 
-**Auth** (`/auth/*`):
+**Auth** (`/v1/auth/*`):
 ```bash
-POST   /auth/register      # Register new user
-POST   /auth/login         # Login and get JWT
-POST   /auth/logout        # Logout
-POST   /auth/refresh       # Refresh access token
+POST   /v1/auth/register      # Register new user
+POST   /v1/auth/login         # Login and get JWT
+POST   /v1/auth/logout        # Logout
+POST   /v1/auth/refresh       # Refresh access token
 ```
 
-**Users** (`/users/*`):
+**Users** (`/v1/users/*`):
 ```bash
-GET    /users/me           # Get current user
-GET    /users              # List all users (admin)
-GET    /users/{id}         # Get user by ID
-PUT    /users/{id}         # Update user
-DELETE /users/{id}         # Delete user
-POST   /users/{id}/roles   # Assign role to user
+GET    /v1/users/me           # Get current user
+GET    /v1/users              # List all users (admin)
+GET    /v1/users/{id}         # Get user by ID
+PUT    /v1/users/{id}         # Update user
+DELETE /v1/users/{id}         # Delete user
+POST   /v1/users/{id}/roles   # Assign role to user
 ```
 
-**Roles** (`/roles/*`):
+**Roles** (`/v1/roles/*`):
 ```bash
-GET    /roles              # List all roles
-POST   /roles              # Create new role (admin)
-GET    /roles/{id}         # Get role details
-PUT    /roles/{id}         # Update role
-DELETE /roles/{id}         # Delete role
+GET    /v1/roles              # List all roles
+POST   /v1/roles              # Create new role (admin)
+GET    /v1/roles/{id}         # Get role details
+PUT    /v1/roles/{id}         # Update role
+DELETE /v1/roles/{id}         # Delete role
 ```
 
-**Permissions** (`/permissions/*`):
+**Permissions** (`/v1/permissions/*`):
 ```bash
-GET    /permissions/check  # Check user permissions
+GET    /v1/permissions/check  # Check user permissions
 ```
 
-**API Keys** (`/api-keys/*`):
+**API Keys** (`/v1/api-keys/*`):
 ```bash
-POST   /api-keys           # Create API key
-GET    /api-keys           # List API keys
-DELETE /api-keys/{id}      # Revoke API key
+POST   /v1/api-keys           # Create API key
+GET    /v1/api-keys           # List API keys
+DELETE /v1/api-keys/{id}      # Revoke API key
 ```
 
 ### Custom Blog Routes
@@ -181,7 +177,7 @@ GET    /health             # Health check
 ### 1. Register a New User
 
 ```bash
-curl -X POST http://localhost:8003/auth/register \
+curl -X POST http://localhost:8003/v1/auth/register \
   -H "Content-Type: application/json" \
   -d '{
     "email": "john@example.com",
@@ -203,7 +199,7 @@ curl -X POST http://localhost:8003/auth/register \
 ### 2. Login
 
 ```bash
-curl -X POST http://localhost:8003/auth/login \
+curl -X POST http://localhost:8003/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{
     "email": "john@example.com",
@@ -214,7 +210,7 @@ curl -X POST http://localhost:8003/auth/login \
 ### 3. Get Current User
 
 ```bash
-curl -X GET http://localhost:8003/users/me \
+curl -X GET http://localhost:8003/v1/users/me \
   -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
 ```
 
@@ -253,10 +249,10 @@ curl -X POST http://localhost:8003/posts/POST_ID/comments \
 
 ```bash
 # First, get the role ID
-curl -X GET http://localhost:8003/roles
+curl -X GET http://localhost:8003/v1/roles
 
 # Then assign it to the user
-curl -X POST http://localhost:8003/users/USER_ID/roles \
+curl -X POST http://localhost:8003/v1/users/USER_ID/roles \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -268,10 +264,10 @@ curl -X POST http://localhost:8003/users/USER_ID/roles \
 
 ```bash
 # Make sure the API is running
-docker compose up
+uv run uvicorn main:app --reload --port 8003
 
 # In another terminal, run tests
-python test_api.py
+uv run python test_api.py
 ```
 
 ## Development
@@ -290,8 +286,7 @@ Just edit files and save - the server restarts instantly!
 examples/simple_rbac/
 ├── main.py                # FastAPI app with SimpleRBAC
 ├── models.py              # BlogPost and Comment models
-├── docker-compose.yml     # Docker setup
-├── Dockerfile             # Container definition
+├── pyproject.toml         # Example app dependencies
 ├── test_api.py           # Integration tests
 ├── REQUIREMENTS.md        # Detailed use cases
 └── README.md              # This file
@@ -311,7 +306,7 @@ examples/simple_rbac/
 
 ## Configuration
 
-Environment variables (set in `docker-compose.yml`):
+Environment variables:
 
 ```yaml
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac

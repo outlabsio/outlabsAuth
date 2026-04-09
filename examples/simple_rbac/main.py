@@ -28,7 +28,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import SQLModel
 
 from outlabs_auth import SimpleRBAC, User
-from outlabs_auth.database import DatabaseConfig, create_engine, create_session_factory
 from outlabs_auth.routers import (
     get_api_keys_router,
     get_auth_router,
@@ -117,6 +116,14 @@ class CommentResponse(BaseModel):
 auth: Optional[SimpleRBAC] = None
 
 
+def _ensure_example_tables(sync_conn) -> None:
+    """Create example-owned tables without re-touching migrated auth tables."""
+    SQLModel.metadata.create_all(
+        sync_conn,
+        tables=[BlogPost.__table__, Comment.__table__],
+    )
+
+
 # ============================================================================
 # FastAPI Application
 # ============================================================================
@@ -163,7 +170,7 @@ async def lifespan(app: FastAPI):
     # Create blog-specific tables if they don't exist
     print("📝 Creating blog tables...")
     async with auth.engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
+        await conn.run_sync(_ensure_example_tables)
     print("✅ Blog tables ready")
 
     # Create default roles if they don't exist
@@ -173,6 +180,7 @@ async def lifespan(app: FastAPI):
     print(f"📦 Database: {DATABASE_URL.split('@')[-1]}")  # Hide password
     print(f"📍 API: http://localhost:8003")
     print(f"📚 Docs: http://localhost:8003/docs")
+    print("🛠️  Auth schema bootstrap: uv run outlabs-auth migrate")
     print(f"🔑 Default roles created: reader, writer, editor, admin")
 
     yield

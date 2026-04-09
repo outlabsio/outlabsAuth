@@ -1,26 +1,33 @@
 # Quick Start - Real Estate Example
 
-**Status**: ✅ Ready to test immediately (MongoDB & Redis are running)
+**Status**: ✅ Ready to test as a standalone consumer app
 
 ## Run in 3 Commands
 
 ```bash
-# 1. Seed the database (creates all 5 scenarios)
+# 1. Install example dependencies
 cd examples/enterprise_rbac
-python seed_data.py
+uv sync
 
-# 2. Start the API
-uvicorn main:app --reload --port 8001
+# Optional: validate a local wheel instead of the published package
+# uv pip install --reinstall ../../dist/outlabs_auth-0.1.0a10-py3-none-any.whl
 
-# 3. Open Swagger UI in browser
-open http://localhost:8001/docs
+# 2. Bootstrap auth schema + seed demo data
+uv run outlabs-auth migrate
+uv run python reset_test_env.py
+
+# 3. Start the API
+uv run uvicorn main:app --reload --port 8004
+
+# 4. Open Swagger UI in browser
+open http://localhost:8004/docs
 ```
 
 ## Test Immediately
 
 ### Login & Explore
 
-1. **Visit**: http://localhost:8001/docs
+1. **Visit**: http://localhost:8004/docs
 2. **Click**: "Authorize" button (top right)
 3. **Login** with any of these accounts:
 
@@ -32,10 +39,10 @@ Support:              support@outlabs.com     / password123
 ```
 
 4. **Try**:
-   - `GET /api/leads` - See leads (different results per user!)
-   - `GET /api/entities/suggestions` - Entity type suggestions
-   - `GET /api/entities` - View entity hierarchy
-   - `POST /api/leads` - Create a new lead
+   - `GET /v1/leads` - See leads (different results per user)
+   - `GET /v1/entities/suggestions` - Entity type suggestions
+   - `GET /v1/entities` - View entity hierarchy
+   - `POST /v1/leads` - Create a new lead
 
 ### What to Test
 
@@ -49,7 +56,7 @@ Support:              support@outlabs.com     / password123
 - Both work seamlessly
 
 **Entity Suggestions:**
-- `GET /api/entities/suggestions?parent_id={id}`
+- `GET /v1/entities/suggestions?parent_id={id}`
 - Shows existing entity types at that level
 
 **Internal Teams:**
@@ -61,7 +68,7 @@ Support:              support@outlabs.com     / password123
 examples/enterprise_rbac/
 ├── main.py           (600 lines)  - FastAPI application
 ├── models.py         (140 lines)  - Lead domain model
-├── seed_data.py      (1000 lines) - 5 scenarios seeding
+├── reset_test_env.py (reset + demo data seeding)
 ├── README.md         (400 lines)  - Complete documentation
 ├── REQUIREMENTS.md   (650 lines)  - Use case analysis
 └── PROGRESS.md       (190 lines)  - Implementation tracker
@@ -94,7 +101,7 @@ examples/enterprise_rbac/
 
 ## Next Steps
 
-1. ✅ **Test the API** (run the 3 commands above)
+1. ✅ **Test the API** (run the commands above)
 2. **Connect Admin UI** (optional)
 3. **Read full docs** in README.md
 
