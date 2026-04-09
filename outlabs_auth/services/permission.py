@@ -140,6 +140,7 @@ class PermissionService(BaseService[Permission]):
         resource_context: Optional[Dict[str, Any]] = None,
         env_context: Optional[Dict[str, Any]] = None,
         time_attrs: Optional[Dict[str, Any]] = None,
+        user: Optional[User] = None,
     ) -> bool:
         """
         Check if user has a specific permission.
@@ -158,12 +159,11 @@ class PermissionService(BaseService[Permission]):
         """
         start_time = datetime.now(timezone.utc)
 
-        # Get user
-        stmt = select(User).where(User.id == user_id)
-        result = await session.execute(stmt)
-        user = result.scalar_one_or_none()
+        resolved_user = user
+        if resolved_user is None:
+            resolved_user = await session.get(User, user_id)
 
-        if not user:
+        if not resolved_user:
             raise UserNotFoundError(
                 message="User not found",
                 details={"user_id": str(user_id)},
@@ -199,7 +199,7 @@ class PermissionService(BaseService[Permission]):
                 return cached
 
         # Superusers have all permissions
-        if user.is_superuser:
+        if resolved_user.is_superuser:
             self._log_permission_check(user_id, permission, "granted", start_time, "superuser")
             return True
 
@@ -208,12 +208,12 @@ class PermissionService(BaseService[Permission]):
         if abac_enabled:
             context = engine.create_context(
                 user={
-                    "id": str(user.id),
-                    "email": user.email,
-                    "status": getattr(user.status, "value", user.status),
-                    "timezone": user.timezone,
-                    "locale": user.locale,
-                    "is_superuser": user.is_superuser,
+                    "id": str(resolved_user.id),
+                    "email": resolved_user.email,
+                    "status": getattr(resolved_user.status, "value", resolved_user.status),
+                    "timezone": resolved_user.timezone,
+                    "locale": resolved_user.locale,
+                    "is_superuser": resolved_user.is_superuser,
                 },
                 resource=resource_context,
                 env=env_context,

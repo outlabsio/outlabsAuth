@@ -9,7 +9,7 @@ Uses SQLAlchemy for PostgreSQL backend.
 import re
 import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -82,6 +82,19 @@ class EntityService(BaseService[Entity]):
         self.role_service: Optional["RoleService"] = None
         self.api_key_service: Optional["APIKeyService"] = None
         self.integration_principal_service: Optional["IntegrationPrincipalService"] = None
+
+    async def _get_entities_by_ids(
+        self,
+        session: AsyncSession,
+        entity_ids: Sequence[UUID],
+    ) -> Dict[UUID, Entity]:
+        """Fetch entities in one query and return them keyed by ID."""
+        if not entity_ids:
+            return {}
+
+        stmt = select(Entity).where(Entity.id.in_(entity_ids))
+        result = await session.execute(stmt)
+        return {entity.id: entity for entity in result.scalars().all()}
 
     async def create_entity(
         self,
@@ -614,12 +627,8 @@ class EntityService(BaseService[Entity]):
             if cached is not None:
                 # For cached data, we need to fetch fresh entities by ID
                 entity_ids = [UUID(e["id"]) for e in cached]
-                entities = []
-                for eid in entity_ids:
-                    entity = await self.get_by_id(session, eid)
-                    if entity:
-                        entities.append(entity)
-                return entities
+                entity_map = await self._get_entities_by_ids(session, entity_ids)
+                return [entity_map[eid] for eid in entity_ids if eid in entity_map]
 
         # Get all ancestors from closure table (sorted from root to entity)
         stmt = (
@@ -630,12 +639,9 @@ class EntityService(BaseService[Entity]):
         result = await session.execute(stmt)
         closures = result.scalars().all()
 
-        # Fetch entities
-        entities = []
-        for closure in closures:
-            entity = await self.get_by_id(session, closure.ancestor_id)
-            if entity:
-                entities.append(entity)
+        ancestor_ids = [closure.ancestor_id for closure in closures]
+        entity_map = await self._get_entities_by_ids(session, ancestor_ids)
+        entities = [entity_map[ancestor_id] for ancestor_id in ancestor_ids if ancestor_id in entity_map]
 
         # Cache result (if Redis enabled)
         if self.redis_client and self.redis_client.is_available and entities:

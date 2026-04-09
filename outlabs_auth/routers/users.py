@@ -266,7 +266,8 @@ def get_users_router(
         Returns paginated results with total count.
         """
         try:
-            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_actor_user_or_401(session, obs.user_id)
+
             parsed_status = None
             if user_status is not None:
                 try:

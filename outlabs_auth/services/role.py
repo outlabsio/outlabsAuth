@@ -1001,6 +1001,11 @@ class RoleService(BaseService[Role]):
             skip=skip,
             limit=limit,
             order_by=Role.name,
+            options=[
+                selectinload(Role.permissions),
+                selectinload(Role.root_entity),
+                selectinload(Role.scope_entity),
+            ],
         )
 
         return roles, total_count
@@ -1105,7 +1110,16 @@ class RoleService(BaseService[Role]):
         if include_auto_assigned_only:
             role_filter = and_(role_filter, Role.is_auto_assigned == True)
 
-        stmt = select(Role).where(role_filter).order_by(Role.name)
+        stmt = (
+            select(Role)
+            .where(role_filter)
+            .options(
+                selectinload(Role.permissions),
+                selectinload(Role.root_entity),
+                selectinload(Role.scope_entity),
+            )
+            .order_by(Role.name)
+        )
         result = await session.execute(stmt)
         roles = [
             role

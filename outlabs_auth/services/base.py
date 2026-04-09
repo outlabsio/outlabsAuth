@@ -56,7 +56,10 @@ class BaseService(Generic[ModelType]):
         Returns:
             Record if found, None otherwise
         """
-        stmt = select(self.model).where(self.model.id == id)
+        if not options:
+            return await session.get(self.model, id)
+
+        stmt = select(self.model).where(getattr(self.model, "id") == id)
         if options:
             for opt in options:
                 stmt = stmt.options(opt)

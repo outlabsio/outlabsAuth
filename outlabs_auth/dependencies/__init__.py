@@ -124,14 +124,27 @@ class AuthDeps:
                 detail="Invalid user ID in auth result",
             )
 
-        has_permission = await permission_service.check_permission(
-            session,
-            user_id=user_id_uuid,
-            permission=permission,
-            entity_id=entity_id,
-            resource_context=resource_context,
-            env_context=env_context,
-        )
+        try:
+            has_permission = await permission_service.check_permission(
+                session,
+                user_id=user_id_uuid,
+                permission=permission,
+                entity_id=entity_id,
+                resource_context=resource_context,
+                env_context=env_context,
+                user=auth_result.get("user"),
+            )
+        except TypeError as exc:
+            if "unexpected keyword argument 'user'" not in str(exc):
+                raise
+            has_permission = await permission_service.check_permission(
+                session,
+                user_id=user_id_uuid,
+                permission=permission,
+                entity_id=entity_id,
+                resource_context=resource_context,
+                env_context=env_context,
+            )
         if not has_permission:
             return False
 

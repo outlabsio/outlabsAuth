@@ -18,7 +18,7 @@ from outlabs_auth.observability import (
     ObservabilityContext,
     get_observability_dependency,
 )
-from outlabs_auth.response_builders import build_role_response
+from outlabs_auth.response_builders import build_role_response, build_role_responses
 from outlabs_auth.schemas.abac import (
     AbacConditionCreateRequest,
     AbacConditionResponse,
@@ -233,12 +233,7 @@ def get_roles_router(
             # Calculate total pages
             pages = (total + limit - 1) // limit if total > 0 else 0
 
-            items: List[RoleResponse] = []
-            for role in roles:
-                permission_names = await auth.role_service.get_role_permission_names(
-                    session, role.id
-                )
-                items.append(await build_role_response(session, role, permission_names))
+            items = await build_role_responses(session, roles)
 
             return PaginatedResponse(
                 items=items, total=total, page=page, limit=limit, pages=pages
@@ -277,12 +272,7 @@ def get_roles_router(
 
             pages = (total + limit - 1) // limit if total > 0 else 0
 
-            items: List[RoleResponse] = []
-            for role in roles:
-                permission_names = await auth.role_service.get_role_permission_names(
-                    session, role.id
-                )
-                items.append(await build_role_response(session, role, permission_names))
+            items = await build_role_responses(session, roles)
 
             return PaginatedResponse(
                 items=items, total=total, page=page, limit=limit, pages=pages

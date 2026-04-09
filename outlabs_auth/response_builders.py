@@ -1,5 +1,6 @@
 """Helpers for building API responses from SQL models."""
 
+from collections.abc import Mapping
 from typing import Any, Optional
 
 from sqlalchemy import select
@@ -92,57 +93,95 @@ async def build_user_response_async(
     return (await build_user_responses(session, [user]))[0]
 
 
+async def build_role_responses(
+    session: AsyncSession,
+    roles: list[Any],
+    permission_names_by_role_id: Optional[Mapping[Any, list[str]]] = None,
+) -> list[RoleResponse]:
+    """Build role responses while resolving related entity names in bulk."""
+    from outlabs_auth.models.sql.entity import Entity
+
+    missing_entity_ids = {
+        entity_id
+        for role in roles
+        for entity_id, relationship_name in (
+            (getattr(role, "root_entity_id", None), "root_entity"),
+            (getattr(role, "scope_entity_id", None), "scope_entity"),
+        )
+        if entity_id
+        and getattr(getattr(role, "__dict__", {}).get(relationship_name), "display_name", None) is None
+    }
+
+    entity_names: dict[Any, str] = {}
+    if missing_entity_ids:
+        result = await session.execute(
+            select(Entity.id, Entity.display_name).where(Entity.id.in_(missing_entity_ids))
+        )
+        entity_names = {entity_id: display_name for entity_id, display_name in result.all()}
+
+    responses: list[RoleResponse] = []
+    for role in roles:
+        root_entity_name = (
+            getattr(getattr(role, "__dict__", {}).get("root_entity"), "display_name", None)
+            or entity_names.get(getattr(role, "root_entity_id", None))
+        )
+        scope_entity_name = (
+            getattr(getattr(role, "__dict__", {}).get("scope_entity"), "display_name", None)
+            or entity_names.get(getattr(role, "scope_entity_id", None))
+        )
+        resolved_permissions = (
+            permission_names_by_role_id.get(getattr(role, "id"))
+            if permission_names_by_role_id is not None
+            else [
+                permission.name
+                for permission in (getattr(role, "permissions", []) or [])
+                if getattr(getattr(permission, "status", None), "value", getattr(permission, "status", None))
+                != "archived"
+                and getattr(permission, "name", None)
+            ]
+        )
+
+        scope_value = RoleScopeEnum.HIERARCHY
+        if getattr(role, "scope", None) == RoleScope.ENTITY_ONLY:
+            scope_value = RoleScopeEnum.ENTITY_ONLY
+
+        responses.append(
+            RoleResponse(
+                id=str(role.id),
+                name=role.name,
+                display_name=role.display_name,
+                description=role.description,
+                permissions=resolved_permissions or [],
+                is_system_role=role.is_system_role,
+                is_global=role.is_global,
+                status=serialize_status(getattr(role, "status", None)),
+                root_entity_id=str(role.root_entity_id) if role.root_entity_id else None,
+                root_entity_name=root_entity_name,
+                assignable_at_types=list(getattr(role, "assignable_at_types", []) or []),
+                scope_entity_id=str(role.scope_entity_id) if role.scope_entity_id else None,
+                scope_entity_name=scope_entity_name,
+                scope=scope_value,
+                is_auto_assigned=role.is_auto_assigned,
+            )
+        )
+
+    return responses
+
+
 async def build_role_response(
     session: AsyncSession,
     role: Any,
     permission_names: Optional[list[str]] = None,
 ) -> RoleResponse:
     """Build a consistent role response from a SQL model."""
-    from outlabs_auth.models.sql.entity import Entity
-
-    root_entity_name = None
-    if getattr(role, "root_entity_id", None):
-        root_entity = await session.get(Entity, role.root_entity_id)
-        if root_entity:
-            root_entity_name = root_entity.display_name
-
-    scope_entity_name = None
-    if getattr(role, "scope_entity_id", None):
-        scope_entity = await session.get(Entity, role.scope_entity_id)
-        if scope_entity:
-            scope_entity_name = scope_entity.display_name
-
-    resolved_permissions = permission_names
-    if resolved_permissions is None:
-        resolved_permissions = [
-            permission.name
-            for permission in (getattr(role, "permissions", []) or [])
-            if getattr(getattr(permission, "status", None), "value", getattr(permission, "status", None))
-            != "archived"
-            and getattr(permission, "name", None)
-        ]
-
-    scope_value = RoleScopeEnum.HIERARCHY
-    if getattr(role, "scope", None) == RoleScope.ENTITY_ONLY:
-        scope_value = RoleScopeEnum.ENTITY_ONLY
-
-    return RoleResponse(
-        id=str(role.id),
-        name=role.name,
-        display_name=role.display_name,
-        description=role.description,
-        permissions=resolved_permissions,
-        is_system_role=role.is_system_role,
-        is_global=role.is_global,
-        status=serialize_status(getattr(role, "status", None)),
-        root_entity_id=str(role.root_entity_id) if role.root_entity_id else None,
-        root_entity_name=root_entity_name,
-        assignable_at_types=list(getattr(role, "assignable_at_types", []) or []),
-        scope_entity_id=str(role.scope_entity_id) if role.scope_entity_id else None,
-        scope_entity_name=scope_entity_name,
-        scope=scope_value,
-        is_auto_assigned=role.is_auto_assigned,
+    responses = await build_role_responses(
+        session,
+        [role],
+        permission_names_by_role_id=(
+            {getattr(role, "id"): permission_names} if permission_names is not None else None
+        ),
     )
+    return responses[0]
 
 
 def build_permission_response(permission: Any) -> PermissionResponse:
