@@ -327,15 +327,14 @@ async def test_entities_router_callback_move_descendants_and_members_paths(
         )
         role = SimpleNamespace(id=uuid.uuid4(), name="entity_reader")
         memberships = [
-            SimpleNamespace(user_id=member_user.id, roles=[role]),
-            SimpleNamespace(user_id=uuid.uuid4(), roles=[]),
+            SimpleNamespace(user_id=member_user.id, user=member_user, roles=[role]),
+            SimpleNamespace(user_id=uuid.uuid4(), user=None, roles=[]),
         ]
         monkeypatch.setattr(
             auth_instance.membership_service,
-            "get_entity_members",
+            "get_entity_members_with_users",
             AsyncMock(return_value=(memberships, 2)),
         )
-        monkeypatch.setattr(session, "get", AsyncMock(side_effect=[member_user, None]))
 
         paginated_members = await get_entity_members(
             entity_id=root.id,

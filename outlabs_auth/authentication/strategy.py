@@ -117,7 +117,11 @@ class JWTStrategy:
             # Fetch user from database (requires session for PostgreSQL)
             if user_service and session:
                 logger.debug("jwt_fetch_user_start", extra={"user_id": user_id})
-                user = await user_service.get_user_by_id(session, user_id)
+                user = await user_service.get_user_by_id(
+                    session,
+                    user_id,
+                    load_root_entity=True,
+                )
                 logger.debug(
                     "jwt_fetch_user_done",
                     extra={

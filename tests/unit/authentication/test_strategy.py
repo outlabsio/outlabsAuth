@@ -70,7 +70,11 @@ async def test_jwt_strategy_authenticates_active_user():
         },
         "jti": "jwt-123",
     }
-    user_service.get_user_by_id.assert_awaited_once_with(session, "user-123")
+    user_service.get_user_by_id.assert_awaited_once_with(
+        session,
+        "user-123",
+        load_root_entity=True,
+    )
 
 
 @pytest.mark.unit
@@ -264,11 +268,14 @@ async def test_api_key_strategy_handles_missing_services_empty_lookup_and_except
     strategy = ApiKeyStrategy()
 
     assert await strategy.authenticate("olk_live.secret", api_key_service=None, session=object()) is None
-    assert await strategy.authenticate(
-        "olk_live.secret",
-        api_key_service=SimpleNamespace(),
-        session=None,
-    ) is None
+    assert (
+        await strategy.authenticate(
+            "olk_live.secret",
+            api_key_service=SimpleNamespace(),
+            session=None,
+        )
+        is None
+    )
 
     verify_returns_none = SimpleNamespace(
         verify_api_key=AsyncMock(return_value=(None, 0)),

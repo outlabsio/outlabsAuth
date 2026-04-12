@@ -536,7 +536,13 @@ async def test_users_router_callback_crud_status_delete_and_invite_paths(
         assert restored.deleted_at is None
 
         logged_events = {event for event, _fields in auth_instance.observability.records}
-        assert {"admin_password_reset", "user_status_changed", "invite_resent", "user_deleted", "user_restored"} <= logged_events
+        assert {
+            "admin_password_reset",
+            "user_status_changed",
+            "invite_resent",
+            "user_deleted",
+            "user_restored",
+        } <= logged_events
 
 
 @pytest.mark.integration
@@ -1170,7 +1176,7 @@ async def test_users_router_callback_remaining_generic_error_paths(
         with monkeypatch.context() as m:
             m.setattr(
                 auth_instance.permission_service,
-                "get_permissions_for_role",
+                "get_permissions_for_roles",
                 _runtime_raiser("permissions exploded"),
             )
             with pytest.raises(RuntimeError):

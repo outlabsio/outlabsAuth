@@ -13,6 +13,7 @@ from uuid import UUID
 from fastapi import Request, Response
 from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
@@ -320,6 +321,8 @@ class UserService(BaseService[User]):
         self,
         session: AsyncSession,
         user_id: UUID,
+        *,
+        load_root_entity: bool = False,
     ) -> Optional[User]:
         """
         Get user by ID.
@@ -327,11 +330,13 @@ class UserService(BaseService[User]):
         Args:
             session: Database session
             user_id: User UUID
+            load_root_entity: Whether to eager-load the assigned root entity
 
         Returns:
             User if found, None otherwise
         """
-        return await self.get_by_id(session, user_id)
+        options = [joinedload(cast(Any, User.root_entity))] if load_root_entity else None
+        return await self.get_by_id(session, user_id, options=options)
 
     async def get_user_by_email(
         self,

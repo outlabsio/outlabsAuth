@@ -35,9 +35,7 @@ def _entity_to_response(entity: Any) -> EntityResponse:
         display_name=entity.display_name,
         slug=entity.slug,
         description=entity.description,
-        entity_class=entity.entity_class.value
-        if hasattr(entity.entity_class, "value")
-        else entity.entity_class,
+        entity_class=entity.entity_class.value if hasattr(entity.entity_class, "value") else entity.entity_class,
         entity_type=entity.entity_type,
         parent_entity_id=parent_id,
         status=entity.status,
@@ -53,9 +51,7 @@ def _entity_to_response(entity: Any) -> EntityResponse:
     )
 
 
-def get_entities_router(
-    auth: Any, prefix: str = "", tags: Optional[list[str | Enum]] = None
-) -> APIRouter:
+def get_entities_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum]] = None) -> APIRouter:
     """
     Generate entity hierarchy management router.
 
@@ -87,15 +83,9 @@ def get_entities_router(
         description="List all entities (requires entity:read permission)",
     )
     async def list_entities(
-        search: Optional[str] = Query(
-            None, description="Search by name, display name, description, or type"
-        ),
-        entity_class: Optional[str] = Query(
-            None, description="Filter by class (structural/access_group)"
-        ),
-        entity_type: Optional[str] = Query(
-            None, description="Filter by type (organization/department/team/etc)"
-        ),
+        search: Optional[str] = Query(None, description="Search by name, display name, description, or type"),
+        entity_class: Optional[str] = Query(None, description="Filter by class (structural/access_group)"),
+        entity_type: Optional[str] = Query(None, description="Filter by type (organization/department/team/etc)"),
         parent_id: Optional[UUID] = Query(None, description="Filter by parent entity"),
         root_only: bool = Query(False, description="Only include root entities"),
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
@@ -155,22 +145,14 @@ def get_entities_router(
         pages = (total + limit - 1) // limit if total > 0 else 0
 
         # Get paginated results
-        stmt = (
-            select(Entity)
-            .where(*filters)
-            .order_by(name_col)
-            .offset(skip)
-            .limit(limit)
-        )
+        stmt = select(Entity).where(*filters).order_by(name_col).offset(skip).limit(limit)
         result = await session.execute(stmt)
         entities = result.scalars().all()
 
         # Convert to response format
         items = [_entity_to_response(entity) for entity in entities]
 
-        return PaginatedResponse(
-            items=items, total=total, page=page, limit=limit, pages=pages
-        )
+        return PaginatedResponse(items=items, total=total, page=page, limit=limit, pages=pages)
 
     @router.post(
         "/",
@@ -181,22 +163,14 @@ def get_entities_router(
     )
     async def create_entity(
         data: EntityCreateRequest,
-        auth_result=Depends(
-            auth.require_tree_permission(
-                "entity:create", "parent_entity_id", source="body"
-            )
-        ),
+        auth_result=Depends(auth.require_tree_permission("entity:create", "parent_entity_id", source="body")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Create a new entity in the hierarchy."""
         from outlabs_auth.models.sql.enums import EntityClass
 
         # Parse entity class
-        entity_class = (
-            EntityClass(data.entity_class)
-            if isinstance(data.entity_class, str)
-            else data.entity_class
-        )
+        entity_class = EntityClass(data.entity_class) if isinstance(data.entity_class, str) else data.entity_class
 
         entity = await auth.entity_service.create_entity(
             session=session,
@@ -236,19 +210,13 @@ def get_entities_router(
             pattern="^(structural|access_group)$",
             description="Optional entity class filter for suggestions.",
         ),
-        auth_result=Depends(
-            auth.require_tree_permission("entity:create", "parent_id", source="query")
-        ),
+        auth_result=Depends(auth.require_tree_permission("entity:create", "parent_id", source="query")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Return sibling-based entity type suggestions for create flows."""
         from outlabs_auth.models.sql.enums import EntityClass
 
-        parsed_entity_class = (
-            EntityClass(entity_class)
-            if isinstance(entity_class, str)
-            else entity_class
-        )
+        parsed_entity_class = EntityClass(entity_class) if isinstance(entity_class, str) else entity_class
         suggestions = await auth.entity_service.get_suggested_entity_types(
             session,
             parent_id=parent_id,
@@ -270,9 +238,7 @@ def get_entities_router(
         """Get entity details by ID."""
         entity = await auth.entity_service.get_entity(session, entity_id)
         if not entity:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found")
         return _entity_to_response(entity)
 
     @router.patch(
@@ -305,9 +271,7 @@ def get_entities_router(
     async def move_entity(
         entity_id: UUID,
         data: EntityMoveRequest,
-        auth_result=Depends(
-            auth.require_entity_permission("entity:update", "entity_id")
-        ),
+        auth_result=Depends(auth.require_entity_permission("entity:update", "entity_id")),
         session: AsyncSession = Depends(auth.uow),
     ):
         new_parent_id = UUID(data.new_parent_id) if data.new_parent_id else None
@@ -416,16 +380,13 @@ def get_entities_router(
         entity_id: UUID,
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=100),
-        auth_result=Depends(
-            auth.require_tree_permission("membership:read", "entity_id")
-        ),
+        auth_result=Depends(auth.require_tree_permission("membership:read", "entity_id")),
         session: AsyncSession = Depends(auth.uow),
     ):
         """Get all members of an entity."""
-        from outlabs_auth.models.sql.user import User
-
-        # Get memberships with pagination
-        memberships, total = await auth.membership_service.get_entity_members(
+        # Get memberships with user details and roles already loaded to avoid
+        # one user lookup per membership row on large entities.
+        memberships, total = await auth.membership_service.get_entity_members_with_users(
             session=session,
             entity_id=entity_id,
             page=page,
@@ -435,7 +396,7 @@ def get_entities_router(
         # Build member responses
         members = []
         for membership in memberships:
-            user = await session.get(User, membership.user_id)
+            user = membership.user
             if user:
                 members.append(
                     MemberResponse(

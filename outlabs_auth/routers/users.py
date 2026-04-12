@@ -15,6 +15,8 @@ from sqlalchemy.orm import selectinload
 
 from outlabs_auth.models.sql.entity_membership import EntityMembership
 from outlabs_auth.models.sql.enums import DefinitionStatus, UserStatus
+from outlabs_auth.models.sql.role import Role
+from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
 from outlabs_auth.response_builders import (
     build_role_response,
@@ -247,9 +249,7 @@ def get_users_router(
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
         limit: int = Query(20, ge=1, le=100, description="Results per page"),
         search: Optional[str] = Query(None, description="Search by email, first name, or last name"),
-        user_status: Optional[str] = Query(
-            None, alias="status", description="Filter by account status"
-        ),
+        user_status: Optional[str] = Query(None, alias="status", description="Filter by account status"),
         is_superuser: Optional[bool] = Query(None, description="Filter by superuser flag"),
         root_entity_id: Optional[UUID] = Query(None, description="Filter by root entity assignment"),
         session: AsyncSession = Depends(auth.uow),
@@ -1205,14 +1205,18 @@ def get_users_router(
 
             permission_sources = []
             seen_permissions = set()
+            roles_for_lookup: list[Any] = []
 
-            async def _append_role_permissions(role: Any) -> None:
+            def _append_role_permissions(
+                role: Any,
+                permissions_by_role_id: dict[UUID, list[Any]],
+            ) -> None:
                 if role is None:
                     return
                 if getattr(role, "status", DefinitionStatus.ACTIVE) != DefinitionStatus.ACTIVE:
                     return
 
-                role_permissions = await auth.permission_service.get_permissions_for_role(session, role.id)
+                role_permissions = permissions_by_role_id.get(role.id, [])
                 for perm in role_permissions:
                     if perm.name in seen_permissions:
                         continue
@@ -1239,9 +1243,24 @@ def get_users_router(
                     seen_permissions.add(perm.name)
 
             # Direct user role memberships.
-            roles = await auth.role_service.get_user_roles(session, user_id=user_id)
-            for role in roles:
-                await _append_role_permissions(role)
+            direct_role_memberships_stmt = (
+                select(UserRoleMembership)
+                .options(selectinload(cast(Any, UserRoleMembership.role)))
+                .where(
+                    cast(Any, UserRoleMembership.user_id) == user_id,
+                )
+            )
+            direct_role_memberships_result = await session.execute(direct_role_memberships_stmt)
+            direct_role_memberships = direct_role_memberships_result.scalars().all()
+            for membership in direct_role_memberships:
+                if not membership.is_currently_valid():
+                    continue
+                role = membership.role
+                if role is None:
+                    continue
+                if getattr(role, "status", DefinitionStatus.ACTIVE) == DefinitionStatus.ARCHIVED:
+                    continue
+                roles_for_lookup.append(role)
 
             # Enterprise entity memberships also grant permissions and must be
             # reflected here so host/UI permission gates match runtime behavior.
@@ -1258,8 +1277,15 @@ def get_users_router(
             for membership in entity_memberships:
                 if not membership.can_grant_permissions():
                     continue
-                for role in membership.roles:
-                    await _append_role_permissions(role)
+                roles_for_lookup.extend(role for role in membership.roles if role is not None)
+
+            permissions_by_role_id = await auth.permission_service.get_permissions_for_roles(
+                session,
+                [cast(UUID, role.id) for role in roles_for_lookup if getattr(role, "id", None) is not None],
+            )
+
+            for role in roles_for_lookup:
+                _append_role_permissions(role, permissions_by_role_id)
 
             # Sort by permission name
             permission_sources.sort(key=lambda x: x.permission.name)

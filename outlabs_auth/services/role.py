@@ -1061,24 +1061,30 @@ class RoleService(BaseService[Role]):
         Returns:
             Tuple of (roles, total_count)
         """
-        entity = await session.get(Entity, entity_id)
-        if not entity:
-            return [], 0
-
-        # Step 1: Get all ancestors (including self) using closure table
-        ancestors_stmt = select(
-            cast(Any, EntityClosure.ancestor_id),
-            cast(Any, EntityClosure.depth),
-        ).where(cast(Any, EntityClosure.descendant_id) == entity_id)
+        # Resolve target entity type and ancestor chain in one round trip.
+        ancestors_stmt = (
+            select(
+                cast(Any, Entity.entity_type),
+                cast(Any, EntityClosure.ancestor_id),
+                cast(Any, EntityClosure.depth),
+            )
+            .join(
+                EntityClosure,
+                cast(Any, EntityClosure.descendant_id) == cast(Any, Entity.id),
+            )
+            .where(cast(Any, Entity.id) == entity_id)
+        )
         ancestors_result = await session.execute(ancestors_stmt)
         ancestor_rows = ancestors_result.all()
 
         if not ancestor_rows:
             return [], 0
 
-        ancestor_ids = [row[0] for row in ancestor_rows]
+        entity_type = cast(str, ancestor_rows[0][0])
+        ancestor_depth_rows = [(row[1], row[2]) for row in ancestor_rows]
+        ancestor_ids = [ancestor_id for ancestor_id, _depth in ancestor_depth_rows]
         # Root is the one with highest depth
-        root_id = max(ancestor_rows, key=lambda x: x[1])[0]
+        root_id = max(ancestor_depth_rows, key=lambda row: row[1])[0]
 
         # Step 2: Build filter for available roles
         # A role is available at entity X if:
@@ -1147,7 +1153,7 @@ class RoleService(BaseService[Role]):
         roles = [
             role
             for role in result.scalars().all()
-            if self._allows_entity_type(role, entity.entity_type)
+            if self._allows_entity_type(role, entity_type)
         ]
 
         total_count = len(roles)

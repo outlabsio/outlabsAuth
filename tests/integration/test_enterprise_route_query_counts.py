@@ -131,6 +131,70 @@ async def seeded_context(auth_instance: EnterpriseRBAC) -> dict[str, str]:
             root_entity_id=root.id,
         )
 
+        permissions_target = await auth_instance.user_service.create_user(
+            session=session,
+            email=f"permissions-target-{uuid.uuid4().hex[:8]}@example.com",
+            password="TestPass123!",
+            first_name="Permissions",
+            last_name="Target",
+            root_entity_id=root.id,
+        )
+
+        permission_names = [
+            "users:bench_read",
+            "users:bench_write",
+            "users:bench_export",
+            "users:bench_manage",
+        ]
+        created_permissions = []
+        for name in permission_names:
+            created_permissions.append(
+                await auth_instance.permission_service.create_permission(
+                    session=session,
+                    name=name,
+                    display_name=name,
+                )
+            )
+
+        direct_roles = []
+        for idx, permission in enumerate(created_permissions[:2]):
+            direct_roles.append(
+                await auth_instance.role_service.create_role(
+                    session=session,
+                    name=f"permissions-direct-{idx}-{uuid.uuid4().hex[:6]}",
+                    display_name=f"Permissions Direct {idx}",
+                    permission_names=[permission.name],
+                    is_global=True,
+                )
+            )
+
+        membership_roles = []
+        for idx, permission in enumerate(created_permissions[2:]):
+            membership_roles.append(
+                await auth_instance.role_service.create_role(
+                    session=session,
+                    name=f"permissions-membership-{idx}-{uuid.uuid4().hex[:6]}",
+                    display_name=f"Permissions Membership {idx}",
+                    permission_names=[permission.name],
+                    is_global=False,
+                    root_entity_id=root.id,
+                )
+            )
+
+        for role in direct_roles:
+            await auth_instance.role_service.assign_role_to_user(
+                session=session,
+                user_id=permissions_target.id,
+                role_id=role.id,
+            )
+
+        await auth_instance.membership_service.add_member(
+            session=session,
+            entity_id=team.id,
+            user_id=permissions_target.id,
+            role_ids=[role.id for role in membership_roles],
+        )
+
         for idx in range(25):
             user = await auth_instance.user_service.create_user(
                 session=session,
@@ -167,6 +231,7 @@ async def seeded_context(auth_instance: EnterpriseRBAC) -> dict[str, str]:
         "headers": {"Authorization": f"Bearer {token}"},
         "root_id": str(root.id),
         "department_id": str(department.id),
+        "permissions_target_user_id": str(permissions_target.id),
     }
 
 
@@ -178,6 +243,7 @@ async def test_enterprise_admin_routes_stay_within_query_budgets(
     seeded_context: dict[str, str],
 ) -> None:
     cases = [
+        ("users_me", "/v1/users/me", None, 1),
         ("memberships_me", "/v1/memberships/me", {"include_inactive": "true"}, 3),
         ("entity_get", f"/v1/entities/{seeded_context['root_id']}", None, 2),
         (
@@ -186,13 +252,25 @@ async def test_enterprise_admin_routes_stay_within_query_budgets(
             {"page": "1", "limit": "100", "root_entity_id": seeded_context["root_id"]},
             4,
         ),
+        (
+            "users_permissions",
+            f"/v1/users/{seeded_context['permissions_target_user_id']}/permissions",
+            None,
+            8,
+        ),
+        (
+            "entity_members",
+            f"/v1/entities/{seeded_context['department_id']}/members",
+            {"page": "1", "limit": "100"},
+            5,
+        ),
         ("entity_descendants", f"/v1/entities/{seeded_context['root_id']}/descendants", None, 3),
         ("entity_path", f"/v1/entities/{seeded_context['department_id']}/path", None, 3),
         (
             "roles_for_entity",
             f"/v1/roles/entity/{seeded_context['root_id']}",
             {"page": "1", "limit": "100"},
-            8,
+            5,
         ),
     ]
 
@@ -204,6 +282,5 @@ async def test_enterprise_admin_routes_stay_within_query_budgets(
 
         assert response.status_code == 200, f"{name} failed: {response.text}"
         assert query_counter.count <= max_queries, (
-            f"{name} exceeded query budget: {query_counter.count} > {max_queries} "
-            f"(db_ms={query_counter.db_ms:.1f})"
+            f"{name} exceeded query budget: {query_counter.count} > {max_queries} " f"(db_ms={query_counter.db_ms:.1f})"
         )

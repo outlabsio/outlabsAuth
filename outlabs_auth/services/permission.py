@@ -91,9 +91,7 @@ class PermissionService(BaseService[Permission]):
             requested_status = self._coerce_definition_status(status)
 
         if is_active is not None:
-            status_from_is_active = (
-                DefinitionStatus.ACTIVE if is_active else DefinitionStatus.INACTIVE
-            )
+            status_from_is_active = DefinitionStatus.ACTIVE if is_active else DefinitionStatus.INACTIVE
             if requested_status is not None and requested_status != status_from_is_active:
                 raise InvalidInputError(
                     message="status and is_active cannot conflict",
@@ -121,11 +119,7 @@ class PermissionService(BaseService[Permission]):
 
     @staticmethod
     def _permission_definition_is_live(permission: Optional[Permission]) -> bool:
-        return bool(
-            permission
-            and getattr(permission, "status", DefinitionStatus.ACTIVE)
-            == DefinitionStatus.ACTIVE
-        )
+        return bool(permission and getattr(permission, "status", DefinitionStatus.ACTIVE) == DefinitionStatus.ACTIVE)
 
     @staticmethod
     def _require_policy_engine(
@@ -135,35 +129,66 @@ class PermissionService(BaseService[Permission]):
             raise RuntimeError("ABAC engine is required when ABAC evaluation is enabled")
         return engine
 
-    @staticmethod
-    def _entity_membership_permission_options() -> list[Any]:
-        return [
-            selectinload(cast(Any, EntityMembership.roles))
-            .selectinload(cast(Any, Role.permissions))
-            .selectinload(cast(Any, Permission.conditions)),
-            selectinload(cast(Any, EntityMembership.roles)).selectinload(
-                cast(Any, Role.conditions)
-            ),
-            selectinload(cast(Any, EntityMembership.roles))
-            .selectinload(cast(Any, Role.entity_type_permissions))
-            .selectinload(cast(Any, RoleEntityTypePermission.permission))
-            .selectinload(cast(Any, Permission.conditions)),
-        ]
+    def _should_load_entity_type_permissions(self, entity_type: Optional[str]) -> bool:
+        return bool(self.config.enable_context_aware_roles and entity_type)
 
-    @staticmethod
-    def _user_role_membership_permission_options() -> list[Any]:
-        return [
-            selectinload(cast(Any, UserRoleMembership.role))
-            .selectinload(cast(Any, Role.permissions))
-            .selectinload(cast(Any, Permission.conditions)),
-            selectinload(cast(Any, UserRoleMembership.role)).selectinload(
-                cast(Any, Role.conditions)
-            ),
-            selectinload(cast(Any, UserRoleMembership.role))
-            .selectinload(cast(Any, Role.entity_type_permissions))
-            .selectinload(cast(Any, RoleEntityTypePermission.permission))
-            .selectinload(cast(Any, Permission.conditions)),
-        ]
+    def _entity_membership_permission_options(
+        self,
+        *,
+        include_conditions: bool = False,
+        entity_type: Optional[str] = None,
+    ) -> list[Any]:
+        role_permissions_loader = selectinload(cast(Any, EntityMembership.roles)).selectinload(
+            cast(Any, Role.permissions)
+        )
+        if include_conditions:
+            role_permissions_loader = role_permissions_loader.selectinload(cast(Any, Permission.conditions))
+
+        options: list[Any] = [role_permissions_loader]
+
+        if include_conditions:
+            options.append(selectinload(cast(Any, EntityMembership.roles)).selectinload(cast(Any, Role.conditions)))
+
+        if self._should_load_entity_type_permissions(entity_type):
+            entity_type_loader = (
+                selectinload(cast(Any, EntityMembership.roles))
+                .selectinload(cast(Any, Role.entity_type_permissions))
+                .selectinload(cast(Any, RoleEntityTypePermission.permission))
+            )
+            if include_conditions:
+                entity_type_loader = entity_type_loader.selectinload(cast(Any, Permission.conditions))
+            options.append(entity_type_loader)
+
+        return options
+
+    def _user_role_membership_permission_options(
+        self,
+        *,
+        include_conditions: bool = False,
+        entity_type: Optional[str] = None,
+    ) -> list[Any]:
+        role_permissions_loader = selectinload(cast(Any, UserRoleMembership.role)).selectinload(
+            cast(Any, Role.permissions)
+        )
+        if include_conditions:
+            role_permissions_loader = role_permissions_loader.selectinload(cast(Any, Permission.conditions))
+
+        options: list[Any] = [role_permissions_loader]
+
+        if include_conditions:
+            options.append(selectinload(cast(Any, UserRoleMembership.role)).selectinload(cast(Any, Role.conditions)))
+
+        if self._should_load_entity_type_permissions(entity_type):
+            entity_type_loader = (
+                selectinload(cast(Any, UserRoleMembership.role))
+                .selectinload(cast(Any, Role.entity_type_permissions))
+                .selectinload(cast(Any, RoleEntityTypePermission.permission))
+            )
+            if include_conditions:
+                entity_type_loader = entity_type_loader.selectinload(cast(Any, Permission.conditions))
+            options.append(entity_type_loader)
+
+        return options
 
     # =========================================================================
     # Permission Checking
@@ -449,15 +474,18 @@ class PermissionService(BaseService[Permission]):
         if not ancestor_rows:
             return False
 
-        depth_by_ancestor: Dict[UUID, int] = {
-            cast(UUID, row[0]): int(row[1]) for row in ancestor_rows
-        }
+        depth_by_ancestor: Dict[UUID, int] = {cast(UUID, row[0]): int(row[1]) for row in ancestor_rows}
         ancestor_ids = list(depth_by_ancestor.keys())
 
         # Load memberships in any ancestor entity with roles+permissions.
         memberships_stmt = (
             select(EntityMembership)
-            .options(*self._entity_membership_permission_options())
+            .options(
+                *self._entity_membership_permission_options(
+                    include_conditions=engine is not None,
+                    entity_type=entity_type,
+                )
+            )
             .where(
                 cast(Any, EntityMembership.user_id) == user_id,
                 cast(Any, EntityMembership.entity_id).in_(ancestor_ids),
@@ -579,7 +607,12 @@ class PermissionService(BaseService[Permission]):
         """
         stmt = (
             select(UserRoleMembership)
-            .options(*self._user_role_membership_permission_options())
+            .options(
+                *self._user_role_membership_permission_options(
+                    include_conditions=True,
+                    entity_type=entity_type,
+                )
+            )
             .where(
                 cast(Any, UserRoleMembership.user_id) == user_id,
                 cast(Any, UserRoleMembership.status) == MembershipStatus.ACTIVE,
@@ -665,9 +698,7 @@ class PermissionService(BaseService[Permission]):
 
         group_ops: Dict[Optional[str], str] = {}
         if group_ids:
-            groups_stmt = select(SqlConditionGroup).where(
-                cast(Any, SqlConditionGroup.id).in_(list(group_ids))
-            )
+            groups_stmt = select(SqlConditionGroup).where(cast(Any, SqlConditionGroup.id).in_(list(group_ids)))
             groups_result = await session.execute(groups_stmt)
             groups = groups_result.scalars().all()
             for g in groups:
@@ -701,7 +732,11 @@ class PermissionService(BaseService[Permission]):
         """
         stmt = (
             select(UserRoleMembership)
-            .options(*self._user_role_membership_permission_options())
+            .options(
+                *self._user_role_membership_permission_options(
+                    entity_type=entity_type,
+                )
+            )
             .where(
                 cast(Any, UserRoleMembership.user_id) == user_id,
                 cast(Any, UserRoleMembership.status) == MembershipStatus.ACTIVE,
@@ -789,7 +824,11 @@ class PermissionService(BaseService[Permission]):
         # Get active role memberships with roles eagerly loaded
         membership_stmt = (
             select(UserRoleMembership)
-            .options(*self._user_role_membership_permission_options())
+            .options(
+                *self._user_role_membership_permission_options(
+                    entity_type=entity_type,
+                )
+            )
             .where(
                 cast(Any, UserRoleMembership.user_id) == user_id,
                 cast(Any, UserRoleMembership.status) == MembershipStatus.ACTIVE,
@@ -821,7 +860,11 @@ class PermissionService(BaseService[Permission]):
         # permissions must be included for effective user permission resolution.
         entity_stmt = (
             select(EntityMembership)
-            .options(*self._entity_membership_permission_options())
+            .options(
+                *self._entity_membership_permission_options(
+                    entity_type=entity_type,
+                )
+            )
             .where(
                 cast(Any, EntityMembership.user_id) == user_id,
                 cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
@@ -884,9 +927,7 @@ class PermissionService(BaseService[Permission]):
 
         if not self.config.enable_context_aware_roles or not entity_type:
             return [
-                permission
-                for permission in (role.permissions or [])
-                if self._permission_definition_is_live(permission)
+                permission for permission in (role.permissions or []) if self._permission_definition_is_live(permission)
             ]
 
         normalized_entity_type = entity_type.lower()
@@ -895,19 +936,13 @@ class PermissionService(BaseService[Permission]):
             for entry in (role.entity_type_permissions or [])
             if entry.permission and entry.entity_type.lower() == normalized_entity_type
         ]
-        overrides = [
-            permission
-            for permission in matching_overrides
-            if self._permission_definition_is_live(permission)
-        ]
+        overrides = [permission for permission in matching_overrides if self._permission_definition_is_live(permission)]
         if matching_overrides:
             return overrides
         if overrides:
             return overrides
         return [
-            permission
-            for permission in (role.permissions or [])
-            if self._permission_definition_is_live(permission)
+            permission for permission in (role.permissions or []) if self._permission_definition_is_live(permission)
         ]
 
     def _get_role_permission_names_for_context(
@@ -1167,9 +1202,7 @@ class PermissionService(BaseService[Permission]):
         """
         stmt = select(Permission).where(cast(Any, Permission.id) == permission_id)
         if not include_archived:
-            stmt = stmt.where(
-                cast(Any, Permission.status) != DefinitionStatus.ARCHIVED
-            )
+            stmt = stmt.where(cast(Any, Permission.status) != DefinitionStatus.ARCHIVED)
 
         options: list[Any] = []
         if load_tags:
@@ -1293,10 +1326,7 @@ class PermissionService(BaseService[Permission]):
             )
 
         await self._invalidate_all_permissions_cache()
-        current_permission = (
-            await self.get_permission_by_id(session, permission_id, load_tags=True)
-            or permission
-        )
+        current_permission = await self.get_permission_by_id(session, permission_id, load_tags=True) or permission
         current_snapshot = await self._build_permission_definition_snapshot(
             session,
             current_permission,
@@ -1359,10 +1389,7 @@ class PermissionService(BaseService[Permission]):
             permission.tags = []
             await self.update(session, permission)
             await self._invalidate_all_permissions_cache()
-            current_permission = (
-                await self.get_permission_by_id(session, permission_id, load_tags=True)
-                or permission
-            )
+            current_permission = await self.get_permission_by_id(session, permission_id, load_tags=True) or permission
             current_snapshot = await self._build_permission_definition_snapshot(
                 session,
                 current_permission,
@@ -1385,9 +1412,7 @@ class PermissionService(BaseService[Permission]):
             return current_permission
 
         # Load/create tag models
-        stmt = select(PermissionTag).where(
-            cast(Any, PermissionTag.name).in_(normalized)
-        )
+        stmt = select(PermissionTag).where(cast(Any, PermissionTag.name).in_(normalized))
         result = await session.execute(stmt)
         existing_tags = {t.name: t for t in result.scalars().all()}
 
@@ -1403,10 +1428,7 @@ class PermissionService(BaseService[Permission]):
         permission.tags = tag_models
         await self.update(session, permission)
         await self._invalidate_all_permissions_cache()
-        current_permission = (
-            await self.get_permission_by_id(session, permission_id, load_tags=True)
-            or permission
-        )
+        current_permission = await self.get_permission_by_id(session, permission_id, load_tags=True) or permission
         current_snapshot = await self._build_permission_definition_snapshot(
             session,
             current_permission,
@@ -1631,8 +1653,7 @@ class PermissionService(BaseService[Permission]):
         )
         condition_result = await session.execute(condition_stmt)
         deleted_conditions = [
-            self._build_permission_condition_snapshot(condition)
-            for condition in condition_result.scalars().all()
+            self._build_permission_condition_snapshot(condition) for condition in condition_result.scalars().all()
         ]
 
         await session.delete(group)
@@ -1879,10 +1900,7 @@ class PermissionService(BaseService[Permission]):
         if resource:
             filters.append(Permission.resource == resource)
         if is_active is not None:
-            filters.append(
-                Permission.status
-                == (DefinitionStatus.ACTIVE if is_active else DefinitionStatus.INACTIVE)
-            )
+            filters.append(Permission.status == (DefinitionStatus.ACTIVE if is_active else DefinitionStatus.INACTIVE))
 
         total_count = await self.count(session, *filters)
 
@@ -2046,6 +2064,41 @@ class PermissionService(BaseService[Permission]):
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_permissions_for_roles(
+        self,
+        session: AsyncSession,
+        role_ids: List[UUID],
+    ) -> Dict[UUID, List[Permission]]:
+        """
+        Get permissions assigned to multiple roles in one query.
+
+        Args:
+            session: Database session
+            role_ids: Role UUIDs
+
+        Returns:
+            Mapping of role_id -> list of Permission objects
+        """
+        unique_role_ids = list(dict.fromkeys(role_ids))
+        if not unique_role_ids:
+            return {}
+
+        stmt = (
+            select(cast(Any, RolePermission.role_id), Permission)
+            .join(Permission, cast(Any, RolePermission.permission_id) == Permission.id)
+            .where(
+                cast(Any, RolePermission.role_id).in_(unique_role_ids),
+                cast(Any, Permission.status) != DefinitionStatus.ARCHIVED,
+            )
+        )
+        result = await session.execute(stmt)
+
+        permissions_by_role_id: Dict[UUID, List[Permission]] = {role_id: [] for role_id in unique_role_ids}
+        for role_id, permission in result.all():
+            permissions_by_role_id.setdefault(cast(UUID, role_id), []).append(cast(Permission, permission))
+
+        return permissions_by_role_id
+
     async def check_permission_exists(
         self,
         session: AsyncSession,
@@ -2146,10 +2199,7 @@ class PermissionService(BaseService[Permission]):
         session: AsyncSession,
         permission: Permission,
     ) -> Dict[str, Any]:
-        current_permission = (
-            await self.get_permission_by_id(session, permission.id, load_tags=True)
-            or permission
-        )
+        current_permission = await self.get_permission_by_id(session, permission.id, load_tags=True) or permission
         tags = sorted(
             list(getattr(current_permission, "tags", []) or []),
             key=lambda tag: (tag.name, str(tag.id)),
@@ -2185,13 +2235,8 @@ class PermissionService(BaseService[Permission]):
             "status": getattr(current_permission.status, "value", current_permission.status),
             "is_active": current_permission.is_active,
             "tag_names": [tag.name for tag in tags],
-            "condition_groups": [
-                self._build_condition_group_snapshot(group) for group in groups
-            ],
-            "conditions": [
-                self._build_permission_condition_snapshot(condition)
-                for condition in conditions
-            ],
+            "condition_groups": [self._build_condition_group_snapshot(group) for group in groups],
+            "conditions": [self._build_permission_condition_snapshot(condition) for condition in conditions],
         }
 
     def _changed_permission_definition_fields(

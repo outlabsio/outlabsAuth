@@ -5,6 +5,8 @@
 
 This document is a reality check for maintainers. It is not a roadmap and it is not a full changelog. When this document conflicts with older planning docs, the code and tests should be treated as the source of truth.
 
+For short-horizon maintainer follow-ups that are known but not yet folded back into the larger roadmap, see [NEXT_PASS_BACKLOG.md](/Users/macbookm3/Documents/projects/outlabsAuth/docs/NEXT_PASS_BACKLOG.md).
+
 ## Completed Slices
 
 ### User Lifecycle and Access Revocation
