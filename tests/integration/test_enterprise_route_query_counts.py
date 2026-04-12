@@ -89,6 +89,12 @@ async def test_enterprise_admin_routes_stay_within_query_budgets(
             8,
         ),
         (
+            "roles_list_scoped",
+            "/v1/roles/",
+            {"page": "1", "limit": "100"},
+            14,
+        ),
+        (
             "entity_members",
             f"/v1/entities/{seeded_context.department_id}/members",
             {"page": "1", "limit": "100"},
@@ -107,7 +113,8 @@ async def test_enterprise_admin_routes_stay_within_query_budgets(
     for name, path, params, max_queries in cases:
         query_counter.reset()
         query_counter.enabled = True
-        response = await client.get(path, params=params, headers=seeded_context.admin_headers)
+        headers = seeded_context.benchmark_headers if name == "roles_list_scoped" else seeded_context.admin_headers
+        response = await client.get(path, params=params, headers=headers)
         query_counter.enabled = False
 
         assert response.status_code == 200, f"{name} failed: {response.text}"

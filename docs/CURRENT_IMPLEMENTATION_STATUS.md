@@ -121,6 +121,23 @@ For short-horizon maintainer follow-ups that are known but not yet folded back i
   - system integration API key authorization
   - entity and system integration-principal inventory routes
 
+### Access Scope Resolution
+
+- Access-scope resolution now supports callers that only need entity/root scope
+  without forcing `member_user_ids` expansion.
+- `AccessScopeService.resolve_for_auth_result(...)`,
+  `resolve_for_user(...)`, and `resolve_for_api_key(...)` now accept an
+  `include_member_user_ids` switch.
+- The packaged role router now resolves actor scope with
+  `include_member_user_ids=False`, because role visibility checks only need:
+  - `entity_ids`
+  - `root_entity_ids`
+  - `is_global`
+- Descendant expansion is now reused inside access-scope resolution instead of
+  being recalculated again during member-user projection.
+- Checked-in query-budget coverage now includes a non-superuser `/v1/roles/`
+  scope path alongside the existing superuser/admin route budgets.
+
 ## Accepted Implementation Nuances
 
 These are intentional implementation details that are slightly more specific than the original strategy notes.
@@ -216,7 +233,7 @@ These are intentional implementation details that are slightly more specific tha
   - add Playwright end-to-end coverage in `../OutlabsAuthUI` once the UI starts
     consuming the new admin and host integration surfaces
 
-- The current full-suite regression baseline on 2026-04-12 passes with `710`
+- The current full-suite regression baseline on 2026-04-12 passes with `712`
   tests green and no warning output.
 - The recent lifecycle and auth-hardening slices are in comparatively good shape:
   - `services/user.py`

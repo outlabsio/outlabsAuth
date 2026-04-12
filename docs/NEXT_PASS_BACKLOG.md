@@ -7,7 +7,7 @@ This document is intentionally short. It is not a full project plan and it does 
 
 ## Release-Ready Auth Perf Slice
 
-This slice is now implemented locally and verified against the full repo test suite on 2026-04-12 (`710 passed`).
+This slice is now implemented locally and verified against the full repo test suite on 2026-04-12 (`712 passed`).
 
 - Reduce `/v1/users/me` from 2 queries to 1 by eager-loading `root_entity` during JWT-authenticated user resolution.
 - Reduce `/v1/roles/entity/{entity_id}` round trips by resolving entity type and ancestor chain in one query.
@@ -26,12 +26,19 @@ This slice is now implemented locally and verified against the full repo test su
     11 queries anchored
   - admin inventory routes: about 12, 13, and 7 queries for the current seeded
     single-item surfaces
+- Make access-scope member projection lazy for packaged role visibility checks:
+  - `resolve_for_auth_result(..., include_member_user_ids=False)` now skips the
+    extra member-user lookup when callers only need entity/root scope
+  - descendant expansion is reused instead of being re-expanded during member
+    projection
+  - checked-in route budgets now include a non-superuser `/v1/roles/` scope path
 - Keep checked-in regression/query-budget coverage for:
   - `/v1/users/me`
   - `/v1/roles/entity/{entity_id}`
   - enterprise permission hot paths
   - `/v1/users/{id}/permissions`
   - `/v1/entities/{id}/members`
+  - non-superuser `/v1/roles/`
   - personal API key authorization and self-service routes
   - system integration API key authorization and admin inventory routes
 - Package this as the next auth library release instead of leaving it as repo-local optimization work.
@@ -68,9 +75,6 @@ Known hot-path areas worth another pass after the next release:
   - `/v1/entities/{id}/descendants`
 - Keep query-budget tests aligned with the real optimized route behavior.
 - Add one small, explicit maintainer benchmark note for “expected query counts on hot admin routes” so regressions are easier to spot before downstream apps feel them.
-- Revisit whether generic descendant scope resolution should always broaden to
-  full `member_user_ids`, or whether member-user projection should become
-  opt-in/lazy for hosts that only need entity scope first.
 - If that shape is kept reusable, add a small benchmark/query-budget note for
   scope resolution with and without member-user expansion so host integrations
   can reason about the tradeoff before rebuilding local workarounds.
@@ -113,14 +117,14 @@ Known hot-path areas worth another pass after the next release:
   - `GET /v1/api-keys/`: about 22 queries for 2 keys
   - `GET /v1/api-keys/grantable-scopes`: about 8 queries unanchored, 11 anchored
   - `GET /v1/admin/entities/{id}/api-keys`: about 12 queries
-  - `resolve_for_user(...)`: 5 queries, about 3-4 ms
+  - `resolve_for_user(...)`: about 5 queries when member projection is needed
+  - non-superuser `GET /v1/roles/`: about 14 queries on the current seeded path
   - `GET /v1/entities/{id}`: 1 query as superuser vs 7 queries as regular RBAC user
 - Prioritize investigation of the current fixed query tax in permission
   resolution:
   - eager loading of role permissions, role conditions, permission conditions,
     and entity-type overrides even when ABAC/context-aware-role features are
     off
-  - repeated descendant expansion during access-scope resolution
 - API-key policy no longer needs a separate repo-local permission projection
   workaround in the common non-ABAC case; remaining API-key perf follow-ups
   should focus on:
@@ -128,6 +132,11 @@ Known hot-path areas worth another pass after the next release:
   - anchored-key denied-entity and deep-tree scaling behavior
   - ABAC-enabled API-key grant/runtime budgets, which still intentionally fall
     back to the slower conditioned permission path
+- Access-scope member projection is now opt-in on the packaged path, so the
+  next access-scope follow-up should be broader host-facing adoption:
+  - audit whether other consumers actually need `member_user_ids`
+  - extend the lazy/explicit pattern to host-facing integrations before adding
+    more route-local workarounds
 - Remaining route-level follow-ups should be evaluated from fresh query-budget
   output rather than the now-fixed `users/{id}/permissions` and
   `entities/{id}/members` hotspots.

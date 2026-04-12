@@ -38,9 +38,7 @@ from outlabs_auth.schemas.role import (
 )
 
 
-def get_roles_router(
-    auth: Any, prefix: str = "", tags: Optional[list[str | Enum]] = None
-) -> APIRouter:
+def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum]] = None) -> APIRouter:
     """
     Generate role management router.
 
@@ -74,11 +72,7 @@ def get_roles_router(
     get_obs = get_observability_dependency(auth.observability)
 
     def _role_is_system_wide(role: Role) -> bool:
-        return (
-            role.is_global
-            and role.root_entity_id is None
-            and role.scope_entity_id is None
-        )
+        return role.is_global and role.root_entity_id is None and role.scope_entity_id is None
 
     async def _resolve_actor_scope(
         session: AsyncSession,
@@ -89,6 +83,7 @@ def get_roles_router(
             await auth.access_scope_service.resolve_for_auth_result(
                 session,
                 auth_result,
+                include_member_user_ids=False,
             ),
         )
 
@@ -194,15 +189,9 @@ def get_roles_router(
     async def list_roles(
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
         limit: int = Query(20, ge=1, le=100, description="Results per page"),
-        search: Optional[str] = Query(
-            None, description="Search by role name, display name, or description"
-        ),
-        is_global: Optional[bool] = Query(
-            None, description="Filter by global/non-global roles"
-        ),
-        root_entity_id: Optional[UUID] = Query(
-            None, description="Filter by root entity that owns the role"
-        ),
+        search: Optional[str] = Query(None, description="Search by role name, display name, or description"),
+        is_global: Optional[bool] = Query(None, description="Filter by global/non-global roles"),
+        root_entity_id: Optional[UUID] = Query(None, description="Filter by root entity that owns the role"),
         session: AsyncSession = Depends(auth.uow),
         auth_result=Depends(auth.deps.require_permission("role:read")),
         obs: ObservabilityContext = Depends(get_obs),
@@ -239,33 +228,25 @@ def get_roles_router(
 
             items = await build_role_responses(session, roles)
 
-            return PaginatedResponse(
-                items=items, total=total, page=page, limit=limit, pages=pages
-            )
+            return PaginatedResponse(items=items, total=total, page=page, limit=limit, pages=pages)
         except HTTPException:
             raise
         except Exception as e:
-            obs.log_500_error(
-                e, page=page, limit=limit, search=search, is_global=is_global
-            )
+            obs.log_500_error(e, page=page, limit=limit, search=search, is_global=is_global)
             raise
 
     @router.get(
         "/entity/{entity_id}",
         response_model=PaginatedResponse[RoleResponse],
         summary="List roles for entity",
-        description=(
-            "List roles available for a specific entity (requires role:read_tree permission)"
-        ),
+        description=("List roles available for a specific entity (requires role:read_tree permission)"),
     )
     async def list_roles_for_entity(
         entity_id: UUID,
         page: int = Query(1, ge=1, description="Page number (1-indexed)"),
         limit: int = Query(20, ge=1, le=100, description="Results per page"),
         session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(
-            auth.require_tree_permission("role:read", "entity_id", source="path")
-        ),
+        auth_result=Depends(auth.require_tree_permission("role:read", "entity_id", source="path")),
         obs: ObservabilityContext = Depends(get_obs),
     ):
         """List roles available for a specific entity."""
@@ -278,9 +259,7 @@ def get_roles_router(
 
             items = await build_role_responses(session, roles)
 
-            return PaginatedResponse(
-                items=items, total=total, page=page, limit=limit, pages=pages
-            )
+            return PaginatedResponse(items=items, total=total, page=page, limit=limit, pages=pages)
         except HTTPException:
             raise
         except Exception as e:
@@ -316,9 +295,7 @@ def get_roles_router(
             is_global=data.is_global,
             status=data.status,
             root_entity_id=UUID(data.root_entity_id) if data.root_entity_id else None,
-            scope_entity_id=UUID(data.scope_entity_id)
-            if data.scope_entity_id
-            else None,
+            scope_entity_id=UUID(data.scope_entity_id) if data.scope_entity_id else None,
             scope=scope,
             is_auto_assigned=data.is_auto_assigned,
             assignable_at_types=data.assignable_at_types,
@@ -328,9 +305,7 @@ def get_roles_router(
         if role.is_auto_assigned:
             await auth.membership_service.apply_auto_assigned_role(session, role.id)
 
-        permission_names = await auth.role_service.get_role_permission_names(
-            session, role.id
-        )
+        permission_names = await auth.role_service.get_role_permission_names(session, role.id)
 
         return await build_role_response(session, role, permission_names)
 
@@ -373,11 +348,7 @@ def get_roles_router(
         # Map schema scope enum to model enum if provided
         scope = None
         if "scope" in update_dict and update_dict["scope"] is not None:
-            scope = (
-                RoleScope.ENTITY_ONLY
-                if update_dict["scope"] == RoleScopeEnum.ENTITY_ONLY
-                else RoleScope.HIERARCHY
-            )
+            scope = RoleScope.ENTITY_ONLY if update_dict["scope"] == RoleScopeEnum.ENTITY_ONLY else RoleScope.HIERARCHY
 
         role = await auth.role_service.update_role(
             session,
@@ -397,9 +368,7 @@ def get_roles_router(
         if not was_auto_assigned and role.is_auto_assigned:
             await auth.membership_service.apply_auto_assigned_role(session, role.id)
 
-        permission_names = await auth.role_service.get_role_permission_names(
-            session, role.id
-        )
+        permission_names = await auth.role_service.get_role_permission_names(session, role.id)
 
         return await build_role_response(session, role, permission_names)
 
@@ -424,9 +393,7 @@ def get_roles_router(
             deleted_by_id=UUID(auth_result["user_id"]),
         )
         if not deleted:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Role not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
         return None
 
     @router.post(
@@ -495,9 +462,7 @@ def get_roles_router(
         role = await _get_role_or_404(session, role_id)
         await _require_role_visibility(session, auth_result, role)
 
-        groups = await session.execute(
-            select(ConditionGroup).where(cast(Any, ConditionGroup.role_id) == role_id)
-        )
+        groups = await session.execute(select(ConditionGroup).where(cast(Any, ConditionGroup.role_id) == role_id))
         return [
             ConditionGroupResponse(
                 id=str(g.id),
@@ -628,9 +593,7 @@ def get_roles_router(
         role = await _get_role_or_404(session, role_id)
         await _require_role_visibility(session, auth_result, role)
 
-        result = await session.execute(
-            select(RoleCondition).where(cast(Any, RoleCondition.role_id) == role_id)
-        )
+        result = await session.execute(select(RoleCondition).where(cast(Any, RoleCondition.role_id) == role_id))
         conditions = result.scalars().all()
         return [
             AbacConditionResponse(
@@ -640,9 +603,7 @@ def get_roles_router(
                 value=c.value,
                 value_type=c.value_type,
                 description=c.description,
-                condition_group_id=str(c.condition_group_id)
-                if c.condition_group_id
-                else None,
+                condition_group_id=str(c.condition_group_id) if c.condition_group_id else None,
             )
             for c in conditions
         ]
@@ -685,9 +646,7 @@ def get_roles_router(
             value=cond.value,
             value_type=cond.value_type,
             description=cond.description,
-            condition_group_id=str(cond.condition_group_id)
-            if cond.condition_group_id
-            else None,
+            condition_group_id=str(cond.condition_group_id) if cond.condition_group_id else None,
         )
 
     @router.patch(
@@ -711,9 +670,9 @@ def get_roles_router(
                 role_id,
                 condition_id,
                 fields_set=set(data.model_fields_set),
-                condition_group_id=parse_uuid(data.condition_group_id)
-                if "condition_group_id" in data.model_fields_set
-                else None,
+                condition_group_id=(
+                    parse_uuid(data.condition_group_id) if "condition_group_id" in data.model_fields_set else None
+                ),
                 attribute=data.attribute,
                 operator=data.operator,
                 value=data.value,
@@ -735,9 +694,7 @@ def get_roles_router(
             value=cond.value,
             value_type=cond.value_type,
             description=cond.description,
-            condition_group_id=str(cond.condition_group_id)
-            if cond.condition_group_id
-            else None,
+            condition_group_id=str(cond.condition_group_id) if cond.condition_group_id else None,
         )
 
     @router.delete(

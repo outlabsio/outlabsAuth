@@ -151,6 +151,7 @@ async def seed_enterprise_query_budget_context(
     api_key_global_scope = f"dashboard{unique}:read"
     api_key_entity_scope = f"pipeline{unique}:read_tree"
     api_key_denied_scope = f"secrets{unique}:read"
+    role_read_permission_name = "role:read"
     user_permission_names = [
         f"users{unique}:bench_read",
         f"users{unique}:bench_write",
@@ -210,6 +211,7 @@ async def seed_enterprise_query_budget_context(
             permission_tree_name,
             api_key_global_scope,
             api_key_entity_scope,
+            role_read_permission_name,
             *user_permission_names,
         ]
         for name in permission_names:
@@ -269,6 +271,16 @@ async def seed_enterprise_query_budget_context(
                     is_global=True,
                 )
             )
+
+        direct_roles.append(
+            await auth_instance.role_service.create_role(
+                session=session,
+                name=f"query-bench-role-read-{unique}",
+                display_name="Query Bench Role Read",
+                permission_names=[role_read_permission_name],
+                is_global=True,
+            )
+        )
 
         membership_roles = []
         for index, permission_name in enumerate(user_permission_names[2:]):

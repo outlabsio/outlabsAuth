@@ -447,6 +447,7 @@ async def test_roles_router_callback_success_paths_cover_list_read_update_delete
         )
 
         async def _scoped_scope(*args, **kwargs):
+            assert kwargs.get("include_member_user_ids") is False
             return {
                 "is_global": False,
                 "entity_ids": [str(team.id)],
@@ -477,7 +478,9 @@ async def test_roles_router_callback_success_paths_cover_list_read_update_delete
         )
         assert any(item.id == str(role.id) for item in listed_for_entity.items)
 
-        monkeypatch.setattr(auth_instance.role_service, "get_roles_for_entity", _runtime_raiser("entity roles exploded"))
+        monkeypatch.setattr(
+            auth_instance.role_service, "get_roles_for_entity", _runtime_raiser("entity roles exploded")
+        )
         obs = DummyObs()
         with pytest.raises(RuntimeError, match="entity roles exploded"):
             await list_roles_for_entity(

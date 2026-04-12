@@ -83,12 +83,17 @@ class AccessScopeService:
         self,
         session: AsyncSession,
         auth_result: Optional[dict[str, Any]],
+        *,
+        include_member_user_ids: bool = True,
     ) -> dict[str, Any]:
         """
         Resolve scope from an auth result produced by AuthDeps.require_auth().
         """
         if not auth_result:
-            return self._with_principal_member(PrincipalEntityScope(source="anonymous")).to_dict()
+            return self._with_principal_member(
+                PrincipalEntityScope(source="anonymous"),
+                include_member_user_ids=include_member_user_ids,
+            ).to_dict()
 
         source = str(auth_result.get("source") or "unknown")
         user = auth_result.get("user")
@@ -100,7 +105,8 @@ class AccessScopeService:
                     source=source,
                     is_global=True,
                     principal_user_id=user_id,
-                )
+                ),
+                include_member_user_ids=include_member_user_ids,
             ).to_dict()
 
         if source == "api_key":
@@ -109,11 +115,15 @@ class AccessScopeService:
                     session=session,
                     api_key=auth_result.get("api_key"),
                     principal_user_id=user_id,
+                    include_member_user_ids=include_member_user_ids,
                 )
             ).to_dict()
 
         if user_id is None:
-            return self._with_principal_member(PrincipalEntityScope(source=source)).to_dict()
+            return self._with_principal_member(
+                PrincipalEntityScope(source=source),
+                include_member_user_ids=include_member_user_ids,
+            ).to_dict()
 
         return (
             await self.resolve_for_user(
@@ -121,6 +131,7 @@ class AccessScopeService:
                 user_id=user_id,
                 source=source,
                 user=user,
+                include_member_user_ids=include_member_user_ids,
             )
         ).to_dict()
 
@@ -131,6 +142,7 @@ class AccessScopeService:
         *,
         source: str = "jwt",
         user: Optional[Any] = None,
+        include_member_user_ids: bool = True,
     ) -> PrincipalEntityScope:
         """
         Resolve user scope from root entity + active memberships.
@@ -143,9 +155,15 @@ class AccessScopeService:
 
         effective_entity_ids = set(seed_entity_ids)
         includes_descendants = bool(seed_entity_ids) and bool(self.config.enable_entity_hierarchy)
+        descendant_entity_ids_by_ancestor: dict[UUID, set[UUID]] = {}
 
         if includes_descendants:
-            effective_entity_ids.update(await self._expand_descendant_entity_ids(session, seed_entity_ids))
+            descendant_entity_ids_by_ancestor = await self._resolve_descendant_entity_ids_by_ancestor(
+                session,
+                seed_entity_ids,
+            )
+            for descendant_entity_ids in descendant_entity_ids_by_ancestor.values():
+                effective_entity_ids.update(descendant_entity_ids)
 
         scope = PrincipalEntityScope(
             source=source,
@@ -155,12 +173,15 @@ class AccessScopeService:
             root_entity_ids=_sorted_uuid_list(root_entity_ids),
             entity_ids=_sorted_uuid_list(effective_entity_ids),
         )
-        scope.member_user_ids = await self._resolve_member_user_ids(
-            session,
-            self._select_member_projection_entity_ids(scope),
-            include_descendants=scope.includes_descendants,
-        )
-        return self._with_principal_member(scope)
+        if include_member_user_ids:
+            scope.member_user_ids = await self._resolve_member_user_ids(
+                session,
+                self._select_member_projection_entity_ids(
+                    scope,
+                    descendant_entity_ids_by_ancestor=descendant_entity_ids_by_ancestor,
+                ),
+            )
+        return self._with_principal_member(scope, include_member_user_ids=include_member_user_ids)
 
     async def resolve_for_api_key(
         self,
@@ -168,6 +189,7 @@ class AccessScopeService:
         *,
         api_key: Optional[Any],
         principal_user_id: Optional[UUID] = None,
+        include_member_user_ids: bool = True,
     ) -> PrincipalEntityScope:
         """
         Resolve scope from API key entity scoping fields.
@@ -178,28 +200,39 @@ class AccessScopeService:
         - `entity_id` + `inherit_from_tree` => entity + descendants
         """
         if api_key is None:
-            return self._with_principal_member(PrincipalEntityScope(
-                source="api_key",
-                principal_user_id=principal_user_id,
-            ))
+            return self._with_principal_member(
+                PrincipalEntityScope(
+                    source="api_key",
+                    principal_user_id=principal_user_id,
+                ),
+                include_member_user_ids=include_member_user_ids,
+            )
 
         api_key_id = _coerce_uuid(getattr(api_key, "id", None))
         api_key_entity_id = _coerce_uuid(getattr(api_key, "entity_id", None))
         inherit_from_tree = bool(getattr(api_key, "inherit_from_tree", False))
 
         if api_key_entity_id is None:
-            return self._with_principal_member(PrincipalEntityScope(
-                source="api_key",
-                is_global=True,
-                principal_user_id=principal_user_id,
-                api_key_id=api_key_id,
-            ))
+            return self._with_principal_member(
+                PrincipalEntityScope(
+                    source="api_key",
+                    is_global=True,
+                    principal_user_id=principal_user_id,
+                    api_key_id=api_key_id,
+                ),
+                include_member_user_ids=include_member_user_ids,
+            )
 
         effective_entity_ids: set[UUID] = {api_key_entity_id}
         includes_descendants = bool(self.config.enable_entity_hierarchy and inherit_from_tree)
+        descendant_entity_ids_by_ancestor: dict[UUID, set[UUID]] = {}
 
         if includes_descendants:
-            effective_entity_ids.update(await self._expand_descendant_entity_ids(session, {api_key_entity_id}))
+            descendant_entity_ids_by_ancestor = await self._resolve_descendant_entity_ids_by_ancestor(
+                session,
+                {api_key_entity_id},
+            )
+            effective_entity_ids.update(descendant_entity_ids_by_ancestor.get(api_key_entity_id, set()))
 
         scope = PrincipalEntityScope(
             source="api_key",
@@ -210,12 +243,15 @@ class AccessScopeService:
             direct_entity_ids=[api_key_entity_id],
             entity_ids=_sorted_uuid_list(effective_entity_ids),
         )
-        scope.member_user_ids = await self._resolve_member_user_ids(
-            session,
-            self._select_member_projection_entity_ids(scope),
-            include_descendants=scope.includes_descendants,
-        )
-        return self._with_principal_member(scope)
+        if include_member_user_ids:
+            scope.member_user_ids = await self._resolve_member_user_ids(
+                session,
+                self._select_member_projection_entity_ids(
+                    scope,
+                    descendant_entity_ids_by_ancestor=descendant_entity_ids_by_ancestor,
+                ),
+            )
+        return self._with_principal_member(scope, include_member_user_ids=include_member_user_ids)
 
     async def _resolve_root_entity_ids(
         self,
@@ -233,9 +269,7 @@ class AccessScopeService:
         if root_entity_ids:
             return root_entity_ids
 
-        root_stmt = select(cast(Any, User.root_entity_id)).where(
-            cast(Any, User.id) == user_id
-        )
+        root_stmt = select(cast(Any, User.root_entity_id)).where(cast(Any, User.id) == user_id)
         root_result = await session.execute(root_stmt)
         root_entity_id = root_result.scalar_one_or_none()
         if root_entity_id is not None:
@@ -260,14 +294,36 @@ class AccessScopeService:
         session: AsyncSession,
         ancestor_entity_ids: set[UUID],
     ) -> set[UUID]:
-        if not ancestor_entity_ids:
-            return set()
-
-        closure_stmt = select(cast(Any, EntityClosure.descendant_id)).where(
-            cast(Any, EntityClosure.ancestor_id).in_(ancestor_entity_ids)
+        descendant_entity_ids_by_ancestor = await self._resolve_descendant_entity_ids_by_ancestor(
+            session,
+            ancestor_entity_ids,
         )
+        descendant_entity_ids: set[UUID] = set()
+        for resolved_entity_ids in descendant_entity_ids_by_ancestor.values():
+            descendant_entity_ids.update(resolved_entity_ids)
+        return descendant_entity_ids
+
+    async def _resolve_descendant_entity_ids_by_ancestor(
+        self,
+        session: AsyncSession,
+        ancestor_entity_ids: set[UUID],
+    ) -> dict[UUID, set[UUID]]:
+        if not ancestor_entity_ids:
+            return {}
+
+        closure_stmt = select(
+            cast(Any, EntityClosure.ancestor_id),
+            cast(Any, EntityClosure.descendant_id),
+        ).where(cast(Any, EntityClosure.ancestor_id).in_(ancestor_entity_ids))
         closure_result = await session.execute(closure_stmt)
-        return {descendant_id for (descendant_id,) in closure_result.all() if descendant_id is not None}
+        descendants_by_ancestor: dict[UUID, set[UUID]] = {
+            ancestor_entity_id: set() for ancestor_entity_id in ancestor_entity_ids
+        }
+        for ancestor_id, descendant_id in closure_result.all():
+            if ancestor_id is None or descendant_id is None:
+                continue
+            descendants_by_ancestor.setdefault(cast(UUID, ancestor_id), set()).add(cast(UUID, descendant_id))
+        return descendants_by_ancestor
 
     async def _resolve_member_user_ids(
         self,
@@ -302,13 +358,27 @@ class AccessScopeService:
         result = await session.execute(stmt)
         return _sorted_uuid_list(user_id for (user_id,) in result.all() if user_id is not None)
 
-    def _select_member_projection_entity_ids(self, scope: PrincipalEntityScope) -> list[UUID]:
+    def _select_member_projection_entity_ids(
+        self,
+        scope: PrincipalEntityScope,
+        *,
+        descendant_entity_ids_by_ancestor: Optional[dict[UUID, set[UUID]]] = None,
+    ) -> list[UUID]:
         if scope.direct_entity_ids:
-            return _sorted_uuid_list(scope.direct_entity_ids)
+            projected_entity_ids = set(scope.direct_entity_ids)
+            if scope.includes_descendants and descendant_entity_ids_by_ancestor:
+                for direct_entity_id in scope.direct_entity_ids:
+                    projected_entity_ids.update(descendant_entity_ids_by_ancestor.get(direct_entity_id, set()))
+            return _sorted_uuid_list(projected_entity_ids)
         return _sorted_uuid_list(scope.entity_ids)
 
-    def _with_principal_member(self, scope: PrincipalEntityScope) -> PrincipalEntityScope:
-        if scope.principal_user_id is None:
+    def _with_principal_member(
+        self,
+        scope: PrincipalEntityScope,
+        *,
+        include_member_user_ids: bool = True,
+    ) -> PrincipalEntityScope:
+        if not include_member_user_ids or scope.principal_user_id is None:
             return scope
         scope.member_user_ids = _sorted_uuid_list([*scope.member_user_ids, scope.principal_user_id])
         return scope
