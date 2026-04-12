@@ -85,6 +85,8 @@ Known hot-path areas worth another pass after the next release:
 - Current checked-in coverage after this slice:
   - `tests/integration/test_enterprise_permission_query_counts.py`
   - `tests/integration/test_enterprise_route_query_counts.py`
+  - `tests/integration/test_enterprise_api_key_query_counts.py`
+  - `tests/integration/test_enterprise_api_key_admin_query_counts.py`
 - Keep non-superuser query-budget coverage explicit. Current route-budget tests
   can look artificially cheap when authenticated as a superuser because the
   normal permission-resolution path is bypassed.
