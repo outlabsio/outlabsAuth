@@ -8,6 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.models.sql.enums import APIKeyKind, APIKeyStatus
+from outlabs_auth.routers._api_key_response import (
+    build_api_key_response,
+    build_api_key_responses,
+)
 from outlabs_auth.schemas.api_key import ApiKeyResponse
 from outlabs_auth.schemas.common import PaginatedResponse
 
@@ -25,41 +29,6 @@ def get_api_key_admin_router(
     integration-principal admin routes.
     """
     router = APIRouter(prefix=prefix, tags=tags or ["api-key-admin"])
-
-    async def _to_response(session: AsyncSession, api_key) -> ApiKeyResponse:
-        scopes = await auth.api_key_service.get_api_key_scopes(session, api_key.id)
-        ip_whitelist = await auth.api_key_service.get_api_key_ip_whitelist(session, api_key.id)
-        is_currently_effective = None
-        ineffective_reasons = None
-        if getattr(auth, "api_key_policy_service", None) is not None:
-            effectiveness = await auth.api_key_policy_service.evaluate_effectiveness(
-                session,
-                api_key=api_key,
-                scopes=scopes,
-            )
-            is_currently_effective = effectiveness.is_currently_effective
-            ineffective_reasons = effectiveness.ineffective_reasons
-        return ApiKeyResponse(
-            id=str(api_key.id),
-            prefix=api_key.prefix,
-            name=api_key.name,
-            key_kind=api_key.key_kind,
-            scopes=scopes,
-            ip_whitelist=ip_whitelist or None,
-            rate_limit_per_minute=api_key.rate_limit_per_minute,
-            status=api_key.status,
-            usage_count=api_key.usage_count,
-            created_at=api_key.created_at,
-            expires_at=api_key.expires_at,
-            last_used_at=api_key.last_used_at,
-            description=api_key.description,
-            entity_ids=[str(api_key.entity_id)] if api_key.entity_id else None,
-            inherit_from_tree=api_key.inherit_from_tree,
-            owner_id=str(api_key.resolved_owner_id) if api_key.resolved_owner_id else None,
-            owner_type=api_key.owner_type,
-            is_currently_effective=is_currently_effective,
-            ineffective_reasons=ineffective_reasons,
-        )
 
     async def _get_entity_api_key(session: AsyncSession, entity_id: UUID, key_id: UUID):
         api_key = await auth.api_key_service.get_api_key(session, key_id)
@@ -97,7 +66,7 @@ def get_api_key_admin_router(
         )
         pages = (total + limit - 1) // limit if total > 0 else 0
         return PaginatedResponse(
-            items=[await _to_response(session, api_key) for api_key in api_keys],
+            items=await build_api_key_responses(auth, session, api_keys),
             total=total,
             page=page,
             limit=limit,
@@ -118,7 +87,7 @@ def get_api_key_admin_router(
     ):
         del auth_result
         api_key = await _get_entity_api_key(session, entity_id, key_id)
-        return await _to_response(session, api_key)
+        return await build_api_key_response(auth, session, api_key)
 
     @router.delete(
         "/{entity_id}/api-keys/{key_id}",

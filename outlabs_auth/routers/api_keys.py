@@ -13,6 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.exceptions import InvalidInputError
 from outlabs_auth.models.sql.enums import APIKeyKind
+from outlabs_auth.routers._api_key_response import (
+    build_api_key_response,
+    build_api_key_responses,
+)
 from outlabs_auth.schemas.api_key import (
     ApiKeyCreateRequest,
     ApiKeyCreateResponse,
@@ -57,41 +61,6 @@ def get_api_keys_router(
     """
     router = APIRouter(prefix=prefix, tags=tags or ["api-keys"])
 
-    async def _to_response(session: AsyncSession, api_key) -> ApiKeyResponse:
-        scopes = await auth.api_key_service.get_api_key_scopes(session, api_key.id)
-        ip_whitelist = await auth.api_key_service.get_api_key_ip_whitelist(session, api_key.id)
-        is_currently_effective = None
-        ineffective_reasons = None
-        if getattr(auth, "api_key_policy_service", None) is not None:
-            effectiveness = await auth.api_key_policy_service.evaluate_effectiveness(
-                session,
-                api_key=api_key,
-                scopes=scopes,
-            )
-            is_currently_effective = effectiveness.is_currently_effective
-            ineffective_reasons = effectiveness.ineffective_reasons
-        return ApiKeyResponse(
-            id=str(api_key.id),
-            prefix=api_key.prefix,
-            name=api_key.name,
-            key_kind=api_key.key_kind,
-            scopes=scopes,
-            ip_whitelist=ip_whitelist or None,
-            rate_limit_per_minute=api_key.rate_limit_per_minute,
-            status=api_key.status,
-            usage_count=api_key.usage_count,
-            created_at=api_key.created_at,
-            expires_at=api_key.expires_at,
-            last_used_at=api_key.last_used_at,
-            description=api_key.description,
-            entity_ids=[str(api_key.entity_id)] if api_key.entity_id else None,
-            inherit_from_tree=api_key.inherit_from_tree,
-            owner_id=str(api_key.resolved_owner_id) if api_key.resolved_owner_id else None,
-            owner_type=api_key.owner_type,
-            is_currently_effective=is_currently_effective,
-            ineffective_reasons=ineffective_reasons,
-        )
-
     @router.get(
         "/",
         response_model=List[ApiKeyResponse],
@@ -105,7 +74,7 @@ def get_api_keys_router(
         """List all API keys for the current user."""
         user_id = UUID(auth_result["user_id"])
         api_keys = await auth.api_key_service.list_user_api_keys(session, user_id=user_id)
-        return [await _to_response(session, key) for key in api_keys]
+        return await build_api_key_responses(auth, session, api_keys)
 
     @router.get(
         "/grantable-scopes",
@@ -242,8 +211,7 @@ def get_api_keys_router(
             missing_scopes = [
                 scope
                 for scope in data.scopes
-                if not grantable_scopes
-                or not auth.api_key_service.scopes_allow_permission(grantable_scopes, scope)
+                if not grantable_scopes or not auth.api_key_service.scopes_allow_permission(grantable_scopes, scope)
             ]
             if missing_scopes:
                 raise HTTPException(
@@ -275,7 +243,7 @@ def get_api_keys_router(
                 detail=exc.message,
             ) from exc
 
-        api_key_response = await _to_response(session, api_key_model)
+        api_key_response = await build_api_key_response(auth, session, api_key_model)
         return ApiKeyCreateResponse(**api_key_response.model_dump(), api_key=full_key)
 
     @router.get(
@@ -299,7 +267,7 @@ def get_api_keys_router(
         if str(api_key.owner_id) != auth_result["user_id"]:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-        return await _to_response(session, api_key)
+        return await build_api_key_response(auth, session, api_key)
 
     @router.patch(
         "/{key_id}",
@@ -349,7 +317,7 @@ def get_api_keys_router(
 
         if not updated_key:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
-        return await _to_response(session, updated_key)
+        return await build_api_key_response(auth, session, updated_key)
 
     @router.delete(
         "/{key_id}",
@@ -413,7 +381,7 @@ def get_api_keys_router(
             event_source="api_keys_router.rotate_api_key",
         )
 
-        api_key_response = await _to_response(session, new_key)
+        api_key_response = await build_api_key_response(auth, session, new_key)
         return ApiKeyCreateResponse(**api_key_response.model_dump(), api_key=full_key)
 
     return router

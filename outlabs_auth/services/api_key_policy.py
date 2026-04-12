@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import logging
-from typing import TYPE_CHECKING, Any, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, cast
 from uuid import UUID
 
 from sqlalchemy import select
@@ -313,90 +313,162 @@ class APIKeyPolicyService:
         scopes: Optional[List[str]] = None,
     ) -> APIKeyEffectivenessResult:
         """Return derived runtime effectiveness and the reasons when a key is ineffective."""
-        reasons: list[str] = []
-
-        if api_key.status == APIKeyStatus.SUSPENDED:
-            reasons.append("key_suspended")
-        elif api_key.status == APIKeyStatus.REVOKED:
-            reasons.append("key_revoked")
-        elif api_key.status == APIKeyStatus.EXPIRED:
-            reasons.append("key_expired")
-        elif api_key.expires_at and datetime.now(timezone.utc) > api_key.expires_at:
-            reasons.append("key_expired")
-
-        principal = None
-        owner = None
-        if api_key.integration_principal_id is not None:
-            principal = await session.get(IntegrationPrincipal, api_key.integration_principal_id)
-            if principal is None:
-                reasons.append("integration_principal_missing")
-            elif not principal.is_active():
-                reasons.append("integration_principal_inactive")
-        else:
-            owner = await session.get(User, api_key.owner_id)
-            if owner is None:
-                reasons.append("owner_missing")
-            elif not owner.can_authenticate():
-                reasons.append("owner_inactive")
-
-        if api_key.entity_id is not None:
-            entity = await session.get(Entity, api_key.entity_id)
-            if entity is None:
-                reasons.append("anchor_missing")
-            elif not entity.is_active():
-                reasons.append("anchor_inactive")
-
-        if reasons:
-            return APIKeyEffectivenessResult(
-                is_currently_effective=False,
-                ineffective_reasons=reasons,
+        return (
+            await self.evaluate_effectiveness_map(
+                session,
+                api_keys=[api_key],
+                scopes_by_key_id={api_key.id: scopes} if scopes is not None else None,
             )
+        )[api_key.id]
 
-        if not self.config.enable_entity_hierarchy:
-            return APIKeyEffectivenessResult(
-                is_currently_effective=True,
-                ineffective_reasons=[],
-            )
+    async def evaluate_effectiveness_map(
+        self,
+        session: AsyncSession,
+        *,
+        api_keys: List[APIKey],
+        scopes_by_key_id: Optional[Mapping[UUID, Optional[List[str]]]] = None,
+    ) -> Dict[UUID, APIKeyEffectivenessResult]:
+        """Batch runtime effectiveness evaluation for one or more API keys."""
+        if not api_keys:
+            return {}
 
-        stored_scopes = scopes
-        if stored_scopes is None:
-            stmt = select(cast(Any, APIKeyScope.scope)).where(
-                cast(Any, APIKeyScope.api_key_id) == api_key.id
+        key_ids = [api_key.id for api_key in api_keys]
+        resolved_scopes_by_key_id: Dict[UUID, List[str]] = {
+            key_id: list(scopes) for key_id, scopes in (scopes_by_key_id or {}).items() if scopes is not None
+        }
+        missing_scope_key_ids = [key_id for key_id in key_ids if key_id not in resolved_scopes_by_key_id]
+        if missing_scope_key_ids:
+            stmt = (
+                select(
+                    cast(Any, APIKeyScope.api_key_id),
+                    cast(Any, APIKeyScope.scope),
+                )
+                .where(cast(Any, APIKeyScope.api_key_id).in_(missing_scope_key_ids))
+                .order_by(cast(Any, APIKeyScope.api_key_id), cast(Any, APIKeyScope.scope))
             )
             result = await session.execute(stmt)
-            stored_scopes = [row[0] for row in result.all()]
+            for key_id in missing_scope_key_ids:
+                resolved_scopes_by_key_id.setdefault(key_id, [])
+            for key_id, scope in result.all():
+                resolved_scopes_by_key_id.setdefault(cast(UUID, key_id), []).append(cast(str, scope))
 
-        if principal is not None:
-            owner_grantable_scopes = list(principal.allowed_scopes)
-        else:
-            try:
-                owner_grantable_scopes = await self.calculate_owner_grantable_scopes(
-                    session,
-                    owner=owner,
-                    key_kind=api_key.key_kind,
-                    entity_id=api_key.entity_id,
-                    inherit_from_tree=api_key.inherit_from_tree,
-                )
-            except InvalidInputError:
-                reasons.append("policy_invalid")
-                return APIKeyEffectivenessResult(
-                    is_currently_effective=False,
-                    ineffective_reasons=reasons,
-                )
+        owner_ids = list({api_key.owner_id for api_key in api_keys if api_key.owner_id is not None})
+        principal_ids = list(
+            {api_key.integration_principal_id for api_key in api_keys if api_key.integration_principal_id is not None}
+        )
+        entity_ids = list({api_key.entity_id for api_key in api_keys if api_key.entity_id is not None})
+
+        owners_by_id: Dict[UUID, User] = {}
+        principals_by_id: Dict[UUID, IntegrationPrincipal] = {}
+        entities_by_id: Dict[UUID, Entity] = {}
+
+        if owner_ids:
+            owners_result = await session.execute(select(User).where(cast(Any, User.id).in_(owner_ids)))
+            owners_by_id = {owner.id: owner for owner in owners_result.scalars().all()}
+        if principal_ids:
+            principals_result = await session.execute(
+                select(IntegrationPrincipal).where(cast(Any, IntegrationPrincipal.id).in_(principal_ids))
+            )
+            principals_by_id = {principal.id: principal for principal in principals_result.scalars().all()}
+        if entity_ids:
+            entities_result = await session.execute(select(Entity).where(cast(Any, Entity.id).in_(entity_ids)))
+            entities_by_id = {entity.id: entity for entity in entities_result.scalars().all()}
 
         from outlabs_auth.services.api_key import APIKeyService
 
-        has_effective_scope = any(
-            APIKeyService.scopes_allow_permission(stored_scopes, permission_name)
-            for permission_name in owner_grantable_scopes
-        )
-        if not has_effective_scope:
-            reasons.append("no_effective_scopes")
+        owner_grantable_scope_cache: Dict[tuple[UUID, APIKeyKind, Optional[UUID], bool], List[str]] = {}
+        results: Dict[UUID, APIKeyEffectivenessResult] = {}
 
-        return APIKeyEffectivenessResult(
-            is_currently_effective=not reasons,
-            ineffective_reasons=reasons,
-        )
+        for api_key in api_keys:
+            reasons: list[str] = []
+
+            if api_key.status == APIKeyStatus.SUSPENDED:
+                reasons.append("key_suspended")
+            elif api_key.status == APIKeyStatus.REVOKED:
+                reasons.append("key_revoked")
+            elif api_key.status == APIKeyStatus.EXPIRED:
+                reasons.append("key_expired")
+            elif api_key.expires_at and datetime.now(timezone.utc) > api_key.expires_at:
+                reasons.append("key_expired")
+
+            principal = None
+            owner = None
+            if api_key.integration_principal_id is not None:
+                principal = principals_by_id.get(api_key.integration_principal_id)
+                if principal is None:
+                    reasons.append("integration_principal_missing")
+                elif not principal.is_active():
+                    reasons.append("integration_principal_inactive")
+            else:
+                owner = owners_by_id.get(api_key.owner_id) if api_key.owner_id is not None else None
+                if owner is None:
+                    reasons.append("owner_missing")
+                elif not owner.can_authenticate():
+                    reasons.append("owner_inactive")
+
+            if api_key.entity_id is not None:
+                entity = entities_by_id.get(api_key.entity_id)
+                if entity is None:
+                    reasons.append("anchor_missing")
+                elif not entity.is_active():
+                    reasons.append("anchor_inactive")
+
+            if reasons:
+                results[api_key.id] = APIKeyEffectivenessResult(
+                    is_currently_effective=False,
+                    ineffective_reasons=reasons,
+                )
+                continue
+
+            if not self.config.enable_entity_hierarchy:
+                results[api_key.id] = APIKeyEffectivenessResult(
+                    is_currently_effective=True,
+                    ineffective_reasons=[],
+                )
+                continue
+
+            stored_scopes = resolved_scopes_by_key_id.get(api_key.id, [])
+
+            if principal is not None:
+                owner_grantable_scopes = list(principal.allowed_scopes or [])
+            else:
+                if owner is None:
+                    results[api_key.id] = APIKeyEffectivenessResult(
+                        is_currently_effective=False,
+                        ineffective_reasons=["owner_missing"],
+                    )
+                    continue
+                cache_key = (owner.id, api_key.key_kind, api_key.entity_id, api_key.inherit_from_tree)
+                if cache_key not in owner_grantable_scope_cache:
+                    try:
+                        owner_grantable_scope_cache[cache_key] = await self.calculate_owner_grantable_scopes(
+                            session,
+                            owner=owner,
+                            key_kind=api_key.key_kind,
+                            entity_id=api_key.entity_id,
+                            inherit_from_tree=api_key.inherit_from_tree,
+                        )
+                    except InvalidInputError:
+                        results[api_key.id] = APIKeyEffectivenessResult(
+                            is_currently_effective=False,
+                            ineffective_reasons=["policy_invalid"],
+                        )
+                        continue
+                owner_grantable_scopes = owner_grantable_scope_cache[cache_key]
+
+            has_effective_scope = any(
+                APIKeyService.scopes_allow_permission(stored_scopes, permission_name)
+                for permission_name in owner_grantable_scopes
+            )
+            if not has_effective_scope:
+                reasons.append("no_effective_scopes")
+
+            results[api_key.id] = APIKeyEffectivenessResult(
+                is_currently_effective=not reasons,
+                ineffective_reasons=reasons,
+            )
+
+        return results
 
     def get_allowed_key_kinds(self) -> List[APIKeyKind]:
         """Return the key kinds available in the current implementation slice."""
@@ -443,6 +515,7 @@ class APIKeyPolicyService:
             user_id=owner.id,
             key_kind=key_kind,
             entity_id=entity_id,
+            user=owner,
         )
 
     async def calculate_actor_grantable_scopes(
@@ -501,21 +574,26 @@ class APIKeyPolicyService:
                 entity_id=entity_id,
                 inherit_from_tree=inherit_from_tree,
             )
-
+            permission_names = await self._list_active_permission_names(session)
             owner_scopes = set(
                 await self._calculate_user_grantable_scopes(
                     session,
                     user_id=owner.id,
                     key_kind=key_kind,
                     entity_id=entity_id,
+                    candidate_permission_names=permission_names,
+                    user=owner,
                 )
             )
+            if actor_user_id == owner.id:
+                return sorted(owner_scopes)
             actor_scopes = set(
                 await self._calculate_user_grantable_scopes(
                     session,
                     user_id=actor_user_id,
                     key_kind=key_kind,
                     entity_id=entity_id,
+                    candidate_permission_names=permission_names,
                 )
             )
             return sorted(owner_scopes & actor_scopes)
@@ -550,11 +628,10 @@ class APIKeyPolicyService:
             )
 
         permission_names = await self._list_active_permission_names(session)
-        allowed_names = [
-            permission_name
-            for permission_name in permission_names
-            if self._is_scope_allowed_for_key_kind(permission_name, APIKeyKind.SYSTEM_INTEGRATION)
-        ]
+        allowed_names = self._filter_allowed_permission_names(
+            permission_names,
+            APIKeyKind.SYSTEM_INTEGRATION,
+        )
 
         if scope_kind == IntegrationPrincipalScopeKind.PLATFORM_GLOBAL:
             if not actor.is_superuser:
@@ -594,6 +671,17 @@ class APIKeyPolicyService:
         if self.permission_service is None or actor.is_superuser:
             return sorted(allowed_names)
 
+        if not getattr(self.permission_service.config, "enable_abac", False):
+            return sorted(
+                await self.permission_service.get_effective_permission_names(
+                    session,
+                    user_id=actor_user_id,
+                    entity_id=anchor_entity_id,
+                    candidate_permission_names=allowed_names,
+                    user=actor,
+                )
+            )
+
         grantable: list[str] = []
         for permission_name in allowed_names:
             if await self.permission_service.check_permission(
@@ -601,6 +689,7 @@ class APIKeyPolicyService:
                 user_id=actor_user_id,
                 permission=permission_name,
                 entity_id=anchor_entity_id,
+                user=actor,
             ):
                 grantable.append(permission_name)
         return sorted(grantable)
@@ -1018,24 +1107,40 @@ class APIKeyPolicyService:
         user_id: UUID,
         key_kind: APIKeyKind,
         entity_id: Optional[UUID],
+        candidate_permission_names: Optional[Iterable[str]] = None,
+        user: Optional[User] = None,
     ) -> List[str]:
-        permission_names = await self._list_active_permission_names(session)
+        permission_names = list(
+            candidate_permission_names
+            if candidate_permission_names is not None
+            else await self._list_active_permission_names(session)
+        )
+        allowed_names = self._filter_allowed_permission_names(permission_names, key_kind)
+        if not allowed_names:
+            return []
+
         if self.permission_service is None:
+            return sorted(allowed_names)
+
+        if not getattr(self.permission_service.config, "enable_abac", False):
             return sorted(
-                permission_name
-                for permission_name in permission_names
-                if self._is_scope_allowed_for_key_kind(permission_name, key_kind)
+                await self.permission_service.get_effective_permission_names(
+                    session,
+                    user_id=user_id,
+                    entity_id=entity_id,
+                    candidate_permission_names=allowed_names,
+                    user=user,
+                )
             )
 
         grantable: list[str] = []
-        for permission_name in permission_names:
-            if not self._is_scope_allowed_for_key_kind(permission_name, key_kind):
-                continue
+        for permission_name in allowed_names:
             if await self.permission_service.check_permission(
                 session,
                 user_id=user_id,
                 permission=permission_name,
                 entity_id=entity_id,
+                user=user,
             ):
                 grantable.append(permission_name)
         return sorted(grantable)
@@ -1078,6 +1183,17 @@ class APIKeyPolicyService:
         )
         result = await session.execute(stmt)
         return [row[0] for row in result.all()]
+
+    def _filter_allowed_permission_names(
+        self,
+        permission_names: Iterable[str],
+        key_kind: APIKeyKind,
+    ) -> List[str]:
+        return [
+            permission_name
+            for permission_name in permission_names
+            if self._is_scope_allowed_for_key_kind(permission_name, key_kind)
+        ]
 
     def _policy_error(
         self,

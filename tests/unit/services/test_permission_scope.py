@@ -87,9 +87,7 @@ async def _create_entity_local_role(
     return role
 
 
-async def _create_org_scoped_role(
-    session, name: str, perms: list[Permission], root_entity: Entity
-) -> Role:
+async def _create_org_scoped_role(session, name: str, perms: list[Permission], root_entity: Entity) -> Role:
     """Create an org-scoped role (works globally within the org)."""
     role = Role(
         name=name,
@@ -153,9 +151,7 @@ async def _assign_user_role(session, user: User, role: Role) -> UserRoleMembersh
     return membership
 
 
-async def _assign_entity_membership(
-    session, user: User, entity: Entity, roles: list[Role]
-) -> EntityMembership:
+async def _assign_entity_membership(session, user: User, entity: Entity, roles: list[Role]) -> EntityMembership:
     """Create entity membership with roles for a user."""
     membership = EntityMembership(
         user_id=user.id,
@@ -237,9 +233,7 @@ async def test_global_role_grants_permission_without_entity_context(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_global_role_grants_permission_with_entity_context(
-    test_session, permission_service: PermissionService
-):
+async def test_global_role_grants_permission_with_entity_context(test_session, permission_service: PermissionService):
     """
     DD-054: Global roles should also grant permissions when entity context is provided.
 
@@ -302,9 +296,7 @@ async def test_entity_local_role_denies_permission_without_entity_context(
     await _add_closure_self(test_session, marketing)
 
     perm = await _create_permission(test_session, "user:create")
-    entity_local_role = await _create_entity_local_role(
-        test_session, "marketing-admin", [perm], scope_entity=marketing
-    )
+    entity_local_role = await _create_entity_local_role(test_session, "marketing-admin", [perm], scope_entity=marketing)
     await _assign_user_role(test_session, user, entity_local_role)
 
     # Check permission WITHOUT entity context - should be DENIED
@@ -411,9 +403,7 @@ async def test_entity_local_role_denies_permission_with_wrong_entity_context(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_entity_local_role_hierarchy_grants_in_descendant(
-    test_session, permission_service: PermissionService
-):
+async def test_entity_local_role_hierarchy_grants_in_descendant(test_session, permission_service: PermissionService):
     """
     DD-054: Entity-local role with scope=hierarchy grants in descendant entities.
 
@@ -463,9 +453,7 @@ async def test_entity_local_role_hierarchy_grants_in_descendant(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_entity_local_role_entity_only_denies_in_descendant(
-    test_session, permission_service: PermissionService
-):
+async def test_entity_local_role_entity_only_denies_in_descendant(test_session, permission_service: PermissionService):
     """
     DD-054: Entity-local role with scope=entity_only does NOT grant in descendants.
 
@@ -538,9 +526,7 @@ async def test_org_scoped_role_grants_permission_without_entity_context(
     await _add_closure_self(test_session, acme)
 
     perm = await _create_permission(test_session, "report:view")
-    org_role = await _create_org_scoped_role(
-        test_session, "org-reader", [perm], root_entity=acme
-    )
+    org_role = await _create_org_scoped_role(test_session, "org-reader", [perm], root_entity=acme)
 
     await _assign_user_role(test_session, user, org_role)
 
@@ -561,9 +547,7 @@ async def test_org_scoped_role_grants_permission_without_entity_context(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_mixed_roles_only_global_applies_without_context(
-    test_session, permission_service: PermissionService
-):
+async def test_mixed_roles_only_global_applies_without_context(test_session, permission_service: PermissionService):
     """
     DD-054: When user has both global and entity-local roles,
     only global role permissions apply without entity context.
@@ -620,9 +604,7 @@ async def test_mixed_roles_only_global_applies_without_context(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_mixed_roles_both_apply_with_entity_context(
-    test_session, permission_service: PermissionService
-):
+async def test_mixed_roles_both_apply_with_entity_context(test_session, permission_service: PermissionService):
     """
     DD-054: When user has both global and entity-local roles,
     both apply when entity context is provided.
@@ -682,9 +664,7 @@ async def test_mixed_roles_both_apply_with_entity_context(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_superuser_bypasses_all_scope_checks(
-    test_session, permission_service: PermissionService
-):
+async def test_superuser_bypasses_all_scope_checks(test_session, permission_service: PermissionService):
     """
     DD-054: Superusers should bypass all permission and scope checks.
 
@@ -738,28 +718,126 @@ async def test_get_user_permissions_excludes_entity_local_when_requested(
     await _add_closure_self(test_session, entity)
 
     perm_global = await _create_permission(test_session, "perm:global")
-    global_role = await _create_global_role(
-        test_session, "global-for-get", [perm_global]
-    )
+    global_role = await _create_global_role(test_session, "global-for-get", [perm_global])
 
     perm_local = await _create_permission(test_session, "perm:local")
-    local_role = await _create_entity_local_role(
-        test_session, "local-for-get", [perm_local], scope_entity=entity
-    )
+    local_role = await _create_entity_local_role(test_session, "local-for-get", [perm_local], scope_entity=entity)
 
     await _assign_user_role(test_session, user, global_role)
     await _assign_user_role(test_session, user, local_role)
 
     # With include_entity_local=True (default)
-    all_perms = await permission_service.get_user_permissions(
-        test_session, user.id, include_entity_local=True
-    )
+    all_perms = await permission_service.get_user_permissions(test_session, user.id, include_entity_local=True)
     assert "perm:global" in all_perms
     assert "perm:local" in all_perms
 
     # With include_entity_local=False
-    global_only_perms = await permission_service.get_user_permissions(
-        test_session, user.id, include_entity_local=False
-    )
+    global_only_perms = await permission_service.get_user_permissions(test_session, user.id, include_entity_local=False)
     assert "perm:global" in global_only_perms
     assert "perm:local" not in global_only_perms
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_get_effective_permission_names_projects_entity_context_permissions(
+    test_session, permission_service: PermissionService
+):
+    user = User(email="projection-test@example.com")
+    test_session.add(user)
+    await test_session.flush()
+
+    parent = await _create_entity(test_session, "projection-parent")
+    child = await _create_entity(test_session, "projection-child", parent=parent)
+    await _add_closure_rows(test_session, parent, child)
+
+    perm_global = await _create_permission(test_session, "project:read")
+    perm_direct = await _create_permission(test_session, "audit:view")
+    perm_tree_base = await _create_permission(test_session, "team:manage")
+    perm_tree = await _create_permission(test_session, "team:manage_tree")
+    perm_non_inherited = await _create_permission(test_session, "project:write")
+
+    global_role = await _create_global_role(test_session, "projection-global", [perm_global])
+    direct_role = await _create_org_scoped_role(
+        test_session,
+        "projection-direct",
+        [perm_direct],
+        root_entity=parent,
+    )
+    ancestor_tree_role = await _create_org_scoped_role(
+        test_session,
+        "projection-tree",
+        [perm_tree],
+        root_entity=parent,
+    )
+    ancestor_non_tree_role = await _create_org_scoped_role(
+        test_session,
+        "projection-non-tree",
+        [perm_non_inherited],
+        root_entity=parent,
+    )
+
+    await _assign_user_role(test_session, user, global_role)
+    await _assign_entity_membership(test_session, user, child, [direct_role])
+    await _assign_entity_membership(
+        test_session,
+        user,
+        parent,
+        [ancestor_tree_role, ancestor_non_tree_role],
+    )
+
+    effective = await permission_service.get_effective_permission_names(
+        test_session,
+        user.id,
+        entity_id=child.id,
+        candidate_permission_names=[
+            perm_global.name,
+            perm_direct.name,
+            perm_tree_base.name,
+            perm_tree.name,
+            perm_non_inherited.name,
+        ],
+    )
+
+    assert effective == {
+        perm_global.name,
+        perm_direct.name,
+        perm_tree_base.name,
+        perm_tree.name,
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_get_effective_permission_names_excludes_entity_local_roles_without_entity_context(
+    test_session, permission_service: PermissionService
+):
+    user = User(email="projection-local@example.com")
+    test_session.add(user)
+    await test_session.flush()
+
+    entity = await _create_entity(test_session, "projection-local-entity")
+    await _add_closure_self(test_session, entity)
+
+    perm_local = await _create_permission(test_session, "contact:update")
+    local_role = await _create_entity_local_role(
+        test_session,
+        "projection-local-role",
+        [perm_local],
+        scope_entity=entity,
+    )
+    await _assign_entity_membership(test_session, user, entity, [local_role])
+
+    global_projection = await permission_service.get_effective_permission_names(
+        test_session,
+        user.id,
+        candidate_permission_names=[perm_local.name],
+    )
+    entity_projection = await permission_service.get_effective_permission_names(
+        test_session,
+        user.id,
+        entity_id=entity.id,
+        candidate_permission_names=[perm_local.name],
+    )
+
+    assert global_projection == set()
+    assert entity_projection == {perm_local.name}

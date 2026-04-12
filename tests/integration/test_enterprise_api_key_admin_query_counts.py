@@ -80,7 +80,7 @@ async def test_system_integration_api_key_authorization_stays_within_query_budge
                 entity_id=admin_context.team_id,
             ),
             True,
-            20,
+            13,
         ),
         (
             "entity_system_key_denied_anchor_escape",
@@ -91,7 +91,7 @@ async def test_system_integration_api_key_authorization_stays_within_query_budge
                 entity_id=admin_context.root_id,
             ),
             False,
-            10,
+            7,
         ),
         (
             "platform_global_system_key",
@@ -101,7 +101,7 @@ async def test_system_integration_api_key_authorization_stays_within_query_budge
                 required_scope=admin_context.system_global_scope,
             ),
             True,
-            15,
+            10,
         ),
     ]
 
@@ -134,21 +134,21 @@ async def test_api_key_admin_inventory_routes_stay_within_query_budgets(
             f"/v1/admin/entities/{admin_context.department_id}/api-keys",
             {"key_kind": "system_integration"},
             admin_context.entity_admin_headers,
-            16,
+            14,
         ),
         (
             "entity_principal_api_keys",
             f"/v1/admin/entities/{admin_context.department_id}/integration-principals/{admin_context.entity_principal_id}/api-keys",
             None,
             admin_context.entity_admin_headers,
-            18,
+            15,
         ),
         (
             "system_principal_api_keys",
             f"/v1/admin/system/integration-principals/{admin_context.system_principal_id}/api-keys",
             None,
             admin_context.superuser_headers,
-            18,
+            9,
         ),
     ]
 

@@ -91,7 +91,7 @@ async def test_enterprise_api_key_authorization_stays_within_query_budgets(
                 required_scope=seeded_context.api_key_global_scope,
             ),
             True,
-            40,
+            24,
         ),
         (
             "anchored_tree",
@@ -102,7 +102,7 @@ async def test_enterprise_api_key_authorization_stays_within_query_budgets(
                 entity_id=seeded_context.team_id,
             ),
             True,
-            35,
+            30,
         ),
         (
             "denied_scope",
@@ -124,7 +124,7 @@ async def test_enterprise_api_key_authorization_stays_within_query_budgets(
                 entity_id=seeded_context.root_id,
             ),
             False,
-            14,
+            10,
         ),
     ]
 
@@ -157,14 +157,14 @@ async def test_enterprise_api_key_routes_stay_within_query_budgets(
             "/v1/api-keys/",
             None,
             self_service_context.headers,
-            36,
+            24,
         ),
         (
             "grantable_scopes_unanchored",
             "/v1/api-keys/grantable-scopes",
             None,
             self_service_context.headers,
-            34,
+            10,
         ),
         (
             "grantable_scopes_anchored",
@@ -174,7 +174,7 @@ async def test_enterprise_api_key_routes_stay_within_query_budgets(
                 "inherit_from_tree": "true",
             },
             self_service_context.headers,
-            28,
+            13,
         ),
     ]
 

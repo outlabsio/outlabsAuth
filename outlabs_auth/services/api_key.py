@@ -293,7 +293,13 @@ class APIKeyService(BaseService[APIKey]):
                 occurred_at=api_key.created_at,
             )
 
-        logger.info("Created API key '%s' for %s %s with prefix %s", name, resolved_owner.owner_type, resolved_owner.owner_id, prefix)
+        logger.info(
+            "Created API key '%s' for %s %s with prefix %s",
+            name,
+            resolved_owner.owner_type,
+            resolved_owner.owner_id,
+            prefix,
+        )
         if record_observability:
             self._log_api_key_lifecycle(
                 operation="created",
@@ -489,8 +495,10 @@ class APIKeyService(BaseService[APIKey]):
         return self.scopes_allow_permission(scopes, required_scope)
 
     async def _check_ip(self, session: AsyncSession, api_key_id: UUID, ip_address: str) -> bool:
-        count_stmt = select(func.count()).select_from(APIKeyIPWhitelist).where(
-            cast(Any, APIKeyIPWhitelist.api_key_id) == api_key_id
+        count_stmt = (
+            select(func.count())
+            .select_from(APIKeyIPWhitelist)
+            .where(cast(Any, APIKeyIPWhitelist.api_key_id) == api_key_id)
         )
         result = await session.execute(count_stmt)
         count = result.scalar() or 0
@@ -693,21 +701,63 @@ class APIKeyService(BaseService[APIKey]):
             ],
         )
 
-    async def get_api_key_scopes(self, session: AsyncSession, key_id: UUID) -> List[str]:
-        """Get scopes for an API key."""
-        stmt = select(cast(Any, APIKeyScope.scope)).where(
-            cast(Any, APIKeyScope.api_key_id) == key_id
+    async def get_api_key_scopes_map(
+        self,
+        session: AsyncSession,
+        key_ids: List[UUID],
+    ) -> Dict[UUID, List[str]]:
+        """Get scopes for multiple API keys in a single query."""
+        if not key_ids:
+            return {}
+
+        unique_key_ids = list(dict.fromkeys(key_ids))
+        stmt = (
+            select(
+                cast(Any, APIKeyScope.api_key_id),
+                cast(Any, APIKeyScope.scope),
+            )
+            .where(cast(Any, APIKeyScope.api_key_id).in_(unique_key_ids))
+            .order_by(cast(Any, APIKeyScope.api_key_id), cast(Any, APIKeyScope.scope))
         )
         result = await session.execute(stmt)
-        return [row[0] for row in result.all()]
+
+        scopes_by_key_id: Dict[UUID, List[str]] = {key_id: [] for key_id in unique_key_ids}
+        for key_id, scope in result.all():
+            scopes_by_key_id[cast(UUID, key_id)].append(cast(str, scope))
+        return scopes_by_key_id
+
+    async def get_api_key_scopes(self, session: AsyncSession, key_id: UUID) -> List[str]:
+        """Get scopes for an API key."""
+        return (await self.get_api_key_scopes_map(session, [key_id])).get(key_id, [])
+
+    async def get_api_key_ip_whitelist_map(
+        self,
+        session: AsyncSession,
+        key_ids: List[UUID],
+    ) -> Dict[UUID, List[str]]:
+        """Get IP whitelist entries for multiple API keys in a single query."""
+        if not key_ids:
+            return {}
+
+        unique_key_ids = list(dict.fromkeys(key_ids))
+        stmt = (
+            select(
+                cast(Any, APIKeyIPWhitelist.api_key_id),
+                cast(Any, APIKeyIPWhitelist.ip_address),
+            )
+            .where(cast(Any, APIKeyIPWhitelist.api_key_id).in_(unique_key_ids))
+            .order_by(cast(Any, APIKeyIPWhitelist.api_key_id), cast(Any, APIKeyIPWhitelist.ip_address))
+        )
+        result = await session.execute(stmt)
+
+        whitelist_by_key_id: Dict[UUID, List[str]] = {key_id: [] for key_id in unique_key_ids}
+        for key_id, ip_address in result.all():
+            whitelist_by_key_id[cast(UUID, key_id)].append(cast(str, ip_address))
+        return whitelist_by_key_id
 
     async def get_api_key_ip_whitelist(self, session: AsyncSession, key_id: UUID) -> List[str]:
         """Get IP whitelist entries for an API key."""
-        stmt = select(cast(Any, APIKeyIPWhitelist.ip_address)).where(
-            cast(Any, APIKeyIPWhitelist.api_key_id) == key_id
-        )
-        result = await session.execute(stmt)
-        return [row[0] for row in result.all()]
+        return (await self.get_api_key_ip_whitelist_map(session, [key_id])).get(key_id, [])
 
     async def list_user_api_keys(
         self,
@@ -826,9 +876,7 @@ class APIKeyService(BaseService[APIKey]):
         limit: int = 20,
     ) -> tuple[List[APIKey], int]:
         """List API keys owned by an integration principal with pagination."""
-        filters: list[Any] = [
-            cast(Any, APIKey.integration_principal_id) == integration_principal_id
-        ]
+        filters: list[Any] = [cast(Any, APIKey.integration_principal_id) == integration_principal_id]
         if status is not None:
             filters.append(cast(Any, APIKey.status) == status)
         if search:
@@ -1061,9 +1109,7 @@ class APIKeyService(BaseService[APIKey]):
         # Handle scopes separately
         if "scopes" in updates:
             # Clear existing scopes
-            stmt = sql_delete(APIKeyScope).where(
-                cast(Any, APIKeyScope.api_key_id) == key_id
-            )
+            stmt = sql_delete(APIKeyScope).where(cast(Any, APIKeyScope.api_key_id) == key_id)
             await session.execute(stmt)
 
             # Add new scopes
@@ -1074,9 +1120,7 @@ class APIKeyService(BaseService[APIKey]):
         # Handle IP whitelist separately
         if "ip_whitelist" in updates:
             # Clear existing IPs
-            stmt = sql_delete(APIKeyIPWhitelist).where(
-                cast(Any, APIKeyIPWhitelist.api_key_id) == key_id
-            )
+            stmt = sql_delete(APIKeyIPWhitelist).where(cast(Any, APIKeyIPWhitelist.api_key_id) == key_id)
             await session.execute(stmt)
 
             # Add new IPs

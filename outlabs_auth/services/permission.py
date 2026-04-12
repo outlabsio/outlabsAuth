@@ -7,7 +7,7 @@ Handles permission checking and management with PostgreSQL/SQLAlchemy:
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional, Set, Tuple, cast
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, cast
 from uuid import UUID
 
 from sqlalchemy import inspect, or_, select
@@ -889,6 +889,214 @@ class PermissionService(BaseService[Permission]):
                     all_permissions.add(perm.name)
 
         return list(all_permissions)
+
+    async def get_effective_permission_names(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        *,
+        entity_id: Optional[UUID] = None,
+        candidate_permission_names: Optional[Iterable[str]] = None,
+        user: Optional[User] = None,
+    ) -> Set[str]:
+        """
+        Project the effective permission-name set for a user in the current context.
+
+        This keeps the same non-ABAC semantics as ``check_permission`` while
+        avoiding a per-permission round-trip through the full permission check.
+        """
+        resolved_user = user
+        if resolved_user is None:
+            resolved_user = await session.get(User, user_id)
+
+        if not resolved_user:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": str(user_id)},
+            )
+
+        candidate_names = set(candidate_permission_names or await self._list_active_permission_names(session))
+        if not candidate_names:
+            return set()
+
+        if resolved_user.is_superuser:
+            return candidate_names
+
+        if getattr(self.config, "enable_abac", False):
+            granted: Set[str] = set()
+            for permission_name in candidate_names:
+                if await self.check_permission(
+                    session,
+                    user_id=user_id,
+                    permission=permission_name,
+                    entity_id=entity_id,
+                    user=resolved_user,
+                ):
+                    granted.add(permission_name)
+            return granted
+
+        target_entity_type: Optional[str] = None
+        if entity_id is not None and self.config.enable_context_aware_roles:
+            target_entity = await session.get(Entity, entity_id)
+            if target_entity is not None:
+                target_entity_type = target_entity.entity_type
+
+        if entity_id is None:
+            granted_permissions = await self._get_user_role_permissions(
+                session=session,
+                user_id=user_id,
+                include_entity_local=False,
+                entity_type=target_entity_type,
+            )
+            granted_permissions.update(
+                await self._get_entity_membership_permission_names(
+                    session=session,
+                    user_id=user_id,
+                    include_entity_local=False,
+                    entity_type=target_entity_type,
+                )
+            )
+            return {
+                permission_name
+                for permission_name in candidate_names
+                if self._permission_set_allows(permission_name, granted_permissions)
+            }
+
+        direct_permissions = await self._get_user_role_permissions(
+            session=session,
+            user_id=user_id,
+            include_entity_local=True,
+            entity_type=target_entity_type,
+        )
+        membership_direct_permissions, ancestor_permissions = (
+            await self._get_entity_context_membership_permission_names(
+                session=session,
+                user_id=user_id,
+                entity_id=entity_id,
+                entity_type=target_entity_type,
+            )
+        )
+        direct_permissions.update(membership_direct_permissions)
+
+        return {
+            permission_name
+            for permission_name in candidate_names
+            if self._permission_set_allows(permission_name, direct_permissions)
+            or self._permission_set_allows_from_ancestor(permission_name, ancestor_permissions)
+        }
+
+    async def _list_active_permission_names(
+        self,
+        session: AsyncSession,
+    ) -> List[str]:
+        stmt = (
+            select(cast(Any, Permission.name))
+            .where(cast(Any, Permission.status) == DefinitionStatus.ACTIVE)
+            .order_by(cast(Any, Permission.name).asc())
+        )
+        result = await session.execute(stmt)
+        return [row[0] for row in result.all()]
+
+    async def _get_entity_membership_permission_names(
+        self,
+        *,
+        session: AsyncSession,
+        user_id: UUID,
+        include_entity_local: bool = True,
+        entity_type: Optional[str] = None,
+    ) -> Set[str]:
+        stmt = (
+            select(EntityMembership)
+            .options(
+                *self._entity_membership_permission_options(
+                    entity_type=entity_type,
+                )
+            )
+            .where(
+                cast(Any, EntityMembership.user_id) == user_id,
+                cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
+            )
+        )
+        result = await session.execute(stmt)
+        memberships: list[EntityMembership] = list(result.scalars().all())
+
+        permissions: Set[str] = set()
+        for membership in memberships:
+            if not membership.can_grant_permissions():
+                continue
+
+            for role in membership.roles:
+                if not self._role_definition_is_live(role):
+                    continue
+                if not include_entity_local and role.scope_entity_id is not None:
+                    continue
+                permissions.update(self._get_role_permission_names_for_context(role, entity_type))
+
+        return permissions
+
+    async def _get_entity_context_membership_permission_names(
+        self,
+        *,
+        session: AsyncSession,
+        user_id: UUID,
+        entity_id: UUID,
+        entity_type: Optional[str] = None,
+    ) -> Tuple[Set[str], Set[str]]:
+        ancestors_stmt = select(
+            cast(Any, EntityClosure.ancestor_id),
+            cast(Any, EntityClosure.depth),
+        ).where(cast(Any, EntityClosure.descendant_id) == entity_id)
+        ancestors_result = await session.execute(ancestors_stmt)
+        ancestor_rows = ancestors_result.all()
+        if not ancestor_rows:
+            return set(), set()
+
+        depth_by_ancestor: Dict[UUID, int] = {cast(UUID, row[0]): int(row[1]) for row in ancestor_rows}
+        ancestor_ids = list(depth_by_ancestor.keys())
+
+        memberships_stmt = (
+            select(EntityMembership)
+            .options(
+                *self._entity_membership_permission_options(
+                    entity_type=entity_type,
+                )
+            )
+            .where(
+                cast(Any, EntityMembership.user_id) == user_id,
+                cast(Any, EntityMembership.entity_id).in_(ancestor_ids),
+                cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
+            )
+        )
+        memberships_result = await session.execute(memberships_stmt)
+        memberships: list[EntityMembership] = list(memberships_result.scalars().all())
+
+        direct_permissions: Set[str] = set()
+        ancestor_permissions: Set[str] = set()
+
+        for membership in memberships:
+            if not membership.can_grant_permissions():
+                continue
+
+            membership_depth = depth_by_ancestor.get(membership.entity_id)
+            if membership_depth is None:
+                continue
+
+            is_direct_membership = membership_depth == 0
+            target_permissions = direct_permissions if is_direct_membership else ancestor_permissions
+
+            for role in membership.roles:
+                if not self._role_definition_is_live(role):
+                    continue
+                if not self._role_can_grant_at_entity(
+                    role,
+                    membership.entity_id,
+                    entity_id,
+                    is_direct_membership,
+                ):
+                    continue
+                target_permissions.update(self._get_role_permission_names_for_context(role, entity_type))
+
+        return direct_permissions, ancestor_permissions
 
     async def _get_global_role_permissions(
         self,

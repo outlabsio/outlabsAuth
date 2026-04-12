@@ -7,7 +7,7 @@ This document is intentionally short. It is not a full project plan and it does 
 
 ## Release-Ready Auth Perf Slice
 
-This slice is now implemented locally and verified against the full repo test suite on 2026-04-12 (`703 passed`).
+This slice is now implemented locally and verified against the full repo test suite on 2026-04-12 (`710 passed`).
 
 - Reduce `/v1/users/me` from 2 queries to 1 by eager-loading `root_entity` during JWT-authenticated user resolution.
 - Reduce `/v1/roles/entity/{entity_id}` round trips by resolving entity type and ancestor chain in one query.
@@ -17,12 +17,23 @@ This slice is now implemented locally and verified against the full repo test su
 - Remove two obvious route-level N+1s:
   - `/v1/users/{id}/permissions` now batches role permission loading
   - `/v1/entities/{id}/members` now uses `get_entity_members_with_users(...)`
+- Add an API-key permission projection and batched response-shaping path for the
+  common non-ABAC case:
+  - personal `authorize_api_key(...)`: about 22 queries unanchored, 27 queries
+    for anchored tree checks
+  - self-service `/v1/api-keys/`: about 22 queries for 2 keys
+  - self-service `/v1/api-keys/grantable-scopes`: about 8 queries unanchored,
+    11 queries anchored
+  - admin inventory routes: about 12, 13, and 7 queries for the current seeded
+    single-item surfaces
 - Keep checked-in regression/query-budget coverage for:
   - `/v1/users/me`
   - `/v1/roles/entity/{entity_id}`
   - enterprise permission hot paths
   - `/v1/users/{id}/permissions`
   - `/v1/entities/{id}/members`
+  - personal API key authorization and self-service routes
+  - system integration API key authorization and admin inventory routes
 - Package this as the next auth library release instead of leaving it as repo-local optimization work.
 
 ## Bootstrap And Operator Tooling
@@ -57,9 +68,6 @@ Known hot-path areas worth another pass after the next release:
   - `/v1/entities/{id}/descendants`
 - Keep query-budget tests aligned with the real optimized route behavior.
 - Add one small, explicit maintainer benchmark note for “expected query counts on hot admin routes” so regressions are easier to spot before downstream apps feel them.
-- Add a shared cheap permission-name resolution path for embedded hosts so
-  downstream apps do not need repo-local SQL projections just to avoid the
-  heavier full permission graph-loading path on hot requests.
 - Revisit whether generic descendant scope resolution should always broaden to
   full `member_user_ids`, or whether member-user projection should become
   opt-in/lazy for hosts that only need entity scope first.
@@ -100,6 +108,11 @@ Known hot-path areas worth another pass after the next release:
   - `check_permission(...)` entity-direct: 8 queries after the lean loader path
   - `check_permission(...)` ancestor-tree grant: 8 queries after the lean loader path
   - `get_user_permissions(...)`: 7 queries after the lean loader path
+  - personal `authorize_api_key(...)` unanchored grant: about 22 queries
+  - personal `authorize_api_key(...)` anchored tree grant: about 27 queries
+  - `GET /v1/api-keys/`: about 22 queries for 2 keys
+  - `GET /v1/api-keys/grantable-scopes`: about 8 queries unanchored, 11 anchored
+  - `GET /v1/admin/entities/{id}/api-keys`: about 12 queries
   - `resolve_for_user(...)`: 5 queries, about 3-4 ms
   - `GET /v1/entities/{id}`: 1 query as superuser vs 7 queries as regular RBAC user
 - Prioritize investigation of the current fixed query tax in permission
@@ -107,8 +120,14 @@ Known hot-path areas worth another pass after the next release:
   - eager loading of role permissions, role conditions, permission conditions,
     and entity-type overrides even when ABAC/context-aware-role features are
     off
-  - separate loading of direct user-role grants and entity-membership grants
   - repeated descendant expansion during access-scope resolution
+- API-key policy no longer needs a separate repo-local permission projection
+  workaround in the common non-ABAC case; remaining API-key perf follow-ups
+  should focus on:
+  - mutation/invalidation cost after role and membership churn
+  - anchored-key denied-entity and deep-tree scaling behavior
+  - ABAC-enabled API-key grant/runtime budgets, which still intentionally fall
+    back to the slower conditioned permission path
 - Remaining route-level follow-ups should be evaluated from fresh query-budget
   output rather than the now-fixed `users/{id}/permissions` and
   `entities/{id}/members` hotspots.

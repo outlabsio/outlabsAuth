@@ -1,6 +1,6 @@
 # Current Implementation Status
 
-**Updated**: 2026-04-06
+**Updated**: 2026-04-12
 **Purpose**: Record what is already implemented in code, where implementation intentionally differs in small ways from earlier strategy docs, and which known gaps still remain.
 
 This document is a reality check for maintainers. It is not a roadmap and it is not a full changelog. When this document conflicts with older planning docs, the code and tests should be treated as the source of truth.
@@ -105,6 +105,21 @@ For short-horizon maintainer follow-ups that are known but not yet folded back i
   required permission has conditions, principal-backed API keys are denied.
 - Auth-owned API key observability now emits bounded signals for validation,
   policy denials, rate-limit hits, and lifecycle operations.
+- The common non-ABAC EnterpriseRBAC path now projects effective permission
+  names once per owner/context instead of re-running `check_permission(...)`
+  once per candidate scope in API key policy calculations.
+- Runtime effectiveness evaluation for API keys now supports a batched path so
+  list/inventory surfaces do not repeatedly reload owners, principals, anchor
+  entities, and stored scopes one key at a time.
+- The packaged API key routers now batch:
+  - scope loading
+  - IP whitelist loading
+  - derived effectiveness calculation
+  across list responses instead of doing those lookups per key.
+- Checked-in query-budget coverage now explicitly covers:
+  - personal API key authorization and self-service surfaces
+  - system integration API key authorization
+  - entity and system integration-principal inventory routes
 
 ## Accepted Implementation Nuances
 
@@ -181,8 +196,11 @@ These are intentional implementation details that are slightly more specific tha
   - `tests/integration/test_api_key_admin_endpoints.py`
   - `tests/integration/test_api_key_lifecycle.py`
   - `tests/integration/test_api_keys_router_callback_paths.py`
+  - `tests/integration/test_enterprise_api_key_query_counts.py`
+  - `tests/integration/test_enterprise_api_key_admin_query_counts.py`
   - `tests/integration/test_enterprise_api_key_policy_matrix.py`
   - `tests/unit/services/test_api_key_service.py`
+  - `tests/unit/services/test_permission_scope.py`
   - `tests/unit/test_auth_core_lifecycle.py`
   - `tests/unit/test_auth_deps_permission_sources.py`
   - `tests/unit/authentication/test_strategy.py`
@@ -198,7 +216,8 @@ These are intentional implementation details that are slightly more specific tha
   - add Playwright end-to-end coverage in `../OutlabsAuthUI` once the UI starts
     consuming the new admin and host integration surfaces
 
-- A full-suite coverage audit on 2026-03-19 now passes with `664` tests green, `85%` total Python line coverage, and no warning output.
+- The current full-suite regression baseline on 2026-04-12 passes with `710`
+  tests green and no warning output.
 - The recent lifecycle and auth-hardening slices are in comparatively good shape:
   - `services/user.py`
   - `routers/users.py`
