@@ -285,9 +285,22 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
         anchor_entity_id: Optional[UUID],
         inherit_from_tree: bool,
     ) -> None:
+        if scope_kind == IntegrationPrincipalScopeKind.PLATFORM_GLOBAL:
+            if anchor_entity_id is not None:
+                raise InvalidInputError(
+                    message="Platform-global principals cannot have an anchor entity",
+                    details={"anchor_entity_id": str(anchor_entity_id)},
+                )
+            if inherit_from_tree:
+                raise InvalidInputError(
+                    message="Platform-global principals cannot inherit from entity trees",
+                    details={"scope_kind": scope_kind.value},
+                )
+            return
+
         if not self.config.enable_entity_hierarchy:
             raise InvalidInputError(
-                message="Integration principals require EnterpriseRBAC",
+                message="Entity-scoped integration principals require EnterpriseRBAC",
                 details={"scope_kind": scope_kind.value},
             )
 
@@ -309,17 +322,6 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
                     details={"anchor_entity_id": str(anchor_entity_id)},
                 )
             return
-
-        if anchor_entity_id is not None:
-            raise InvalidInputError(
-                message="Platform-global principals cannot have an anchor entity",
-                details={"anchor_entity_id": str(anchor_entity_id)},
-            )
-        if inherit_from_tree:
-            raise InvalidInputError(
-                message="Platform-global principals cannot inherit from entity trees",
-                details={"scope_kind": scope_kind.value},
-            )
 
     async def _load_actor(
         self,

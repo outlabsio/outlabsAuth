@@ -472,9 +472,7 @@ class APIKeyPolicyService:
 
     def get_allowed_key_kinds(self) -> List[APIKeyKind]:
         """Return the key kinds available in the current implementation slice."""
-        if self.config.enable_entity_hierarchy:
-            return [APIKeyKind.PERSONAL, APIKeyKind.SYSTEM_INTEGRATION]
-        return [APIKeyKind.PERSONAL]
+        return [APIKeyKind.PERSONAL, APIKeyKind.SYSTEM_INTEGRATION]
 
     def get_personal_allowed_action_prefixes(self) -> List[str]:
         """Expose the configured action-prefix allowlist for personal keys."""
@@ -965,12 +963,6 @@ class APIKeyPolicyService:
                 details={"key_kind": key_kind.value},
             )
 
-        if not self.config.enable_entity_hierarchy:
-            raise self._policy_error(
-                "unsupported_key_kind",
-                message="System integration API keys require EnterpriseRBAC",
-                details={"key_kind": key_kind.value},
-            )
         if owner is not None:
             raise self._policy_error(
                 "invalid_owner_context",
@@ -1020,6 +1012,16 @@ class APIKeyPolicyService:
                     details={"actor_user_id": str(actor_user_id)},
                 )
             return
+
+        if not self.config.enable_entity_hierarchy:
+            raise self._policy_error(
+                "entity_scoped_system_key_unsupported",
+                message="Entity-scoped system integration API keys require EnterpriseRBAC",
+                details={
+                    "key_kind": key_kind.value,
+                    "integration_principal_id": str(integration_principal.id),
+                },
+            )
 
         if integration_principal.anchor_entity_id is None:
             raise self._policy_error(

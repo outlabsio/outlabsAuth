@@ -11,6 +11,7 @@ from outlabs_auth.fastapi import register_exception_handlers
 from outlabs_auth.routers import (
     get_api_keys_router,
     get_auth_router,
+    get_integration_principals_router,
     get_permissions_router,
     get_roles_router,
     get_users_router,
@@ -42,6 +43,9 @@ async def simple_app(simple_auth_instance: SimpleRBAC) -> FastAPI:
     app.include_router(get_roles_router(simple_auth_instance, prefix="/v1/roles"))
     app.include_router(get_permissions_router(simple_auth_instance, prefix="/v1/permissions"))
     app.include_router(get_api_keys_router(simple_auth_instance, prefix="/v1/api-keys"))
+    app.include_router(
+        get_integration_principals_router(simple_auth_instance, prefix="/v1/admin")
+    )
     return app
 
 
@@ -115,6 +119,7 @@ async def test_simple_auth_config_returns_expected_features_and_permissions(
     assert payload["features"]["abac"] is False
     assert payload["features"]["tree_permissions"] is False
     assert payload["features"]["api_keys"] is True
+    assert payload["features"]["system_api_keys"] is True
     assert payload["features"]["user_status"] is True
     assert payload["features"]["activity_tracking"] is True
     assert payload["features"]["invitations"] is True
@@ -186,6 +191,15 @@ async def test_simple_admin_ui_contract_exposes_shared_routes_and_omits_enterpri
     assert api_keys_response.status_code == 200
     assert isinstance(api_keys_response.json(), list)
 
+    integration_principals_response = await simple_client.get(
+        "/v1/admin/system/integration-principals?page=1&limit=20",
+        headers=headers,
+    )
+    assert integration_principals_response.status_code == 200
+    integration_principals_payload = integration_principals_response.json()
+    assert integration_principals_payload["items"] == []
+    assert integration_principals_payload["total"] == 0
+
     user_roles_response = await simple_client.get(
         f"/v1/users/{target_user_id}/roles",
         headers=headers,
@@ -233,7 +247,6 @@ async def test_simple_admin_ui_contract_exposes_shared_routes_and_omits_enterpri
         "/v1/entities",
         f"/v1/memberships/user/{target_user_id}?include_inactive=true",
         "/v1/config/entity-types",
-        "/v1/admin/system/integration-principals",
     ]
 
     for path in absent_enterprise_routes:

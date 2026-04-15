@@ -104,6 +104,7 @@ def get_auth_router(
             "abac": auth.config.enable_abac,
             "tree_permissions": auth.config.enable_entity_hierarchy,  # Tree permissions require hierarchy
             "api_keys": True,  # Always available
+            "system_api_keys": True,  # Platform-global system keys are available in all presets
             "user_status": True,  # Always available
             "activity_tracking": True,  # Always available
             "invitations": auth.config.enable_invitations,

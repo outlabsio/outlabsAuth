@@ -132,9 +132,9 @@ async def reset_database():
             {"name": "permission:create", "display_name": "Permission Create", "resource": "permission", "action": "create"},
             {"name": "permission:update", "display_name": "Permission Update", "resource": "permission", "action": "update"},
             # API Key permissions
-            {"name": "apikey:read", "display_name": "API Key Read", "resource": "apikey", "action": "read"},
-            {"name": "apikey:create", "display_name": "API Key Create", "resource": "apikey", "action": "create"},
-            {"name": "apikey:revoke", "display_name": "API Key Revoke", "resource": "apikey", "action": "revoke"},
+            {"name": "api_key:read", "display_name": "API Key Read", "resource": "api_key", "action": "read"},
+            {"name": "api_key:create", "display_name": "API Key Create", "resource": "api_key", "action": "create"},
+            {"name": "api_key:revoke", "display_name": "API Key Revoke", "resource": "api_key", "action": "revoke"},
             # Blog-specific permissions
             {"name": "post:read", "display_name": "Post Read", "resource": "post", "action": "read"},
             {"name": "post:create", "display_name": "Post Create", "resource": "post", "action": "create"},
@@ -220,9 +220,9 @@ async def reset_database():
                     "permission:read",
                     "permission:create",
                     "permission:update",
-                    "apikey:read",
-                    "apikey:create",
-                    "apikey:revoke",
+                    "api_key:read",
+                    "api_key:create",
+                    "api_key:revoke",
                 ],
             },
         ]
