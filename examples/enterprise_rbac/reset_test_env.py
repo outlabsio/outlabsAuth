@@ -503,6 +503,19 @@ async def reset_database():
                 "description": "Full system access.",
                 "permission_names": list(permissions_map.keys()),
             },
+            {
+                "name": "service_reader",
+                "display_name": "Service Reader",
+                "description": "Machine-safe global role for service accounts and system API keys.",
+                "permission_names": [
+                    "entity:read",
+                    "entity:read_tree",
+                    "membership:read",
+                    "membership:read_tree",
+                    "user:read",
+                    "user:read_tree",
+                ],
+            },
         ]
 
         for role_data in base_roles_data:

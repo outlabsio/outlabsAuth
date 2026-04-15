@@ -764,7 +764,13 @@ class OutlabsAuth:
         user = resolved_owner.user if hasattr(resolved_owner, "user") else resolved_owner.get("user")
         owner_id = resolved_owner.owner_id if hasattr(resolved_owner, "owner_id") else resolved_owner.get("owner_id")
         if principal is not None:
-            metadata["principal_allowed_scopes"] = list(principal.allowed_scopes)
+            if self.api_key_policy_service is not None:
+                metadata["principal_allowed_scopes"] = await self.api_key_policy_service.resolve_integration_principal_effective_scopes(
+                    session,
+                    principal,
+                )
+            else:
+                metadata["principal_allowed_scopes"] = list(principal.allowed_scopes)
         if self.api_key_policy_service is not None:
             effectiveness = await self.api_key_policy_service.evaluate_effectiveness(
                 session,

@@ -327,6 +327,14 @@ async def create_default_roles():
             ],
         },
         {
+            "name": "service_reader",
+            "display_name": "Service Reader",
+            "description": "Minimal machine-access role for service accounts.",
+            "permissions": [
+                "user:read",
+            ],
+        },
+        {
             "name": "admin",
             "display_name": "Administrator",
             "description": "Full administrative control",

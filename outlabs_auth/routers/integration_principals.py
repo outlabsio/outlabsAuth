@@ -52,7 +52,23 @@ def get_integration_principals_router(
             )
         return UUID(str(raw_user_id))
 
-    async def _to_principal_response(principal) -> IntegrationPrincipalResponse:
+    def _parse_role_ids(raw_role_ids: Optional[list[str]]) -> list[UUID]:
+        try:
+            return [UUID(str(role_id)) for role_id in (raw_role_ids or [])]
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role ID") from exc
+
+    async def _to_principal_response(
+        session: AsyncSession,
+        principal,
+    ) -> IntegrationPrincipalResponse:
+        if auth.api_key_policy_service is not None:
+            effective_allowed_scopes = await auth.api_key_policy_service.resolve_integration_principal_effective_scopes(
+                session,
+                principal,
+            )
+        else:
+            effective_allowed_scopes = list(principal.allowed_scopes or [])
         return IntegrationPrincipalResponse(
             id=str(principal.id),
             name=principal.name,
@@ -62,6 +78,8 @@ def get_integration_principals_router(
             anchor_entity_id=str(principal.anchor_entity_id) if principal.anchor_entity_id else None,
             inherit_from_tree=principal.inherit_from_tree,
             allowed_scopes=list(principal.allowed_scopes or []),
+            effective_allowed_scopes=effective_allowed_scopes,
+            role_ids=[str(role.id) for role in (principal.roles or [])],
             created_by_user_id=str(principal.created_by_user_id) if principal.created_by_user_id else None,
             created_at=principal.created_at,
             updated_at=principal.updated_at,
@@ -115,7 +133,7 @@ def get_integration_principals_router(
         )
         pages = (total + limit - 1) // limit if total > 0 else 0
         return PaginatedResponse(
-            items=[await _to_principal_response(principal) for principal in principals],
+            items=[await _to_principal_response(session, principal) for principal in principals],
             total=total,
             page=page,
             limit=limit,
@@ -144,11 +162,12 @@ def get_integration_principals_router(
                 anchor_entity_id=entity_id,
                 inherit_from_tree=data.inherit_from_tree,
                 allowed_scopes=data.allowed_scopes,
+                role_ids=_parse_role_ids(data.role_ids),
                 created_by_user_id=actor_user_id,
             )
         except InvalidInputError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.message) from exc
-        return await _to_principal_response(principal)
+        return await _to_principal_response(session, principal)
 
     @router.get(
         "/entities/{entity_id}/integration-principals/{principal_id}",
@@ -163,7 +182,7 @@ def get_integration_principals_router(
     ):
         del auth_result
         principal = await _get_entity_principal(session, entity_id, principal_id)
-        return await _to_principal_response(principal)
+        return await _to_principal_response(session, principal)
 
     @router.patch(
         "/entities/{entity_id}/integration-principals/{principal_id}",
@@ -178,18 +197,21 @@ def get_integration_principals_router(
         auth_result=Depends(auth.require_tree_permission("api_key:update", "entity_id", source="path")),
     ):
         await _get_entity_principal(session, entity_id, principal_id)
+        payload = data.model_dump(exclude_unset=True)
+        if "role_ids" in payload:
+            payload["role_ids"] = _parse_role_ids(payload["role_ids"])
         try:
             principal = await auth.integration_principal_service.update_principal(
                 session,
                 principal_id,
                 actor_user_id=_actor_user_id(auth_result),
-                **data.model_dump(exclude_unset=True),
+                **payload,
             )
         except InvalidInputError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.message) from exc
         if principal is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Integration principal not found")
-        return await _to_principal_response(principal)
+        return await _to_principal_response(session, principal)
 
     @router.delete(
         "/entities/{entity_id}/integration-principals/{principal_id}",
@@ -400,7 +422,7 @@ def get_integration_principals_router(
         )
         pages = (total + limit - 1) // limit if total > 0 else 0
         return PaginatedResponse(
-            items=[await _to_principal_response(principal) for principal in principals],
+            items=[await _to_principal_response(session, principal) for principal in principals],
             total=total,
             page=page,
             limit=limit,
@@ -427,11 +449,12 @@ def get_integration_principals_router(
                 anchor_entity_id=None,
                 inherit_from_tree=False,
                 allowed_scopes=data.allowed_scopes,
+                role_ids=_parse_role_ids(data.role_ids),
                 created_by_user_id=_actor_user_id(auth_result),
             )
         except InvalidInputError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.message) from exc
-        return await _to_principal_response(principal)
+        return await _to_principal_response(session, principal)
 
     @router.get(
         "/system/integration-principals/{principal_id}",
@@ -445,7 +468,7 @@ def get_integration_principals_router(
     ):
         del auth_result
         principal = await _get_system_principal(session, principal_id)
-        return await _to_principal_response(principal)
+        return await _to_principal_response(session, principal)
 
     @router.patch(
         "/system/integration-principals/{principal_id}",
@@ -459,18 +482,21 @@ def get_integration_principals_router(
         auth_result=Depends(auth.deps.require_superuser()),
     ):
         await _get_system_principal(session, principal_id)
+        payload = data.model_dump(exclude_unset=True)
+        if "role_ids" in payload:
+            payload["role_ids"] = _parse_role_ids(payload["role_ids"])
         try:
             principal = await auth.integration_principal_service.update_principal(
                 session,
                 principal_id,
                 actor_user_id=_actor_user_id(auth_result),
-                **data.model_dump(exclude_unset=True),
+                **payload,
             )
         except InvalidInputError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.message) from exc
         if principal is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Integration principal not found")
-        return await _to_principal_response(principal)
+        return await _to_principal_response(session, principal)
 
     @router.delete(
         "/system/integration-principals/{principal_id}",
@@ -670,7 +696,23 @@ def _get_platform_global_integration_principals_router(
             )
         return UUID(str(raw_user_id))
 
-    async def _to_principal_response(principal) -> IntegrationPrincipalResponse:
+    def _parse_role_ids(raw_role_ids: Optional[list[str]]) -> list[UUID]:
+        try:
+            return [UUID(str(role_id)) for role_id in (raw_role_ids or [])]
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role ID") from exc
+
+    async def _to_principal_response(
+        session: AsyncSession,
+        principal,
+    ) -> IntegrationPrincipalResponse:
+        if auth.api_key_policy_service is not None:
+            effective_allowed_scopes = await auth.api_key_policy_service.resolve_integration_principal_effective_scopes(
+                session,
+                principal,
+            )
+        else:
+            effective_allowed_scopes = list(principal.allowed_scopes or [])
         return IntegrationPrincipalResponse(
             id=str(principal.id),
             name=principal.name,
@@ -680,6 +722,8 @@ def _get_platform_global_integration_principals_router(
             anchor_entity_id=str(principal.anchor_entity_id) if principal.anchor_entity_id else None,
             inherit_from_tree=principal.inherit_from_tree,
             allowed_scopes=list(principal.allowed_scopes or []),
+            effective_allowed_scopes=effective_allowed_scopes,
+            role_ids=[str(role.id) for role in (principal.roles or [])],
             created_by_user_id=str(principal.created_by_user_id) if principal.created_by_user_id else None,
             created_at=principal.created_at,
             updated_at=principal.updated_at,
@@ -721,7 +765,7 @@ def _get_platform_global_integration_principals_router(
         )
         pages = (total + limit - 1) // limit if total > 0 else 0
         return PaginatedResponse(
-            items=[await _to_principal_response(principal) for principal in principals],
+            items=[await _to_principal_response(session, principal) for principal in principals],
             total=total,
             page=page,
             limit=limit,
@@ -748,11 +792,12 @@ def _get_platform_global_integration_principals_router(
                 anchor_entity_id=None,
                 inherit_from_tree=False,
                 allowed_scopes=data.allowed_scopes,
+                role_ids=_parse_role_ids(data.role_ids),
                 created_by_user_id=_actor_user_id(auth_result),
             )
         except InvalidInputError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.message) from exc
-        return await _to_principal_response(principal)
+        return await _to_principal_response(session, principal)
 
     @router.get(
         "/system/integration-principals/{principal_id}",
@@ -766,7 +811,7 @@ def _get_platform_global_integration_principals_router(
     ):
         del auth_result
         principal = await _get_system_principal(session, principal_id)
-        return await _to_principal_response(principal)
+        return await _to_principal_response(session, principal)
 
     @router.patch(
         "/system/integration-principals/{principal_id}",
@@ -780,18 +825,21 @@ def _get_platform_global_integration_principals_router(
         auth_result=Depends(auth.deps.require_superuser()),
     ):
         await _get_system_principal(session, principal_id)
+        payload = data.model_dump(exclude_unset=True)
+        if "role_ids" in payload:
+            payload["role_ids"] = _parse_role_ids(payload["role_ids"])
         try:
             principal = await auth.integration_principal_service.update_principal(
                 session,
                 principal_id,
                 actor_user_id=_actor_user_id(auth_result),
-                **data.model_dump(exclude_unset=True),
+                **payload,
             )
         except InvalidInputError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.message) from exc
         if principal is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Integration principal not found")
-        return await _to_principal_response(principal)
+        return await _to_principal_response(session, principal)
 
     @router.delete(
         "/system/integration-principals/{principal_id}",

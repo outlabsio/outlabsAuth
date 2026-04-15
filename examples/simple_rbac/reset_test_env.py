@@ -198,6 +198,14 @@ async def reset_database():
                 ],
             },
             {
+                "name": "service_reader",
+                "display_name": "Service Reader",
+                "description": "Minimal machine-access role for service accounts.",
+                "permissions": [
+                    "user:read",
+                ],
+            },
+            {
                 "name": "admin",
                 "display_name": "Administrator",
                 "description": "Full system access",

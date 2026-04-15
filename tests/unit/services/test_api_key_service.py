@@ -742,6 +742,65 @@ async def test_integration_principal_service_denies_cross_root_creation(
 
 
 @pytest.mark.unit
+@pytest.mark.asyncio
+async def test_role_backed_integration_principal_derives_effective_scopes(
+    test_session,
+):
+    simple_config = AuthConfig(
+        database_url="postgresql+asyncpg://example:example@localhost:5432/test",
+        secret_key="test-secret",
+        enable_entity_hierarchy=False,
+    )
+    permission_service = PermissionService(config=simple_config)
+    policy_service = APIKeyPolicyService(config=simple_config, permission_service=permission_service)
+    principal_service = IntegrationPrincipalService(config=simple_config, policy_service=policy_service)
+    role_service = RoleService(config=simple_config)
+    user_service = UserService(config=simple_config)
+
+    actor = await user_service.create_user(
+        test_session,
+        email="role-backed-principal@example.com",
+        password="TestPass123!",
+        first_name="Role",
+        last_name="Backed",
+        is_superuser=True,
+    )
+    await permission_service.create_permission(
+        test_session,
+        name="agent:read",
+        display_name="Agent Read",
+        description="Role-backed integration principal permission",
+    )
+    scraper_role = await role_service.create_role(
+        test_session,
+        name="scraper-worker-role",
+        display_name="Scraper Worker",
+        description="Global worker role",
+        permission_names=["agent:read"],
+    )
+
+    principal = await principal_service.create_principal(
+        test_session,
+        name="Scraping Workers",
+        description="Platform-global scraper service account",
+        scope_kind=IntegrationPrincipalScopeKind.PLATFORM_GLOBAL,
+        anchor_entity_id=None,
+        inherit_from_tree=False,
+        allowed_scopes=[],
+        role_ids=[scraper_role.id],
+        created_by_user_id=actor.id,
+    )
+
+    assert [role.id for role in principal.roles] == [scraper_role.id]
+    assert principal.allowed_scopes == []
+    effective_scopes = await policy_service.resolve_integration_principal_effective_scopes(
+        test_session,
+        principal,
+    )
+    assert effective_scopes == ["agent:read"]
+
+
+@pytest.mark.unit
 def test_integration_principal_model_normalizes_string_backed_enum_fields():
     principal = IntegrationPrincipal(
         name="String Backed Principal",

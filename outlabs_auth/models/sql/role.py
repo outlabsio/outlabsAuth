@@ -18,9 +18,11 @@ from sqlmodel import Field, Relationship, SQLModel
 from outlabs_auth.database.base import BaseModel
 
 from .enums import ConditionOperator, DefinitionStatus, RoleScope
+from .integration_principal import IntegrationPrincipalRole
 
 if TYPE_CHECKING:
     from .entity import Entity
+    from .integration_principal import IntegrationPrincipal
     from .permission import Permission
     from .user_role_membership import UserRoleMembership
 
@@ -329,6 +331,10 @@ class Role(BaseModel, table=True):
         sa_relationship_kwargs={"foreign_keys": "[Role.scope_entity_id]"},
     )
     user_memberships: List["UserRoleMembership"] = Relationship(back_populates="role")
+    integration_principals: List["IntegrationPrincipal"] = Relationship(
+        back_populates="roles",
+        link_model=IntegrationPrincipalRole,
+    )
 
     # Permissions via junction table
     permissions: List["Permission"] = Relationship(

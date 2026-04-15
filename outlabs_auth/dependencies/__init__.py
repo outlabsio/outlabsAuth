@@ -495,15 +495,6 @@ class AuthDeps:
 
         signature = self._get_dependency_signature()
 
-        def _tree_permission_name(permission_name: str) -> str:
-            if permission_name in {"*", "*:*"} or ":" not in permission_name:
-                return permission_name
-
-            resource, action = permission_name.split(":", 1)
-            if action == "*" or action.endswith("_tree") or action.endswith("_all"):
-                return permission_name
-            return f"{resource}:{action}_tree"
-
         def _parse_uuid_optional(raw: Any, *, invalid_detail: str) -> Optional[UUID]:
             if raw is None or raw == "":
                 return None
@@ -560,10 +551,6 @@ class AuthDeps:
                 raw_entity_id, invalid_detail=f"Invalid {entity_id_field}"
             )
 
-            required_permission = (
-                _tree_permission_name(permission) if entity_id is not None else permission
-            )
-
             resource_context = None
             env_context = None
             if abac_enabled:
@@ -581,7 +568,7 @@ class AuthDeps:
             has_perm = await self._auth_result_has_permission(
                 auth_result=auth_result,
                 session=session,
-                permission=required_permission,
+                permission=permission,
                 entity_id=entity_id,
                 resource_context=resource_context,
                 env_context=env_context,

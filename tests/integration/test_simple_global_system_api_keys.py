@@ -53,6 +53,7 @@ async def test_simple_rbac_supports_platform_global_system_keys(
     simple_auth_with_global_keys: SimpleRBAC,
 ):
     assert simple_auth_with_global_keys.permission_service is not None
+    assert simple_auth_with_global_keys.role_service is not None
     assert simple_auth_with_global_keys.user_service is not None
     assert simple_auth_with_global_keys.api_key_service is not None
 
@@ -62,6 +63,13 @@ async def test_simple_rbac_supports_platform_global_system_keys(
             name="agent:read",
             display_name="Agent Read",
             description="Read agents for worker automation.",
+        )
+        scraper_role = await simple_auth_with_global_keys.role_service.create_role(
+            session,
+            name=f"scraper-worker-{uuid.uuid4().hex[:8]}",
+            display_name="Scraper Worker",
+            description="Global worker role for scraper traffic.",
+            permission_names=["agent:read"],
         )
         superuser = await simple_auth_with_global_keys.user_service.create_user(
             session=session,
@@ -81,7 +89,7 @@ async def test_simple_rbac_supports_platform_global_system_keys(
             json={
                 "name": "Scraping Workers",
                 "description": "Global worker principal for scraper traffic.",
-                "allowed_scopes": ["agent:read"],
+                "role_ids": [str(scraper_role.id)],
             },
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -91,7 +99,9 @@ async def test_simple_rbac_supports_platform_global_system_keys(
         principal_id = principal_payload["id"]
         assert principal_payload["scope_kind"] == "platform_global"
         assert principal_payload["anchor_entity_id"] is None
-        assert principal_payload["allowed_scopes"] == ["agent:read"]
+        assert principal_payload["allowed_scopes"] == []
+        assert principal_payload["effective_allowed_scopes"] == ["agent:read"]
+        assert principal_payload["role_ids"] == [str(scraper_role.id)]
 
         api_key_response = await client.post(
             f"/v1/admin/system/integration-principals/{principal_id}/api-keys",

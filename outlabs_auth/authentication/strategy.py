@@ -239,6 +239,7 @@ class ApiKeyStrategy:
             return None
 
         try:
+            api_key_policy_service = kwargs.get("api_key_policy_service")
             client_ip = None
             if request is not None and getattr(request, "client", None):
                 client_ip = getattr(request.client, "host", None)
@@ -298,7 +299,13 @@ class ApiKeyStrategy:
                 user = resolved_owner.user if hasattr(resolved_owner, "user") else resolved_owner.get("user")
                 owner_id = resolved_owner.owner_id if hasattr(resolved_owner, "owner_id") else resolved_owner.get("owner_id")
                 if principal is not None:
-                    metadata["principal_allowed_scopes"] = list(principal.allowed_scopes)
+                    if api_key_policy_service is not None:
+                        metadata["principal_allowed_scopes"] = await api_key_policy_service.resolve_integration_principal_effective_scopes(
+                            session,
+                            principal,
+                        )
+                    else:
+                        metadata["principal_allowed_scopes"] = list(principal.allowed_scopes)
 
                 if user is not None:
                     return {

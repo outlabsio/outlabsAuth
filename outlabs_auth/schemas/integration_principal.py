@@ -14,6 +14,7 @@ class IntegrationPrincipalCreateRequest(BaseModel):
     name: str = Field(..., description="Human-readable principal name")
     description: Optional[str] = Field(default=None, description="Optional description")
     allowed_scopes: List[str] = Field(default_factory=list, description="Maximum scopes this principal may delegate")
+    role_ids: List[str] = Field(default_factory=list, description="Role IDs assigned to this principal")
     inherit_from_tree: bool = Field(
         default=False,
         description="Whether entity-scoped principals may access descendant entities",
@@ -27,6 +28,7 @@ class IntegrationPrincipalUpdateRequest(BaseModel):
     description: Optional[str] = None
     status: Optional[IntegrationPrincipalStatus] = None
     allowed_scopes: Optional[List[str]] = None
+    role_ids: Optional[List[str]] = None
     inherit_from_tree: Optional[bool] = None
 
 
@@ -41,6 +43,8 @@ class IntegrationPrincipalResponse(BaseModel):
     anchor_entity_id: Optional[str] = None
     inherit_from_tree: bool
     allowed_scopes: List[str]
+    effective_allowed_scopes: List[str] = Field(default_factory=list)
+    role_ids: List[str] = Field(default_factory=list)
     created_by_user_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime

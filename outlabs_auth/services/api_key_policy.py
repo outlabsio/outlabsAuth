@@ -27,7 +27,7 @@ from outlabs_auth.models.sql.enums import (
     DefinitionStatus,
     IntegrationPrincipalScopeKind,
 )
-from outlabs_auth.models.sql.integration_principal import IntegrationPrincipal
+from outlabs_auth.models.sql.integration_principal import IntegrationPrincipal, IntegrationPrincipalRole
 from outlabs_auth.models.sql.permission import Permission
 from outlabs_auth.models.sql.user import User
 
@@ -293,7 +293,11 @@ class APIKeyPolicyService:
                 return False
             from outlabs_auth.services.api_key import APIKeyService
 
-            return APIKeyService.scopes_allow_permission(principal.allowed_scopes, required_scope)
+            principal_allowed_scopes = await self.resolve_integration_principal_effective_scopes(
+                session,
+                principal,
+            )
+            return APIKeyService.scopes_allow_permission(principal_allowed_scopes, required_scope)
 
         if self.permission_service is None or api_key.owner_id is None:
             return True
@@ -377,6 +381,14 @@ class APIKeyPolicyService:
         from outlabs_auth.services.api_key import APIKeyService
 
         owner_grantable_scope_cache: Dict[tuple[UUID, APIKeyKind, Optional[UUID], bool], List[str]] = {}
+        principal_effective_scopes_by_id = (
+            await self.resolve_integration_principals_effective_scopes_map(
+                session,
+                principals_by_id.values(),
+            )
+            if principals_by_id
+            else {}
+        )
         results: Dict[UUID, APIKeyEffectivenessResult] = {}
 
         for api_key in api_keys:
@@ -430,7 +442,7 @@ class APIKeyPolicyService:
             stored_scopes = resolved_scopes_by_key_id.get(api_key.id, [])
 
             if principal is not None:
-                owner_grantable_scopes = list(principal.allowed_scopes or [])
+                owner_grantable_scopes = list(principal_effective_scopes_by_id.get(principal.id, []))
             else:
                 if owner is None:
                     results[api_key.id] = APIKeyEffectivenessResult(
@@ -469,6 +481,108 @@ class APIKeyPolicyService:
             )
 
         return results
+
+    async def load_integration_principal_role_ids_map(
+        self,
+        session: AsyncSession,
+        principal_ids: Iterable[UUID],
+    ) -> Dict[UUID, List[UUID]]:
+        """Load assigned role IDs for one or more integration principals."""
+        unique_principal_ids = list(dict.fromkeys(principal_ids))
+        if not unique_principal_ids:
+            return {}
+
+        stmt = (
+            select(
+                cast(Any, IntegrationPrincipalRole.integration_principal_id),
+                cast(Any, IntegrationPrincipalRole.role_id),
+            )
+            .where(cast(Any, IntegrationPrincipalRole.integration_principal_id).in_(unique_principal_ids))
+            .order_by(
+                cast(Any, IntegrationPrincipalRole.integration_principal_id),
+                cast(Any, IntegrationPrincipalRole.role_id),
+            )
+        )
+        result = await session.execute(stmt)
+
+        role_ids_by_principal_id: Dict[UUID, List[UUID]] = {principal_id: [] for principal_id in unique_principal_ids}
+        for principal_id, role_id in result.all():
+            role_ids_by_principal_id.setdefault(cast(UUID, principal_id), []).append(cast(UUID, role_id))
+
+        return role_ids_by_principal_id
+
+    async def resolve_effective_scopes_for_assignments(
+        self,
+        session: AsyncSession,
+        *,
+        role_ids: List[UUID],
+        legacy_allowed_scopes: List[str],
+    ) -> List[str]:
+        """Resolve effective system scopes from assigned roles plus compatibility scopes."""
+        normalized_legacy_scopes = sorted({scope for scope in legacy_allowed_scopes if scope})
+        unique_role_ids = list(dict.fromkeys(role_ids))
+        if not unique_role_ids or self.permission_service is None:
+            return normalized_legacy_scopes
+
+        permissions_by_role_id = await self.permission_service.get_permissions_for_roles(
+            session,
+            unique_role_ids,
+        )
+
+        effective_scopes = set(normalized_legacy_scopes)
+        for permissions in permissions_by_role_id.values():
+            for permission in permissions:
+                if permission.name:
+                    effective_scopes.add(permission.name)
+
+        return sorted(effective_scopes)
+
+    async def resolve_integration_principals_effective_scopes_map(
+        self,
+        session: AsyncSession,
+        principals: Iterable[IntegrationPrincipal],
+    ) -> Dict[UUID, List[str]]:
+        """Resolve effective scopes for multiple principals in one pass."""
+        principal_list = list(principals)
+        if not principal_list:
+            return {}
+
+        role_ids_by_principal_id = await self.load_integration_principal_role_ids_map(
+            session,
+            [principal.id for principal in principal_list],
+        )
+        all_role_ids = list(
+            dict.fromkeys(role_id for role_ids in role_ids_by_principal_id.values() for role_id in role_ids)
+        )
+        permissions_by_role_id = (
+            await self.permission_service.get_permissions_for_roles(session, all_role_ids)
+            if all_role_ids and self.permission_service is not None
+            else {}
+        )
+
+        scopes_by_principal_id: Dict[UUID, List[str]] = {}
+        for principal in principal_list:
+            effective_scopes = set(scope for scope in (principal.allowed_scopes or []) if scope)
+            for role_id in role_ids_by_principal_id.get(principal.id, []):
+                for permission in permissions_by_role_id.get(role_id, []):
+                    if permission.name:
+                        effective_scopes.add(permission.name)
+            scopes_by_principal_id[principal.id] = sorted(effective_scopes)
+
+        return scopes_by_principal_id
+
+    async def resolve_integration_principal_effective_scopes(
+        self,
+        session: AsyncSession,
+        principal: IntegrationPrincipal,
+    ) -> List[str]:
+        """Resolve the effective scope envelope for a single integration principal."""
+        return (
+            await self.resolve_integration_principals_effective_scopes_map(
+                session,
+                [principal],
+            )
+        ).get(principal.id, [])
 
     def get_allowed_key_kinds(self) -> List[APIKeyKind]:
         """Return the key kinds available in the current implementation slice."""
@@ -700,10 +814,13 @@ class APIKeyPolicyService:
         allowed_scopes: List[str],
         anchor_entity_id: Optional[UUID],
         scope_kind: IntegrationPrincipalScopeKind,
+        allow_empty: bool = False,
     ) -> List[str]:
         """Validate a principal scope envelope against actor authority and allowlists."""
         normalized_scopes = sorted({scope for scope in allowed_scopes if scope})
         if not normalized_scopes:
+            if allow_empty:
+                return []
             raise self._policy_error(
                 "explicit_scopes_required",
                 message="Integration principals require at least one explicit scope",
@@ -760,28 +877,35 @@ class APIKeyPolicyService:
                     "integration_principal_required",
                     message="System integration API keys require an integration principal owner",
                 )
-            if not scopes:
-                raise self._policy_error(
-                    "explicit_scopes_required",
-                    message="System integration API keys require at least one explicit scope",
-                )
             if actor_user_id is None:
                 raise self._policy_error(
                     "actor_required",
                     message="System integration API keys require an acting user",
                 )
 
+            principal_allowed_scopes = await self.resolve_integration_principal_effective_scopes(
+                session,
+                integration_principal,
+            )
+            requested_scopes = list(scopes) if scopes else principal_allowed_scopes
+            if not requested_scopes:
+                raise self._policy_error(
+                    "principal_has_no_effective_scopes",
+                    message="System integration principals must have at least one effective permission before minting keys",
+                    details={"integration_principal_id": str(integration_principal.id)},
+                )
+
             normalized_scopes = await self.validate_integration_principal_allowed_scopes(
                 session,
                 actor_user_id=actor_user_id,
-                allowed_scopes=list(scopes),
+                allowed_scopes=requested_scopes,
                 anchor_entity_id=integration_principal.anchor_entity_id,
                 scope_kind=integration_principal.scope_kind,
             )
             from outlabs_auth.services.api_key import APIKeyService
 
             for scope in normalized_scopes:
-                if not APIKeyService.scopes_allow_permission(integration_principal.allowed_scopes, scope):
+                if not APIKeyService.scopes_allow_permission(principal_allowed_scopes, scope):
                     raise self._policy_error(
                         "principal_scope_exceeded",
                         message="Requested scope exceeds the integration principal's allowed scopes",

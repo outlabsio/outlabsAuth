@@ -10,7 +10,7 @@ from uuid import UUID
 from sqlalchemy import Boolean, Column, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlmodel import Field, Relationship
+from sqlmodel import Field, Relationship, SQLModel
 
 from outlabs_auth.database.base import BaseModel
 
@@ -19,7 +19,33 @@ from .enums import IntegrationPrincipalScopeKind, IntegrationPrincipalStatus
 if TYPE_CHECKING:
     from .api_key import APIKey
     from .entity import Entity
+    from .role import Role
     from .user import User
+
+
+class IntegrationPrincipalRole(SQLModel, table=True):
+    """Junction table linking integration principals to roles."""
+
+    __tablename__ = "integration_principal_roles"
+    __table_args__ = (
+        Index("ix_integration_principal_roles_principal_id", "integration_principal_id"),
+        Index("ix_integration_principal_roles_role_id", "role_id"),
+    )
+
+    integration_principal_id: UUID = Field(
+        sa_column=Column(
+            PG_UUID(as_uuid=True),
+            ForeignKey("integration_principals.id", ondelete="CASCADE"),
+            primary_key=True,
+        ),
+    )
+    role_id: UUID = Field(
+        sa_column=Column(
+            PG_UUID(as_uuid=True),
+            ForeignKey("roles.id", ondelete="CASCADE"),
+            primary_key=True,
+        ),
+    )
 
 
 class IntegrationPrincipal(BaseModel, table=True):
@@ -97,6 +123,10 @@ class IntegrationPrincipal(BaseModel, table=True):
     created_by_user: Optional["User"] = Relationship(
         back_populates="created_integration_principals",
         sa_relationship_kwargs={"foreign_keys": "[IntegrationPrincipal.created_by_user_id]"},
+    )
+    roles: List["Role"] = Relationship(
+        back_populates="integration_principals",
+        link_model=IntegrationPrincipalRole,
     )
 
     @property

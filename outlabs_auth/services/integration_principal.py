@@ -9,14 +9,20 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, List, Optional, cast
 from uuid import UUID
 
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import InvalidInputError, UserNotFoundError
 from outlabs_auth.models.sql.entity import Entity
-from outlabs_auth.models.sql.enums import IntegrationPrincipalScopeKind, IntegrationPrincipalStatus
+from outlabs_auth.models.sql.enums import (
+    DefinitionStatus,
+    IntegrationPrincipalScopeKind,
+    IntegrationPrincipalStatus,
+)
 from outlabs_auth.models.sql.integration_principal import IntegrationPrincipal
+from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.services.base import BaseService
 
@@ -43,13 +49,23 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
         self.api_key_service = api_key_service
         self.observability = observability
 
+    @staticmethod
+    def _principal_loader_options() -> list[Any]:
+        return [
+            selectinload(cast(Any, IntegrationPrincipal.roles)).selectinload(cast(Any, Role.permissions)),
+        ]
+
     async def get_principal(
         self,
         session: AsyncSession,
         principal_id: UUID,
     ) -> Optional[IntegrationPrincipal]:
         """Get one integration principal by ID."""
-        return await self.get_by_id(session, principal_id)
+        return await self.get_by_id(
+            session,
+            principal_id,
+            options=self._principal_loader_options(),
+        )
 
     async def list_principals(
         self,
@@ -92,6 +108,7 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
             skip=(page - 1) * limit,
             limit=limit,
             order_by=created_at_col.desc(),
+            options=self._principal_loader_options(),
         )
         return principals, total
 
@@ -105,25 +122,39 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
         anchor_entity_id: Optional[UUID],
         inherit_from_tree: bool,
         allowed_scopes: List[str],
+        role_ids: Optional[List[UUID]] = None,
         created_by_user_id: Optional[UUID],
     ) -> IntegrationPrincipal:
         """Create a new principal after validating scope and grant rules."""
         actor = await self._load_actor(session, created_by_user_id)
-        normalized_scopes = self._normalize_scopes(allowed_scopes)
+        normalized_scopes = self._normalize_scopes(allowed_scopes, allow_empty=True)
+        normalized_role_ids = self._normalize_role_ids(role_ids)
         await self._validate_scope_context(
             session,
             scope_kind=scope_kind,
             anchor_entity_id=anchor_entity_id,
             inherit_from_tree=inherit_from_tree,
         )
+        roles = await self._load_roles(session, normalized_role_ids)
+        self._validate_role_assignments(
+            roles,
+            scope_kind=scope_kind,
+            anchor_entity_id=anchor_entity_id,
+        )
+        effective_scopes = await self._resolve_effective_scopes(
+            session,
+            roles=roles,
+            legacy_allowed_scopes=normalized_scopes,
+        )
 
         if self.policy_service is not None and created_by_user_id is not None:
-            normalized_scopes = await self.policy_service.validate_integration_principal_allowed_scopes(
+            effective_scopes = await self.policy_service.validate_integration_principal_allowed_scopes(
                 session,
                 actor_user_id=created_by_user_id,
-                allowed_scopes=normalized_scopes,
+                allowed_scopes=effective_scopes,
                 anchor_entity_id=anchor_entity_id,
                 scope_kind=scope_kind,
+                allow_empty=True,
             )
 
         principal = IntegrationPrincipal(
@@ -136,9 +167,11 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
             allowed_scopes=normalized_scopes,
             created_by_user_id=created_by_user_id,
         )
+        principal.roles = roles
         session.add(principal)
         await session.flush()
         await session.refresh(principal)
+        principal = cast(IntegrationPrincipal, await self.get_principal(session, principal.id))
 
         if self.observability is not None:
             self.observability.log_api_key_lifecycle(
@@ -153,7 +186,7 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
                 entity_scoped=bool(principal.anchor_entity_id),
                 event_source="integration_principal_service.create_principal",
                 scope_kind=principal.scope_kind_enum.value,
-                allowed_scopes=principal.allowed_scopes,
+                allowed_scopes=effective_scopes,
                 actor_superuser=actor.is_superuser if actor is not None else None,
             )
 
@@ -169,6 +202,7 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
         description: Optional[str] = None,
         status: Optional[IntegrationPrincipalStatus] = None,
         allowed_scopes: Optional[List[str]] = None,
+        role_ids: Optional[List[UUID]] = None,
         inherit_from_tree: Optional[bool] = None,
     ) -> Optional[IntegrationPrincipal]:
         """Update mutable principal fields and enforce lifecycle side effects."""
@@ -191,17 +225,39 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
                 )
             principal.inherit_from_tree = inherit_from_tree
 
+        normalized_scopes = (
+            self._normalize_scopes(allowed_scopes, allow_empty=True)
+            if allowed_scopes is not None
+            else list(principal.allowed_scopes or [])
+        )
+        roles = (
+            await self._load_roles(session, self._normalize_role_ids(role_ids))
+            if role_ids is not None
+            else list(principal.roles or [])
+        )
+        self._validate_role_assignments(
+            roles,
+            scope_kind=principal.scope_kind_enum,
+            anchor_entity_id=principal.anchor_entity_id,
+        )
+        effective_scopes = await self._resolve_effective_scopes(
+            session,
+            roles=roles,
+            legacy_allowed_scopes=normalized_scopes,
+        )
+        if self.policy_service is not None and actor_user_id is not None:
+            effective_scopes = await self.policy_service.validate_integration_principal_allowed_scopes(
+                session,
+                actor_user_id=actor_user_id,
+                allowed_scopes=effective_scopes,
+                anchor_entity_id=principal.anchor_entity_id,
+                scope_kind=principal.scope_kind_enum,
+                allow_empty=True,
+            )
         if allowed_scopes is not None:
-            normalized_scopes = self._normalize_scopes(allowed_scopes)
-            if self.policy_service is not None and actor_user_id is not None:
-                normalized_scopes = await self.policy_service.validate_integration_principal_allowed_scopes(
-                    session,
-                    actor_user_id=actor_user_id,
-                    allowed_scopes=normalized_scopes,
-                    anchor_entity_id=principal.anchor_entity_id,
-                    scope_kind=principal.scope_kind_enum,
-                )
             principal.allowed_scopes = normalized_scopes
+        if role_ids is not None:
+            principal.roles = roles
 
         current_status = principal.status_enum
         status_changed = status is not None and status != current_status
@@ -210,6 +266,7 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
 
         await session.flush()
         await session.refresh(principal)
+        principal = cast(IntegrationPrincipal, await self.get_principal(session, principal.id))
 
         if status_changed and principal.status_enum != IntegrationPrincipalStatus.ACTIVE and self.api_key_service is not None:
             await self.api_key_service.revoke_integration_principal_api_keys(
@@ -336,11 +393,99 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
         return actor
 
     @staticmethod
-    def _normalize_scopes(scopes: List[str]) -> List[str]:
+    def _normalize_scopes(scopes: List[str], *, allow_empty: bool = False) -> List[str]:
         normalized = sorted({scope.strip() for scope in scopes if scope and scope.strip()})
         if not normalized:
+            if allow_empty:
+                return []
             raise InvalidInputError(
                 message="Integration principals require at least one allowed scope",
                 details={"allowed_scopes": []},
             )
         return normalized
+
+    @staticmethod
+    def _normalize_role_ids(role_ids: Optional[List[UUID]]) -> List[UUID]:
+        return list(dict.fromkeys(role_ids or []))
+
+    async def _load_roles(
+        self,
+        session: AsyncSession,
+        role_ids: List[UUID],
+    ) -> List[Role]:
+        if not role_ids:
+            return []
+
+        stmt = (
+            select(Role)
+            .where(
+                cast(Any, Role.id).in_(role_ids),
+                cast(Any, Role.status) == DefinitionStatus.ACTIVE,
+            )
+            .options(selectinload(cast(Any, Role.permissions)))
+        )
+        result = await session.execute(stmt)
+        roles = list(result.scalars().all())
+        roles_by_id = {role.id: role for role in roles}
+        missing_role_ids = [role_id for role_id in role_ids if role_id not in roles_by_id]
+        if missing_role_ids:
+            raise InvalidInputError(
+                message="One or more roles were not found or are not active",
+                details={"role_ids": [str(role_id) for role_id in missing_role_ids]},
+            )
+        return [roles_by_id[role_id] for role_id in role_ids]
+
+    @staticmethod
+    def _validate_role_assignments(
+        roles: List[Role],
+        *,
+        scope_kind: IntegrationPrincipalScopeKind,
+        anchor_entity_id: Optional[UUID],
+    ) -> None:
+        if not roles:
+            return
+
+        if scope_kind == IntegrationPrincipalScopeKind.PLATFORM_GLOBAL:
+            invalid_roles = [role.name for role in roles if not role.is_global]
+            if invalid_roles:
+                raise InvalidInputError(
+                    message="Platform-global integration principals may only use global roles",
+                    details={"role_names": invalid_roles},
+                )
+            return
+
+        if scope_kind == IntegrationPrincipalScopeKind.ENTITY and anchor_entity_id is None:
+            raise InvalidInputError(
+                message="Entity-scoped integration principals require an anchor entity",
+                details={"scope_kind": scope_kind.value},
+            )
+
+    async def _resolve_effective_scopes(
+        self,
+        session: AsyncSession,
+        *,
+        roles: List[Role],
+        legacy_allowed_scopes: List[str],
+    ) -> List[str]:
+        role_ids = [role.id for role in roles]
+        if self.policy_service is not None:
+            effective_scopes = await self.policy_service.resolve_effective_scopes_for_assignments(
+                session,
+                role_ids=role_ids,
+                legacy_allowed_scopes=legacy_allowed_scopes,
+            )
+        else:
+            effective_scopes_set = set(legacy_allowed_scopes)
+            for role in roles:
+                for permission in getattr(role, "permissions", []):
+                    if getattr(permission, "name", None):
+                        effective_scopes_set.add(permission.name)
+            effective_scopes = sorted(effective_scopes_set)
+
+        if not effective_scopes:
+            raise InvalidInputError(
+                message="Integration principals require at least one role or allowed scope",
+                details={"allowed_scopes": legacy_allowed_scopes, "role_ids": [str(role_id) for role_id in role_ids]},
+            )
+
+        return list(effective_scopes)
