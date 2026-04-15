@@ -6,7 +6,7 @@ from collections.abc import AsyncGenerator
 import httpx
 import pytest
 import pytest_asyncio
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 from outlabs_auth import SimpleRBAC
 from outlabs_auth.fastapi import register_exception_handlers
@@ -140,3 +140,87 @@ async def test_simple_rbac_supports_platform_global_system_keys(
 
         assert verified_key is not None
         assert str(verified_key.integration_principal_id) == principal_id
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_simple_rbac_system_key_can_access_permission_protected_route(
+    simple_auth_with_global_keys: SimpleRBAC,
+):
+    assert simple_auth_with_global_keys.permission_service is not None
+    assert simple_auth_with_global_keys.role_service is not None
+    assert simple_auth_with_global_keys.user_service is not None
+    assert simple_auth_with_global_keys.api_key_service is not None
+
+    protected_app = FastAPI()
+    register_exception_handlers(protected_app, debug=True)
+
+    @protected_app.get("/protected")
+    async def protected_route(
+        _: dict = Depends(simple_auth_with_global_keys.deps.require_permission("agent:write")),
+    ) -> dict[str, str]:
+        return {"ok": "yes"}
+
+    protected_app.include_router(
+        get_integration_principals_router(simple_auth_with_global_keys, prefix="/v1/admin")
+    )
+
+    async with simple_auth_with_global_keys.get_session() as session:
+        await simple_auth_with_global_keys.permission_service.create_permission(
+            session,
+            name="agent:write",
+            display_name="Agent Write",
+            description="Write agents for worker automation.",
+        )
+        scraper_role = await simple_auth_with_global_keys.role_service.create_role(
+            session,
+            name=f"scraper-worker-{uuid.uuid4().hex[:8]}",
+            display_name="Scraper Worker",
+            description="Global worker role for scraper traffic.",
+            permission_names=["agent:write"],
+        )
+        superuser = await simple_auth_with_global_keys.user_service.create_user(
+            session=session,
+            email=f"simple-global-route-admin-{uuid.uuid4().hex[:8]}@example.com",
+            password="AdminPass123!",
+            first_name="Simple",
+            last_name="Global",
+            is_superuser=True,
+        )
+        await session.commit()
+        token = await _bearer_token(simple_auth_with_global_keys, str(superuser.id))
+
+    transport = httpx.ASGITransport(app=protected_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        principal_response = await client.post(
+            "/v1/admin/system/integration-principals",
+            json={
+                "name": "Scraping Workers",
+                "description": "Global worker principal for scraper traffic.",
+                "role_ids": [str(scraper_role.id)],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert principal_response.status_code == 201, principal_response.text
+        principal_id = principal_response.json()["id"]
+
+        api_key_response = await client.post(
+            f"/v1/admin/system/integration-principals/{principal_id}/api-keys",
+            json={
+                "name": "Scraper Key",
+                "description": "Production scraper key.",
+                "scopes": ["agent:write"],
+                "prefix_type": "sk_live",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert api_key_response.status_code == 201, api_key_response.text
+        api_key = api_key_response.json()["api_key"]
+
+        protected_response = await client.get(
+            "/protected",
+            headers={"X-API-Key": api_key},
+        )
+
+        assert protected_response.status_code == 200, protected_response.text
+        assert protected_response.json() == {"ok": "yes"}

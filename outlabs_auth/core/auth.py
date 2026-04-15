@@ -595,6 +595,7 @@ class OutlabsAuth:
             backends=self._backends,
             user_service=self.user_service,
             api_key_service=self.api_key_service,
+            api_key_policy_service=self.api_key_policy_service,
             permission_service=self.permission_service,
             access_scope_service=self.access_scope_service,
             role_service=self.role_service,
