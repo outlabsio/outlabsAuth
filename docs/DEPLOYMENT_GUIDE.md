@@ -875,6 +875,29 @@ auth = EnterpriseRBAC(
 
 **Why Background Sync**: API key usage tracking generates heavy database load. Redis counters reduce writes by 99%+.
 
+> **Production recommendation**: Enable Redis for any deployment that expects concurrent requests sharing a single API key (scrapers, batch importers, worker fleets, machine-to-machine integrations). The failure mode without Redis is severe, not just "slower" — see below.
+
+**Why the DB fallback wedges under concurrency**:
+
+Without Redis, every authenticated request executes roughly:
+
+```sql
+UPDATE api_keys
+SET    last_used_at = now(),
+       usage_count  = usage_count + 1
+WHERE  id = <api_key_id>
+```
+
+This runs inside the auth middleware on the request's database session. Every worker that presents the same API key is writing to the *same row*, so Postgres serializes them on a row-level tuple lock. Observed behavior from a real migration workload (32 concurrent ingest requests, one shared scraper key):
+
+- `pg_stat_activity` shows most connections blocked on `wait_event_type=Lock, wait_event=tuple`, all stuck on the same `UPDATE api_keys SET ... last_used_at, usage_count ...` statement.
+- Per-request latency balloons from ~20 ms to ~200 ms even though the ingest queries themselves are fast — the middleware UPDATE is the wall.
+- Scaling out API workers (more uvicorn processes) and client concurrency does **not** help, because the contention is on a single Postgres row, not on the app.
+
+Switching on Redis moves the counter to `INCR api_key_usage:<id>` and the timestamp to a `SET`, both lock-free in memory. The hot-row serialization disappears and throughput scales linearly with worker count.
+
+**Heads-up: enabling Redis also activates the rate limiter.** `_check_rate_limits` in `services/api_key.py` is guarded by `if self.redis_client and self.redis_client.is_available`, so it's silently a no-op when Redis is absent. The first time you turn Redis on, audit every row in `api_keys` — the default `rate_limit_per_minute` of 60 will cause batch workloads to start getting `InvalidInputError: Rate limit exceeded` after the first ~60 requests. For service keys used by importers or scrapers, set `rate_limit_per_minute` to a high value (or configure a dedicated service key) before flipping Redis on.
+
 **Configuration**:
 ```python
 # Enable Redis counters for API keys
