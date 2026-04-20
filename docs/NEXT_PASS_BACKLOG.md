@@ -91,10 +91,36 @@ First data-plane auth slices implemented on 2026-04-20:
   authorization result shape, but does not rehydrate live SQLAlchemy user,
   principal, or API-key models from Redis.
 
+Current local benchmark snapshot after the snapshot slices:
+
+```bash
+uv run python scripts/benchmark_auth_paths.py \
+  --presets simple,enterprise \
+  --redis-modes off,cache \
+  --redis-url redis://:guest@localhost:6379/0 \
+  --iterations 25 \
+  --warmup 3 \
+  --concurrency 10 \
+  --commit-usage \
+  --no-service-tokens
+```
+
+| scenario | off q/req | cache q/req | off p95 ms | cache p95 ms |
+|---|---:|---:|---:|---:|
+| `simple_user_api_key_global` | 12 | 0 | 80.92 | 8.53 |
+| `simple_user_api_key_dependency_global` | 17 | 0 | 106.78 | 4.49 |
+| `enterprise_personal_api_key_unanchored` | 14 | 0 | 89.03 | 14.40 |
+| `enterprise_personal_api_key_dependency_unanchored` | 21 | 0 | 144.10 | 5.00 |
+| `enterprise_personal_api_key_anchored_tree` | 19 | 0 | 91.45 | 7.34 |
+| `enterprise_system_api_key_global` | 9 | 0 | 42.38 | 4.86 |
+| `enterprise_system_api_key_entity_tree` | 11 | 0 | 49.40 | 6.67 |
+
 Known hot-path areas worth another pass after the next release:
 
-- Add compiled entity/tree authorization to snapshots so Enterprise anchored keys
-  do not need closure-table reads on warm requests.
+- Tighten entity-relation invalidation beyond the current versioned relation-key
+  strategy once production mutation patterns are clearer.
+- Add explicit fast-deny semantics for cached negative entity/permission checks
+  if denied hot paths show up in production traces.
 - Keep tightening invalidation granularity where global role/permission changes
   can eventually be narrowed to affected principals/users instead of bumping the
   global RBAC epoch.
@@ -142,8 +168,8 @@ Known hot-path areas worth another pass after the next release:
   - `check_permission(...)` entity-direct: 8 queries after the lean loader path
   - `check_permission(...)` ancestor-tree grant: 8 queries after the lean loader path
   - `get_user_permissions(...)`: 7 queries after the lean loader path
-  - personal `authorize_api_key(...)` unanchored grant: about 22 queries
-  - personal `authorize_api_key(...)` anchored tree grant: about 27 queries
+  - warm cached personal `authorize_api_key(...)` unanchored grant: 0 queries
+  - warm cached personal `authorize_api_key(...)` anchored tree grant: 0 queries
   - `GET /v1/api-keys/`: about 22 queries for 2 keys
   - `GET /v1/api-keys/grantable-scopes`: about 8 queries unanchored, 11 anchored
   - `GET /v1/admin/entities/{id}/api-keys`: about 12 queries

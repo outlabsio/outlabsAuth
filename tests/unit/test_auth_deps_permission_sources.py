@@ -148,7 +148,13 @@ def _make_request(
     return Request(scope, receive)
 
 
-def _api_key_model(key_id: UUID, *, prefix: str = "sk_live_cached_1") -> SimpleNamespace:
+def _api_key_model(
+    key_id: UUID,
+    *,
+    prefix: str = "sk_live_cached_1",
+    entity_id: UUID | None = None,
+    inherit_from_tree: bool = False,
+) -> SimpleNamespace:
     return SimpleNamespace(
         id=key_id,
         prefix=prefix,
@@ -157,8 +163,8 @@ def _api_key_model(key_id: UUID, *, prefix: str = "sk_live_cached_1") -> SimpleN
         owner_type="user",
         resolved_owner_id=None,
         expires_at=None,
-        entity_id=None,
-        inherit_from_tree=False,
+        entity_id=entity_id,
+        inherit_from_tree=inherit_from_tree,
         rate_limit_per_minute=None,
         rate_limit_per_hour=None,
         rate_limit_per_day=None,
@@ -204,6 +210,79 @@ async def test_require_permission_allows_cached_api_key_snapshot_without_backend
 
     dep = deps.require_permission("job:write")
     request = _make_request("POST", "/jobs/claim", headers={"X-API-Key": api_key_string})
+
+    resolved = await dep(request=request, session=test_session)
+
+    assert resolved["source"] == "api_key"
+    assert resolved["user_id"] == str(user_id)
+    assert resolved["metadata"]["auth_snapshot"] is True
+    assert permission_service.calls == []
+    assert redis.counters[f"apikey:{key_id}:usage"] == 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_require_tree_permission_allows_cached_entity_snapshot_without_backend_auth(
+    test_session,
+    auth_config,
+):
+    api_key_string = "sk_live_cached_tree_key_123456789"
+    key_id = uuid4()
+    user_id = uuid4()
+    anchor_id = uuid4()
+    target_id = uuid4()
+    redis = _SnapshotRedis()
+    snapshot_config = auth_config.model_copy(update={"redis_enabled": True, "enable_caching": True})
+    cache_service = CacheService(redis, snapshot_config)
+    api_key_service = APIKeyService(snapshot_config, redis_client=redis)
+    api_key_service.cache_service = cache_service
+    await api_key_service.set_api_key_auth_snapshot(
+        api_key_string,
+        auth_result={
+            "user": None,
+            "user_id": str(user_id),
+            "source": "api_key",
+            "api_key": _api_key_model(
+                key_id,
+                entity_id=anchor_id,
+                inherit_from_tree=True,
+            ),
+            "metadata": {
+                "scopes": ["pipeline:read_tree"],
+                "owner_type": "user",
+                "owner_id": str(user_id),
+            },
+        },
+        effective_permissions=[],
+        ip_whitelist=[],
+    )
+    await cache_service.set_permission_check(
+        str(user_id),
+        "pipeline:read_tree",
+        True,
+        str(target_id),
+    )
+    await cache_service.set_entity_relation(
+        str(anchor_id),
+        str(target_id),
+        True,
+        version=0,
+    )
+    permission_service = _PermissionServiceStub(result=False)
+    deps = AuthDeps(
+        backends=[],
+        permission_service=permission_service,
+        api_key_service=api_key_service,
+        get_session=lambda: None,
+    )
+
+    dep = deps.require_tree_permission("pipeline:read", "entity_id", source="path")
+    request = _make_request(
+        "GET",
+        f"/entities/{target_id}/pipeline",
+        headers={"X-API-Key": api_key_string},
+        path_params={"entity_id": str(target_id)},
+    )
 
     resolved = await dep(request=request, session=test_session)
 

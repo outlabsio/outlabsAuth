@@ -636,15 +636,23 @@ debugging an integration, pass `enable_caching=False` explicitly.
 
 For API-key protected FastAPI routes that use
 `auth.deps.require_permission(...)`, and for host code calling
-`auth.authorize_api_key(..., required_scope=...)` without ABAC or request entity
-context, Redis cache mode also enables a short-lived compiled auth snapshot. The
-warm path validates the API key, scopes, owner permissions, usage counter, and
-rate limits from Redis without issuing SQL. The default snapshot TTL is 60
-seconds and can be tuned with `api_key_auth_snapshot_ttl`. Snapshots also carry
-Redis version counters for global RBAC state, user state, integration-principal
-state, and entity state. Role, permission, membership, user status,
-integration-principal, and API-key lifecycle mutations invalidate matching warm
-snapshots before the TTL expires.
+`auth.authorize_api_key(..., required_scope=...)` without ABAC, Redis cache mode
+also enables a short-lived compiled auth snapshot. The warm path validates the
+API key, scopes, owner permissions, usage counter, rate limits, and cached
+Enterprise entity/tree relation checks from Redis without issuing SQL. The
+default snapshot TTL is 60 seconds and can be tuned with
+`api_key_auth_snapshot_ttl`. Snapshots also carry Redis version counters for
+global RBAC state, user state, integration-principal state, and entity state.
+Role, permission, membership, user status, integration-principal, and API-key
+lifecycle mutations invalidate matching warm snapshots before the TTL expires.
+
+Current local benchmark smoke for Redis cache mode shows the warm SimpleRBAC
+worker-style API-key paths issuing `0.00` SQL queries/request:
+
+| scenario | q/req | p95 ms |
+|---|---:|---:|
+| direct `auth.authorize_api_key(...)` | 0.00 | 8.53 |
+| `auth.deps.require_permission(...)` | 0.00 | 4.49 |
 
 **Cache Invalidation**:
 ```python

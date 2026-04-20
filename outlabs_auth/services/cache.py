@@ -35,6 +35,23 @@ class CacheService:
             )
         )
 
+    def make_entity_relation_key(
+        self,
+        ancestor_id: str,
+        descendant_id: str,
+        *,
+        version: int = 0,
+    ) -> str:
+        return str(
+            self.redis_client.make_key(
+                "auth",
+                "entity-relation",
+                str(version),
+                ancestor_id,
+                descendant_id,
+            )
+        )
+
     def make_api_key_auth_snapshot_version_key(
         self,
         scope: str,
@@ -139,6 +156,46 @@ class CacheService:
                 self.make_permission_check_key(user_id, permission, entity_id),
                 result,
                 ttl=self.config.cache_permission_ttl,
+            )
+        )
+
+    async def get_entity_relation(
+        self,
+        ancestor_id: str,
+        descendant_id: str,
+        *,
+        version: int = 0,
+    ) -> Optional[bool]:
+        if not self.redis_client or not self.redis_client.is_available:
+            return None
+        cached = await self.redis_client.get(
+            self.make_entity_relation_key(
+                ancestor_id,
+                descendant_id,
+                version=version,
+            )
+        )
+        return cached if isinstance(cached, bool) else None
+
+    async def set_entity_relation(
+        self,
+        ancestor_id: str,
+        descendant_id: str,
+        result: bool,
+        *,
+        version: int = 0,
+    ) -> bool:
+        if not self.redis_client or not self.redis_client.is_available:
+            return False
+        return bool(
+            await self.redis_client.set(
+                self.make_entity_relation_key(
+                    ancestor_id,
+                    descendant_id,
+                    version=version,
+                ),
+                result,
+                ttl=self.config.cache_entity_ttl,
             )
         )
 

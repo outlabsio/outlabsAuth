@@ -122,6 +122,48 @@ async def test_cache_service_permission_key_get_and_set_helpers(auth_config):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_cache_service_entity_relation_helpers(auth_config):
+    config = _cache_config(auth_config)
+    redis = _FakeRedis()
+    cache_service = CacheService(redis, config)
+
+    relation_key = cache_service.make_entity_relation_key(
+        "ancestor-1",
+        "descendant-1",
+        version=7,
+    )
+    assert relation_key == "auth:entity-relation:7:ancestor-1:descendant-1"
+
+    redis.get_values[relation_key] = True
+    assert (
+        await cache_service.get_entity_relation(
+            "ancestor-1",
+            "descendant-1",
+            version=7,
+        )
+        is True
+    )
+
+    assert (
+        await cache_service.set_entity_relation(
+            "ancestor-1",
+            "descendant-2",
+            False,
+            version=7,
+        )
+        is True
+    )
+    assert redis.set_calls == [
+        (
+            "auth:entity-relation:7:ancestor-1:descendant-2",
+            False,
+            config.cache_entity_ttl,
+        )
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_cache_service_targeted_invalidation_and_publish_helpers(auth_config):
     config = _cache_config(auth_config)
     redis = _FakeRedis()

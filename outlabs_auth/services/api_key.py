@@ -696,6 +696,25 @@ class APIKeyService(BaseService[APIKey]):
             return str(self.redis_client.make_key("auth", "api-key-snapshot", key_hash))
         return f"auth:api-key-snapshot:{key_hash}"
 
+    def _make_entity_relation_key(
+        self,
+        ancestor_id: str,
+        descendant_id: str,
+        *,
+        version: int = 0,
+    ) -> str:
+        if self.redis_client is not None:
+            return str(
+                self.redis_client.make_key(
+                    "auth",
+                    "entity-relation",
+                    str(version),
+                    ancestor_id,
+                    descendant_id,
+                )
+            )
+        return f"auth:entity-relation:{version}:{ancestor_id}:{descendant_id}"
+
     def _auth_snapshot_ttl(self) -> int:
         return max(
             1,
@@ -769,6 +788,10 @@ class APIKeyService(BaseService[APIKey]):
         if entity_id:
             versions[f"entity:{entity_id}"] = await self._get_auth_snapshot_version("entity", entity_id)
         return versions
+
+    async def _entity_relation_cache_version(self) -> int:
+        versions = await self._current_auth_snapshot_versions()
+        return int(versions.get("global", 0))
 
     async def _auth_snapshot_versions_match(self, snapshot: dict[str, Any]) -> bool:
         snapshot_versions = snapshot.get("versions")
@@ -1001,6 +1024,136 @@ class APIKeyService(BaseService[APIKey]):
             result["integration_principal"] = None
             result["integration_principal_id"] = snapshot.get("integration_principal_id")
         return result
+
+    async def get_cached_entity_relation(
+        self,
+        ancestor_id: str,
+        descendant_id: str,
+    ) -> Optional[bool]:
+        if not getattr(self.config, "enable_caching", False):
+            return None
+        if not self.redis_client or not self.redis_client.is_available:
+            return None
+
+        version = await self._entity_relation_cache_version()
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is not None and hasattr(cache_service, "get_entity_relation"):
+            return await cache_service.get_entity_relation(
+                ancestor_id,
+                descendant_id,
+                version=version,
+            )
+
+        cached = await self.redis_client.get(
+            self._make_entity_relation_key(
+                ancestor_id,
+                descendant_id,
+                version=version,
+            )
+        )
+        return cached if isinstance(cached, bool) else None
+
+    async def set_cached_entity_relation(
+        self,
+        ancestor_id: str,
+        descendant_id: str,
+        result: bool,
+    ) -> bool:
+        if not getattr(self.config, "enable_caching", False):
+            return False
+        if not self.redis_client or not self.redis_client.is_available:
+            return False
+
+        version = await self._entity_relation_cache_version()
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is not None and hasattr(cache_service, "set_entity_relation"):
+            return bool(
+                await cache_service.set_entity_relation(
+                    ancestor_id,
+                    descendant_id,
+                    result,
+                    version=version,
+                )
+            )
+
+        return bool(
+            await self.redis_client.set(
+                self._make_entity_relation_key(
+                    ancestor_id,
+                    descendant_id,
+                    version=version,
+                ),
+                result,
+                ttl=self.config.cache_entity_ttl,
+            )
+        )
+
+    async def auth_snapshot_entity_allowed(
+        self,
+        snapshot: dict[str, Any],
+        entity_id: UUID,
+    ) -> Optional[bool]:
+        anchor_id = snapshot.get("entity_id")
+        if not anchor_id:
+            return True
+        if str(entity_id) == str(anchor_id):
+            return True
+        if not snapshot.get("inherit_from_tree"):
+            return False
+        return await self.get_cached_entity_relation(str(anchor_id), str(entity_id))
+
+    async def auth_snapshot_owner_allows_permission(
+        self,
+        snapshot: dict[str, Any],
+        permission: str,
+        *,
+        entity_id: Optional[UUID] = None,
+    ) -> Optional[bool]:
+        if not self.scopes_allow_permission(snapshot.get("scopes") or [], permission):
+            return False
+
+        if entity_id is None:
+            return self.auth_snapshot_allows_permission(snapshot, permission)
+
+        if snapshot.get("integration_principal_id"):
+            return self.scopes_allow_permission(
+                snapshot.get("principal_allowed_scopes") or [],
+                permission,
+            )
+
+        user_id = snapshot.get("user_id")
+        if not user_id:
+            return False
+
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is None:
+            return None
+        cached = await cache_service.get_permission_check(
+            str(user_id),
+            permission,
+            str(entity_id),
+        )
+        return cached if isinstance(cached, bool) else None
+
+    async def auth_snapshot_allows_authorization(
+        self,
+        snapshot: dict[str, Any],
+        permission: str,
+        *,
+        entity_id: Optional[UUID] = None,
+    ) -> Optional[bool]:
+        owner_allowed = await self.auth_snapshot_owner_allows_permission(
+            snapshot,
+            permission,
+            entity_id=entity_id,
+        )
+        if owner_allowed is not True:
+            return owner_allowed
+
+        if entity_id is None:
+            return True
+
+        return await self.auth_snapshot_entity_allowed(snapshot, entity_id)
 
     def auth_snapshot_allows_permission(self, snapshot: dict[str, Any], permission: str) -> bool:
         """Check whether a cached API-key auth snapshot grants a permission."""
@@ -1614,6 +1767,13 @@ class APIKeyService(BaseService[APIKey]):
 
         # Check tree access if enabled
         if api_key.inherit_from_tree:
+            cached_relation = await self.get_cached_entity_relation(
+                str(api_key.entity_id),
+                str(target_entity_id),
+            )
+            if cached_relation is not None:
+                return cached_relation
+
             # Check if target is a descendant of api_key's entity
             stmt = select(EntityClosure).where(
                 cast(Any, EntityClosure.ancestor_id) == api_key.entity_id,
@@ -1622,8 +1782,14 @@ class APIKeyService(BaseService[APIKey]):
             )
             result = await session.execute(stmt)
             closure = result.scalar_one_or_none()
+            has_relation = closure is not None
+            await self.set_cached_entity_relation(
+                str(api_key.entity_id),
+                str(target_entity_id),
+                has_relation,
+            )
 
-            if closure:
+            if has_relation:
                 return True
 
         return False

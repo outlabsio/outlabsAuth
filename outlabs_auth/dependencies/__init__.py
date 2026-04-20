@@ -87,23 +87,36 @@ class AuthDeps:
         client_ip = request.client.host if request.client else None
         return bool(client_ip and client_ip in whitelist)
 
-    @staticmethod
-    def _snapshot_entity_allowed(snapshot: dict[str, Any], entity_id: Optional[UUID]) -> bool:
+    async def _snapshot_entity_allowed(self, snapshot: dict[str, Any], entity_id: Optional[UUID]) -> bool:
         if entity_id is None:
             return True
-        anchor_id = snapshot.get("entity_id")
-        if not anchor_id:
-            return True
-        if str(entity_id) == str(anchor_id):
-            return True
-        # Descendant checks still require the closure table until we add a compiled
-        # entity projection to the snapshot.
-        return False
 
-    def _snapshot_has_permission(self, snapshot: dict[str, Any], permission: str) -> bool:
         api_key_service = self.api_key_service
         if api_key_service is None:
             return False
+        if hasattr(api_key_service, "auth_snapshot_entity_allowed"):
+            return bool(await api_key_service.auth_snapshot_entity_allowed(snapshot, entity_id))
+        return False
+
+    async def _snapshot_has_permission(
+        self,
+        snapshot: dict[str, Any],
+        permission: str,
+        *,
+        entity_id: Optional[UUID],
+    ) -> bool:
+        api_key_service = self.api_key_service
+        if api_key_service is None:
+            return False
+
+        if hasattr(api_key_service, "auth_snapshot_allows_authorization"):
+            return bool(
+                await api_key_service.auth_snapshot_allows_authorization(
+                    snapshot,
+                    permission,
+                    entity_id=entity_id,
+                )
+            )
 
         if hasattr(api_key_service, "auth_snapshot_allows_permission"):
             return bool(api_key_service.auth_snapshot_allows_permission(snapshot, permission))
@@ -131,10 +144,17 @@ class AuthDeps:
 
         if not self._snapshot_ip_allowed(snapshot, request):
             return None
-        if not self._snapshot_entity_allowed(snapshot, entity_id):
+        if not await self._snapshot_entity_allowed(snapshot, entity_id):
             return None
 
-        checks = [self._snapshot_has_permission(snapshot, permission) for permission in permissions]
+        checks = [
+            await self._snapshot_has_permission(
+                snapshot,
+                permission,
+                entity_id=entity_id,
+            )
+            for permission in permissions
+        ]
         allowed = all(checks) if require_all else any(checks)
         if not allowed:
             return None
@@ -154,8 +174,6 @@ class AuthDeps:
         auth_result: dict,
         entity_id: Optional[UUID],
     ) -> None:
-        if entity_id is not None:
-            return
         if auth_result.get("source") != "api_key":
             return
 
@@ -555,27 +573,11 @@ class AuthDeps:
             *args: Any,
             **kwargs: Any,
         ) -> dict:
-            auth_result = await self.require_auth()(
-                request=request, session=session, *args, **kwargs
-            )
-            if not auth_result:
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
-
             permission_service = self.services.get("permission_service")
-            if not permission_service:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Permission service not configured",
-                )
             abac_enabled = bool(
-                getattr(getattr(permission_service, "config", None), "enable_abac", False)
+                permission_service
+                and getattr(getattr(permission_service, "config", None), "enable_abac", False)
             )
-
-            if session is None:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Database session not configured for auth dependencies",
-                )
 
             raw_entity_id = request.path_params.get(
                 entity_id_param
@@ -583,7 +585,43 @@ class AuthDeps:
             if raw_entity_id is None and entity_id_param == "entity_id":
                 raw_entity_id = request.headers.get("X-Entity-Context")
 
-            entity_id = _parse_uuid(raw_entity_id, detail="Entity ID is required")
+            entity_id: Optional[UUID] = None
+            if (
+                permission_service is not None
+                and session is not None
+                and not abac_enabled
+                and self._api_key_header(request)
+            ):
+                entity_id = _parse_uuid(raw_entity_id, detail="Entity ID is required")
+                snapshot_auth_result = await self._try_api_key_auth_snapshot(
+                    request=request,
+                    permissions=[permission],
+                    require_all=True,
+                    entity_id=entity_id,
+                )
+                if snapshot_auth_result is not None:
+                    return snapshot_auth_result
+
+            auth_result = await self.require_auth()(
+                request=request, session=session, *args, **kwargs
+            )
+            if not auth_result:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+
+            if not permission_service:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Permission service not configured",
+                )
+
+            if session is None:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Database session not configured for auth dependencies",
+                )
+
+            if entity_id is None:
+                entity_id = _parse_uuid(raw_entity_id, detail="Entity ID is required")
             resource_context = None
             env_context = None
             if abac_enabled:
@@ -610,6 +648,14 @@ class AuthDeps:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Insufficient permissions",
+                )
+
+            if not abac_enabled:
+                await self._cache_api_key_auth_snapshot(
+                    request=request,
+                    session=session,
+                    auth_result=auth_result,
+                    entity_id=entity_id,
                 )
 
             return cast(dict[Any, Any], auth_result)
@@ -663,21 +709,68 @@ class AuthDeps:
             *args: Any,
             **kwargs: Any,
         ) -> dict:
+            permission_service = self.services.get("permission_service")
+            abac_enabled = bool(
+                permission_service
+                and getattr(getattr(permission_service, "config", None), "enable_abac", False)
+            )
+
+            raw_entity_id: Any = None
+            raw_entity_loaded = False
+
+            async def _load_raw_entity_id() -> Any:
+                nonlocal raw_entity_id, raw_entity_loaded
+                if raw_entity_loaded:
+                    return raw_entity_id
+                if source == "path":
+                    raw_entity_id = request.path_params.get(entity_id_field)
+                elif source == "query":
+                    raw_entity_id = request.query_params.get(entity_id_field)
+                elif source == "header":
+                    raw_entity_id = request.headers.get(entity_id_field)
+                else:
+                    body = await request.json()
+                    if isinstance(body, dict):
+                        raw_entity_id = body.get(entity_id_field)
+                raw_entity_loaded = True
+                return raw_entity_id
+
+            entity_id: Optional[UUID] = None
+            if (
+                permission_service is not None
+                and session is not None
+                and not abac_enabled
+                and self._api_key_header(request)
+            ):
+                raw_entity_id = await _load_raw_entity_id()
+                entity_id = _parse_uuid_optional(
+                    raw_entity_id,
+                    invalid_detail=f"Invalid {entity_id_field}",
+                )
+                snapshot_auth_result = await self._try_api_key_auth_snapshot(
+                    request=request,
+                    permissions=[
+                        self._tree_permission_variant(permission)
+                        if entity_id is not None
+                        else permission
+                    ],
+                    require_all=True,
+                    entity_id=entity_id,
+                )
+                if snapshot_auth_result is not None:
+                    return snapshot_auth_result
+
             auth_result = await self.require_auth()(
                 request=request, session=session, *args, **kwargs
             )
             if not auth_result:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
-            permission_service = self.services.get("permission_service")
             if not permission_service:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Permission service not configured",
                 )
-            abac_enabled = bool(
-                getattr(getattr(permission_service, "config", None), "enable_abac", False)
-            )
 
             if session is None:
                 raise HTTPException(
@@ -685,21 +778,11 @@ class AuthDeps:
                     detail="Database session not configured for auth dependencies",
                 )
 
-            raw_entity_id: Any = None
-            if source == "path":
-                raw_entity_id = request.path_params.get(entity_id_field)
-            elif source == "query":
-                raw_entity_id = request.query_params.get(entity_id_field)
-            elif source == "header":
-                raw_entity_id = request.headers.get(entity_id_field)
-            else:
-                body = await request.json()
-                if isinstance(body, dict):
-                    raw_entity_id = body.get(entity_id_field)
-
-            entity_id = _parse_uuid_optional(
-                raw_entity_id, invalid_detail=f"Invalid {entity_id_field}"
-            )
+            if entity_id is None:
+                raw_entity_id = await _load_raw_entity_id()
+                entity_id = _parse_uuid_optional(
+                    raw_entity_id, invalid_detail=f"Invalid {entity_id_field}"
+                )
 
             resource_context = None
             env_context = None
@@ -727,6 +810,14 @@ class AuthDeps:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Insufficient permissions",
+                )
+
+            if not abac_enabled:
+                await self._cache_api_key_auth_snapshot(
+                    request=request,
+                    session=session,
+                    auth_result=auth_result,
+                    entity_id=entity_id,
                 )
 
             return cast(dict[Any, Any], auth_result)

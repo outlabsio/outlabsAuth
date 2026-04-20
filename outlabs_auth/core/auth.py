@@ -707,8 +707,6 @@ class OutlabsAuth:
     ) -> bool:
         if not required_scope:
             return False
-        if entity_id is not None:
-            return False
 
         permission_service = self.permission_service
         if permission_service is not None and getattr(
@@ -748,7 +746,7 @@ class OutlabsAuth:
             return None
 
         get_snapshot = getattr(api_key_service, "get_api_key_auth_snapshot", None)
-        snapshot_allows = getattr(api_key_service, "auth_snapshot_allows_permission", None)
+        snapshot_allows = getattr(api_key_service, "auth_snapshot_allows_authorization", None)
         record_usage = getattr(api_key_service, "record_api_key_auth_snapshot_usage", None)
         result_from_snapshot = getattr(api_key_service, "auth_result_from_snapshot", None)
         if any(
@@ -767,7 +765,7 @@ class OutlabsAuth:
             return None
         if not self._api_key_snapshot_ip_allowed(snapshot, ip_address):
             return None
-        if not snapshot_allows(snapshot, required_scope):
+        if await snapshot_allows(snapshot, required_scope, entity_id=entity_id) is not True:
             return None
 
         usage_count = await record_usage(snapshot)

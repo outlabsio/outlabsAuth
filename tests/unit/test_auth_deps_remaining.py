@@ -472,6 +472,45 @@ async def test_require_tree_permission_validates_inputs_and_permission_service(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_entity_snapshot_preflight_preserves_auth_first_failures(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    permission_service = _PermissionServiceStub(result=True)
+    deps = AuthDeps(
+        backends=[],
+        permission_service=permission_service,
+        get_session=lambda: None,
+    )
+
+    async def _no_auth(**kwargs):
+        return None
+
+    monkeypatch.setattr(deps, "require_auth", lambda *args, **kwargs: _no_auth)
+
+    entity_dependency = deps.require_entity_permission("entity:read")
+    invalid_entity_request = _make_request(
+        "GET",
+        "/entities/not-a-uuid",
+        path_params={"entity_id": "not-a-uuid"},
+    )
+    with pytest.raises(HTTPException) as entity_exc:
+        await entity_dependency(request=invalid_entity_request, session=object())
+    assert entity_exc.value.status_code == 401
+
+    tree_dependency = deps.require_tree_permission("entity:create", "entity_id", source="query")
+    invalid_tree_request = _make_request(
+        "GET",
+        "/entities",
+        query_params={"entity_id": "not-a-uuid"},
+    )
+    with pytest.raises(HTTPException) as tree_exc:
+        await tree_dependency(request=invalid_tree_request, session=object())
+    assert tree_exc.value.status_code == 401
+    assert permission_service.calls == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_require_source_and_superuser_cover_success_and_no_auth(
     monkeypatch: pytest.MonkeyPatch,
 ):

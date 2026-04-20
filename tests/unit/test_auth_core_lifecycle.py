@@ -50,7 +50,13 @@ class _SessionContext:
         return False
 
 
-def _snapshot_api_key_model(key_id, *, prefix: str = "sk_live_cached_1"):
+def _snapshot_api_key_model(
+    key_id,
+    *,
+    prefix: str = "sk_live_cached_1",
+    entity_id=None,
+    inherit_from_tree: bool = False,
+):
     return SimpleNamespace(
         id=key_id,
         prefix=prefix,
@@ -59,8 +65,8 @@ def _snapshot_api_key_model(key_id, *, prefix: str = "sk_live_cached_1"):
         owner_type="user",
         resolved_owner_id=None,
         expires_at=None,
-        entity_id=None,
-        inherit_from_tree=False,
+        entity_id=entity_id,
+        inherit_from_tree=inherit_from_tree,
         rate_limit_per_minute=None,
         rate_limit_per_hour=None,
         rate_limit_per_day=None,
@@ -503,6 +509,77 @@ async def test_outlabs_auth_authorize_api_key_uses_cached_snapshot_without_db_au
     assert result["metadata"]["auth_snapshot"] is True
     assert result["metadata"]["is_currently_effective"] is True
     assert result["metadata"]["ineffective_reasons"] == []
+    assert redis.counters[f"apikey:{key_id}:usage"] == 1
+    api_key_service.verify_api_key.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_outlabs_auth_authorize_api_key_uses_entity_snapshot_without_db_auth():
+    auth = OutlabsAuth(
+        database_url="postgresql+asyncpg://example:example@localhost:5432/test",
+        secret_key="test-secret",
+    )
+    api_key_string = "sk_live_entity_cached_key_123456"
+    key_id = uuid4()
+    user_id = uuid4()
+    anchor_id = uuid4()
+    target_id = uuid4()
+    redis = _SnapshotRedis()
+    snapshot_config = auth.config.model_copy(update={"redis_enabled": True, "enable_caching": True})
+    cache_service = CacheService(redis, snapshot_config)
+    api_key_service = APIKeyService(snapshot_config, redis_client=redis)
+    api_key_service.cache_service = cache_service
+    await api_key_service.set_api_key_auth_snapshot(
+        api_key_string,
+        auth_result={
+            "user": None,
+            "user_id": str(user_id),
+            "source": "api_key",
+            "api_key": _snapshot_api_key_model(
+                key_id,
+                entity_id=anchor_id,
+                inherit_from_tree=True,
+            ),
+            "metadata": {
+                "scopes": ["pipeline:read_tree"],
+                "owner_type": "user",
+                "owner_id": str(user_id),
+            },
+        },
+        effective_permissions=[],
+        ip_whitelist=[],
+    )
+    await cache_service.set_permission_check(
+        str(user_id),
+        "pipeline:read_tree",
+        True,
+        str(target_id),
+    )
+    await cache_service.set_entity_relation(
+        str(anchor_id),
+        str(target_id),
+        True,
+        version=0,
+    )
+    api_key_service.verify_api_key = AsyncMock(side_effect=AssertionError("slow path should not run"))
+
+    auth._initialized = True
+    auth.api_key_service = api_key_service
+    auth.user_service = SimpleNamespace()
+    auth.permission_service = SimpleNamespace(config=SimpleNamespace(enable_abac=False))
+
+    result = await auth.authorize_api_key(
+        "db-session",
+        api_key_string,
+        required_scope="pipeline:read_tree",
+        entity_id=target_id,
+    )
+
+    assert result is not None
+    assert result["source"] == "api_key"
+    assert result["user_id"] == str(user_id)
+    assert result["metadata"]["auth_snapshot"] is True
     assert redis.counters[f"apikey:{key_id}:usage"] == 1
     api_key_service.verify_api_key.assert_not_awaited()
 
