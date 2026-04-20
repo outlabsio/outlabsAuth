@@ -413,25 +413,50 @@ def get_auth_router(
 
         try:
             actor_user_id = UUID(obs.user_id) if obs.user_id else None
+            actor_user = (
+                await auth.user_service.get_user_by_id(session, actor_user_id)
+                if actor_user_id is not None
+                else None
+            )
+            if data.is_superuser and not (actor_user and actor_user.is_superuser):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only superusers can invite superusers",
+                )
 
             user, plain_token = await auth.user_service.invite_user(
                 session,
                 email=data.email,
                 first_name=data.first_name,
                 last_name=data.last_name,
+                is_superuser=data.is_superuser,
                 invited_by_id=actor_user_id,
                 root_entity_id=None,
             )
 
-            # If entity_id provided, add membership
-            if data.entity_id and auth.membership_service:
-                await auth.membership_service.add_member(
-                    session,
-                    entity_id=UUID(data.entity_id),
-                    user_id=user.id,
-                    role_ids=[UUID(rid) for rid in data.role_ids] if data.role_ids else [],
-                    joined_by_id=actor_user_id,
-                )
+            role_ids = [UUID(rid) for rid in data.role_ids] if data.role_ids else []
+
+            # If entity_id is provided, roles are applied through the entity
+            # membership. Without an entity, role_ids represent direct RBAC
+            # assignments for SimpleRBAC/system-wide roles.
+            if data.entity_id:
+                if auth.membership_service:
+                    await auth.membership_service.add_member(
+                        session,
+                        entity_id=UUID(data.entity_id),
+                        user_id=user.id,
+                        role_ids=role_ids,
+                        joined_by_id=actor_user_id,
+                    )
+                    await session.refresh(user)
+            elif role_ids:
+                for role_id in role_ids:
+                    await auth.role_service.assign_role_to_user(
+                        session,
+                        user_id=user.id,
+                        role_id=role_id,
+                        assigned_by_id=actor_user_id,
+                    )
                 await session.refresh(user)
 
             # Trigger hook

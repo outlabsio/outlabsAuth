@@ -111,6 +111,7 @@ class TestInviteUser:
 
             assert user.status == UserStatus.INVITED
             assert user.hashed_password is None
+            assert user.is_superuser is False
             assert user.email == "invite@example.com"
             assert user.first_name == "Test"
             assert user.last_name == "User"
@@ -122,6 +123,28 @@ class TestInviteUser:
             # Token should be stored as SHA-256 hash, not plain
             expected_hash = hashlib.sha256(plain_token.encode()).hexdigest()
             assert user.invite_token == expected_hash
+
+    @pytest.mark.asyncio
+    async def test_invite_can_mark_user_as_superuser(self, user_service):
+        session = AsyncMock()
+
+        with patch.object(user_service, "get_one", return_value=None), \
+             patch.object(user_service, "create", new_callable=AsyncMock) as mock_create:
+
+            async def set_id(session, user):
+                user.id = uuid4()
+                user.created_at = datetime.now(timezone.utc)
+
+            mock_create.side_effect = set_id
+
+            user, _ = await user_service.invite_user(
+                session,
+                email="super-invite@example.com",
+                is_superuser=True,
+            )
+
+            assert user.status == UserStatus.INVITED
+            assert user.is_superuser is True
 
     @pytest.mark.asyncio
     async def test_invite_rejects_existing_email(self, user_service):
@@ -311,6 +334,7 @@ class TestInviteSchemas:
         req = InviteUserRequest(email="test@example.com")
         assert req.email == "test@example.com"
         assert req.first_name is None
+        assert req.is_superuser is False
         assert req.role_ids is None
         assert req.entity_id is None
 
@@ -321,10 +345,12 @@ class TestInviteSchemas:
             email="test@example.com",
             first_name="John",
             last_name="Doe",
+            is_superuser=True,
             role_ids=["role-1"],
             entity_id="entity-1",
         )
         assert req.first_name == "John"
+        assert req.is_superuser is True
         assert req.role_ids == ["role-1"]
 
     def test_accept_invite_request(self):

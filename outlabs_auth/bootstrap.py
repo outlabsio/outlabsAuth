@@ -48,7 +48,6 @@ SYSTEM_PERMISSION_CATALOG: tuple[PermissionSeed, ...] = (
     PermissionSeed("user:create", "User Create", "Create users."),
     PermissionSeed("user:update", "User Update", "Update users."),
     PermissionSeed("user:delete", "User Delete", "Delete users."),
-    PermissionSeed("user:create_superuser", "User Create Superuser", "Create superusers."),
     PermissionSeed("role:read", "Role Read", "View roles."),
     PermissionSeed("role:read_tree", "Role Read Tree", "View roles across descendant entities."),
     PermissionSeed("role:create", "Role Create", "Create roles."),

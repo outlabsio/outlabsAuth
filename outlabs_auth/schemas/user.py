@@ -107,3 +107,17 @@ class UserStatusUpdateRequest(BaseModel):
         max_length=500,
         description="Optional reason for status change (stored in audit log)",
     )
+
+
+class UserSuperuserUpdateRequest(BaseModel):
+    """Update a user's platform superuser flag."""
+
+    is_superuser: bool = Field(
+        ...,
+        description="Whether the user should have platform-wide superuser privileges.",
+    )
+    reason: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="Optional reason for the audit log.",
+    )

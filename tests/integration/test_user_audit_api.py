@@ -161,6 +161,69 @@ async def test_user_audit_events_capture_status_delete_and_restore(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_user_audit_events_capture_superuser_privilege_changes(
+    auth_instance: EnterpriseRBAC,
+    client: httpx.AsyncClient,
+    admin_user: dict,
+):
+    async with auth_instance.get_session() as session:
+        user = await auth_instance.user_service.create_user(
+            session=session,
+            email=f"superuser-audit-{uuid.uuid4().hex[:8]}@example.com",
+            password="StartPass123!",
+            first_name="Privilege",
+            last_name="Audit",
+        )
+        await session.commit()
+        user_id = str(user.id)
+
+    grant_resp = await client.patch(
+        f"/v1/users/{user_id}/superuser",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"is_superuser": True, "reason": "backup platform owner"},
+    )
+    assert grant_resp.status_code == 200, grant_resp.text
+    assert grant_resp.json()["is_superuser"] is True
+
+    revoke_resp = await client.patch(
+        f"/v1/users/{user_id}/superuser",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"is_superuser": False, "reason": "rotation complete"},
+    )
+    assert revoke_resp.status_code == 200, revoke_resp.text
+    assert revoke_resp.json()["is_superuser"] is False
+
+    audit_resp = await client.get(
+        f"/v1/users/{user_id}/audit-events?category=privilege",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+    )
+    assert audit_resp.status_code == 200, audit_resp.text
+    items = audit_resp.json()["items"]
+
+    assert [item["event_type"] for item in items] == [
+        "user.superuser_revoked",
+        "user.superuser_granted",
+    ]
+
+    revoked_event = items[0]
+    assert revoked_event["event_category"] == "privilege"
+    assert revoked_event["actor_user_id"] == admin_user["id"]
+    assert revoked_event["reason"] == "rotation complete"
+    assert revoked_event["before"]["is_superuser"] is True
+    assert revoked_event["after"]["is_superuser"] is False
+    assert revoked_event["metadata"]["changed_fields"] == ["is_superuser"]
+
+    granted_event = items[1]
+    assert granted_event["event_category"] == "privilege"
+    assert granted_event["actor_user_id"] == admin_user["id"]
+    assert granted_event["reason"] == "backup platform owner"
+    assert granted_event["before"]["is_superuser"] is False
+    assert granted_event["after"]["is_superuser"] is True
+    assert granted_event["metadata"]["changed_fields"] == ["is_superuser"]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_user_audit_events_capture_profile_email_and_password_changes(
     auth_instance: EnterpriseRBAC,
     client: httpx.AsyncClient,

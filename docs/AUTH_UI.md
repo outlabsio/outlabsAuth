@@ -13,6 +13,21 @@ The Nuxt admin UI is no longer stored in this repository.
 - The `OutlabsAuthUI` repository owns the Nuxt application, Bun toolchain, and frontend-specific tests/builds.
 - Backend documentation in this repo should treat the external UI as a consumer of the backend contract, not as a tracked subproject.
 
+## SimpleRBAC Invite Contract
+
+For `SimpleRBAC`, the backend advertises `features.entity_hierarchy=false` and
+`features.context_aware_roles=false` from `GET /auth/config`.
+
+Admin UIs must treat that as a flat RBAC contract:
+
+- Do not show entity membership or entity scope controls.
+- Do not send `entity_id` when inviting a user.
+- Send selected `role_ids` to `POST /auth/invite`.
+- The backend applies those `role_ids` as direct account role memberships.
+
+For `EnterpriseRBAC`, selected invite roles may be applied through an entity
+membership when an `entity_id` is supplied.
+
 ## Local Development
 
 Run the backend from this repository and the UI from the sibling repo.

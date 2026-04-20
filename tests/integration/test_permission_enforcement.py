@@ -20,8 +20,9 @@ import pytest_asyncio
 from fastapi import FastAPI
 
 from outlabs_auth import EnterpriseRBAC
+from outlabs_auth.core.exceptions import InvalidInputError
 from outlabs_auth.fastapi import register_exception_handlers
-from outlabs_auth.models.sql.enums import EntityClass, MembershipStatus, RoleScope
+from outlabs_auth.models.sql.enums import EntityClass, MembershipStatus, RoleScope, UserStatus
 from outlabs_auth.routers import (
     get_api_keys_router,
     get_auth_router,
@@ -222,7 +223,7 @@ async def user_with_create_permission(auth_instance: EnterpriseRBAC) -> dict:
 
 @pytest_asyncio.fixture
 async def user_with_create_superuser_permission(auth_instance: EnterpriseRBAC) -> dict:
-    """Create user with both user:create and user:create_superuser permissions."""
+    """Create non-superuser with legacy delegated superuser-create permission."""
     async with auth_instance.get_session() as session:
         create_perm = await auth_instance.permission_service.create_permission(
             session,
@@ -391,6 +392,134 @@ async def test_superuser_can_create_user(client: httpx.AsyncClient, admin_user: 
         },
     )
     assert resp.status_code == 201
+
+    superuser_resp = await client.post(
+        "/v1/users/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "email": f"new-super-{uuid.uuid4().hex[:8]}@example.com",
+            "password": "TestPass123!",
+            "first_name": "New",
+            "last_name": "Superuser",
+            "is_superuser": True,
+        },
+    )
+    assert superuser_resp.status_code == 201
+    assert superuser_resp.json()["is_superuser"] is True
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_superuser_can_grant_and_revoke_superuser_privileges(
+    client: httpx.AsyncClient, admin_user: dict, regular_user: dict
+):
+    """Test that only a current superuser can mutate the superuser flag."""
+    create_resp = await client.post(
+        "/v1/users/",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "email": f"privilege-target-{uuid.uuid4().hex[:8]}@example.com",
+            "password": "TestPass123!",
+            "first_name": "Privilege",
+            "last_name": "Target",
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    user_id = create_resp.json()["id"]
+
+    forbidden_resp = await client.patch(
+        f"/v1/users/{user_id}/superuser",
+        headers={"Authorization": f"Bearer {regular_user['token']}"},
+        json={"is_superuser": True},
+    )
+    assert forbidden_resp.status_code == 403, forbidden_resp.text
+
+    grant_resp = await client.patch(
+        f"/v1/users/{user_id}/superuser",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"is_superuser": True, "reason": "operational owner"},
+    )
+    assert grant_resp.status_code == 200, grant_resp.text
+    assert grant_resp.json()["is_superuser"] is True
+
+    self_revoke_resp = await client.patch(
+        f"/v1/users/{admin_user['id']}/superuser",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"is_superuser": False},
+    )
+    assert self_revoke_resp.status_code == 400, self_revoke_resp.text
+
+    revoke_resp = await client.patch(
+        f"/v1/users/{user_id}/superuser",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={"is_superuser": False, "reason": "temporary access complete"},
+    )
+    assert revoke_resp.status_code == 200, revoke_resp.text
+    assert revoke_resp.json()["is_superuser"] is False
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_invited_superuser_does_not_satisfy_final_active_superuser_guard(
+    auth_instance: EnterpriseRBAC,
+):
+    """Test invited superusers do not permit revoking the final active superuser."""
+    async with auth_instance.get_session() as session:
+        active_superuser = await auth_instance.user_service.create_user(
+            session=session,
+            email=f"active-superuser-{uuid.uuid4().hex[:8]}@example.com",
+            password="TestPass123!",
+            is_superuser=True,
+        )
+        invited_superuser, _ = await auth_instance.user_service.invite_user(
+            session=session,
+            email=f"invited-superuser-{uuid.uuid4().hex[:8]}@example.com",
+            is_superuser=True,
+            invited_by_id=active_superuser.id,
+        )
+
+        assert active_superuser.status == UserStatus.ACTIVE
+        assert invited_superuser.status == UserStatus.INVITED
+
+        with pytest.raises(InvalidInputError, match="Cannot revoke the final active superuser"):
+            await auth_instance.user_service.update_superuser_status(
+                session,
+                active_superuser.id,
+                is_superuser=False,
+                changed_by_id=active_superuser.id,
+            )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_only_superuser_can_invite_superusers(
+    client: httpx.AsyncClient,
+    admin_user: dict,
+    user_with_create_permission: dict,
+):
+    """Test invite-time superuser access cannot be delegated through user:create."""
+    forbidden_resp = await client.post(
+        "/v1/auth/invite",
+        headers={"Authorization": f"Bearer {user_with_create_permission['token']}"},
+        json={
+            "email": f"blocked-super-invite-{uuid.uuid4().hex[:8]}@example.com",
+            "is_superuser": True,
+        },
+    )
+    assert forbidden_resp.status_code == 403, forbidden_resp.text
+
+    invite_resp = await client.post(
+        "/v1/auth/invite",
+        headers={"Authorization": f"Bearer {admin_user['token']}"},
+        json={
+            "email": f"allowed-super-invite-{uuid.uuid4().hex[:8]}@example.com",
+            "first_name": "Invited",
+            "last_name": "Superuser",
+            "is_superuser": True,
+        },
+    )
+    assert invite_resp.status_code == 201, invite_resp.text
+    assert invite_resp.json()["is_superuser"] is True
 
 
 @pytest.mark.integration
@@ -687,10 +816,10 @@ async def test_user_with_create_permission_cannot_create_superuser(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_user_with_create_superuser_permission_can_create_superuser(
+async def test_user_with_create_superuser_permission_cannot_create_superuser(
     client: httpx.AsyncClient, user_with_create_superuser_permission: dict
 ):
-    """Test delegated superuser creation when explicit permission is granted."""
+    """Test delegated permission cannot create superusers without actor superuser status."""
     resp = await client.post(
         "/v1/users/",
         headers={"Authorization": f"Bearer {user_with_create_superuser_permission['token']}"},
@@ -702,8 +831,7 @@ async def test_user_with_create_superuser_permission_can_create_superuser(
             "is_superuser": True,
         },
     )
-    assert resp.status_code == 201
-    assert resp.json()["is_superuser"] is True
+    assert resp.status_code == 403
 
 
 # ============================================================================

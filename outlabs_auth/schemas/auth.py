@@ -84,6 +84,10 @@ class InviteUserRequest(BaseModel):
     email: EmailStr
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+    is_superuser: bool = Field(
+        default=False,
+        description="Invite this user with platform-wide superuser privileges. Only current superusers may set this.",
+    )
     role_ids: Optional[List[str]] = Field(default=None, description="Role IDs to assign after invite")
     entity_id: Optional[str] = Field(default=None, description="Entity ID to add membership to")
 

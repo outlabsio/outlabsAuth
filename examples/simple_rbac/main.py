@@ -31,6 +31,7 @@ from outlabs_auth import SimpleRBAC, User
 from outlabs_auth.routers import (
     get_api_keys_router,
     get_auth_router,
+    get_integration_principals_router,
     get_permissions_router,
     get_roles_router,
     get_users_router,
@@ -225,6 +226,14 @@ def include_auth_routers(app: FastAPI, auth_instance: SimpleRBAC):
     app.include_router(get_permissions_router(auth_instance, prefix="/v1/permissions", tags=["Permissions"]))
     # API Key management routes
     app.include_router(get_api_keys_router(auth_instance, prefix="/v1/api-keys", tags=["API Keys"]))
+    # Platform-global integration principals and owned system API keys
+    app.include_router(
+        get_integration_principals_router(
+            auth_instance,
+            prefix="/v1/admin",
+            tags=["Integration Principals"],
+        )
+    )
 
 
 # ============================================================================

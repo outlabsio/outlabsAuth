@@ -16,6 +16,7 @@ from outlabs_auth.schemas.user import (
     ChangePasswordRequest,
     UserCreateRequest,
     UserStatusUpdateRequest,
+    UserSuperuserUpdateRequest,
     UserUpdateRequest,
 )
 from outlabs_auth.schemas.user_role_membership import AssignRoleRequest
@@ -364,6 +365,60 @@ async def test_users_router_callback_create_list_and_self_service_paths(
         assert tokens.access_token
         assert any(event == "user_created" for event, _fields in auth_instance.observability.records)
         assert any(event == "user_password_changed" for event, _fields in auth_instance.observability.records)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_users_router_callback_superuser_privilege_paths(
+    auth_instance: EnterpriseRBAC,
+    users_router,
+):
+    update_superuser = _endpoint(users_router, "/v1/users/{user_id}/superuser", "PATCH")
+
+    async with auth_instance.get_session() as session:
+        actor = await _create_user(
+            auth_instance,
+            session,
+            email_prefix="superuser-actor",
+            is_superuser=True,
+        )
+        target = await _create_user(auth_instance, session, email_prefix="superuser-target")
+        regular_actor = await _create_user(auth_instance, session, email_prefix="regular-actor")
+
+        with pytest.raises(HTTPException) as exc:
+            await update_superuser(
+                user_id=target.id,
+                data=UserSuperuserUpdateRequest(is_superuser=True),
+                session=session,
+                obs=DummyObs(str(regular_actor.id)),
+            )
+        assert exc.value.status_code == 403
+
+        promoted = await update_superuser(
+            user_id=target.id,
+            data=UserSuperuserUpdateRequest(is_superuser=True, reason="needs platform access"),
+            session=session,
+            obs=DummyObs(str(actor.id)),
+        )
+        assert promoted.is_superuser is True
+
+        with pytest.raises(HTTPException) as exc:
+            await update_superuser(
+                user_id=actor.id,
+                data=UserSuperuserUpdateRequest(is_superuser=False),
+                session=session,
+                obs=DummyObs(str(actor.id)),
+            )
+        assert exc.value.status_code == 400
+        assert "cannot revoke your own" in exc.value.detail
+
+        demoted = await update_superuser(
+            user_id=target.id,
+            data=UserSuperuserUpdateRequest(is_superuser=False, reason="access no longer needed"),
+            session=session,
+            obs=DummyObs(str(actor.id)),
+        )
+        assert demoted.is_superuser is False
 
 
 @pytest.mark.integration

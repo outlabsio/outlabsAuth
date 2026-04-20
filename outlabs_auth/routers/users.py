@@ -37,6 +37,7 @@ from outlabs_auth.schemas.user import (
     UserCreateRequest,
     UserResponse,
     UserStatusUpdateRequest,
+    UserSuperuserUpdateRequest,
     UserUpdateRequest,
 )
 from outlabs_auth.schemas.user_role_membership import (
@@ -199,16 +200,10 @@ def get_users_router(
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
 
             if data.is_superuser and not actor_user.is_superuser:
-                has_superuser_create_permission = await auth.permission_service.check_permission(
-                    session,
-                    user_id=UUID(str(actor_user.id)),
-                    permission="user:create_superuser",
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only superusers can create superusers",
                 )
-                if not has_superuser_create_permission:
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="Only superusers or users with user:create_superuser can create superusers",
-                    )
 
             user = await auth.user_service.create_user(
                 session,
@@ -696,6 +691,67 @@ def get_users_router(
             raise
 
         return None
+
+    @router.patch(
+        "/{user_id}/superuser",
+        response_model=UserResponse,
+        summary="Update superuser privileges",
+        description="Grant or revoke platform superuser privileges. Requires current superuser privileges.",
+    )
+    async def update_user_superuser(
+        user_id: UUID,
+        data: UserSuperuserUpdateRequest,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_superuser(),
+            )
+        ),
+    ):
+        """
+        Update a user's platform-wide superuser flag.
+
+        Superuser is intentionally not a role. This endpoint is restricted to
+        current superusers and records a durable user audit event.
+        """
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            if not actor_user.is_superuser:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Superuser privileges required",
+                )
+
+            await _get_target_user_or_404(session, user_id, actor_user)
+            if actor_user.id == user_id and not data.is_superuser:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="You cannot revoke your own superuser privileges",
+                )
+
+            user = await auth.user_service.update_superuser_status(
+                session,
+                user_id=user_id,
+                is_superuser=data.is_superuser,
+                changed_by_id=actor_user.id,
+                reason=data.reason,
+            )
+
+            if auth.observability:
+                auth.observability.logger.info(
+                    "user_superuser_status_changed",
+                    target_user_id=str(user_id),
+                    is_superuser=data.is_superuser,
+                    changed_by=obs.user_id,
+                )
+
+            return await build_user_response_async(session, user)
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
 
     @router.patch(
         "/{user_id}/status",

@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 from uuid import UUID
 
 from fastapi import Request, Response
-from sqlalchemy import or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
@@ -774,6 +774,73 @@ class UserService(BaseService[User]):
 
         return user
 
+    async def update_superuser_status(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        *,
+        is_superuser: bool,
+        changed_by_id: Optional[UUID] = None,
+        reason: Optional[str] = None,
+    ) -> User:
+        """Grant or revoke platform-wide superuser privileges."""
+        user = await self.get_by_id(session, user_id)
+        if not user:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": str(user_id)},
+            )
+
+        if user.status == UserStatus.DELETED:
+            raise InvalidInputError(
+                message="Deleted users must be restored before changing superuser privileges",
+                details={"user_id": str(user_id), "status": user.status.value},
+            )
+
+        previous_is_superuser = bool(user.is_superuser)
+        if previous_is_superuser == is_superuser:
+            return user
+
+        if previous_is_superuser and not is_superuser:
+            superuser_count_stmt = (
+                select(func.count())
+                .select_from(User)
+                .where(
+                    cast(Any, User.is_superuser).is_(True),
+                    cast(Any, User.status) == UserStatus.ACTIVE,
+                )
+            )
+            active_superuser_count = int(
+                (await session.execute(superuser_count_stmt)).scalar_one() or 0
+            )
+            if active_superuser_count <= 1:
+                raise InvalidInputError(
+                    message="Cannot revoke the final active superuser",
+                    details={"user_id": str(user_id)},
+                )
+
+        user.is_superuser = is_superuser
+        await self.update(session, user)
+        await self._invalidate_user_auth_snapshot(user.id)
+
+        if self.user_audit_service:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="privilege",
+                event_type="user.superuser_granted" if is_superuser else "user.superuser_revoked",
+                event_source="user_service.update_superuser_status",
+                actor_user_id=changed_by_id,
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                reason=reason,
+                before={"is_superuser": previous_is_superuser},
+                after={"is_superuser": user.is_superuser},
+                metadata={"changed_fields": ["is_superuser"]},
+            )
+
+        return user
+
     async def delete_user(
         self,
         session: AsyncSession,
@@ -1054,6 +1121,7 @@ class UserService(BaseService[User]):
         *,
         first_name: Optional[str] = None,
         last_name: Optional[str] = None,
+        is_superuser: bool = False,
         invited_by_id: Optional[UUID] = None,
         root_entity_id: Optional[UUID] = None,
     ) -> Tuple[User, str]:
@@ -1065,6 +1133,7 @@ class UserService(BaseService[User]):
             email: Email to invite
             first_name: Optional first name
             last_name: Optional last name
+            is_superuser: Whether the invited user should receive platform-wide privileges
             invited_by_id: UUID of inviting user
             root_entity_id: Optional root entity ID
 
@@ -1111,7 +1180,7 @@ class UserService(BaseService[User]):
             first_name=first_name,
             last_name=last_name,
             status=UserStatus.INVITED,
-            is_superuser=False,
+            is_superuser=is_superuser,
             root_entity_id=root_entity_id,
             invite_token=hashed_token,
             invite_token_expires=expires,
@@ -1147,6 +1216,7 @@ class UserService(BaseService[User]):
                 before=None,
                 after={
                     "status": user.status,
+                    "is_superuser": user.is_superuser,
                     "invite_token_expires": user.invite_token_expires,
                     "email_verified": user.email_verified,
                 },

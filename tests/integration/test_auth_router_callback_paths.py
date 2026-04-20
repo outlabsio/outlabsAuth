@@ -90,6 +90,7 @@ async def _create_user(
     *,
     email_prefix: str,
     password: str = "TestPass123!",
+    is_superuser: bool = False,
 ):
     return await auth.user_service.create_user(
         session=session,
@@ -97,6 +98,7 @@ async def _create_user(
         password=password,
         first_name="Test",
         last_name="User",
+        is_superuser=is_superuser,
     )
 
 
@@ -269,6 +271,79 @@ async def test_auth_router_callback_happy_paths(
             is_global=False,
         )
         actor = await _create_user(auth_instance, session, email_prefix="inviter")
+        super_actor = await _create_user(
+            auth_instance,
+            session,
+            email_prefix="super-inviter",
+            is_superuser=True,
+        )
+
+        direct_permission = await auth_instance.permission_service.create_permission(
+            session,
+            name=f"invite_direct:{_suffix()}",
+            display_name="Invite Direct Permission",
+        )
+        direct_role = await auth_instance.role_service.create_role(
+            session=session,
+            name=f"direct_role_{_suffix()}",
+            display_name="Direct Invite Role",
+            permission_names=[direct_permission.name],
+        )
+        direct_invited = await invite_user(
+            data=InviteUserRequest(
+                email=f"direct-invited-{_suffix()}@example.com",
+                first_name="Direct",
+                last_name="Invite",
+                role_ids=[str(direct_role.id)],
+            ),
+            session=session,
+            obs=DummyObs(str(actor.id)),
+        )
+        assert direct_invited.status == "invited"
+        assert captured["invite_token"]
+
+        direct_accepted = await accept_invite(
+            data=AcceptInviteRequest(
+                token=captured["invite_token"],
+                new_password="DirectInvite123!",
+            ),
+            session=session,
+            obs=DummyObs(),
+        )
+        assert direct_accepted.access_token
+        direct_roles = await auth_instance.role_service.get_user_roles(
+            session,
+            user_id=uuid.UUID(direct_invited.id),
+        )
+        assert [role.id for role in direct_roles] == [direct_role.id]
+        assert await auth_instance.permission_service.check_permission(
+            session,
+            user_id=uuid.UUID(direct_invited.id),
+            permission=direct_permission.name,
+        )
+
+        with pytest.raises(HTTPException) as exc:
+            await invite_user(
+                data=InviteUserRequest(
+                    email=f"blocked-super-invite-{_suffix()}@example.com",
+                    is_superuser=True,
+                ),
+                session=session,
+                obs=DummyObs(str(actor.id)),
+            )
+        assert exc.value.status_code == 403
+
+        super_invited = await invite_user(
+            data=InviteUserRequest(
+                email=f"super-invited-{_suffix()}@example.com",
+                first_name="Super",
+                last_name="Invite",
+                is_superuser=True,
+            ),
+            session=session,
+            obs=DummyObs(str(super_actor.id)),
+        )
+        assert super_invited.is_superuser is True
 
         invited = await invite_user(
             data=InviteUserRequest(
