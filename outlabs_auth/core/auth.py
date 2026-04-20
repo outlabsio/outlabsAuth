@@ -60,7 +60,7 @@ class OutlabsAuth:
         enable_entity_hierarchy: bool = False,
         enable_context_aware_roles: bool = False,
         enable_abac: bool = False,
-        enable_caching: bool = False,
+        enable_caching: Optional[bool] = None,
         enable_audit_log: bool = False,
         trust_resource_context_header: bool = False,
         store_oauth_provider_tokens: bool = False,
@@ -79,7 +79,7 @@ class OutlabsAuth:
         api_key_rate_limit_per_minute: int = 60,
         api_key_temporary_lock_minutes: int = 30,
         # Optional dependencies
-        redis_enabled: bool = False,
+        redis_enabled: Optional[bool] = None,
         redis_url: Optional[str] = None,
         cache_ttl_seconds: int = 300,
         notification_service: Optional[Any] = None,
@@ -112,15 +112,20 @@ class OutlabsAuth:
             enable_entity_hierarchy: Enable entity system (EnterpriseRBAC)
             enable_context_aware_roles: Context-based role permissions (optional)
             enable_abac: Attribute-based access control (optional)
-            enable_caching: Redis caching for performance (optional)
+            enable_caching: Redis-backed permission caching. Defaults to True
+                when Redis is enabled; pass False to opt out while keeping
+                Redis counters/rate limits.
             enable_audit_log: Audit logging for compliance (optional)
             trust_resource_context_header: Trust client-provided X-Resource-Context headers for ABAC
             store_oauth_provider_tokens: Persist OAuth provider tokens in database
             oauth_token_encryption_key: Fernet key for OAuth provider token encryption
             enable_notifications: Enable notification system (optional)
 
-            redis_enabled: Enable Redis features (caching, counters, activity tracking)
-            redis_url: Redis connection URL (required if redis_enabled=True)
+            redis_enabled: Enable Redis features (counters, rate limits,
+                optional permission cache, activity tracking). Defaults to True
+                when redis_url is provided.
+            redis_url: Redis connection URL. If omitted with redis_enabled=True,
+                redis_host/redis_port/redis_db settings are used.
             notification_service: NotificationService instance (optional)
             transactional_mail_service: Optional transactional auth mail service
             observability_logger: Optional host-managed logger adapter for auth events
@@ -142,20 +147,19 @@ class OutlabsAuth:
                 "multi_tenant is no longer supported. Use entity hierarchy and root-entity scoping instead."
             )
 
+        resolved_redis_enabled = redis_enabled if redis_enabled is not None else bool(redis_url)
+        resolved_enable_caching = enable_caching if enable_caching is not None else resolved_redis_enabled
+
         # Validate configuration
         self._validate_config(
             enable_entity_hierarchy=enable_entity_hierarchy,
             enable_context_aware_roles=enable_context_aware_roles,
             enable_abac=enable_abac,
-            enable_caching=enable_caching,
-            redis_url=redis_url,
+            enable_caching=resolved_enable_caching,
+            redis_enabled=resolved_redis_enabled,
             store_oauth_provider_tokens=store_oauth_provider_tokens,
             oauth_token_encryption_key=oauth_token_encryption_key,
         )
-
-        # Set redis_enabled based on redis_url if not explicitly set
-        if redis_url and "redis_enabled" not in kwargs:
-            redis_enabled = True
 
         # Create configuration object
         self.config = AuthConfig(
@@ -179,8 +183,8 @@ class OutlabsAuth:
             enable_entity_hierarchy=enable_entity_hierarchy,
             enable_context_aware_roles=enable_context_aware_roles,
             enable_abac=enable_abac,
-            enable_caching=enable_caching,
-            redis_enabled=redis_enabled,
+            enable_caching=resolved_enable_caching,
+            redis_enabled=resolved_redis_enabled,
             enable_audit_log=enable_audit_log,
             trust_resource_context_header=trust_resource_context_header,
             store_oauth_provider_tokens=store_oauth_provider_tokens,
@@ -262,7 +266,7 @@ class OutlabsAuth:
         enable_context_aware_roles: bool,
         enable_abac: bool,
         enable_caching: bool,
-        redis_url: Optional[str],
+        redis_enabled: bool,
         store_oauth_provider_tokens: bool,
         oauth_token_encryption_key: Optional[str],
     ):
@@ -271,9 +275,9 @@ class OutlabsAuth:
         if enable_context_aware_roles and not enable_entity_hierarchy:
             raise ConfigurationError("enable_context_aware_roles requires enable_entity_hierarchy=True")
 
-        # Caching requires Redis URL
-        if enable_caching and not redis_url:
-            raise ConfigurationError("enable_caching=True requires redis_url parameter")
+        # Caching requires Redis to be enabled.
+        if enable_caching and not redis_enabled:
+            raise ConfigurationError("enable_caching=True requires Redis; provide redis_url or redis_enabled=True")
 
         if store_oauth_provider_tokens and not oauth_token_encryption_key:
             raise ConfigurationError("store_oauth_provider_tokens=True requires oauth_token_encryption_key")
@@ -449,7 +453,7 @@ class OutlabsAuth:
         )
 
         # Initialize Redis client if enabled
-        if self.config.redis_enabled and self.config.redis_url:
+        if self.config.redis_enabled:
             from outlabs_auth.services.redis_client import RedisClient
 
             self.redis_client = RedisClient(self.config)
@@ -773,13 +777,17 @@ class OutlabsAuth:
             else:
                 metadata["principal_allowed_scopes"] = list(principal.allowed_scopes)
         if self.api_key_policy_service is not None:
-            effectiveness = await self.api_key_policy_service.evaluate_effectiveness(
-                session,
-                api_key=api_key,
-                scopes=key_scopes,
-            )
-            metadata["is_currently_effective"] = effectiveness.is_currently_effective
-            metadata["ineffective_reasons"] = effectiveness.ineffective_reasons
+            if required_scope:
+                metadata["is_currently_effective"] = True
+                metadata["ineffective_reasons"] = []
+            else:
+                effectiveness = await self.api_key_policy_service.evaluate_effectiveness(
+                    session,
+                    api_key=api_key,
+                    scopes=key_scopes,
+                )
+                metadata["is_currently_effective"] = effectiveness.is_currently_effective
+                metadata["ineffective_reasons"] = effectiveness.ineffective_reasons
 
         if (
             required_scope

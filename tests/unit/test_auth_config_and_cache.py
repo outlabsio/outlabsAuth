@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from pydantic import ValidationError
 
 from outlabs_auth import SimpleRBAC
+from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import ConfigurationError
 from outlabs_auth.services.cache import CacheService
 
@@ -71,6 +73,50 @@ def test_oauth_token_storage_requires_encryption_key():
             database_url="postgresql+asyncpg://example:example@localhost:5432/test",
             secret_key="test-secret-key-do-not-use-in-production-12345678",
             store_oauth_provider_tokens=True,
+        )
+
+
+@pytest.mark.unit
+def test_auth_config_enables_redis_and_caching_from_redis_url(test_secret_key: str):
+    config = AuthConfig(
+        secret_key=test_secret_key,
+        redis_url="redis://localhost:6379/0",
+    )
+
+    assert config.redis_enabled is True
+    assert config.enable_caching is True
+
+
+@pytest.mark.unit
+def test_auth_config_preserves_explicit_cache_opt_out(test_secret_key: str):
+    config = AuthConfig(
+        secret_key=test_secret_key,
+        redis_url="redis://localhost:6379/0",
+        enable_caching=False,
+    )
+
+    assert config.redis_enabled is True
+    assert config.enable_caching is False
+
+
+@pytest.mark.unit
+def test_auth_config_preserves_explicit_redis_opt_out(test_secret_key: str):
+    config = AuthConfig(
+        secret_key=test_secret_key,
+        redis_url="redis://localhost:6379/0",
+        redis_enabled=False,
+    )
+
+    assert config.redis_enabled is False
+    assert config.enable_caching is False
+
+
+@pytest.mark.unit
+def test_auth_config_rejects_cache_without_redis(test_secret_key: str):
+    with pytest.raises(ValidationError, match="enable_caching=True requires Redis"):
+        AuthConfig(
+            secret_key=test_secret_key,
+            enable_caching=True,
         )
 
 

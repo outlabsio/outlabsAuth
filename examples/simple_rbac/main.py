@@ -31,7 +31,6 @@ from outlabs_auth import SimpleRBAC, User
 from outlabs_auth.routers import (
     get_api_keys_router,
     get_auth_router,
-    get_integration_principals_router,
     get_permissions_router,
     get_roles_router,
     get_users_router,
@@ -146,7 +145,6 @@ async def lifespan(app: FastAPI):
         access_token_expire_minutes=480,  # 8 hours for dev
         refresh_token_expire_days=7,
         redis_url=REDIS_URL if REDIS_URL else None,
-        enable_caching=REDIS_URL is not None,
         auto_migrate=False,  # We'll handle migrations manually
         echo_sql=os.getenv("ECHO_SQL", "false").lower() == "true",
     )
@@ -227,14 +225,6 @@ def include_auth_routers(app: FastAPI, auth_instance: SimpleRBAC):
     app.include_router(get_permissions_router(auth_instance, prefix="/v1/permissions", tags=["Permissions"]))
     # API Key management routes
     app.include_router(get_api_keys_router(auth_instance, prefix="/v1/api-keys", tags=["API Keys"]))
-    # Global integration-principal and system-key management routes
-    app.include_router(
-        get_integration_principals_router(
-            auth_instance,
-            prefix="/v1/admin",
-            tags=["System API Keys"],
-        )
-    )
 
 
 # ============================================================================

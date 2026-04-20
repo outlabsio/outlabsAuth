@@ -228,7 +228,6 @@ async def lifespan(app: FastAPI):
         refresh_token_expire_days=7,  # 7 days for dev (default: 30 days)
         redis_client=redis_client,
         redis_url=REDIS_URL if redis_client else None,
-        enable_caching=redis_client is not None,
         enable_context_aware_roles=True,
         enable_abac=True,
         observability_config=obs_config,

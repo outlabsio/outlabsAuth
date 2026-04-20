@@ -110,7 +110,6 @@ auth = OutlabsAuth(
     enable_entity_hierarchy=True,
     enable_context_aware_roles=True,  # Opt-in
     enable_abac=True,                 # Opt-in
-    enable_caching=True,              # Opt-in
     redis_url="redis://localhost:6379"
 )
 ```

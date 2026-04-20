@@ -382,8 +382,7 @@ config = EnterpriseConfig(
     # Optional features:
     enable_context_aware_roles=False,  # Enable if needed
     enable_abac=False,                 # Enable if needed
-    enable_caching=bool(os.getenv("REDIS_URL")),
-    redis_url=os.getenv("REDIS_URL"),
+    redis_url=os.getenv("REDIS_URL"),   # Enables Redis counters + permission cache
 )
 ```
 

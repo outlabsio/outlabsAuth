@@ -2,9 +2,9 @@
 Configuration classes for OutlabsAuth library
 """
 
-from typing import Optional
+from typing import Optional, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class AuthConfig(BaseModel):
@@ -65,7 +65,10 @@ class AuthConfig(BaseModel):
         description="Enable context-aware roles (EnterpriseRBAC optional)",
     )
     enable_abac: bool = Field(default=False, description="Enable ABAC conditions (EnterpriseRBAC optional)")
-    enable_caching: bool = Field(default=False, description="Enable Redis caching (optional)")
+    enable_caching: bool = Field(
+        default=False,
+        description="Enable Redis-backed permission caching. OutlabsAuth enables this by default when Redis is enabled.",
+    )
     enable_audit_log: bool = Field(default=False, description="Enable audit logging (optional)")
     trust_resource_context_header: bool = Field(
         default=False,
@@ -88,8 +91,8 @@ class AuthConfig(BaseModel):
         description="Number of days before an invite token expires",
     )
 
-    # Redis Configuration (optional - for caching)
-    redis_enabled: bool = Field(default=False, description="Enable Redis caching")
+    # Redis Configuration (recommended for production counters, rate limits, and caching)
+    redis_enabled: bool = Field(default=False, description="Enable Redis-backed auth features")
     redis_host: str = Field(default="localhost", description="Redis host")
     redis_port: int = Field(default=6379, description="Redis port")
     redis_db: int = Field(default=0, description="Redis database number")
@@ -171,6 +174,28 @@ class AuthConfig(BaseModel):
     activity_ttl_days: int = Field(default=90, description="Days to keep ActivityMetric records (default: 90 days)")
 
     model_config = ConfigDict(validate_assignment=True)
+
+    @model_validator(mode="after")
+    def _resolve_redis_defaults(self) -> Self:
+        """
+        Treat Redis configuration as the source of truth while preserving explicit opt-outs.
+
+        Direct AuthConfig construction should behave the same as OutlabsAuth:
+        providing redis_url enables Redis features and permission caching unless
+        the caller explicitly sets redis_enabled=False or enable_caching=False.
+        """
+        fields_set = self.model_fields_set
+
+        if self.redis_url and "redis_enabled" not in fields_set:
+            object.__setattr__(self, "redis_enabled", True)
+
+        if self.redis_enabled and "enable_caching" not in fields_set:
+            object.__setattr__(self, "enable_caching", True)
+
+        if self.enable_caching and not self.redis_enabled:
+            raise ValueError("enable_caching=True requires Redis; provide redis_url or redis_enabled=True")
+
+        return self
 
 
 class SimpleConfig(AuthConfig):

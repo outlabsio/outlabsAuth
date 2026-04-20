@@ -591,11 +591,10 @@ async def approve_invoice(
 from outlabs_auth import EnterpriseRBAC
 import time
 
-# Enable caching feature (requires Redis)
+# Providing redis_url enables Redis counters and permission caching
 auth = EnterpriseRBAC(
     database=db,
     redis_url="redis://localhost:6379",
-    enable_caching=True  # Opt-in feature, requires Redis
 )
 
 # First call - miss cache, hits database
@@ -1641,9 +1640,8 @@ config = EnterpriseConfig(
     # Optional features (opt-in via feature flags)
     enable_context_aware_roles=True,
     enable_abac=True,
-    enable_caching=True,
 
-    # Caching settings (only used when enable_caching=True)
+    # Redis counters + permission cache
     redis_url="redis://localhost:6379",
     cache_ttl_seconds=300,  # 5 minutes
 )

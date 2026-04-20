@@ -25,7 +25,7 @@ Start here: Do you need organizational hierarchy (departments/teams)?
            ✓ Multiple roles per user (always included)
            ✓ Optional: Context-aware roles (enable_context_aware_roles=True)
            ✓ Optional: ABAC conditions (enable_abac=True)
-           ✓ Optional: Redis caching (enable_caching=True)
+           ✓ Recommended: Redis counters + caching (redis_url)
            ✓ Entity-isolated single app (root-entity scoping)
 
            Configure only what you need via feature flags!
@@ -83,8 +83,8 @@ Start here: Do you need organizational hierarchy (departments/teams)?
 | **Optional Features (Feature Flags)** |
 | Context-aware roles | ❌ | ⭕ `enable_context_aware_roles=True` |
 | ABAC conditions | ❌ | ⭕ `enable_abac=True` |
-| Redis caching | ❌ | ⭕ `enable_caching=True` (requires Redis) |
-| Redis Pub/Sub cache invalidation | ❌ | ⭕ `enable_caching=True` (DD-037) |
+| Redis-backed caching | ✅ via `redis_url` | ✅ via `redis_url` |
+| Redis Pub/Sub cache invalidation | ✅ via `redis_url` | ✅ via `redis_url` |
 | Tenant isolation mode | ❌ | ❌ (removed; use entity/root scoping) |
 | Core lifecycle history | ✅ user/definition history | ✅ user/membership/definition history |
 | **Performance (Updated v1.4)** |
@@ -434,7 +434,6 @@ auth = EnterpriseRBAC(
     redis_url="redis://localhost:6379",
     enable_context_aware_roles=True,  # Opt-in
     enable_abac=True,                 # Opt-in
-    enable_caching=True,              # Opt-in (requires Redis)
 )
 
 # Context-aware roles (opt-in feature)
@@ -469,7 +468,7 @@ invoice_approval = await auth.permission_service.create_permission(
 **Optional Features (Feature Flags):**
 - Context-aware roles (`enable_context_aware_roles=True`)
 - ABAC conditions (`enable_abac=True`)
-- Redis caching (`enable_caching=True`, requires Redis)
+- Redis counters and permission caching (`redis_url`)
 - Entity/root scoping isolation
 
 **Core History (Current Runtime):**
@@ -480,14 +479,14 @@ invoice_approval = await auth.permission_service.create_permission(
 **Limitations:**
 - More complex than SimpleRBAC
 - Optional features add complexity
-- Redis required for caching (optional)
+- Redis recommended for production API-key counters and permission caching
 - Steeper learning curve with all features enabled
 
 **Dependencies:**
 - MongoDB (via Beanie)
 - FastAPI
 - Python 3.10+
-- Redis (optional, only if `enable_caching=True`)
+- Redis (recommended in production when using API keys)
 
 **Performance (Updated v1.4):**
 - Permission check: ~10ms (uncached with closure table), ~5ms (cached)
@@ -616,7 +615,7 @@ EnterpriseRBAC with optional features:
 - Entity hierarchy ✅ (core)
 - Context-aware roles ⭕ (enable_context_aware_roles=True)
 - ABAC conditions ⭕ (enable_abac=True)
-- Redis caching ⭕ (enable_caching=True)
+- Redis caching ✅ (via `redis_url`)
 ```
 
 #### 5. Healthcare System (Advanced Features)
@@ -632,7 +631,7 @@ EnterpriseRBAC with optional features:
 - Context-aware roles ⭕ (enable_context_aware_roles=True)
 - ABAC conditions ⭕ (enable_abac=True)
 - Core lifecycle history ✅
-- Redis caching ⭕ (enable_caching=True)
+- Redis caching ✅ (via `redis_url`)
 ```
 
 #### 6. Multi-Tenant SaaS (Advanced Features)
@@ -647,7 +646,7 @@ EnterpriseRBAC with optional features:
 - Entity hierarchy ✅ (core)
 - Tenant mode ❌ (removed)
 - ABAC for feature flags ⭕ (enable_abac=True)
-- Redis caching ⭕ (enable_caching=True)
+- Redis caching ✅ (via `redis_url`)
 ```
 
 ---
@@ -707,13 +706,13 @@ await auth.membership_service.add_member(
 **When to Enable:**
 - **Context-aware roles**: Role permissions need to vary by entity type
 - **ABAC conditions**: Need attribute-based access control
-- **Redis caching**: Performance is critical (high traffic)
+- **Redis**: Production API-key counters, rate limits, and permission-cache performance
 - **Entity isolation**: Need strict root-entity boundaries
 - **Additional compliance overlays**: Core lifecycle history is included; add host-specific compliance/export handling only if needed
 
 **Migration Steps:**
 1. Add feature flags to existing `EnterpriseRBAC` configuration
-2. Set up Redis if enabling caching
+2. Provide `redis_url` for production Redis counters/rate limits and permission caching
 3. Update roles to use context-aware permissions (if needed)
 4. Add ABAC conditions to permissions (if needed)
 5. Test thoroughly before production deployment
@@ -731,7 +730,6 @@ auth = EnterpriseRBAC(
     redis_url="redis://localhost:6379",
     enable_context_aware_roles=True,  # Enable as needed
     enable_abac=True,                 # Enable as needed
-    enable_caching=True               # Enable as needed
 )
 
 # Context-aware role (optional feature)
@@ -772,7 +770,7 @@ manager_role = await auth.role_service.create_role(
 | EnterpriseRBAC (uncached) | ~200 | **~500** | **~500** | ~150 | ~2000 |
 | EnterpriseRBAC (cached) | ~200 | **~1000** | **~1000** | ~150 | ~2000 |
 
-*Benchmarks on MacBook Pro M1, MongoDB local, Redis local (when caching enabled)*
+*Benchmarks on MacBook Pro M1, PostgreSQL local, Redis local (when configured)*
 
 ---
 
@@ -807,13 +805,13 @@ manager_role = await auth.role_service.create_role(
 - ⭐⭐ Multiple roles per user (always included)
 - ⭐⭐ Scales to any size organization
 - ⭐⭐ Optional advanced features (enable as needed)
-- ⭐⭐⭐ Best performance when caching enabled
+- ⭐⭐⭐ Best performance when Redis is configured
 
 **Cons:**
 - ⭐ More complex than SimpleRBAC
 - ⭐ Slower permission checks than SimpleRBAC (without caching)
 - ⭐ Steeper learning curve with all features enabled
-- ⭐ Requires Redis for caching (optional)
+- ⭐ Redis recommended for production; no-Redis mode is mainly for early integration
 
 **When to Choose:**
 - Medium to large organization

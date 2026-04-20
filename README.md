@@ -95,8 +95,7 @@ auth = EnterpriseRBAC(
     database_schema="outlabs_auth",
     secret_key="replace-me",
     auto_migrate=False,
-    enable_caching=True,
-    redis_url="redis://cache-host:6379/0",
+    redis_url="redis://cache-host:6379/0",  # Enables Redis counters + permission cache
 )
 ```
 
@@ -104,7 +103,7 @@ Recommended defaults:
 
 - use an explicit auth schema such as `outlabs_auth`
 - keep `auto_migrate=False` in normal runtime
-- enable Redis caching for enterprise/admin-heavy apps
+- provide Redis for production API-key counters, rate limits, and permission caching
 - mount the library under an app-owned prefix such as `/iam`
 
 ### Database connection guidance

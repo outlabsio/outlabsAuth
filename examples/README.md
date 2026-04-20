@@ -102,7 +102,7 @@ Use the examples as consumer references, but keep production defaults explicit:
 - set an explicit auth schema such as `OUTLABS_AUTH_SCHEMA=outlabs_auth`
 - keep runtime `auto_migrate=False`
 - run `uv run outlabs-auth migrate` and `uv run outlabs-auth seed-system` in a single-process prestart or release hook before starting multi-worker app processes
-- enable Redis caching for enterprise/admin-heavy apps
+- provide `REDIS_URL` for production counters, rate limits, and permission caching
 
 If you are validating a packaged integration, prefer the library README's
 production baseline over the convenience local-demo settings used by the
@@ -135,7 +135,7 @@ examples.
 ### Use Full-Featured Example if:
 - ✅ You need attribute-based conditions (budget limits, etc.)
 - ✅ Permissions should adapt based on context
-- ✅ High-performance requirements (Redis caching)
+- ✅ High-performance requirements (Redis-backed permission cache)
 - ✅ Complex permission evaluation logic
 - ✅ Advanced use cases
 
@@ -160,7 +160,7 @@ examples.
 ### 3. Master Full-Featured (2-3 hours)
 - Add ABAC conditions
 - Implement context-aware roles
-- Enable Redis caching
+- Configure `REDIS_URL` for Redis-backed counters and permission caching
 - Optimize performance
 
 ---

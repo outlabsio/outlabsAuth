@@ -85,7 +85,7 @@ class _FakeApp:
                 "secret_key": "test-secret",
                 "enable_caching": True,
             },
-            "enable_caching=True requires redis_url parameter",
+            "enable_caching=True requires Redis",
         ),
     ],
 )
@@ -106,12 +106,41 @@ def test_outlabs_auth_sets_redis_enabled_and_reports_features():
     )
 
     assert auth.config.redis_enabled is True
+    assert auth.config.enable_caching is True
     assert auth.is_enterprise is True
     assert auth.features["entity_hierarchy"] is True
     assert auth.features["abac"] is True
+    assert auth.features["caching"] is True
     assert auth.features["audit_log"] is True
     assert "EnterpriseRBAC" in repr(auth)
     assert "abac" in repr(auth)
+
+
+@pytest.mark.unit
+def test_outlabs_auth_allows_explicit_cache_opt_out_with_redis_url():
+    auth = OutlabsAuth(
+        database_url="postgresql+asyncpg://example:example@localhost:5432/test",
+        secret_key="test-secret",
+        redis_url="redis://localhost:6379/0",
+        enable_caching=False,
+    )
+
+    assert auth.config.redis_enabled is True
+    assert auth.config.enable_caching is False
+    assert auth.features["caching"] is False
+
+
+@pytest.mark.unit
+def test_outlabs_auth_allows_explicit_redis_opt_out_with_redis_url():
+    auth = OutlabsAuth(
+        database_url="postgresql+asyncpg://example:example@localhost:5432/test",
+        secret_key="test-secret",
+        redis_url="redis://localhost:6379/0",
+        redis_enabled=False,
+    )
+
+    assert auth.config.redis_enabled is False
+    assert auth.config.enable_caching is False
 
 
 @pytest.mark.unit
@@ -363,6 +392,7 @@ async def test_outlabs_auth_authorize_api_key_returns_host_safe_auth_result():
     )
     auth.api_key_service.get_api_key_scopes.assert_awaited_once_with("db-session", api_key.id)
     auth.user_service.get_user_by_id.assert_awaited_once_with("db-session", owner_id)
+    auth.api_key_policy_service.evaluate_effectiveness.assert_not_awaited()
 
 
 @pytest.mark.unit
@@ -415,7 +445,6 @@ async def test_outlabs_auth_init_services_wires_redis_cache_enterprise_and_activ
         secret_key="test-secret",
         enable_entity_hierarchy=True,
         redis_url="redis://localhost:6379/0",
-        enable_caching=True,
         enable_activity_tracking=True,
         store_oauth_provider_tokens=True,
         oauth_token_encryption_key=Fernet.generate_key().decode(),
@@ -446,6 +475,26 @@ async def test_outlabs_auth_init_services_wires_redis_cache_enterprise_and_activ
     assert auth.auth_service.activity_tracker is auth.activity_tracker
     assert auth.api_key_policy_service.observability is auth.observability
     assert auth.api_key_service.observability is auth.observability
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_outlabs_auth_init_services_can_use_redis_without_permission_cache():
+    auth = OutlabsAuth(
+        database_url="postgresql+asyncpg://example:example@localhost:5432/test",
+        secret_key="test-secret",
+        redis_url="redis://localhost:6379/0",
+        enable_caching=False,
+    )
+
+    await auth._init_services()
+
+    assert auth.redis_client is not None
+    assert auth.cache_service is None
+    assert auth.cache is None
+    assert auth.api_key_service.redis_client is auth.redis_client
+    assert auth.role_service.cache_service is None
+    assert auth.permission_service.cache_service is None
 
 
 @pytest.mark.unit

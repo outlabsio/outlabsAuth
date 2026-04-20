@@ -496,11 +496,8 @@ Redis optional with in-memory fallback.
 # No caching
 auth = SimpleRBAC(database=db)
 
-# In-memory caching
-auth = SimpleRBAC(database=db, enable_caching=True)
-
 # Redis caching
-auth = FullFeatured(
+auth = SimpleRBAC(
     database=db,
     redis_url="redis://localhost:6379"
 )
@@ -748,7 +745,6 @@ auth = EnterpriseRBAC(
     redis_url="redis://localhost:6379",
     enable_context_aware_roles=True,  # Opt-in
     enable_abac=True,                 # Opt-in
-    enable_caching=True               # Opt-in
 )
 ```
 
@@ -2931,7 +2927,7 @@ The data is already structured correctly—just add entity context.
 ## DD-048: Redis Configuration Simplification
 
 **Date**: 2025-01-26
-**Status**: Accepted (Clarification)
+**Status**: Superseded 2026-04-20
 **Deciders**: Core team
 **Context**: Simplify Redis enablement to reduce configuration confusion
 
@@ -2946,13 +2942,18 @@ Current implementation has confusing dual-flag system:
 - Why have both `enable_caching` AND `redis_enabled`?
 - Unclear which features require Redis
 
-### Decision
-Simplify to single `redis_enabled` flag as source of truth.
+### Updated Decision
+`redis_url` is the normal source of truth. Providing it enables Redis-backed
+auth features by default: API-key counters, API-key rate limiting, and
+permission caching. `enable_caching=False` remains as an explicit opt-out for
+debugging or first integration, and `redis_enabled=False` disables Redis even if
+a URL is present.
 
 **Simple Rules**:
-1. User provides `redis_enabled=True` → Use Redis for all features
-2. User provides `redis_url` but `redis_enabled=False` → Redis available but not used (user's explicit choice)
-3. Redis unavailable → Graceful degradation to in-memory/direct DB
+1. User provides `redis_url` → Use Redis counters/rate limits and permission caching
+2. User provides `redis_url` plus `enable_caching=False` → Use Redis counters/rate limits, skip permission caching
+3. User provides `redis_url` plus `redis_enabled=False` → Redis available but not used (user's explicit choice)
+4. Redis unavailable → Graceful degradation to in-memory/direct DB
 
 **Configuration**:
 ```python
@@ -2966,7 +2967,6 @@ auth = SimpleRBAC(
 auth = SimpleRBAC(
     database=db,
     secret_key="secret",
-    redis_enabled=True,
     redis_url="redis://localhost:6379"
 )
 ```
@@ -2979,48 +2979,36 @@ auth = SimpleRBAC(
 - ✅ Activity tracking DAU/MAU (falls back to disabled)
 - ✅ Entity path caching (falls back to direct closure table queries)
 
-**Why Not Auto-Enable on redis_url?**
-- User may provide `redis_url` for future use but not want it active yet
-- Explicit is better than implicit (Zen of Python)
-- Allows configuration via environment variables without auto-activation
-- User maintains control over when Redis features activate
+**Why Auto-Enable on redis_url?**
+- The DB fallback path writes to the same `api_keys` row on every request and
+  becomes a production bottleneck under shared API-key concurrency.
+- Forgetting `enable_caching=True` is easy and leaves avoidable role/permission
+  queries in the hot path.
+- Apps that truly need to opt out can say so explicitly.
 
 ### Implementation
 ```python
 # In OutlabsAuth.__init__
-if redis_url and redis_enabled:
-    self.redis_client = RedisClient(config)
-else:
-    self.redis_client = None
-
-# In RedisClient.connect()
-if not self.config.redis_enabled:
-    logger.info("Redis disabled in configuration")
-    return False
+redis_enabled = redis_enabled if redis_enabled is not None else bool(redis_url)
+enable_caching = enable_caching if enable_caching is not None else redis_enabled
 ```
 
-**Remove**:
-- `enable_caching` parameter (redundant with `redis_enabled`)
-- Automatic Redis enablement on `redis_url` presence
-
 ### Consequences
-- **Positive**: Clearer configuration, single source of truth, explicit control
-- **Negative**: Requires `redis_enabled=True` even when `redis_url` provided
-- **Neutral**: One-line change for users (add `redis_enabled=True`)
+- **Positive**: Production-safe default when Redis is configured
+- **Positive**: Existing `enable_caching=True` configurations continue to work
+- **Neutral**: Hosts can still explicitly opt out for debugging or initial integration
 
 ### Migration for Existing Code
 ```python
 # OLD (confusing)
 auth = SimpleRBAC(
     database=db,
-    enable_caching=True,
     redis_url="redis://localhost:6379"
 )
 
 # NEW (clear)
 auth = SimpleRBAC(
     database=db,
-    redis_enabled=True,
     redis_url="redis://localhost:6379"
 )
 ```

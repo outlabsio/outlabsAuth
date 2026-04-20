@@ -138,11 +138,11 @@ class OutlabsAuth:
         enable_entity_hierarchy: bool = False,
         enable_context_aware_roles: bool = False,
         enable_abac: bool = False,
-        enable_caching: bool = False,
+        enable_caching: Optional[bool] = None,
         enable_audit_log: bool = False,  # Reserved for future extended/compliance capture
         # Optional dependencies
         redis_url: Optional[str] = None,
-        redis_enabled: bool = False,
+        redis_enabled: Optional[bool] = None,
         notification_service: Optional[NotificationService] = None,
         **kwargs
     ):
@@ -150,12 +150,15 @@ class OutlabsAuth:
         self.secret_key = secret_key
 
         # Configuration
+        resolved_redis_enabled = redis_enabled if redis_enabled is not None else bool(redis_url)
+        resolved_enable_caching = enable_caching if enable_caching is not None else resolved_redis_enabled
         self.config = AuthConfig(
             enable_entity_hierarchy=enable_entity_hierarchy,
             enable_context_aware_roles=enable_context_aware_roles,
             enable_abac=enable_abac,
-            enable_caching=enable_caching,
+            enable_caching=resolved_enable_caching,
             enable_audit_log=enable_audit_log,
+            redis_enabled=resolved_redis_enabled,
             redis_url=redis_url,
             **kwargs
         )
@@ -197,8 +200,9 @@ class OutlabsAuth:
             self.membership_service = None  # Not available
 
         # Optional services
-        if self.config.enable_caching and self.config.redis_url:
-            self.cache_service = CacheService(self.config.redis_url)
+        self.redis_client = RedisClient(self.config) if self.config.redis_enabled else None
+        if self.config.redis_enabled and self.config.enable_caching:
+            self.cache_service = CacheService(self.redis_client)
         else:
             self.cache_service = None
 
@@ -337,10 +341,10 @@ class EnterpriseRBAC(OutlabsAuth):
 - Tree permissions (`resource:action_tree`)
 - Entity context in permission checks
 
-**Optional Features** (Opt-in via flags):
+**Optional Features** (Opt-in via flags/config):
 - Context-aware roles (permissions vary by entity type) - `enable_context_aware_roles=True`
 - ABAC conditions (attribute-based access control) - `enable_abac=True`
-- Permission caching (Redis) - `enable_caching=True` (requires `redis_url`)
+- Permission caching (Redis) - enabled by `redis_url`; opt out with `enable_caching=False`
 - Entity-isolated operation via root-entity scoping
 
 **Core History Surfaces** (included in current runtime):
@@ -401,10 +405,8 @@ auth = EnterpriseRBAC(
     database_url=DATABASE_URL,
     secret_key=SECRET_KEY,
     redis_url="redis://localhost:6379",
-    redis_enabled=True,
     enable_context_aware_roles=True,  # Opt-in
     enable_abac=True,                 # Opt-in
-    enable_caching=True               # Opt-in
 )
 
 # Context-aware role
@@ -453,7 +455,7 @@ result = await auth.permission_service.check_permission_with_context(
 - `auth.entity_service` - ✅ Entity hierarchy management
 - `auth.membership_service` - ✅ Entity membership management
 - `auth.host_query_service` - ✅ Host-facing read facade for embedded app integrations
-- `auth.cache_service` - ✅ Available if `enable_caching=True` and `redis_url` provided
+- `auth.cache_service` - ✅ Available when Redis is enabled and permission caching is not explicitly disabled
 
 ---
 
@@ -792,7 +794,7 @@ class EnterprisePermissionService(BasicPermissionService):
         2. Check ReBAC (is entity relationship valid?)
         3. Check ABAC (do conditions pass?) - only if enable_abac=True
 
-        Note: Caching automatically applied when enable_caching=True
+        Note: Redis-backed permission caching is automatically applied when Redis is enabled.
         """
         pass
 ```
@@ -2264,10 +2266,10 @@ class EnterpriseConfig(AuthConfig):
     # Optional features (opt-in)
     enable_context_aware_roles: bool = False
     enable_abac: bool = False
-    enable_caching: bool = False
+    enable_caching: bool = False  # Defaults to True when Redis is enabled by OutlabsAuth
     enable_audit_log: bool = False  # Reserved for future extended/compliance capture
 
-    # Caching settings (only used when enable_caching=True)
+    # Redis counters + permission cache
     redis_url: Optional[str] = None
     cache_ttl_seconds: int = 300
 ```

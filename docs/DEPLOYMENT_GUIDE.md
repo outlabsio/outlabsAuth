@@ -87,7 +87,7 @@ OutlabsAuth is a library, not a service, so it gets embedded in your application
 
 - **Python**: 3.11+
 - **MongoDB**: 6.0+
-- **Redis**: 7.0+ (optional, for caching)
+- **Redis**: 7.0+ recommended for production API-key counters, rate limits, and permission caching
 - **Docker**: 24.0+ (for containerized deployments)
 - **Kubernetes**: 1.28+ (for K8s deployments)
 
@@ -626,10 +626,13 @@ from outlabs_auth import EnterpriseRBAC
 auth = EnterpriseRBAC(
     database=db,
     redis_url="redis://redis:6379",
-    enable_caching=True,
     cache_ttl_seconds=300  # 5 minutes
 )
 ```
+
+`redis_url` enables both Redis counters and the permission cache by default. If
+you need Redis counters/rate limits but want to disable permission caching while
+debugging an integration, pass `enable_caching=False` explicitly.
 
 **Cache Invalidation**:
 ```python
@@ -664,8 +667,6 @@ from outlabs_auth import EnterpriseRBAC
 auth = EnterpriseRBAC(
     database=db,
     redis_url="redis://redis:6379",
-    enable_caching=True,
-    enable_pubsub_invalidation=True,  # Enable Pub/Sub (v1.4)
     cache_ttl_seconds=300
 )
 
@@ -866,8 +867,6 @@ auth = EnterpriseRBAC(
         ("redis-sentinel-3", 26379)
     ],
     redis_sentinel_master="mymaster",
-    enable_caching=True,
-    enable_pubsub_invalidation=True
 )
 ```
 
@@ -894,7 +893,7 @@ This runs inside the auth middleware on the request's database session. Every wo
 - Per-request latency balloons from ~20 ms to ~200 ms even though the ingest queries themselves are fast — the middleware UPDATE is the wall.
 - Scaling out API workers (more uvicorn processes) and client concurrency does **not** help, because the contention is on a single Postgres row, not on the app.
 
-Switching on Redis moves the counter to `INCR api_key_usage:<id>` and the timestamp to a `SET`, both lock-free in memory. The hot-row serialization disappears and throughput scales linearly with worker count.
+Providing `redis_url` enables Redis by default. That moves the usage counter to `INCR apikey:{id}:usage`, stores the timestamp in Redis, and enables the permission-check cache. The hot-row serialization disappears, and repeated permission checks avoid most role/permission aggregation queries.
 
 **Heads-up: enabling Redis also activates the rate limiter.** `_check_rate_limits` in `services/api_key.py` is guarded by `if self.redis_client and self.redis_client.is_available`, so it's silently a no-op when Redis is absent. The first time you turn Redis on, audit every row in `api_keys` — the default `rate_limit_per_minute` of 60 will cause batch workloads to start getting `InvalidInputError: Rate limit exceeded` after the first ~60 requests. For service keys used by importers or scrapers, set `rate_limit_per_minute` to a high value (or configure a dedicated service key) before flipping Redis on.
 
@@ -903,21 +902,29 @@ Switching on Redis moves the counter to `INCR api_key_usage:<id>` and the timest
 # Enable Redis counters for API keys
 auth = EnterpriseRBAC(
     database=db,
-    redis_url="redis://redis:6379",
-    enable_api_key_redis_counters=True,  # 99%+ DB write reduction
-    api_key_sync_interval=300  # Sync to DB every 5 minutes
+    redis_url="redis://redis:6379",  # Enables Redis counters + permission cache
 )
 
 # Start background sync task
 @app.on_event("startup")
 async def startup():
-    # Start API key counter sync
-    asyncio.create_task(auth.api_key_service.run_background_sync())
+    from outlabs_auth.workers import start_api_key_sync_worker
+
+    app.state.api_key_usage_sync = await start_api_key_sync_worker(
+        auth.api_key_service,
+        auth.config,
+        session_factory=auth.session_factory,
+        interval_seconds=300,
+    )
+
+@app.on_event("shutdown")
+async def shutdown():
+    await app.state.api_key_usage_sync.stop()
 ```
 
 **How It Works**:
 ```
-API Request → Redis INCR api_key_usage:{key_id} → Every 5 min → Batch update MongoDB
+API Request → Redis INCR apikey:{key_id}:usage → Every 5 min → Batch update Postgres
 100 requests/sec → 100 Redis writes (fast) → 1 DB write/5min (instead of 30,000)
 ```
 

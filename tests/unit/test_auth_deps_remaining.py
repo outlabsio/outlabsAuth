@@ -467,7 +467,7 @@ async def test_require_tree_permission_validates_inputs_and_permission_service(
     )
 
     await path_dependency(request=path_request, session=object())
-    assert permission_service.calls[-1]["permission"] == "entity:create"
+    assert permission_service.calls[-1]["permission"] == "entity:create_tree"
 
 
 @pytest.mark.unit

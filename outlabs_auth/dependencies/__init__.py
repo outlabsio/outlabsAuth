@@ -59,6 +59,21 @@ class AuthDeps:
             )
         return required_permission in normalized or "*:*" in normalized
 
+    @staticmethod
+    def _tree_permission_variant(permission: str) -> str:
+        if permission in {"*", "*:*"} or ":" not in permission:
+            return permission
+
+        resource, action = permission.split(":", 1)
+        if action == "*":
+            return permission
+
+        action_base, separator, maybe_scope = action.rpartition("_")
+        if separator and maybe_scope in {"tree", "all", "own"}:
+            return permission
+
+        return f"{resource}:{action}_tree"
+
     async def _auth_result_has_permission(
         self,
         *,
@@ -472,8 +487,7 @@ class AuthDeps:
         source: str = "path",
     ) -> Callable:
         """
-        Require a permission in a *target* entity context, allowing inheritance
-        from ancestors via `*_tree` / `*_all` permissions.
+        Require a tree-scoped permission for a target entity context.
 
         `entity_id_field` indicates where to read the target entity ID from:
         - `source="path"`: `request.path_params[entity_id_field]`
@@ -481,11 +495,10 @@ class AuthDeps:
         - `source="header"`: `request.headers[entity_id_field]`
         - `source="body"`: JSON body field `entity_id_field`
 
-        This helper delegates entity-context permission evaluation to
-        `permission_service.check_permission(...)`, which already allows:
-
-        - exact-entity non-scoped permissions at the target entity
-        - ancestor `*_tree` / `*_all` permissions across descendants
+        When an entity ID is present, this checks the `_tree` variant of a
+        base permission, so a direct `resource:action` grant on the parent does
+        not authorize child/subtree operations. Existing scoped permissions,
+        wildcards, and non-`resource:action` forms are preserved.
 
         If `source="body"` and the field is absent/null, this falls back to a
         global permission check (useful for root-level creates).
@@ -568,7 +581,7 @@ class AuthDeps:
             has_perm = await self._auth_result_has_permission(
                 auth_result=auth_result,
                 session=session,
-                permission=permission,
+                permission=self._tree_permission_variant(permission) if entity_id is not None else permission,
                 entity_id=entity_id,
                 resource_context=resource_context,
                 env_context=env_context,
