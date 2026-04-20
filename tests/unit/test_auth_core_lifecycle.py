@@ -11,7 +11,10 @@ from cryptography.fernet import Fernet
 
 from outlabs_auth.core.auth import OutlabsAuth
 from outlabs_auth.core.exceptions import ConfigurationError
-from outlabs_auth.models.sql.enums import APIKeyKind
+from outlabs_auth.models.sql.api_key import APIKey
+from outlabs_auth.models.sql.enums import APIKeyKind, APIKeyStatus
+from outlabs_auth.services.api_key import APIKeyService
+from outlabs_auth.services.cache import CacheService
 
 
 class _FakeSession:
@@ -47,6 +50,23 @@ class _SessionContext:
         return False
 
 
+def _snapshot_api_key_model(key_id, *, prefix: str = "sk_live_cached_1"):
+    return SimpleNamespace(
+        id=key_id,
+        prefix=prefix,
+        status=APIKeyStatus.ACTIVE,
+        key_kind=APIKeyKind.PERSONAL,
+        owner_type="user",
+        resolved_owner_id=None,
+        expires_at=None,
+        entity_id=None,
+        inherit_from_tree=False,
+        rate_limit_per_minute=None,
+        rate_limit_per_hour=None,
+        rate_limit_per_day=None,
+    )
+
+
 class _FakeApp:
     def __init__(self, fail_middleware: bool = False) -> None:
         self.fail_middleware = fail_middleware
@@ -60,6 +80,41 @@ class _FakeApp:
 
     def include_router(self, router: object) -> None:
         self.routers.append(router)
+
+
+class _SnapshotRedis:
+    def __init__(self) -> None:
+        self.is_available = True
+        self.values: dict[str, object] = {}
+        self.counters: dict[str, int] = {}
+        self.deleted: list[str] = []
+
+    def make_key(self, *parts: str) -> str:
+        return ":".join(str(part) for part in parts)
+
+    async def get(self, key: str):
+        return self.values.get(key)
+
+    async def set(self, key: str, value, ttl=None):
+        self.values[key] = value
+        return True
+
+    async def delete(self, key: str):
+        self.deleted.append(key)
+        self.values.pop(key, None)
+        self.counters.pop(key, None)
+        return True
+
+    async def get_counter(self, key: str):
+        return self.counters.get(key, 0)
+
+    async def increment(self, key: str, amount: int = 1):
+        self.counters[key] = self.counters.get(key, 0) + amount
+        return self.counters[key]
+
+    async def increment_with_ttl(self, key: str, amount: int = 1, ttl: int | None = None):
+        self.counters[key] = self.counters.get(key, 0) + amount
+        return self.counters[key]
 
 
 @pytest.mark.unit
@@ -393,6 +448,117 @@ async def test_outlabs_auth_authorize_api_key_returns_host_safe_auth_result():
     auth.api_key_service.get_api_key_scopes.assert_awaited_once_with("db-session", api_key.id)
     auth.user_service.get_user_by_id.assert_awaited_once_with("db-session", owner_id)
     auth.api_key_policy_service.evaluate_effectiveness.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_outlabs_auth_authorize_api_key_uses_cached_snapshot_without_db_auth():
+    auth = OutlabsAuth(
+        database_url="postgresql+asyncpg://example:example@localhost:5432/test",
+        secret_key="test-secret",
+    )
+    api_key_string = "sk_live_direct_cached_key_123456"
+    key_id = uuid4()
+    user_id = uuid4()
+    redis = _SnapshotRedis()
+    snapshot_config = auth.config.model_copy(update={"redis_enabled": True, "enable_caching": True})
+    cache_service = CacheService(redis, snapshot_config)
+    api_key_service = APIKeyService(snapshot_config, redis_client=redis)
+    api_key_service.cache_service = cache_service
+    await api_key_service.set_api_key_auth_snapshot(
+        api_key_string,
+        auth_result={
+            "user": None,
+            "user_id": str(user_id),
+            "source": "api_key",
+            "api_key": _snapshot_api_key_model(key_id),
+            "metadata": {
+                "scopes": ["contacts:read"],
+                "owner_type": "user",
+                "owner_id": str(user_id),
+            },
+        },
+        effective_permissions=["contacts:read"],
+        ip_whitelist=["127.0.0.1"],
+    )
+    api_key_service.verify_api_key = AsyncMock(side_effect=AssertionError("slow path should not run"))
+
+    auth._initialized = True
+    auth.api_key_service = api_key_service
+    auth.user_service = SimpleNamespace()
+    auth.permission_service = SimpleNamespace(config=SimpleNamespace(enable_abac=False))
+
+    result = await auth.authorize_api_key(
+        "db-session",
+        api_key_string,
+        required_scope="contacts:read",
+        ip_address="127.0.0.1",
+    )
+
+    assert result is not None
+    assert result["source"] == "api_key"
+    assert result["user_id"] == str(user_id)
+    assert result["user"] is None
+    assert result["api_key"] is None
+    assert result["metadata"]["auth_snapshot"] is True
+    assert result["metadata"]["is_currently_effective"] is True
+    assert result["metadata"]["ineffective_reasons"] == []
+    assert redis.counters[f"apikey:{key_id}:usage"] == 1
+    api_key_service.verify_api_key.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_outlabs_auth_authorize_api_key_populates_direct_snapshot_after_slow_success():
+    auth = OutlabsAuth(
+        database_url="postgresql+asyncpg://example:example@localhost:5432/test",
+        secret_key="test-secret",
+    )
+    api_key_string = "sk_live_direct_cache_fill_key_123456"
+    key_id = uuid4()
+    user_id = uuid4()
+    redis = _SnapshotRedis()
+    snapshot_config = auth.config.model_copy(update={"redis_enabled": True, "enable_caching": True})
+    cache_service = CacheService(redis, snapshot_config)
+    api_key_service = APIKeyService(snapshot_config, redis_client=redis)
+    api_key_service.cache_service = cache_service
+    api_key = _snapshot_api_key_model(key_id)
+    user = SimpleNamespace(id=user_id, can_authenticate=lambda: True)
+    api_key_service.verify_api_key = AsyncMock(return_value=(api_key, 3))
+    api_key_service.resolve_api_key_owner = AsyncMock(
+        return_value=SimpleNamespace(
+            user=user,
+            integration_principal=None,
+            owner_id=user_id,
+        )
+    )
+    api_key_service.get_api_key_scopes = AsyncMock(return_value=["contacts:read"])
+    api_key_service.get_api_key_ip_whitelist = AsyncMock(return_value=[])
+    permission_service = SimpleNamespace(
+        config=SimpleNamespace(enable_abac=False),
+        get_user_permissions=AsyncMock(return_value=["contacts:read"]),
+    )
+
+    auth._initialized = True
+    auth.api_key_service = api_key_service
+    auth.user_service = SimpleNamespace()
+    auth.permission_service = permission_service
+
+    result = await auth.authorize_api_key(
+        "db-session",
+        api_key_string,
+        required_scope="contacts:read",
+    )
+
+    snapshot_key = api_key_service._make_auth_snapshot_key(APIKey.hash_key(api_key_string))
+    assert result is not None
+    assert result["api_key"] is api_key
+    assert redis.values[snapshot_key]["effective_permissions"] == ["contacts:read"]
+    assert redis.values[snapshot_key]["scopes"] == ["contacts:read"]
+    assert redis.values[snapshot_key]["versions"] == {
+        "global": 0,
+        f"user:{user_id}": 0,
+    }
 
 
 @pytest.mark.unit

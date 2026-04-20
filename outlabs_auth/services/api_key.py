@@ -1002,6 +1002,26 @@ class APIKeyService(BaseService[APIKey]):
             result["integration_principal_id"] = snapshot.get("integration_principal_id")
         return result
 
+    def auth_snapshot_allows_permission(self, snapshot: dict[str, Any], permission: str) -> bool:
+        """Check whether a cached API-key auth snapshot grants a permission."""
+        if not self.scopes_allow_permission(snapshot.get("scopes") or [], permission):
+            return False
+
+        if snapshot.get("integration_principal_id"):
+            return self.scopes_allow_permission(
+                snapshot.get("principal_allowed_scopes") or [],
+                permission,
+            )
+
+        from outlabs_auth.services.permission import PermissionService
+
+        normalized_permissions = {
+            "*:*" if granted_permission == "*" else str(granted_permission)
+            for granted_permission in (snapshot.get("effective_permissions") or [])
+            if granted_permission
+        }
+        return PermissionService._permission_set_allows(permission, normalized_permissions)
+
     # API Key Management Methods
 
     async def get_api_key(self, session: AsyncSession, key_id: UUID) -> Optional[APIKey]:

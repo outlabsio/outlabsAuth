@@ -66,15 +66,20 @@ Known next-pass work:
 
 ## Runtime Performance Follow-Ups
 
-First data-plane auth slice implemented on 2026-04-20:
+First data-plane auth slices implemented on 2026-04-20:
 
 - `AuthDeps.require_permission(...)` now checks a Redis-backed API-key auth
   snapshot before running the DB-backed strategy path when ABAC is off.
-- The snapshot is intentionally limited to non-entity permission dependencies for
-  this slice, matching SimpleRBAC worker routes and avoiding closure-table
+- `auth.authorize_api_key(..., required_scope=...)` now uses the same snapshot
+  for non-ABAC calls that do not pass a request entity context.
+- The snapshot is intentionally limited to non-entity authorization surfaces for
+  these slices, matching SimpleRBAC worker routes and avoiding closure-table
   correctness risk until entity/tree projections are compiled too.
 - Warm SimpleRBAC dependency-path smoke result:
   `simple_user_api_key_dependency_global` dropped to 0.00 SQL queries/request in
+  Redis cache mode after one warmup request.
+- Warm SimpleRBAC direct-helper smoke result:
+  `simple_user_api_key_global` now also drops to 0.00 SQL queries/request in
   Redis cache mode after one warmup request.
 - Snapshot correctness is no longer only TTL-bounded. Cached API-key auth
   snapshots now include Redis epoch versions for global RBAC state, user state,
@@ -82,13 +87,12 @@ First data-plane auth slice implemented on 2026-04-20:
   changes bump the relevant existing cache invalidation epochs, while user
   status, integration-principal, and API-key lifecycle changes invalidate their
   dependent snapshots directly.
-- This does not optimize direct `auth.authorize_api_key(...)` calls yet; those
-  remain useful baselines for the current relational path.
+- The cached direct-helper result is intentionally host-safe: it preserves the
+  authorization result shape, but does not rehydrate live SQLAlchemy user,
+  principal, or API-key models from Redis.
 
 Known hot-path areas worth another pass after the next release:
 
-- Extend the snapshot/projection approach to direct `auth.authorize_api_key(...)`
-  host-helper calls.
 - Add compiled entity/tree authorization to snapshots so Enterprise anchored keys
   do not need closure-table reads on warm requests.
 - Keep tightening invalidation granularity where global role/permission changes

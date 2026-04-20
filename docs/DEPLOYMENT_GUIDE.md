@@ -635,10 +635,11 @@ you need Redis counters/rate limits but want to disable permission caching while
 debugging an integration, pass `enable_caching=False` explicitly.
 
 For API-key protected FastAPI routes that use
-`auth.deps.require_permission(...)`, Redis cache mode also enables a short-lived
-compiled auth snapshot. The warm path validates the API key, scopes, owner
-permissions, usage counter, and rate limits from Redis without issuing SQL for
-non-ABAC, non-entity permission dependencies. The default snapshot TTL is 60
+`auth.deps.require_permission(...)`, and for host code calling
+`auth.authorize_api_key(..., required_scope=...)` without ABAC or request entity
+context, Redis cache mode also enables a short-lived compiled auth snapshot. The
+warm path validates the API key, scopes, owner permissions, usage counter, and
+rate limits from Redis without issuing SQL. The default snapshot TTL is 60
 seconds and can be tuned with `api_key_auth_snapshot_ttl`. Snapshots also carry
 Redis version counters for global RBAC state, user state, integration-principal
 state, and entity state. Role, permission, membership, user status,

@@ -699,6 +699,142 @@ class OutlabsAuth:
 
         return await self.auth_service.get_current_user(session, token)
 
+    def _api_key_snapshot_supported_for_direct_authorization(
+        self,
+        *,
+        required_scope: Optional[str],
+        entity_id: Optional[UUID],
+    ) -> bool:
+        if not required_scope:
+            return False
+        if entity_id is not None:
+            return False
+
+        permission_service = self.permission_service
+        if permission_service is not None and getattr(
+            getattr(permission_service, "config", None),
+            "enable_abac",
+            False,
+        ):
+            return False
+        return True
+
+    @staticmethod
+    def _api_key_snapshot_ip_allowed(
+        snapshot: dict[str, Any],
+        ip_address: Optional[str],
+    ) -> bool:
+        whitelist = snapshot.get("ip_whitelist") or []
+        if not whitelist or ip_address is None:
+            return True
+        return ip_address in whitelist
+
+    async def _try_authorize_api_key_snapshot(
+        self,
+        api_key_string: str,
+        *,
+        required_scope: Optional[str],
+        entity_id: Optional[UUID],
+        ip_address: Optional[str],
+    ) -> Optional[dict]:
+        if not self._api_key_snapshot_supported_for_direct_authorization(
+            required_scope=required_scope,
+            entity_id=entity_id,
+        ):
+            return None
+
+        api_key_service = self.api_key_service
+        if api_key_service is None:
+            return None
+
+        get_snapshot = getattr(api_key_service, "get_api_key_auth_snapshot", None)
+        snapshot_allows = getattr(api_key_service, "auth_snapshot_allows_permission", None)
+        record_usage = getattr(api_key_service, "record_api_key_auth_snapshot_usage", None)
+        result_from_snapshot = getattr(api_key_service, "auth_result_from_snapshot", None)
+        if any(
+            helper is None
+            for helper in (
+                get_snapshot,
+                snapshot_allows,
+                record_usage,
+                result_from_snapshot,
+            )
+        ):
+            return None
+
+        snapshot = await get_snapshot(api_key_string)
+        if not snapshot:
+            return None
+        if not self._api_key_snapshot_ip_allowed(snapshot, ip_address):
+            return None
+        if not snapshot_allows(snapshot, required_scope):
+            return None
+
+        usage_count = await record_usage(snapshot)
+        auth_result = result_from_snapshot(snapshot, usage_count=usage_count)
+        metadata = auth_result.setdefault("metadata", {})
+        metadata["is_currently_effective"] = True
+        metadata["ineffective_reasons"] = []
+        return cast(dict[Any, Any], auth_result)
+
+    async def _cache_authorized_api_key_snapshot(
+        self,
+        session: AsyncSession,
+        api_key_string: str,
+        *,
+        required_scope: Optional[str],
+        entity_id: Optional[UUID],
+        auth_result: dict,
+    ) -> None:
+        if not self._api_key_snapshot_supported_for_direct_authorization(
+            required_scope=required_scope,
+            entity_id=entity_id,
+        ):
+            return
+        if auth_result.get("source") != "api_key":
+            return
+
+        api_key_service = self.api_key_service
+        if api_key_service is None:
+            return
+        if not getattr(getattr(api_key_service, "config", None), "enable_caching", False):
+            return
+        redis_client = getattr(api_key_service, "redis_client", None)
+        if redis_client is None or not getattr(redis_client, "is_available", False):
+            return
+        set_snapshot = getattr(api_key_service, "set_api_key_auth_snapshot", None)
+        if set_snapshot is None:
+            return
+
+        api_key = auth_result.get("api_key")
+        if api_key is None:
+            return
+
+        permission_service = self.permission_service
+        effective_permissions: list[str] = []
+        if auth_result.get("user_id") and permission_service is not None:
+            try:
+                effective_permissions = list(
+                    await permission_service.get_user_permissions(
+                        session,
+                        user_id=UUID(str(auth_result["user_id"])),
+                        include_entity_local=False,
+                    )
+                )
+            except Exception:
+                return
+
+        try:
+            ip_whitelist = await api_key_service.get_api_key_ip_whitelist(session, api_key.id)
+            await set_snapshot(
+                api_key_string,
+                auth_result=auth_result,
+                effective_permissions=effective_permissions,
+                ip_whitelist=ip_whitelist,
+            )
+        except Exception:
+            return
+
     async def authorize_api_key(
         self,
         session: AsyncSession,
@@ -720,6 +856,15 @@ class OutlabsAuth:
             raise ConfigurationError("API key support is not initialized for this auth instance.")
         if self.user_service is None:
             raise ConfigurationError("User service is not initialized for this auth instance.")
+
+        snapshot_auth_result = await self._try_authorize_api_key_snapshot(
+            api_key_string,
+            required_scope=required_scope,
+            entity_id=entity_id,
+            ip_address=ip_address,
+        )
+        if snapshot_auth_result is not None:
+            return snapshot_auth_result
 
         api_key, usage_count = await self.api_key_service.verify_api_key(
             session,
@@ -804,15 +949,23 @@ class OutlabsAuth:
         if user is not None:
             if not user.can_authenticate():
                 return None
-            return {
+            auth_result = {
                 "user": user,
                 "user_id": str(user.id),
                 "source": "api_key",
                 "api_key": api_key,
                 "metadata": metadata,
             }
+            await self._cache_authorized_api_key_snapshot(
+                session,
+                api_key_string,
+                required_scope=required_scope,
+                entity_id=entity_id,
+                auth_result=auth_result,
+            )
+            return auth_result
 
-        return {
+        auth_result = {
             "user": None,
             "user_id": None,
             "integration_principal": principal,
@@ -821,6 +974,14 @@ class OutlabsAuth:
             "api_key": api_key,
             "metadata": metadata,
         }
+        await self._cache_authorized_api_key_snapshot(
+            session,
+            api_key_string,
+            required_scope=required_scope,
+            entity_id=entity_id,
+            auth_result=auth_result,
+        )
+        return auth_result
 
     @property
     def engine(self) -> AsyncEngine:

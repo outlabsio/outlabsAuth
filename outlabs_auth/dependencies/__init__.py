@@ -105,19 +105,9 @@ class AuthDeps:
         if api_key_service is None:
             return False
 
-        if not api_key_service.scopes_allow_permission(snapshot.get("scopes") or [], permission):
-            return False
-
-        if snapshot.get("integration_principal_id"):
-            return api_key_service.scopes_allow_permission(
-                snapshot.get("principal_allowed_scopes") or [],
-                permission,
-            )
-
-        return self._permission_set_allows(
-            permission,
-            snapshot.get("effective_permissions") or [],
-        )
+        if hasattr(api_key_service, "auth_snapshot_allows_permission"):
+            return bool(api_key_service.auth_snapshot_allows_permission(snapshot, permission))
+        return False
 
     async def _try_api_key_auth_snapshot(
         self,
