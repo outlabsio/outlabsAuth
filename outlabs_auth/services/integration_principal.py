@@ -267,6 +267,7 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
         await session.flush()
         await session.refresh(principal)
         principal = cast(IntegrationPrincipal, await self.get_principal(session, principal.id))
+        await self._invalidate_principal_auth_snapshot(principal.id)
 
         if status_changed and principal.status_enum != IntegrationPrincipalStatus.ACTIVE and self.api_key_service is not None:
             await self.api_key_service.revoke_integration_principal_api_keys(
@@ -294,6 +295,7 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
 
         principal.status = IntegrationPrincipalStatus.ARCHIVED
         await session.flush()
+        await self._invalidate_principal_auth_snapshot(principal.id)
 
         if self.api_key_service is not None:
             await self.api_key_service.revoke_integration_principal_api_keys(
@@ -333,6 +335,11 @@ class IntegrationPrincipalService(BaseService[IntegrationPrincipal]):
             )
 
         return len(principals)
+
+    async def _invalidate_principal_auth_snapshot(self, principal_id: UUID) -> None:
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is not None:
+            await cache_service.bump_integration_principal_api_key_auth_snapshot_version(str(principal_id))
 
     async def _validate_scope_context(
         self,

@@ -509,15 +509,6 @@ class OutlabsAuth:
         # Service Token service
         self.service_token_service = ServiceTokenService(self.config)
 
-        for service in (
-            self.role_service,
-            self.permission_service,
-            self.entity_service,
-            self.membership_service,
-        ):
-            if service is not None:
-                setattr(service, "cache_service", self.cache_service)
-
         # Activity tracking
         if self.config.enable_activity_tracking:
             if not self.redis_client:
@@ -537,6 +528,18 @@ class OutlabsAuth:
                 observability=self.observability,
             )
             self.auth_service.activity_tracker = self.activity_tracker
+
+        for service in (
+            self.user_service,
+            self.role_service,
+            self.permission_service,
+            self.entity_service,
+            self.membership_service,
+            self.integration_principal_service,
+            self.api_key_service,
+        ):
+            if service is not None:
+                setattr(service, "cache_service", self.cache_service)
 
     async def _init_services(self):
         self._init_services_sync()

@@ -76,6 +76,12 @@ First data-plane auth slice implemented on 2026-04-20:
 - Warm SimpleRBAC dependency-path smoke result:
   `simple_user_api_key_dependency_global` dropped to 0.00 SQL queries/request in
   Redis cache mode after one warmup request.
+- Snapshot correctness is no longer only TTL-bounded. Cached API-key auth
+  snapshots now include Redis epoch versions for global RBAC state, user state,
+  integration-principal state, and entity state. Role/permission/membership
+  changes bump the relevant existing cache invalidation epochs, while user
+  status, integration-principal, and API-key lifecycle changes invalidate their
+  dependent snapshots directly.
 - This does not optimize direct `auth.authorize_api_key(...)` calls yet; those
   remain useful baselines for the current relational path.
 
@@ -85,8 +91,9 @@ Known hot-path areas worth another pass after the next release:
   host-helper calls.
 - Add compiled entity/tree authorization to snapshots so Enterprise anchored keys
   do not need closure-table reads on warm requests.
-- Replace broad TTL staleness with versioned principal/key snapshots and targeted
-  invalidation on role, membership, principal, and API-key lifecycle changes.
+- Keep tightening invalidation granularity where global role/permission changes
+  can eventually be narrowed to affected principals/users instead of bumping the
+  global RBAC epoch.
 - Audit remaining enterprise admin routes that still perform multiple auth/member/entity round trips:
   - `/v1/memberships/me`
   - `/v1/entities/{id}`

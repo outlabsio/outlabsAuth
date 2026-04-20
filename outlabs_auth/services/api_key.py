@@ -32,6 +32,7 @@ from outlabs_auth.services.base import BaseService
 if TYPE_CHECKING:
     from outlabs_auth.observability.service import ObservabilityService
     from outlabs_auth.services.api_key_policy import APIKeyPolicyService
+    from outlabs_auth.services.cache import CacheService
     from outlabs_auth.services.redis_client import RedisClient
     from outlabs_auth.services.user_audit import UserAuditService
 
@@ -88,6 +89,7 @@ class APIKeyService(BaseService[APIKey]):
         self.policy_service = policy_service
         self.user_audit_service = user_audit_service
         self.observability = observability
+        self.cache_service: Optional["CacheService"] = None
 
     async def resolve_api_key_owner(
         self,
@@ -703,6 +705,94 @@ class APIKeyService(BaseService[APIKey]):
             ),
         )
 
+    def _make_auth_snapshot_version_key(
+        self,
+        scope: str,
+        subject_id: Optional[str] = None,
+    ) -> str:
+        if self.redis_client is not None:
+            parts = ["auth", "api-key-snapshot-version", scope]
+            if subject_id is not None:
+                parts.append(subject_id)
+            return str(self.redis_client.make_key(*parts))
+        if subject_id is not None:
+            return f"auth:api-key-snapshot-version:{scope}:{subject_id}"
+        return f"auth:api-key-snapshot-version:{scope}"
+
+    async def _get_auth_snapshot_version(
+        self,
+        scope: str,
+        subject_id: Optional[str] = None,
+    ) -> int:
+        if not self.redis_client or not self.redis_client.is_available:
+            return 0
+
+        key = self._make_auth_snapshot_version_key(scope, subject_id)
+        get_counter = getattr(self.redis_client, "get_counter", None)
+        if get_counter is not None:
+            return int(await get_counter(key))
+
+        value = await self.redis_client.get(key)
+        if value is None:
+            return 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    async def _current_auth_snapshot_versions(
+        self,
+        *,
+        user_id: Optional[str] = None,
+        integration_principal_id: Optional[str] = None,
+        entity_id: Optional[str] = None,
+    ) -> dict[str, int]:
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is not None:
+            return await cache_service.get_api_key_auth_snapshot_versions(
+                user_id=user_id,
+                integration_principal_id=integration_principal_id,
+                entity_id=entity_id,
+            )
+
+        if not self.redis_client or not self.redis_client.is_available:
+            return {}
+
+        versions = {"global": await self._get_auth_snapshot_version("global")}
+        if user_id:
+            versions[f"user:{user_id}"] = await self._get_auth_snapshot_version("user", user_id)
+        if integration_principal_id:
+            versions[f"integration_principal:{integration_principal_id}"] = await self._get_auth_snapshot_version(
+                "integration_principal",
+                integration_principal_id,
+            )
+        if entity_id:
+            versions[f"entity:{entity_id}"] = await self._get_auth_snapshot_version("entity", entity_id)
+        return versions
+
+    async def _auth_snapshot_versions_match(self, snapshot: dict[str, Any]) -> bool:
+        snapshot_versions = snapshot.get("versions")
+        if not isinstance(snapshot_versions, dict):
+            return False
+
+        current_versions = await self._current_auth_snapshot_versions(
+            user_id=str(snapshot["user_id"]) if snapshot.get("user_id") else None,
+            integration_principal_id=(
+                str(snapshot["integration_principal_id"])
+                if snapshot.get("integration_principal_id")
+                else None
+            ),
+            entity_id=str(snapshot["entity_id"]) if snapshot.get("entity_id") else None,
+        )
+        try:
+            normalized_snapshot_versions = {
+                str(key): int(value)
+                for key, value in snapshot_versions.items()
+            }
+        except (TypeError, ValueError):
+            return False
+        return normalized_snapshot_versions == current_versions
+
     @staticmethod
     def _serialize_datetime(value: Optional[datetime]) -> Optional[str]:
         if value is None:
@@ -747,6 +837,10 @@ class APIKeyService(BaseService[APIKey]):
             await self.redis_client.delete(cache_key)
             return None
 
+        if not await self._auth_snapshot_versions_match(snapshot):
+            await self.redis_client.delete(cache_key)
+            return None
+
         return snapshot
 
     async def set_api_key_auth_snapshot(
@@ -778,6 +872,18 @@ class APIKeyService(BaseService[APIKey]):
             or auth_result.get("user_id")
             or auth_result.get("integration_principal_id")
         )
+        user_id = str(auth_result["user_id"]) if auth_result.get("user_id") else None
+        integration_principal_id = (
+            str(auth_result["integration_principal_id"])
+            if auth_result.get("integration_principal_id")
+            else None
+        )
+        entity_id = str(getattr(api_key, "entity_id", None)) if getattr(api_key, "entity_id", None) else None
+        versions = await self._current_auth_snapshot_versions(
+            user_id=user_id,
+            integration_principal_id=integration_principal_id,
+            entity_id=entity_id,
+        )
         snapshot: dict[str, Any] = {
             "key_id": str(api_key.id),
             "key_prefix": getattr(api_key, "prefix", api_key_string[:16]),
@@ -786,19 +892,20 @@ class APIKeyService(BaseService[APIKey]):
             "key_kind": self._normalize_enum(getattr(api_key, "key_kind", "")),
             "owner_type": owner_type,
             "owner_id": str(resolved_owner_id) if resolved_owner_id else None,
-            "user_id": auth_result.get("user_id"),
-            "integration_principal_id": auth_result.get("integration_principal_id"),
+            "user_id": user_id,
+            "integration_principal_id": integration_principal_id,
             "scopes": sorted(str(scope) for scope in (metadata.get("scopes") or [])),
             "effective_permissions": sorted(str(permission) for permission in (effective_permissions or [])),
             "principal_allowed_scopes": sorted(
                 str(scope) for scope in (metadata.get("principal_allowed_scopes") or [])
             ),
-            "entity_id": str(getattr(api_key, "entity_id", None)) if getattr(api_key, "entity_id", None) else None,
+            "entity_id": entity_id,
             "inherit_from_tree": bool(getattr(api_key, "inherit_from_tree", False)),
             "ip_whitelist": sorted(str(ip) for ip in (ip_whitelist or [])),
             "rate_limit_per_minute": getattr(api_key, "rate_limit_per_minute", None),
             "rate_limit_per_hour": getattr(api_key, "rate_limit_per_hour", None),
             "rate_limit_per_day": getattr(api_key, "rate_limit_per_day", None),
+            "versions": versions,
         }
 
         return bool(

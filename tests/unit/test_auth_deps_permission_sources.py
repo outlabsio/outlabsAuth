@@ -15,6 +15,7 @@ from outlabs_auth.models.sql.api_key import APIKey
 from outlabs_auth.models.sql.enums import APIKeyKind, APIKeyStatus
 from outlabs_auth.dependencies import AuthDeps
 from outlabs_auth.services.api_key import APIKeyService
+from outlabs_auth.services.cache import CacheService
 from outlabs_auth.services.service_token import ServiceTokenService
 
 
@@ -96,6 +97,9 @@ class _SnapshotRedis:
         self.values.pop(key, None)
         self.counters.pop(key, None)
         return True
+
+    async def get_counter(self, key: str):
+        return self.counters.get(key, 0)
 
     async def increment(self, key: str, amount: int = 1):
         self.counters[key] = self.counters.get(key, 0) + amount
@@ -256,6 +260,62 @@ async def test_require_permission_populates_api_key_snapshot_after_slow_success(
     assert permission_service.calls
     assert redis.values[snapshot_key]["effective_permissions"] == ["job:write"]
     assert redis.values[snapshot_key]["scopes"] == ["job:write"]
+    assert redis.values[snapshot_key]["versions"] == {
+        "global": 0,
+        f"user:{user_id}": 0,
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_require_permission_rejects_stale_api_key_snapshot(
+    test_session,
+    auth_config,
+):
+    api_key_string = "sk_live_stale_permission_key_123456"
+    key_id = uuid4()
+    user_id = uuid4()
+    redis = _SnapshotRedis()
+    snapshot_config = auth_config.model_copy(update={"redis_enabled": True, "enable_caching": True})
+    cache_service = CacheService(redis, snapshot_config)
+    api_key_service = APIKeyService(snapshot_config, redis_client=redis)
+    api_key_service.cache_service = cache_service
+    await api_key_service.set_api_key_auth_snapshot(
+        api_key_string,
+        auth_result={
+            "user": None,
+            "user_id": str(user_id),
+            "source": "api_key",
+            "api_key": _api_key_model(key_id),
+            "metadata": {
+                "scopes": ["job:write"],
+                "owner_type": "user",
+                "owner_id": str(user_id),
+            },
+        },
+        effective_permissions=["job:write"],
+        ip_whitelist=[],
+    )
+    await cache_service.bump_user_api_key_auth_snapshot_version(str(user_id))
+
+    permission_service = _PermissionServiceStub(result=False)
+    deps = AuthDeps(
+        backends=[],
+        permission_service=permission_service,
+        api_key_service=api_key_service,
+        get_session=lambda: None,
+    )
+
+    dep = deps.require_permission("job:write")
+    request = _make_request("POST", "/jobs/claim", headers={"X-API-Key": api_key_string})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await dep(request=request, session=test_session)
+
+    snapshot_key = api_key_service._make_auth_snapshot_key(APIKey.hash_key(api_key_string))
+    assert exc_info.value.status_code == 401
+    assert snapshot_key in redis.deleted
+    assert snapshot_key not in redis.values
 
 
 @pytest.mark.unit

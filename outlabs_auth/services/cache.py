@@ -35,6 +35,83 @@ class CacheService:
             )
         )
 
+    def make_api_key_auth_snapshot_version_key(
+        self,
+        scope: str,
+        subject_id: Optional[str] = None,
+    ) -> str:
+        parts = ["auth", "api-key-snapshot-version", scope]
+        if subject_id is not None:
+            parts.append(subject_id)
+        return str(self.redis_client.make_key(*parts))
+
+    async def get_api_key_auth_snapshot_versions(
+        self,
+        *,
+        user_id: Optional[str] = None,
+        integration_principal_id: Optional[str] = None,
+        entity_id: Optional[str] = None,
+    ) -> dict[str, int]:
+        if not self.redis_client or not self.redis_client.is_available:
+            return {}
+
+        versions = {
+            "global": await self._get_version("global"),
+        }
+        if user_id:
+            versions[f"user:{user_id}"] = await self._get_version("user", user_id)
+        if integration_principal_id:
+            versions[f"integration_principal:{integration_principal_id}"] = await self._get_version(
+                "integration_principal",
+                integration_principal_id,
+            )
+        if entity_id:
+            versions[f"entity:{entity_id}"] = await self._get_version("entity", entity_id)
+        return versions
+
+    async def bump_api_key_auth_snapshot_version(
+        self,
+        scope: str,
+        subject_id: Optional[str] = None,
+    ) -> int:
+        if not self.redis_client or not self.redis_client.is_available:
+            return 0
+        key = self.make_api_key_auth_snapshot_version_key(scope, subject_id)
+        value = await self.redis_client.increment(key, amount=1)
+        return int(value or 0)
+
+    async def bump_global_api_key_auth_snapshot_version(self) -> int:
+        return await self.bump_api_key_auth_snapshot_version("global")
+
+    async def bump_user_api_key_auth_snapshot_version(self, user_id: str) -> int:
+        return await self.bump_api_key_auth_snapshot_version("user", user_id)
+
+    async def bump_integration_principal_api_key_auth_snapshot_version(
+        self,
+        integration_principal_id: str,
+    ) -> int:
+        return await self.bump_api_key_auth_snapshot_version(
+            "integration_principal",
+            integration_principal_id,
+        )
+
+    async def bump_entity_api_key_auth_snapshot_version(self, entity_id: str) -> int:
+        return await self.bump_api_key_auth_snapshot_version("entity", entity_id)
+
+    async def _get_version(self, scope: str, subject_id: Optional[str] = None) -> int:
+        key = self.make_api_key_auth_snapshot_version_key(scope, subject_id)
+        get_counter = getattr(self.redis_client, "get_counter", None)
+        if get_counter is not None:
+            return int(await get_counter(key))
+
+        value = await self.redis_client.get(key)
+        if value is None:
+            return 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
     async def get_permission_check(
         self,
         user_id: str,
@@ -90,12 +167,15 @@ class CacheService:
         return int(await self.redis_client.delete_pattern(pattern))
 
     async def publish_user_permissions_invalidation(self, user_id: str) -> bool:
+        await self.bump_user_api_key_auth_snapshot_version(user_id)
         return bool(await self._publish(f"permissions:user:{user_id}"))
 
     async def publish_entity_permissions_invalidation(self, entity_id: str) -> bool:
+        await self.bump_entity_api_key_auth_snapshot_version(entity_id)
         return bool(await self._publish(f"permissions:entity:{entity_id}"))
 
     async def publish_all_permissions_invalidation(self) -> bool:
+        await self.bump_global_api_key_auth_snapshot_version()
         return bool(await self._publish("permissions:all"))
 
     async def publish_role_permissions_invalidation(self, role_id: str) -> bool:

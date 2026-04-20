@@ -665,6 +665,7 @@ class UserService(BaseService[User]):
             user.suspended_until = None
 
         await self.update(session, user)
+        await self._invalidate_user_auth_snapshot(user.id)
 
         # Emit notification
         if self.notifications:
@@ -739,6 +740,7 @@ class UserService(BaseService[User]):
         user.locked_until = None
 
         await self.update(session, user)
+        await self._invalidate_user_auth_snapshot(user.id)
 
         if self.notifications:
             await self.notifications.emit(
@@ -843,6 +845,7 @@ class UserService(BaseService[User]):
         user.locked_until = None
 
         await self.update(session, user)
+        await self._invalidate_user_auth_snapshot(user.id)
 
         user_email = user.email
         user_id_str = str(user.id)
@@ -1233,6 +1236,11 @@ class UserService(BaseService[User]):
         if request is None:
             return None
         return str(request.base_url).rstrip("/")
+
+    async def _invalidate_user_auth_snapshot(self, user_id: UUID) -> None:
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is not None:
+            await cache_service.bump_user_api_key_auth_snapshot_version(str(user_id))
 
     @staticmethod
     def _merge_mail_metadata(

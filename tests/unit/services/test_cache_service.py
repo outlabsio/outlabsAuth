@@ -29,6 +29,7 @@ class _FakeRedis:
         self.published: list[tuple[str, str]] = []
         self.subscribed_channels: list[str] = []
         self.get_values: dict[str, object] = {}
+        self.counters: dict[str, int] = {}
         self.set_calls: list[tuple[str, object, int | None]] = []
         self.pubsub = _FakePubSub(messages=messages)
 
@@ -41,6 +42,13 @@ class _FakeRedis:
     async def set(self, key: str, value, ttl: int | None = None):
         self.set_calls.append((key, value, ttl))
         return True
+
+    async def get_counter(self, key: str) -> int:
+        return self.counters.get(key, 0)
+
+    async def increment(self, key: str, amount: int = 1):
+        self.counters[key] = self.counters.get(key, 0) + amount
+        return self.counters[key]
 
     async def delete_pattern(self, pattern: str) -> int:
         self.deleted_patterns.append(pattern)
@@ -139,6 +147,46 @@ async def test_cache_service_targeted_invalidation_and_publish_helpers(auth_conf
         (config.redis_invalidation_channel, "permissions:all"),
         (config.redis_invalidation_channel, "permissions:all"),
     ]
+    assert redis.counters == {
+        "auth:api-key-snapshot-version:user:user-1": 1,
+        "auth:api-key-snapshot-version:entity:entity-123": 1,
+        "auth:api-key-snapshot-version:global": 2,
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cache_service_api_key_auth_snapshot_version_helpers(auth_config):
+    config = _cache_config(auth_config)
+    redis = _FakeRedis()
+    cache_service = CacheService(redis, config)
+
+    assert await cache_service.get_api_key_auth_snapshot_versions(
+        user_id="user-1",
+        integration_principal_id="principal-1",
+        entity_id="entity-1",
+    ) == {
+        "global": 0,
+        "user:user-1": 0,
+        "integration_principal:principal-1": 0,
+        "entity:entity-1": 0,
+    }
+
+    assert await cache_service.bump_global_api_key_auth_snapshot_version() == 1
+    assert await cache_service.bump_user_api_key_auth_snapshot_version("user-1") == 1
+    assert await cache_service.bump_integration_principal_api_key_auth_snapshot_version("principal-1") == 1
+    assert await cache_service.bump_entity_api_key_auth_snapshot_version("entity-1") == 1
+
+    assert await cache_service.get_api_key_auth_snapshot_versions(
+        user_id="user-1",
+        integration_principal_id="principal-1",
+        entity_id="entity-1",
+    ) == {
+        "global": 1,
+        "user:user-1": 1,
+        "integration_principal:principal-1": 1,
+        "entity:entity-1": 1,
+    }
 
 
 @pytest.mark.unit

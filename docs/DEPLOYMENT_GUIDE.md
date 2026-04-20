@@ -639,7 +639,11 @@ For API-key protected FastAPI routes that use
 compiled auth snapshot. The warm path validates the API key, scopes, owner
 permissions, usage counter, and rate limits from Redis without issuing SQL for
 non-ABAC, non-entity permission dependencies. The default snapshot TTL is 60
-seconds and can be tuned with `api_key_auth_snapshot_ttl`.
+seconds and can be tuned with `api_key_auth_snapshot_ttl`. Snapshots also carry
+Redis version counters for global RBAC state, user state, integration-principal
+state, and entity state. Role, permission, membership, user status,
+integration-principal, and API-key lifecycle mutations invalidate matching warm
+snapshots before the TTL expires.
 
 **Cache Invalidation**:
 ```python

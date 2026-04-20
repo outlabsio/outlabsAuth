@@ -467,10 +467,13 @@ async def test_outlabs_auth_init_services_wires_redis_cache_enterprise_and_activ
     assert auth.api_key_policy_service is not None
     assert auth.api_key_service.policy_service is auth.api_key_policy_service
     assert auth.user_service.api_key_service is auth.api_key_service
+    assert auth.user_service.cache_service is auth.cache_service
     assert auth.role_service.cache_service is auth.cache_service
     assert auth.permission_service.cache_service is auth.cache_service
     assert auth.entity_service.cache_service is auth.cache_service
     assert auth.membership_service.cache_service is auth.cache_service
+    assert auth.integration_principal_service.cache_service is auth.cache_service
+    assert auth.api_key_service.cache_service is auth.cache_service
     assert auth.activity_tracker is not None
     assert auth.auth_service.activity_tracker is auth.activity_tracker
     assert auth.api_key_policy_service.observability is auth.observability
@@ -493,8 +496,11 @@ async def test_outlabs_auth_init_services_can_use_redis_without_permission_cache
     assert auth.cache_service is None
     assert auth.cache is None
     assert auth.api_key_service.redis_client is auth.redis_client
+    assert auth.user_service.cache_service is None
     assert auth.role_service.cache_service is None
     assert auth.permission_service.cache_service is None
+    assert auth.integration_principal_service.cache_service is None
+    assert auth.api_key_service.cache_service is None
 
 
 @pytest.mark.unit
