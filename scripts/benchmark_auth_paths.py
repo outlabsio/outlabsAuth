@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlmodel import SQLModel
+from starlette.requests import Request
 
 from outlabs_auth import EnterpriseRBAC, SimpleRBAC
 from tests.integration.query_budget_support import (
@@ -304,6 +305,50 @@ def api_key_operation(
     return run
 
 
+def make_benchmark_request(*, api_key: str, path: str = "/bench/auth") -> Request:
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "path": path,
+            "raw_path": path.encode("utf-8"),
+            "path_params": {},
+            "query_string": b"",
+            "headers": [(b"x-api-key", api_key.encode("utf-8"))],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+            "scheme": "http",
+        },
+        receive,
+    )
+
+
+def api_key_dependency_operation(
+    auth: SimpleRBAC | EnterpriseRBAC,
+    *,
+    api_key: str,
+    required_scope: str,
+    commit_usage: bool,
+) -> Callable[[], Awaitable[bool]]:
+    dependency = auth.deps.require_permission(required_scope)
+
+    async def run() -> bool:
+        async with auth.get_session() as session:
+            result = await dependency(
+                request=make_benchmark_request(api_key=api_key),
+                session=session,
+            )
+            if commit_usage:
+                await session.commit()
+            return result is not None
+
+    return run
+
+
 def service_token_operation(
     auth: SimpleRBAC | EnterpriseRBAC,
     *,
@@ -368,6 +413,20 @@ async def build_scenarios(
         scenarios.append(
             Scenario(
                 preset="simple",
+                name="simple_user_api_key_dependency_global",
+                auth_kind="user_api_key_dependency",
+                operation=api_key_dependency_operation(
+                    simple_auth,
+                    api_key=simple_context.user_api_key,
+                    required_scope=simple_context.permission_name,
+                    commit_usage=args.commit_usage,
+                ),
+                notes="FastAPI require_permission path used by worker routes",
+            )
+        )
+        scenarios.append(
+            Scenario(
+                preset="simple",
                 name="simple_seeded_service_token_permission",
                 auth_kind="service_token",
                 operation=service_token_operation(
@@ -396,6 +455,18 @@ async def build_scenarios(
                     commit_usage=args.commit_usage,
                 ),
                 notes="enterprise query-budget seed, global personal key",
+            ),
+            Scenario(
+                preset="enterprise",
+                name="enterprise_personal_api_key_dependency_unanchored",
+                auth_kind="user_api_key_dependency",
+                operation=api_key_dependency_operation(
+                    enterprise_auth,
+                    api_key=user_context.unanchored_api_key,
+                    required_scope=user_context.api_key_global_scope,
+                    commit_usage=args.commit_usage,
+                ),
+                notes="FastAPI require_permission path, global personal key",
             ),
             Scenario(
                 preset="enterprise",

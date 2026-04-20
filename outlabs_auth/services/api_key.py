@@ -688,6 +688,213 @@ class APIKeyService(BaseService[APIKey]):
         """Make Redis key for rate limit window."""
         return f"apikey:{key_id}:ratelimit:{window}"
 
+    def _make_auth_snapshot_key(self, key_hash: str) -> str:
+        """Make Redis key for a cached API-key authorization snapshot."""
+        if self.redis_client is not None:
+            return str(self.redis_client.make_key("auth", "api-key-snapshot", key_hash))
+        return f"auth:api-key-snapshot:{key_hash}"
+
+    def _auth_snapshot_ttl(self) -> int:
+        return max(
+            1,
+            min(
+                int(getattr(self.config, "api_key_auth_snapshot_ttl", 60)),
+                int(getattr(self.config, "cache_permission_ttl", 900)),
+            ),
+        )
+
+    @staticmethod
+    def _serialize_datetime(value: Optional[datetime]) -> Optional[str]:
+        if value is None:
+            return None
+        return value.isoformat()
+
+    @staticmethod
+    def _deserialize_datetime(value: Any) -> Optional[datetime]:
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            return value
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+    async def get_api_key_auth_snapshot(self, api_key_string: str) -> Optional[dict[str, Any]]:
+        """Load a cached API-key auth snapshot without touching Postgres."""
+        if not getattr(self.config, "enable_caching", False):
+            return None
+        if not self.redis_client or not self.redis_client.is_available:
+            return None
+        if not api_key_string or len(api_key_string) < 16:
+            return None
+
+        key_hash = APIKey.hash_key(api_key_string)
+        cache_key = self._make_auth_snapshot_key(key_hash)
+        snapshot = await self.redis_client.get(cache_key)
+        if not isinstance(snapshot, dict):
+            return None
+
+        if snapshot.get("status") != APIKeyStatus.ACTIVE.value:
+            await self.redis_client.delete(cache_key)
+            return None
+
+        expires_at = self._deserialize_datetime(snapshot.get("expires_at"))
+        if expires_at is not None and datetime.now(timezone.utc) > expires_at:
+            await self.redis_client.delete(cache_key)
+            return None
+
+        return snapshot
+
+    async def set_api_key_auth_snapshot(
+        self,
+        api_key_string: str,
+        *,
+        auth_result: dict[str, Any],
+        effective_permissions: Optional[List[str]] = None,
+        ip_whitelist: Optional[List[str]] = None,
+    ) -> bool:
+        """Cache the compiled API-key auth context used by permission dependencies."""
+        if not getattr(self.config, "enable_caching", False):
+            return False
+        if not self.redis_client or not self.redis_client.is_available:
+            return False
+        if not api_key_string or len(api_key_string) < 16:
+            return False
+
+        api_key = auth_result.get("api_key")
+        if api_key is None:
+            return False
+
+        metadata = auth_result.get("metadata") or {}
+        key_hash = APIKey.hash_key(api_key_string)
+        owner_type = metadata.get("owner_type") or getattr(api_key, "owner_type", None)
+        resolved_owner_id = (
+            metadata.get("owner_id")
+            or getattr(api_key, "resolved_owner_id", None)
+            or auth_result.get("user_id")
+            or auth_result.get("integration_principal_id")
+        )
+        snapshot: dict[str, Any] = {
+            "key_id": str(api_key.id),
+            "key_prefix": getattr(api_key, "prefix", api_key_string[:16]),
+            "status": self._normalize_enum(getattr(api_key, "status", APIKeyStatus.ACTIVE)),
+            "expires_at": self._serialize_datetime(getattr(api_key, "expires_at", None)),
+            "key_kind": self._normalize_enum(getattr(api_key, "key_kind", "")),
+            "owner_type": owner_type,
+            "owner_id": str(resolved_owner_id) if resolved_owner_id else None,
+            "user_id": auth_result.get("user_id"),
+            "integration_principal_id": auth_result.get("integration_principal_id"),
+            "scopes": sorted(str(scope) for scope in (metadata.get("scopes") or [])),
+            "effective_permissions": sorted(str(permission) for permission in (effective_permissions or [])),
+            "principal_allowed_scopes": sorted(
+                str(scope) for scope in (metadata.get("principal_allowed_scopes") or [])
+            ),
+            "entity_id": str(getattr(api_key, "entity_id", None)) if getattr(api_key, "entity_id", None) else None,
+            "inherit_from_tree": bool(getattr(api_key, "inherit_from_tree", False)),
+            "ip_whitelist": sorted(str(ip) for ip in (ip_whitelist or [])),
+            "rate_limit_per_minute": getattr(api_key, "rate_limit_per_minute", None),
+            "rate_limit_per_hour": getattr(api_key, "rate_limit_per_hour", None),
+            "rate_limit_per_day": getattr(api_key, "rate_limit_per_day", None),
+        }
+
+        return bool(
+            await self.redis_client.set(
+                self._make_auth_snapshot_key(key_hash),
+                snapshot,
+                ttl=self._auth_snapshot_ttl(),
+            )
+        )
+
+    async def invalidate_api_key_auth_snapshot(self, api_key: APIKey) -> bool:
+        """Invalidate the cached auth snapshot for a concrete API key row."""
+        if not self.redis_client or not self.redis_client.is_available:
+            return False
+        return bool(await self.redis_client.delete(self._make_auth_snapshot_key(api_key.key_hash)))
+
+    async def record_api_key_auth_snapshot_usage(self, snapshot: dict[str, Any]) -> int:
+        """Record usage/rate limits for a cache-hit API-key authorization."""
+        if not self.redis_client or not self.redis_client.is_available:
+            return 0
+
+        key_id = str(snapshot["key_id"])
+        usage_count = await self.redis_client.increment(self._make_usage_counter_key(key_id), amount=1) or 0
+        await self.redis_client.set(
+            self._make_last_used_key(key_id),
+            datetime.now(timezone.utc).isoformat(),
+            ttl=self.config.cache_ttl_seconds,
+        )
+        await self._check_rate_limits_from_snapshot(snapshot)
+        return usage_count
+
+    async def _check_rate_limits_from_snapshot(self, snapshot: dict[str, Any]) -> None:
+        if not self.redis_client or not self.redis_client.is_available:
+            return
+
+        key_id = str(snapshot["key_id"])
+        prefix = str(snapshot.get("key_prefix") or "")
+        key_kind = str(snapshot.get("key_kind") or "")
+
+        async def _check(window: str, limit: Optional[int], ttl: int) -> None:
+            if not limit:
+                return
+            count = await self.redis_client.increment_with_ttl(
+                self._make_rate_limit_key(key_id, window),
+                amount=1,
+                ttl=ttl,
+            ) or 0
+            if count <= limit:
+                return
+            if self.observability is not None:
+                self.observability.log_api_key_rate_limited(
+                    prefix=prefix,
+                    current_count=count,
+                    limit=limit,
+                    window=window,
+                    key_kind=key_kind,
+                )
+            raise InvalidInputError(
+                message=f"Rate limit exceeded: {limit} requests per {window}",
+                details={"limit": limit, "current": count, "window": window},
+            )
+
+        await _check("minute", snapshot.get("rate_limit_per_minute"), 60)
+        await _check("hour", snapshot.get("rate_limit_per_hour"), 3600)
+        await _check("day", snapshot.get("rate_limit_per_day"), 86400)
+
+    def auth_result_from_snapshot(self, snapshot: dict[str, Any], *, usage_count: int = 0) -> dict[str, Any]:
+        """Build a host-safe auth result from a cached API-key snapshot."""
+        metadata: dict[str, Any] = {
+            "key_id": snapshot.get("key_id"),
+            "key_prefix": snapshot.get("key_prefix"),
+            "scopes": list(snapshot.get("scopes") or []),
+            "usage_count": usage_count,
+            "auth_snapshot": True,
+            "owner_type": snapshot.get("owner_type"),
+            "owner_id": snapshot.get("owner_id"),
+        }
+        if snapshot.get("key_kind"):
+            metadata["key_kind"] = snapshot["key_kind"]
+        if snapshot.get("entity_id"):
+            metadata["entity_id"] = snapshot["entity_id"]
+        if snapshot.get("principal_allowed_scopes") is not None:
+            metadata["principal_allowed_scopes"] = list(snapshot.get("principal_allowed_scopes") or [])
+
+        result: dict[str, Any] = {
+            "user": None,
+            "user_id": snapshot.get("user_id"),
+            "source": "api_key",
+            "api_key": None,
+            "metadata": metadata,
+        }
+        if snapshot.get("integration_principal_id"):
+            result["integration_principal"] = None
+            result["integration_principal_id"] = snapshot.get("integration_principal_id")
+        return result
+
     # API Key Management Methods
 
     async def get_api_key(self, session: AsyncSession, key_id: UUID) -> Optional[APIKey]:
@@ -1150,6 +1357,7 @@ class APIKeyService(BaseService[APIKey]):
             event_source=event_source,
             updated_fields=sorted(updates.keys()),
         )
+        await self.invalidate_api_key_auth_snapshot(api_key)
         return api_key
 
     async def rotate_api_key(
@@ -1311,6 +1519,7 @@ class APIKeyService(BaseService[APIKey]):
         # Scopes and IP whitelist are deleted via cascade
         await session.delete(api_key)
         await session.flush()
+        await self.invalidate_api_key_auth_snapshot(api_key)
 
         logger.info(f"Deleted API key: {api_key.prefix}")
         self._log_api_key_lifecycle(
@@ -1339,6 +1548,7 @@ class APIKeyService(BaseService[APIKey]):
 
         api_key.status = APIKeyStatus.REVOKED
         await session.flush()
+        await self.invalidate_api_key_auth_snapshot(api_key)
 
         if self.user_audit_service is not None and owner is not None and record_audit:
             await self._record_api_key_audit_event(

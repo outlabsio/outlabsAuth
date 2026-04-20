@@ -11,6 +11,8 @@ from starlette.requests import Request
 from outlabs_auth.authentication.backend import AuthBackend
 from outlabs_auth.authentication.strategy import ServiceTokenStrategy
 from outlabs_auth.authentication.transport import ApiKeyTransport, BearerTransport
+from outlabs_auth.models.sql.api_key import APIKey
+from outlabs_auth.models.sql.enums import APIKeyKind, APIKeyStatus
 from outlabs_auth.dependencies import AuthDeps
 from outlabs_auth.services.api_key import APIKeyService
 from outlabs_auth.services.service_token import ServiceTokenService
@@ -25,10 +27,19 @@ class _StaticAuthResultStrategy:
 
 
 class _PermissionServiceStub:
-    def __init__(self, result: bool, *, abac_enabled: bool = False, condition_result: bool = False) -> None:
+    def __init__(
+        self,
+        result: bool,
+        *,
+        abac_enabled: bool = False,
+        condition_result: bool = False,
+        user_permissions: list[str] | None = None,
+    ) -> None:
         self.result = result
         self.condition_result = condition_result
+        self.user_permissions = user_permissions or []
         self.calls: list[dict] = []
+        self.get_user_permissions_calls: list[dict] = []
         self.config = SimpleNamespace(enable_abac=abac_enabled)
 
     async def check_permission(
@@ -52,6 +63,47 @@ class _PermissionServiceStub:
 
     async def permission_has_conditions(self, session, permission_name):
         return self.condition_result
+
+    async def get_user_permissions(self, session, *, user_id, include_entity_local=True):
+        self.get_user_permissions_calls.append(
+            {
+                "user_id": user_id,
+                "include_entity_local": include_entity_local,
+            }
+        )
+        return list(self.user_permissions)
+
+
+class _SnapshotRedis:
+    def __init__(self) -> None:
+        self.is_available = True
+        self.values: dict[str, object] = {}
+        self.counters: dict[str, int] = {}
+        self.deleted: list[str] = []
+
+    def make_key(self, *parts: str) -> str:
+        return ":".join(str(part) for part in parts)
+
+    async def get(self, key: str):
+        return self.values.get(key)
+
+    async def set(self, key: str, value, ttl=None):
+        self.values[key] = value
+        return True
+
+    async def delete(self, key: str):
+        self.deleted.append(key)
+        self.values.pop(key, None)
+        self.counters.pop(key, None)
+        return True
+
+    async def increment(self, key: str, amount: int = 1):
+        self.counters[key] = self.counters.get(key, 0) + amount
+        return self.counters[key]
+
+    async def increment_with_ttl(self, key: str, amount: int = 1, ttl: int | None = None):
+        self.counters[key] = self.counters.get(key, 0) + amount
+        return self.counters[key]
 
 
 def _make_request(
@@ -90,6 +142,120 @@ def _make_request(
         "scheme": "http",
     }
     return Request(scope, receive)
+
+
+def _api_key_model(key_id: UUID, *, prefix: str = "sk_live_cached_1") -> SimpleNamespace:
+    return SimpleNamespace(
+        id=key_id,
+        prefix=prefix,
+        status=APIKeyStatus.ACTIVE,
+        key_kind=APIKeyKind.PERSONAL,
+        owner_type="user",
+        resolved_owner_id=None,
+        expires_at=None,
+        entity_id=None,
+        inherit_from_tree=False,
+        rate_limit_per_minute=None,
+        rate_limit_per_hour=None,
+        rate_limit_per_day=None,
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_require_permission_allows_cached_api_key_snapshot_without_backend_auth(
+    test_session,
+    auth_config,
+):
+    api_key_string = "sk_live_cached_permission_key_123456"
+    key_id = uuid4()
+    user_id = uuid4()
+    redis = _SnapshotRedis()
+    snapshot_config = auth_config.model_copy(update={"redis_enabled": True, "enable_caching": True})
+    api_key_service = APIKeyService(snapshot_config, redis_client=redis)
+    await api_key_service.set_api_key_auth_snapshot(
+        api_key_string,
+        auth_result={
+            "user": None,
+            "user_id": str(user_id),
+            "source": "api_key",
+            "api_key": _api_key_model(key_id),
+            "metadata": {
+                "scopes": ["job:write"],
+                "owner_type": "user",
+                "owner_id": str(user_id),
+            },
+        },
+        effective_permissions=["job:write"],
+        ip_whitelist=[],
+    )
+
+    permission_service = _PermissionServiceStub(result=False)
+    deps = AuthDeps(
+        backends=[],
+        permission_service=permission_service,
+        api_key_service=api_key_service,
+        get_session=lambda: None,
+    )
+
+    dep = deps.require_permission("job:write")
+    request = _make_request("POST", "/jobs/claim", headers={"X-API-Key": api_key_string})
+
+    resolved = await dep(request=request, session=test_session)
+
+    assert resolved["source"] == "api_key"
+    assert resolved["user_id"] == str(user_id)
+    assert resolved["metadata"]["auth_snapshot"] is True
+    assert permission_service.calls == []
+    assert redis.counters[f"apikey:{key_id}:usage"] == 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_require_permission_populates_api_key_snapshot_after_slow_success(
+    test_session,
+    auth_config,
+):
+    api_key_string = "sk_live_cache_fill_key_123456789"
+    key_id = uuid4()
+    user_id = uuid4()
+    redis = _SnapshotRedis()
+    snapshot_config = auth_config.model_copy(update={"redis_enabled": True, "enable_caching": True})
+    api_key_service = APIKeyService(snapshot_config, redis_client=redis)
+    auth_result = {
+        "user": None,
+        "user_id": str(user_id),
+        "source": "api_key",
+        "api_key": _api_key_model(key_id),
+        "metadata": {
+            "scopes": ["job:write"],
+            "owner_type": "user",
+            "owner_id": str(user_id),
+        },
+    }
+    backend = AuthBackend(
+        name="api_key",
+        transport=ApiKeyTransport(header_name="X-API-Key"),
+        strategy=_StaticAuthResultStrategy(auth_result),
+    )
+    permission_service = _PermissionServiceStub(result=True, user_permissions=["job:write"])
+    deps = AuthDeps(
+        backends=[backend],
+        permission_service=permission_service,
+        api_key_service=api_key_service,
+        get_session=lambda: None,
+    )
+
+    dep = deps.require_permission("job:write")
+    request = _make_request("POST", "/jobs/claim", headers={"X-API-Key": api_key_string})
+
+    resolved = await dep(request=request, session=test_session)
+
+    snapshot_key = api_key_service._make_auth_snapshot_key(APIKey.hash_key(api_key_string))
+    assert resolved is auth_result
+    assert permission_service.calls
+    assert redis.values[snapshot_key]["effective_permissions"] == ["job:write"]
+    assert redis.values[snapshot_key]["scopes"] == ["job:write"]
 
 
 @pytest.mark.unit

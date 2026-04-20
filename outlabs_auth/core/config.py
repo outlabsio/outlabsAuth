@@ -103,6 +103,10 @@ class AuthConfig(BaseModel):
     cache_ttl_seconds: int = Field(default=300, description="Default cache TTL in seconds (5 minutes)")
     cache_permission_ttl: int = Field(default=900, description="Permission cache TTL in seconds (15 minutes)")
     cache_entity_ttl: int = Field(default=600, description="Entity cache TTL in seconds (10 minutes)")
+    api_key_auth_snapshot_ttl: int = Field(
+        default=60,
+        description="Compiled API-key auth snapshot TTL in seconds for permission-dependency hot paths",
+    )
 
     # Pub/Sub Channels
     redis_invalidation_channel: str = Field(

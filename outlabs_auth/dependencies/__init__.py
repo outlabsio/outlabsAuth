@@ -16,6 +16,7 @@ from makefun import with_signature
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.authentication.backend import AuthBackend
+from outlabs_auth.core.exceptions import InvalidInputError
 
 
 class AuthDeps:
@@ -73,6 +74,134 @@ class AuthDeps:
             return permission
 
         return f"{resource}:{action}_tree"
+
+    @staticmethod
+    def _api_key_header(request: Request) -> Optional[str]:
+        return request.headers.get("X-API-Key")
+
+    @staticmethod
+    def _snapshot_ip_allowed(snapshot: dict[str, Any], request: Request) -> bool:
+        whitelist = snapshot.get("ip_whitelist") or []
+        if not whitelist:
+            return True
+        client_ip = request.client.host if request.client else None
+        return bool(client_ip and client_ip in whitelist)
+
+    @staticmethod
+    def _snapshot_entity_allowed(snapshot: dict[str, Any], entity_id: Optional[UUID]) -> bool:
+        if entity_id is None:
+            return True
+        anchor_id = snapshot.get("entity_id")
+        if not anchor_id:
+            return True
+        if str(entity_id) == str(anchor_id):
+            return True
+        # Descendant checks still require the closure table until we add a compiled
+        # entity projection to the snapshot.
+        return False
+
+    def _snapshot_has_permission(self, snapshot: dict[str, Any], permission: str) -> bool:
+        api_key_service = self.api_key_service
+        if api_key_service is None:
+            return False
+
+        if not api_key_service.scopes_allow_permission(snapshot.get("scopes") or [], permission):
+            return False
+
+        if snapshot.get("integration_principal_id"):
+            return api_key_service.scopes_allow_permission(
+                snapshot.get("principal_allowed_scopes") or [],
+                permission,
+            )
+
+        return self._permission_set_allows(
+            permission,
+            snapshot.get("effective_permissions") or [],
+        )
+
+    async def _try_api_key_auth_snapshot(
+        self,
+        *,
+        request: Request,
+        permissions: Sequence[str],
+        require_all: bool,
+        entity_id: Optional[UUID],
+    ) -> Optional[dict]:
+        api_key_service = self.api_key_service
+        if api_key_service is None:
+            return None
+
+        api_key = self._api_key_header(request)
+        if not api_key:
+            return None
+
+        snapshot = await api_key_service.get_api_key_auth_snapshot(api_key)
+        if not snapshot:
+            return None
+
+        if not self._snapshot_ip_allowed(snapshot, request):
+            return None
+        if not self._snapshot_entity_allowed(snapshot, entity_id):
+            return None
+
+        checks = [self._snapshot_has_permission(snapshot, permission) for permission in permissions]
+        allowed = all(checks) if require_all else any(checks)
+        if not allowed:
+            return None
+
+        try:
+            usage_count = await api_key_service.record_api_key_auth_snapshot_usage(snapshot)
+        except InvalidInputError:
+            return None
+
+        return cast(dict[Any, Any], api_key_service.auth_result_from_snapshot(snapshot, usage_count=usage_count))
+
+    async def _cache_api_key_auth_snapshot(
+        self,
+        *,
+        request: Request,
+        session: AsyncSession,
+        auth_result: dict,
+        entity_id: Optional[UUID],
+    ) -> None:
+        if entity_id is not None:
+            return
+        if auth_result.get("source") != "api_key":
+            return
+
+        api_key_service = self.api_key_service
+        if api_key_service is None:
+            return
+
+        api_key_string = self._api_key_header(request)
+        api_key = auth_result.get("api_key")
+        if not api_key_string or api_key is None:
+            return
+
+        permission_service = self.services.get("permission_service")
+        effective_permissions: list[str] = []
+        if auth_result.get("user_id") and permission_service is not None:
+            try:
+                effective_permissions = list(
+                    await permission_service.get_user_permissions(
+                        session,
+                        user_id=UUID(str(auth_result["user_id"])),
+                        include_entity_local=False,
+                    )
+                )
+            except Exception:
+                return
+
+        try:
+            ip_whitelist = await api_key_service.get_api_key_ip_whitelist(session, api_key.id)
+            await api_key_service.set_api_key_auth_snapshot(
+                api_key_string,
+                auth_result=auth_result,
+                effective_permissions=effective_permissions,
+                ip_whitelist=ip_whitelist,
+            )
+        except Exception:
+            return
 
     async def _auth_result_has_permission(
         self,
@@ -293,13 +422,6 @@ class AuthDeps:
             *args: Any,
             **kwargs: Any,
         ) -> dict:
-            auth_result = await self.require_auth()(
-                request=request, session=session, *args, **kwargs
-            )
-
-            if not auth_result:
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
-
             permission_service = self.services.get("permission_service")
             if not permission_service:
                 raise HTTPException(
@@ -310,13 +432,30 @@ class AuthDeps:
                 getattr(getattr(permission_service, "config", None), "enable_abac", False)
             )
 
+            entity_id = _parse_entity_context_id(request)
+            if session is not None and not abac_enabled:
+                snapshot_auth_result = await self._try_api_key_auth_snapshot(
+                    request=request,
+                    permissions=permissions,
+                    require_all=require_all,
+                    entity_id=entity_id,
+                )
+                if snapshot_auth_result is not None:
+                    return snapshot_auth_result
+
+            auth_result = await self.require_auth()(
+                request=request, session=session, *args, **kwargs
+            )
+
+            if not auth_result:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+
             if session is None:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Database session not configured for auth dependencies",
                 )
 
-            entity_id = _parse_entity_context_id(request)
             resource_context: Optional[dict] = None
             env_context: Optional[dict] = None
             if abac_enabled:
@@ -381,6 +520,14 @@ class AuthDeps:
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="Insufficient permissions",
                     )
+
+            if not abac_enabled:
+                await self._cache_api_key_auth_snapshot(
+                    request=request,
+                    session=session,
+                    auth_result=auth_result,
+                    entity_id=entity_id,
+                )
 
             return cast(dict[Any, Any], auth_result)
 
