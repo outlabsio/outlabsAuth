@@ -752,7 +752,7 @@ def _get_platform_global_integration_principals_router(
         status_filter: Optional[IntegrationPrincipalStatus] = Query(default=None, alias="status"),
         search: Optional[str] = Query(default=None, min_length=1),
         session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_superuser()),
+        auth_result=Depends(auth.deps.require_permission("api_key:read")),
     ):
         del auth_result
         principals, total = await auth.integration_principal_service.list_principals(
@@ -781,7 +781,7 @@ def _get_platform_global_integration_principals_router(
     async def create_system_integration_principal(
         data: IntegrationPrincipalCreateRequest,
         session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_superuser()),
+        auth_result=Depends(auth.deps.require_permission("api_key:create")),
     ):
         try:
             principal = await auth.integration_principal_service.create_principal(
@@ -807,7 +807,7 @@ def _get_platform_global_integration_principals_router(
     async def get_system_integration_principal(
         principal_id: UUID,
         session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_superuser()),
+        auth_result=Depends(auth.deps.require_permission("api_key:read")),
     ):
         del auth_result
         principal = await _get_system_principal(session, principal_id)
@@ -822,7 +822,7 @@ def _get_platform_global_integration_principals_router(
         principal_id: UUID,
         data: IntegrationPrincipalUpdateRequest,
         session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_superuser()),
+        auth_result=Depends(auth.deps.require_permission("api_key:update")),
     ):
         await _get_system_principal(session, principal_id)
         payload = data.model_dump(exclude_unset=True)
@@ -849,7 +849,7 @@ def _get_platform_global_integration_principals_router(
     async def delete_system_integration_principal(
         principal_id: UUID,
         session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_superuser()),
+        auth_result=Depends(auth.deps.require_permission("api_key:delete", "api_key:revoke")),
     ):
         await _get_system_principal(session, principal_id)
         archived = await auth.integration_principal_service.archive_principal(
@@ -874,7 +874,7 @@ def _get_platform_global_integration_principals_router(
         status_filter: Optional[APIKeyStatus] = Query(default=None, alias="status"),
         search: Optional[str] = Query(default=None, min_length=1),
         session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_superuser()),
+        auth_result=Depends(auth.deps.require_permission("api_key:read")),
     ):
         del auth_result
         await _get_system_principal(session, principal_id)
@@ -905,7 +905,7 @@ def _get_platform_global_integration_principals_router(
         principal_id: UUID,
         data: SystemIntegrationApiKeyCreateRequest,
         session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_superuser()),
+        auth_result=Depends(auth.deps.require_permission("api_key:create")),
     ):
         await _get_system_principal(session, principal_id)
         try:
@@ -938,7 +938,7 @@ def _get_platform_global_integration_principals_router(
         principal_id: UUID,
         key_id: UUID,
         session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_superuser()),
+        auth_result=Depends(auth.deps.require_permission("api_key:read")),
     ):
         del auth_result
         await _get_system_principal(session, principal_id)
@@ -955,7 +955,7 @@ def _get_platform_global_integration_principals_router(
         key_id: UUID,
         data: SystemIntegrationApiKeyUpdateRequest,
         session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_superuser()),
+        auth_result=Depends(auth.deps.require_permission("api_key:update")),
     ):
         await _get_system_principal(session, principal_id)
         await _get_principal_api_key(session, principal_id, key_id)
@@ -982,7 +982,7 @@ def _get_platform_global_integration_principals_router(
         principal_id: UUID,
         key_id: UUID,
         session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_superuser()),
+        auth_result=Depends(auth.deps.require_permission("api_key:delete", "api_key:revoke")),
     ):
         await _get_system_principal(session, principal_id)
         await _get_principal_api_key(session, principal_id, key_id)
@@ -1006,7 +1006,7 @@ def _get_platform_global_integration_principals_router(
         principal_id: UUID,
         key_id: UUID,
         session: AsyncSession = Depends(auth.uow),
-        auth_result=Depends(auth.deps.require_superuser()),
+        auth_result=Depends(auth.deps.require_permission("api_key:update")),
     ):
         await _get_system_principal(session, principal_id)
         await _get_principal_api_key(session, principal_id, key_id)

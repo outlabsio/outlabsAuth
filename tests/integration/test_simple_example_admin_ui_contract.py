@@ -128,6 +128,149 @@ async def test_simple_auth_config_returns_expected_features_and_permissions(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_simple_invite_assigns_selected_role_ids_as_direct_memberships(
+    simple_client: httpx.AsyncClient,
+    simple_auth_instance: SimpleRBAC,
+    simple_admin: dict[str, str],
+):
+    """SimpleRBAC invite accepts role_ids and persists them as direct role memberships."""
+    permission_name = f"simpleinvite{uuid.uuid4().hex[:6]}:read"
+    role_name = f"simple-invite-role-{uuid.uuid4().hex[:8]}"
+    invited_email = f"simple-invited-{uuid.uuid4().hex[:8]}@example.com"
+
+    async with simple_auth_instance.get_session() as session:
+        permission = await simple_auth_instance.permission_service.create_permission(
+            session,
+            name=permission_name,
+            display_name="Simple Invite Read",
+        )
+        role = await simple_auth_instance.role_service.create_role(
+            session,
+            name=role_name,
+            display_name="Simple Invite Role",
+            permission_names=[permission.name],
+            created_by_id=UUID(simple_admin["id"]),
+        )
+        await session.commit()
+        role_id = str(role.id)
+
+    headers = _auth_headers(simple_admin["token"])
+    invite_response = await simple_client.post(
+        "/v1/auth/invite",
+        headers=headers,
+        json={
+            "email": invited_email,
+            "first_name": "Simple",
+            "last_name": "Invited",
+            "role_ids": [role_id],
+        },
+    )
+
+    assert invite_response.status_code == 201, invite_response.text
+    invited_payload = invite_response.json()
+    assert invited_payload["email"] == invited_email
+    assert invited_payload["status"] == "invited"
+    assert invited_payload["root_entity_id"] is None
+    assert "role_ids" not in invited_payload
+
+    memberships_response = await simple_client.get(
+        f"/v1/users/{invited_payload['id']}/role-memberships?include_inactive=true",
+        headers=headers,
+    )
+    assert memberships_response.status_code == 200, memberships_response.text
+    memberships_payload = memberships_response.json()
+    assert len(memberships_payload) == 1
+    assert memberships_payload[0]["role_id"] == role_id
+    assert memberships_payload[0]["status"] == "active"
+    assert memberships_payload[0]["can_grant_permissions"] is True
+    assert memberships_payload[0]["role"]["name"] == role_name
+
+    permissions_response = await simple_client.get(
+        f"/v1/users/{invited_payload['id']}/permissions",
+        headers=headers,
+    )
+    assert permissions_response.status_code == 200, permissions_response.text
+    permissions_payload = permissions_response.json()
+    assert any(
+        item["permission"]["name"] == permission_name for item in permissions_payload
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_simple_permissioned_admin_can_list_global_roles(
+    simple_client: httpx.AsyncClient,
+    simple_auth_instance: SimpleRBAC,
+    simple_admin: dict[str, str],
+):
+    """SimpleRBAC role catalogs are global for permissioned non-superuser admins."""
+    visible_permission_name = f"simplerolecatalog{uuid.uuid4().hex[:6]}:read"
+    visible_role_name = f"simple-visible-role-{uuid.uuid4().hex[:8]}"
+    catalog_admin_role_name = f"simple-role-catalog-admin-{uuid.uuid4().hex[:8]}"
+
+    async with simple_auth_instance.get_session() as session:
+        if await simple_auth_instance.permission_service.get_permission_by_name(
+            session,
+            "role:read",
+            include_archived=False,
+        ) is None:
+            await simple_auth_instance.permission_service.create_permission(
+                session,
+                name="role:read",
+                display_name="Role Read",
+            )
+        visible_permission = await simple_auth_instance.permission_service.create_permission(
+            session,
+            name=visible_permission_name,
+            display_name="Simple Visible Read",
+        )
+        visible_role = await simple_auth_instance.role_service.create_role(
+            session,
+            name=visible_role_name,
+            display_name="Simple Visible Role",
+            permission_names=[visible_permission.name],
+            created_by_id=UUID(simple_admin["id"]),
+        )
+        catalog_admin_role = await simple_auth_instance.role_service.create_role(
+            session,
+            name=catalog_admin_role_name,
+            display_name="Simple Role Catalog Admin",
+            permission_names=["role:read"],
+            created_by_id=UUID(simple_admin["id"]),
+        )
+        catalog_admin = await simple_auth_instance.user_service.create_user(
+            session=session,
+            email=f"simple-role-catalog-admin-{uuid.uuid4().hex[:8]}@example.com",
+            password="AdminPass123!",
+            first_name="Role",
+            last_name="Admin",
+            is_superuser=False,
+        )
+        await simple_auth_instance.role_service.assign_role_to_user(
+            session,
+            user_id=catalog_admin.id,
+            role_id=catalog_admin_role.id,
+            assigned_by_id=UUID(simple_admin["id"]),
+        )
+        await session.commit()
+        catalog_admin_token = create_access_token(
+            {"sub": str(catalog_admin.id)},
+            secret_key=simple_auth_instance.config.secret_key,
+            algorithm=simple_auth_instance.config.algorithm,
+            audience=simple_auth_instance.config.jwt_audience,
+        )
+
+    roles_response = await simple_client.get(
+        "/v1/roles/?page=1&limit=20&is_global=true",
+        headers=_auth_headers(catalog_admin_token),
+    )
+    assert roles_response.status_code == 200, roles_response.text
+    roles_payload = roles_response.json()
+    assert any(item["id"] == str(visible_role.id) for item in roles_payload["items"])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_simple_admin_ui_contract_exposes_shared_routes_and_omits_enterprise_only_routes(
     simple_client: httpx.AsyncClient,
     simple_auth_instance: SimpleRBAC,

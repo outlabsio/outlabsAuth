@@ -78,7 +78,7 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         session: AsyncSession,
         auth_result: dict[str, Any],
     ) -> dict[str, Any]:
-        return cast(
+        scope = cast(
             dict[str, Any],
             await auth.access_scope_service.resolve_for_auth_result(
                 session,
@@ -86,6 +86,9 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
                 include_member_user_ids=False,
             ),
         )
+        if not auth.config.enable_entity_hierarchy:
+            scope["is_global"] = True
+        return scope
 
     async def _get_role_or_404(
         session: AsyncSession,

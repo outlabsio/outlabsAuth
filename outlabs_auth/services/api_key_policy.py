@@ -746,13 +746,24 @@ class APIKeyPolicyService:
         )
 
         if scope_kind == IntegrationPrincipalScopeKind.PLATFORM_GLOBAL:
-            if not actor.is_superuser:
+            if actor.is_superuser:
+                return sorted(allowed_names)
+            if self.config.enable_entity_hierarchy:
                 raise self._policy_error(
                     "superuser_required",
                     message="Platform-global integration principals require a superuser actor",
                     details={"actor_user_id": str(actor_user_id)},
                 )
-            return sorted(allowed_names)
+            if self.permission_service is None:
+                return []
+            return sorted(
+                await self.permission_service.get_effective_permission_names(
+                    session,
+                    user_id=actor_user_id,
+                    candidate_permission_names=allowed_names,
+                    user=actor,
+                )
+            )
 
         if anchor_entity_id is None:
             raise self._policy_error(
@@ -1129,7 +1140,7 @@ class APIKeyPolicyService:
                     "inherit_from_tree_disallowed",
                     message="Platform-global integration principals cannot inherit tree scope",
                 )
-            if not actor.is_superuser:
+            if not actor.is_superuser and self.config.enable_entity_hierarchy:
                 raise self._policy_error(
                     "superuser_required",
                     message="Platform-global integration principals require a superuser actor",

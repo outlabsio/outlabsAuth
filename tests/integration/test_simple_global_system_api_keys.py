@@ -48,6 +48,109 @@ async def _bearer_token(auth: SimpleRBAC, user_id: str) -> str:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_simple_rbac_system_key_routes_honor_api_key_permissions(
+    simple_global_keys_app: FastAPI,
+    simple_auth_with_global_keys: SimpleRBAC,
+):
+    assert simple_auth_with_global_keys.permission_service is not None
+    assert simple_auth_with_global_keys.role_service is not None
+    assert simple_auth_with_global_keys.user_service is not None
+    assert simple_auth_with_global_keys.api_key_service is not None
+
+    async with simple_auth_with_global_keys.get_session() as session:
+        for name in ["api_key:read", "api_key:create", "api_key:revoke", "agent:read"]:
+            await simple_auth_with_global_keys.permission_service.create_permission(
+                session,
+                name=name,
+                display_name=name,
+                description=f"{name} permission.",
+            )
+
+        scraper_role = await simple_auth_with_global_keys.role_service.create_role(
+            session,
+            name=f"permissioned-scraper-{uuid.uuid4().hex[:8]}",
+            display_name="Permissioned Scraper",
+            description="Global worker role for scraper traffic.",
+            permission_names=["agent:read"],
+        )
+        api_key_admin_role = await simple_auth_with_global_keys.role_service.create_role(
+            session,
+            name=f"api-key-admin-{uuid.uuid4().hex[:8]}",
+            display_name="API Key Admin",
+            description="Can manage SimpleRBAC platform-global service accounts.",
+            permission_names=["api_key:read", "api_key:create", "api_key:revoke", "agent:read"],
+        )
+        permissioned_user = await simple_auth_with_global_keys.user_service.create_user(
+            session=session,
+            email=f"simple-api-key-admin-{uuid.uuid4().hex[:8]}@example.com",
+            password="AdminPass123!",
+            first_name="API",
+            last_name="Admin",
+            is_superuser=False,
+        )
+        await simple_auth_with_global_keys.role_service.assign_role_to_user(
+            session,
+            user_id=permissioned_user.id,
+            role_id=api_key_admin_role.id,
+            assigned_by_id=permissioned_user.id,
+        )
+        await session.commit()
+        token = await _bearer_token(simple_auth_with_global_keys, str(permissioned_user.id))
+
+    transport = httpx.ASGITransport(app=simple_global_keys_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        list_response = await client.get(
+            "/v1/admin/system/integration-principals",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert list_response.status_code == 200, list_response.text
+
+        principal_response = await client.post(
+            "/v1/admin/system/integration-principals",
+            json={
+                "name": "Permissioned Scraping Workers",
+                "description": "Global worker principal managed by an API-key admin role.",
+                "role_ids": [str(scraper_role.id)],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert principal_response.status_code == 201, principal_response.text
+        principal_id = principal_response.json()["id"]
+
+        api_key_response = await client.post(
+            f"/v1/admin/system/integration-principals/{principal_id}/api-keys",
+            json={
+                "name": "Permissioned Scraper Key",
+                "description": "Scraper key created by a non-superuser API-key admin.",
+                "scopes": ["agent:read"],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert api_key_response.status_code == 201, api_key_response.text
+        key_id = api_key_response.json()["id"]
+
+        list_keys_response = await client.get(
+            f"/v1/admin/system/integration-principals/{principal_id}/api-keys",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert list_keys_response.status_code == 200, list_keys_response.text
+        assert [item["id"] for item in list_keys_response.json()["items"]] == [key_id]
+
+        revoke_key_response = await client.delete(
+            f"/v1/admin/system/integration-principals/{principal_id}/api-keys/{key_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert revoke_key_response.status_code == 204, revoke_key_response.text
+
+        archive_principal_response = await client.delete(
+            f"/v1/admin/system/integration-principals/{principal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert archive_principal_response.status_code == 204, archive_principal_response.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_simple_rbac_supports_platform_global_system_keys(
     simple_global_keys_app: FastAPI,
     simple_auth_with_global_keys: SimpleRBAC,
