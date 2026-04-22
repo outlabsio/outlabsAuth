@@ -5,10 +5,11 @@ Uses Redis Sets for O(1) tracking with 99%+ write reduction.
 Background worker syncs to PostgreSQL for historical analytics.
 """
 
+import asyncio
 import logging
 import time
 from datetime import date, datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, Optional, Set, cast
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -62,6 +63,31 @@ class ActivityTracker:
         self.update_user_model = update_user_model
         self.store_user_ids = store_user_ids
         self.observability = observability
+        self._background_tasks: Set[asyncio.Task[None]] = set()
+
+    def track_activity_detached(self, user_id: str) -> None:
+        """Schedule track_activity as a background task with proper lifecycle.
+
+        Wraps asyncio.create_task so the task reference is retained (Python's
+        loop only keeps weak references — an un-held task can be GC'd mid-run)
+        and any exception that escapes track_activity's internal try/except
+        (e.g. CancelledError, unexpected raises) is surfaced to the logger
+        instead of bubbling up as "Task exception was never retrieved".
+        """
+        if not self.enabled:
+            return
+
+        task = asyncio.create_task(self.track_activity(user_id))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._on_background_task_done)
+
+    def _on_background_task_done(self, task: "asyncio.Task[None]") -> None:
+        self._background_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Activity tracking task failed", exc_info=exc)
 
     async def track_activity(self, user_id: str) -> None:
         """

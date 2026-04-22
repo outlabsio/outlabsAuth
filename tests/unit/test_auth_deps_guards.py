@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import inspect
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -177,28 +175,19 @@ async def test_auth_deps_require_auth_optional_and_activity_tracking(monkeypatch
             {"user": tracked_user, "user_id": str(user_id), "source": "tracking"}
         ),
     )
-    activity_tracker = SimpleNamespace(track_activity=AsyncMock())
+    tracked: list[str] = []
+
+    def fake_track_activity_detached(tracked_user_id: str) -> None:
+        tracked.append(tracked_user_id)
+
+    activity_tracker = SimpleNamespace(
+        track_activity_detached=fake_track_activity_detached,
+    )
     deps = AuthDeps(
         backends=[tracking_backend],
         activity_tracker=activity_tracker,
         get_session=lambda: None,
     )
-    tracked: list[str] = []
-
-    async def fake_track_activity(tracked_user_id: str):
-        tracked.append(tracked_user_id)
-
-    activity_tracker.track_activity.side_effect = fake_track_activity
-
-    real_create_task = asyncio.create_task
-    created_tasks: list[asyncio.Task] = []
-
-    def fake_create_task(coro):
-        task = real_create_task(coro)
-        created_tasks.append(task)
-        return task
-
-    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
 
     dep = deps.require_auth()
     request = _make_request(
@@ -208,7 +197,6 @@ async def test_auth_deps_require_auth_optional_and_activity_tracking(monkeypatch
     )
 
     auth_result = await dep(request=request, session=object())
-    await asyncio.gather(*created_tasks)
 
     assert auth_result["source"] == "tracking"
     assert tracked == [str(user_id)]

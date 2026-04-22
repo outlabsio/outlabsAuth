@@ -70,9 +70,13 @@ async def test_emit_is_fire_and_forget_and_logs_observability(monkeypatch):
     async def fake_process_event(event_type: str, data: dict | None, metadata: dict | None) -> None:
         processed.append((event_type, data, metadata))
 
+    class _FakeTask:
+        def add_done_callback(self, callback):
+            self._callback = callback
+
     def fake_create_task(coro):
         captured_coroutines.append(coro)
-        return object()
+        return _FakeTask()
 
     monkeypatch.setattr(service, "_process_event", fake_process_event)
     monkeypatch.setattr("asyncio.create_task", fake_create_task)

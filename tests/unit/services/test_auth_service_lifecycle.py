@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -120,7 +119,7 @@ async def test_auth_service_login_success_emits_notification_tracks_activity_and
     monkeypatch,
 ):
     notifications = SimpleNamespace(emit=AsyncMock())
-    activity_tracker = SimpleNamespace(track_activity=AsyncMock())
+    activity_tracker = SimpleNamespace(track_activity_detached=MagicMock())
     observability = MagicMock()
     audit = SimpleNamespace(record_event=AsyncMock())
     service = AuthService(
@@ -132,14 +131,6 @@ async def test_auth_service_login_success_emits_notification_tracks_activity_and
     )
     user = await _create_user(test_session, auth_config, email="success@example.com")
 
-    created_coroutines = []
-
-    def fake_create_task(coro):
-        created_coroutines.append(coro)
-        coro.close()
-        return MagicMock()
-
-    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
     async def _fake_verify(plain, hashed):
         return (True, "upgraded-password-hash")
 
@@ -161,7 +152,7 @@ async def test_auth_service_login_success_emits_notification_tracks_activity_and
     assert token_pair.refresh_token
     notifications.emit.assert_awaited_once()
     assert notifications.emit.await_args_list[0].args[0] == "user.login"
-    assert len(created_coroutines) == 1
+    activity_tracker.track_activity_detached.assert_called_once_with(str(user.id))
     assert user.hashed_password == "upgraded-password-hash"
     observability.log_login_success.assert_called_once()
     audit.record_event.assert_awaited_once()
@@ -320,7 +311,7 @@ async def test_auth_service_refresh_access_token_revokes_stale_token_and_tracks_
     monkeypatch,
 ):
     observability = MagicMock()
-    activity_tracker = SimpleNamespace(track_activity=AsyncMock())
+    activity_tracker = SimpleNamespace(track_activity_detached=MagicMock())
     service = AuthService(
         config=auth_config,
         observability=observability,
@@ -329,19 +320,10 @@ async def test_auth_service_refresh_access_token_revokes_stale_token_and_tracks_
     user = await _create_user(test_session, auth_config, email="refresh@example.com")
     token_pair = await service.create_tokens_for_user(test_session, user)
 
-    created_coroutines = []
-
-    def fake_create_task(coro):
-        created_coroutines.append(coro)
-        coro.close()
-        return MagicMock()
-
-    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
-
     refreshed = await service.refresh_access_token(test_session, token_pair.refresh_token)
     assert refreshed.refresh_token == token_pair.refresh_token
     observability.log_token_refreshed.assert_called_with(user_id=str(user.id), status="success")
-    assert len(created_coroutines) == 1
+    activity_tracker.track_activity_detached.assert_called_once_with(str(user.id))
 
     user.last_password_change = datetime.now(timezone.utc) + timedelta(seconds=1)
     await test_session.flush()

@@ -384,11 +384,8 @@ class AuthDeps:
                                 continue
 
                         if self.activity_tracker and result.get("user"):
-                            import asyncio
-
-                            user_id = str(result["user"].id)
-                            asyncio.create_task(
-                                self.activity_tracker.track_activity(user_id)
+                            self.activity_tracker.track_activity_detached(
+                                str(result["user"].id)
                             )
 
                         return result

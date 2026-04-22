@@ -6,8 +6,11 @@ Emits events to configured channels (RabbitMQ, Email, SMS, Webhooks).
 """
 
 import asyncio
+import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from outlabs_auth.observability import ObservabilityService
@@ -68,6 +71,7 @@ class NotificationService:
         self.enabled = enabled
         self.channels = channels or []
         self.observability = observability
+        self._background_tasks: Set[asyncio.Task[None]] = set()
 
     async def emit(
         self,
@@ -146,8 +150,21 @@ class NotificationService:
                 user_id=user_id,
             )
 
-        # Fire and forget - don't block the caller
-        asyncio.create_task(self._process_event(event_type, data, metadata))
+        # Fire and forget - don't block the caller. Retain the task so the
+        # loop does not GC it mid-run, and surface any escape through the
+        # done-callback. _process_event already swallows its own exceptions,
+        # so the callback mostly guards against cancellation / loop teardown.
+        task = asyncio.create_task(self._process_event(event_type, data, metadata))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._on_background_task_done)
+
+    def _on_background_task_done(self, task: "asyncio.Task[None]") -> None:
+        self._background_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Notification background task failed", exc_info=exc)
 
     async def _process_event(
         self,

@@ -278,9 +278,7 @@ class AuthService:
 
         # Track activity
         if self.activity_tracker:
-            import asyncio
-
-            asyncio.create_task(self.activity_tracker.track_activity(str(user.id)))
+            self.activity_tracker.track_activity_detached(str(user.id))
 
         # Create JWT token pair
         _t = time.perf_counter()
@@ -651,9 +649,7 @@ class AuthService:
 
         # Track activity
         if self.activity_tracker:
-            import asyncio
-
-            asyncio.create_task(self.activity_tracker.track_activity(str(user.id)))
+            self.activity_tracker.track_activity_detached(str(user.id))
 
         return TokenPair(
             access_token=access_token,
