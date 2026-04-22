@@ -10,7 +10,7 @@ Open-source FastAPI authentication and authorization for RBAC, ABAC, API keys, a
 
 ## Status
 
-**Current Library Version**: 0.1.0a18
+**Current Library Version**: 0.1.0a19
 
 **Release Stage**: Alpha
 
@@ -165,10 +165,14 @@ Today, the recommended operational commands are:
   one or more checks failed, `2` `DATABASE_URL` not set. Passwords in the URL
   are redacted in all output. Safe to run against production — it issues no
   writes.
-
-A first-boot `outlabs-auth bootstrap` command is the next planned step in this
-operator-experience track; until then, prefer the explicit prestart flow above
-over implicit runtime bootstrap.
+- `outlabs-auth bootstrap` — idempotent first-boot orchestrator. Classifies
+  the schema, builds a deterministic plan (migrate → seed → optional admin),
+  and executes it. Aborts explicitly on drift, partially-bootstrapped, or
+  missing-schema states rather than auto-repairing. Flags: `--dry-run`,
+  `--skip-seed`, `--admin-email`/`--admin-password` (also via
+  `OUTLABS_AUTH_BOOTSTRAP_*` env vars), `--format text|json`. Same exit-code
+  semantics as doctor. Runs a final doctor pass on success to confirm the
+  healthy end state.
 
 ## More
 

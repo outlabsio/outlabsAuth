@@ -49,12 +49,18 @@ Current packaged commands (`migrate`, `seed-system`, `bootstrap-admin`, `tables`
 
 Known next-pass work:
 
-- Add `outlabs-auth bootstrap`
-  - verify DB connectivity
-  - verify schema target
-  - detect empty vs healthy schema
-  - run safe bootstrap/migration steps in the correct order
-- ✅ `outlabs-auth doctor` (landed post-v0.1.0a18, unreleased)
+- ✅ `outlabs-auth bootstrap` (shipped in v0.1.0a19)
+  - classifies target schema into one of nine states (empty, legacy,
+    healthy_current, healthy_behind, alembic_empty, schema_missing,
+    partial_non_auth, drifted, no_connection)
+  - builds a deterministic plan: migrate → seed → optional admin
+  - safe by default: aborts on drift, partial-non-auth, schema-missing
+  - flags: `--dry-run`, `--skip-seed`, `--admin-email`/`--admin-password`
+    (also via `OUTLABS_AUTH_BOOTSTRAP_*` env vars), `--format text|json`
+  - exit codes `0`/`1`/`2` match doctor
+  - idempotent; re-running on a healthy schema is a no-op
+  - runs a final doctor pass to confirm the healthy end state
+- ✅ `outlabs-auth doctor` (shipped in v0.1.0a19)
   - five read-only checks: connectivity, target schema, Alembic version table,
     revision matches code, core auth tables
   - `--format text` (default) and `--format json`
@@ -483,6 +489,6 @@ original P1 scope proposed.
 
 These are known and accepted for now:
 
-- No first-class `bootstrap` CLI yet (`doctor` has landed; see Bootstrap And Operator Tooling).
+- Bootstrap/doctor CLI has landed but not yet been exercised against real production deployments — operator feedback may surface additional edge cases.
 - No broader admin-route perf benchmark suite beyond the current query-budget tests.
 - No guarantee yet that every downstream host app is using the optimized production defaults unless they follow the current docs.
