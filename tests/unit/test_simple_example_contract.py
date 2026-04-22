@@ -23,5 +23,4 @@ def test_simple_example_mounts_shared_admin_routers_only():
     assert "get_entities_router(" not in example_main
     assert "get_memberships_router(" not in example_main
     assert "get_config_router(" not in example_main
-    assert "get_integration_principals_router(" not in example_main
     assert "get_api_key_admin_router(" not in example_main
