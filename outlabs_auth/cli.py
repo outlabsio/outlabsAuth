@@ -705,6 +705,459 @@ def _format_doctor_json(
     return json.dumps(payload, indent=2)
 
 
+# ============================================================================
+# Bootstrap — safe idempotent first-boot orchestration
+# ============================================================================
+
+
+class SchemaState:
+    """Target-schema classification used to plan bootstrap actions."""
+
+    NO_CONNECTION = "no_connection"
+    SCHEMA_MISSING = "schema_missing"
+    EMPTY = "empty"
+    LEGACY = "legacy"
+    PARTIAL_NON_AUTH = "partial_non_auth"
+    ALEMBIC_EMPTY = "alembic_empty"
+    DRIFTED = "drifted"
+    HEALTHY_BEHIND = "healthy_behind"
+    HEALTHY_CURRENT = "healthy_current"
+
+
+class BootstrapAction:
+    MIGRATE = "migrate"
+    SKIP_MIGRATE = "skip_migrate"
+    SEED = "seed"
+    CREATE_ADMIN = "create_admin"
+    SKIP_ADMIN = "skip_admin"
+
+
+@dataclass(frozen=True)
+class BootstrapStep:
+    action: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class BootstrapStepResult:
+    action: str
+    status: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class BootstrapPlan:
+    state: str
+    state_detail: str
+    can_proceed: bool
+    steps: tuple[BootstrapStep, ...]
+    abort_reason: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class BootstrapResult:
+    plan: BootstrapPlan
+    dry_run: bool
+    success: bool
+    executed: tuple[BootstrapStepResult, ...]
+    final_checks: tuple[DoctorCheck, ...]
+    error: Optional[str]
+
+
+_ABORT_STATES = frozenset(
+    {
+        SchemaState.NO_CONNECTION,
+        SchemaState.SCHEMA_MISSING,
+        SchemaState.PARTIAL_NON_AUTH,
+        SchemaState.DRIFTED,
+    }
+)
+
+
+async def _classify_schema_state(
+    database_url: str, schema: Optional[str]
+) -> tuple[str, str]:
+    """Classify the target schema for bootstrap planning (read-only).
+
+    Returns a ``(state, detail)`` tuple where ``state`` is one of the
+    ``SchemaState`` constants and ``detail`` is a human-readable explanation.
+    """
+    normalized_url = normalize_database_url(database_url)
+
+    engine = create_async_engine(normalized_url, echo=False)
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        await engine.dispose()
+        return SchemaState.NO_CONNECTION, f"Cannot reach database: {type(exc).__name__}"
+    else:
+        await engine.dispose()
+
+    if schema:
+        exists_engine = create_async_engine(normalized_url, echo=False)
+        try:
+            async with exists_engine.connect() as conn:
+                result = await conn.execute(
+                    text("SELECT 1 FROM information_schema.schemata WHERE schema_name = :name"),
+                    {"name": schema},
+                )
+                if result.first() is None:
+                    return (
+                        SchemaState.SCHEMA_MISSING,
+                        f"Schema '{schema}' does not exist",
+                    )
+        finally:
+            await exists_engine.dispose()
+
+    tables = await _list_schema_tables(normalized_url, schema)
+    if not tables:
+        return SchemaState.EMPTY, "Target schema is empty"
+
+    if ALEMBIC_VERSION_TABLE not in tables:
+        if LEGACY_SCHEMA_ADOPTION_TABLES.issubset(tables):
+            return (
+                SchemaState.LEGACY,
+                "Pre-Alembic auth schema detected; adoption is safe",
+            )
+        return (
+            SchemaState.PARTIAL_NON_AUTH,
+            "Schema contains tables that are neither the legacy auth set nor "
+            "the Alembic version table",
+        )
+
+    from alembic.script import ScriptDirectory
+
+    target = _validate_schema_name(schema) or "public"
+    rev_engine = create_async_engine(normalized_url, echo=False)
+    try:
+        async with rev_engine.connect() as conn:
+            result = await conn.execute(
+                text(f'SELECT version_num FROM "{target}"."{ALEMBIC_VERSION_TABLE}"')
+            )
+            row = result.first()
+            db_revision = str(row[0]) if row else None
+    finally:
+        await rev_engine.dispose()
+
+    if db_revision is None:
+        return (
+            SchemaState.ALEMBIC_EMPTY,
+            "Alembic version table exists but is empty",
+        )
+
+    alembic_cfg = _load_alembic_config()
+    script = ScriptDirectory.from_config(alembic_cfg)
+    code_head = script.get_current_head()
+
+    if db_revision == code_head:
+        return SchemaState.HEALTHY_CURRENT, f"At head ({code_head})"
+
+    try:
+        script.get_revision(db_revision)
+    except Exception:
+        return (
+            SchemaState.DRIFTED,
+            f"DB is at unknown revision '{db_revision}'; code head is '{code_head}'",
+        )
+
+    return (
+        SchemaState.HEALTHY_BEHIND,
+        f"DB is at '{db_revision}', code head is '{code_head}'",
+    )
+
+
+def _build_bootstrap_plan(
+    state: str,
+    state_detail: str,
+    *,
+    skip_seed: bool,
+    admin_email: Optional[str],
+) -> BootstrapPlan:
+    """Translate a classified state into an ordered, executable plan."""
+    if state in _ABORT_STATES:
+        abort_messages = {
+            SchemaState.NO_CONNECTION: state_detail,
+            SchemaState.SCHEMA_MISSING: (
+                f"{state_detail}. Create the schema explicitly (CREATE SCHEMA or "
+                "outlabs-auth init-db) before re-running bootstrap."
+            ),
+            SchemaState.PARTIAL_NON_AUTH: (
+                f"{state_detail}. Refusing to co-tenant into an unclaimed schema; "
+                "inspect contents manually."
+            ),
+            SchemaState.DRIFTED: (
+                f"{state_detail}. Run 'outlabs-auth doctor' for details and confirm the "
+                "installed library version matches this database before migrating."
+            ),
+        }
+        return BootstrapPlan(
+            state=state,
+            state_detail=state_detail,
+            can_proceed=False,
+            steps=(),
+            abort_reason=abort_messages[state],
+        )
+
+    steps: list[BootstrapStep] = []
+    if state == SchemaState.EMPTY:
+        steps.append(BootstrapStep(BootstrapAction.MIGRATE, "Run all migrations to head"))
+    elif state == SchemaState.LEGACY:
+        steps.append(
+            BootstrapStep(
+                BootstrapAction.MIGRATE,
+                "Stamp pre-Alembic auth schema, then upgrade to head",
+            )
+        )
+    elif state == SchemaState.ALEMBIC_EMPTY:
+        steps.append(BootstrapStep(BootstrapAction.MIGRATE, "Run all migrations to head"))
+    elif state == SchemaState.HEALTHY_BEHIND:
+        steps.append(BootstrapStep(BootstrapAction.MIGRATE, "Upgrade to head"))
+    elif state == SchemaState.HEALTHY_CURRENT:
+        steps.append(BootstrapStep(BootstrapAction.SKIP_MIGRATE, "Schema already at head"))
+
+    if not skip_seed:
+        steps.append(BootstrapStep(BootstrapAction.SEED, "Seed permissions and config"))
+
+    if admin_email:
+        steps.append(
+            BootstrapStep(
+                BootstrapAction.CREATE_ADMIN,
+                f"Ensure admin user exists: {admin_email}",
+            )
+        )
+    else:
+        steps.append(
+            BootstrapStep(
+                BootstrapAction.SKIP_ADMIN,
+                "No --admin-email provided; skipping admin creation",
+            )
+        )
+
+    return BootstrapPlan(
+        state=state,
+        state_detail=state_detail,
+        can_proceed=True,
+        steps=tuple(steps),
+    )
+
+
+async def run_bootstrap(
+    database_url: str,
+    schema: Optional[str],
+    *,
+    skip_seed: bool = False,
+    admin_email: Optional[str] = None,
+    admin_password: Optional[str] = None,
+    admin_first_name: Optional[str] = None,
+    admin_last_name: Optional[str] = None,
+    dry_run: bool = False,
+) -> BootstrapResult:
+    """Classify schema state, build a plan, and execute (unless dry-run).
+
+    On successful execution, runs a final doctor pass to confirm the healthy
+    end state. Idempotent: re-running against an already-bootstrapped schema
+    is a safe no-op on migrate/admin steps.
+    """
+    state, state_detail = await _classify_schema_state(database_url, schema)
+    plan = _build_bootstrap_plan(
+        state, state_detail, skip_seed=skip_seed, admin_email=admin_email
+    )
+
+    if not plan.can_proceed:
+        return BootstrapResult(
+            plan=plan,
+            dry_run=dry_run,
+            success=False,
+            executed=(),
+            final_checks=(),
+            error=plan.abort_reason,
+        )
+
+    if dry_run:
+        return BootstrapResult(
+            plan=plan,
+            dry_run=True,
+            success=True,
+            executed=(),
+            final_checks=(),
+            error=None,
+        )
+
+    executed: list[BootstrapStepResult] = []
+    try:
+        for step in plan.steps:
+            if step.action == BootstrapAction.MIGRATE:
+                await run_migrations(database_url, schema=schema)
+                executed.append(
+                    BootstrapStepResult(
+                        action=step.action,
+                        status=DoctorStatus.OK,
+                        detail="Migrated to head",
+                    )
+                )
+            elif step.action == BootstrapAction.SKIP_MIGRATE:
+                executed.append(
+                    BootstrapStepResult(
+                        action=step.action,
+                        status=DoctorStatus.SKIP,
+                        detail="Already at head",
+                    )
+                )
+            elif step.action == BootstrapAction.SEED:
+                created, existing, config_seeded = await seed_system_state(
+                    database_url, schema=schema
+                )
+                executed.append(
+                    BootstrapStepResult(
+                        action=step.action,
+                        status=DoctorStatus.OK,
+                        detail=(
+                            f"Permissions: {created} created, {existing} existing; "
+                            f"config: {'seeded' if config_seeded else 'already present'}"
+                        ),
+                    )
+                )
+            elif step.action == BootstrapAction.CREATE_ADMIN:
+                if not admin_password:
+                    raise RuntimeError(
+                        "--admin-password (or OUTLABS_AUTH_BOOTSTRAP_PASSWORD) is required "
+                        "when --admin-email is set"
+                    )
+                status_str, user_id, email = await bootstrap_admin_user(
+                    database_url,
+                    schema=schema,
+                    email=admin_email or "",
+                    password=admin_password,
+                    first_name=admin_first_name,
+                    last_name=admin_last_name,
+                )
+                executed.append(
+                    BootstrapStepResult(
+                        action=step.action,
+                        status=DoctorStatus.OK,
+                        detail=f"Admin {status_str}: {email} ({user_id})",
+                    )
+                )
+            elif step.action == BootstrapAction.SKIP_ADMIN:
+                executed.append(
+                    BootstrapStepResult(
+                        action=step.action,
+                        status=DoctorStatus.SKIP,
+                        detail="No admin email provided",
+                    )
+                )
+    except Exception as exc:
+        return BootstrapResult(
+            plan=plan,
+            dry_run=False,
+            success=False,
+            executed=tuple(executed),
+            final_checks=(),
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
+    final_checks = await run_doctor(database_url, schema)
+    success = all(c.status == DoctorStatus.OK for c in final_checks)
+    return BootstrapResult(
+        plan=plan,
+        dry_run=False,
+        success=success,
+        executed=tuple(executed),
+        final_checks=tuple(final_checks),
+        error=None if success else "Final doctor check reported failures",
+    )
+
+
+def _format_bootstrap_text(
+    result: BootstrapResult,
+    database_url: str,
+    schema: Optional[str],
+) -> str:
+    symbols = {
+        DoctorStatus.OK: "[OK]",
+        DoctorStatus.FAIL: "[FAIL]",
+        DoctorStatus.SKIP: "[--]",
+    }
+    lines = [
+        "OutlabsAuth Bootstrap",
+        f"  Database: {_redact_database_url(database_url)}",
+        f"  Schema:   {schema or '(public)'}",
+        f"  State:    {result.plan.state} - {result.plan.state_detail}",
+        "",
+    ]
+
+    if not result.plan.can_proceed:
+        lines.append("Refusing to bootstrap:")
+        lines.append(f"  {result.plan.abort_reason}")
+        return "\n".join(lines)
+
+    if result.dry_run:
+        lines.append("Plan (dry-run - no changes applied):")
+        for idx, step in enumerate(result.plan.steps, 1):
+            lines.append(f"  {idx}. [{step.action}] {step.detail}")
+        lines.append("")
+        lines.append("Re-run without --dry-run to execute.")
+        return "\n".join(lines)
+
+    lines.append("Executed:")
+    for step_result in result.executed:
+        symbol = symbols.get(step_result.status, "[?]")
+        lines.append(f"  {symbol:<6} [{step_result.action}] {step_result.detail}")
+
+    if result.final_checks:
+        lines.append("")
+        lines.append("Final health check:")
+        for check in result.final_checks:
+            symbol = symbols.get(check.status, "[?]")
+            lines.append(f"  {symbol:<6} {check.name} - {check.detail}")
+            if check.status == DoctorStatus.FAIL and check.remediation:
+                lines.append(f"         -> {check.remediation}")
+
+    lines.append("")
+    if result.success:
+        lines.append("Bootstrap complete.")
+    else:
+        lines.append(f"Bootstrap did not complete cleanly: {result.error}")
+    return "\n".join(lines)
+
+
+def _format_bootstrap_json(
+    result: BootstrapResult,
+    database_url: str,
+    schema: Optional[str],
+) -> str:
+    payload: dict[str, object] = {
+        "database_url": _redact_database_url(database_url),
+        "schema": schema,
+        "state": result.plan.state,
+        "state_detail": result.plan.state_detail,
+        "can_proceed": result.plan.can_proceed,
+        "dry_run": result.dry_run,
+        "success": result.success,
+        "plan": [
+            {"action": s.action, "detail": s.detail} for s in result.plan.steps
+        ],
+        "executed": [
+            {"action": e.action, "status": e.status, "detail": e.detail}
+            for e in result.executed
+        ],
+        "final_checks": [
+            {
+                "name": c.name,
+                "status": c.status,
+                "detail": c.detail,
+                **({"remediation": c.remediation} if c.remediation else {}),
+            }
+            for c in result.final_checks
+        ],
+        "error": result.error,
+    }
+    if not result.plan.can_proceed:
+        payload["abort_reason"] = result.plan.abort_reason
+    return json.dumps(payload, indent=2)
+
+
 @click.group()
 @click.version_option(version=__version__, prog_name="outlabs-auth")
 def main():
@@ -1023,6 +1476,97 @@ def doctor(output_format: str):
 
     has_failure = any(c.status == DoctorStatus.FAIL for c in checks)
     sys.exit(1 if has_failure else 0)
+
+
+@main.command()
+@click.option(
+    "--admin-email",
+    envvar="OUTLABS_AUTH_BOOTSTRAP_EMAIL",
+    default=None,
+    help="Admin email. If set, bootstrap creates or re-uses the admin user.",
+)
+@click.option(
+    "--admin-password",
+    envvar="OUTLABS_AUTH_BOOTSTRAP_PASSWORD",
+    default=None,
+    help="Admin password. Required whenever --admin-email is set.",
+)
+@click.option(
+    "--admin-first-name",
+    envvar="OUTLABS_AUTH_BOOTSTRAP_FIRST_NAME",
+    default=None,
+    help="Optional admin first name.",
+)
+@click.option(
+    "--admin-last-name",
+    envvar="OUTLABS_AUTH_BOOTSTRAP_LAST_NAME",
+    default=None,
+    help="Optional admin last name.",
+)
+@click.option(
+    "--skip-seed",
+    is_flag=True,
+    default=False,
+    help="Skip seeding system permissions and config.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Print the plan without making any changes.",
+)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    show_default=True,
+    help="Output format.",
+)
+def bootstrap(
+    admin_email: Optional[str],
+    admin_password: Optional[str],
+    admin_first_name: Optional[str],
+    admin_last_name: Optional[str],
+    skip_seed: bool,
+    dry_run: bool,
+    output_format: str,
+):
+    """First-boot orchestrator: classify, migrate, seed, and optionally create admin (idempotent)."""
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        click.echo("Error: DATABASE_URL environment variable not set", err=True)
+        sys.exit(2)
+
+    if admin_email and not admin_password:
+        click.echo(
+            "Error: --admin-password (or OUTLABS_AUTH_BOOTSTRAP_PASSWORD) is required "
+            "when --admin-email is set",
+            err=True,
+        )
+        sys.exit(2)
+
+    normalized = normalize_database_url(url)
+    schema = get_target_schema_from_env()
+    result = asyncio.run(
+        run_bootstrap(
+            normalized,
+            schema,
+            skip_seed=skip_seed,
+            admin_email=admin_email,
+            admin_password=admin_password,
+            admin_first_name=admin_first_name,
+            admin_last_name=admin_last_name,
+            dry_run=dry_run,
+        )
+    )
+
+    if output_format == "json":
+        click.echo(_format_bootstrap_json(result, normalized, schema))
+    else:
+        click.echo(_format_bootstrap_text(result, normalized, schema))
+
+    sys.exit(0 if result.success else 1)
 
 
 if __name__ == "__main__":
