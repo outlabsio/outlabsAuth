@@ -8,11 +8,14 @@ caller-owned connection when invoking Alembic.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.parse import urlparse, urlunparse
 from uuid import UUID
 
 import click
@@ -417,6 +420,291 @@ def get_target_schema_from_env() -> Optional[str]:
     return _validate_schema_name(os.environ.get("OUTLABS_AUTH_SCHEMA"))
 
 
+# ============================================================================
+# Doctor — read-only diagnostics
+# ============================================================================
+
+
+class DoctorStatus:
+    OK = "ok"
+    FAIL = "fail"
+    SKIP = "skip"
+
+
+@dataclass(frozen=True)
+class DoctorCheck:
+    name: str
+    status: str
+    detail: str
+    remediation: Optional[str] = None
+
+
+DOCTOR_CHECK_NAMES = (
+    "Database connectivity",
+    "Target schema",
+    "Alembic version table",
+    "Revision matches code",
+    "Core auth tables",
+)
+
+
+def _redact_database_url(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return "<unparseable URL>"
+    if not parsed.password:
+        return url
+    redacted_netloc = parsed.netloc.replace(f":{parsed.password}@", ":****@", 1)
+    return urlunparse(parsed._replace(netloc=redacted_netloc))
+
+
+async def _check_connectivity(database_url: str) -> DoctorCheck:
+    engine = create_async_engine(normalize_database_url(database_url), echo=False)
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        return DoctorCheck(
+            name="Database connectivity",
+            status=DoctorStatus.OK,
+            detail="Connected successfully",
+        )
+    except Exception as exc:
+        return DoctorCheck(
+            name="Database connectivity",
+            status=DoctorStatus.FAIL,
+            detail=f"Cannot reach database: {type(exc).__name__}",
+            remediation="Verify DATABASE_URL and that Postgres is reachable from this host.",
+        )
+    finally:
+        await engine.dispose()
+
+
+async def _check_target_schema(database_url: str, schema: Optional[str]) -> DoctorCheck:
+    if not schema:
+        return DoctorCheck(
+            name="Target schema",
+            status=DoctorStatus.OK,
+            detail="OUTLABS_AUTH_SCHEMA is unset; using 'public'",
+        )
+    engine = create_async_engine(normalize_database_url(database_url), echo=False)
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                text("SELECT 1 FROM information_schema.schemata WHERE schema_name = :name"),
+                {"name": schema},
+            )
+            exists = result.first() is not None
+    finally:
+        await engine.dispose()
+
+    if exists:
+        return DoctorCheck(
+            name="Target schema",
+            status=DoctorStatus.OK,
+            detail=f"Schema '{schema}' exists",
+        )
+    return DoctorCheck(
+        name="Target schema",
+        status=DoctorStatus.FAIL,
+        detail=f"Schema '{schema}' does not exist",
+        remediation="Run: outlabs-auth migrate",
+    )
+
+
+async def _check_alembic_version_table(database_url: str, schema: Optional[str]) -> DoctorCheck:
+    tables = await _list_schema_tables(database_url, schema)
+    if ALEMBIC_VERSION_TABLE in tables:
+        return DoctorCheck(
+            name="Alembic version table",
+            status=DoctorStatus.OK,
+            detail=f"{ALEMBIC_VERSION_TABLE} present",
+        )
+    if not tables:
+        return DoctorCheck(
+            name="Alembic version table",
+            status=DoctorStatus.FAIL,
+            detail="Schema is empty",
+            remediation="Run: outlabs-auth migrate",
+        )
+    if LEGACY_SCHEMA_ADOPTION_TABLES.issubset(tables):
+        return DoctorCheck(
+            name="Alembic version table",
+            status=DoctorStatus.FAIL,
+            detail="Pre-Alembic auth schema detected",
+            remediation="Run: outlabs-auth adopt-existing-schema",
+        )
+    return DoctorCheck(
+        name="Alembic version table",
+        status=DoctorStatus.FAIL,
+        detail=f"Tables exist but {ALEMBIC_VERSION_TABLE} is missing",
+        remediation="Run: outlabs-auth migrate",
+    )
+
+
+async def _check_revision(database_url: str, schema: Optional[str]) -> DoctorCheck:
+    from alembic.script import ScriptDirectory
+
+    target = _validate_schema_name(schema) or "public"
+    engine = create_async_engine(normalize_database_url(database_url), echo=False)
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                text(f'SELECT version_num FROM "{target}"."{ALEMBIC_VERSION_TABLE}"')
+            )
+            row = result.first()
+            db_revision = str(row[0]) if row else None
+    finally:
+        await engine.dispose()
+
+    alembic_cfg = _load_alembic_config()
+    script = ScriptDirectory.from_config(alembic_cfg)
+    code_head = script.get_current_head()
+
+    if db_revision is None:
+        return DoctorCheck(
+            name="Revision matches code",
+            status=DoctorStatus.FAIL,
+            detail="Alembic version table exists but is empty",
+            remediation="Run: outlabs-auth migrate",
+        )
+    if db_revision == code_head:
+        return DoctorCheck(
+            name="Revision matches code",
+            status=DoctorStatus.OK,
+            detail=f"At head ({code_head})",
+        )
+    try:
+        script.get_revision(db_revision)
+        known = True
+    except Exception:
+        known = False
+    if not known:
+        return DoctorCheck(
+            name="Revision matches code",
+            status=DoctorStatus.FAIL,
+            detail=f"DB is at unknown revision '{db_revision}'; code head is '{code_head}'",
+            remediation="Investigate schema drift; confirm the installed library version matches this database.",
+        )
+    return DoctorCheck(
+        name="Revision matches code",
+        status=DoctorStatus.FAIL,
+        detail=f"DB is at '{db_revision}', code head is '{code_head}'",
+        remediation="Run: outlabs-auth migrate",
+    )
+
+
+async def _check_core_tables(database_url: str, schema: Optional[str]) -> DoctorCheck:
+    tables = await _list_schema_tables(database_url, schema)
+    missing = sorted(LEGACY_SCHEMA_ADOPTION_TABLES - tables)
+    if not missing:
+        return DoctorCheck(
+            name="Core auth tables",
+            status=DoctorStatus.OK,
+            detail=f"All {len(LEGACY_SCHEMA_ADOPTION_TABLES)} core tables present",
+        )
+    return DoctorCheck(
+        name="Core auth tables",
+        status=DoctorStatus.FAIL,
+        detail=f"Missing: {', '.join(missing)}",
+        remediation="Run: outlabs-auth migrate",
+    )
+
+
+def _skip(name: str, reason: str) -> DoctorCheck:
+    return DoctorCheck(name=name, status=DoctorStatus.SKIP, detail=f"Skipped — {reason}")
+
+
+async def run_doctor(database_url: str, schema: Optional[str]) -> list[DoctorCheck]:
+    """Run all doctor checks sequentially, short-circuiting on prerequisite failures.
+
+    Read-only: never mutates schema, tables, or rows.
+    """
+    checks: list[DoctorCheck] = []
+
+    connectivity = await _check_connectivity(database_url)
+    checks.append(connectivity)
+    if connectivity.status != DoctorStatus.OK:
+        for name in DOCTOR_CHECK_NAMES[1:]:
+            checks.append(_skip(name, "database unreachable"))
+        return checks
+
+    schema_check = await _check_target_schema(database_url, schema)
+    checks.append(schema_check)
+    if schema_check.status != DoctorStatus.OK:
+        for name in DOCTOR_CHECK_NAMES[2:]:
+            checks.append(_skip(name, "target schema missing"))
+        return checks
+
+    alembic_check = await _check_alembic_version_table(database_url, schema)
+    checks.append(alembic_check)
+    if alembic_check.status != DoctorStatus.OK:
+        checks.append(_skip("Revision matches code", "Alembic version table missing"))
+        checks.append(await _check_core_tables(database_url, schema))
+        return checks
+
+    checks.append(await _check_revision(database_url, schema))
+    checks.append(await _check_core_tables(database_url, schema))
+    return checks
+
+
+def _format_doctor_text(
+    checks: list[DoctorCheck],
+    database_url: str,
+    schema: Optional[str],
+) -> str:
+    symbols = {
+        DoctorStatus.OK: "[OK]",
+        DoctorStatus.FAIL: "[FAIL]",
+        DoctorStatus.SKIP: "[--]",
+    }
+    name_width = max((len(c.name) for c in checks), default=0)
+
+    lines = [
+        "OutlabsAuth Doctor",
+        f"  Database: {_redact_database_url(database_url)}",
+        f"  Schema:   {schema or '(public)'}",
+        "",
+    ]
+    for check in checks:
+        symbol = symbols.get(check.status, "[?]")
+        lines.append(f"  {symbol:<6} {check.name:<{name_width}}  {check.detail}")
+        if check.status == DoctorStatus.FAIL and check.remediation:
+            lines.append(f"         -> {check.remediation}")
+
+    failed = sum(1 for c in checks if c.status == DoctorStatus.FAIL)
+    lines.append("")
+    if failed:
+        plural = "s" if failed != 1 else ""
+        lines.append(f"{failed} check{plural} failed. See remediation above.")
+    else:
+        lines.append("All checks passed.")
+    return "\n".join(lines)
+
+
+def _format_doctor_json(
+    checks: list[DoctorCheck],
+    database_url: str,
+    schema: Optional[str],
+) -> str:
+    healthy = all(c.status == DoctorStatus.OK for c in checks)
+    payload = {
+        "database_url": _redact_database_url(database_url),
+        "schema": schema,
+        "healthy": healthy,
+        "checks": [
+            {
+                "name": c.name,
+                "status": c.status,
+                "detail": c.detail,
+                **({"remediation": c.remediation} if c.remediation else {}),
+            }
+            for c in checks
+        ],
+    }
+    return json.dumps(payload, indent=2)
+
+
 @click.group()
 @click.version_option(version=__version__, prog_name="outlabs-auth")
 def main():
@@ -706,6 +994,35 @@ def tables():
     click.echo(f"\nDatabase tables in schema {schema} ({len(tables_list)} total):\n")
     for table, columns in tables_list:
         click.echo(f"  {table} ({columns} columns)")
+
+
+@main.command()
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    show_default=True,
+    help="Output format.",
+)
+def doctor(output_format: str):
+    """Diagnose the target DB/schema for bootstrap and migration issues (read-only)."""
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        click.echo("Error: DATABASE_URL environment variable not set", err=True)
+        sys.exit(2)
+
+    normalized = normalize_database_url(url)
+    schema = get_target_schema_from_env()
+    checks = asyncio.run(run_doctor(normalized, schema))
+
+    if output_format == "json":
+        click.echo(_format_doctor_json(checks, normalized, schema))
+    else:
+        click.echo(_format_doctor_text(checks, normalized, schema))
+
+    has_failure = any(c.status == DoctorStatus.FAIL for c in checks)
+    sys.exit(1 if has_failure else 0)
 
 
 if __name__ == "__main__":

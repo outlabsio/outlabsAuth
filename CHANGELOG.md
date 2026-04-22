@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [Unreleased]
+
+### Added
+
+- **`outlabs-auth doctor` — read-only preflight diagnostics.** New CLI command that runs five safe, read-only checks against the target database and schema: connectivity, target schema existence, Alembic version table presence, revision matches the packaged head, and core auth tables present. Supports `--format text` (default, with `[OK]` / `[FAIL]` / `[--]` markers and `->` remediation hints) and `--format json` (machine-readable payload with `healthy`, `schema`, and a `checks[]` array). Exit codes: `0` healthy, `1` one or more checks failed, `2` `DATABASE_URL` not set. Short-circuits cleanly on prerequisite failures (skipped checks are reported, not silently dropped) and redacts passwords from any URL printed to stdout or embedded in JSON output. Covered by 18 new tests in `tests/unit/test_cli_doctor.py`, wired into the release-gate workflow.
+
 ## [0.1.0a18] - 2026-04-22
 
 Async/perf pass across the auth data plane. Full test suite (745 tests) green.

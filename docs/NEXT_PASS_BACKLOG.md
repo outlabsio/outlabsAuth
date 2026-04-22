@@ -54,11 +54,13 @@ Known next-pass work:
   - verify schema target
   - detect empty vs healthy schema
   - run safe bootstrap/migration steps in the correct order
-- Add `outlabs-auth doctor`
-  - detect empty schema
-  - detect partially bootstrapped schema
-  - detect schema/search-path misconfiguration
-  - produce explicit repair guidance
+- ✅ `outlabs-auth doctor` (landed post-v0.1.0a18, unreleased)
+  - five read-only checks: connectivity, target schema, Alembic version table,
+    revision matches code, core auth tables
+  - `--format text` (default) and `--format json`
+  - exit codes: `0` healthy, `1` one or more checks failed, `2` `DATABASE_URL` missing
+  - remediation hints point at `outlabs-auth migrate` and `outlabs-auth adopt-existing-schema`
+  - passwords redacted in all output
 - Move first-boot operational ownership toward the library CLI instead of host-app runtime glue.
 - Keep multi-worker apps on the recommended pattern:
   - CLI/bootstrap in prestart or release step
@@ -481,6 +483,6 @@ original P1 scope proposed.
 
 These are known and accepted for now:
 
-- No first-class `bootstrap` / `doctor` CLI yet.
+- No first-class `bootstrap` CLI yet (`doctor` has landed; see Bootstrap And Operator Tooling).
 - No broader admin-route perf benchmark suite beyond the current query-budget tests.
 - No guarantee yet that every downstream host app is using the optimized production defaults unless they follow the current docs.

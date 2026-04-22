@@ -158,11 +158,17 @@ Today, the recommended operational commands are:
 - `outlabs-auth bootstrap-admin`
 - `outlabs-auth tables`
 - `outlabs-auth current`
+- `outlabs-auth doctor` — read-only preflight diagnostics. Runs five checks
+  (connectivity, target schema, Alembic version table, revision matches code,
+  core auth tables) against `DATABASE_URL` + `OUTLABS_AUTH_SCHEMA`. Supports
+  `--format text` (default) and `--format json`. Exit codes: `0` healthy, `1`
+  one or more checks failed, `2` `DATABASE_URL` not set. Passwords in the URL
+  are redacted in all output. Safe to run against production — it issues no
+  writes.
 
-The intended next step for the library is a more explicit operator experience
-around first-boot and diagnosis, such as `outlabs-auth bootstrap` and
-`outlabs-auth doctor`. Until that exists, prefer explicit CLI-driven prestart
-or release-hook flows over implicit runtime bootstrap.
+A first-boot `outlabs-auth bootstrap` command is the next planned step in this
+operator-experience track; until then, prefer the explicit prestart flow above
+over implicit runtime bootstrap.
 
 ## More
 
