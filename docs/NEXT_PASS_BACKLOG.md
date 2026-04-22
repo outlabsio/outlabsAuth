@@ -7,7 +7,7 @@ This document is intentionally short. It is not a full project plan and it does 
 
 ## Release-Ready Auth Perf Slice
 
-This slice is now implemented locally and verified against the full repo test suite on 2026-04-12 (`712 passed`).
+**Shipped in v0.1.0a17** (tagged 2026-04-21). Verified against the full repo test suite on 2026-04-12 (`712 passed`). Kept here as the authoritative description of what that release contained.
 
 - Reduce `/v1/users/me` from 2 queries to 1 by eager-loading `root_entity` during JWT-authenticated user resolution.
 - Reduce `/v1/roles/entity/{entity_id}` round trips by resolving entity type and ancestor chain in one query.
@@ -41,7 +41,7 @@ This slice is now implemented locally and verified against the full repo test su
   - non-superuser `/v1/roles/`
   - personal API key authorization and self-service routes
   - system integration API key authorization and admin inventory routes
-- Package this as the next auth library release instead of leaving it as repo-local optimization work.
+- ✅ Packaged as auth library release v0.1.0a17.
 
 ## Bootstrap And Operator Tooling
 
@@ -229,6 +229,8 @@ These are known ecosystem follow-ups, not core auth-library blockers:
 - Keep consumer examples validating the packaged wheel path, not repo-local editable assumptions.
 
 ## Sync-In-Async Audit Follow-Ups (2026-04-22)
+
+**Shipped in v0.1.0a18** (tagged 2026-04-22). Full suite (745 tests) green. Kept here as the authoritative description of what that release contained, including the reverted-after-measurement items that downstream maintainers should not re-attempt without a CPU profile.
 
 **Context**: Login was taking 2–3 seconds under production concurrency. Root cause
 was Argon2id hashing (~20ms per verify) running synchronously on the event loop.
