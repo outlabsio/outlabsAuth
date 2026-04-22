@@ -173,7 +173,7 @@ Known hot-path areas worth another pass after the next release:
   - `GET /v1/api-keys/`: about 22 queries for 2 keys
   - `GET /v1/api-keys/grantable-scopes`: about 8 queries unanchored, 11 anchored
   - `GET /v1/admin/entities/{id}/api-keys`: about 12 queries
-  - `resolve_for_user(...)`: about 5 queries when member projection is needed
+  - `resolve_for_user(...)`: 2 queries after the CTE collapse (1 scope + 1 member projection); was ~5 before
   - non-superuser `GET /v1/roles/`: about 14 queries on the current seeded path
   - `GET /v1/entities/{id}`: 1 query as superuser vs 7 queries as regular RBAC user
 - Prioritize investigation of the current fixed query tax in permission
@@ -295,15 +295,17 @@ after measuring them. Treat it as a default when evaluating any future
     allow-all, otherwise in-memory membership check. Saves one real DB
     round trip per IP-whitelisted key authentication.
 
-- **`AccessScopeService.resolve_for_user` parallelization** — ⚠️ STILL DEFERRED
+- **`AccessScopeService.resolve_for_user` CTE collapse** — ✅ DONE
   - [services/access_scope.py](outlabs_auth/services/access_scope.py)
-    lines 150–184. Same reason as before: the shared `AsyncSession`
-    makes naive `asyncio.gather` unsafe. The real win is combining direct
-    + closure into a single CTE/JOIN query, which is an architectural
-    refactor (the service and [tests/unit/services/test_access_scope.py](tests/unit/services/test_access_scope.py)
-    monkeypatch `_resolve_root_entity_ids` / `_resolve_direct_entity_ids`
-    as separate helpers). JWT common path already skips the root query via
-    the hydrated user. Defer until production tracing flags this.
+    `resolve_for_user` was 3 sequential queries (root → direct → closure).
+    Replaced with a single `_resolve_user_scope_inputs` method that unions
+    the root seed (hydrated literal when possible, else a `User` lookup)
+    with direct memberships as a CTE, LEFT JOINed against `entity_closure`
+    when hierarchy is enabled. Saves 1 round trip on the hydrated-user
+    path and 2 round trips when `user=None`. The two helpers
+    `_resolve_root_entity_ids` / `_resolve_direct_entity_ids` were
+    deleted; [tests/unit/services/test_access_scope.py](tests/unit/services/test_access_scope.py)
+    updated to monkeypatch the new combined method.
 
 - **`verify_api_key` broader short-circuit flatten** — ⚠️ STILL DEFERRED
   - Same `AsyncSession` constraint blocks naive `gather` across the status /
@@ -383,21 +385,11 @@ The items below did not land in this pass because they are real architectural
 refactors, not drop-in async fixes. They are parked here with enough detail
 that a later session can pick them up cold.
 
-1. **Combine `AccessScopeService.resolve_for_user` direct + closure into one query.**
-   - File: [services/access_scope.py](outlabs_auth/services/access_scope.py)
-     lines 150–184.
-   - Goal: replace the sequential `_resolve_root_entity_ids` +
-     `_resolve_direct_entity_ids` + closure expansion with a single CTE /
-     UNION that returns the full entity-id set in one round trip.
-   - Blocker that made this a refactor, not a quick win: the current tests
-     in [tests/unit/services/test_access_scope.py](tests/unit/services/test_access_scope.py)
-     monkeypatch those helpers as separate units. A single-query version
-     would need either (a) the helpers kept as pass-throughs that build
-     a subquery each, or (b) the tests rewritten against the combined
-     shape. Either is fine — it's just not a <1-hour change.
-   - Expected saving: ~1 round trip on the `user=None` fallback path (API
-     keys / internal callers). JWT path already skips the root query, so
-     the win there is smaller.
+1. ~~**Combine `AccessScopeService.resolve_for_user` direct + closure into one query.**~~
+   - ✅ Landed in this pass. `_resolve_user_scope_inputs` CTE replaces the
+     three sequential queries; tests rewritten against the combined shape.
+     Integration suite (292 tests, including real-DB roles scope paths)
+     passes green.
 
 2. **Flatten the `verify_api_key` short-circuit chain into fewer queries.**
    - File: [services/api_key.py](outlabs_auth/services/api_key.py) around

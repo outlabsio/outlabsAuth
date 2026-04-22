@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional, cast
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import literal, or_, select
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.config import AuthConfig
@@ -147,21 +148,21 @@ class AccessScopeService:
         """
         Resolve user scope from root entity + active memberships.
         """
-        root_entity_ids = await self._resolve_root_entity_ids(session, user_id=user_id, user=user)
-        direct_entity_ids = await self._resolve_direct_entity_ids(session, user_id=user_id)
+        expand_descendants = bool(self.config.enable_entity_hierarchy)
+        root_entity_ids, direct_entity_ids, descendant_entity_ids_by_ancestor = (
+            await self._resolve_user_scope_inputs(
+                session,
+                user_id=user_id,
+                user=user,
+                expand_descendants=expand_descendants,
+            )
+        )
 
-        seed_entity_ids = set(root_entity_ids)
-        seed_entity_ids.update(direct_entity_ids)
-
+        seed_entity_ids = root_entity_ids | direct_entity_ids
         effective_entity_ids = set(seed_entity_ids)
-        includes_descendants = bool(seed_entity_ids) and bool(self.config.enable_entity_hierarchy)
-        descendant_entity_ids_by_ancestor: dict[UUID, set[UUID]] = {}
+        includes_descendants = bool(seed_entity_ids) and expand_descendants
 
         if includes_descendants:
-            descendant_entity_ids_by_ancestor = await self._resolve_descendant_entity_ids_by_ancestor(
-                session,
-                seed_entity_ids,
-            )
             for descendant_entity_ids in descendant_entity_ids_by_ancestor.values():
                 effective_entity_ids.update(descendant_entity_ids)
 
@@ -253,41 +254,95 @@ class AccessScopeService:
             )
         return self._with_principal_member(scope, include_member_user_ids=include_member_user_ids)
 
-    async def _resolve_root_entity_ids(
+    async def _resolve_user_scope_inputs(
         self,
         session: AsyncSession,
         *,
         user_id: UUID,
         user: Optional[Any] = None,
-    ) -> set[UUID]:
-        root_entity_ids: set[UUID] = set()
+        expand_descendants: bool = True,
+    ) -> tuple[set[UUID], set[UUID], dict[UUID, set[UUID]]]:
+        """
+        Resolve root, direct membership, and descendant entity ids in one round trip.
+
+        Uses a CTE that unions the user's root entity (either hydrated literal or
+        a User lookup) with active membership entity ids, optionally LEFT JOINed
+        against the closure table to expand descendants.
+        """
+        hydrated_root: Optional[UUID] = None
         if user is not None:
-            root_entity_id = _coerce_uuid(getattr(user, "root_entity_id", None))
-            if root_entity_id:
-                root_entity_ids.add(root_entity_id)
+            hydrated_root = _coerce_uuid(getattr(user, "root_entity_id", None))
 
-        if root_entity_ids:
-            return root_entity_ids
+        if user is not None:
+            if hydrated_root is not None:
+                root_select = select(
+                    literal("root").label("source"),
+                    literal(hydrated_root, type_=PG_UUID(as_uuid=True)).label("entity_id"),
+                )
+            else:
+                root_select = None
+        else:
+            root_select = (
+                select(
+                    literal("root").label("source"),
+                    cast(Any, User.root_entity_id).label("entity_id"),
+                )
+                .where(cast(Any, User.id) == user_id)
+                .where(cast(Any, User.root_entity_id).is_not(None))
+            )
 
-        root_stmt = select(cast(Any, User.root_entity_id)).where(cast(Any, User.id) == user_id)
-        root_result = await session.execute(root_stmt)
-        root_entity_id = root_result.scalar_one_or_none()
-        if root_entity_id is not None:
-            root_entity_ids.add(root_entity_id)
-        return root_entity_ids
-
-    async def _resolve_direct_entity_ids(
-        self,
-        session: AsyncSession,
-        *,
-        user_id: UUID,
-    ) -> set[UUID]:
-        direct_stmt = select(cast(Any, EntityMembership.entity_id)).where(
+        direct_select = select(
+            literal("direct").label("source"),
+            cast(Any, EntityMembership.entity_id).label("entity_id"),
+        ).where(
             cast(Any, EntityMembership.user_id) == user_id,
             cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
         )
-        direct_result = await session.execute(direct_stmt)
-        return {entity_id for (entity_id,) in direct_result.all() if entity_id is not None}
+
+        seeds = (
+            root_select.union_all(direct_select) if root_select is not None else direct_select
+        ).cte("seeds")
+
+        if expand_descendants:
+            stmt = select(
+                seeds.c.source,
+                seeds.c.entity_id,
+                cast(Any, EntityClosure.descendant_id),
+            ).select_from(
+                seeds.outerjoin(
+                    EntityClosure,
+                    cast(Any, EntityClosure.ancestor_id) == seeds.c.entity_id,
+                )
+            )
+        else:
+            stmt = select(seeds.c.source, seeds.c.entity_id)
+
+        result = await session.execute(stmt)
+        rows = result.all()
+
+        root_entity_ids: set[UUID] = set()
+        direct_entity_ids: set[UUID] = set()
+        descendant_entity_ids_by_ancestor: dict[UUID, set[UUID]] = {}
+
+        for row in rows:
+            row_source = row[0]
+            entity_id = row[1]
+            if entity_id is None:
+                continue
+            entity_uuid = cast(UUID, entity_id)
+
+            if row_source == "root":
+                root_entity_ids.add(entity_uuid)
+            elif row_source == "direct":
+                direct_entity_ids.add(entity_uuid)
+
+            if expand_descendants:
+                descendant_entity_ids_by_ancestor.setdefault(entity_uuid, set())
+                descendant_id = row[2]
+                if descendant_id is not None:
+                    descendant_entity_ids_by_ancestor[entity_uuid].add(cast(UUID, descendant_id))
+
+        return root_entity_ids, direct_entity_ids, descendant_entity_ids_by_ancestor
 
     async def _expand_descendant_entity_ids(
         self,
