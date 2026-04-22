@@ -5,6 +5,7 @@ Uses pwdlib with Argon2id as the primary hasher and bcrypt compatibility
 for legacy hashes.
 """
 
+import asyncio
 import re
 from typing import Optional
 
@@ -17,7 +18,32 @@ from outlabs_auth.core.exceptions import InvalidPasswordError
 
 
 # Primary hasher is Argon2id; bcrypt remains enabled for legacy hash verify.
-password_hasher = PasswordHash((Argon2Hasher(), BcryptHasher()))
+# Parameters default to OWASP 2023 minimums (m=19 MiB, t=2, p=1) — secure and
+# ~3x faster than pwdlib's stock defaults. Override via configure_argon2() at
+# library init (AuthConfig.argon2_* fields).
+password_hasher = PasswordHash(
+    (Argon2Hasher(time_cost=2, memory_cost=19456, parallelism=1), BcryptHasher())
+)
+
+
+def configure_argon2(time_cost: int, memory_cost_kib: int, parallelism: int) -> None:
+    """Rebuild the module-level password hasher with custom Argon2id params.
+
+    Called by OutlabsAuth during initialization so the hash cost is driven
+    by AuthConfig rather than hard-coded. Bcrypt stays enabled for verifying
+    legacy hashes.
+    """
+    global password_hasher
+    password_hasher = PasswordHash(
+        (
+            Argon2Hasher(
+                time_cost=time_cost,
+                memory_cost=memory_cost_kib,
+                parallelism=parallelism,
+            ),
+            BcryptHasher(),
+        )
+    )
 
 
 def hash_password(password: str) -> str:
@@ -75,6 +101,24 @@ def verify_and_upgrade_password(plain_password: str, hashed_password: str) -> tu
         return password_hasher.verify_and_update(plain_password, hashed_password)
     except PwdlibError:
         return False, None
+
+
+# Async variants — offload CPU-bound Argon2 work to a thread so the event loop
+# stays free for other requests. Under concurrent logins this is the difference
+# between serialized and parallel hashing; see benchmarks/bench_login.py.
+
+async def hash_password_async(password: str) -> str:
+    return await asyncio.to_thread(hash_password, password)
+
+
+async def verify_password_async(plain_password: str, hashed_password: str) -> bool:
+    return await asyncio.to_thread(verify_password, plain_password, hashed_password)
+
+
+async def verify_and_upgrade_password_async(
+    plain_password: str, hashed_password: str
+) -> tuple[bool, Optional[str]]:
+    return await asyncio.to_thread(verify_and_upgrade_password, plain_password, hashed_password)
 
 
 def validate_password_strength(
@@ -196,3 +240,15 @@ def generate_password_hash(password: str, config) -> str:
 
     # Hash and return
     return hash_password(password)
+
+
+async def generate_password_hash_async(password: str, config) -> str:
+    """
+    Async variant of generate_password_hash.
+
+    Validation is cheap (regex) but the Argon2 hash is CPU-heavy; offload
+    the entire call to a thread so callers in async contexts don't block
+    the event loop.
+    """
+    validate_password_with_config(password, config)
+    return await asyncio.to_thread(hash_password, password)

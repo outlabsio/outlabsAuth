@@ -42,6 +42,13 @@ class AuthConfig(BaseModel):
     require_uppercase: bool = Field(default=True, description="Require uppercase letter in password")
     require_digit: bool = Field(default=True, description="Require digit in password")
 
+    # Argon2id tuning. Defaults meet OWASP 2023 minimum (m=19 MiB, t=2, p=1)
+    # and typically hash in 30-80ms. Raise memory/time for higher security
+    # budgets; raise parallelism on multi-core machines. Applied at library init.
+    argon2_time_cost: int = Field(default=2, description="Argon2id iterations (OWASP min: 2)")
+    argon2_memory_cost_kib: int = Field(default=19456, description="Argon2id memory in KiB (OWASP min: 19 MiB)")
+    argon2_parallelism: int = Field(default=1, description="Argon2id parallelism (OWASP min: 1)")
+
     # Security
     max_login_attempts: int = Field(default=5, description="Max failed login attempts before lockout")
     lockout_duration_minutes: int = Field(default=30, description="Account lockout duration in minutes")

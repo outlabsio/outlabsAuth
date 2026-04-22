@@ -43,8 +43,13 @@ class UserAuditService(BaseService[UserAuditEvent]):
         after: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         occurred_at: Optional[datetime] = None,
+        flush: bool = True,
     ) -> UserAuditEvent:
-        """Append one audit event."""
+        """Append one audit event.
+
+        Set flush=False when the caller batches multiple writes in the same
+        transaction and will commit at the end; this saves a round trip.
+        """
         event = UserAuditEvent(
             occurred_at=occurred_at or datetime.now(timezone.utc),
             event_category=event_category,
@@ -65,7 +70,8 @@ class UserAuditService(BaseService[UserAuditEvent]):
             event_metadata=self._normalize_payload(metadata),
         )
         session.add(event)
-        await session.flush()
+        if flush:
+            await session.flush()
         return event
 
     async def list_user_events(

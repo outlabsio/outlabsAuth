@@ -10,6 +10,7 @@ Handles user authentication operations with PostgreSQL/SQLAlchemy:
 """
 
 import hashlib
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Optional, Tuple, cast
 from uuid import UUID
@@ -31,7 +32,11 @@ from outlabs_auth.models.sql.token import RefreshToken
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.enums import UserStatus
 from outlabs_auth.utils.jwt import create_token_pair, verify_token
-from outlabs_auth.utils.password import generate_password_hash, verify_and_upgrade_password, verify_password
+from outlabs_auth.utils.password import (
+    generate_password_hash_async,
+    verify_and_upgrade_password_async,
+    verify_password_async,
+)
 from outlabs_auth.utils.validation import validate_email
 
 
@@ -125,14 +130,17 @@ class AuthService:
             AccountInactiveError: If account is not active
         """
         start_time = datetime.now(timezone.utc)
+        phases: dict[str, float] = {}
 
         # Validate and normalize email
         email = validate_email(email)
 
         # Find user by email
+        _t = time.perf_counter()
         stmt = select(User).where(cast(Any, User.email) == email)
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
+        phases["db_select_user_ms"] = (time.perf_counter() - _t) * 1000.0
 
         if not user:
             self._log_login_failed(email, "user_not_found", 0, ip_address, start_time)
@@ -159,7 +167,11 @@ class AuthService:
         is_valid_password = False
         upgraded_hash: Optional[str] = None
         if user.hashed_password:
-            is_valid_password, upgraded_hash = verify_and_upgrade_password(password, user.hashed_password)
+            _t = time.perf_counter()
+            is_valid_password, upgraded_hash = await verify_and_upgrade_password_async(
+                password, user.hashed_password
+            )
+            phases["password_verify_ms"] = (time.perf_counter() - _t) * 1000.0
 
         if not is_valid_password:
             previous_failed_attempts = user.failed_login_attempts or 0
@@ -244,10 +256,9 @@ class AuthService:
         user.locked_until = None
         login_recorded_at = datetime.now(timezone.utc)
         user.last_login = login_recorded_at
-        await session.flush()
-
-        # Log successful login
-        self._log_login_success(str(user.id), email, ip_address, start_time)
+        # Intentionally no flush here — the user update, refresh token insert,
+        # and audit event all share the caller's transaction and are flushed
+        # together at commit time. Saves two round trips.
 
         # Emit notification
         if self.notifications:
@@ -272,6 +283,7 @@ class AuthService:
             asyncio.create_task(self.activity_tracker.track_activity(str(user.id)))
 
         # Create JWT token pair
+        _t = time.perf_counter()
         access_token, refresh_token_value = create_token_pair(
             user_id=str(user.id),
             secret_key=self.config.secret_key,
@@ -280,9 +292,11 @@ class AuthService:
             refresh_token_expire_days=self.config.refresh_token_expire_days,
             audience=self.config.jwt_audience,
         )
+        phases["jwt_create_ms"] = (time.perf_counter() - _t) * 1000.0
 
         # Store refresh token in database (if enabled)
         if self.config.store_refresh_tokens:
+            _t = time.perf_counter()
             refresh_token_hash = self._hash_token(refresh_token_value)
             refresh_token_model = RefreshToken(
                 user_id=user.id,
@@ -293,9 +307,11 @@ class AuthService:
                 user_agent=user_agent,
             )
             session.add(refresh_token_model)
-            await session.flush()
+            # No flush — batched with user update and audit event at commit time.
+            phases["db_refresh_token_ms"] = (time.perf_counter() - _t) * 1000.0
 
         if self.user_audit_service is not None:
+            _t = time.perf_counter()
             await self.user_audit_service.record_event(
                 session,
                 event_category="authentication",
@@ -322,7 +338,12 @@ class AuthService:
                     "refresh_token_stored": self.config.store_refresh_tokens,
                 },
                 occurred_at=login_recorded_at,
+                flush=False,
             )
+            phases["db_audit_event_ms"] = (time.perf_counter() - _t) * 1000.0
+
+        # Log successful login with per-phase breakdown
+        self._log_login_success(str(user.id), email, ip_address, start_time, phases=phases)
 
         # Return user and tokens
         token_pair = TokenPair(
@@ -847,7 +868,7 @@ class AuthService:
         previous_failed_attempts = user.failed_login_attempts
         previous_locked_until = user.locked_until
         previous_reset_expires = user.password_reset_expires
-        hashed_password = generate_password_hash(new_password, self.config)
+        hashed_password = await generate_password_hash_async(new_password, self.config)
         user.hashed_password = hashed_password
         reset_recorded_at = datetime.now(timezone.utc)
         user.last_password_change = reset_recorded_at
@@ -918,7 +939,7 @@ class AuthService:
         """
         if not user.hashed_password:
             return False
-        return verify_password(password, user.hashed_password)
+        return await verify_password_async(password, user.hashed_password)
 
     # =========================================================================
     # Helper Methods
@@ -1027,7 +1048,7 @@ class AuthService:
         previous_status = user.status
         previous_email_verified = user.email_verified
         previous_invite_expires = user.invite_token_expires
-        hashed_password = generate_password_hash(new_password, self.config)
+        hashed_password = await generate_password_hash_async(new_password, self.config)
         user.hashed_password = hashed_password
         user.status = UserStatus.ACTIVE
         user.email_verified = True
@@ -1137,16 +1158,21 @@ class AuthService:
         email: str,
         ip_address: Optional[str],
         start_time: datetime,
+        phases: Optional[Mapping[str, float]] = None,
     ) -> None:
         """Log successful login for observability."""
         if self.observability:
             duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            extras: dict[str, Any] = {}
+            if phases:
+                extras.update(phases)
             self.observability.log_login_success(
                 user_id=user_id,
                 email=email,
                 method="password",
                 duration_ms=duration_ms,
                 ip_address=ip_address,
+                **extras,
             )
 
     def _log_account_locked(

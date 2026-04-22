@@ -194,6 +194,15 @@ class OutlabsAuth:
             **kwargs,
         )
 
+        # Apply Argon2 tuning from config to the module-level password hasher.
+        from outlabs_auth.utils.password import configure_argon2
+
+        configure_argon2(
+            time_cost=self.config.argon2_time_cost,
+            memory_cost_kib=self.config.argon2_memory_cost_kib,
+            parallelism=self.config.argon2_parallelism,
+        )
+
         # Store notification service
         self.notification_service = notification_service
         self.transactional_mail_service = transactional_mail_service

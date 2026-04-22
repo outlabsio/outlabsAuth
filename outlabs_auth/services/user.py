@@ -35,7 +35,7 @@ from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.enums import UserStatus
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.services.base import BaseService
-from outlabs_auth.utils.password import generate_password_hash, verify_password
+from outlabs_auth.utils.password import generate_password_hash_async, verify_password_async
 from outlabs_auth.utils.validation import validate_email, validate_name
 
 
@@ -269,7 +269,7 @@ class UserService(BaseService[User]):
             last_name = validate_name(last_name, "last_name")
 
         # Hash password (with validation)
-        hashed_password = generate_password_hash(password, self.config)
+        hashed_password = await generate_password_hash_async(password, self.config)
 
         # Validate root_entity_id if provided
         if root_entity_id:
@@ -515,7 +515,7 @@ class UserService(BaseService[User]):
                 details={"user_id": str(user_id)},
             )
 
-        if not user.hashed_password or not verify_password(current_password, user.hashed_password):
+        if not user.hashed_password or not await verify_password_async(current_password, user.hashed_password):
             raise InvalidCredentialsError(message="Current password is incorrect")
 
         return await self.change_password(
@@ -559,7 +559,7 @@ class UserService(BaseService[User]):
         changed_at = datetime.now(timezone.utc)
 
         # Hash new password (with validation)
-        hashed_password = generate_password_hash(new_password, self.config)
+        hashed_password = await generate_password_hash_async(new_password, self.config)
         user.hashed_password = hashed_password
         user.last_password_change = changed_at
 

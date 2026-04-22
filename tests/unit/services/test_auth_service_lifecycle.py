@@ -140,9 +140,12 @@ async def test_auth_service_login_success_emits_notification_tracks_activity_and
         return MagicMock()
 
     monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+    async def _fake_verify(plain, hashed):
+        return (True, "upgraded-password-hash")
+
     monkeypatch.setattr(
-        "outlabs_auth.services.auth.verify_and_upgrade_password",
-        lambda plain, hashed: (True, "upgraded-password-hash"),
+        "outlabs_auth.services.auth.verify_and_upgrade_password_async",
+        _fake_verify,
     )
 
     _, token_pair = await service.login(
