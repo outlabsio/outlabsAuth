@@ -267,7 +267,7 @@ after measuring them. Treat it as a default when evaluating any future
 
 ### P1 — what actually landed after measurement
 
-**Status (2026-04-22)**: P1 pass re-evaluated. All 745 tests green.
+**Status (2026-04-22)**: P1 pass re-evaluated. Full suite (745 collected) green.
 
 - **Fernet offload for OAuth token encryption** — ❌ REVERTED
   - Was originally implemented as `encrypt_async` / `decrypt_async` on
@@ -359,15 +359,15 @@ after measuring them. Treat it as a default when evaluating any future
     the correctness risk on a low-traffic path. Decision documented here
     so the next audit does not re-open it.
 
-### P3 — nice-to-have (unchanged)
+### P3 — nice-to-have
 
-- **Fire-and-forget background tasks have no error path**
-  - Files: [services/auth.py:283](outlabs_auth/services/auth.py),
-    [services/notification.py:150](outlabs_auth/services/notification.py).
-  - `asyncio.create_task(...)` without a reference or done-callback.
-    Exceptions are logged by Python but silently dropped operationally.
-  - Fix: track tasks via a small set + `task.add_done_callback(...)` that
-    logs structurally, or switch to `asyncio.TaskGroup`.
+- **Fire-and-forget background tasks have no error path** — ✅ DONE (commit `c9bfe16`)
+  - `ActivityTracker` now exposes `track_activity_detached()` and
+    `NotificationService.emit()` both track their `asyncio.create_task`
+    handles in an instance-level set with `task.add_done_callback(...)`
+    that logs exceptions structurally. Callers in `services/auth.py` and
+    `dependencies/__init__.py` were migrated to the detached helper so no
+    fire-and-forget task escapes observability any more.
 
 - **API key auth snapshot dict construction is hot on the serialize path**
   - [services/api_key.py](outlabs_auth/services/api_key.py) lines 910–932.
@@ -401,20 +401,36 @@ that a later session can pick them up cold.
      `_log_api_key_validation`. Today each check runs independently so the
      first failing reason wins; a single combined query needs a deterministic
      way to pick which reason to emit when multiple fail.
-   - Nuance: this is only worth doing if the no-cache verify path shows up
-     in production traces. With the Redis snapshot layer already in place,
-     warm traffic hits ~0 queries, so the uncached path is the target.
+   - **Measurement guard: DO NOT pick this up without trace data.** Warm
+     traffic already hits ~0 queries through the Redis snapshot layer, so
+     the uncached path is the only possible target. A maintainer picking
+     this up cold should first confirm the no-cache verify path actually
+     shows up as a hot spot in production traces. If it does not, leave it
+     deferred — the refactor cost (redesigning the check chain to preserve
+     per-reason labels deterministically) is not justified by intuition.
 
 3. **Restructure `validate_runtime_use` for fewer sequential `session.get(...)` calls.**
-   - File: [services/api_key_policy.py](outlabs_auth/services/api_key_policy.py).
-   - Goal: current shape has up to 3 sequential `session.get(...)` calls
-     (principal/owner → entity) with conditional dependencies. Either
-     load all up front (wastes work when owner is rejected) or restructure
-     the policy check so the queries compose into one.
+   - File: [services/api_key_policy.py:192](outlabs_auth/services/api_key_policy.py)
+     (method spans ~90 lines).
+   - Shape today: up to 2 sequential `session.get(...)` calls on the happy
+     path (principal OR user, then optionally entity when `entity_id` is
+     set). The backlog previously said "3" — that was counting the OR as
+     two branches rather than two sequential awaits. Happy-path ceiling is
+     2 round trips, reject-on-owner short-circuits at 1.
+   - Goal: one LEFT JOIN query that pulls `User`/`IntegrationPrincipal`
+     alongside the optional `Entity`. Save 1 round trip on the happy path
+     when the key is entity-anchored.
    - Blocker: the conditional structure is load-bearing — the owner check
      legitimately gates whether the entity check runs. A combined query
-     needs to match the same "early deny" semantics or accept slightly
-     more wasted reads on the reject path.
+     trades that for slightly more wasted work on the reject path (the
+     entity join runs even when owner is rejected).
+   - **Measurement guard: DO NOT pick this up without trace data.** The
+     uncached API-key verify path is where this sits; warm traffic skips
+     it entirely via the snapshot cache. A fresh session picking this up
+     should first confirm it shows up in production traces. The code is
+     contained (~45 min of work) but the measurement rule above still
+     applies — we have already reverted three speculative perf refactors
+     (Fernet, SHA-256, JWT offloads) in this pass. Do not add a fourth.
 
 ### How to verify changes in this area
 
