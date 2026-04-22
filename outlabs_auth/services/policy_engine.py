@@ -7,12 +7,28 @@ This engine evaluates conditions against a context to determine if access should
 import json
 import re
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from dateutil import parser as date_parser  # type: ignore[import-untyped]
 
 from outlabs_auth.models.sql.condition import Condition, ConditionGroup
 from outlabs_auth.models.sql.enums import ConditionOperator
+
+
+@lru_cache(maxsize=1024)
+def _compile_regex(pattern: str) -> Optional[re.Pattern[str]]:
+    """Compile-and-cache regex patterns used by the MATCHES operator.
+
+    Patterns come from stored ABAC conditions, so the set is bounded by how
+    many distinct patterns the host app has configured. 1024 entries covers
+    any realistic deployment; lru_cache evicts LRU on overflow. Returns None
+    on invalid patterns so callers can cheaply fail the match.
+    """
+    try:
+        return re.compile(pattern)
+    except re.error:
+        return None
 
 
 class PolicyEvaluationEngine:
@@ -234,12 +250,10 @@ class PolicyEvaluationEngine:
             return str(attribute_value).endswith(str(expected_value))
 
         if operator == ConditionOperator.MATCHES:
-            # Regex match
-            try:
-                pattern = re.compile(str(expected_value))
-                return bool(pattern.match(str(attribute_value)))
-            except re.error:
+            pattern = _compile_regex(str(expected_value))
+            if pattern is None:
                 return False
+            return bool(pattern.match(str(attribute_value)))
 
         # Time-based operations
         if operator == ConditionOperator.BEFORE:

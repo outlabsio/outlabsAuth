@@ -6,6 +6,7 @@ signature that includes all configured auth transports so they show up in
 OpenAPI/Swagger.
 """
 
+import asyncio
 import inspect
 from inspect import Parameter, Signature
 from typing import Any, Callable, Optional, Sequence, cast
@@ -147,14 +148,31 @@ class AuthDeps:
         if not await self._snapshot_entity_allowed(snapshot, entity_id):
             return None
 
-        checks = [
-            await self._snapshot_has_permission(
-                snapshot,
-                permission,
-                entity_id=entity_id,
+        # When a route declares multiple permissions, each check can hit Redis
+        # independently; run them in parallel so N checks cost ~1 RTT instead of N.
+        # Safe to gather here: the snapshot path is all CPU + Redis, no SQLAlchemy
+        # session is involved. For a single permission this collapses to one await.
+        if len(permissions) == 1:
+            checks = [
+                await self._snapshot_has_permission(
+                    snapshot,
+                    permissions[0],
+                    entity_id=entity_id,
+                )
+            ]
+        else:
+            checks = list(
+                await asyncio.gather(
+                    *(
+                        self._snapshot_has_permission(
+                            snapshot,
+                            permission,
+                            entity_id=entity_id,
+                        )
+                        for permission in permissions
+                    )
+                )
             )
-            for permission in permissions
-        ]
         allowed = all(checks) if require_all else any(checks)
         if not allowed:
             return None

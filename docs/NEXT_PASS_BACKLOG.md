@@ -1,6 +1,6 @@
 # Next Pass Backlog
 
-**Updated**: 2026-04-12
+**Updated**: 2026-04-22
 **Purpose**: Lightweight maintainer backlog for known follow-up work that is too current or too small to keep re-threading through the larger roadmap.
 
 This document is intentionally short. It is not a full project plan and it does not replace [IMPLEMENTATION_ROADMAP.md](/Users/macbookm3/Documents/projects/outlabsAuth/docs/IMPLEMENTATION_ROADMAP.md). It is a working list of already-known follow-ups that came out of real integration, deployment, and performance work.
@@ -227,6 +227,245 @@ These are known ecosystem follow-ups, not core auth-library blockers:
 - External admin UI should adopt the newer enterprise API key and integration-principal surfaces.
 - Add Playwright coverage in the UI repo when those newer surfaces are actually in use.
 - Keep consumer examples validating the packaged wheel path, not repo-local editable assumptions.
+
+## Sync-In-Async Audit Follow-Ups (2026-04-22)
+
+**Context**: Login was taking 2–3 seconds under production concurrency. Root cause
+was Argon2id hashing (~20ms per verify) running synchronously on the event loop.
+Commit `ece5095` fixed login by offloading Argon2 to `asyncio.to_thread(...)`,
+retuning Argon2 to OWASP 2023 minimums, and batching flushes into the commit.
+Login p95 under concurrency dropped roughly 40x on the local baseline.
+
+The items below came out of sweeping the rest of the auth data plane for
+similar patterns (sync CPU, sync crypto, sequential independent awaits, chatty
+flushes). The key lesson from this pass — written up front because it changed
+several of the findings — is the measurement rule below.
+
+### Measurement rule: when does thread offload actually win?
+
+`asyncio.to_thread(...)` has ~35μs of scheduling overhead (loop hop, executor
+submit, future resolution). Offloading a sync op to a thread is only a win when
+the sync op cost is >> that overhead. Concretely:
+
+| Operation | Sync cost | to_thread cost | Verdict |
+|---|---:|---:|---|
+| Argon2id verify | ~20 ms | ~35 μs | ✅ Offload wins ~600x |
+| Fernet encrypt | 11.5 μs | ~35 μs | ❌ Offload LOSES 3x |
+| Fernet decrypt | 8.4 μs | ~35 μs | ❌ Offload LOSES 4x |
+| SHA-256 (API key) | 0.4 μs | ~35 μs | ❌ Offload LOSES 90x |
+| JWT HS256 encode | ~13 μs | ~35 μs | ❌ Offload LOSES 2.7x |
+| JWT HS256 decode | ~19 μs | ~35 μs | ❌ Offload LOSES 1.8x |
+
+**Rule of thumb: only offload sync CPU when the op costs >> 100 μs.** On this
+codebase, Argon2 is the only thing that qualifies. Everything else is better
+left sync — the offload costs more than it saves and it also burns worker
+threads that other code paths (DB driver, actual Argon2 work) may need.
+
+This rule is what made us revert the original P1.1 and P1.2 offloads below
+after measuring them. Treat it as a default when evaluating any future
+"unblock the event loop" task in this codebase.
+
+### P1 — what actually landed after measurement
+
+**Status (2026-04-22)**: P1 pass re-evaluated. All 745 tests green.
+
+- **Fernet offload for OAuth token encryption** — ❌ REVERTED
+  - Was originally implemented as `encrypt_async` / `decrypt_async` on
+    `FernetCipher` + an async `encrypt_provider_token` helper. Subsequent
+    measurement showed Fernet encrypt/decrypt at ~8–12 μs, well below the
+    ~35 μs to_thread overhead. Net loss per call.
+  - Reverted across
+    [utils/crypto.py](outlabs_auth/utils/crypto.py),
+    [routers/oauth_utils.py](outlabs_auth/routers/oauth_utils.py),
+    [routers/oauth.py](outlabs_auth/routers/oauth.py),
+    [routers/oauth_associate.py](outlabs_auth/routers/oauth_associate.py),
+    [tests/unit/test_oauth_utils.py](tests/unit/test_oauth_utils.py).
+
+- **API-key SHA-256 offload on the verify path** — ❌ REVERTED
+  - `APIKey.hash_key_async` was removed after measurement showed SHA-256
+    over a short API key at ~0.4 μs — the offload made the verify path ~90x
+    slower. Reverted across
+    [models/sql/api_key.py](outlabs_auth/models/sql/api_key.py) and
+    [services/api_key.py](outlabs_auth/services/api_key.py).
+
+- **`_check_ip` query collapse** — ✅ KEPT (real DB win, unrelated to offload)
+  - [services/api_key.py](outlabs_auth/services/api_key.py) `_check_ip`
+    collapsed from two queries (COUNT, then SELECT-for-row) to a single
+    `SELECT ip_address` that returns all whitelist entries; empty list →
+    allow-all, otherwise in-memory membership check. Saves one real DB
+    round trip per IP-whitelisted key authentication.
+
+- **`AccessScopeService.resolve_for_user` parallelization** — ⚠️ STILL DEFERRED
+  - [services/access_scope.py](outlabs_auth/services/access_scope.py)
+    lines 150–184. Same reason as before: the shared `AsyncSession`
+    makes naive `asyncio.gather` unsafe. The real win is combining direct
+    + closure into a single CTE/JOIN query, which is an architectural
+    refactor (the service and [tests/unit/services/test_access_scope.py](tests/unit/services/test_access_scope.py)
+    monkeypatch `_resolve_root_entity_ids` / `_resolve_direct_entity_ids`
+    as separate helpers). JWT common path already skips the root query via
+    the hydrated user. Defer until production tracing flags this.
+
+- **`verify_api_key` broader short-circuit flatten** — ⚠️ STILL DEFERRED
+  - Same `AsyncSession` constraint blocks naive `gather` across the status /
+    expiry / IP / rate-limit / owner / entity checks. Preserving per-reason
+    `_log_api_key_validation` labels and "first failing reason wins" semantics
+    rules out run-all-then-pick. A real win would mean combining more of these
+    into a single SQL round trip (status + owner + entity via a JOIN) — that
+    is an architectural refactor, not a drop-in gather.
+  - `validate_runtime_use` in
+    [services/api_key_policy.py](outlabs_auth/services/api_key_policy.py)
+    has up to three sequential `session.get(...)` calls
+    (principal/owner → entity). They are conditionally dependent (entity
+    only checked after owner passes), so combining them means loading
+    eagerly even when owner is rejected, or restructuring the policy
+    method entirely. Defer until traces show it.
+
+### P2 — landed in this pass
+
+- **JWT encode/decode offload in service tokens** — ❌ SKIPPED
+  - [services/service_token.py:111](outlabs_auth/services/service_token.py),
+    line 150. Not implemented. Benchmark showed sync JWT encode at ~13 μs
+    and decode at ~19 μs — both under the ~35 μs to_thread overhead. Same
+    rule applies for the `utils/jwt.py` access/refresh token helpers. Leave
+    all JWT ops sync; revisit only if we move to RS256 / ES256 (asymmetric
+    signing is much more expensive and may cross the threshold).
+
+- **Compile-cache regex in policy engine MATCHES operator** — ✅ DONE
+  - Added module-level `_compile_regex(pattern)` with
+    `functools.lru_cache(maxsize=1024)` in
+    [services/policy_engine.py](outlabs_auth/services/policy_engine.py)
+    and routed the `ConditionOperator.MATCHES` branch through it. Invalid
+    patterns return `None` from the cache and fail the condition closed,
+    matching the previous behavior. Bounded cache avoids unbounded growth
+    on user-supplied patterns.
+
+- **Snapshot permission check `asyncio.gather`** — ✅ DONE
+  - `_try_api_key_auth_snapshot` in
+    [dependencies/__init__.py](outlabs_auth/dependencies/__init__.py)
+    now uses `asyncio.gather` when multiple permissions are declared on a
+    route. Single-permission path stays as a plain await (no gather
+    overhead when there's nothing to parallelize). Safe because this path
+    is pure CPU + Redis — it does not touch the `AsyncSession`, so the
+    constraint that blocks other gather work does not apply.
+
+- **Entity-creation `session.flush()`** — ⚠️ REVIEWED, KEPT AS-IS
+  - [services/entity.py:952](outlabs_auth/services/entity.py). The trailing
+    flush after closure-table inserts could be removed to batch into the
+    commit, but entity creation is an admin operation (not a hot path),
+    the savings are ~1 round trip, and the current flush provides early
+    constraint-violation detection before the caller continues. Not worth
+    the correctness risk on a low-traffic path. Decision documented here
+    so the next audit does not re-open it.
+
+### P3 — nice-to-have (unchanged)
+
+- **Fire-and-forget background tasks have no error path**
+  - Files: [services/auth.py:283](outlabs_auth/services/auth.py),
+    [services/notification.py:150](outlabs_auth/services/notification.py).
+  - `asyncio.create_task(...)` without a reference or done-callback.
+    Exceptions are logged by Python but silently dropped operationally.
+  - Fix: track tasks via a small set + `task.add_done_callback(...)` that
+    logs structurally, or switch to `asyncio.TaskGroup`.
+
+- **API key auth snapshot dict construction is hot on the serialize path**
+  - [services/api_key.py](outlabs_auth/services/api_key.py) lines 910–932.
+    Snapshot dict rebuilt from scratch on every miss. Only worth touching
+    if cold-start snapshot construction shows up in the benchmark.
+
+- **Regex compile at entity validation**
+  - [services/entity.py:869](outlabs_auth/services/entity.py). Lift slug /
+    name validation pattern to a module-level `_SLUG_RE`. Same shape as
+    the policy engine fix.
+
+### Deferred architectural work (for a future session with fresh context)
+
+The items below did not land in this pass because they are real architectural
+refactors, not drop-in async fixes. They are parked here with enough detail
+that a later session can pick them up cold.
+
+1. **Combine `AccessScopeService.resolve_for_user` direct + closure into one query.**
+   - File: [services/access_scope.py](outlabs_auth/services/access_scope.py)
+     lines 150–184.
+   - Goal: replace the sequential `_resolve_root_entity_ids` +
+     `_resolve_direct_entity_ids` + closure expansion with a single CTE /
+     UNION that returns the full entity-id set in one round trip.
+   - Blocker that made this a refactor, not a quick win: the current tests
+     in [tests/unit/services/test_access_scope.py](tests/unit/services/test_access_scope.py)
+     monkeypatch those helpers as separate units. A single-query version
+     would need either (a) the helpers kept as pass-throughs that build
+     a subquery each, or (b) the tests rewritten against the combined
+     shape. Either is fine — it's just not a <1-hour change.
+   - Expected saving: ~1 round trip on the `user=None` fallback path (API
+     keys / internal callers). JWT path already skips the root query, so
+     the win there is smaller.
+
+2. **Flatten the `verify_api_key` short-circuit chain into fewer queries.**
+   - File: [services/api_key.py](outlabs_auth/services/api_key.py) around
+     `verify_api_key` and `_check_ip`/`_check_status`/`_check_expiry`/...
+   - Goal: combine status + owner + entity-scope lookups into a single
+     SELECT with JOINs so the verify path makes ~2 round trips instead of
+     the current ~5 in the worst case.
+   - Blocker: preserving the current per-reason failure labeling in
+     `_log_api_key_validation`. Today each check runs independently so the
+     first failing reason wins; a single combined query needs a deterministic
+     way to pick which reason to emit when multiple fail.
+   - Nuance: this is only worth doing if the no-cache verify path shows up
+     in production traces. With the Redis snapshot layer already in place,
+     warm traffic hits ~0 queries, so the uncached path is the target.
+
+3. **Restructure `validate_runtime_use` for fewer sequential `session.get(...)` calls.**
+   - File: [services/api_key_policy.py](outlabs_auth/services/api_key_policy.py).
+   - Goal: current shape has up to 3 sequential `session.get(...)` calls
+     (principal/owner → entity) with conditional dependencies. Either
+     load all up front (wastes work when owner is rejected) or restructure
+     the policy check so the queries compose into one.
+   - Blocker: the conditional structure is load-bearing — the owner check
+     legitimately gates whether the entity check runs. A combined query
+     needs to match the same "early deny" semantics or accept slightly
+     more wasted reads on the reject path.
+
+### How to verify changes in this area
+
+- `uv run python benchmarks/bench_login.py` — login smoke on the async flow.
+- `uv run python scripts/benchmark_auth_paths.py --presets simple,enterprise
+  --redis-modes off,cache --iterations 25 --warmup 3 --concurrency 10
+  --commit-usage --no-service-tokens` — per-request query counts and p95 on
+  the API-key paths.
+- `uv run pytest` — full suite must stay green. When touching session
+  concurrency (any new gather involving DB reads), specifically re-run
+  `tests/integration/test_enterprise_*` and the query-budget tests; those
+  will catch "operation already in progress" races.
+
+### Intentionally NOT on this list
+
+- Argon2 tuning and login flush batching — shipped in `ece5095`.
+- Broader snapshot/cache invalidation tightening — tracked under
+  "Runtime Performance Follow-Ups" above.
+- Re-trying any of the reverted thread offloads (Fernet, SHA-256, JWT)
+  without a CPU profile showing a concrete hot spot that crosses the
+  ~100 μs offload threshold. The measurement rule above takes precedence
+  over intuition.
+
+### Lesson learned from this pass
+
+Two separate lessons:
+
+1. **`asyncio.to_thread` is not free.** It has ~35 μs of scheduling
+   overhead. Any offload candidate must be measured, not assumed — on
+   this codebase only Argon2 qualified. See the measurement rule above.
+
+2. **Naive `asyncio.gather(session.execute(...), session.execute(...))`
+   on the same `AsyncSession` is unsafe.** SQLAlchemy's async session only
+   permits one task at a time. Parallelization involving DB reads must
+   either (a) combine queries (CTE / UNION / JOIN), (b) use separate
+   sessions per parallel task, or (c) only parallelize CPU/Redis work
+   that does not touch the session (this is what the snapshot gather
+   does).
+
+The real latency wins in this broader pass came from the original login
+Argon2 offload + flush batching (in `ece5095`) and the `_check_ip` query
+collapse — not from the speculative offloads or parallelizations that the
+original P1 scope proposed.
 
 ## Intentional Deferrals
 

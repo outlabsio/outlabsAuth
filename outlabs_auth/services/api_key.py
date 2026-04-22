@@ -497,25 +497,17 @@ class APIKeyService(BaseService[APIKey]):
         return self.scopes_allow_permission(scopes, required_scope)
 
     async def _check_ip(self, session: AsyncSession, api_key_id: UUID, ip_address: str) -> bool:
-        count_stmt = (
-            select(func.count())
-            .select_from(APIKeyIPWhitelist)
-            .where(cast(Any, APIKeyIPWhitelist.api_key_id) == api_key_id)
-        )
-        result = await session.execute(count_stmt)
-        count = result.scalar() or 0
-
-        # No whitelist = allow all
-        if count == 0:
-            return True
-
-        # Check if IP is in whitelist
-        whitelist_stmt = select(APIKeyIPWhitelist).where(
+        whitelist_stmt = select(cast(Any, APIKeyIPWhitelist.ip_address)).where(
             cast(Any, APIKeyIPWhitelist.api_key_id) == api_key_id,
-            cast(Any, APIKeyIPWhitelist.ip_address) == ip_address,
         )
         result = await session.execute(whitelist_stmt)
-        return result.scalar_one_or_none() is not None
+        allowed_ips = [row for (row,) in result.all()]
+
+        # No whitelist = allow all
+        if not allowed_ips:
+            return True
+
+        return ip_address in allowed_ips
 
     async def _check_rate_limits(self, api_key: APIKey) -> None:
         """
