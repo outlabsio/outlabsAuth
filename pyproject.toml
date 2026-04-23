@@ -38,8 +38,7 @@ dependencies = [
     "click>=8.1.0",
     # Authentication & Security
     "pwdlib[argon2,bcrypt]>=0.2.0",
-    "python-jose[cryptography]>=3.3.0",
-    "pyjwt[crypto]>=2.8.0", # [crypto] for Apple Sign In (ES256)
+    "pyjwt[crypto]>=2.8.0", # [crypto] required for ES256 (Apple Sign In) and RS256
     "python-multipart>=0.0.6",
     "email-validator>=2.0.0",
     # Dynamic dependency injection (DD-039)

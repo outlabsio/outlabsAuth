@@ -9,7 +9,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional, Protocol
 
-from jose import JWTError, jwt
+import jwt
 
 from outlabs_auth.core.exceptions import TokenInvalidError
 
@@ -151,7 +151,7 @@ class JWTStrategy:
         except jwt.ExpiredSignatureError:
             logger.info("jwt_expired")
             return None
-        except JWTError as e:
+        except jwt.PyJWTError as e:
             logger.info("jwt_invalid", extra={"error": str(e)})
             return None
         except Exception as e:
@@ -409,7 +409,7 @@ class ServiceTokenStrategy:
             return None
         except TokenInvalidError:
             return None
-        except JWTError:
+        except jwt.PyJWTError:
             return None
         except Exception:
             return None

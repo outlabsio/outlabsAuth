@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta, timezone
 
 import pytest
-from jose import jwt
+import jwt
 
 from outlabs_auth.core.exceptions import TokenExpiredError, TokenInvalidError
 from outlabs_auth.utils.jwt import (
@@ -95,7 +95,7 @@ def test_decode_and_expiration_helpers_handle_invalid_missing_and_expired_tokens
     no_exp_payload = decode_token_without_verification(no_exp_token)
     no_exp_payload.pop("exp", None)
 
-    from jose import jwt
+    import jwt
 
     tampered_token = access_token + "broken"
     no_exp_encoded = jwt.encode(no_exp_payload, secret, algorithm="HS256")

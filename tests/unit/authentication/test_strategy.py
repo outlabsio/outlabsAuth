@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from jose import jwt
+import jwt
 
 from outlabs_auth.core.exceptions import TokenInvalidError
 from outlabs_auth.authentication.strategy import (

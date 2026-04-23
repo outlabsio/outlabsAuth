@@ -234,13 +234,15 @@ def test_invalid_token_raises_error(service_token_service):
 
 def test_user_token_rejected_as_service_token(service_token_service, config):
     """Test that user tokens are rejected when validating as service token"""
-    from jose import jwt
+    import jwt
 
-    # Create a user token (without type="service")
+    # A token with the correct audience but the wrong `type` claim — this
+    # is what the `not a service token` branch is designed to catch.
     user_token = jwt.encode(
         {
             "sub": "user-123",
             "type": "access",  # Not "service"
+            "aud": service_token_service.SERVICE_AUDIENCE,
             "exp": datetime.now(timezone.utc) + timedelta(minutes=15),
         },
         config.secret_key,

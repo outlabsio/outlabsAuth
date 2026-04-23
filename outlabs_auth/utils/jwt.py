@@ -1,13 +1,13 @@
 """
 JWT token creation and verification utilities
 
-Uses python-jose for JWT operations with configurable algorithm and expiration.
+Uses PyJWT for JWT operations with configurable algorithm and expiration.
 """
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, cast
 
-from jose import JWTError, jwt
+import jwt
 
 from outlabs_auth.core.exceptions import TokenInvalidError, TokenExpiredError
 
@@ -175,7 +175,7 @@ def verify_token(
             message="Token has expired",
             details={"token_expired": True}
         )
-    except JWTError as e:
+    except jwt.PyJWTError as e:
         raise TokenInvalidError(
             message=f"Invalid token: {str(e)}",
             details={"jwt_error": str(e)}
@@ -202,8 +202,11 @@ def decode_token_without_verification(token: str) -> Dict[str, Any]:
         'user_123'
     """
     try:
-        return cast(Dict[str, Any], jwt.get_unverified_claims(token))
-    except JWTError as e:
+        return cast(
+            Dict[str, Any],
+            jwt.decode(token, options={"verify_signature": False}),
+        )
+    except jwt.PyJWTError as e:
         raise TokenInvalidError(
             message=f"Cannot decode token: {str(e)}",
             details={"jwt_error": str(e)}

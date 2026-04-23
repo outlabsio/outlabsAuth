@@ -56,7 +56,7 @@ def generate_state_token(
 
     Related:
         - DD-042: JWT State Tokens for OAuth Flow
-        - Uses same JWT library as auth tokens (python-jose)
+        - Uses same JWT library as auth tokens (PyJWT)
     """
     if secret is None:
         raise ValueError("secret is required for OAuth state tokens")

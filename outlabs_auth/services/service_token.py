@@ -15,7 +15,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, cast
 
-from jose import jwt, JWTError
+import jwt
+
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import TokenInvalidError
 
@@ -107,7 +108,6 @@ class ServiceTokenService:
         if metadata:
             payload["metadata"] = metadata
 
-        # Create JWT token using jose
         token = jwt.encode(
             payload,
             self.config.secret_key,
@@ -168,7 +168,7 @@ class ServiceTokenService:
                 message="Service token has expired",
                 details={"expired": True}
             )
-        except JWTError as e:
+        except jwt.PyJWTError as e:
             raise TokenInvalidError(
                 message=f"Invalid service token: {str(e)}",
                 details={"error": str(e)}
