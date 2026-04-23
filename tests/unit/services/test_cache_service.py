@@ -119,6 +119,31 @@ async def test_cache_service_permission_key_get_and_set_helpers(auth_config):
         )
     ]
 
+    # ABAC callers pass a context hash so keys for different contexts stay distinct.
+    ctx_hash = "abc1234567890def"
+    abac_key = cache_service.make_permission_check_key(
+        "user-1",
+        "user:read",
+        None,
+        ctx_hash,
+    )
+    assert abac_key == f"auth:permission-check:user-1:global:user:read:{ctx_hash}"
+
+    redis.get_values[abac_key] = False
+    assert (
+        await cache_service.get_permission_check(
+            "user-1",
+            "user:read",
+            None,
+            ctx_hash,
+        )
+        is False
+    )
+    # The same user/permission without a context hash is a different key.
+    assert (
+        await cache_service.get_permission_check("user-1", "user:read") is True
+    )
+
 
 @pytest.mark.unit
 @pytest.mark.asyncio

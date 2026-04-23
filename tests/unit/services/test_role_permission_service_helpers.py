@@ -165,32 +165,41 @@ def test_permission_service_role_context_and_cache_helpers():
     ) == []
     assert service._get_role_permission_names_for_context(role, "team") == {"task:approve"}
 
+    assert service._can_use_permission_cache() is True
+
+    # Non-ABAC calls never add a context hash — resource/env/time context
+    # does not affect the non-ABAC evaluation path.
     assert (
-        service._can_use_permission_cache(
-            resource_context=None,
-            env_context=None,
-            time_attrs=None,
+        service._permission_cache_context_hash(
             abac_enabled=False,
-        )
-        is True
-    )
-    assert (
-        service._can_use_permission_cache(
             resource_context={"resource": "doc"},
             env_context=None,
             time_attrs=None,
-            abac_enabled=False,
         )
-        is False
+        is None
     )
-    assert (
-        service._can_use_permission_cache(
-            resource_context=None,
-            env_context=None,
-            time_attrs=None,
-            abac_enabled=True,
-        )
-        is False
+
+    # ABAC calls produce a stable short hash derived from all three contexts.
+    abac_hash = service._permission_cache_context_hash(
+        abac_enabled=True,
+        resource_context={"resource": "doc"},
+        env_context={"method": "GET"},
+        time_attrs=None,
+    )
+    assert isinstance(abac_hash, str) and len(abac_hash) == 16
+    # Same inputs → same hash (deterministic).
+    assert abac_hash == service._permission_cache_context_hash(
+        abac_enabled=True,
+        resource_context={"resource": "doc"},
+        env_context={"method": "GET"},
+        time_attrs=None,
+    )
+    # Different inputs → different hash.
+    assert abac_hash != service._permission_cache_context_hash(
+        abac_enabled=True,
+        resource_context={"resource": "doc"},
+        env_context={"method": "POST"},
+        time_attrs=None,
     )
     assert service._role_definition_is_live(role) is True
     assert service._role_definition_is_live(archived_role) is False

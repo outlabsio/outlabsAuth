@@ -12,16 +12,17 @@ from outlabs_auth.services.permission import PermissionService
 class FakePermissionCache:
     def __init__(self) -> None:
         self.cached_value = None
-        self.get_calls: list[tuple[str, str, str | None]] = []
-        self.set_calls: list[tuple[str, str, bool, str | None]] = []
+        self.get_calls: list[tuple[str, str, str | None, str | None]] = []
+        self.set_calls: list[tuple[str, str, bool, str | None, str | None]] = []
 
     async def get_permission_check(
         self,
         user_id: str,
         permission: str,
         entity_id: str | None,
+        context_hash: str | None = None,
     ):
-        self.get_calls.append((user_id, permission, entity_id))
+        self.get_calls.append((user_id, permission, entity_id, context_hash))
         return self.cached_value
 
     async def set_permission_check(
@@ -30,8 +31,9 @@ class FakePermissionCache:
         permission: str,
         result: bool,
         entity_id: str | None,
+        context_hash: str | None = None,
     ):
-        self.set_calls.append((user_id, permission, result, entity_id))
+        self.set_calls.append((user_id, permission, result, entity_id, context_hash))
         return True
 
 
@@ -85,8 +87,8 @@ async def test_permission_service_status_cache_and_require_helpers(
         result=True,
     )
 
-    assert cache.get_calls == [(str(user_id), "user:read", str(entity_id))]
-    assert cache.set_calls == [(str(user_id), "user:read", False, str(entity_id))]
+    assert cache.get_calls == [(str(user_id), "user:read", str(entity_id), None)]
+    assert cache.set_calls == [(str(user_id), "user:read", False, str(entity_id), None)]
 
     service.check_permission = AsyncMock(side_effect=[False, False, True, True, False])  # type: ignore[method-assign]
 

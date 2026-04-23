@@ -6,6 +6,8 @@ Handles permission checking and management with PostgreSQL/SQLAlchemy:
 - EnterprisePermissionService: Hierarchical permissions (EnterpriseRBAC) - Phase 3+
 """
 
+import hashlib
+import json
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, cast
 from uuid import UUID
@@ -256,17 +258,21 @@ class PermissionService(BaseService[Permission]):
                     target_entity_type = target_entity.entity_type
 
         abac_enabled = bool(getattr(self.config, "enable_abac", False))
-        use_permission_cache = self._can_use_permission_cache(
+        cache_context_hash = self._permission_cache_context_hash(
+            abac_enabled=abac_enabled,
             resource_context=resource_context,
             env_context=env_context,
             time_attrs=time_attrs,
-            abac_enabled=abac_enabled,
+        )
+        use_permission_cache = self._can_use_permission_cache() and (
+            not abac_enabled or cache_context_hash is not None
         )
         if use_permission_cache:
             cached = await self._get_cached_permission_result(
                 user_id=user_id,
                 permission=permission,
                 entity_id=entity_id,
+                context_hash=cache_context_hash,
             )
             if cached is not None:
                 self._log_permission_check(
@@ -340,6 +346,7 @@ class PermissionService(BaseService[Permission]):
                     permission=permission,
                     entity_id=entity_id,
                     result=True,
+                    context_hash=cache_context_hash,
                 )
                 self._log_permission_check(user_id, permission, "granted", start_time, "global_match")
                 return True
@@ -374,6 +381,7 @@ class PermissionService(BaseService[Permission]):
                     permission=permission,
                     entity_id=entity_id,
                     result=True,
+                    context_hash=cache_context_hash,
                 )
                 self._log_permission_check(user_id, permission, "granted", start_time, "entity_match")
                 return True
@@ -385,6 +393,7 @@ class PermissionService(BaseService[Permission]):
             permission=permission,
             entity_id=entity_id,
             result=False,
+            context_hash=cache_context_hash,
         )
         self._log_permission_check(user_id, permission, "denied", start_time, "no_permission")
         return False
@@ -1195,22 +1204,38 @@ class PermissionService(BaseService[Permission]):
             if permission and permission.name
         }
 
-    def _can_use_permission_cache(
-        self,
-        *,
-        resource_context: Optional[Dict[str, Any]],
-        env_context: Optional[Dict[str, Any]],
-        time_attrs: Optional[Dict[str, Any]],
-        abac_enabled: bool,
-    ) -> bool:
+    def _can_use_permission_cache(self) -> bool:
         return bool(
             getattr(self.config, "enable_caching", False)
             and getattr(self, "cache_service", None) is not None
-            and not abac_enabled
-            and not resource_context
-            and not env_context
-            and not time_attrs
         )
+
+    @staticmethod
+    def _permission_cache_context_hash(
+        *,
+        abac_enabled: bool,
+        resource_context: Optional[Dict[str, Any]],
+        env_context: Optional[Dict[str, Any]],
+        time_attrs: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        """Compute a stable short hash of the ABAC context inputs.
+
+        Returns None for non-ABAC calls (context does not influence outcome)
+        and for ABAC calls whose context is not JSON-serialisable — in the
+        latter case callers should skip caching entirely to avoid stale hits.
+        """
+        if not abac_enabled:
+            return None
+        payload = {
+            "resource": resource_context or {},
+            "env": env_context or {},
+            "time": time_attrs or {},
+        }
+        try:
+            encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+        except (TypeError, ValueError):
+            return None
+        return hashlib.sha256(encoded).hexdigest()[:16]
 
     async def _get_cached_permission_result(
         self,
@@ -1218,6 +1243,7 @@ class PermissionService(BaseService[Permission]):
         user_id: UUID,
         permission: str,
         entity_id: Optional[UUID],
+        context_hash: Optional[str] = None,
     ) -> Optional[bool]:
         cache_service = getattr(self, "cache_service", None)
         if cache_service is None:
@@ -1228,6 +1254,7 @@ class PermissionService(BaseService[Permission]):
                 str(user_id),
                 permission,
                 str(entity_id) if entity_id is not None else None,
+                context_hash,
             ),
         )
 
@@ -1239,6 +1266,7 @@ class PermissionService(BaseService[Permission]):
         permission: str,
         entity_id: Optional[UUID],
         result: bool,
+        context_hash: Optional[str] = None,
     ) -> None:
         if not use_cache:
             return
@@ -1250,6 +1278,7 @@ class PermissionService(BaseService[Permission]):
             permission,
             result,
             str(entity_id) if entity_id is not None else None,
+            context_hash,
         )
 
     async def require_permission(

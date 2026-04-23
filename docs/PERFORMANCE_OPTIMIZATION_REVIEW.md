@@ -60,15 +60,15 @@ Plus **one security fix** not strictly in scope but found during review: **`supe
 - ✅ #6 Batch permission checks for `require_any` / `require_all` — fast path folds user-auth/no-entity/non-ABAC into one `get_user_permissions` per loop
 - ✅ #3 (§1.3) Reuse effective permissions from `check_permission` to `_cache_api_key_auth_snapshot` via optional `capture` dict
 
-**Phase 3 (landed)** — per-request cache:
+**Phase 3 (landed)** — per-request cache + ABAC caching:
 
 - ✅ #1 Per-request ContextVar memoization — `outlabs_auth/services/request_cache.py` + `RequestCacheMiddleware`; caches User, Entity, and closure-ancestor lookups; both `PermissionService` and `MembershipService` share the same keys
+- ✅ ABAC cache-keying fix (§3.1 inline) — `PermissionService._permission_cache_context_hash()` folds `{resource, env, time}` into a stable SHA-256 prefix appended to the cache key; `_can_use_permission_cache()` no longer bails when ABAC is enabled, so ABAC callers hit Redis with the full context as part of the key
 
 **Phase 3+ (pending)** — higher risk or broader scope:
 
 - ⏳ #7 In-process user-role snapshot cache (§4.2) — duplicates existing Redis cache; defer until Redis round-trips measurably bottleneck
 - ⏳ #8 `python-jose` → `pyjwt` migration (§6.1) — requires benchmarking first
-- ⏳ ABAC cache-keying fix (§3.1 inline) — correctness fix for ABAC caching
 
 Test harness additions: Redis fixture with graceful skip, `LatencyStats` p50/p95/p99 instrumentation, SimpleRBAC query-budget suite.
 

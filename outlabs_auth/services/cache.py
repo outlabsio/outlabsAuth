@@ -23,17 +23,13 @@ class CacheService:
         user_id: str,
         permission: str,
         entity_id: Optional[str] = None,
+        context_hash: Optional[str] = None,
     ) -> str:
         scope = entity_id or "global"
-        return str(
-            self.redis_client.make_key(
-                "auth",
-                "permission-check",
-                user_id,
-                scope,
-                permission,
-            )
-        )
+        parts = ["auth", "permission-check", user_id, scope, permission]
+        if context_hash:
+            parts.append(context_hash)
+        return str(self.redis_client.make_key(*parts))
 
     def make_entity_relation_key(
         self,
@@ -134,11 +130,12 @@ class CacheService:
         user_id: str,
         permission: str,
         entity_id: Optional[str] = None,
+        context_hash: Optional[str] = None,
     ) -> Optional[bool]:
         if not self.redis_client or not self.redis_client.is_available:
             return None
         cached = await self.redis_client.get(
-            self.make_permission_check_key(user_id, permission, entity_id)
+            self.make_permission_check_key(user_id, permission, entity_id, context_hash)
         )
         return cached if isinstance(cached, bool) else None
 
@@ -148,12 +145,13 @@ class CacheService:
         permission: str,
         result: bool,
         entity_id: Optional[str] = None,
+        context_hash: Optional[str] = None,
     ) -> bool:
         if not self.redis_client or not self.redis_client.is_available:
             return False
         return bool(
             await self.redis_client.set(
-                self.make_permission_check_key(user_id, permission, entity_id),
+                self.make_permission_check_key(user_id, permission, entity_id, context_hash),
                 result,
                 ttl=self.config.cache_permission_ttl,
             )
