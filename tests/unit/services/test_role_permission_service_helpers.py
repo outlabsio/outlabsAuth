@@ -304,6 +304,44 @@ def test_permission_service_role_context_and_cache_helpers():
 
 
 @pytest.mark.unit
+@pytest.mark.asyncio
+async def test_permission_service_resolve_context_entity_type_dedupes_within_request():
+    from outlabs_auth.services import request_cache
+
+    service = PermissionService(SimpleNamespace(enable_context_aware_roles=True))
+    entity_id = uuid4()
+    entity = SimpleNamespace(entity_type="team")
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = 0
+
+        async def get(self, model, key):
+            self.calls += 1
+            return entity if key == entity_id else None
+
+    session = FakeSession()
+    request_cache.reset()
+
+    # First call loads from the session and populates the cache.
+    first = await service._resolve_context_entity_type(session, entity_id)
+    # Second call must reuse the cached Entity — the session is not touched again.
+    second = await service._resolve_context_entity_type(session, entity_id)
+
+    assert first == second == "team"
+    assert session.calls == 1
+    assert request_cache.get(("entity", entity_id)) is entity
+
+    # Short-circuits: no entity, or context-aware roles disabled.
+    assert await service._resolve_context_entity_type(session, None) is None
+    disabled = PermissionService(SimpleNamespace(enable_context_aware_roles=False))
+    assert await disabled._resolve_context_entity_type(session, entity_id) is None
+    assert session.calls == 1  # still one — neither short-circuit touched the session
+
+    request_cache.reset()
+
+
+@pytest.mark.unit
 def test_role_service_definition_and_delta_helpers():
     service = RoleService(SimpleNamespace())
 

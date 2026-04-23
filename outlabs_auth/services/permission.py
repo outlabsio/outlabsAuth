@@ -211,6 +211,30 @@ class PermissionService(BaseService[Permission]):
     def _should_load_entity_type_permissions(self, entity_type: Optional[str]) -> bool:
         return bool(self.config.enable_context_aware_roles and entity_type)
 
+    async def _resolve_context_entity_type(
+        self,
+        session: AsyncSession,
+        entity_id: Optional[UUID],
+    ) -> Optional[str]:
+        """
+        Return the ``entity_type`` of ``entity_id`` for context-aware-role resolution.
+
+        Deduplicates the fetch across ``check_permission`` and ``get_user_permissions``
+        on the same request: both paths need the entity's type but only differ in how
+        they use it, and the naive version re-issued ``session.get(Entity, ...)`` on
+        every call. The request cache stores the ``Entity`` under ``("entity", id)``
+        so any later caller in the same request — including ``MembershipService``,
+        which shares the same cache keys — sees the already-fetched row.
+        """
+        if entity_id is None or not self.config.enable_context_aware_roles:
+            return None
+
+        async def _loader() -> Optional[Entity]:
+            return await session.get(Entity, entity_id)
+
+        entity = await request_cache.get_or_load(("entity", entity_id), _loader)
+        return entity.entity_type if entity is not None else None
+
     def _entity_membership_permission_options(
         self,
         *,
@@ -322,16 +346,7 @@ class PermissionService(BaseService[Permission]):
                 details={"user_id": str(user_id)},
             )
 
-        target_entity_type: Optional[str] = None
-        if entity_id is not None and self.config.enable_context_aware_roles:
-            cached_entity = request_cache.get(("entity", entity_id))
-            if cached_entity is not None:
-                target_entity_type = cached_entity.entity_type
-            else:
-                target_entity = await session.get(Entity, entity_id)
-                if target_entity is not None:
-                    request_cache.set_value(("entity", entity_id), target_entity)
-                    target_entity_type = target_entity.entity_type
+        target_entity_type = await self._resolve_context_entity_type(session, entity_id)
 
         abac_enabled = bool(getattr(self.config, "enable_abac", False))
         # Resolve a lazy env_context supplier (see AuthDeps._EnvContextSupplier)
@@ -1077,11 +1092,7 @@ class PermissionService(BaseService[Permission]):
                     granted.add(permission_name)
             return granted
 
-        target_entity_type: Optional[str] = None
-        if entity_id is not None and self.config.enable_context_aware_roles:
-            target_entity = await session.get(Entity, entity_id)
-            if target_entity is not None:
-                target_entity_type = target_entity.entity_type
+        target_entity_type = await self._resolve_context_entity_type(session, entity_id)
 
         if entity_id is None:
             granted_permissions = await self._get_user_role_permissions(
