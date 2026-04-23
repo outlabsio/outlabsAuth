@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [0.1.0a20] - 2026-04-23
+
+Performance pass covering middleware, dependency wiring, ABAC lazy-loading, permission-cache invalidation scope, and request-scoped dedup of repeat entity and closure-table fetches. Full test suite (815 tests) green.
+
+### Performance
+
+- **Pure-ASGI middleware.** `CorrelationIdMiddleware` and `ResourceContextMiddleware` rewritten as ASGI middleware — no `BaseHTTPMiddleware` wrapper, no `Request` rebuild per request.
+- **`AuthDeps` credential short-circuit.** When a request has no credentials for any configured transport, the auth-backend loop exits immediately instead of instantiating each backend only to probe empty headers.
+- **Lazy ABAC `env_context`.** `env_context` is now built by a memoized supplier; the dict materializes only when a check actually reads `request.*` or `time.*` attributes.
+- **`APIKey.hash_key_bytes` helper.** Returns the raw 32-byte digest for byte-identity internal hot paths; the hex form is still used for persistence and Redis keys. Dropped an unused `verify_hash` path along the way.
+- **`PermissionMatcher` precomputed index.** Replaces per-candidate string-splitting in the `get_user_permission_names` fan-out with a single frozenset-backed index covering super-grant, exact, wildcard, `_all`, and `_tree` matches.
+- **ABAC condition lazy-load.** `_abac_allows_role_and_permission` now narrows permissions by name match first, then batch-loads ABAC conditions only for the matching candidates. Outer queries no longer eager-load `permission.conditions`. Side-effect correctness fix: `role.conditions` is also lazy-loaded now (previously an unloaded collection was silently treated as empty).
+- **Targeted entity cache invalidation.** `EntityService._invalidate_permission_cache` defaults to per-entity and takes an explicit `scope_global=True` from `move_entity` / `delete_entity` (the operations that reshape the closure table). Create and update no longer nuke every cached permission check deployment-wide.
+- **Request-scoped entity fetch dedup.** New `_resolve_context_entity_type` helper routes context-aware-role resolution through `request_cache.get_or_load`, so `check_permission` and `get_user_permissions` share a single entity fetch per request per entity.
+- **Request-scoped closure-ancestor dedup.** New `_load_ancestor_depths` helper deduplicates closure-table ancestor lookups across `_check_permission_in_entity` and `_get_entity_context_membership_permission_names` via the same request cache.
+
+### Deliberately deferred
+
+- **In-process user-role snapshot cache.** No measurement yet shows Redis round-trips as the bottleneck; a new cache layer with TTL, size-cap, and pub/sub eviction would add security-relevant staleness surface for speculative gain.
+- **Full closure-table warm-start.** The request-cache dedup covers the observed repeat-fetch pattern; a cross-request warm-start would also need invalidation tracking and isn't justified without a measured hotspot.
+
 ## [0.1.0a19] - 2026-04-22
 
 Operator tooling release: first-class `doctor` and `bootstrap` CLI commands for preflight diagnostics and idempotent first-boot orchestration. Full test suite (793 tests) green.
