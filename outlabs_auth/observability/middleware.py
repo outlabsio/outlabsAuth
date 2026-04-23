@@ -5,14 +5,14 @@ Automatically extracts or generates correlation IDs for request tracing.
 """
 
 import uuid
-from typing import Any, Callable, cast
-from fastapi import Request, Response
-from starlette.middleware.base import BaseHTTPMiddleware
+
+from starlette.datastructures import Headers, MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .service import ObservabilityService
 
 
-class CorrelationIDMiddleware(BaseHTTPMiddleware):
+class CorrelationIDMiddleware:
     """
     Middleware to extract or generate correlation IDs for request tracing.
 
@@ -27,53 +27,37 @@ class CorrelationIDMiddleware(BaseHTTPMiddleware):
         >>> app = FastAPI()
         >>> obs_service = ObservabilityService(config)
         >>> app.add_middleware(CorrelationIDMiddleware, obs_service=obs_service)
+
+    Implemented as pure ASGI (no BaseHTTPMiddleware wrapping) to avoid the
+    extra async-generator overhead per request.
     """
 
-    def __init__(self, app, obs_service: ObservabilityService):
-        """
-        Initialize correlation ID middleware.
-
-        Args:
-            app: FastAPI application
-            obs_service: Observability service instance
-        """
-        super().__init__(app)
+    def __init__(self, app: ASGIApp, obs_service: ObservabilityService) -> None:
+        self.app = app
         self.obs_service = obs_service
         self.config = obs_service.config
 
-    async def dispatch(
-        self, request: Request, call_next: Callable[[Request], Any]
-    ) -> Response:
-        """
-        Process request and inject correlation ID.
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-        Args:
-            request: Incoming HTTP request
-            call_next: Next middleware/route handler
+        header_name = self.config.correlation_id_header
+        incoming = Headers(scope=scope).get(header_name)
 
-        Returns:
-            HTTP response with correlation ID header
-        """
-        # Extract correlation ID from header or generate new one
-        correlation_id = request.headers.get(self.config.correlation_id_header)
-
+        correlation_id = incoming
         if not correlation_id and self.config.generate_correlation_id:
             correlation_id = str(uuid.uuid4())
 
-        # Set correlation ID in context
         if correlation_id:
             ObservabilityService.set_correlation_id(correlation_id)
 
+        async def send_with_header(message: Message) -> None:
+            if correlation_id and message["type"] == "http.response.start":
+                MutableHeaders(scope=message)[header_name] = correlation_id
+            await send(message)
+
         try:
-            # Process request
-            response = cast(Response, await call_next(request))
-
-            # Add correlation ID to response headers
-            if correlation_id:
-                response.headers[self.config.correlation_id_header] = correlation_id
-
-            return response
-
+            await self.app(scope, receive, send_with_header)
         finally:
-            # Clear correlation ID from context
             ObservabilityService.clear_correlation_id()

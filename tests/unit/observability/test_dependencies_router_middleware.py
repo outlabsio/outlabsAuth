@@ -203,38 +203,84 @@ async def test_observability_dependencies_extract_user_context_and_validate_auth
         ObservabilityDeps(observability).with_permission("user:read")
 
 
+def _asgi_http_scope(headers: dict[str, str] | None = None) -> dict:
+    return {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "path": "/users",
+        "raw_path": b"/users",
+        "query_string": b"",
+        "headers": [
+            (key.lower().encode("utf-8"), value.encode("utf-8"))
+            for key, value in (headers or {}).items()
+        ],
+        "client": ("testclient", 123),
+        "server": ("testserver", 80),
+        "scheme": "http",
+    }
+
+
+async def _noop_receive():
+    return {"type": "http.request", "body": b"", "more_body": False}
+
+
+def _response_header(messages: list[dict], name: str) -> str | None:
+    start = next((m for m in messages if m["type"] == "http.response.start"), None)
+    if start is None:
+        return None
+    wanted = name.lower().encode("utf-8")
+    for key, value in start["headers"]:
+        if key.lower() == wanted:
+            return value.decode("utf-8")
+    return None
+
+
 @pytest.mark.asyncio
 async def test_correlation_id_middleware_propagates_and_generates_ids(monkeypatch: pytest.MonkeyPatch):
     obs_service = SimpleNamespace(config=ObservabilityConfig(async_logging=False))
-    middleware = CorrelationIDMiddleware(app=FastAPI(), obs_service=obs_service)
+    header_name = obs_service.config.correlation_id_header
 
-    request_with_header = _make_request(
-        headers={obs_service.config.correlation_id_header: "cid-existing"}
-    )
+    observed_cids: list[str | None] = []
 
-    async def call_next(request: Request) -> Response:
-        assert ObservabilityService.get_correlation_id() == "cid-existing"
-        return Response("ok", status_code=200)
+    async def inner_app(scope, receive, send):
+        observed_cids.append(ObservabilityService.get_correlation_id())
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/plain")],
+            }
+        )
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
 
-    response = await middleware.dispatch(request_with_header, call_next)
-    assert response.headers[obs_service.config.correlation_id_header] == "cid-existing"
+    middleware = CorrelationIDMiddleware(app=inner_app, obs_service=obs_service)
+
+    messages: list[dict] = []
+
+    async def send(message):
+        messages.append(message)
+
+    await middleware(_asgi_http_scope({header_name: "cid-existing"}), _noop_receive, send)
+    assert observed_cids[-1] == "cid-existing"
+    assert _response_header(messages, header_name) == "cid-existing"
     assert ObservabilityService.get_correlation_id() is None
 
     monkeypatch.setattr(
         "outlabs_auth.observability.middleware.uuid.uuid4",
         lambda: UUID("11111111-1111-1111-1111-111111111111"),
     )
-    generated_request = _make_request()
 
-    async def generated_call_next(request: Request) -> Response:
-        return Response("generated", status_code=200)
+    messages2: list[dict] = []
 
-    generated_response = await middleware.dispatch(
-        generated_request,
-        generated_call_next,
-    )
-    assert generated_response.headers[obs_service.config.correlation_id_header] == (
-        "11111111-1111-1111-1111-111111111111"
+    async def send2(message):
+        messages2.append(message)
+
+    await middleware(_asgi_http_scope(), _noop_receive, send2)
+    assert observed_cids[-1] == "11111111-1111-1111-1111-111111111111"
+    assert (
+        _response_header(messages2, header_name)
+        == "11111111-1111-1111-1111-111111111111"
     )
     assert ObservabilityService.get_correlation_id() is None
 
@@ -244,18 +290,37 @@ async def test_correlation_id_middleware_skips_generation_and_clears_on_errors()
     obs_service = SimpleNamespace(
         config=ObservabilityConfig(async_logging=False, generate_correlation_id=False)
     )
-    middleware = CorrelationIDMiddleware(app=FastAPI(), obs_service=obs_service)
-    request = _make_request()
+
+    async def failing_app(scope, receive, send):
+        raise RuntimeError("boom")
+
+    middleware = CorrelationIDMiddleware(app=failing_app, obs_service=obs_service)
 
     ObservabilityService.set_correlation_id("stale-value")
 
-    async def call_next(_request: Request) -> Response:
-        raise RuntimeError("boom")
+    async def send(message):
+        pass
 
     with pytest.raises(RuntimeError, match="boom"):
-        await middleware.dispatch(request, call_next)
+        await middleware(_asgi_http_scope(), _noop_receive, send)
 
     assert ObservabilityService.get_correlation_id() is None
+
+
+@pytest.mark.asyncio
+async def test_correlation_id_middleware_passes_through_non_http_scope():
+    obs_service = SimpleNamespace(config=ObservabilityConfig(async_logging=False))
+    calls: list[tuple] = []
+
+    async def inner_app(scope, receive, send):
+        calls.append((scope, receive, send))
+
+    middleware = CorrelationIDMiddleware(app=inner_app, obs_service=obs_service)
+
+    lifespan_scope = {"type": "lifespan"}
+    await middleware(lifespan_scope, _noop_receive, lambda _m: None)
+
+    assert calls and calls[0][0] is lifespan_scope
 
 
 def test_create_metrics_router_respects_enablement_and_serves_metrics():
