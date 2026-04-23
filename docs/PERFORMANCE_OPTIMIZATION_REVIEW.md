@@ -66,9 +66,34 @@ Plus **one security fix** not strictly in scope but found during review: **`supe
 - ✅ ABAC cache-keying fix (§3.1 inline) — `PermissionService._permission_cache_context_hash()` folds `{resource, env, time}` into a stable SHA-256 prefix appended to the cache key; `_can_use_permission_cache()` no longer bails when ABAC is enabled, so ABAC callers hit Redis with the full context as part of the key
 - ✅ #8 `python-jose` → `pyjwt` migration (§6.1) — benchmark on this machine (HS256, 20k samples): encode 10.14 → 6.60 µs (1.54×), decode 19.07 → 9.00 µs (2.12×). `utils/jwt.py`, `authentication/strategy.py`, and `services/service_token.py` migrated; `python-jose` dropped from `pyproject.toml`
 
-**Phase 3+ (pending)** — higher risk or broader scope:
+**Phase 4 (landed)** — middleware + dependency fast-paths:
 
-- ⏳ #7 In-process user-role snapshot cache (§4.2) — duplicates existing Redis cache; defer until Redis round-trips measurably bottleneck
+- ✅ 4.1 Auth and resource-context middleware rewritten as pure-ASGI — no `BaseHTTPMiddleware` wrap-per-request
+- ✅ 4.2 `AuthDeps` short-circuits the backend loop when a request carries no credentials for any configured transport
+- ✅ 4.3 ABAC `env_context` deferred via a lazy, memoized supplier — dict is materialized only when a check actually reads it
+- ✅ 4.4 `APIKey.hash_key_bytes` helper for byte-identity internal hot paths (hex form still used for persistence and Redis keys)
+- ✅ 4.5 `PermissionMatcher` precomputed frozenset index — replaces per-candidate string-splitting in `get_user_permission_names` fan-out
+
+**Phase 5 (landed)** — ABAC condition lazy-loading (§3.5):
+
+- ✅ `_abac_allows_role_and_permission` narrows permissions by name match first, then batch-loads ABAC conditions for just those candidates; outer queries no longer eager-load conditions. Also lazy-loads `role.conditions` as a side-effect correctness fix (previously silently treated unloaded collections as empty).
+
+**Phase 6 (landed)** — invalidation scope (§4.4):
+
+- ✅ `EntityService._invalidate_permission_cache` defaults to per-entity only; `scope_global=True` is passed explicitly by `move_entity` / `delete_entity` because they reshape the closure table. Create/update no longer nuke every cached permission check deployment-wide.
+
+**Phase 7 (landed)** — entity fetch dedup (§1.4):
+
+- ✅ `_resolve_context_entity_type` — shared helper that goes through `request_cache.get_or_load`, so `check_permission` and `get_user_permissions` share a single fetch per request per entity.
+
+**Phase 8 (landed)** — closure-ancestor fetch dedup (scope of §4.3):
+
+- ✅ `_load_ancestor_depths` — closure lookup shared across `_check_permission_in_entity` and `_get_entity_context_membership_permission_names` via the request cache. Full app-scoped warm-start deliberately skipped; queries are indexed and the cross-request win doesn't justify the invalidation-tracking complexity.
+
+**Not landed — deliberately deferred:**
+
+- ⏳ #7 In-process user-role snapshot cache (§4.2) — review notes "defer until Redis round-trips measurably bottleneck"; no measurement motivates it yet, and it adds a new cache layer (TTL, size-cap, pub/sub-driven eviction) whose staleness would be security-relevant.
+- ⏳ Full closure-table warm start (§4.3) — superseded by the request-cache dedup in Phase 8. Can revisit if across-request closure lookups show up as a measured hotspot.
 
 Test harness additions: Redis fixture with graceful skip, `LatencyStats` p50/p95/p99 instrumentation, SimpleRBAC query-budget suite.
 
