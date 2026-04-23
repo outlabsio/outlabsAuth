@@ -8,7 +8,7 @@ import pytest
 from outlabs_auth.models.sql.enums import DefinitionStatus, RoleScope
 from outlabs_auth.models.sql.permission import Permission
 from outlabs_auth.models.sql.role import Role, RoleEntityTypePermission
-from outlabs_auth.services.permission import PermissionService
+from outlabs_auth.services.permission import PermissionMatcher, PermissionService
 from outlabs_auth.services.role import RoleService
 
 
@@ -92,6 +92,102 @@ def test_permission_service_name_and_allowance_helpers():
         )
         is False
     )
+
+
+@pytest.mark.unit
+def test_permission_matcher_matches_all_grammar_variants():
+    matcher = PermissionMatcher(
+        {
+            "user:*",
+            "role:update_all",
+            "post:publish_tree",
+            "comment:read",
+        }
+    )
+
+    assert matcher.allows("user:create") is True
+    assert matcher.allows("user:delete_all") is True
+    assert matcher.allows("role:update") is True
+    assert matcher.allows("role:update_tree") is True
+    assert matcher.allows("role:update_all") is True
+    assert matcher.allows("post:publish") is True
+    assert matcher.allows("post:publish_tree") is True
+    assert matcher.allows("post:publish_all") is False
+    assert matcher.allows("comment:read") is True
+    assert matcher.allows("comment:write") is False
+    assert matcher.allows("team:edit") is False
+
+
+@pytest.mark.unit
+def test_permission_matcher_super_grant_short_circuits():
+    matcher = PermissionMatcher({"*:*"})
+
+    assert matcher.allows("anything:goes") is True
+    assert matcher.allows_from_ancestor("deep:tree") is True
+
+
+@pytest.mark.unit
+def test_permission_matcher_empty_set_denies_everything():
+    matcher = PermissionMatcher(set())
+
+    assert matcher.allows("user:read") is False
+    assert matcher.allows_from_ancestor("user:read") is False
+
+
+@pytest.mark.unit
+def test_permission_matcher_ancestor_only_propagates_tree_and_all():
+    matcher = PermissionMatcher({"membership:read_tree", "role:update_all"})
+
+    # tree or all upstream satisfies both non-scoped and _tree requireds
+    assert matcher.allows_from_ancestor("membership:read") is True
+    assert matcher.allows_from_ancestor("membership:read_tree") is True
+    assert matcher.allows_from_ancestor("role:update") is True
+    assert matcher.allows_from_ancestor("role:update_tree") is True
+    # _all requireds only match an upstream _all grant
+    assert matcher.allows_from_ancestor("role:update_all") is True
+    assert matcher.allows_from_ancestor("membership:read_all") is False
+    # Non-tree/non-all grants never propagate
+    assert matcher.allows_from_ancestor("other:thing") is False
+
+
+@pytest.mark.unit
+def test_permission_matcher_ignores_non_permission_strings():
+    # Entries without ':' or with empty values should not crash or match stray requireds.
+    matcher = PermissionMatcher({"", "not_a_permission", "user:read"})
+
+    assert matcher.allows("user:read") is True
+    assert matcher.allows("not_a_permission") is True  # exact-match passthrough
+    assert matcher.allows("something:else") is False
+
+
+@pytest.mark.unit
+def test_permission_matcher_agrees_with_permission_service_helpers():
+    granted = {"user:*", "role:update_all", "post:publish_tree", "comment:read"}
+    ancestor_granted = {"membership:read_tree", "role:update_all"}
+
+    requireds = [
+        "user:create",
+        "role:update",
+        "role:update_tree",
+        "role:update_all",
+        "post:publish",
+        "post:publish_all",
+        "comment:read",
+        "comment:write",
+        "team:edit",
+    ]
+
+    matcher = PermissionMatcher(granted)
+    ancestor_matcher = PermissionMatcher(ancestor_granted)
+    for required in requireds:
+        assert matcher.allows(required) == PermissionService._permission_set_allows(
+            required, granted
+        )
+        assert ancestor_matcher.allows_from_ancestor(
+            required
+        ) == PermissionService._permission_set_allows_from_ancestor(
+            required, ancestor_granted
+        )
 
 
 @pytest.mark.unit

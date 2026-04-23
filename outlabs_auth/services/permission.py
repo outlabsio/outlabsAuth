@@ -44,6 +44,82 @@ from outlabs_auth.schemas.abac import serialize_condition_value
 from outlabs_auth.utils.validation import validate_permission_name
 
 
+class PermissionMatcher:
+    """
+    Precomputed index for matching required permissions against a granted set.
+
+    The matcher folds a granted permission set into five disjoint views once
+    (``*:*`` flag, exact names, ``resource:*`` wildcards, ``_all`` bases,
+    ``_tree`` bases). Subsequent ``allows()`` / ``allows_from_ancestor()``
+    calls become O(1) set lookups plus a single parse of the required name —
+    no string splits on the granted side.
+
+    Building the index is O(N) (one split per granted entry). It pays off
+    whenever the same granted set is matched against many required names —
+    e.g. the permission fan-out in ``get_user_permission_names``.
+    """
+
+    __slots__ = (
+        "_has_super",
+        "_exact",
+        "_resource_wildcards",
+        "_all_scoped",
+        "_tree_scoped",
+    )
+
+    def __init__(self, granted: Iterable[str]) -> None:
+        exact: Set[str] = {perm for perm in granted if perm}
+        self._has_super: bool = "*:*" in exact
+
+        resource_wildcards: Set[str] = set()
+        all_scoped: Set[str] = set()
+        tree_scoped: Set[str] = set()
+        for perm in exact:
+            if ":" not in perm:
+                continue
+            resource, action_part = perm.split(":", 1)
+            if action_part == "*":
+                resource_wildcards.add(resource)
+                continue
+            if "_" not in action_part:
+                continue
+            base_action, scope = action_part.rsplit("_", 1)
+            if scope == "all":
+                all_scoped.add(f"{resource}:{base_action}")
+            elif scope == "tree":
+                tree_scoped.add(f"{resource}:{base_action}")
+
+        self._exact: frozenset = frozenset(exact)
+        self._resource_wildcards: frozenset = frozenset(resource_wildcards)
+        self._all_scoped: frozenset = frozenset(all_scoped)
+        self._tree_scoped: frozenset = frozenset(tree_scoped)
+
+    def allows(self, required: str) -> bool:
+        """Mirror of ``PermissionService._permission_set_allows``."""
+        if self._has_super or required in self._exact:
+            return True
+        resource, action, scope = PermissionService._parse_permission_name(required)
+        if resource in self._resource_wildcards:
+            return True
+        base = f"{resource}:{action}"
+        if base in self._all_scoped:
+            return True
+        if scope is None and base in self._tree_scoped:
+            return True
+        return False
+
+    def allows_from_ancestor(self, required: str) -> bool:
+        """Mirror of ``PermissionService._permission_set_allows_from_ancestor``."""
+        if self._has_super:
+            return True
+        resource, action, scope = PermissionService._parse_permission_name(required)
+        base = f"{resource}:{action}"
+        if scope == "all":
+            return base in self._all_scoped
+        # ``_tree`` and non-scoped requireds both accept ``_tree`` or ``_all`` upstream.
+        return base in self._all_scoped or base in self._tree_scoped
+
+
 class PermissionService(BaseService[Permission]):
     """
     Permission management and checking service.
@@ -1001,10 +1077,11 @@ class PermissionService(BaseService[Permission]):
                     entity_type=target_entity_type,
                 )
             )
+            matcher = PermissionMatcher(granted_permissions)
             return {
                 permission_name
                 for permission_name in candidate_names
-                if self._permission_set_allows(permission_name, granted_permissions)
+                if matcher.allows(permission_name)
             }
 
         direct_permissions = await self._get_user_role_permissions(
@@ -1023,11 +1100,13 @@ class PermissionService(BaseService[Permission]):
         )
         direct_permissions.update(membership_direct_permissions)
 
+        direct_matcher = PermissionMatcher(direct_permissions)
+        ancestor_matcher = PermissionMatcher(ancestor_permissions)
         return {
             permission_name
             for permission_name in candidate_names
-            if self._permission_set_allows(permission_name, direct_permissions)
-            or self._permission_set_allows_from_ancestor(permission_name, ancestor_permissions)
+            if direct_matcher.allows(permission_name)
+            or ancestor_matcher.allows_from_ancestor(permission_name)
         }
 
     async def _list_active_permission_names(
