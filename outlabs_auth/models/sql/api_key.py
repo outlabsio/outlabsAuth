@@ -225,8 +225,19 @@ class APIKey(BaseModel, table=True):
 
     @staticmethod
     def hash_key(full_key: str) -> str:
-        """Hash an API key using SHA-256."""
+        """Hash an API key using SHA-256 (hex-encoded for storage)."""
         return hashlib.sha256(full_key.encode()).hexdigest()
+
+    @staticmethod
+    def hash_key_bytes(full_key: str) -> bytes:
+        """
+        Raw 32-byte SHA-256 digest of an API key.
+
+        Prefer this in internal hot paths that need byte-identity checks; the
+        hex form is only required when the value is persisted in ``key_hash``
+        or used as a Redis key component.
+        """
+        return hashlib.sha256(full_key.encode()).digest()
 
     # === Instance Methods ===
     def is_active(self) -> bool:
@@ -236,10 +247,6 @@ class APIKey(BaseModel, table=True):
         if self.expires_at and datetime.now(timezone.utc) > self.expires_at:
             return False
         return True
-
-    def verify_hash(self, full_key: str) -> bool:
-        """Verify a key matches this API key's hash."""
-        return self.key_hash == self.hash_key(full_key)
 
     def record_usage(self) -> None:
         """Record key usage."""
