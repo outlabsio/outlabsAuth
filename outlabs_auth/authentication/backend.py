@@ -47,6 +47,22 @@ class AuthBackend:
         self.transport = transport
         self.strategy = strategy
 
+    def has_credentials(self, request: Any) -> bool:
+        """
+        Cheap hint: does this request look like it carries credentials for this backend?
+
+        Lets the caller skip the full authentication pipeline for requests that
+        obviously have no credentials. Defaults to ``True`` when the transport does
+        not implement the hint, preserving previous behavior.
+        """
+        transport_hint = getattr(self.transport, "has_credentials", None)
+        if transport_hint is None:
+            return True
+        try:
+            return bool(transport_hint(request))
+        except Exception:
+            return True
+
     async def authenticate(self, request: Any, **kwargs: Any) -> Optional[dict]:
         """
         Attempt authentication using this backend.

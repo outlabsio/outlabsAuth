@@ -202,6 +202,66 @@ async def test_auth_deps_require_auth_optional_and_activity_tracking(monkeypatch
     assert tracked == [str(user_id)]
 
 
+class _SpyStrategy:
+    def __init__(self, result=None):
+        self.result = result
+        self.calls = 0
+
+    async def authenticate(self, credentials: str, **kwargs):
+        self.calls += 1
+        return self.result
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_auth_deps_short_circuits_backend_loop_when_no_credentials_present():
+    """
+    When no backend's transport reports credentials on the request, the deps
+    layer should skip strategy invocation entirely — either returning None
+    (optional) or raising 401 without walking the backend loop.
+    """
+    spy_a = _SpyStrategy()
+    spy_b = _SpyStrategy()
+    deps = AuthDeps(
+        backends=[
+            AuthBackend(
+                name="a",
+                transport=HeaderTransport(header_name="X-Auth-A"),
+                strategy=spy_a,
+            ),
+            AuthBackend(
+                name="b",
+                transport=HeaderTransport(header_name="X-Auth-B"),
+                strategy=spy_b,
+            ),
+        ],
+        get_session=lambda: None,
+    )
+
+    request = _make_request("GET", "/me")
+
+    # Optional: silent return None, no strategy call
+    optional_dep = deps.require_auth(optional=True)
+    assert await optional_dep(request=request, session=object()) is None
+    assert spy_a.calls == 0 and spy_b.calls == 0
+
+    # Required: raises 401 without running any strategy
+    required_dep = deps.require_auth()
+    request = _make_request("GET", "/me")
+    with pytest.raises(HTTPException) as exc_info:
+        await required_dep(request=request, session=object())
+    assert exc_info.value.status_code == 401
+    assert spy_a.calls == 0 and spy_b.calls == 0
+
+    # Positive control: when a matching header is present, the loop runs
+    spy_a.calls = 0
+    spy_a.result = {"user_id": "u1", "source": "a"}
+    request = _make_request("GET", "/me", headers={"X-Auth-A": "creds"})
+    result = await required_dep(request=request, session=object())
+    assert result is not None and result["source"] == "a"
+    assert spy_a.calls == 1
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_auth_deps_permission_helpers_handle_missing_ids_and_service_tokens():

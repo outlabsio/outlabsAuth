@@ -501,6 +501,16 @@ class AuthDeps:
             if cached is not None:
                 return cached
 
+        # Short-circuit: if no backend sees anything that looks like credentials,
+        # skip the full backend loop (avoids JWT decode setup, DB session work, etc.)
+        # on anonymous requests. Backends without a hint default to True and fall through.
+        if not any(backend.has_credentials(request) for backend in self.backends):
+            if optional:
+                return None
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+            )
+
         for backend in self.backends:
             try:
                 result = await backend.authenticate(

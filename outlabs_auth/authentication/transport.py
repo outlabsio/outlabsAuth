@@ -29,6 +29,16 @@ class Transport:
         """
         raise NotImplementedError()  # pragma: no cover
 
+    def has_credentials(self, request: Request) -> bool:
+        """
+        Cheap hint: does the request appear to carry credentials this transport can read?
+
+        Used by the backend loop to skip credential validation entirely when no backend
+        could possibly match (e.g. an anonymous request with no auth headers). The default
+        is conservative (``True``) so unknown transports still run their full extraction.
+        """
+        return True
+
 
 class BearerTransport(Transport):
     """
@@ -46,6 +56,9 @@ class BearerTransport(Transport):
         if authorization:
             return authorization.credentials
         return None
+
+    def has_credentials(self, request: Request) -> bool:
+        return "authorization" in request.headers
 
 
 class ApiKeyTransport(Transport):
@@ -68,6 +81,9 @@ class ApiKeyTransport(Transport):
     async def get_credentials(self, request: Request) -> Optional[str]:
         """Extract API key from custom header."""
         return request.headers.get(self.header_name)
+
+    def has_credentials(self, request: Request) -> bool:
+        return self.header_name.lower() in request.headers
 
 
 class HeaderTransport(Transport):
@@ -97,6 +113,9 @@ class HeaderTransport(Transport):
             return None
         return value
 
+    def has_credentials(self, request: Request) -> bool:
+        return self.header_name.lower() in request.headers
+
 
 class CookieTransport(Transport):
     """
@@ -117,6 +136,9 @@ class CookieTransport(Transport):
     async def get_credentials(self, request: Request) -> Optional[str]:
         """Extract credentials from cookie."""
         return request.cookies.get(self.cookie_name)
+
+    def has_credentials(self, request: Request) -> bool:
+        return self.cookie_name in request.cookies
 
 
 class QueryParamTransport(Transport):
@@ -139,3 +161,6 @@ class QueryParamTransport(Transport):
     async def get_credentials(self, request: Request) -> Optional[str]:
         """Extract credentials from query parameter."""
         return request.query_params.get(self.param_name)
+
+    def has_credentials(self, request: Request) -> bool:
+        return self.param_name in request.query_params
