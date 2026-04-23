@@ -35,6 +35,7 @@ from outlabs_auth.models.sql.role import ConditionGroup as SqlConditionGroup
 from outlabs_auth.models.sql.role import Role, RoleEntityTypePermission, RolePermission
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
+from outlabs_auth.services import request_cache
 from outlabs_auth.services.base import BaseService
 from outlabs_auth.services.policy_engine import PolicyEvaluationEngine
 from outlabs_auth.schemas.abac import serialize_condition_value
@@ -229,7 +230,13 @@ class PermissionService(BaseService[Permission]):
 
         resolved_user = user
         if resolved_user is None:
-            resolved_user = await session.get(User, user_id)
+            cached_user = request_cache.get(("user", user_id))
+            if cached_user is not None:
+                resolved_user = cached_user
+            else:
+                resolved_user = await session.get(User, user_id)
+                if resolved_user is not None:
+                    request_cache.set_value(("user", user_id), resolved_user)
 
         if not resolved_user:
             raise UserNotFoundError(
@@ -239,9 +246,14 @@ class PermissionService(BaseService[Permission]):
 
         target_entity_type: Optional[str] = None
         if entity_id is not None and self.config.enable_context_aware_roles:
-            target_entity = await session.get(Entity, entity_id)
-            if target_entity is not None:
-                target_entity_type = target_entity.entity_type
+            cached_entity = request_cache.get(("entity", entity_id))
+            if cached_entity is not None:
+                target_entity_type = cached_entity.entity_type
+            else:
+                target_entity = await session.get(Entity, entity_id)
+                if target_entity is not None:
+                    request_cache.set_value(("entity", entity_id), target_entity)
+                    target_entity_type = target_entity.entity_type
 
         abac_enabled = bool(getattr(self.config, "enable_abac", False))
         use_permission_cache = self._can_use_permission_cache(
@@ -472,17 +484,26 @@ class PermissionService(BaseService[Permission]):
         - inherited tree permissions via membership roles on ancestor entities (closure table)
         - respects entity-local role scope (entity_only vs hierarchy)
         """
-        # Resolve ancestors (including self) via closure table.
-        ancestors_stmt = select(
-            cast(Any, EntityClosure.ancestor_id),
-            cast(Any, EntityClosure.depth),
-        ).where(cast(Any, EntityClosure.descendant_id) == entity_id)
-        ancestors_result = await session.execute(ancestors_stmt)
-        ancestor_rows = ancestors_result.all()
-        if not ancestor_rows:
+        # Resolve ancestors (including self) via closure table. Depth-keyed lookup
+        # is cached per-request so descendants explored during the same request
+        # (e.g. a nested tree-permission check) don't reissue the same query.
+        depth_by_ancestor: Optional[Dict[UUID, int]] = request_cache.get(
+            ("ancestor_depths", entity_id)
+        )
+        if depth_by_ancestor is None:
+            ancestors_stmt = select(
+                cast(Any, EntityClosure.ancestor_id),
+                cast(Any, EntityClosure.depth),
+            ).where(cast(Any, EntityClosure.descendant_id) == entity_id)
+            ancestors_result = await session.execute(ancestors_stmt)
+            ancestor_rows = ancestors_result.all()
+            if not ancestor_rows:
+                return False
+            depth_by_ancestor = {cast(UUID, row[0]): int(row[1]) for row in ancestor_rows}
+            request_cache.set_value(("ancestor_depths", entity_id), depth_by_ancestor)
+        elif not depth_by_ancestor:
             return False
 
-        depth_by_ancestor: Dict[UUID, int] = {cast(UUID, row[0]): int(row[1]) for row in ancestor_rows}
         ancestor_ids = list(depth_by_ancestor.keys())
 
         # Load memberships in any ancestor entity with roles+permissions.

@@ -872,6 +872,7 @@ def test_outlabs_auth_instrument_fastapi_registers_integrations_and_warns(
 
     correlation_middleware = type("CorrelationIDMiddleware", (), {})
     resource_context_middleware = type("ResourceContextMiddleware", (), {})
+    request_cache_middleware = type("RequestCacheMiddleware", (), {})
     monkeypatch.setattr(
         "outlabs_auth.observability.CorrelationIDMiddleware",
         correlation_middleware,
@@ -883,6 +884,10 @@ def test_outlabs_auth_instrument_fastapi_registers_integrations_and_warns(
     monkeypatch.setattr(
         "outlabs_auth.middleware.ResourceContextMiddleware",
         resource_context_middleware,
+    )
+    monkeypatch.setattr(
+        "outlabs_auth.middleware.RequestCacheMiddleware",
+        request_cache_middleware,
     )
 
     app = _FakeApp(fail_middleware=False)
@@ -903,6 +908,7 @@ def test_outlabs_auth_instrument_fastapi_registers_integrations_and_warns(
         }
     ]
     assert app.middleware_calls == [
+        (request_cache_middleware, {}),
         (correlation_middleware, {"obs_service": auth.observability}),
         (resource_context_middleware, {"trust_client_header": True}),
     ]

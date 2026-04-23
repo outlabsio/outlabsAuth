@@ -38,6 +38,7 @@ from outlabs_auth.models.sql.entity_membership_history import EntityMembershipHi
 from outlabs_auth.models.sql.enums import DefinitionStatus, MembershipStatus, RoleScope
 from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user import User
+from outlabs_auth.services import request_cache
 from outlabs_auth.services.base import BaseService
 
 
@@ -1562,12 +1563,27 @@ class MembershipService(BaseService[EntityMembership]):
         session: AsyncSession,
         entity_id: UUID,
     ) -> Set[UUID]:
-        """Fetch the closure-table ancestor set for an entity in one query."""
+        """
+        Fetch the closure-table ancestor set for an entity in one query.
+
+        Shares the per-request cache key used by
+        ``PermissionService._check_permission_in_entity`` so both services
+        reuse the same closure read within a request.
+        """
+        depth_cache = request_cache.get(("ancestor_depths", entity_id))
+        if depth_cache:
+            return set(depth_cache.keys())
+        cached = request_cache.get(("ancestors", entity_id))
+        if cached is not None:
+            return set(cached)
+
         stmt = select(cast(Any, EntityClosure.ancestor_id)).where(
             cast(Any, EntityClosure.descendant_id) == entity_id
         )
         result = await session.execute(stmt)
-        return {row[0] for row in result.all()}
+        ancestors = {row[0] for row in result.all()}
+        request_cache.set_value(("ancestors", entity_id), ancestors)
+        return ancestors
 
     async def _is_role_available_for_entity(
         self,

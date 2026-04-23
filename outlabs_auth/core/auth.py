@@ -1195,6 +1195,11 @@ class OutlabsAuth:
 
         middleware_added = True
 
+        from outlabs_auth.middleware import RequestCacheMiddleware
+
+        if not _safe_add_middleware(RequestCacheMiddleware):
+            middleware_added = False
+
         if self.observability:
             from outlabs_auth.observability import (
                 CorrelationIDMiddleware,
