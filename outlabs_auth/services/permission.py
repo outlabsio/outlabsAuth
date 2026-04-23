@@ -211,6 +211,29 @@ class PermissionService(BaseService[Permission]):
     def _should_load_entity_type_permissions(self, entity_type: Optional[str]) -> bool:
         return bool(self.config.enable_context_aware_roles and entity_type)
 
+    async def _load_ancestor_depths(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+    ) -> Dict[UUID, int]:
+        """
+        Return a ``{ancestor_id: depth}`` mapping for ``entity_id`` from the
+        closure table. Cached per-request so multiple permission checks on the
+        same entity (direct + tree-based + context-aware-role) share the fetch.
+        """
+
+        async def _loader() -> Dict[UUID, int]:
+            ancestors_stmt = select(
+                cast(Any, EntityClosure.ancestor_id),
+                cast(Any, EntityClosure.depth),
+            ).where(cast(Any, EntityClosure.descendant_id) == entity_id)
+            result = await session.execute(ancestors_stmt)
+            return {cast(UUID, row[0]): int(row[1]) for row in result.all()}
+
+        return await request_cache.get_or_load(
+            ("ancestor_depths", entity_id), _loader
+        )
+
     async def _resolve_context_entity_type(
         self,
         session: AsyncSession,
@@ -592,21 +615,8 @@ class PermissionService(BaseService[Permission]):
         # Resolve ancestors (including self) via closure table. Depth-keyed lookup
         # is cached per-request so descendants explored during the same request
         # (e.g. a nested tree-permission check) don't reissue the same query.
-        depth_by_ancestor: Optional[Dict[UUID, int]] = request_cache.get(
-            ("ancestor_depths", entity_id)
-        )
-        if depth_by_ancestor is None:
-            ancestors_stmt = select(
-                cast(Any, EntityClosure.ancestor_id),
-                cast(Any, EntityClosure.depth),
-            ).where(cast(Any, EntityClosure.descendant_id) == entity_id)
-            ancestors_result = await session.execute(ancestors_stmt)
-            ancestor_rows = ancestors_result.all()
-            if not ancestor_rows:
-                return False
-            depth_by_ancestor = {cast(UUID, row[0]): int(row[1]) for row in ancestor_rows}
-            request_cache.set_value(("ancestor_depths", entity_id), depth_by_ancestor)
-        elif not depth_by_ancestor:
+        depth_by_ancestor = await self._load_ancestor_depths(session, entity_id)
+        if not depth_by_ancestor:
             return False
 
         ancestor_ids = list(depth_by_ancestor.keys())
@@ -1198,16 +1208,10 @@ class PermissionService(BaseService[Permission]):
         entity_id: UUID,
         entity_type: Optional[str] = None,
     ) -> Tuple[Set[str], Set[str]]:
-        ancestors_stmt = select(
-            cast(Any, EntityClosure.ancestor_id),
-            cast(Any, EntityClosure.depth),
-        ).where(cast(Any, EntityClosure.descendant_id) == entity_id)
-        ancestors_result = await session.execute(ancestors_stmt)
-        ancestor_rows = ancestors_result.all()
-        if not ancestor_rows:
+        depth_by_ancestor = await self._load_ancestor_depths(session, entity_id)
+        if not depth_by_ancestor:
             return set(), set()
 
-        depth_by_ancestor: Dict[UUID, int] = {cast(UUID, row[0]): int(row[1]) for row in ancestor_rows}
         ancestor_ids = list(depth_by_ancestor.keys())
 
         memberships_stmt = (

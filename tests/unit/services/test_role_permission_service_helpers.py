@@ -342,6 +342,48 @@ async def test_permission_service_resolve_context_entity_type_dedupes_within_req
 
 
 @pytest.mark.unit
+@pytest.mark.asyncio
+async def test_permission_service_load_ancestor_depths_dedupes_within_request():
+    from outlabs_auth.services import request_cache
+
+    service = PermissionService(SimpleNamespace(enable_context_aware_roles=False))
+    entity_id = uuid4()
+    ancestor_a, ancestor_b = uuid4(), uuid4()
+    depth_rows = [(ancestor_a, 1), (ancestor_b, 2)]
+
+    class _Result:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def all(self):
+            return self._rows
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = 0
+
+        async def execute(self, stmt):
+            self.calls += 1
+            return _Result(depth_rows)
+
+    session = FakeSession()
+    request_cache.reset()
+
+    first = await service._load_ancestor_depths(session, entity_id)
+    second = await service._load_ancestor_depths(session, entity_id)
+
+    assert first == {ancestor_a: 1, ancestor_b: 2}
+    assert first is second
+    assert session.calls == 1
+
+    # Different entity still hits the DB — the cache key includes entity_id.
+    await service._load_ancestor_depths(session, uuid4())
+    assert session.calls == 2
+
+    request_cache.reset()
+
+
+@pytest.mark.unit
 def test_role_service_definition_and_delta_helpers():
     service = RoleService(SimpleNamespace())
 
