@@ -382,3 +382,128 @@ async def test_permission_service_abac_permission_resolution_and_user_permission
         "test",
     )
     observability.log_permission_check.assert_called_once()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_abac_conditions_are_lazy_loaded_when_outer_query_skips_them(
+    test_session,
+    auth_config: AuthConfig,
+):
+    """
+    Verify §3.5 optimization: ABAC conditions can be lazy-loaded inside
+    _abac_allows_role_and_permission when the outer role/membership query
+    did not eager-load them. Covers both role-level and permission-level
+    condition lazy loads.
+    """
+    config = auth_config.model_copy(update={"enable_abac": True})
+    permission_service = PermissionService(config=config)
+    role_service = RoleService(config=config)
+
+    permission = await permission_service.create_permission(
+        test_session,
+        name=f"gated:{uuid4().hex[:6]}",
+        display_name="Gated Permission",
+    )
+    role = await role_service.create_role(
+        test_session,
+        name=f"gated-role-{uuid4().hex[:6]}",
+        display_name="Gated Role",
+        is_global=True,
+        permission_names=[permission.name],
+    )
+
+    # Attach a role-level ABAC condition — this is the path that was silently
+    # treated as empty before the lazy-load fix.
+    role_group = await role_service.create_role_condition_group(
+        test_session,
+        role.id,
+        operator="AND",
+    )
+    await role_service.create_role_condition(
+        test_session,
+        role.id,
+        condition_group_id=role_group.id,
+        attribute="user.department",
+        operator="equals",
+        value="engineering",
+        value_type="string",
+    )
+
+    # Permission-level condition as well — must be loaded lazily for matching
+    # perms only.
+    perm_group = await permission_service.create_permission_condition_group(
+        test_session,
+        permission.id,
+        operator="AND",
+    )
+    await permission_service.create_permission_condition(
+        test_session,
+        permission.id,
+        condition_group_id=perm_group.id,
+        attribute="resource.region",
+        operator="equals",
+        value="us",
+        value_type="string",
+    )
+
+    # Load the role WITHOUT conditions eagerly — this mirrors what the outer
+    # permission-check query now does after the §3.5 refactor.
+    role_without_conditions = await role_service.get_role_by_id(
+        test_session,
+        role.id,
+        load_permissions=True,
+    )
+    assert role_without_conditions is not None
+    engine = PolicyEvaluationEngine()
+
+    # Context satisfies both role and permission conditions → allowed.
+    assert await permission_service._abac_allows_role_and_permission(
+        session=test_session,
+        role=role_without_conditions,
+        required_permission=permission.name,
+        entity_type=None,
+        context={
+            "user": {"department": "engineering"},
+            "resource": {"region": "us"},
+        },
+        engine=engine,
+    )
+
+    # Context fails the role-level condition → denied (proves role.conditions
+    # are actually being read, not silently ignored).
+    assert not await permission_service._abac_allows_role_and_permission(
+        session=test_session,
+        role=role_without_conditions,
+        required_permission=permission.name,
+        entity_type=None,
+        context={
+            "user": {"department": "sales"},
+            "resource": {"region": "us"},
+        },
+        engine=engine,
+    )
+
+    # Context fails the permission-level condition → denied (proves matching
+    # perm's conditions were lazy-loaded).
+    assert not await permission_service._abac_allows_role_and_permission(
+        session=test_session,
+        role=role_without_conditions,
+        required_permission=permission.name,
+        entity_type=None,
+        context={
+            "user": {"department": "engineering"},
+            "resource": {"region": "eu"},
+        },
+        engine=engine,
+    )
+
+    # Non-matching required permission → early return without condition load.
+    assert not await permission_service._abac_allows_role_and_permission(
+        session=test_session,
+        role=role_without_conditions,
+        required_permission="unrelated:thing",
+        entity_type=None,
+        context={},
+        engine=engine,
+    )

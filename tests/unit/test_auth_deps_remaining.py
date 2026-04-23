@@ -12,6 +12,7 @@ from starlette.requests import Request
 from outlabs_auth.authentication.backend import AuthBackend
 from outlabs_auth.authentication.transport import HeaderTransport
 from outlabs_auth.dependencies import AuthDeps, create_auth_deps
+from outlabs_auth.dependencies import _EnvContextSupplier
 
 
 class _StaticAuthResultStrategy:
@@ -543,3 +544,46 @@ async def test_require_source_and_superuser_cover_success_and_no_auth(
         await deps.require_superuser()(request=request, session=object())
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "Not authenticated"
+
+
+@pytest.mark.unit
+def test_env_context_supplier_is_lazy_and_memoized():
+    request = _make_request(
+        "POST",
+        "/resources",
+        headers={"user-agent": "pytest-agent/1.0"},
+    )
+    supplier = _EnvContextSupplier(request)
+
+    # Construction must not materialize the dict — the cache stays empty until
+    # something actually reads it.
+    assert supplier._cached is None
+
+    first = supplier()
+    second = supplier()
+
+    # Same call returns the identical dict instance (no redundant rebuilds when
+    # multiple permission checks on the same request pull env_context).
+    assert first is second
+    assert first == {
+        "method": "POST",
+        "path": "/resources",
+        "client_host": "testclient",
+        "user_agent": "pytest-agent/1.0",
+    }
+
+
+@pytest.mark.unit
+def test_env_context_supplier_handles_missing_client_and_user_agent():
+    request = _make_request("GET", "/health")
+    # Starlette's Request pulls client from scope; _make_request already sets a
+    # client, so clear it explicitly to exercise the None branch.
+    request.scope["client"] = None
+
+    supplier = _EnvContextSupplier(request)
+    env = supplier()
+
+    assert env["client_host"] is None
+    assert env["user_agent"] is None
+    assert env["method"] == "GET"
+    assert env["path"] == "/health"

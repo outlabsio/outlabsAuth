@@ -16,6 +16,7 @@ from outlabs_auth.models.sql.enums import (
     IntegrationPrincipalStatus,
     UserStatus,
 )
+from outlabs_auth.models.sql.api_key import APIKey
 from outlabs_auth.models.sql.integration_principal import IntegrationPrincipal
 from outlabs_auth.services.api_key import APIKeyService
 from outlabs_auth.services.api_key_policy import APIKeyPolicyService
@@ -49,6 +50,21 @@ class FakeRedis:
         self.counters.pop(key, None)
         self.values.pop(key, None)
         return True
+
+
+@pytest.mark.unit
+def test_api_key_hash_helpers_agree_and_produce_32_byte_digest():
+    # ``hash_key_bytes`` is the hot-path byte-identity form used when the hex
+    # string would just be decoded back to bytes anyway; it must stay in lock
+    # step with ``hash_key`` so cache keys and persisted hashes line up.
+    full_key, _prefix = APIKey.generate_key()
+
+    hex_digest = APIKey.hash_key(full_key)
+    raw_digest = APIKey.hash_key_bytes(full_key)
+
+    assert isinstance(hex_digest, str) and len(hex_digest) == 64
+    assert isinstance(raw_digest, bytes) and len(raw_digest) == 32
+    assert bytes.fromhex(hex_digest) == raw_digest
 
 
 def _entity(*, name: str, slug: str, parent_id=None, depth: int = 0, path: str | None = None) -> Entity:

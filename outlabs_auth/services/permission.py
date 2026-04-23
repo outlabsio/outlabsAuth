@@ -34,7 +34,7 @@ from outlabs_auth.models.sql.permission import (
     PermissionTagLink,
 )
 from outlabs_auth.models.sql.role import ConditionGroup as SqlConditionGroup
-from outlabs_auth.models.sql.role import Role, RoleEntityTypePermission, RolePermission
+from outlabs_auth.models.sql.role import Role, RoleCondition, RoleEntityTypePermission, RolePermission
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
 from outlabs_auth.services import request_cache
@@ -597,11 +597,13 @@ class PermissionService(BaseService[Permission]):
         ancestor_ids = list(depth_by_ancestor.keys())
 
         # Load memberships in any ancestor entity with roles+permissions.
+        # ABAC conditions are lazy-loaded inside _abac_allows_role_and_permission
+        # for matching perms only — eager loading here would fetch empty
+        # condition collections for every permission in every role.
         memberships_stmt = (
             select(EntityMembership)
             .options(
                 *self._entity_membership_permission_options(
-                    include_conditions=engine is not None,
                     entity_type=entity_type,
                 )
             )
@@ -724,11 +726,14 @@ class PermissionService(BaseService[Permission]):
         Returns:
             True if permission granted, False otherwise
         """
+        # ABAC conditions are lazy-loaded per matching permission inside
+        # _abac_allows_role_and_permission; eager loading them here would
+        # issue additional SELECTs for every permission the user can see,
+        # even when the target permission has no conditions attached.
         stmt = (
             select(UserRoleMembership)
             .options(
                 *self._user_role_membership_permission_options(
-                    include_conditions=True,
                     entity_type=entity_type,
                 )
             )
@@ -780,12 +785,23 @@ class PermissionService(BaseService[Permission]):
         context: Dict[str, Any],
         engine: PolicyEvaluationEngine,
     ) -> bool:
-        role_conditions = list(role.conditions or []) if self._relationship_is_loaded(role, "conditions") else []
         perms = self._get_role_permissions_for_context(role, entity_type)
+
+        # Narrow to candidate permissions *before* touching conditions. Permissions
+        # that can't match the required name can never contribute, so loading
+        # their ABAC conditions is pure waste — and for a role with many unrelated
+        # permissions this dominates the outer query cost when ABAC is on.
+        matching_perms = [
+            p for p in perms if p and self._permission_set_allows(required_permission, {p.name})
+        ]
+        if not matching_perms:
+            return False
+
+        # Lazy-load conditions for matching permissions only, batched in one SELECT.
         unloaded_permission_ids = [
             permission.id
-            for permission in perms
-            if permission is not None and not self._relationship_is_loaded(permission, "conditions")
+            for permission in matching_perms
+            if not self._relationship_is_loaded(permission, "conditions")
         ]
         if unloaded_permission_ids:
             perm_stmt = (
@@ -795,14 +811,19 @@ class PermissionService(BaseService[Permission]):
             )
             perm_result = await session.execute(perm_stmt)
             permission_map = {permission.id: permission for permission in perm_result.scalars().all()}
-            perms = [
-                permission_map.get(permission.id, permission) if permission is not None else None
-                for permission in perms
-            ]
+            matching_perms = [permission_map.get(p.id, p) for p in matching_perms]
 
-        matching_perms = [p for p in perms if p and self._permission_set_allows(required_permission, {p.name})]
-        if not matching_perms:
-            return False
+        # Lazy-load role conditions when they weren't eagerly fetched. Silently
+        # treating an unloaded collection as empty (the previous default) would
+        # bypass any role-level ABAC guard the deployment has configured.
+        if self._relationship_is_loaded(role, "conditions"):
+            role_conditions = list(role.conditions or [])
+        else:
+            role_conditions_stmt = select(RoleCondition).where(
+                cast(Any, RoleCondition.role_id) == role.id
+            )
+            role_conditions_result = await session.execute(role_conditions_stmt)
+            role_conditions = list(role_conditions_result.scalars().all())
 
         group_ids: Set[UUID] = set()
         for cond in role_conditions:
