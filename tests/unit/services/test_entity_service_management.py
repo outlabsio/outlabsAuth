@@ -98,8 +98,11 @@ async def test_entity_service_create_update_lookup_and_permission_invalidation(
         for call in observability.log_entity_operation.call_args_list
     ] == ["create", "update"]
 
+    # Create and update emit per-entity invalidation but don't nuke globally —
+    # neither mutation reshapes the closure table, so descendants' cached tree
+    # permissions are unaffected.
     assert cache_service.publish_entity_permissions_invalidation.await_count == 2
-    assert cache_service.publish_all_permissions_invalidation.await_count == 2
+    assert cache_service.publish_all_permissions_invalidation.await_count == 0
 
     with pytest.raises(InvalidInputError, match="already exists"):
         await service.create_entity(
@@ -206,8 +209,35 @@ async def test_entity_service_move_and_delete_management_paths(
     }
     assert archived_entity_ids == {root.id, child.id, grandchild.id}
     assert observability.log_entity_operation.call_args_list[-1].kwargs["operation"] == "delete"
-    assert cache_service.publish_entity_permissions_invalidation.await_count >= 4
-    assert cache_service.publish_all_permissions_invalidation.await_count >= 4
+    # 3 creates emit per-entity only; the cascade delete emits both per-entity
+    # and global for each of root/child/grandchild (closure table shrinks).
+    assert cache_service.publish_entity_permissions_invalidation.await_count == 6
+    assert cache_service.publish_all_permissions_invalidation.await_count == 3
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_entity_service_invalidate_permission_cache_scope_switch():
+    cache_service = SimpleNamespace(
+        publish_entity_permissions_invalidation=AsyncMock(),
+        publish_all_permissions_invalidation=AsyncMock(),
+    )
+    service = EntityService(config=AuthConfig(secret_key="x"), redis_client=None)
+    service.cache_service = cache_service
+
+    entity_id = uuid4()
+
+    # Default scope is per-entity — closure table is untouched, so descendants'
+    # cached tree checks don't need to be invalidated.
+    await service._invalidate_permission_cache(entity_id)
+    assert cache_service.publish_entity_permissions_invalidation.await_count == 1
+    assert cache_service.publish_all_permissions_invalidation.await_count == 0
+
+    # Global scope is explicit — used by move/delete where ancestor/descendant
+    # relationships shift and downstream cache keys must be purged.
+    await service._invalidate_permission_cache(entity_id, scope_global=True)
+    assert cache_service.publish_entity_permissions_invalidation.await_count == 2
+    assert cache_service.publish_all_permissions_invalidation.await_count == 1
 
 
 @pytest.mark.unit

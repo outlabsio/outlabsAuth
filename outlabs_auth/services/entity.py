@@ -494,7 +494,7 @@ class EntityService(BaseService[Entity]):
                 parent_id=str(new_parent_id) if new_parent_id else None,
             )
 
-        await self._invalidate_permission_cache(entity.id)
+        await self._invalidate_permission_cache(entity.id, scope_global=True)
         return entity
 
     async def delete_entity(
@@ -606,7 +606,7 @@ class EntityService(BaseService[Entity]):
                 cascade=cascade,
             )
 
-        await self._invalidate_permission_cache(entity_id)
+        await self._invalidate_permission_cache(entity_id, scope_global=True)
         return True
 
     async def get_entity_path(self, session: AsyncSession, entity_id: UUID) -> List[Entity]:
@@ -1228,12 +1228,26 @@ class EntityService(BaseService[Entity]):
         result = await session.execute(stmt)
         return result.scalar_one_or_none() is not None
 
-    async def _invalidate_permission_cache(self, entity_id: UUID) -> None:
+    async def _invalidate_permission_cache(
+        self,
+        entity_id: UUID,
+        *,
+        scope_global: bool = False,
+    ) -> None:
+        """
+        Publish permission-cache invalidation for a mutated entity.
+
+        The default targets only this entity's channel. Pass ``scope_global=True``
+        when the mutation reshapes the closure table (move / delete), because
+        descendants' cached tree-permission checks depend on the old ancestors
+        and can't be found via ``permissions:entity:{id}`` alone.
+        """
         cache_service = getattr(self, "cache_service", None)
         if cache_service is None:
             return
         await cache_service.publish_entity_permissions_invalidation(str(entity_id))
-        await cache_service.publish_all_permissions_invalidation()
+        if scope_global:
+            await cache_service.publish_all_permissions_invalidation()
 
     async def get_ancestors(self, session: AsyncSession, entity_id: UUID, include_self: bool = False) -> List[Entity]:
         """
