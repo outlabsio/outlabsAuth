@@ -211,16 +211,20 @@ class AuthDeps:
         permission_service = self.services.get("permission_service")
         effective_permissions: list[str] = []
         if auth_result.get("user_id") and permission_service is not None:
-            try:
-                effective_permissions = list(
-                    await permission_service.get_user_permissions(
-                        session,
-                        user_id=UUID(str(auth_result["user_id"])),
-                        include_entity_local=False,
+            stashed = auth_result.get("_outlabs_effective_permissions")
+            if stashed is not None:
+                effective_permissions = list(stashed)
+            else:
+                try:
+                    effective_permissions = list(
+                        await permission_service.get_user_permissions(
+                            session,
+                            user_id=UUID(str(auth_result["user_id"])),
+                            include_entity_local=False,
+                        )
                     )
-                )
-            except Exception:
-                return
+                except Exception:
+                    return
 
         try:
             ip_whitelist = await api_key_service.get_api_key_ip_whitelist(session, api_key.id)
@@ -232,6 +236,90 @@ class AuthDeps:
             )
         except Exception:
             return
+
+    def _build_permission_check_cache(
+        self,
+        *,
+        auth_result: dict,
+        session: AsyncSession,
+        entity_id: Optional[UUID],
+        abac_enabled: bool,
+        resource_context: Optional[dict],
+        env_context: Optional[dict],
+    ) -> Callable[[str], Any]:
+        """
+        Return an async `check(permission) -> bool` that memoizes the user's
+        aggregated permission set for the duration of a single require_all /
+        require_any loop.
+
+        The no-entity, non-ABAC, user-auth path aggregates into one
+        ``get_user_permissions`` query on the first call; subsequent
+        permissions test the cached set in-memory. Other auth sources
+        (service_token, api_key snapshots) and ABAC / entity-context paths
+        fall through to the per-permission route without change.
+        """
+        source = auth_result.get("source")
+        permission_service = self.services.get("permission_service")
+        user_obj = auth_result.get("user")
+        user_id_raw = auth_result.get("user_id")
+
+        fast_path_applicable = (
+            source not in ("service_token", "api_key")
+            and not abac_enabled
+            and entity_id is None
+            and permission_service is not None
+            and user_id_raw is not None
+            and hasattr(permission_service, "get_user_permissions")
+        )
+
+        # Parsed once, reused across permissions.
+        user_id_uuid: Optional[UUID] = None
+        if fast_path_applicable:
+            try:
+                user_id_uuid = user_id_raw if isinstance(user_id_raw, UUID) else UUID(str(user_id_raw))
+            except Exception:
+                fast_path_applicable = False
+
+        superuser_shortcut = bool(user_obj and getattr(user_obj, "is_superuser", False))
+        cached_permissions: Optional[set] = None
+
+        async def _check(permission: str) -> bool:
+            nonlocal cached_permissions
+
+            if fast_path_applicable:
+                if superuser_shortcut:
+                    return True
+
+                if cached_permissions is None:
+                    try:
+                        fetched = await permission_service.get_user_permissions(
+                            session,
+                            user_id_uuid,
+                            include_entity_local=False,
+                            user=user_obj,
+                        )
+                    except TypeError as exc:
+                        if "unexpected keyword argument 'user'" not in str(exc):
+                            raise
+                        fetched = await permission_service.get_user_permissions(
+                            session,
+                            user_id_uuid,
+                            include_entity_local=False,
+                        )
+                    cached_permissions = set(fetched or ())
+
+                return self._permission_set_allows(permission, cached_permissions)
+
+            return await self._auth_result_has_permission(
+                auth_result=auth_result,
+                session=session,
+                permission=permission,
+                entity_id=entity_id,
+                resource_context=resource_context,
+                env_context=env_context,
+            )
+
+        return _check
 
     async def _auth_result_has_permission(
         self,
@@ -305,6 +393,18 @@ class AuthDeps:
         if permission_service is None:
             return False
 
+        abac_enabled = bool(
+            getattr(getattr(permission_service, "config", None), "enable_abac", False)
+        )
+        capture: Optional[Dict[str, Any]] = None
+        if (
+            source == "api_key"
+            and entity_id is None
+            and not abac_enabled
+            and auth_result.get("_outlabs_effective_permissions") is None
+        ):
+            capture = {}
+
         try:
             has_permission = await permission_service.check_permission(
                 session,
@@ -314,18 +414,46 @@ class AuthDeps:
                 resource_context=resource_context,
                 env_context=env_context,
                 user=auth_result.get("user"),
+                capture=capture,
             )
         except TypeError as exc:
-            if "unexpected keyword argument 'user'" not in str(exc):
+            exc_msg = str(exc)
+            if "unexpected keyword argument 'capture'" in exc_msg:
+                capture = None
+                try:
+                    has_permission = await permission_service.check_permission(
+                        session,
+                        user_id=user_id_uuid,
+                        permission=permission,
+                        entity_id=entity_id,
+                        resource_context=resource_context,
+                        env_context=env_context,
+                        user=auth_result.get("user"),
+                    )
+                except TypeError as exc2:
+                    if "unexpected keyword argument 'user'" not in str(exc2):
+                        raise
+                    has_permission = await permission_service.check_permission(
+                        session,
+                        user_id=user_id_uuid,
+                        permission=permission,
+                        entity_id=entity_id,
+                        resource_context=resource_context,
+                        env_context=env_context,
+                    )
+            elif "unexpected keyword argument 'user'" in exc_msg:
+                has_permission = await permission_service.check_permission(
+                    session,
+                    user_id=user_id_uuid,
+                    permission=permission,
+                    entity_id=entity_id,
+                    resource_context=resource_context,
+                    env_context=env_context,
+                )
+            else:
                 raise
-            has_permission = await permission_service.check_permission(
-                session,
-                user_id=user_id_uuid,
-                permission=permission,
-                entity_id=entity_id,
-                resource_context=resource_context,
-                env_context=env_context,
-            )
+        if capture is not None and "effective_permissions" in capture:
+            auth_result["_outlabs_effective_permissions"] = capture["effective_permissions"]
         if not has_permission:
             return False
 
@@ -351,6 +479,67 @@ class AuthDeps:
 
         return True
 
+    async def _authenticate_request(
+        self,
+        request: Request,
+        session: Optional[AsyncSession],
+        *,
+        active: bool,
+        verified: bool,
+        optional: bool,
+    ) -> Optional[dict]:
+        # Memoize only the default-parameter authentication on request.state
+        # so two dependencies on the same route (e.g. Depends(require_auth())
+        # AND Depends(require_permission(...))) don't run the backend loop
+        # twice. Non-default params (active=False, verified=True, ...) fall
+        # through uncached — that path is rare and callers may rely on the
+        # per-call filter semantics (e.g. skipping to the next backend when a
+        # user can't authenticate).
+        is_default = active and not verified and not optional
+        if is_default:
+            cached = getattr(request.state, "_outlabs_auth_result", None)
+            if cached is not None:
+                return cached
+
+        for backend in self.backends:
+            try:
+                result = await backend.authenticate(
+                    request,
+                    session=session,
+                    user_service=self.user_service,
+                    api_key_service=self.api_key_service,
+                    **self.services,
+                )
+
+                if result:
+                    if active and result.get("user"):
+                        if not result["user"].can_authenticate():
+                            continue
+
+                    if verified and result.get("user"):
+                        if not result["user"].email_verified:
+                            continue
+
+                    if self.activity_tracker and result.get("user"):
+                        self.activity_tracker.track_activity_detached(
+                            str(result["user"].id)
+                        )
+
+                    if is_default:
+                        request.state._outlabs_auth_result = result
+
+                    return result
+
+            except Exception:
+                continue
+
+        if optional:
+            return None
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+        )
+
     def require_auth(
         self, active: bool = True, verified: bool = False, optional: bool = False
     ) -> Callable:
@@ -363,45 +552,8 @@ class AuthDeps:
             *args: Any,
             **kwargs: Any,
         ) -> Optional[dict]:
-            return await _authenticate_with_session(request, session)
-
-        async def _authenticate_with_session(
-            request: Request, session: Optional[AsyncSession]
-        ) -> Optional[dict]:
-            for backend in self.backends:
-                try:
-                    result = await backend.authenticate(
-                        request,
-                        session=session,
-                        user_service=self.user_service,
-                        api_key_service=self.api_key_service,
-                        **self.services,
-                    )
-
-                    if result:
-                        if active and result.get("user"):
-                            if not result["user"].can_authenticate():
-                                continue
-
-                        if verified and result.get("user"):
-                            if not result["user"].email_verified:
-                                continue
-
-                        if self.activity_tracker and result.get("user"):
-                            self.activity_tracker.track_activity_detached(
-                                str(result["user"].id)
-                            )
-
-                        return result
-
-                except Exception:
-                    continue
-
-            if optional:
-                return None
-
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+            return await self._authenticate_request(
+                request, session, active=active, verified=verified, optional=optional
             )
 
         return cast(Callable[..., Any], dependency)
@@ -470,8 +622,8 @@ class AuthDeps:
                 if snapshot_auth_result is not None:
                     return snapshot_auth_result
 
-            auth_result = await self.require_auth()(
-                request=request, session=session, *args, **kwargs
+            auth_result = await self._authenticate_request(
+                request, session, active=True, verified=False, optional=False
             )
 
             if not auth_result:
@@ -513,17 +665,18 @@ class AuthDeps:
                     "user_agent": request.headers.get("user-agent"),
                 }
 
+            check_permission_callable = self._build_permission_check_cache(
+                auth_result=auth_result,
+                session=session,
+                entity_id=entity_id,
+                abac_enabled=abac_enabled,
+                resource_context=resource_context,
+                env_context=env_context,
+            )
+
             if require_all:
                 for perm in permissions:
-                    has_perm = await self._auth_result_has_permission(
-                        auth_result=auth_result,
-                        session=session,
-                        permission=perm,
-                        entity_id=entity_id,
-                        resource_context=resource_context,
-                        env_context=env_context,
-                    )
-                    if not has_perm:
+                    if not await check_permission_callable(perm):
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
                             detail="Insufficient permissions",
@@ -531,14 +684,7 @@ class AuthDeps:
             else:
                 has_any = False
                 for perm in permissions:
-                    if await self._auth_result_has_permission(
-                        auth_result=auth_result,
-                        session=session,
-                        permission=perm,
-                        entity_id=entity_id,
-                        resource_context=resource_context,
-                        env_context=env_context,
-                    ):
+                    if await check_permission_callable(perm):
                         has_any = True
                         break
 
@@ -621,8 +767,8 @@ class AuthDeps:
                 if snapshot_auth_result is not None:
                     return snapshot_auth_result
 
-            auth_result = await self.require_auth()(
-                request=request, session=session, *args, **kwargs
+            auth_result = await self._authenticate_request(
+                request, session, active=True, verified=False, optional=False
             )
             if not auth_result:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
@@ -779,8 +925,8 @@ class AuthDeps:
                 if snapshot_auth_result is not None:
                     return snapshot_auth_result
 
-            auth_result = await self.require_auth()(
-                request=request, session=session, *args, **kwargs
+            auth_result = await self._authenticate_request(
+                request, session, active=True, verified=False, optional=False
             )
             if not auth_result:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
@@ -853,8 +999,8 @@ class AuthDeps:
             *args: Any,
             **kwargs: Any,
         ) -> dict:
-            auth_result = await self.require_auth()(
-                request=request, session=session, *args, **kwargs
+            auth_result = await self._authenticate_request(
+                request, session, active=True, verified=False, optional=False
             )
 
             if not auth_result or auth_result.get("source") != source:
@@ -891,8 +1037,8 @@ class AuthDeps:
             *args: Any,
             **kwargs: Any,
         ) -> dict:
-            auth_result = await self.require_auth()(
-                request=request, session=session, *args, **kwargs
+            auth_result = await self._authenticate_request(
+                request, session, active=True, verified=False, optional=False
             )
 
             if not auth_result:

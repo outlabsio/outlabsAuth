@@ -204,6 +204,7 @@ class PermissionService(BaseService[Permission]):
         env_context: Optional[Dict[str, Any]] = None,
         time_attrs: Optional[Dict[str, Any]] = None,
         user: Optional[User] = None,
+        capture: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Check if user has a specific permission.
@@ -308,6 +309,8 @@ class PermissionService(BaseService[Permission]):
                         user=resolved_user,
                     )
                 )
+                if capture is not None and entity_id is None:
+                    capture["effective_permissions"] = user_permissions
             else:
                 # Entity context: do NOT pre-grant via entity-membership role
                 # aggregation, otherwise entity-local permissions can bypass

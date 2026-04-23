@@ -9,7 +9,7 @@ Uses SQLAlchemy for PostgreSQL backend.
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Tuple, cast
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -163,13 +163,8 @@ class MembershipService(BaseService[EntityMembership]):
         if not user:
             raise UserNotFoundError(message="User not found", details={"user_id": str(user_id)})
 
-        # Validate explicitly requested roles exist
-        roles = []
-        for role_id in role_ids:
-            role = await session.get(Role, role_id)
-            if not role:
-                raise RoleNotFoundError(message="Role not found", details={"role_id": str(role_id)})
-            roles.append(role)
+        # Validate explicitly requested roles exist (single IN-query batch)
+        roles = await self._fetch_roles_by_ids(session, role_ids)
 
         # Get the root entity for this entity using closure table
         root_entity_id = await self._get_root_entity_id(session, entity_id)
@@ -200,7 +195,10 @@ class MembershipService(BaseService[EntityMembership]):
                 if auto_role.id not in explicit_role_ids:
                     roles.append(auto_role)
 
-        # Validate each role is available for this entity
+        # Validate each role is available for this entity. Pre-compute the
+        # ancestor set once so the HIERARCHY-scope branch doesn't re-issue the
+        # same closure-table query per role.
+        entity_ancestor_ids = await self._get_entity_ancestor_ids(session, entity_id)
         for role in roles:
             if not await self._is_role_available_for_entity(
                 session,
@@ -208,6 +206,7 @@ class MembershipService(BaseService[EntityMembership]):
                 entity_id,
                 root_entity_id,
                 entity_type=entity.entity_type,
+                ancestor_ids=entity_ancestor_ids,
             ):
                 raise InvalidInputError(
                     message=f"Role '{role.name}' is not available for this entity",
@@ -490,12 +489,7 @@ class MembershipService(BaseService[EntityMembership]):
             )
 
         if update_roles:
-            roles = []
-            for role_id in role_ids or []:
-                role = await session.get(Role, role_id)
-                if not role:
-                    raise RoleNotFoundError(message="Role not found", details={"role_id": str(role_id)})
-                roles.append(role)
+            roles = await self._fetch_roles_by_ids(session, role_ids or [])
 
             entity = await session.get(Entity, entity_id)
             if not entity:
@@ -505,6 +499,7 @@ class MembershipService(BaseService[EntityMembership]):
                 )
 
             root_entity_id = await self._get_root_entity_id(session, entity_id)
+            entity_ancestor_ids = await self._get_entity_ancestor_ids(session, entity_id)
             for role in roles:
                 if not await self._is_role_available_for_entity(
                     session,
@@ -512,6 +507,7 @@ class MembershipService(BaseService[EntityMembership]):
                     entity_id,
                     root_entity_id,
                     entity_type=entity.entity_type,
+                    ancestor_ids=entity_ancestor_ids,
                 ):
                     raise InvalidInputError(
                         message=f"Role '{role.name}' is not available for this entity",
@@ -1534,6 +1530,45 @@ class MembershipService(BaseService[EntityMembership]):
         row = result.first()
         return row[0] if row else entity_id
 
+    async def _fetch_roles_by_ids(
+        self,
+        session: AsyncSession,
+        role_ids: Iterable[UUID],
+    ) -> List[Role]:
+        """
+        Batch-fetch roles by id, preserving caller order and raising
+        RoleNotFoundError for any missing id. Replaces the per-id
+        ``session.get(Role, ...)`` loop that previously issued one query
+        per role.
+        """
+        ordered_ids = list(role_ids)
+        if not ordered_ids:
+            return []
+
+        stmt = select(Role).where(cast(Any, Role.id).in_(ordered_ids))
+        result = await session.execute(stmt)
+        by_id = {role.id: role for role in result.scalars().all()}
+
+        for role_id in ordered_ids:
+            if role_id not in by_id:
+                raise RoleNotFoundError(
+                    message="Role not found", details={"role_id": str(role_id)}
+                )
+
+        return [by_id[role_id] for role_id in ordered_ids]
+
+    async def _get_entity_ancestor_ids(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+    ) -> Set[UUID]:
+        """Fetch the closure-table ancestor set for an entity in one query."""
+        stmt = select(cast(Any, EntityClosure.ancestor_id)).where(
+            cast(Any, EntityClosure.descendant_id) == entity_id
+        )
+        result = await session.execute(stmt)
+        return {row[0] for row in result.all()}
+
     async def _is_role_available_for_entity(
         self,
         session: AsyncSession,
@@ -1541,6 +1576,7 @@ class MembershipService(BaseService[EntityMembership]):
         entity_id: UUID,
         root_entity_id: UUID,
         entity_type: Optional[str] = None,
+        ancestor_ids: Optional[Set[UUID]] = None,
     ) -> bool:
         """
         Check if a role can be assigned within an entity's context.
@@ -1581,13 +1617,13 @@ class MembershipService(BaseService[EntityMembership]):
                 return False
 
             if role.scope == RoleScope.HIERARCHY:
-                # Hierarchy scope: available if scope_entity is this entity or an ancestor
-                # Get ancestors of entity_id
-                ancestors_stmt = select(cast(Any, EntityClosure.ancestor_id)).where(
-                    cast(Any, EntityClosure.descendant_id) == entity_id
-                )
-                ancestors_result = await session.execute(ancestors_stmt)
-                ancestor_ids = {row[0] for row in ancestors_result.all()}
+                # Hierarchy scope: available if scope_entity is this entity or an
+                # ancestor. Reuse a pre-fetched ancestor set when the caller is
+                # validating multiple roles for the same entity in a batch.
+                if ancestor_ids is None:
+                    ancestor_ids = await self._get_entity_ancestor_ids(
+                        session, entity_id
+                    )
                 return role.scope_entity_id in ancestor_ids
             else:
                 # Entity-only scope: available only at the exact scope entity

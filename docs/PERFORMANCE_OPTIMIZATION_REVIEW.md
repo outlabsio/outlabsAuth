@@ -53,12 +53,16 @@ Plus **one security fix** not strictly in scope but found during review: **`supe
 - ✅ Cache `AuthDeps` signatures per instance (avoids rebuild on every router factory call)
 - ✅ Pool-recycle tuning: default `3600 → 1800`, production preset `1800 → 750` (under Neon's 900 s idle-kill — §2.4)
 
-**Phase 2+ (pending)** — higher risk or broader scope:
+**Phase 2 (landed)** — medium-risk, covered by existing query-budget and enforcement suites:
+
+- ✅ #5 Avoid double authentication in `require_permission()` — memoize default-params `auth_result` on `request.state`
+- ✅ #4 N+1 fix in `MembershipService.add_member()` — batch `Role` IN-query + single closure lookup per call
+- ✅ #6 Batch permission checks for `require_any` / `require_all` — fast path folds user-auth/no-entity/non-ABAC into one `get_user_permissions` per loop
+- ✅ #3 (§1.3) Reuse effective permissions from `check_permission` to `_cache_api_key_auth_snapshot` via optional `capture` dict
+
+**Phase 3+ (pending)** — higher risk or broader scope:
 
 - ⏳ #1 Per-request memoization (ContextVar-based)
-- ⏳ #4 N+1 fix in `MembershipService.add_member()`
-- ⏳ #5 Avoid double authentication in `require_permission()`
-- ⏳ #6 Batch permission checks for `require_any` / `require_all`
 - ⏳ #7 In-process user-role snapshot cache
 - ⏳ #8 `python-jose` → `pyjwt` migration
 - ⏳ ABAC cache-keying fix (§3.1 inline)

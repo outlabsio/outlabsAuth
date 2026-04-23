@@ -165,10 +165,10 @@ async def test_require_permission_handles_empty_auth_and_abac_request_context(
     permission_service = _PermissionServiceStub(result=True, enable_abac=True)
     deps = AuthDeps(backends=[], permission_service=permission_service)
 
-    async def _no_auth(**kwargs):
+    async def _no_auth(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(deps, "require_auth", lambda *args, **kwargs: _no_auth)
+    monkeypatch.setattr(deps, "_authenticate_request", _no_auth)
 
     dependency = deps.require_permission("user:read")
     with pytest.raises(HTTPException) as exc_info:
@@ -256,19 +256,19 @@ async def test_require_entity_permission_handles_missing_auth_service_session_an
 
     deps = AuthDeps(backends=[], get_session=lambda: None)
 
-    async def _no_auth(**kwargs):
+    async def _no_auth(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(deps, "require_auth", lambda *args, **kwargs: _no_auth)
+    monkeypatch.setattr(deps, "_authenticate_request", _no_auth)
     dependency = deps.require_entity_permission("entity:read")
     with pytest.raises(HTTPException) as no_auth_exc:
         await dependency(request=request, session=object())
     assert no_auth_exc.value.status_code == 401
 
-    async def _auth_result(**kwargs):
+    async def _auth_result(*args, **kwargs):
         return {"user_id": str(user_id), "source": "jwt"}
 
-    monkeypatch.setattr(deps, "require_auth", lambda *args, **kwargs: _auth_result)
+    monkeypatch.setattr(deps, "_authenticate_request", _auth_result)
     with pytest.raises(HTTPException) as no_service_exc:
         await dependency(request=request, session=object())
     assert no_service_exc.value.status_code == 500
@@ -276,7 +276,7 @@ async def test_require_entity_permission_handles_missing_auth_service_session_an
 
     permission_service = _PermissionServiceStub(result=True, enable_abac=True)
     deps = AuthDeps(backends=[], permission_service=permission_service, get_session=lambda: None)
-    monkeypatch.setattr(deps, "require_auth", lambda *args, **kwargs: _auth_result)
+    monkeypatch.setattr(deps, "_authenticate_request", _auth_result)
     dependency = deps.require_entity_permission("entity:read")
 
     with pytest.raises(HTTPException) as no_session_exc:
@@ -390,10 +390,10 @@ async def test_require_tree_permission_validates_inputs_and_permission_service(
         query_params={"entity_id": str(uuid4())},
     )
 
-    async def _auth_result(**kwargs):
+    async def _auth_result(*args, **kwargs):
         return {"user_id": str(uuid4()), "source": "jwt"}
 
-    monkeypatch.setattr(deps, "require_auth", lambda *args, **kwargs: _auth_result)
+    monkeypatch.setattr(deps, "_authenticate_request", _auth_result)
     dependency = deps.require_tree_permission("entity:create", "entity_id", source="query")
 
     with pytest.raises(HTTPException) as no_service_exc:
@@ -406,7 +406,7 @@ async def test_require_tree_permission_validates_inputs_and_permission_service(
         permission_service=_PermissionServiceStub(result=True),
         get_session=lambda: None,
     )
-    monkeypatch.setattr(deps, "require_auth", lambda *args, **kwargs: _auth_result)
+    monkeypatch.setattr(deps, "_authenticate_request", _auth_result)
     dependency = deps.require_tree_permission("entity:create", "entity_id", source="query")
 
     with pytest.raises(HTTPException) as no_session_exc:
@@ -430,7 +430,7 @@ async def test_require_tree_permission_validates_inputs_and_permission_service(
         permission_service=denied_service,
         get_session=lambda: None,
     )
-    monkeypatch.setattr(deps, "require_auth", lambda *args, **kwargs: _auth_result)
+    monkeypatch.setattr(deps, "_authenticate_request", _auth_result)
     denied_dependency = deps.require_tree_permission("entity:create", "entity_id", source="query")
 
     with pytest.raises(HTTPException) as denied_exc:
@@ -438,10 +438,10 @@ async def test_require_tree_permission_validates_inputs_and_permission_service(
     assert denied_exc.value.status_code == 403
     assert denied_exc.value.detail == "Insufficient permissions"
 
-    async def _no_auth(**kwargs):
+    async def _no_auth(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(deps, "require_auth", lambda *args, **kwargs: _no_auth)
+    monkeypatch.setattr(deps, "_authenticate_request", _no_auth)
     no_auth_dependency = deps.require_tree_permission("entity:create", "entity_id", source="path")
     no_auth_request = _make_request(
         "GET",
@@ -458,7 +458,7 @@ async def test_require_tree_permission_validates_inputs_and_permission_service(
         permission_service=permission_service,
         get_session=lambda: None,
     )
-    monkeypatch.setattr(deps, "require_auth", lambda *args, **kwargs: _auth_result)
+    monkeypatch.setattr(deps, "_authenticate_request", _auth_result)
     path_dependency = deps.require_tree_permission("entity:create", "entity_id", source="path")
     path_request = _make_request(
         "GET",
@@ -482,10 +482,10 @@ async def test_entity_snapshot_preflight_preserves_auth_first_failures(
         get_session=lambda: None,
     )
 
-    async def _no_auth(**kwargs):
+    async def _no_auth(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(deps, "require_auth", lambda *args, **kwargs: _no_auth)
+    monkeypatch.setattr(deps, "_authenticate_request", _no_auth)
 
     entity_dependency = deps.require_entity_permission("entity:read")
     invalid_entity_request = _make_request(
@@ -533,10 +533,10 @@ async def test_require_source_and_superuser_cover_success_and_no_auth(
     assert (await source_dependency(request=request, session=object()))["source"] == "jwt"
     assert (await superuser_dependency(request=request, session=object()))["user"] is superuser
 
-    async def _no_auth(**kwargs):
+    async def _no_auth(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(deps, "require_auth", lambda *args, **kwargs: _no_auth)
+    monkeypatch.setattr(deps, "_authenticate_request", _no_auth)
     with pytest.raises(HTTPException) as exc_info:
         await deps.require_superuser()(request=request, session=object())
     assert exc_info.value.status_code == 401
