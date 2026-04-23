@@ -50,7 +50,7 @@ async def test_enterprise_permission_checks_stay_within_query_budgets(
                 user_id=seeded_permission_context.benchmark_user_id,
                 permission=seeded_permission_context.permission_global_name,
             ),
-            8,
+            7,
         ),
         (
             "entity_direct",

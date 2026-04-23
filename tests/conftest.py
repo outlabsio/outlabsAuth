@@ -9,7 +9,7 @@ Updated for PostgreSQL/SQLAlchemy.
 
 import asyncio
 import os
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 from uuid import uuid4
 
 import pytest
@@ -34,6 +34,11 @@ TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
     "postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test",
 )
+
+# Test Redis URL - uses a dedicated DB index to isolate from other tooling.
+# Tests that opt into the `redis_client` / `auth_with_cache` fixtures will
+# skip automatically if the URL is unreachable.
+TEST_REDIS_URL = os.getenv("TEST_REDIS_URL", "redis://localhost:6379/15")
 
 
 def pytest_configure(config):
@@ -181,6 +186,132 @@ async def auth(test_secret_key: str) -> AsyncGenerator[SimpleRBAC, None]:
     # Cleanup: drop all tables
     async with auth_instance.engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.drop_all)
+
+    await auth_instance.shutdown()
+
+
+# ============================================================================
+# Redis Fixtures
+# ============================================================================
+
+
+@pytest_asyncio.fixture
+async def redis_client() -> AsyncGenerator["object", None]:
+    """
+    Connected RedisClient pointing at TEST_REDIS_URL (DB 15 by default).
+
+    Skips the test if Redis is not reachable, so the suite still runs on
+    boxes without Redis. The test DB is flushed before and after the test
+    to guarantee isolation — do not point TEST_REDIS_URL at a shared DB.
+    """
+    try:
+        import redis.asyncio as _redis  # type: ignore
+    except ImportError:
+        pytest.skip("redis package not installed")
+
+    from outlabs_auth.core.config import AuthConfig
+    from outlabs_auth.services.redis_client import RedisClient
+
+    probe = _redis.Redis.from_url(
+        TEST_REDIS_URL,
+        decode_responses=True,
+        socket_connect_timeout=1,
+        socket_timeout=1,
+    )
+    try:
+        await probe.ping()
+        await probe.flushdb()
+    except Exception as exc:  # noqa: BLE001 — surface any connection failure as a skip
+        await probe.close()
+        pytest.skip(f"Redis not reachable at {TEST_REDIS_URL}: {exc}")
+    finally:
+        await probe.close()
+
+    config = AuthConfig(
+        secret_key="test-secret-key-do-not-use-in-production-12345678",
+        redis_url=TEST_REDIS_URL,
+        redis_enabled=True,
+    )
+    client = RedisClient(config)
+    connected = await client.connect()
+    if not connected:
+        pytest.skip("RedisClient could not connect")
+
+    yield client
+
+    try:
+        # Flush before disconnect so keys from this test do not leak
+        if client._client is not None:  # type: ignore[attr-defined]
+            await client._client.flushdb()  # type: ignore[attr-defined]
+    finally:
+        await client.disconnect()
+
+
+@pytest_asyncio.fixture
+async def auth_with_cache(test_secret_key: str) -> AsyncGenerator[SimpleRBAC, None]:
+    """
+    SimpleRBAC wired with real Redis + permission caching enabled.
+
+    Uses the same per-test schema isolation as `auth`, but also exercises
+    Redis paths: cache service, pub/sub invalidation, API-key counters.
+    Skips if Redis is not reachable.
+    """
+    try:
+        import redis.asyncio as _redis  # type: ignore
+    except ImportError:
+        pytest.skip("redis package not installed")
+
+    probe = _redis.Redis.from_url(
+        TEST_REDIS_URL,
+        decode_responses=True,
+        socket_connect_timeout=1,
+        socket_timeout=1,
+    )
+    try:
+        await probe.ping()
+        await probe.flushdb()
+    except Exception as exc:  # noqa: BLE001
+        await probe.close()
+        pytest.skip(f"Redis not reachable at {TEST_REDIS_URL}: {exc}")
+    finally:
+        await probe.close()
+
+    from outlabs_auth.observability import ObservabilityConfig
+
+    obs_config = ObservabilityConfig(
+        enabled=False,
+        log_format="text",
+        log_level="ERROR",
+    )
+
+    auth_instance = SimpleRBAC(
+        database_url=TEST_DATABASE_URL,
+        secret_key=test_secret_key,
+        access_token_expire_minutes=15,
+        refresh_token_expire_days=30,
+        enable_token_cleanup=False,
+        redis_url=TEST_REDIS_URL,
+        redis_enabled=True,
+        enable_caching=True,
+        observability_config=obs_config,
+    )
+
+    await auth_instance.initialize()
+
+    async with auth_instance.engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+
+    yield auth_instance
+
+    async with auth_instance.engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.drop_all)
+
+    # Clean Redis keys written by the test before shutdown
+    if auth_instance.redis_client and auth_instance.redis_client._client is not None:  # type: ignore[attr-defined]
+        try:
+            await auth_instance.redis_client._client.flushdb()  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            pass
 
     await auth_instance.shutdown()
 

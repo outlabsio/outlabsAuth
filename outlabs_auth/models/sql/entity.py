@@ -44,9 +44,10 @@ class Entity(BaseModel, table=True):
 
     __tablename__ = "entities"
     __table_args__ = (
+        # The unique constraint on slug already creates a btree index; the
+        # separate ix_entities_slug is redundant and dropped.
         UniqueConstraint("slug", name="uq_entities_slug"),
         Index("ix_entities_name", "name"),
-        Index("ix_entities_slug", "slug"),
         Index("ix_entities_class_type", "entity_class", "entity_type"),
         Index("ix_entities_parent_id", "parent_id"),
         Index("ix_entities_status", "status"),

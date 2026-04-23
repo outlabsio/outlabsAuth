@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import statistics
 import time
 import uuid
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import event
 
-from outlabs_auth import EnterpriseRBAC
+from outlabs_auth import EnterpriseRBAC, SimpleRBAC
 from outlabs_auth.models.sql.enums import APIKeyKind, EntityClass, IntegrationPrincipalScopeKind
 from outlabs_auth.utils.jwt import create_access_token
 
@@ -49,6 +51,118 @@ def attach_query_counter(engine) -> tuple[QueryCounter, Callable[[], None]]:
         event.remove(sync_engine, "after_cursor_execute", after_cursor_execute)
 
     return counter, cleanup
+
+
+@dataclass
+class LatencyStats:
+    """Summary statistics for a benchmarked operation."""
+
+    iterations: int
+    db_ms_samples: list[float] = field(default_factory=list)
+    wall_ms_samples: list[float] = field(default_factory=list)
+    query_count_samples: list[int] = field(default_factory=list)
+
+    @staticmethod
+    def _percentile(values: list[float], p: float) -> float:
+        if not values:
+            return 0.0
+        ordered = sorted(values)
+        if len(ordered) == 1:
+            return ordered[0]
+        # nearest-rank percentile, 0 <= p <= 100
+        k = max(1, min(len(ordered), int(round(p / 100.0 * len(ordered)))))
+        return ordered[k - 1]
+
+    @property
+    def db_ms_p50(self) -> float:
+        return self._percentile(self.db_ms_samples, 50)
+
+    @property
+    def db_ms_p95(self) -> float:
+        return self._percentile(self.db_ms_samples, 95)
+
+    @property
+    def db_ms_p99(self) -> float:
+        return self._percentile(self.db_ms_samples, 99)
+
+    @property
+    def wall_ms_p50(self) -> float:
+        return self._percentile(self.wall_ms_samples, 50)
+
+    @property
+    def wall_ms_p95(self) -> float:
+        return self._percentile(self.wall_ms_samples, 95)
+
+    @property
+    def wall_ms_p99(self) -> float:
+        return self._percentile(self.wall_ms_samples, 99)
+
+    @property
+    def db_ms_mean(self) -> float:
+        return statistics.fmean(self.db_ms_samples) if self.db_ms_samples else 0.0
+
+    @property
+    def wall_ms_mean(self) -> float:
+        return statistics.fmean(self.wall_ms_samples) if self.wall_ms_samples else 0.0
+
+    @property
+    def query_count_max(self) -> int:
+        return max(self.query_count_samples) if self.query_count_samples else 0
+
+    @property
+    def query_count_min(self) -> int:
+        return min(self.query_count_samples) if self.query_count_samples else 0
+
+    def summary(self) -> str:
+        return (
+            f"iterations={self.iterations} "
+            f"queries[min/max]={self.query_count_min}/{self.query_count_max} "
+            f"db_ms[p50/p95/p99]={self.db_ms_p50:.2f}/{self.db_ms_p95:.2f}/{self.db_ms_p99:.2f} "
+            f"wall_ms[p50/p95/p99]={self.wall_ms_p50:.2f}/{self.wall_ms_p95:.2f}/{self.wall_ms_p99:.2f}"
+        )
+
+
+async def benchmark_operation(
+    counter: QueryCounter,
+    operation: Callable[[], Awaitable[Any]],
+    *,
+    iterations: int = 50,
+    warmup: int = 5,
+) -> LatencyStats:
+    """
+    Run an async operation N times with the counter attached and return stats.
+
+    - Warmup iterations are executed first but excluded from samples (lets
+      connection pools / prepared statements / caches reach steady state).
+    - Each sampled iteration is timed end-to-end (wall clock) alongside the
+      DB time and query count captured by the counter.
+
+    The caller is responsible for ensuring `operation` is idempotent and does
+    not accumulate state (e.g., rollback writes, or read-only benchmarks).
+    """
+    for _ in range(max(0, warmup)):
+        counter.reset()
+        counter.enabled = True
+        try:
+            await operation()
+        finally:
+            counter.enabled = False
+
+    stats = LatencyStats(iterations=iterations)
+    for _ in range(iterations):
+        counter.reset()
+        counter.enabled = True
+        start = time.perf_counter()
+        try:
+            await operation()
+        finally:
+            counter.enabled = False
+            wall_ms = (time.perf_counter() - start) * 1000
+        stats.db_ms_samples.append(counter.db_ms)
+        stats.wall_ms_samples.append(wall_ms)
+        stats.query_count_samples.append(counter.count)
+
+    return stats
 
 
 @dataclass(frozen=True, slots=True)
@@ -844,4 +958,132 @@ async def seed_api_key_mutation_query_context(
         permission_removed_scope_check_name=permission_removed_scope_tree_name.removesuffix("_tree"),
         membership_scope_check_name=membership_scope_tree_name.removesuffix("_tree"),
         direct_role_scope_name=direct_role_scope_name,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SimpleQueryBudgetContext:
+    """
+    Seeded SimpleRBAC context for query-count benchmarks.
+
+    Mirrors EnterpriseQueryBudgetContext but without entity hierarchy —
+    exercises the flat user -> role -> permission path that SimpleRBAC uses.
+    """
+
+    benchmark_user_id: UUID
+    admin_user_id: UUID
+    role_count: int
+    permission_granted_name: str
+    permission_missing_name: str
+    benchmark_user_token: str
+    admin_token: str
+
+    @property
+    def admin_headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.admin_token}"}
+
+    @property
+    def benchmark_headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.benchmark_user_token}"}
+
+
+async def seed_simple_query_budget_context(
+    auth_instance: SimpleRBAC,
+    *,
+    role_count: int = 3,
+    extra_permissions_per_role: int = 4,
+) -> SimpleQueryBudgetContext:
+    """
+    Seed a realistic SimpleRBAC dataset for query-count benchmarking.
+
+    Creates:
+    - One admin (superuser) and one benchmark user.
+    - `role_count` roles, each holding `1 + extra_permissions_per_role` permissions.
+    - The benchmark user is assigned every role so `get_user_permissions` has
+      to fold together several memberships and permission sets.
+    - A `permission_missing_name` the user is not granted, for deny-path checks.
+    """
+    unique = uuid.uuid4().hex[:8]
+    permission_granted_name = f"report{unique}:view"
+    permission_missing_name = f"admin{unique}:destroy"
+
+    async with auth_instance.get_session() as session:
+        admin = await auth_instance.user_service.create_user(
+            session=session,
+            email=f"simple-bench-admin-{unique}@example.com",
+            password="TestPass123!",
+            first_name="Simple",
+            last_name="Admin",
+            is_superuser=True,
+        )
+        benchmark_user = await auth_instance.user_service.create_user(
+            session=session,
+            email=f"simple-bench-user-{unique}@example.com",
+            password="TestPass123!",
+            first_name="Simple",
+            last_name="Bench",
+        )
+
+        # Permission that the user WILL have (via role 0)
+        await auth_instance.permission_service.create_permission(
+            session=session,
+            name=permission_granted_name,
+            display_name=permission_granted_name,
+        )
+        # Permission that the user WILL NOT have (deny-path)
+        await auth_instance.permission_service.create_permission(
+            session=session,
+            name=permission_missing_name,
+            display_name=permission_missing_name,
+        )
+
+        role_ids: list[UUID] = []
+        for role_index in range(role_count):
+            role_permission_names: list[str] = []
+            for perm_index in range(extra_permissions_per_role):
+                perm_name = f"mod{role_index}{unique}:act{perm_index}"
+                await auth_instance.permission_service.create_permission(
+                    session=session,
+                    name=perm_name,
+                    display_name=perm_name,
+                )
+                role_permission_names.append(perm_name)
+            if role_index == 0:
+                role_permission_names.append(permission_granted_name)
+
+            role = await auth_instance.role_service.create_role(
+                session=session,
+                name=f"simple-bench-role-{role_index}-{unique}",
+                display_name=f"Simple Bench Role {role_index}",
+                permission_names=role_permission_names,
+                is_global=True,
+            )
+            await auth_instance.role_service.assign_role_to_user(
+                session=session,
+                user_id=benchmark_user.id,
+                role_id=role.id,
+            )
+            role_ids.append(role.id)
+
+        await session.commit()
+
+    benchmark_token = create_access_token(
+        data={"sub": str(benchmark_user.id)},
+        secret_key=auth_instance.config.secret_key,
+        algorithm=auth_instance.config.algorithm,
+    )
+    admin_token = create_access_token(
+        data={"sub": str(admin.id)},
+        secret_key=auth_instance.config.secret_key,
+        algorithm=auth_instance.config.algorithm,
+    )
+
+    return SimpleQueryBudgetContext(
+        benchmark_user_id=benchmark_user.id,
+        admin_user_id=admin.id,
+        role_count=len(role_ids),
+        permission_granted_name=permission_granted_name,
+        permission_missing_name=permission_missing_name,
+        benchmark_user_token=benchmark_token,
+        admin_token=admin_token,
     )

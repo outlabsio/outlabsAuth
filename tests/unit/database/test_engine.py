@@ -69,7 +69,7 @@ def test_database_presets_apply_expected_pool_defaults():
     assert production.pool_size == 10
     assert production.max_overflow == 20
     assert production.pool_timeout == 30
-    assert production.pool_recycle == 1800
+    assert production.pool_recycle == 750
 
     assert serverless.pool_size == 0
     assert serverless.max_overflow == 0

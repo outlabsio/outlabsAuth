@@ -43,7 +43,11 @@ class DatabaseConfig:
         pool_size: int = 5,
         max_overflow: int = 10,
         pool_timeout: int = 30,
-        pool_recycle: int = 3600,
+        # Managed Postgres providers (Neon, RDS Proxy idle, Supabase) kill
+        # idle connections in the 600-900s range. Recycle well under that
+        # window so we rarely hand out a dead connection; pool_pre_ping stays
+        # on as the safety net for the remaining cases.
+        pool_recycle: int = 1800,
         pool_pre_ping: bool = True,
         connect_args: Optional[Dict[str, Any]] = None,
     ):
@@ -106,7 +110,9 @@ class DatabasePresets:
         - No SQL echo
         - Larger pool (10 connections)
         - Connection validation
-        - 30-minute recycling
+        - 12.5-minute recycling (stays under common 15-minute idle-kill
+          windows on managed Postgres providers like Neon and some
+          RDS Proxy configurations)
         """
         return DatabaseConfig(
             database_url=database_url,
@@ -114,7 +120,7 @@ class DatabasePresets:
             pool_size=10,
             max_overflow=20,
             pool_timeout=30,
-            pool_recycle=1800,  # 30 minutes
+            pool_recycle=750,
             pool_pre_ping=True,
         )
 

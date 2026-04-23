@@ -50,8 +50,9 @@ class User(BaseModel, table=True):
 
     __tablename__ = "users"
     __table_args__ = (
+        # The unique constraint on email already creates a btree index; the
+        # separate ix_users_email is redundant and dropped.
         UniqueConstraint("email", name="uq_users_email"),
-        Index("ix_users_email", "email"),
         Index("ix_users_status", "status"),
         Index("ix_users_root_entity_id", "root_entity_id"),
     )

@@ -101,8 +101,10 @@ class APIKey(BaseModel, table=True):
         Index("ix_api_keys_owner_id", "owner_id"),
         Index("ix_api_keys_integration_principal_id", "integration_principal_id"),
         Index("ix_api_keys_key_kind", "key_kind"),
-        Index("ix_api_keys_status", "status"),
-        Index("ix_api_keys_expires_at", "expires_at"),
+        # Compound index covers the hot-path authentication filter
+        # (status = 'active' AND (expires_at IS NULL OR expires_at > now())).
+        # Supersedes the separate single-column indexes on status and expires_at.
+        Index("ix_api_keys_status_expires_at", "status", "expires_at"),
         CheckConstraint(
             "(owner_id IS NOT NULL AND integration_principal_id IS NULL) OR "
             "(owner_id IS NULL AND integration_principal_id IS NOT NULL)",

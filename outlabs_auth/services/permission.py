@@ -197,7 +197,7 @@ class PermissionService(BaseService[Permission]):
     async def check_permission(
         self,
         session: AsyncSession,
-        user_id: UUID,
+        user_id: Optional[UUID],
         permission: str,
         entity_id: Optional[UUID] = None,
         resource_context: Optional[Dict[str, Any]] = None,
@@ -210,7 +210,7 @@ class PermissionService(BaseService[Permission]):
 
         Args:
             session: Database session
-            user_id: User UUID
+            user_id: User UUID, or None for anonymous (always returns False)
             permission: Permission name (e.g., "user:create")
             entity_id: Optional entity context for EnterpriseRBAC
 
@@ -220,6 +220,10 @@ class PermissionService(BaseService[Permission]):
         Raises:
             UserNotFoundError: If user doesn't exist
         """
+        # Anonymous / null user never has permissions — skip the DB hit.
+        if user_id is None:
+            return False
+
         start_time = datetime.now(timezone.utc)
 
         resolved_user = user
@@ -301,6 +305,7 @@ class PermissionService(BaseService[Permission]):
                         session,
                         user_id,
                         include_entity_local=False,
+                        user=resolved_user,
                     )
                 )
             else:
@@ -783,6 +788,7 @@ class PermissionService(BaseService[Permission]):
         user_id: UUID,
         include_entity_local: bool = True,
         entity_type: Optional[str] = None,
+        user: Optional[User] = None,
     ) -> List[str]:
         """
         Get all permissions for a user.
@@ -797,6 +803,8 @@ class PermissionService(BaseService[Permission]):
             include_entity_local: If False, exclude permissions from entity-local roles
                 (roles where scope_entity_id is set). Defaults to True for backwards
                 compatibility. Set to False when checking permissions without entity context.
+            user: Optional already-fetched User (saves one SELECT when callers
+                have the row in hand, e.g. `check_permission` after JWT auth).
 
         Returns:
             List of permission names
@@ -804,19 +812,18 @@ class PermissionService(BaseService[Permission]):
         Raises:
             UserNotFoundError: If user doesn't exist
         """
-        # Get user
-        user_stmt = select(User).where(cast(Any, User.id) == user_id)
-        user_result = await session.execute(user_stmt)
-        user = cast(Optional[User], user_result.scalar_one_or_none())
+        resolved_user = user
+        if resolved_user is None:
+            resolved_user = await session.get(User, user_id)
 
-        if not user:
+        if not resolved_user:
             raise UserNotFoundError(
                 message="User not found",
                 details={"user_id": str(user_id)},
             )
 
         # Superusers have all permissions
-        if user.is_superuser:
+        if resolved_user.is_superuser:
             return ["*:*"]
 
         all_permissions: Set[str] = set()

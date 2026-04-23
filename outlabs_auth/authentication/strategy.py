@@ -5,6 +5,7 @@ Transport/Strategy separation pattern from FastAPI-Users (DD-038).
 """
 
 import logging
+import secrets
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional, Protocol
 
@@ -443,25 +444,27 @@ class SuperuserStrategy:
         Returns:
             Superuser auth data if valid, None otherwise
         """
-        # Simple token comparison
-        if credentials == self.superuser_token:
-            # Optionally fetch first superuser account from DB
-            superuser = None
-            if user_service:
-                try:
-                    # Get first superuser from database
-                    superuser = await user_service.get_first_superuser()
-                except Exception:
-                    pass
+        # Constant-time comparison — `==` short-circuits on the first
+        # mismatched byte and leaks the token byte-by-byte to a remote attacker.
+        if not self.superuser_token or not credentials:
+            return None
+        if not secrets.compare_digest(credentials, self.superuser_token):
+            return None
 
-            return {
-                "user": superuser,
-                "user_id": str(superuser.id) if superuser else None,
-                "source": "superuser",
-                "metadata": {"superuser": True},
-            }
+        # Optionally fetch first superuser account from DB
+        superuser = None
+        if user_service:
+            try:
+                superuser = await user_service.get_first_superuser()
+            except Exception:
+                pass
 
-        return None
+        return {
+            "user": superuser,
+            "user_id": str(superuser.id) if superuser else None,
+            "source": "superuser",
+            "metadata": {"superuser": True},
+        }
 
 
 class AnonymousStrategy:

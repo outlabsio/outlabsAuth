@@ -43,6 +43,10 @@ class AuthDeps:
         self.activity_tracker = activity_tracker
         self.get_session = get_session
         self.services = services
+        # Dependency signature is deterministic for the instance lifetime —
+        # backends and get_session never change. Build it once and reuse across
+        # every factory call to avoid rebuilding Parameter lists per route.
+        self._dependency_signature: Optional[Signature] = None
 
     def _permission_set_allows(
         self,
@@ -910,6 +914,9 @@ class AuthDeps:
         return cast(Callable[..., Any], dependency)
 
     def _get_dependency_signature(self) -> Signature:
+        if self._dependency_signature is not None:
+            return self._dependency_signature
+
         parameters = [
             Parameter(
                 name="request", kind=Parameter.POSITIONAL_OR_KEYWORD, annotation=Request
@@ -936,7 +943,8 @@ class AuthDeps:
                 )
             )
 
-        return Signature(parameters)
+        self._dependency_signature = Signature(parameters)
+        return self._dependency_signature
 
 
 def create_auth_deps(backends: Sequence[AuthBackend], **services: Any) -> AuthDeps:
