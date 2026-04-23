@@ -9,7 +9,7 @@ OpenAPI/Swagger.
 import asyncio
 import inspect
 from inspect import Parameter, Signature
-from typing import Any, Callable, Optional, Sequence, cast
+from typing import Any, Callable, Dict, Optional, Sequence, cast
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
@@ -18,6 +18,36 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.authentication.backend import AuthBackend
 from outlabs_auth.core.exceptions import InvalidInputError
+
+
+class _EnvContextSupplier:
+    """
+    Lazy, memoizing builder for the ABAC ``env_context`` dict.
+
+    Materializing the env dict (method / path / client host / user-agent) costs
+    a handful of attribute reads, which adds up when ABAC is globally enabled
+    but the specific permission being checked has no conditions (cache hit or
+    ABAC branch never reached). This supplier defers that construction until
+    something actually reads it, and memoizes the result so multiple permission
+    checks on the same request share a single dict.
+    """
+
+    __slots__ = ("_request", "_cached")
+
+    def __init__(self, request: Request) -> None:
+        self._request = request
+        self._cached: Optional[Dict[str, Any]] = None
+
+    def __call__(self) -> Dict[str, Any]:
+        if self._cached is None:
+            request = self._request
+            self._cached = {
+                "method": request.method,
+                "path": request.url.path,
+                "client_host": request.client.host if request.client else None,
+                "user_agent": request.headers.get("user-agent"),
+            }
+        return self._cached
 
 
 class AuthDeps:
@@ -668,12 +698,7 @@ class AuthDeps:
                 else:
                     resource_context = request_resource_context
 
-                env_context = {
-                    "method": request.method,
-                    "path": request.url.path,
-                    "client_host": request.client.host if request.client else None,
-                    "user_agent": request.headers.get("user-agent"),
-                }
+                env_context = _EnvContextSupplier(request)
 
             check_permission_callable = self._build_permission_check_cache(
                 auth_result=auth_result,
@@ -804,12 +829,7 @@ class AuthDeps:
                 resource_context = (
                     resource_context if isinstance(resource_context, dict) else None
                 )
-                env_context = {
-                    "method": request.method,
-                    "path": request.url.path,
-                    "client_host": request.client.host if request.client else None,
-                    "user_agent": request.headers.get("user-agent"),
-                }
+                env_context = _EnvContextSupplier(request)
 
             has_perm = await self._auth_result_has_permission(
                 auth_result=auth_result,
@@ -966,12 +986,7 @@ class AuthDeps:
                 resource_context = (
                     resource_context if isinstance(resource_context, dict) else None
                 )
-                env_context = {
-                    "method": request.method,
-                    "path": request.url.path,
-                    "client_host": request.client.host if request.client else None,
-                    "user_agent": request.headers.get("user-agent"),
-                }
+                env_context = _EnvContextSupplier(request)
 
             has_perm = await self._auth_result_has_permission(
                 auth_result=auth_result,

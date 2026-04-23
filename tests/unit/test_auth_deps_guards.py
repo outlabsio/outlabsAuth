@@ -46,6 +46,8 @@ class _PermissionServiceStub:
         resource_context=None,
         env_context=None,
     ):
+        if callable(env_context):
+            env_context = env_context()
         self.calls.append(
             {
                 "user_id": user_id,

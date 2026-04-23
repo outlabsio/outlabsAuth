@@ -258,6 +258,11 @@ class PermissionService(BaseService[Permission]):
                     target_entity_type = target_entity.entity_type
 
         abac_enabled = bool(getattr(self.config, "enable_abac", False))
+        # Resolve a lazy env_context supplier (see AuthDeps._EnvContextSupplier)
+        # only now, after the anonymous and user-not-found early returns. When
+        # ABAC is off the dict is never used — drop it entirely in that case.
+        if callable(env_context):
+            env_context = env_context() if abac_enabled else None
         cache_context_hash = self._permission_cache_context_hash(
             abac_enabled=abac_enabled,
             resource_context=resource_context,
