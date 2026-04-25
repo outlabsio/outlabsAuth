@@ -97,6 +97,22 @@ class AuthConfig(BaseModel):
         default=7,
         description="Number of days before an invite token expires",
     )
+    enable_magic_links: bool = Field(
+        default=False,
+        description="Enable email magic-link authentication",
+    )
+    magic_link_expire_minutes: int = Field(
+        default=15,
+        description="Number of minutes before a magic-link token expires",
+    )
+    magic_link_request_rate_limit_max: int = Field(
+        default=3,
+        description="Maximum magic-link requests per email in the rate-limit window",
+    )
+    magic_link_request_rate_limit_window_seconds: int = Field(
+        default=300,
+        description="Magic-link request rate-limit window in seconds",
+    )
 
     # Redis Configuration (recommended for production counters, rate limits, and caching)
     redis_enabled: bool = Field(default=False, description="Enable Redis-backed auth features")

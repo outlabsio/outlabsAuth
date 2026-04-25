@@ -66,6 +66,10 @@ class OutlabsAuth:
         store_oauth_provider_tokens: bool = False,
         oauth_token_encryption_key: Optional[str] = None,
         enable_notifications: bool = False,
+        enable_magic_links: bool = False,
+        magic_link_expire_minutes: int = 15,
+        magic_link_request_rate_limit_max: int = 3,
+        magic_link_request_rate_limit_window_seconds: int = 300,
         # Password settings
         password_min_length: int = 8,
         require_special_char: bool = True,
@@ -120,6 +124,10 @@ class OutlabsAuth:
             store_oauth_provider_tokens: Persist OAuth provider tokens in database
             oauth_token_encryption_key: Fernet key for OAuth provider token encryption
             enable_notifications: Enable notification system (optional)
+            enable_magic_links: Enable email magic-link authentication
+            magic_link_expire_minutes: Magic-link token TTL in minutes
+            magic_link_request_rate_limit_max: Max requests per email in the rate-limit window
+            magic_link_request_rate_limit_window_seconds: Rate-limit window for magic-link requests
 
             redis_enabled: Enable Redis features (counters, rate limits,
                 optional permission cache, activity tracking). Defaults to True
@@ -189,6 +197,10 @@ class OutlabsAuth:
             trust_resource_context_header=trust_resource_context_header,
             store_oauth_provider_tokens=store_oauth_provider_tokens,
             oauth_token_encryption_key=oauth_token_encryption_key,
+            enable_magic_links=enable_magic_links,
+            magic_link_expire_minutes=magic_link_expire_minutes,
+            magic_link_request_rate_limit_max=magic_link_request_rate_limit_max,
+            magic_link_request_rate_limit_window_seconds=magic_link_request_rate_limit_window_seconds,
             redis_url=redis_url,
             cache_ttl_seconds=cache_ttl_seconds,
             **kwargs,
@@ -925,9 +937,11 @@ class OutlabsAuth:
         owner_id = resolved_owner.owner_id if hasattr(resolved_owner, "owner_id") else resolved_owner.get("owner_id")
         if principal is not None:
             if self.api_key_policy_service is not None:
-                metadata["principal_allowed_scopes"] = await self.api_key_policy_service.resolve_integration_principal_effective_scopes(
-                    session,
-                    principal,
+                metadata["principal_allowed_scopes"] = (
+                    await self.api_key_policy_service.resolve_integration_principal_effective_scopes(
+                        session,
+                        principal,
+                    )
                 )
             else:
                 metadata["principal_allowed_scopes"] = list(principal.allowed_scopes)
@@ -1062,6 +1076,7 @@ class OutlabsAuth:
             "caching": self.config.enable_caching,
             "audit_log": self.config.enable_audit_log,
             "invitations": self.config.enable_invitations,
+            "magic_links": self.config.enable_magic_links,
         }
 
     def __repr__(self) -> str:
@@ -1081,11 +1096,11 @@ class OutlabsAuth:
                 try:
                     await asyncio.sleep(interval_seconds)
                     from outlabs_auth.workers.token_cleanup import (
-                        cleanup_expired_refresh_tokens,
+                        cleanup_all,
                     )
 
                     async with self.get_session() as session:
-                        await cleanup_expired_refresh_tokens(session)
+                        await cleanup_all(session)
                         await session.commit()
                 except Exception as e:
                     print(f"[TokenCleanup] Error: {e}")

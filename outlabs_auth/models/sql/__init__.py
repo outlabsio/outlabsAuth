@@ -21,6 +21,7 @@ from .activity_metric import (
     LoginHistory,
     UserActivity,
 )
+from .auth_challenge import AuthChallenge
 
 # === API Key Models ===
 from .api_key import (
@@ -42,6 +43,7 @@ from .integration_principal import (
     IntegrationPrincipalRole,
 )
 from .enums import (
+    AuthChallengeType,
     APIKeyKind,
     APIKeyStatus,
     ConditionOperator,
@@ -90,6 +92,7 @@ from .user_role_membership import UserRoleMembership
 __all__ = [
     # Enums
     "UserStatus",
+    "AuthChallengeType",
     "MembershipStatus",
     "EntityClass",
     "APIKeyKind",
@@ -105,6 +108,7 @@ __all__ = [
     "PermissionCondition",
     "PermissionDefinitionHistory",
     "RefreshToken",
+    "AuthChallenge",
     "RoleDefinitionHistory",
     "UserAuditEvent",
     # SimpleRBAC
@@ -142,6 +146,7 @@ __all__ = [
 # === Model Groups (for feature-based loading) ===
 CORE_MODELS = [
     User,
+    AuthChallenge,
     Permission,
     PermissionTag,
     PermissionTagLink,

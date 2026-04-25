@@ -10,6 +10,7 @@ Handles user authentication operations with PostgreSQL/SQLAlchemy:
 """
 
 import hashlib
+import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Optional, Tuple, cast
@@ -28,9 +29,10 @@ from outlabs_auth.core.exceptions import (
     TokenInvalidError,
     UserNotFoundError,
 )
+from outlabs_auth.models.sql.auth_challenge import AuthChallenge
+from outlabs_auth.models.sql.enums import AuthChallengeType, UserStatus
 from outlabs_auth.models.sql.token import RefreshToken
 from outlabs_auth.models.sql.user import User
-from outlabs_auth.models.sql.enums import UserStatus
 from outlabs_auth.utils.jwt import create_token_pair, verify_token
 from outlabs_auth.utils.password import (
     generate_password_hash_async,
@@ -168,9 +170,7 @@ class AuthService:
         upgraded_hash: Optional[str] = None
         if user.hashed_password:
             _t = time.perf_counter()
-            is_valid_password, upgraded_hash = await verify_and_upgrade_password_async(
-                password, user.hashed_password
-            )
+            is_valid_password, upgraded_hash = await verify_and_upgrade_password_async(password, user.hashed_password)
             phases["password_verify_ms"] = (time.perf_counter() - _t) * 1000.0
 
         if not is_valid_password:
@@ -184,9 +184,7 @@ class AuthService:
             # Check if account should be locked
             was_locked = False
             if user.failed_login_attempts >= self.config.max_login_attempts:
-                user.locked_until = failure_recorded_at + timedelta(
-                    minutes=self.config.lockout_duration_minutes
-                )
+                user.locked_until = failure_recorded_at + timedelta(minutes=self.config.lockout_duration_minutes)
                 was_locked = True
 
             if self.user_audit_service is not None:
@@ -371,8 +369,7 @@ class AuthService:
         if user.is_locked:
             raise AccountLockedError(
                 message=(
-                    "Account is locked until "
-                    f"{user.locked_until.isoformat() if user.locked_until else 'unknown'}"
+                    "Account is locked until " f"{user.locked_until.isoformat() if user.locked_until else 'unknown'}"
                 ),
                 details={
                     "locked_until": user.locked_until.isoformat() if user.locked_until else None,
@@ -572,9 +569,7 @@ class AuthService:
         # If refresh token storage is enabled, check database
         if self.config.store_refresh_tokens:
             token_hash = self._hash_token(refresh_token)
-            refresh_token_stmt = select(RefreshToken).where(
-                cast(Any, RefreshToken.token_hash) == token_hash
-            )
+            refresh_token_stmt = select(RefreshToken).where(cast(Any, RefreshToken.token_hash) == token_hash)
             result = await session.execute(refresh_token_stmt)
             token_model = result.scalar_one_or_none()
 
@@ -812,6 +807,85 @@ class AuthService:
 
         return plain_token
 
+    async def generate_magic_link_token(
+        self,
+        session: AsyncSession,
+        user: User,
+        *,
+        redirect_url: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> str:
+        """
+        Generate a single-use magic-link token for an active user.
+
+        The returned token is plain text for host-owned email delivery. Only a
+        hash is stored in the database.
+        """
+        plain_token = secrets.token_urlsafe(32)
+        hashed_token = self._hash_token(plain_token)
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(minutes=self.config.magic_link_expire_minutes)
+
+        # Keep only the newest outstanding magic link for a user valid.
+        prior_stmt = select(AuthChallenge).where(
+            cast(Any, AuthChallenge.user_id) == user.id,
+            cast(Any, AuthChallenge.challenge_type) == AuthChallengeType.MAGIC_LINK.value,
+            cast(Any, AuthChallenge.used_at).is_(None),
+            cast(Any, AuthChallenge.expires_at) > now,
+        )
+        prior_result = await session.execute(prior_stmt)
+        for challenge in prior_result.scalars().all():
+            challenge.used_at = now
+
+        challenge = AuthChallenge(
+            user_id=user.id,
+            challenge_type=AuthChallengeType.MAGIC_LINK,
+            token_hash=hashed_token,
+            recipient=user.email,
+            expires_at=expires,
+            redirect_url=redirect_url,
+            requested_ip_address=ip_address,
+            requested_user_agent=user_agent,
+        )
+        session.add(challenge)
+        await session.flush()
+
+        if self.notifications:
+            await self.notifications.emit(
+                "user.magic_link_requested",
+                data={
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "expires_at": expires.isoformat(),
+                },
+                metadata={"ip": ip_address, "user_agent": user_agent},
+            )
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="authentication",
+                event_type="user.magic_link_requested",
+                event_source="auth_service.generate_magic_link_token",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                after={
+                    "magic_link_expires_at": expires,
+                    "recipient": user.email,
+                },
+                metadata={
+                    "delivery_channel": "email",
+                    "redirect_url": redirect_url,
+                },
+                occurred_at=now,
+            )
+
+        return plain_token
+
     async def reset_password(
         self,
         session: AsyncSession,
@@ -922,6 +996,126 @@ class AuthService:
 
         return user
 
+    async def verify_magic_link(
+        self,
+        session: AsyncSession,
+        token: str,
+        *,
+        device_name: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> Tuple[User, TokenPair]:
+        """
+        Verify a magic-link token and create JWT tokens.
+
+        Raises:
+            TokenInvalidError: If the token is unknown or already used
+            TokenExpiredError: If the token has expired
+            AccountInactiveError: If the user cannot authenticate
+        """
+        hashed_token = self._hash_token(token)
+        stmt = (
+            select(AuthChallenge)
+            .where(
+                cast(Any, AuthChallenge.token_hash) == hashed_token,
+                cast(Any, AuthChallenge.challenge_type) == AuthChallengeType.MAGIC_LINK.value,
+            )
+            .with_for_update()
+        )
+        result = await session.execute(stmt)
+        challenge = result.scalar_one_or_none()
+
+        if not challenge:
+            raise TokenInvalidError(
+                message="Invalid or expired magic link",
+                details={"reason": "token_not_found"},
+            )
+
+        if challenge.used_at is not None:
+            raise TokenInvalidError(
+                message="Magic link has already been used",
+                details={"reason": "token_used"},
+            )
+
+        now = datetime.now(timezone.utc)
+        if challenge.expires_at < now:
+            raise TokenExpiredError(
+                message="Magic link has expired",
+                details={"expired_at": challenge.expires_at.isoformat()},
+            )
+
+        user_stmt = select(User).where(cast(Any, User.id) == challenge.user_id)
+        user_result = await session.execute(user_stmt)
+        user = user_result.scalar_one_or_none()
+        if not user:
+            raise TokenInvalidError(
+                message="Invalid or expired magic link",
+                details={"reason": "user_not_found"},
+            )
+
+        previous_email_verified = user.email_verified
+        previous_failed_attempts = user.failed_login_attempts
+        previous_locked_until = user.locked_until
+
+        if user.is_locked:
+            raise AccountLockedError(
+                message=(
+                    "Account is locked until " f"{user.locked_until.isoformat() if user.locked_until else 'unknown'}"
+                ),
+                details={
+                    "locked_until": user.locked_until.isoformat() if user.locked_until else None,
+                    "reason": "Too many failed login attempts",
+                },
+            )
+
+        self._check_user_status(user)
+
+        challenge.used_at = now
+        user.email_verified = True
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        self._append_auth_method(user, "MAGIC_LINK")
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="authentication",
+                event_type="user.magic_link_verified",
+                event_source="auth_service.verify_magic_link",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                before={
+                    "email_verified": previous_email_verified,
+                    "failed_login_attempts": previous_failed_attempts,
+                    "locked_until": previous_locked_until,
+                },
+                after={
+                    "email_verified": user.email_verified,
+                    "failed_login_attempts": user.failed_login_attempts,
+                    "locked_until": user.locked_until,
+                    "magic_link_used_at": challenge.used_at,
+                },
+                metadata={
+                    "redirect_url": challenge.redirect_url,
+                    "requested_ip_address": challenge.requested_ip_address,
+                },
+                occurred_at=now,
+            )
+
+        tokens = await self.create_tokens_for_user(
+            session,
+            user,
+            device_name=device_name or "magic_link",
+            ip_address=ip_address,
+            user_agent=user_agent,
+            auth_method="magic_link",
+        )
+
+        return user, tokens
+
     async def verify_password(self, user: User, password: str) -> bool:
         """
         Verify a password against user's hashed password.
@@ -944,6 +1138,14 @@ class AuthService:
     def _hash_token(self, token: str) -> str:
         """Hash token for storage using SHA256."""
         return hashlib.sha256(token.encode()).hexdigest()
+
+    @staticmethod
+    def _append_auth_method(user: User, method: str) -> None:
+        methods = list(user.auth_methods or [])
+        normalized_method = method.upper()
+        if normalized_method not in methods:
+            methods.append(normalized_method)
+            user.auth_methods = methods
 
     @staticmethod
     def _normalize_token_timestamp(value: Any) -> Optional[datetime]:

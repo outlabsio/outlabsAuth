@@ -17,6 +17,12 @@ class UserStatus(str, Enum):
     DELETED = "deleted"  # Soft-deleted (for GDPR compliance)
 
 
+class AuthChallengeType(str, Enum):
+    """Temporary authentication challenge type."""
+
+    MAGIC_LINK = "magic_link"
+
+
 class MembershipStatus(str, Enum):
     """
     Status of a user's membership (role assignment or entity membership).

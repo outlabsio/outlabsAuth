@@ -81,6 +81,7 @@ from outlabs_auth.models.sql.activity_metric import (
     LoginHistory,
     UserActivity,
 )
+from outlabs_auth.models.sql.auth_challenge import AuthChallenge
 
 # SQL Models - API Keys
 from outlabs_auth.models.sql.api_key import (
@@ -104,6 +105,7 @@ from outlabs_auth.models.sql.user_audit_event import UserAuditEvent
 from outlabs_auth.models.sql.enums import (
     APIKeyKind,
     APIKeyStatus,
+    AuthChallengeType,
     ConditionOperator,
     EntityClass,
     IntegrationPrincipalScopeKind,
@@ -212,8 +214,10 @@ __all__ = [
     "APIKeyStatus",
     "IntegrationPrincipalStatus",
     "IntegrationPrincipalScopeKind",
+    "AuthChallengeType",
     "ConditionOperator",
     # Core Models
+    "AuthChallenge",
     "User",
     "Permission",
     "PermissionTag",

@@ -119,6 +119,16 @@ class UserService(BaseService[User]):
         """Hook called after user invitation. Override to send invite link via preferred channel."""
         await self.send_invitation_email(user, token, request=request)
 
+    async def on_after_magic_link_requested(
+        self,
+        user: User,
+        token: str,
+        request: Optional[Request] = None,
+        redirect_url: Optional[str] = None,
+    ) -> None:
+        """Hook called after a magic-link token is generated. Override to send email."""
+        pass
+
     async def on_failed_login(
         self,
         email: str,
@@ -810,9 +820,7 @@ class UserService(BaseService[User]):
                     cast(Any, User.status) == UserStatus.ACTIVE,
                 )
             )
-            active_superuser_count = int(
-                (await session.execute(superuser_count_stmt)).scalar_one() or 0
-            )
+            active_superuser_count = int((await session.execute(superuser_count_stmt)).scalar_one() or 0)
             if active_superuser_count <= 1:
                 raise InvalidInputError(
                     message="Cannot revoke the final active superuser",

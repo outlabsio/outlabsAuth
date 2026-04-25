@@ -7,6 +7,7 @@ Removes:
 1. Expired refresh tokens (past expires_at)
 2. Old revoked refresh tokens (revoked_at older than retention window)
 3. Expired OAuth state rows (optional)
+4. Expired or consumed auth challenges
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from sqlalchemy import delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.models.sql.oauth_state import OAuthState
+from outlabs_auth.models.sql.auth_challenge import AuthChallenge
 from outlabs_auth.models.sql.token import RefreshToken
 
 logger = logging.getLogger(__name__)
@@ -81,6 +83,35 @@ async def cleanup_expired_oauth_states(
     return {"deleted": deleted}
 
 
+async def cleanup_auth_challenges(
+    session: AsyncSession,
+    *,
+    used_retention_hours: int = 24,
+) -> Dict[str, int]:
+    """
+    Clean up expired or already-consumed auth challenges.
+    """
+    now = datetime.now(timezone.utc)
+    used_cutoff = now - timedelta(hours=used_retention_hours)
+    expires_at_col = cast(Any, AuthChallenge.expires_at)
+    used_at_col = cast(Any, AuthChallenge.used_at)
+
+    expired_stmt = sql_delete(AuthChallenge).where(expires_at_col < now)
+    expired_result = await session.execute(expired_stmt)
+    expired = int(getattr(expired_result, "rowcount", 0) or 0)
+
+    used_stmt = sql_delete(AuthChallenge).where(
+        used_at_col.is_not(None),
+        used_at_col < used_cutoff,
+    )
+    used_result = await session.execute(used_stmt)
+    used = int(getattr(used_result, "rowcount", 0) or 0)
+
+    total = expired + used
+    logger.info("auth_challenge_cleanup_complete", extra={"expired": expired, "used": used, "total": total})
+    return {"expired": expired, "used": used, "total": total}
+
+
 async def cleanup_all(session: AsyncSession) -> Dict[str, Dict[str, int]]:
     """
     Run all cleanup tasks within the provided session.
@@ -88,4 +119,5 @@ async def cleanup_all(session: AsyncSession) -> Dict[str, Dict[str, int]]:
     return {
         "refresh_tokens": await cleanup_expired_refresh_tokens(session),
         "oauth_states": await cleanup_expired_oauth_states(session),
+        "auth_challenges": await cleanup_auth_challenges(session),
     }

@@ -25,6 +25,7 @@ TENANTLESS_TABLES = (
     "permissions",
     "permission_tags",
     "permission_conditions",
+    "auth_challenges",
     "refresh_tokens",
     "api_keys",
     "social_accounts",

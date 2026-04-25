@@ -43,9 +43,7 @@ async def simple_app(simple_auth_instance: SimpleRBAC) -> FastAPI:
     app.include_router(get_roles_router(simple_auth_instance, prefix="/v1/roles"))
     app.include_router(get_permissions_router(simple_auth_instance, prefix="/v1/permissions"))
     app.include_router(get_api_keys_router(simple_auth_instance, prefix="/v1/api-keys"))
-    app.include_router(
-        get_integration_principals_router(simple_auth_instance, prefix="/v1/admin")
-    )
+    app.include_router(get_integration_principals_router(simple_auth_instance, prefix="/v1/admin"))
     return app
 
 
@@ -123,6 +121,8 @@ async def test_simple_auth_config_returns_expected_features_and_permissions(
     assert payload["features"]["user_status"] is True
     assert payload["features"]["activity_tracking"] is True
     assert payload["features"]["invitations"] is True
+    assert payload["features"]["magic_links"] is False
+    assert payload["auth_methods"] == {"password": True, "magic_link": False}
     assert permission_name in payload["available_permissions"]
 
 
@@ -191,9 +191,7 @@ async def test_simple_invite_assigns_selected_role_ids_as_direct_memberships(
     )
     assert permissions_response.status_code == 200, permissions_response.text
     permissions_payload = permissions_response.json()
-    assert any(
-        item["permission"]["name"] == permission_name for item in permissions_payload
-    )
+    assert any(item["permission"]["name"] == permission_name for item in permissions_payload)
 
 
 @pytest.mark.integration
@@ -209,11 +207,14 @@ async def test_simple_permissioned_admin_can_list_global_roles(
     catalog_admin_role_name = f"simple-role-catalog-admin-{uuid.uuid4().hex[:8]}"
 
     async with simple_auth_instance.get_session() as session:
-        if await simple_auth_instance.permission_service.get_permission_by_name(
-            session,
-            "role:read",
-            include_archived=False,
-        ) is None:
+        if (
+            await simple_auth_instance.permission_service.get_permission_by_name(
+                session,
+                "role:read",
+                include_archived=False,
+            )
+            is None
+        ):
             await simple_auth_instance.permission_service.create_permission(
                 session,
                 name="role:read",
@@ -364,9 +365,7 @@ async def test_simple_admin_ui_contract_exposes_shared_routes_and_omits_enterpri
     )
     assert user_permissions_response.status_code == 200
     user_permissions_payload = user_permissions_response.json()
-    assert any(
-        item["permission"]["name"] == permission_name for item in user_permissions_payload
-    )
+    assert any(item["permission"]["name"] == permission_name for item in user_permissions_payload)
 
     membership_history_response = await simple_client.get(
         f"/v1/users/{target_user_id}/membership-history?page=1&limit=6",

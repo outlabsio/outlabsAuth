@@ -116,6 +116,35 @@ async def check_forgot_password_rate_limit(
     )
 
 
+async def check_magic_link_rate_limit(
+    email: str,
+    redis_client: Any = None,
+    *,
+    max_requests: int = 3,
+    window_seconds: int = 300,
+) -> Tuple[bool, int]:
+    """
+    Check if email has exceeded magic-link request rate limits.
+    """
+    rate_limit_key = f"magic_link:{email.lower()}"
+
+    if redis_client is not None and getattr(redis_client, "is_available", False):
+        count = await redis_client.increment_with_ttl(
+            rate_limit_key,
+            amount=1,
+            ttl=window_seconds,
+        )
+        if count is not None and count > max_requests:
+            return True, window_seconds
+        return False, 0
+
+    return await _rate_limiter.is_rate_limited(
+        key=rate_limit_key,
+        max_requests=max_requests,
+        window_seconds=window_seconds,
+    )
+
+
 async def cleanup_rate_limiter():
     """Cleanup old rate limit entries."""
     await _rate_limiter.cleanup()

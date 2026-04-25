@@ -22,6 +22,8 @@ from outlabs_auth.schemas.auth import (
     LoginRequest,
     LoginResponse,
     LogoutRequest,
+    MagicLinkRequest,
+    MagicLinkVerifyRequest,
     RefreshRequest,
     RefreshResponse,
     RegisterRequest,
@@ -105,6 +107,8 @@ __all__ = [
     "RefreshResponse",
     "ForgotPasswordRequest",
     "ResetPasswordRequest",
+    "MagicLinkRequest",
+    "MagicLinkVerifyRequest",
     "LogoutRequest",
     # User
     "UserResponse",

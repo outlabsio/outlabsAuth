@@ -20,6 +20,7 @@ LEGACY_TENANT_ID_TABLES = (
     "permissions",
     "permission_tags",
     "permission_conditions",
+    "auth_challenges",
     "refresh_tokens",
     "api_keys",
     "social_accounts",
@@ -196,14 +197,13 @@ def test_packaged_cli_migrate_seed_and_bootstrap(tmp_path):
 
         assert asyncio.run(_table_count(schema, "users")) == 1
         assert asyncio.run(_table_count(schema, "permissions")) == 1
+        assert asyncio.run(_table_count(schema, "auth_challenges")) == 1
         assert asyncio.run(_table_count(schema, "system_config")) == 1
         assert asyncio.run(_table_count(schema, "role_definition_history")) == 1
         assert asyncio.run(_table_count(schema, "permission_definition_history")) == 1
         assert asyncio.run(_table_count(schema, "user_audit_events")) == 1
         assert "status_snapshot" in asyncio.run(_column_names(schema, "role_definition_history"))
-        assert "status_snapshot" in asyncio.run(
-            _column_names(schema, "permission_definition_history")
-        )
+        assert "status_snapshot" in asyncio.run(_column_names(schema, "permission_definition_history"))
         assert asyncio.run(_table_count(schema, "outlabs_auth_alembic_version")) == 1
         assert asyncio.run(_count_rows(schema, "users")) == 1
         assert asyncio.run(_count_rows(schema, "permissions")) == len(get_system_permission_catalog())

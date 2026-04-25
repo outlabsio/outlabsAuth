@@ -7,12 +7,14 @@ Public exports for all SQLModel/PostgreSQL models.
 # Re-export everything from sql submodule
 from outlabs_auth.models.sql import (
     # Enums
+    AuthChallengeType,
     UserStatus,
     MembershipStatus,
     EntityClass,
     APIKeyStatus,
     ConditionOperator,
     # Core
+    AuthChallenge,
     User,
     Permission,
     PermissionTag,
@@ -57,12 +59,14 @@ from outlabs_auth.models.sql import (
 
 __all__ = [
     # Enums
+    "AuthChallengeType",
     "UserStatus",
     "MembershipStatus",
     "EntityClass",
     "APIKeyStatus",
     "ConditionOperator",
     # Core
+    "AuthChallenge",
     "User",
     "Permission",
     "PermissionTag",

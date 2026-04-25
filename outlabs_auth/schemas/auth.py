@@ -58,6 +58,23 @@ class ResetPasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=8)
 
 
+class MagicLinkRequest(BaseModel):
+    """Request a magic-link login email."""
+
+    email: EmailStr
+    redirect_url: Optional[str] = Field(
+        default=None,
+        max_length=2048,
+        description="Optional host-owned redirect URL to include when building the email link.",
+    )
+
+
+class MagicLinkVerifyRequest(BaseModel):
+    """Verify a magic-link token and exchange it for JWT tokens."""
+
+    token: str
+
+
 class LogoutRequest(BaseModel):
     """
     Logout request schema.
@@ -107,12 +124,14 @@ class AuthConfigResponse(BaseModel):
     Used by admin UIs to conditionally show/hide features.
     """
 
-    preset: str = Field(
-        ..., description="Preset name: 'SimpleRBAC' or 'EnterpriseRBAC'"
-    )
+    preset: str = Field(..., description="Preset name: 'SimpleRBAC' or 'EnterpriseRBAC'")
     features: Dict[str, bool] = Field(
         ...,
         description="Enabled features (entity_hierarchy, context_aware_roles, abac, etc.)",
+    )
+    auth_methods: Dict[str, bool] = Field(
+        default_factory=lambda: {"password": True, "magic_link": False},
+        description="Public human-auth methods currently enabled by this auth router.",
     )
     available_permissions: List[str] = Field(
         ..., description="List of all available permission strings for this preset"
