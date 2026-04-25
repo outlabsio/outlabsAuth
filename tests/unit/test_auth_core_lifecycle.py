@@ -271,6 +271,26 @@ async def test_outlabs_auth_initialize_builds_engine_runs_migrations_and_starts_
 
 
 @pytest.mark.unit
+@pytest.mark.asyncio
+async def test_outlabs_auth_initialize_times_out_with_configuration_error():
+    auth = OutlabsAuth(
+        database_url="postgresql+asyncpg://example:example@localhost:5432/test",
+        secret_key="test-secret",
+        initialize_timeout_seconds=0.01,
+    )
+
+    async def never_finishes() -> None:
+        await asyncio.sleep(3600)
+
+    auth._initialize = never_finishes
+
+    with pytest.raises(ConfigurationError, match=r"initialize\(\) exceeded 0.01 seconds"):
+        await auth.initialize()
+
+    assert auth._initialized is False
+
+
+@pytest.mark.unit
 def test_outlabs_auth_init_backends_and_deps_and_wrappers():
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
@@ -667,6 +687,7 @@ async def test_outlabs_auth_run_migrations_forwards_database_url_and_schema(monk
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
         secret_key="test-secret",
         database_schema="auth_schema",
+        migration_statement_timeout="90s",
     )
     run_migrations = AsyncMock()
 
@@ -677,6 +698,7 @@ async def test_outlabs_auth_run_migrations_forwards_database_url_and_schema(monk
     run_migrations.assert_awaited_once_with(
         "postgresql+asyncpg://example:example@localhost:5432/test",
         schema="auth_schema",
+        statement_timeout="90s",
     )
 
 
@@ -787,7 +809,7 @@ async def test_outlabs_auth_token_cleanup_scheduler_runs_success_and_error_paths
 
     monkeypatch.setattr("outlabs_auth.core.auth.asyncio.create_task", fake_create_task)
     monkeypatch.setattr("outlabs_auth.core.auth.asyncio.sleep", fake_sleep)
-    monkeypatch.setattr("outlabs_auth.workers.token_cleanup.cleanup_expired_refresh_tokens", cleanup)
+    monkeypatch.setattr("outlabs_auth.workers.token_cleanup.cleanup_all", cleanup)
     monkeypatch.setattr("builtins.print", lambda message: printed.append(message))
     auth.get_session = lambda: _SessionContext(fake_session)  # type: ignore[method-assign]
     auth.config.token_cleanup_interval_hours = 1

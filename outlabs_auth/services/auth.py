@@ -10,6 +10,7 @@ Handles user authentication operations with PostgreSQL/SQLAlchemy:
 """
 
 import hashlib
+import hmac
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -886,6 +887,86 @@ class AuthService:
 
         return plain_token
 
+    async def generate_access_code(
+        self,
+        session: AsyncSession,
+        user: User,
+        *,
+        redirect_url: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> str:
+        """
+        Generate a short-lived, single-use access code for an active user.
+
+        The returned code is plain text for host-owned email delivery. The
+        stored verifier is a nonce-prefixed HMAC so database contents alone are
+        not enough to brute-force the six-digit code.
+        """
+        code = self._generate_access_code()
+        token_hash = self._hash_access_code(code, user.email)
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(minutes=self.config.access_code_expire_minutes)
+
+        # Keep only the newest outstanding access code for a user valid.
+        prior_stmt = select(AuthChallenge).where(
+            cast(Any, AuthChallenge.user_id) == user.id,
+            cast(Any, AuthChallenge.challenge_type) == AuthChallengeType.ACCESS_CODE.value,
+            cast(Any, AuthChallenge.used_at).is_(None),
+            cast(Any, AuthChallenge.expires_at) > now,
+        )
+        prior_result = await session.execute(prior_stmt)
+        for challenge in prior_result.scalars().all():
+            challenge.used_at = now
+
+        challenge = AuthChallenge(
+            user_id=user.id,
+            challenge_type=AuthChallengeType.ACCESS_CODE,
+            token_hash=token_hash,
+            recipient=user.email,
+            expires_at=expires,
+            redirect_url=redirect_url,
+            requested_ip_address=ip_address,
+            requested_user_agent=user_agent,
+        )
+        session.add(challenge)
+        await session.flush()
+
+        if self.notifications:
+            await self.notifications.emit(
+                "user.access_code_requested",
+                data={
+                    "user_id": str(user.id),
+                    "email": user.email,
+                    "expires_at": expires.isoformat(),
+                },
+                metadata={"ip": ip_address, "user_agent": user_agent},
+            )
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="authentication",
+                event_type="user.access_code_requested",
+                event_source="auth_service.generate_access_code",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                after={
+                    "access_code_expires_at": expires,
+                    "recipient": user.email,
+                },
+                metadata={
+                    "delivery_channel": "email",
+                    "redirect_url": redirect_url,
+                },
+                occurred_at=now,
+            )
+
+        return code
+
     async def reset_password(
         self,
         session: AsyncSession,
@@ -995,6 +1076,129 @@ class AuthService:
             )
 
         return user
+
+    async def verify_access_code(
+        self,
+        session: AsyncSession,
+        *,
+        email: str,
+        code: str,
+        device_name: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> Tuple[User, TokenPair]:
+        """
+        Verify an email access code and create JWT tokens.
+
+        Raises:
+            TokenInvalidError: If the email/code pair is unknown or already used
+            TokenExpiredError: If the matching code has expired
+            AccountInactiveError: If the user cannot authenticate
+        """
+        normalized_email = validate_email(email)
+        normalized_code = self._normalize_access_code(code)
+
+        user_stmt = select(User).where(cast(Any, User.email) == normalized_email)
+        user_result = await session.execute(user_stmt)
+        user = user_result.scalar_one_or_none()
+        if not user:
+            raise TokenInvalidError(
+                message="Invalid or expired access code",
+                details={"reason": "token_not_found"},
+            )
+
+        challenge_stmt = (
+            select(AuthChallenge)
+            .where(
+                cast(Any, AuthChallenge.user_id) == user.id,
+                cast(Any, AuthChallenge.challenge_type) == AuthChallengeType.ACCESS_CODE.value,
+                cast(Any, AuthChallenge.used_at).is_(None),
+            )
+            .order_by(cast(Any, AuthChallenge.created_at).desc())
+            .with_for_update()
+        )
+        challenge_result = await session.execute(challenge_stmt)
+        matching_challenge = None
+        for challenge in challenge_result.scalars().all():
+            if self._verify_access_code_hash(normalized_code, normalized_email, challenge.token_hash):
+                matching_challenge = challenge
+                break
+
+        if matching_challenge is None:
+            raise TokenInvalidError(
+                message="Invalid or expired access code",
+                details={"reason": "token_not_found"},
+            )
+
+        now = datetime.now(timezone.utc)
+        if matching_challenge.expires_at < now:
+            raise TokenExpiredError(
+                message="Access code has expired",
+                details={"expired_at": matching_challenge.expires_at.isoformat()},
+            )
+
+        previous_email_verified = user.email_verified
+        previous_failed_attempts = user.failed_login_attempts
+        previous_locked_until = user.locked_until
+
+        if user.is_locked:
+            raise AccountLockedError(
+                message=(
+                    "Account is locked until " f"{user.locked_until.isoformat() if user.locked_until else 'unknown'}"
+                ),
+                details={
+                    "locked_until": user.locked_until.isoformat() if user.locked_until else None,
+                    "reason": "Too many failed login attempts",
+                },
+            )
+
+        self._check_user_status(user)
+
+        matching_challenge.used_at = now
+        user.email_verified = True
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        self._append_auth_method(user, "ACCESS_CODE")
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="authentication",
+                event_type="user.access_code_verified",
+                event_source="auth_service.verify_access_code",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                before={
+                    "email_verified": previous_email_verified,
+                    "failed_login_attempts": previous_failed_attempts,
+                    "locked_until": previous_locked_until,
+                },
+                after={
+                    "email_verified": user.email_verified,
+                    "failed_login_attempts": user.failed_login_attempts,
+                    "locked_until": user.locked_until,
+                    "access_code_used_at": matching_challenge.used_at,
+                },
+                metadata={
+                    "redirect_url": matching_challenge.redirect_url,
+                    "requested_ip_address": matching_challenge.requested_ip_address,
+                },
+                occurred_at=now,
+            )
+
+        tokens = await self.create_tokens_for_user(
+            session,
+            user,
+            device_name=device_name or "access_code",
+            ip_address=ip_address,
+            user_agent=user_agent,
+            auth_method="access_code",
+        )
+
+        return user, tokens
 
     async def verify_magic_link(
         self,
@@ -1138,6 +1342,39 @@ class AuthService:
     def _hash_token(self, token: str) -> str:
         """Hash token for storage using SHA256."""
         return hashlib.sha256(token.encode()).hexdigest()
+
+    def _generate_access_code(self) -> str:
+        """Generate a zero-padded numeric access code."""
+        upper_bound = 10**self.config.access_code_length
+        return f"{secrets.randbelow(upper_bound):0{self.config.access_code_length}d}"
+
+    def _hash_access_code(self, code: str, recipient: str) -> str:
+        """Hash an access code with a per-challenge nonce and application secret."""
+        nonce = secrets.token_urlsafe(16)
+        digest = self._access_code_digest(code, recipient, nonce)
+        return f"v1:{nonce}:{digest}"
+
+    def _verify_access_code_hash(self, code: str, recipient: str, stored_hash: str) -> bool:
+        """Verify an access code against a stored nonce-prefixed HMAC."""
+        parts = stored_hash.split(":", 2)
+        if len(parts) != 3:
+            return False
+
+        version, nonce, expected_digest = parts
+        if version != "v1" or not nonce or not expected_digest:
+            return False
+
+        actual_digest = self._access_code_digest(code, recipient, nonce)
+        return hmac.compare_digest(actual_digest, expected_digest)
+
+    def _access_code_digest(self, code: str, recipient: str, nonce: str) -> str:
+        message = f"access_code:{nonce}:{recipient.lower()}:{code}".encode()
+        return hmac.new(self.config.secret_key.encode(), message, hashlib.sha256).hexdigest()
+
+    @staticmethod
+    def _normalize_access_code(code: str) -> str:
+        """Allow common copy/paste separators without broadening valid codes."""
+        return "".join(char for char in code.strip() if char not in {" ", "-", "\t", "\n"})
 
     @staticmethod
     def _append_auth_method(user: User, method: str) -> None:

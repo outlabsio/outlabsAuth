@@ -7,6 +7,8 @@ All features are controlled by configuration flags.
 """
 
 import asyncio
+import logging
+import time
 from typing import Any, AsyncGenerator, Dict, Optional, cast
 from uuid import UUID
 
@@ -18,6 +20,9 @@ from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import ConfigurationError
 from outlabs_auth.database import DatabaseConfig, create_engine, create_session_factory
 from outlabs_auth.fastapi import ExceptionHandlerMode
+
+
+logger = logging.getLogger("outlabs_auth")
 
 
 class OutlabsAuth:
@@ -49,6 +54,8 @@ class OutlabsAuth:
         database_url: Optional[str] = None,
         engine: Optional[AsyncEngine] = None,
         auto_migrate: bool = False,
+        migration_statement_timeout: Optional[str] = "60s",
+        initialize_timeout_seconds: float = 120.0,
         database_schema: Optional[str] = None,
         echo_sql: bool = False,
         # Core configuration
@@ -70,6 +77,13 @@ class OutlabsAuth:
         magic_link_expire_minutes: int = 15,
         magic_link_request_rate_limit_max: int = 3,
         magic_link_request_rate_limit_window_seconds: int = 300,
+        enable_access_codes: bool = False,
+        access_code_expire_minutes: int = 10,
+        access_code_length: int = 6,
+        access_code_request_rate_limit_max: int = 3,
+        access_code_request_rate_limit_window_seconds: int = 300,
+        access_code_verify_rate_limit_max: int = 10,
+        access_code_verify_rate_limit_window_seconds: int = 300,
         # Password settings
         password_min_length: int = 8,
         require_special_char: bool = True,
@@ -106,6 +120,8 @@ class OutlabsAuth:
             database_url: PostgreSQL connection URL (required if engine not provided)
             engine: Existing SQLAlchemy AsyncEngine (optional, takes precedence over database_url)
             auto_migrate: Run Alembic migrations on startup
+            migration_statement_timeout: PostgreSQL statement_timeout for migration sessions
+            initialize_timeout_seconds: Wall-clock timeout for initialize() startup work
             database_schema: Optional PostgreSQL schema for auth tables/migrations
             echo_sql: Echo SQL statements for debugging
             secret_key: JWT signing key (REQUIRED)
@@ -128,6 +144,13 @@ class OutlabsAuth:
             magic_link_expire_minutes: Magic-link token TTL in minutes
             magic_link_request_rate_limit_max: Max requests per email in the rate-limit window
             magic_link_request_rate_limit_window_seconds: Rate-limit window for magic-link requests
+            enable_access_codes: Enable email access-code authentication
+            access_code_expire_minutes: Access-code TTL in minutes
+            access_code_length: Number of digits in generated access codes
+            access_code_request_rate_limit_max: Max requests per email in the request rate-limit window
+            access_code_request_rate_limit_window_seconds: Rate-limit window for access-code requests
+            access_code_verify_rate_limit_max: Max verification attempts per email in the verify rate-limit window
+            access_code_verify_rate_limit_window_seconds: Rate-limit window for access-code verification attempts
 
             redis_enabled: Enable Redis features (counters, rate limits,
                 optional permission cache, activity tracking). Defaults to True
@@ -174,6 +197,8 @@ class OutlabsAuth:
             database_url=database_url,
             database_schema=database_schema,
             auto_migrate=auto_migrate,
+            migration_statement_timeout=migration_statement_timeout,
+            initialize_timeout_seconds=initialize_timeout_seconds,
             echo_sql=echo_sql,
             secret_key=secret_key,
             algorithm=algorithm,
@@ -201,6 +226,13 @@ class OutlabsAuth:
             magic_link_expire_minutes=magic_link_expire_minutes,
             magic_link_request_rate_limit_max=magic_link_request_rate_limit_max,
             magic_link_request_rate_limit_window_seconds=magic_link_request_rate_limit_window_seconds,
+            enable_access_codes=enable_access_codes,
+            access_code_expire_minutes=access_code_expire_minutes,
+            access_code_length=access_code_length,
+            access_code_request_rate_limit_max=access_code_request_rate_limit_max,
+            access_code_request_rate_limit_window_seconds=access_code_request_rate_limit_window_seconds,
+            access_code_verify_rate_limit_max=access_code_verify_rate_limit_max,
+            access_code_verify_rate_limit_window_seconds=access_code_verify_rate_limit_window_seconds,
             redis_url=redis_url,
             cache_ttl_seconds=cache_ttl_seconds,
             **kwargs,
@@ -354,6 +386,21 @@ class OutlabsAuth:
         if self._initialized:
             return
 
+        started_at = time.perf_counter()
+        timeout = self.config.initialize_timeout_seconds
+        try:
+            await asyncio.wait_for(self._initialize(), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            raise ConfigurationError(
+                f"OutlabsAuth.initialize() exceeded {timeout:g} seconds - likely network or DB issue"
+            ) from exc
+        logger.info(
+            "[outlabs_auth] initialize: services ready in %.2f s",
+            time.perf_counter() - started_at,
+        )
+
+    async def _initialize(self) -> None:
+        """Perform startup work under the public initialize() timeout."""
         # Create engine if not provided
         if self._engine is None:
             connect_args: Dict[str, Any] = {}
@@ -414,6 +461,7 @@ class OutlabsAuth:
         await run_migrations(
             self.config.database_url,
             schema=self.config.database_schema,
+            statement_timeout=self.config.migration_statement_timeout,
         )
 
     def _init_services_sync(self):
@@ -1077,6 +1125,7 @@ class OutlabsAuth:
             "audit_log": self.config.enable_audit_log,
             "invitations": self.config.enable_invitations,
             "magic_links": self.config.enable_magic_links,
+            "access_codes": self.config.enable_access_codes,
         }
 
     def __repr__(self) -> str:

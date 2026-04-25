@@ -24,6 +24,15 @@ class AuthConfig(BaseModel):
         description="Optional PostgreSQL schema for auth tables and migrations",
     )
     auto_migrate: bool = Field(default=False, description="Automatically run database migrations on startup")
+    migration_statement_timeout: Optional[str] = Field(
+        default="60s",
+        description="PostgreSQL statement_timeout applied to auto-migration and CLI migration sessions",
+    )
+    initialize_timeout_seconds: float = Field(
+        default=120.0,
+        gt=0,
+        description="Wall-clock timeout for OutlabsAuth.initialize() startup work",
+    )
     echo_sql: bool = Field(default=False, description="Echo SQL statements to stdout (for debugging)")
 
     # JWT Settings
@@ -112,6 +121,41 @@ class AuthConfig(BaseModel):
     magic_link_request_rate_limit_window_seconds: int = Field(
         default=300,
         description="Magic-link request rate-limit window in seconds",
+    )
+    enable_access_codes: bool = Field(
+        default=False,
+        description="Enable email access-code authentication",
+    )
+    access_code_expire_minutes: int = Field(
+        default=10,
+        ge=1,
+        description="Number of minutes before an access code expires",
+    )
+    access_code_length: int = Field(
+        default=6,
+        ge=4,
+        le=12,
+        description="Number of digits in generated access codes",
+    )
+    access_code_request_rate_limit_max: int = Field(
+        default=3,
+        ge=1,
+        description="Maximum access-code requests per email in the rate-limit window",
+    )
+    access_code_request_rate_limit_window_seconds: int = Field(
+        default=300,
+        ge=1,
+        description="Access-code request rate-limit window in seconds",
+    )
+    access_code_verify_rate_limit_max: int = Field(
+        default=10,
+        ge=1,
+        description="Maximum access-code verification attempts per email in the rate-limit window",
+    )
+    access_code_verify_rate_limit_window_seconds: int = Field(
+        default=300,
+        ge=1,
+        description="Access-code verification rate-limit window in seconds",
     )
 
     # Redis Configuration (recommended for production counters, rate limits, and caching)

@@ -10,7 +10,7 @@ Open-source FastAPI authentication and authorization for RBAC, ABAC, API keys, a
 
 ## Status
 
-**Current Library Version**: 0.1.0a21
+**Current Library Version**: 0.1.0a22
 
 **Release Stage**: Alpha
 

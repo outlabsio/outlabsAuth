@@ -127,6 +127,7 @@ def register_exception_handlers(
         message = _extract_error_message(exc.detail) or "Request failed"
         return JSONResponse(
             status_code=exc.status_code,
+            headers=exc.headers,
             content={
                 "error": "HTTP_ERROR",
                 "message": message,

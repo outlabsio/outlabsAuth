@@ -18,12 +18,13 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
-from urllib.parse import urlparse
+from typing import Any, List, Optional
+from urllib.parse import urlencode, urlparse
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from models import Lead, LeadNote
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -84,6 +85,13 @@ def _extract_origin(value: str) -> str:
     return value
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 _load_example_env()
 
 DATABASE_URL = os.getenv(
@@ -94,6 +102,10 @@ SECRET_KEY = os.getenv("SECRET_KEY", "enterprise-rbac-secret-change-in-productio
 REDIS_URL = os.getenv("REDIS_URL", None)
 ENV = os.getenv("ENV", "development")
 DEBUG_MODE = ENV != "production"
+ENABLE_MAGIC_LINKS = _env_flag("ENABLE_MAGIC_LINKS", default=DEBUG_MODE)
+ENABLE_ACCESS_CODES = _env_flag("ENABLE_ACCESS_CODES", default=DEBUG_MODE)
+MAGIC_LINK_DEBUG_TOKENS = DEBUG_MODE and _env_flag("MAGIC_LINK_DEBUG_TOKENS")
+ACCESS_CODE_DEBUG_CODES = DEBUG_MODE and _env_flag("ACCESS_CODE_DEBUG_CODES", default=DEBUG_MODE)
 FRONTEND_URL = _trim_trailing_slash(os.getenv("FRONTEND_URL", "http://localhost:3000"))
 MAILGUN_API_BASE_URL = _trim_trailing_slash(os.getenv("MAILGUN_API_BASE_URL", "https://api.mailgun.net"))
 MAILGUN_DOMAIN = os.getenv("MAILGUN_DOMAIN")
@@ -173,6 +185,8 @@ class LeadResponse(BaseModel):
 
 # Auth instance (initialized in lifespan)
 auth: Optional[EnterpriseRBAC] = None
+latest_magic_links: dict[str, dict[str, Any]] = {}
+latest_access_codes: dict[str, dict[str, Any]] = {}
 
 
 # ============================================================================
@@ -186,6 +200,20 @@ def _ensure_example_tables(sync_conn) -> None:
         sync_conn,
         tables=[Lead.__table__, LeadNote.__table__],
     )
+
+
+def _build_frontend_magic_link(token: str, redirect_url: Optional[str] = None) -> str:
+    params = {"token": token}
+    if redirect_url:
+        params["redirect"] = redirect_url
+    return f"{FRONTEND_URL}/auth/magic-link?{urlencode(params)}"
+
+
+def _build_frontend_access_code_url(redirect_url: Optional[str] = None) -> str:
+    params = {"mode": "verify"}
+    if redirect_url:
+        params["redirect"] = redirect_url
+    return f"{FRONTEND_URL}/auth/access-code?{urlencode(params)}"
 
 
 @asynccontextmanager
@@ -228,6 +256,8 @@ async def lifespan(app: FastAPI):
         refresh_token_expire_days=7,  # 7 days for dev (default: 30 days)
         redis_client=redis_client,
         redis_url=REDIS_URL if redis_client else None,
+        enable_magic_links=ENABLE_MAGIC_LINKS,
+        enable_access_codes=ENABLE_ACCESS_CODES,
         enable_context_aware_roles=True,
         enable_abac=True,
         observability_config=obs_config,
@@ -243,6 +273,41 @@ async def lifespan(app: FastAPI):
     )
 
     await auth.initialize()
+
+    if auth.config.enable_magic_links and MAGIC_LINK_DEBUG_TOKENS:
+        print("Magic links enabled with dev token capture")
+
+        async def capture_magic_link(user, token, request=None, redirect_url=None):
+            email = str(user.email).lower()
+            magic_link_url = _build_frontend_magic_link(token, redirect_url=redirect_url)
+            latest_magic_links[email] = {
+                "email": email,
+                "token": token,
+                "magic_link_url": magic_link_url,
+                "redirect_url": redirect_url,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            print(f"Magic link for {email}: {magic_link_url}")
+
+        auth.user_service.on_after_magic_link_requested = capture_magic_link
+
+    if auth.config.enable_access_codes and ACCESS_CODE_DEBUG_CODES:
+        print("Access codes enabled with dev code capture")
+
+        async def capture_access_code(user, code, request=None, redirect_url=None):
+            email = str(user.email).lower()
+            access_code_url = _build_frontend_access_code_url(redirect_url=redirect_url)
+            latest_access_codes[email] = {
+                "email": email,
+                "code": code,
+                "access_code_url": access_code_url,
+                "redirect_url": redirect_url,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            print(f"Access code for {email}: {code}")
+            print(f"Access code entry URL for {email}: {access_code_url}")
+
+        auth.user_service.on_after_access_code_requested = capture_access_code
 
     # Create example-owned domain tables only. Auth tables come from migrations.
     print("Ensuring example domain tables exist...")
@@ -280,6 +345,12 @@ async def lifespan(app: FastAPI):
     print(f"API: http://localhost:8004")
     print(f"Docs: http://localhost:8004/docs")
     print(f"Frontend URL: {FRONTEND_URL}")
+    print(f"Magic links: {'enabled' if auth.config.enable_magic_links else 'disabled'}")
+    print(f"Access codes: {'enabled' if auth.config.enable_access_codes else 'disabled'}")
+    if MAGIC_LINK_DEBUG_TOKENS:
+        print("Magic link debug endpoint: /dev/auth/magic-link/latest?email=<email>")
+    if ACCESS_CODE_DEBUG_CODES:
+        print("Access code debug endpoint: /dev/auth/access-code/latest?email=<email>")
     if MAILGUN_DOMAIN and MAILGUN_API_KEY and MAILGUN_FROM_EMAIL:
         print(f"Mailgun domain: {MAILGUN_DOMAIN}")
         if MAILGUN_RECIPIENT_OVERRIDE:
@@ -333,6 +404,50 @@ def get_auth() -> EnterpriseRBAC:
     if auth is None:
         raise HTTPException(status_code=500, detail="Auth not initialized")
     return auth
+
+
+@app.get("/dev/auth/magic-link/latest", include_in_schema=False)
+async def latest_magic_link(email: str = Query(..., min_length=1)):
+    """Return the latest captured magic link for local development only."""
+    if not MAGIC_LINK_DEBUG_TOKENS:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    captured = latest_magic_links.get(email.lower())
+    if not captured:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No magic link has been requested for that email",
+        )
+    return captured
+
+
+@app.get("/dev/auth/magic-link/open", include_in_schema=False)
+async def open_latest_magic_link(email: str = Query(..., min_length=1)):
+    """Redirect to the latest captured magic link for local development only."""
+    captured = await latest_magic_link(email=email)
+    return RedirectResponse(str(captured["magic_link_url"]))
+
+
+@app.get("/dev/auth/access-code/latest", include_in_schema=False)
+async def latest_access_code(email: str = Query(..., min_length=1)):
+    """Return the latest captured access code for local development only."""
+    if not ACCESS_CODE_DEBUG_CODES:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    captured = latest_access_codes.get(email.lower())
+    if not captured:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No access code has been requested for that email",
+        )
+    return captured
+
+
+@app.get("/dev/auth/access-code/open", include_in_schema=False)
+async def open_latest_access_code(email: str = Query(..., min_length=1)):
+    """Redirect to the access-code entry page for local development only."""
+    captured = await latest_access_code(email=email)
+    return RedirectResponse(str(captured["access_code_url"]))
 
 
 async def get_session(request: Request):

@@ -23,10 +23,16 @@ down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+_TABLES_OWNED_BY_LATER_MIGRATIONS = frozenset({"auth_challenges"})
+
+
+def _baseline_tables():
+    return [table for table in SQLModel.metadata.sorted_tables if table.name not in _TABLES_OWNED_BY_LATER_MIGRATIONS]
+
 
 def upgrade() -> None:
     bind = op.get_bind()
-    SQLModel.metadata.create_all(bind=bind, checkfirst=True)
+    SQLModel.metadata.create_all(bind=bind, tables=_baseline_tables(), checkfirst=True)
 
 
 def downgrade() -> None:

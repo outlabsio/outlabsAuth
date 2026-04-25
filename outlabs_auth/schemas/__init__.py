@@ -18,6 +18,8 @@ from outlabs_auth.schemas.api_key import (
 
 # Auth schemas
 from outlabs_auth.schemas.auth import (
+    AccessCodeRequest,
+    AccessCodeVerifyRequest,
     ForgotPasswordRequest,
     LoginRequest,
     LoginResponse,
@@ -109,6 +111,8 @@ __all__ = [
     "ResetPasswordRequest",
     "MagicLinkRequest",
     "MagicLinkVerifyRequest",
+    "AccessCodeRequest",
+    "AccessCodeVerifyRequest",
     "LogoutRequest",
     # User
     "UserResponse",

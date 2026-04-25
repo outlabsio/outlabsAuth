@@ -19,6 +19,8 @@ from outlabs_auth.observability import (
 from outlabs_auth.response_builders import build_user_response_async
 from outlabs_auth.schemas.auth import (
     AcceptInviteRequest,
+    AccessCodeRequest,
+    AccessCodeVerifyRequest,
     AuthConfigResponse,
     ForgotPasswordRequest,
     InviteUserRequest,
@@ -34,6 +36,8 @@ from outlabs_auth.schemas.auth import (
 )
 from outlabs_auth.schemas.user import UserResponse
 from outlabs_auth.utils.rate_limit import (
+    check_access_code_request_rate_limit,
+    check_access_code_verify_rate_limit,
     check_forgot_password_rate_limit,
     check_magic_link_rate_limit,
 )
@@ -114,10 +118,12 @@ def get_auth_router(
             "activity_tracking": True,  # Always available
             "invitations": auth.config.enable_invitations,
             "magic_links": auth.config.enable_magic_links,
+            "access_codes": auth.config.enable_access_codes,
         }
         auth_methods = {
             "password": True,
             "magic_link": auth.config.enable_magic_links,
+            "access_code": auth.config.enable_access_codes,
         }
 
         # Get available permissions from database
@@ -494,6 +500,137 @@ def get_auth_router(
             )
             await auth.user_service.on_after_login(user, request)
             obs.log_event("magic_link_verified", user_id=str(user.id))
+
+            return LoginResponse(
+                access_token=tokens.access_token,
+                refresh_token=tokens.refresh_token,
+                token_type=tokens.token_type,
+                expires_in=tokens.expires_in,
+            )
+        except HTTPException:
+            raise
+        except OutlabsAuthException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e)
+            raise
+
+    @router.post(
+        "/access-code/request",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Request access code",
+        description="Generate a one-time email access code and expose it to the host email hook.",
+    )
+    async def request_access_code(
+        data: AccessCodeRequest,
+        request: Request,
+        session: AsyncSession = Depends(auth.uow),
+    ):
+        """
+        Request an email access code.
+
+        This endpoint never reveals whether the email belongs to an account. If
+        a usable account exists, it calls `on_after_access_code_requested` with
+        the plain code so the host application can send its own email.
+        """
+        if not auth.config.enable_access_codes:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Access code authentication is not enabled",
+            )
+
+        is_limited, seconds_until_reset = await check_access_code_request_rate_limit(
+            data.email,
+            redis_client=getattr(auth, "redis_client", None),
+            max_requests=auth.config.access_code_request_rate_limit_max,
+            window_seconds=auth.config.access_code_request_rate_limit_window_seconds,
+        )
+        if is_limited:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "message": "Too many access code requests. Please try again later.",
+                    "retry_after_seconds": seconds_until_reset,
+                    "retry_after_minutes": round(seconds_until_reset / 60, 1),
+                },
+                headers={"Retry-After": str(max(seconds_until_reset, 1))},
+            )
+
+        try:
+            user = await auth.user_service.get_user_by_email(session, data.email)
+            if not user:
+                return None
+
+            if getattr(user.status, "value", user.status) != "active" or user.is_locked:
+                return None
+
+            code = await auth.auth_service.generate_access_code(
+                session,
+                user,
+                redirect_url=data.redirect_url,
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+            await auth.user_service.on_after_access_code_requested(
+                user,
+                code,
+                request,
+                redirect_url=data.redirect_url,
+            )
+        except Exception as e:
+            if auth.observability:
+                auth.observability.logger.error("access_code_request_error", email=data.email, error=str(e))
+
+        return None
+
+    @router.post(
+        "/access-code/verify",
+        response_model=LoginResponse,
+        summary="Verify access code",
+        description="Exchange a one-time email access code for JWT tokens.",
+    )
+    async def verify_access_code(
+        data: AccessCodeVerifyRequest,
+        request: Request,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(get_obs),
+    ):
+        """
+        Verify an email access code and return JWT tokens.
+        """
+        if not auth.config.enable_access_codes:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Access code authentication is not enabled",
+            )
+
+        is_limited, seconds_until_reset = await check_access_code_verify_rate_limit(
+            data.email,
+            redis_client=getattr(auth, "redis_client", None),
+            max_requests=auth.config.access_code_verify_rate_limit_max,
+            window_seconds=auth.config.access_code_verify_rate_limit_window_seconds,
+        )
+        if is_limited:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "message": "Too many access code verification attempts. Please try again later.",
+                    "retry_after_seconds": seconds_until_reset,
+                    "retry_after_minutes": round(seconds_until_reset / 60, 1),
+                },
+                headers={"Retry-After": str(max(seconds_until_reset, 1))},
+            )
+
+        try:
+            user, tokens = await auth.auth_service.verify_access_code(
+                session,
+                email=data.email,
+                code=data.code,
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+            await auth.user_service.on_after_login(user, request)
+            obs.log_event("access_code_verified", user_id=str(user.id))
 
             return LoginResponse(
                 access_token=tokens.access_token,

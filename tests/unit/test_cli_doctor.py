@@ -15,6 +15,7 @@ from outlabs_auth.cli import (
     DOCTOR_CHECK_NAMES,
     DoctorCheck,
     DoctorStatus,
+    _build_connect_args,
     _format_doctor_json,
     _format_doctor_text,
     _redact_database_url,
@@ -49,11 +50,23 @@ def test_redact_database_url_passthrough_on_garbage_input():
     assert _redact_database_url("not a url") == "not a url"
 
 
+def test_build_connect_args_applies_migration_statement_timeout_and_schema():
+    assert _build_connect_args("auth_schema") == {
+        "server_settings": {
+            "statement_timeout": "60s",
+            "search_path": "auth_schema,public",
+        }
+    }
+
+
+def test_build_connect_args_allows_disabling_statement_timeout():
+    assert _build_connect_args("auth_schema", statement_timeout=None) == {
+        "server_settings": {"search_path": "auth_schema,public"}
+    }
+
+
 def test_format_doctor_text_success_case_shows_all_passed():
-    checks = [
-        DoctorCheck(name=name, status=DoctorStatus.OK, detail="ok")
-        for name in DOCTOR_CHECK_NAMES
-    ]
+    checks = [DoctorCheck(name=name, status=DoctorStatus.OK, detail="ok") for name in DOCTOR_CHECK_NAMES]
     output = _format_doctor_text(checks, "postgresql://u@h/d", "myschema")
     assert "All checks passed." in output
     assert "myschema" in output
@@ -86,10 +99,7 @@ def test_format_doctor_text_redacts_password():
 
 
 def test_format_doctor_json_shape_for_healthy_case():
-    checks = [
-        DoctorCheck(name=name, status=DoctorStatus.OK, detail="ok")
-        for name in DOCTOR_CHECK_NAMES
-    ]
+    checks = [DoctorCheck(name=name, status=DoctorStatus.OK, detail="ok") for name in DOCTOR_CHECK_NAMES]
     payload = json.loads(_format_doctor_json(checks, "postgresql://u@h/d", "myschema"))
     assert payload["healthy"] is True
     assert payload["schema"] == "myschema"
@@ -240,10 +250,7 @@ async def test_run_doctor_flags_revision_drift(migrated_schema):
     try:
         async with engine.begin() as conn:
             await conn.execute(
-                text(
-                    f'UPDATE "{migrated_schema}"."{ALEMBIC_VERSION_TABLE}" '
-                    "SET version_num = :v"
-                ),
+                text(f'UPDATE "{migrated_schema}"."{ALEMBIC_VERSION_TABLE}" ' "SET version_num = :v"),
                 {"v": "not_a_real_revision"},
             )
     finally:

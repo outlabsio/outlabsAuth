@@ -21,6 +21,7 @@ class AuthChallengeType(str, Enum):
     """Temporary authentication challenge type."""
 
     MAGIC_LINK = "magic_link"
+    ACCESS_CODE = "access_code"
 
 
 class MembershipStatus(str, Enum):

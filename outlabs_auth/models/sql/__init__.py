@@ -146,7 +146,6 @@ __all__ = [
 # === Model Groups (for feature-based loading) ===
 CORE_MODELS = [
     User,
-    AuthChallenge,
     Permission,
     PermissionTag,
     PermissionTagLink,
@@ -155,6 +154,10 @@ CORE_MODELS = [
     RefreshToken,
     RoleDefinitionHistory,
     UserAuditEvent,
+]
+
+AUTH_CHALLENGE_MODELS = [
+    AuthChallenge,
 ]
 
 SIMPLE_RBAC_MODELS = [
@@ -204,6 +207,7 @@ ALL_MODELS = (
     + ENTERPRISE_RBAC_MODELS
     + API_KEY_MODELS
     + OAUTH_MODELS
+    + AUTH_CHALLENGE_MODELS
     + ACTIVITY_MODELS
     + SYSTEM_CONFIG_MODELS
 )

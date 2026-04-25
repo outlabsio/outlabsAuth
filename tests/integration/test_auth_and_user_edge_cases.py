@@ -157,7 +157,8 @@ async def test_auth_config_returns_expected_features_and_permissions(
     assert payload["features"]["tree_permissions"] is True
     assert payload["features"]["invitations"] is True
     assert payload["features"]["magic_links"] is False
-    assert payload["auth_methods"] == {"password": True, "magic_link": False}
+    assert payload["features"]["access_codes"] is False
+    assert payload["auth_methods"] == {"password": True, "magic_link": False, "access_code": False}
     assert permission_name in payload["available_permissions"]
 
 

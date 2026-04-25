@@ -129,6 +129,16 @@ class UserService(BaseService[User]):
         """Hook called after a magic-link token is generated. Override to send email."""
         pass
 
+    async def on_after_access_code_requested(
+        self,
+        user: User,
+        code: str,
+        request: Optional[Request] = None,
+        redirect_url: Optional[str] = None,
+    ) -> None:
+        """Hook called after an access code is generated. Override to send email."""
+        pass
+
     async def on_failed_login(
         self,
         email: str,

@@ -75,6 +75,24 @@ class MagicLinkVerifyRequest(BaseModel):
     token: str
 
 
+class AccessCodeRequest(BaseModel):
+    """Request a short-lived email access code."""
+
+    email: EmailStr
+    redirect_url: Optional[str] = Field(
+        default=None,
+        max_length=2048,
+        description="Optional host-owned redirect URL to include in the access-code email.",
+    )
+
+
+class AccessCodeVerifyRequest(BaseModel):
+    """Verify an email access code and exchange it for JWT tokens."""
+
+    email: EmailStr
+    code: str = Field(..., min_length=1, max_length=32)
+
+
 class LogoutRequest(BaseModel):
     """
     Logout request schema.
@@ -130,7 +148,7 @@ class AuthConfigResponse(BaseModel):
         description="Enabled features (entity_hierarchy, context_aware_roles, abac, etc.)",
     )
     auth_methods: Dict[str, bool] = Field(
-        default_factory=lambda: {"password": True, "magic_link": False},
+        default_factory=lambda: {"password": True, "magic_link": False, "access_code": False},
         description="Public human-auth methods currently enabled by this auth router.",
     )
     available_permissions: List[str] = Field(

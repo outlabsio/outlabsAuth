@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -34,6 +36,8 @@ from outlabs_auth.bootstrap import (
 _SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 ALEMBIC_VERSION_TABLE = "outlabs_auth_alembic_version"
 SQUASHED_BASELINE_REVISION = "20260316_0001"
+DEFAULT_MIGRATION_STATEMENT_TIMEOUT = "60s"
+logger = logging.getLogger("outlabs_auth")
 LEGACY_SCHEMA_ADOPTION_TABLES = frozenset(
     {
         "users",
@@ -129,37 +133,83 @@ def _load_alembic_config(*, require_local: bool = False) -> "Config":
     return alembic_cfg
 
 
-def _build_connect_args(schema: Optional[str]) -> dict[str, object]:
+def _build_connect_args(
+    schema: Optional[str],
+    *,
+    statement_timeout: Optional[str] = DEFAULT_MIGRATION_STATEMENT_TIMEOUT,
+) -> dict[str, object]:
+    server_settings: dict[str, str] = {}
+    if statement_timeout:
+        server_settings["statement_timeout"] = statement_timeout
+
     target_schema = _validate_schema_name(schema)
-    if not target_schema:
-        return {}
-    return {"server_settings": {"search_path": f"{target_schema},public"}}
+    if target_schema:
+        server_settings["search_path"] = f"{target_schema},public"
+
+    return {"server_settings": server_settings} if server_settings else {}
 
 
-def _build_engine(database_url: str, schema: Optional[str]) -> AsyncEngine:
+def _build_engine(
+    database_url: str,
+    schema: Optional[str],
+    *,
+    statement_timeout: Optional[str] = None,
+) -> AsyncEngine:
     return create_async_engine(
         normalize_database_url(database_url),
         echo=False,
-        connect_args=_build_connect_args(schema),
+        connect_args=_build_connect_args(schema, statement_timeout=statement_timeout),
     )
 
 
-async def _ensure_schema_exists(database_url: str, schema: Optional[str]) -> None:
+async def _dispose_engine_with_logging(engine: AsyncEngine, label: str = "migration engine") -> None:
+    logger.info("[outlabs_auth] disposing %s...", label)
+    started_at = time.perf_counter()
+    await engine.dispose()
+    logger.info("[outlabs_auth] %s disposed in %.2f s", label, time.perf_counter() - started_at)
+
+
+async def _ensure_schema_exists(
+    database_url: str,
+    schema: Optional[str],
+    *,
+    engine: Optional[AsyncEngine] = None,
+    statement_timeout: Optional[str] = DEFAULT_MIGRATION_STATEMENT_TIMEOUT,
+) -> None:
     target_schema = _validate_schema_name(schema)
     if not target_schema:
         return
 
-    engine = create_async_engine(normalize_database_url(database_url), echo=False)
+    owned_engine = engine is None
+    if engine is None:
+        engine = _build_engine(
+            normalize_database_url(database_url),
+            None,
+            statement_timeout=statement_timeout,
+        )
     try:
         async with engine.begin() as conn:
             await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{target_schema}"'))
     finally:
-        await engine.dispose()
+        if owned_engine:
+            await _dispose_engine_with_logging(engine)
 
 
-async def _list_schema_tables(database_url: str, schema: Optional[str]) -> set[str]:
+async def _list_schema_tables(
+    database_url: str,
+    schema: Optional[str],
+    *,
+    engine: Optional[AsyncEngine] = None,
+    statement_timeout: Optional[str] = None,
+) -> set[str]:
     schema_name = _validate_schema_name(schema) or "public"
-    engine = create_async_engine(normalize_database_url(database_url), echo=False)
+    owned_engine = engine is None
+    if engine is None:
+        engine = _build_engine(
+            normalize_database_url(database_url),
+            None,
+            statement_timeout=statement_timeout,
+        )
     try:
         async with engine.connect() as conn:
             result = await conn.execute(
@@ -174,7 +224,53 @@ async def _list_schema_tables(database_url: str, schema: Optional[str]) -> set[s
             )
             return {str(row[0]) for row in result}
     finally:
-        await engine.dispose()
+        if owned_engine:
+            await engine.dispose()
+
+
+async def _get_database_revision(
+    database_url: str,
+    schema: Optional[str],
+    *,
+    engine: Optional[AsyncEngine] = None,
+    statement_timeout: Optional[str] = None,
+) -> Optional[str]:
+    target = _validate_schema_name(schema) or "public"
+    owned_engine = engine is None
+    if engine is None:
+        engine = _build_engine(
+            normalize_database_url(database_url),
+            None,
+            statement_timeout=statement_timeout,
+        )
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(text(f'SELECT version_num FROM "{target}"."{ALEMBIC_VERSION_TABLE}"'))
+            row = result.first()
+            return str(row[0]) if row else None
+    finally:
+        if owned_engine:
+            await engine.dispose()
+
+
+def _get_code_head_revision() -> Optional[str]:
+    from alembic.script import ScriptDirectory
+
+    alembic_cfg = _load_alembic_config()
+    script = ScriptDirectory.from_config(alembic_cfg)
+    return script.get_current_head()
+
+
+async def _database_revision_matches_head(
+    database_url: str,
+    schema: Optional[str],
+    *,
+    engine: AsyncEngine,
+) -> bool:
+    tables = await _list_schema_tables(database_url, schema, engine=engine)
+    if ALEMBIC_VERSION_TABLE not in tables:
+        return False
+    return await _get_database_revision(database_url, schema, engine=engine) == _get_code_head_revision()
 
 
 def _invoke_alembic_command(
@@ -199,14 +295,29 @@ async def _run_alembic_command(
     schema: Optional[str],
     runner: Callable[["Config"], None],
     ensure_schema: bool = False,
+    engine: Optional[AsyncEngine] = None,
+    statement_timeout: Optional[str] = DEFAULT_MIGRATION_STATEMENT_TIMEOUT,
+    operation_label: str = "alembic command",
 ) -> None:
     normalized_url = normalize_database_url(database_url)
     target_schema = _validate_schema_name(schema)
     if ensure_schema:
-        await _ensure_schema_exists(normalized_url, target_schema)
+        await _ensure_schema_exists(
+            normalized_url,
+            target_schema,
+            engine=engine,
+            statement_timeout=statement_timeout,
+        )
 
-    engine = _build_engine(normalized_url, target_schema)
+    owned_engine = engine is None
+    if engine is None:
+        engine = _build_engine(
+            normalized_url,
+            target_schema,
+            statement_timeout=statement_timeout,
+        )
     try:
+        logger.info("[outlabs_auth] %s: starting", operation_label)
         # Alembic expects the caller-owned connection to commit DDL changes.
         # Using a plain connect() here can leave the migration transaction open
         # and rolled back on exit even though upgrade logs look successful.
@@ -217,31 +328,56 @@ async def _run_alembic_command(
                 schema=target_schema,
                 runner=runner,
             )
+        logger.info("[outlabs_auth] %s: completed", operation_label)
     finally:
-        await engine.dispose()
+        if owned_engine:
+            await _dispose_engine_with_logging(engine)
 
 
 async def run_migrations(
     database_url: str,
     revision: str = "head",
     schema: Optional[str] = None,
+    statement_timeout: Optional[str] = DEFAULT_MIGRATION_STATEMENT_TIMEOUT,
 ) -> None:
     """Run Alembic migrations asynchronously against the target DB/schema."""
     from alembic import command
 
-    if revision == "head":
-        await adopt_existing_schema(
-            database_url,
-            schema=schema,
-            revision=SQUASHED_BASELINE_REVISION,
-        )
-
-    await _run_alembic_command(
-        database_url,
-        schema=schema,
-        ensure_schema=True,
-        runner=lambda alembic_cfg: command.upgrade(alembic_cfg, revision),
+    normalized_url = normalize_database_url(database_url)
+    target_schema = _validate_schema_name(schema)
+    engine = _build_engine(
+        normalized_url,
+        target_schema,
+        statement_timeout=statement_timeout,
     )
+    try:
+        if revision == "head":
+            await adopt_existing_schema(
+                normalized_url,
+                schema=target_schema,
+                revision=SQUASHED_BASELINE_REVISION,
+                engine=engine,
+                statement_timeout=statement_timeout,
+            )
+            if await _database_revision_matches_head(
+                normalized_url,
+                target_schema,
+                engine=engine,
+            ):
+                logger.info("[outlabs_auth] migration upgrade: at head, no work to do")
+                return
+
+        await _run_alembic_command(
+            normalized_url,
+            schema=target_schema,
+            ensure_schema=True,
+            engine=engine,
+            statement_timeout=statement_timeout,
+            operation_label=f"migration upgrade to {revision}",
+            runner=lambda alembic_cfg: command.upgrade(alembic_cfg, revision),
+        )
+    finally:
+        await _dispose_engine_with_logging(engine)
 
 
 async def adopt_existing_schema(
@@ -249,6 +385,8 @@ async def adopt_existing_schema(
     *,
     schema: Optional[str] = None,
     revision: str = "head",
+    engine: Optional[AsyncEngine] = None,
+    statement_timeout: Optional[str] = DEFAULT_MIGRATION_STATEMENT_TIMEOUT,
 ) -> bool:
     """
     Stamp a legacy auth schema that was created outside Alembic.
@@ -261,29 +399,47 @@ async def adopt_existing_schema(
 
     normalized_url = normalize_database_url(database_url)
     target_schema = _validate_schema_name(schema)
-    tables = await _list_schema_tables(normalized_url, target_schema)
-
-    if ALEMBIC_VERSION_TABLE in tables:
-        return False
-    if not tables:
-        return False
-
-    if not LEGACY_SCHEMA_ADOPTION_TABLES.issubset(tables):
-        missing_tables = sorted(LEGACY_SCHEMA_ADOPTION_TABLES - tables)
-        schema_name = target_schema or "public"
-        raise RuntimeError(
-            "Target schema contains tables but is not versioned by Alembic. "
-            f'Automatic adoption only supports fully bootstrapped auth schemas in "{schema_name}". '
-            f"Missing required tables: {', '.join(missing_tables)}"
+    owned_engine = engine is None
+    if engine is None:
+        engine = _build_engine(
+            normalized_url,
+            target_schema,
+            statement_timeout=statement_timeout,
         )
 
-    await _run_alembic_command(
-        normalized_url,
-        schema=target_schema,
-        ensure_schema=True,
-        runner=lambda alembic_cfg: command.stamp(alembic_cfg, revision),
-    )
-    return True
+    try:
+        tables = await _list_schema_tables(normalized_url, target_schema, engine=engine)
+
+        if ALEMBIC_VERSION_TABLE in tables:
+            logger.info("[outlabs_auth] adopt_existing_schema: schema already versioned, skipping stamp")
+            return False
+        if not tables:
+            logger.info("[outlabs_auth] adopt_existing_schema: target schema is empty, skipping stamp")
+            return False
+
+        if not LEGACY_SCHEMA_ADOPTION_TABLES.issubset(tables):
+            missing_tables = sorted(LEGACY_SCHEMA_ADOPTION_TABLES - tables)
+            schema_name = target_schema or "public"
+            raise RuntimeError(
+                "Target schema contains tables but is not versioned by Alembic. "
+                f'Automatic adoption only supports fully bootstrapped auth schemas in "{schema_name}". '
+                f"Missing required tables: {', '.join(missing_tables)}"
+            )
+
+        await _run_alembic_command(
+            normalized_url,
+            schema=target_schema,
+            ensure_schema=True,
+            engine=engine,
+            statement_timeout=statement_timeout,
+            operation_label=f"adopt_existing_schema stamp to {revision}",
+            runner=lambda alembic_cfg: command.stamp(alembic_cfg, revision),
+        )
+        logger.info("[outlabs_auth] adopt_existing_schema: stamped schema at %s", revision)
+        return True
+    finally:
+        if owned_engine:
+            await _dispose_engine_with_logging(engine)
 
 
 async def downgrade_migrations(
@@ -549,9 +705,7 @@ async def _check_revision(database_url: str, schema: Optional[str]) -> DoctorChe
     engine = create_async_engine(normalize_database_url(database_url), echo=False)
     try:
         async with engine.connect() as conn:
-            result = await conn.execute(
-                text(f'SELECT version_num FROM "{target}"."{ALEMBIC_VERSION_TABLE}"')
-            )
+            result = await conn.execute(text(f'SELECT version_num FROM "{target}"."{ALEMBIC_VERSION_TABLE}"'))
             row = result.first()
             db_revision = str(row[0]) if row else None
     finally:
@@ -774,9 +928,7 @@ _ABORT_STATES = frozenset(
 )
 
 
-async def _classify_schema_state(
-    database_url: str, schema: Optional[str]
-) -> tuple[str, str]:
+async def _classify_schema_state(database_url: str, schema: Optional[str]) -> tuple[str, str]:
     """Classify the target schema for bootstrap planning (read-only).
 
     Returns a ``(state, detail)`` tuple where ``state`` is one of the
@@ -822,8 +974,7 @@ async def _classify_schema_state(
             )
         return (
             SchemaState.PARTIAL_NON_AUTH,
-            "Schema contains tables that are neither the legacy auth set nor "
-            "the Alembic version table",
+            "Schema contains tables that are neither the legacy auth set nor " "the Alembic version table",
         )
 
     from alembic.script import ScriptDirectory
@@ -832,9 +983,7 @@ async def _classify_schema_state(
     rev_engine = create_async_engine(normalized_url, echo=False)
     try:
         async with rev_engine.connect() as conn:
-            result = await conn.execute(
-                text(f'SELECT version_num FROM "{target}"."{ALEMBIC_VERSION_TABLE}"')
-            )
+            result = await conn.execute(text(f'SELECT version_num FROM "{target}"."{ALEMBIC_VERSION_TABLE}"'))
             row = result.first()
             db_revision = str(row[0]) if row else None
     finally:
@@ -883,8 +1032,7 @@ def _build_bootstrap_plan(
                 "outlabs-auth init-db) before re-running bootstrap."
             ),
             SchemaState.PARTIAL_NON_AUTH: (
-                f"{state_detail}. Refusing to co-tenant into an unclaimed schema; "
-                "inspect contents manually."
+                f"{state_detail}. Refusing to co-tenant into an unclaimed schema; " "inspect contents manually."
             ),
             SchemaState.DRIFTED: (
                 f"{state_detail}. Run 'outlabs-auth doctor' for details and confirm the "
@@ -960,9 +1108,7 @@ async def run_bootstrap(
     is a safe no-op on migrate/admin steps.
     """
     state, state_detail = await _classify_schema_state(database_url, schema)
-    plan = _build_bootstrap_plan(
-        state, state_detail, skip_seed=skip_seed, admin_email=admin_email
-    )
+    plan = _build_bootstrap_plan(state, state_detail, skip_seed=skip_seed, admin_email=admin_email)
 
     if not plan.can_proceed:
         return BootstrapResult(
@@ -1005,9 +1151,7 @@ async def run_bootstrap(
                     )
                 )
             elif step.action == BootstrapAction.SEED:
-                created, existing, config_seeded = await seed_system_state(
-                    database_url, schema=schema
-                )
+                created, existing, config_seeded = await seed_system_state(database_url, schema=schema)
                 executed.append(
                     BootstrapStepResult(
                         action=step.action,
@@ -1021,8 +1165,7 @@ async def run_bootstrap(
             elif step.action == BootstrapAction.CREATE_ADMIN:
                 if not admin_password:
                     raise RuntimeError(
-                        "--admin-password (or OUTLABS_AUTH_BOOTSTRAP_PASSWORD) is required "
-                        "when --admin-email is set"
+                        "--admin-password (or OUTLABS_AUTH_BOOTSTRAP_PASSWORD) is required " "when --admin-email is set"
                     )
                 status_str, user_id, email = await bootstrap_admin_user(
                     database_url,
@@ -1135,13 +1278,8 @@ def _format_bootstrap_json(
         "can_proceed": result.plan.can_proceed,
         "dry_run": result.dry_run,
         "success": result.success,
-        "plan": [
-            {"action": s.action, "detail": s.detail} for s in result.plan.steps
-        ],
-        "executed": [
-            {"action": e.action, "status": e.status, "detail": e.detail}
-            for e in result.executed
-        ],
+        "plan": [{"action": s.action, "detail": s.detail} for s in result.plan.steps],
+        "executed": [{"action": e.action, "status": e.status, "detail": e.detail} for e in result.executed],
         "final_checks": [
             {
                 "name": c.name,
@@ -1540,8 +1678,7 @@ def bootstrap(
 
     if admin_email and not admin_password:
         click.echo(
-            "Error: --admin-password (or OUTLABS_AUTH_BOOTSTRAP_PASSWORD) is required "
-            "when --admin-email is set",
+            "Error: --admin-password (or OUTLABS_AUTH_BOOTSTRAP_PASSWORD) is required " "when --admin-email is set",
             err=True,
         )
         sys.exit(2)
