@@ -23,6 +23,33 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
   entity), have a superuser assign that admin a system-wide role. Transitional escape hatch:
   `OutlabsAuth(enforce_user_scope=False)` restores the legacy behavior and will be removed in a future
   alpha.
+- **Roles router aligned to the same anti-enumeration contract (DD-056 follow-up).** Role
+  detail/update/delete/permission/ABAC endpoints now return **404** for roles outside the actor's
+  accessible scope (previously 403 "Role is outside your accessible scope"), indistinguishable from
+  nonexistent roles. System-wide roles still return the explanatory **403** ("Only superusers can
+  access system-wide roles"): they are platform objects, not tenant data, and their IDs already
+  surface on in-scope users' role lists.
+
+### Database migrations
+
+- None. DD-056 uses existing tables; `enforce_user_scope` is a config flag. The latest Alembic
+  revision remains `20260425_0017`.
+
+## [0.1.0a22] - 2026-04-25
+
+Retroactive entry (covers 0.1.0a21–a22, which shipped without changelog sections).
+
+### Added
+
+- **Magic-link and email access-code authentication** (`enable_magic_links`, `enable_access_codes`)
+  with per-recipient rate limiting, challenge expiry, and one-time use. New auth router endpoints and
+  schemas; example wiring in `examples/enterprise_rbac`.
+
+### Database migrations
+
+- **New `auth_challenges` table** — Alembic revision `20260425_0017_add_auth_challenges` (plus indexes
+  on `user_id` and `used_at`). Applied automatically with `auto_migrate=True`, or run
+  `outlabs-auth bootstrap` / the packaged Alembic migrations before upgrading app instances.
 
 ## [0.1.0a20] - 2026-04-23
 

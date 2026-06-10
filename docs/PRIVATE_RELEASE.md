@@ -16,22 +16,28 @@ Trusted publishing is the default path. No long-lived PyPI token is required for
 
 ## Release Checklist
 
-1. Set the new release version:
+1. Make sure `CHANGELOG.md` has an `## [Unreleased]` section covering everything since the last
+   release. It must include a **Database migrations** subsection: list any new Alembic revisions and
+   how they are applied (`auto_migrate=True` or `outlabs-auth bootstrap`), or state "None"; spell out
+   operational upgrade steps (new config flags, required role grants, breaking behavior). The release
+   gate fails if the released version has no `CHANGELOG.md` section.
+2. Set the new release version:
    - `uv run python scripts/release_version.py set X.Y.ZaN`
    - Use `X.Y.Z` for stable, `X.Y.ZaN` for alpha, `X.Y.ZbN` for beta, and `X.Y.ZrcN` for release candidates.
-2. Verify release metadata:
+   - This also promotes `## [Unreleased]` to `## [X.Y.ZaN] - <today>` in `CHANGELOG.md`.
+3. Verify release metadata:
    - `uv run python scripts/release_version.py check`
-3. Run packaging and bootstrap tests:
+4. Run packaging and bootstrap tests:
    - `uv run --extra test python -m pytest tests/unit/test_release_packaging.py tests/unit/test_bootstrap.py -q`
    - `TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test uv run --extra test python -m pytest tests/integration/test_packaged_cli_migrations.py -q`
-4. Build distributions locally:
+5. Build distributions locally:
    - `uv build --no-sources`
-5. Push the branch and wait for the `Release Readiness` workflow to pass.
-6. Merge to `main`.
-7. Create and push the version tag:
+6. Push the branch and wait for the `Release Readiness` workflow to pass.
+7. Merge to `main`.
+8. Create and push the version tag:
    - `git tag vX.Y.ZaN`
    - `git push origin vX.Y.ZaN`
-8. Confirm the `Publish PyPI` workflow completes and the release appears on PyPI.
+9. Confirm the `Publish PyPI` workflow completes and the release appears on PyPI.
 
 ## GitHub Actions Publish Flow
 

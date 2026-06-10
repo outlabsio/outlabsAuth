@@ -101,6 +101,19 @@ def test_release_guide_references_release_helper_ci_and_pypi_publish():
     assert "Release Readiness" in release_guide
     assert "Publish PyPI" in release_guide
     assert "pypa/gh-action-pypi-publish@release/v1" in release_guide
+    assert "CHANGELOG.md" in release_guide
+    assert "Database migrations" in release_guide
+
+
+def test_changelog_documents_current_release():
+    """
+    Every released version must have a changelog section — the section carries
+    the upgrade notes (new Alembic migrations, config flags, breaking behavior)
+    that deployments need before bumping. Runs in the Release Readiness gate.
+    """
+    changelog = (Path(__file__).resolve().parents[2] / "CHANGELOG.md").read_text()
+
+    assert f"## [{__version__}]" in changelog
 
 
 def test_publish_workflow_uses_trusted_publishing():

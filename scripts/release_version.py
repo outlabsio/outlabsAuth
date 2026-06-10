@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILE = ROOT / "outlabs_auth" / "_version.py"
 README = ROOT / "README.md"
 RELEASE_GUIDE = ROOT / "docs" / "PRIVATE_RELEASE.md"
+CHANGELOG = ROOT / "CHANGELOG.md"
 
 
 def _read_current_version() -> str:
@@ -98,10 +99,52 @@ def _check_release_guide() -> list[str]:
         "Release Readiness",
         "Publish PyPI",
         "pypa/gh-action-pypi-publish@release/v1",
+        "CHANGELOG.md",
     ):
         if fragment not in doc_text:
             issues.append(f"`docs/PRIVATE_RELEASE.md` is missing `{fragment}`")
     return issues
+
+
+def _changelog_heading(version: str) -> str:
+    return f"## [{version}]"
+
+
+def _write_changelog(version: str) -> None:
+    """
+    Promote the `## [Unreleased]` section to this version, stamped with today's
+    date. No-op if the version already has a section; if neither exists,
+    `check` will fail and ask for one.
+    """
+    release = parse_release_version(version)
+    changelog = CHANGELOG.read_text()
+    if _changelog_heading(release.python_version) in changelog:
+        return
+    if "## [Unreleased]" not in changelog:
+        return
+    import datetime
+
+    today = datetime.date.today().isoformat()
+    CHANGELOG.write_text(
+        changelog.replace(
+            "## [Unreleased]",
+            f"{_changelog_heading(release.python_version)} - {today}",
+            1,
+        )
+    )
+
+
+def _check_changelog(version: str) -> list[str]:
+    release = parse_release_version(version)
+    changelog = CHANGELOG.read_text()
+    if _changelog_heading(release.python_version) not in changelog:
+        return [
+            f"`CHANGELOG.md` has no `{_changelog_heading(release.python_version)}` section. "
+            "Document the release — including any new Alembic migrations and operational "
+            "upgrade steps — under `## [Unreleased]`, then run "
+            f"`scripts/release_version.py set {release.python_version}` to promote it."
+        ]
+    return []
 
 
 def check_release_metadata(version: str) -> list[str]:
@@ -119,6 +162,7 @@ def check_release_metadata(version: str) -> list[str]:
         if fragment not in readme:
             issues.append(f"`README.md` is missing the expected {description.replace('_', ' ')}")
 
+    issues.extend(_check_changelog(version))
     issues.extend(_check_release_guide())
     return issues
 
@@ -126,6 +170,7 @@ def check_release_metadata(version: str) -> list[str]:
 def _set_version(version: str) -> None:
     _write_version_file(version)
     _write_readme(version)
+    _write_changelog(version)
 
 
 def _build_parser() -> argparse.ArgumentParser:
