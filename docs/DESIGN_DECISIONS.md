@@ -3600,6 +3600,87 @@ Entities do not store live direct permission grants. Access is granted through:
 
 ---
 
+## DD-056: Tenant Isolation on User-Management Routes; System-Wide Roles Grant Global Scope
+
+**Date**: 2026-06-10
+**Status**: Accepted
+**Deciders**: Maintainer (via SEC-4 design investigation)
+**Context**: The 2026-06 security audit (SEC-4) found that user-management endpoints enforced no entity/tenant scoping: authorization was a flat `require_permission("user:*")`, so a non-superuser admin in one top-level tree could read, modify, deactivate, or delete users in other trees, and `GET /users/` enumerated every tenant. The roles routes already enforced scope visibility (`_require_role_visibility`), and `AccessScopeService` already computed actor scope — the model simply was never mirrored onto user routes. The blocker was a legitimate use case: an "administration" top-level entity whose admins manage all other trees, which worked only because of the gap. The full investigation is recorded in `docs/SEC-4_TENANT_ISOLATION_INVESTIGATION.md`.
+
+### Options Considered
+
+1. **Enforce tree isolation + explicit elevated scope** (chosen)
+   - Pros: Closes read and write IDOR; restores symmetry with the roles routes; the elevated-grant carrier (system-wide roles) already exists in the model with controlled create/assign paths
+   - Cons: Breaking change for deployments that relied on implicit cross-tree access; per-request scope resolution cost on user routes
+
+2. **Writes-scoped, reads-global**
+   - Pros: Smaller change
+   - Cons: Leaves cross-tenant enumeration of users, permissions, and audit events (escalation recon); two mental models in one API
+
+3. **Status quo documented as intended**
+   - Pros: No code change
+   - Cons: Contradicts the intended isolation model (DD-005) and the roles-route precedent; amplifies any permission misconfiguration into cross-tenant compromise
+
+### Decision
+
+1. **Scope enforcement on all user-management routes** (reads and writes together). Target endpoints
+   resolve the actor's scope via `AccessScopeService.resolve_for_auth_result(...,
+   include_member_user_ids=False)` and require the target user to be in scope:
+
+   ```
+   in_scope(target) =
+       scope.is_global
+       OR target.root_entity_id ∈ actor.entity_ids
+       OR ∃ active EntityMembership(target, e) with e ∈ actor.entity_ids
+   ```
+
+   The predicate is evaluated from the target side (O(target's memberships)) and deliberately NOT via
+   `member_user_ids`, which omits root-assigned users that have no membership rows and enumerates every
+   user in scope. Out-of-scope targets return **404** (anti-enumeration; deliberate divergence from the
+   roles router's 403). Self-requests always pass. List/search endpoints silently filter to actor scope;
+   the `root_entity_id` param narrows within scope, never widens. Orphaned users (no root, no
+   memberships) match only global scopes.
+
+2. **System-wide roles are the explicit global-scope grant.** A user holding a currently-valid active
+   membership in a system-wide role (`is_global=True`, `root_entity_id IS NULL`, `scope_entity_id IS
+   NULL`, role status ACTIVE) resolves to `is_global=True` scope — the same span as a superuser for
+   scope purposes. Granting global span is already a controlled operation: system-wide roles are
+   creatable only by global-scope actors and assignable only under SEC-2 delegation containment. The
+   "administration entity" pattern becomes an explicit role grant instead of an implicit gap.
+
+3. **Superuser-target guard.** A non-global actor can never mutate a user with `is_superuser=True`
+   (403), even if that user is inside the actor's tree. Reads of in-tree superusers remain allowed.
+
+4. **Rollout**: enforcement is **on by default** (`enforce_user_scope=True`). A transitional config
+   flag (`enforce_user_scope=False`) restores the legacy behavior for one alpha cycle and will be
+   removed later. SimpleRBAC is unaffected (scope is forced global when the entity hierarchy is
+   disabled — and every SimpleRBAC role is system-wide by construction, since non-global roles must
+   define a root or scope entity).
+
+### Consequences
+
+- **Positive**: Closes SEC-4 (cross-tenant IDOR, read + write) and the third leg of the SEC-2/3/4 escalation chain
+- **Positive**: One scoping model across roles and users routes; the machinery (AccessScopeService, system-wide roles) is reused, not invented
+- **Positive**: The administration-entity use case is now explicit and auditable (a superuser assigns the system-wide role once)
+- **Negative**: Per-request scope resolution on user routes (~2–3 indexed queries; same cost class the roles routes already pay); cacheable later via DD-037 pub/sub invalidation
+- **Negative**: Deployments relying on implicit cross-tree admin access must assign a system-wide role (or temporarily set `enforce_user_scope=False`)
+- **Neutral**: Error semantics diverge from the roles router (404 vs 403) in favor of not confirming cross-tenant user existence; aligning roles to 404 is a possible follow-up
+
+### Implementation
+
+- `outlabs_auth/services/access_scope.py` — `_user_has_active_system_wide_role` + global short-circuit in `resolve_for_user`
+- `outlabs_auth/routers/users.py` — `_resolve_actor_scope` / `_target_user_in_scope` / `_require_target_user_in_scope`; enforcement centralized in `_get_target_user_or_404` (`for_mutation=True` on the nine mutation endpoints); scope filtering on `GET /users/` and `GET /users/orphaned`
+- `outlabs_auth/services/user.py` — `scope_entity_ids` filter on `list_users` / `search_users`
+- `outlabs_auth/core/config.py` — `enforce_user_scope` flag (default True)
+- Tests: `tests/integration/test_users_scope_and_isolation.py` (scoped admin, system-wide role, flag, SimpleRBAC); updated `tests/integration/test_users_router_callback_paths.py` cross-root assertions; `tests/unit/services/test_access_scope.py` global short-circuit
+
+### Related Decisions
+
+- DD-005 (Entity-Based Isolation), DD-050 (Role Scoping to Root Entities), DD-053/DD-054 (role/permission scope enforcement)
+- Security audit: `docs/SECURITY_AUDIT_2026-06-10.md` (SEC-4); investigation: `docs/SEC-4_TENANT_ISOLATION_INVESTIGATION.md`
+
+---
+
 ## Questions Still Open
 
 Track questions that need decisions:
@@ -3644,8 +3725,9 @@ Track questions that need decisions:
 | 2026-01-22 | **DD-053** | **Accepted (Entity-Local Roles with Scope Control)** |
 | 2026-01-22 | **DD-054** | **Accepted (Permission Scope Enforcement)** |
 | 2026-03-17 | **DD-055** | **Accepted (Entity Authorization Remains Role-Only)** |
+| 2026-06-10 | **DD-056** | **Accepted (Tenant Isolation on User Routes; System-Wide Roles Grant Global Scope)** |
 
 ---
 
-**Last Updated**: 2026-03-17 (DD-055 added: entity authorization remains role-only)
+**Last Updated**: 2026-06-10 (DD-056 added: tenant isolation on user-management routes)
 **Next Review**: After testing all examples

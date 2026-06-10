@@ -4,17 +4,18 @@ Users router factory.
 Provides ready-to-use user management routes (DD-041).
 """
 
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, List, Optional, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from outlabs_auth.models.sql.entity_membership import EntityMembership
-from outlabs_auth.models.sql.enums import DefinitionStatus, UserStatus
+from outlabs_auth.models.sql.enums import DefinitionStatus, MembershipStatus, UserStatus
 from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
 from outlabs_auth.observability import ObservabilityContext, get_observability_with_auth
@@ -110,10 +111,86 @@ def get_users_router(
             )
         return actor_user
 
+    async def _resolve_actor_scope(session: AsyncSession, actor_user: Any) -> dict[str, Any]:
+        scope = cast(
+            dict[str, Any],
+            await auth.access_scope_service.resolve_for_auth_result(
+                session,
+                {"source": "jwt", "user_id": str(actor_user.id), "user": actor_user},
+                include_member_user_ids=False,
+            ),
+        )
+        if not auth.config.enable_entity_hierarchy:
+            scope["is_global"] = True
+        return scope
+
+    async def _target_user_in_scope(
+        session: AsyncSession,
+        target_user: Any,
+        scope: dict[str, Any],
+    ) -> bool:
+        entity_ids = set(scope.get("entity_ids") or [])
+        if not entity_ids:
+            return False
+
+        target_root_entity_id = getattr(target_user, "root_entity_id", None)
+        if target_root_entity_id is not None and str(target_root_entity_id) in entity_ids:
+            return True
+
+        # Evaluated from the target side (DD-056): O(target's memberships),
+        # and covers root-assigned users with no membership rows.
+        now = datetime.now(timezone.utc)
+        stmt = select(cast(Any, EntityMembership.entity_id)).where(
+            cast(Any, EntityMembership.user_id) == target_user.id,
+            cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
+            or_(
+                cast(Any, EntityMembership.valid_from).is_(None),
+                cast(Any, EntityMembership.valid_from) <= now,
+            ),
+            or_(
+                cast(Any, EntityMembership.valid_until).is_(None),
+                cast(Any, EntityMembership.valid_until) >= now,
+            ),
+        )
+        result = await session.execute(stmt)
+        target_entity_ids = {str(entity_id) for (entity_id,) in result.all() if entity_id is not None}
+        return bool(target_entity_ids & entity_ids)
+
+    async def _require_target_user_in_scope(
+        session: AsyncSession,
+        target_user: Any,
+        actor_user: Any,
+        *,
+        for_mutation: bool = False,
+    ) -> None:
+        if not auth.config.enforce_user_scope:
+            return
+        if actor_user.id == target_user.id:
+            return
+
+        scope = await _resolve_actor_scope(session, actor_user)
+        if scope.get("is_global"):
+            return
+
+        if not await _target_user_in_scope(session, target_user, scope):
+            # 404, not 403: don't confirm that users exist in other trees (DD-056).
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found",
+            )
+
+        if for_mutation and bool(getattr(target_user, "is_superuser", False)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only global administrators can modify a superuser account",
+            )
+
     async def _get_target_user_or_404(
         session: AsyncSession,
         target_user_id: UUID,
         actor_user: Any,
+        *,
+        for_mutation: bool = False,
     ) -> Any:
         target_user = await auth.user_service.get_user_by_id(session, target_user_id)
         if not target_user:
@@ -122,6 +199,12 @@ def get_users_router(
                 detail="User not found",
             )
 
+        await _require_target_user_in_scope(
+            session,
+            target_user,
+            actor_user,
+            for_mutation=for_mutation,
+        )
         return target_user
 
     def _serialize_membership_history_event(event: Any) -> MembershipHistoryEventResponse:
@@ -264,7 +347,15 @@ def get_users_router(
         Returns paginated results with total count.
         """
         try:
-            await _get_actor_user_or_401(session, obs.user_id)
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+
+            # DD-056: non-global actors only see users inside their own trees.
+            # The root_entity_id param narrows within scope, never widens it.
+            scope_entity_ids: Optional[list[UUID]] = None
+            if auth.config.enforce_user_scope:
+                scope = await _resolve_actor_scope(session, actor_user)
+                if not scope.get("is_global"):
+                    scope_entity_ids = [UUID(entity_id) for entity_id in scope.get("entity_ids") or []]
 
             parsed_status = None
             if user_status is not None:
@@ -285,6 +376,7 @@ def get_users_router(
                     status=parsed_status,
                     is_superuser=is_superuser,
                     root_entity_id=root_entity_id,
+                    scope_entity_ids=scope_entity_ids,
                 )
 
                 # Manual pagination of search results
@@ -301,6 +393,7 @@ def get_users_router(
                     status=parsed_status,
                     is_superuser=is_superuser,
                     root_entity_id=root_entity_id,
+                    scope_entity_ids=scope_entity_ids,
                 )
 
             # Calculate total pages
@@ -433,7 +526,13 @@ def get_users_router(
     ):
         """List orphaned users with latest membership history context."""
         try:
-            await _get_actor_user_or_401(session, obs.user_id)
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+
+            # Orphaned users belong to no tree, so they match only global scopes (DD-056).
+            if auth.config.enforce_user_scope:
+                scope = await _resolve_actor_scope(session, actor_user)
+                if not scope.get("is_global"):
+                    return PaginatedResponse(items=[], total=0, page=page, limit=limit, pages=0)
 
             if not getattr(auth, "membership_service", None):
                 return PaginatedResponse(items=[], total=0, page=page, limit=limit, pages=0)
@@ -625,7 +724,7 @@ def get_users_router(
         """
         try:
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
-            await _get_target_user_or_404(session, user_id, actor_user)
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
 
             update_data = data.model_dump(exclude_unset=True)
             user = await auth.user_service.update_user_fields(
@@ -672,7 +771,7 @@ def get_users_router(
         """
         try:
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
-            await _get_target_user_or_404(session, user_id, actor_user)
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
 
             # Change user password using user service
             await auth.user_service.change_password(
@@ -725,7 +824,7 @@ def get_users_router(
                     detail="Superuser privileges required",
                 )
 
-            await _get_target_user_or_404(session, user_id, actor_user)
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
             if actor_user.id == user_id and not data.is_superuser:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -785,7 +884,7 @@ def get_users_router(
         """
         try:
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
-            target_user = await _get_target_user_or_404(session, user_id, actor_user)
+            target_user = await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
 
             # Convert string status to enum
             try:
@@ -868,7 +967,7 @@ def get_users_router(
         """Restore a deleted user without restoring access grants or credentials."""
         try:
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
-            await _get_target_user_or_404(session, user_id, actor_user)
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
 
             user = await auth.user_service.restore_user(
                 session,
@@ -913,7 +1012,7 @@ def get_users_router(
         """
         try:
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
-            user = await _get_target_user_or_404(session, user_id, actor_user)
+            user = await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
 
             await auth.user_service.on_before_delete(user, None)
             deleted = await auth.user_service.delete_user(
@@ -960,7 +1059,7 @@ def get_users_router(
         """
         try:
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
-            await _get_target_user_or_404(session, user_id, actor_user)
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
 
             user, plain_token = await auth.user_service.resend_invite(
                 session,
@@ -1115,7 +1214,7 @@ def get_users_router(
         """
         try:
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
-            await _get_target_user_or_404(session, user_id, actor_user)
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
 
             # Validate role exists
             role = await auth.role_service.get_role_by_id(session, UUID(data.role_id))
@@ -1199,7 +1298,7 @@ def get_users_router(
         """
         try:
             actor_user = await _get_actor_user_or_401(session, obs.user_id)
-            await _get_target_user_or_404(session, user_id, actor_user)
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
 
             # Revoke role
             success = await auth.role_service.revoke_role_from_user(

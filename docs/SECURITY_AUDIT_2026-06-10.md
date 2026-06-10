@@ -32,7 +32,7 @@ Separately, the **primary bearer-auth path accepts 30-day refresh tokens as acce
 | SEC-1 (refresh-as-access) | ✅ Fixed | `type=="access"` enforced in `JWTStrategy.authenticate` |
 | SEC-2 (role-assign escalation) | ✅ Fixed | Delegation-containment guard (`routers/_authz_utils.py`) |
 | SEC-3 (role-permission escalation) | ✅ Fixed | Same guard on role create/update/add-permissions |
-| SEC-4 (cross-tenant user access) | ⏸ Deferred | Design question — see `docs/SEC-4_TENANT_ISOLATION_INVESTIGATION.md` |
+| SEC-4 (cross-tenant user access) | ✅ Fixed | DD-056: scope enforcement on all user routes (404 out-of-scope, lists filtered); system-wide roles grant explicit global scope; `enforce_user_scope` escape hatch |
 | SEC-5 (API-key lockout) | ✅ Fixed | Posture made honest — 32-byte keys need no lockout; a per-IP throttle would harm legit high-TPS workers (gateway's job) |
 | SEC-6 (require `exp`) | ✅ Fixed | `options={"require":["exp"]}` on all decode paths |
 | SEC-7 (login timing) | ✅ Fixed | Dummy Argon2 verify on user-not-found |

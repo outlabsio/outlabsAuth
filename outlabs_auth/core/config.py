@@ -98,6 +98,13 @@ class AuthConfig(BaseModel):
         description="Enable context-aware roles (EnterpriseRBAC optional)",
     )
     enable_abac: bool = Field(default=False, description="Enable ABAC conditions (EnterpriseRBAC optional)")
+    enforce_user_scope: bool = Field(
+        default=True,
+        description=(
+            "Enforce entity-scope (tenant) isolation on user-management routes (DD-056). "
+            "Transitional escape hatch only — set False to restore pre-DD-056 cross-tree access."
+        ),
+    )
     enable_caching: bool = Field(
         default=False,
         description="Enable Redis-backed permission caching. OutlabsAuth enables this by default when Redis is enabled.",

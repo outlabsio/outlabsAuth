@@ -32,7 +32,8 @@ from outlabs_auth.mail.types import (
     coerce_metadata,
 )
 from outlabs_auth.models.sql.entity import Entity
-from outlabs_auth.models.sql.enums import UserStatus
+from outlabs_auth.models.sql.entity_membership import EntityMembership
+from outlabs_auth.models.sql.enums import MembershipStatus, UserStatus
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.services.base import BaseService
 from outlabs_auth.utils.password import generate_password_hash_async, verify_password_async
@@ -975,6 +976,29 @@ class UserService(BaseService[User]):
 
         return True
 
+    def _scope_filter(self, scope_entity_ids: List[UUID]) -> Any:
+        """
+        DD-056 visibility filter: user's root entity is in scope, or the user
+        holds a currently-valid active membership in a scoped entity.
+        """
+        now = datetime.now(timezone.utc)
+        membership_user_ids = select(cast(Any, EntityMembership.user_id)).where(
+            cast(Any, EntityMembership.entity_id).in_(scope_entity_ids),
+            cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
+            or_(
+                cast(Any, EntityMembership.valid_from).is_(None),
+                cast(Any, EntityMembership.valid_from) <= now,
+            ),
+            or_(
+                cast(Any, EntityMembership.valid_until).is_(None),
+                cast(Any, EntityMembership.valid_until) >= now,
+            ),
+        )
+        return or_(
+            cast(Any, User.root_entity_id).in_(scope_entity_ids),
+            cast(Any, User.id).in_(membership_user_ids),
+        )
+
     async def list_users(
         self,
         session: AsyncSession,
@@ -983,6 +1007,7 @@ class UserService(BaseService[User]):
         status: Optional[UserStatus] = None,
         is_superuser: Optional[bool] = None,
         root_entity_id: Optional[UUID] = None,
+        scope_entity_ids: Optional[List[UUID]] = None,
     ) -> Tuple[List[User], int]:
         """
         List users with pagination.
@@ -994,6 +1019,9 @@ class UserService(BaseService[User]):
             status: Filter by status
             is_superuser: Filter by superuser flag
             root_entity_id: Filter by assigned root entity
+            scope_entity_ids: Restrict to users rooted or membered in these
+                entities (DD-056). None means no restriction; an empty list
+                matches nothing.
         Returns:
             Tuple of (users, total_count)
         """
@@ -1009,6 +1037,8 @@ class UserService(BaseService[User]):
             filters.append(is_superuser_col == is_superuser)
         if root_entity_id is not None:
             filters.append(root_entity_id_col == root_entity_id)
+        if scope_entity_ids is not None:
+            filters.append(self._scope_filter(scope_entity_ids))
 
         # Get total count
         total_count = await self.count(session, *filters)
@@ -1033,6 +1063,7 @@ class UserService(BaseService[User]):
         status: Optional[UserStatus] = None,
         is_superuser: Optional[bool] = None,
         root_entity_id: Optional[UUID] = None,
+        scope_entity_ids: Optional[List[UUID]] = None,
     ) -> List[User]:
         """
         Search users by email or name.
@@ -1044,6 +1075,9 @@ class UserService(BaseService[User]):
             status: Filter by status
             is_superuser: Filter by superuser flag
             root_entity_id: Filter by assigned root entity
+            scope_entity_ids: Restrict to users rooted or membered in these
+                entities (DD-056). None means no restriction; an empty list
+                matches nothing.
 
         Returns:
             List of matching users
@@ -1063,6 +1097,8 @@ class UserService(BaseService[User]):
             filters.append(is_superuser_col == is_superuser)
         if root_entity_id is not None:
             filters.append(root_entity_id_col == root_entity_id)
+        if scope_entity_ids is not None:
+            filters.append(self._scope_filter(scope_entity_ids))
 
         users = await self.get_many(
             session,

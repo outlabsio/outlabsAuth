@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [Unreleased]
+
+### Security (breaking)
+
+- **Tenant isolation on user-management routes (DD-056, closes SEC-4).** All `/users` endpoints now
+  enforce entity-scope isolation: a non-global actor can only read or mutate users whose
+  `root_entity_id` or active entity membership falls inside the actor's (closure-expanded) accessible
+  entities. Out-of-scope targets return **404** (anti-enumeration); `GET /users/` and
+  `GET /users/orphaned` are silently filtered to the actor's trees (the `root_entity_id` param narrows
+  within scope, never widens). Non-global actors can no longer mutate superuser accounts (403), even
+  in-tree. Superusers, unscoped API keys, and SimpleRBAC deployments are unaffected.
+- **System-wide roles now grant global scope.** A currently-valid assignment of a system-wide role
+  (`is_global=True`, no `root_entity_id`/`scope_entity_id`) resolves to global access scope — the
+  explicit, auditable replacement for the previous implicit cross-tree access. **Migration:** if a
+  deployment relied on a non-superuser admin managing users across trees (e.g. an "administration"
+  entity), have a superuser assign that admin a system-wide role. Transitional escape hatch:
+  `OutlabsAuth(enforce_user_scope=False)` restores the legacy behavior and will be removed in a future
+  alpha.
+
 ## [0.1.0a20] - 2026-04-23
 
 Performance pass covering middleware, dependency wiring, ABAC lazy-loading, permission-cache invalidation scope, and request-scoped dedup of repeat entity and closure-table fetches. Full test suite (815 tests) green.
