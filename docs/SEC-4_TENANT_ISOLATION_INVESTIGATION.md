@@ -253,8 +253,11 @@ semantics.
 ## Decision points — RESOLVED (2026-06-10)
 
 1. **Candidate 1 adopted** (candidates 2/3 rejected per evaluation).
-2. **404** for out-of-scope user targets (anti-enumeration; deliberate divergence from the roles
-   router's 403 — aligning roles to 404 is a possible follow-up).
+2. **404** for out-of-scope user targets (anti-enumeration). The flagged follow-up — aligning the
+   roles router — landed in the same release: out-of-scope tenant roles now also return 404, while
+   system-wide roles keep the explanatory 403 ("Only superusers can access system-wide roles")
+   because their existence is platform-level, not tenant data (scoped admins already see them on
+   in-scope users' role lists).
 3. **Rollout**: default-on, with `enforce_user_scope=False` as a transitional escape hatch for one
    alpha cycle.
 4. **Reads and writes scoped together.**

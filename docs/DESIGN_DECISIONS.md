@@ -3636,8 +3636,9 @@ Entities do not store live direct permission grants. Access is granted through:
 
    The predicate is evaluated from the target side (O(target's memberships)) and deliberately NOT via
    `member_user_ids`, which omits root-assigned users that have no membership rows and enumerates every
-   user in scope. Out-of-scope targets return **404** (anti-enumeration; deliberate divergence from the
-   roles router's 403). Self-requests always pass. List/search endpoints silently filter to actor scope;
+   user in scope. Out-of-scope targets return **404** (anti-enumeration; the roles router was aligned
+   to the same contract in this change — see Consequences). Self-requests always pass. List/search
+   endpoints silently filter to actor scope;
    the `root_entity_id` param narrows within scope, never widens. Orphaned users (no root, no
    memberships) match only global scopes.
 
@@ -3664,15 +3665,17 @@ Entities do not store live direct permission grants. Access is granted through:
 - **Positive**: The administration-entity use case is now explicit and auditable (a superuser assigns the system-wide role once)
 - **Negative**: Per-request scope resolution on user routes (~2–3 indexed queries; same cost class the roles routes already pay); cacheable later via DD-037 pub/sub invalidation
 - **Negative**: Deployments relying on implicit cross-tree admin access must assign a system-wide role (or temporarily set `enforce_user_scope=False`)
-- **Neutral**: Error semantics diverge from the roles router (404 vs 403) in favor of not confirming cross-tenant user existence; aligning roles to 404 is a possible follow-up
+- **Positive**: The follow-up originally flagged here (aligning the roles router to 404) was applied in the same release: `_require_role_visibility` now returns **404 "Role not found"** for out-of-scope tenant roles — indistinguishable from nonexistent ones — across the role detail/update/delete/permission/ABAC endpoints. The previous 403 ("Role is outside your accessible scope") confirmed cross-tenant role existence while `GET /roles/` hid the same roles at query level. One error contract across users and roles routes
+- **Neutral**: System-wide roles deliberately keep the explanatory **403** ("Only superusers can access system-wide roles"). Their existence is not tenant data: they are platform-level objects, and a scoped admin legitimately learns their IDs from in-scope users' role lists (`GET /users/{user_id}/roles`) whenever a superuser has assigned one in-tree — the very administration pattern this DD introduces. A 404 there would misdirect the legitimate holder of a role ID; 403 names the actual constraint
 
 ### Implementation
 
 - `outlabs_auth/services/access_scope.py` — `_user_has_active_system_wide_role` + global short-circuit in `resolve_for_user`
 - `outlabs_auth/routers/users.py` — `_resolve_actor_scope` / `_target_user_in_scope` / `_require_target_user_in_scope`; enforcement centralized in `_get_target_user_or_404` (`for_mutation=True` on the nine mutation endpoints); scope filtering on `GET /users/` and `GET /users/orphaned`
+- `outlabs_auth/routers/roles.py` — `_require_role_visibility` returns 404 for out-of-scope tenant roles, 403 for system-wide roles; inherited by all role detail/update/delete/permission/ABAC endpoints
 - `outlabs_auth/services/user.py` — `scope_entity_ids` filter on `list_users` / `search_users`
 - `outlabs_auth/core/config.py` — `enforce_user_scope` flag (default True)
-- Tests: `tests/integration/test_users_scope_and_isolation.py` (scoped admin, system-wide role, flag, SimpleRBAC); updated `tests/integration/test_users_router_callback_paths.py` cross-root assertions; `tests/unit/services/test_access_scope.py` global short-circuit
+- Tests: `tests/integration/test_users_scope_and_isolation.py` (scoped admin, system-wide role, flag, SimpleRBAC); updated `tests/integration/test_users_router_callback_paths.py` cross-root assertions; `tests/unit/services/test_access_scope.py` global short-circuit; `tests/integration/test_roles_scope_and_contract.py` 404/403 split with nonexistent-ID response parity
 
 ### Related Decisions
 
@@ -3729,5 +3732,5 @@ Track questions that need decisions:
 
 ---
 
-**Last Updated**: 2026-06-10 (DD-056 added: tenant isolation on user-management routes)
+**Last Updated**: 2026-06-10 (DD-056 added: tenant isolation on user-management routes; roles router aligned to the 404 anti-enumeration contract)
 **Next Review**: After testing all examples

@@ -136,13 +136,19 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         if _role_is_visible_in_scope(role, scope):
             return scope
 
-        detail = "Role is outside your accessible scope"
         if _role_is_system_wide(role):
-            detail = "Only superusers can access system-wide roles"
+            # 403, not 404: system-wide roles are platform objects, not tenant
+            # data — scoped admins already see them on in-scope users' role
+            # lists, so a 404 would mislead rather than protect (DD-056).
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only superusers can access system-wide roles",
+            )
 
+        # 404, not 403: don't confirm that roles exist in other trees (DD-056).
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=detail,
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Role not found",
         )
 
     async def _require_role_create_scope(
