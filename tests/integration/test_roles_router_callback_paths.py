@@ -230,6 +230,18 @@ async def test_roles_router_callback_permission_and_abac_paths(
             display_name="Role Permission",
         )
 
+        # SEC-3 (delegation containment): the actor may only attach permissions
+        # they already hold, so grant this permission to the actor first.
+        actor_grant_role = await auth_instance.role_service.create_role(
+            session,
+            name=f"actor-grant-{_suffix()}",
+            display_name="Actor Grant",
+            permission_names=[permission.name],
+        )
+        await auth_instance.role_service.assign_role_to_user(
+            session, actor.id, actor_grant_role.id
+        )
+
         async def _scoped_scope(*args, **kwargs):
             return {
                 "is_global": False,

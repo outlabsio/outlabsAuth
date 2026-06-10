@@ -7,6 +7,12 @@ from typing import Optional, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+# Minimum length for a symmetric (HS*) JWT signing secret. A short secret is
+# brute-forceable offline, which lets an attacker forge tokens — so we reject it at
+# construction time (SEC-9). Asymmetric algorithms (RS*/ES*) use PEM keys and are exempt.
+MIN_HS_SECRET_KEY_LENGTH = 32
+
+
 class AuthConfig(BaseModel):
     """
     Base configuration for all OutlabsAuth presets.
@@ -34,6 +40,17 @@ class AuthConfig(BaseModel):
         description="Wall-clock timeout for OutlabsAuth.initialize() startup work",
     )
     echo_sql: bool = Field(default=False, description="Echo SQL statements to stdout (for debugging)")
+
+    # Connection pool sizing (PERF). Previously hardcoded to 5/10 and unconfigurable.
+    # Defaults preserve prior behavior; raise for high-throughput deployments
+    # (e.g. db_pool_size=20, db_max_overflow=40) and size against Postgres max_connections.
+    db_pool_size: int = Field(default=5, description="Persistent SQLAlchemy connection pool size")
+    db_max_overflow: int = Field(default=10, description="Max connections above pool_size under burst")
+    db_pool_timeout: int = Field(default=30, description="Seconds to wait for a pooled connection before erroring")
+    db_pool_pre_ping: bool = Field(
+        default=True,
+        description="Validate pooled connections with a SELECT 1 on checkout; disable for stable/low-latency networks",
+    )
 
     # JWT Settings
     secret_key: str = Field(..., description="Secret key for JWT signing")
@@ -174,6 +191,15 @@ class AuthConfig(BaseModel):
         default=60,
         description="Compiled API-key auth snapshot TTL in seconds for permission-dependency hot paths",
     )
+    # PERF (opt-in): when > 0, each process caches the validated API-key auth snapshot
+    # in memory for this many seconds, skipping the Redis snapshot GET + version reads on
+    # hot keys (e.g. high-throughput workers). Tradeoff: this also skips the per-read
+    # version check, so a permission/role/revocation change may take up to this long to be
+    # honored *per process*. Keep it small (1-5s) and leave at 0 to disable.
+    api_key_local_snapshot_cache_ttl: float = Field(
+        default=0.0,
+        description="In-process API-key auth snapshot cache TTL in seconds (0 disables; opt-in perf)",
+    )
 
     # Pub/Sub Channels
     redis_invalidation_channel: str = Field(
@@ -184,7 +210,11 @@ class AuthConfig(BaseModel):
     # API Key Settings (v1.3 - included in core)
     api_key_prefix_length: int = Field(default=12, description="API key prefix length")
     api_key_rate_limit_per_minute: int = Field(default=60, description="Default rate limit per API key")
-    api_key_temporary_lock_minutes: int = Field(default=30, description="Temporary lock duration after failures")
+    api_key_temporary_lock_minutes: int = Field(
+        default=30,
+        description="RESERVED — not currently enforced (SEC-5). API keys are 32-byte high-entropy "
+        "secrets, so failure-based lockout is unnecessary; IP throttling belongs at the gateway.",
+    )
     api_key_personal_allowed_action_prefixes: list[str] = Field(
         default_factory=lambda: ["read", "list", "search", "view", "get", "update"],
         description="Action prefixes allowed for personal API keys in EnterpriseRBAC v1",
@@ -266,6 +296,22 @@ class AuthConfig(BaseModel):
         if self.enable_caching and not self.redis_enabled:
             raise ValueError("enable_caching=True requires Redis; provide redis_url or redis_enabled=True")
 
+        return self
+
+    @model_validator(mode="after")
+    def _validate_secret_strength(self) -> Self:
+        """Reject weak symmetric signing secrets (SEC-9).
+
+        A short HS* secret can be brute-forced offline, enabling token forgery.
+        RS*/ES* use PEM keys (long by construction) and are exempt.
+        """
+        algorithm = (self.algorithm or "").upper()
+        if algorithm.startswith("HS") and len(self.secret_key or "") < MIN_HS_SECRET_KEY_LENGTH:
+            raise ValueError(
+                f"secret_key must be at least {MIN_HS_SECRET_KEY_LENGTH} characters when using "
+                f"{algorithm}. Generate one with: "
+                'python -c "import secrets; print(secrets.token_urlsafe(48))"'
+            )
         return self
 
 

@@ -109,6 +109,23 @@ class _SnapshotRedis:
         self.counters[key] = self.counters.get(key, 0) + amount
         return self.counters[key]
 
+    async def record_api_key_usage_pipeline(
+        self,
+        *,
+        usage_key: str,
+        last_used_key: str,
+        last_used_value: str,
+        last_used_ttl=None,
+        rate_windows=None,
+    ):
+        self.counters[usage_key] = self.counters.get(usage_key, 0) + 1
+        self.values[last_used_key] = last_used_value
+        counts = {usage_key: self.counters[usage_key]}
+        for rate_key, _ttl in (rate_windows or []):
+            self.counters[rate_key] = self.counters.get(rate_key, 0) + 1
+            counts[rate_key] = self.counters[rate_key]
+        return counts
+
 
 def _make_request(
     method: str,

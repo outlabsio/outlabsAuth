@@ -39,6 +39,7 @@ from outlabs_auth.utils.password import (
     generate_password_hash_async,
     verify_and_upgrade_password_async,
     verify_password_async,
+    verify_password_dummy_async,
 )
 from outlabs_auth.utils.validation import validate_email
 
@@ -146,6 +147,9 @@ class AuthService:
         phases["db_select_user_ms"] = (time.perf_counter() - _t) * 1000.0
 
         if not user:
+            # SEC-7: equalize timing with the wrong-password path (a CPU-heavy Argon2
+            # verify) so accounts can't be enumerated by measuring response latency.
+            await verify_password_dummy_async()
             self._log_login_failed(email, "user_not_found", 0, ip_address, start_time)
             raise InvalidCredentialsError(
                 message="Invalid email or password",

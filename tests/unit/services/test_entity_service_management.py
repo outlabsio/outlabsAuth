@@ -222,7 +222,7 @@ async def test_entity_service_invalidate_permission_cache_scope_switch():
         publish_entity_permissions_invalidation=AsyncMock(),
         publish_all_permissions_invalidation=AsyncMock(),
     )
-    service = EntityService(config=AuthConfig(secret_key="x"), redis_client=None)
+    service = EntityService(config=AuthConfig(secret_key="test-secret-key-do-not-use-in-production-1234567890"), redis_client=None)
     service.cache_service = cache_service
 
     entity_id = uuid4()

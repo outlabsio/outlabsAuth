@@ -41,7 +41,7 @@ class OutlabsAuth:
     Example:
         >>> auth = OutlabsAuth(
         ...     database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
-        ...     secret_key="your-secret-key",
+        ...     secret_key="your-secret-key-at-least-32-characters",
         ...     enable_entity_hierarchy=True
         ... )
         >>> await auth.initialize()
@@ -355,6 +355,10 @@ class OutlabsAuth:
             db_config = DatabaseConfig(
                 database_url=database_url,
                 echo=self.config.echo_sql,
+                pool_size=self.config.db_pool_size,
+                max_overflow=self.config.db_max_overflow,
+                pool_timeout=self.config.db_pool_timeout,
+                pool_pre_ping=self.config.db_pool_pre_ping,
                 connect_args=connect_args,
             )
             self._engine = create_engine(db_config)
@@ -379,7 +383,7 @@ class OutlabsAuth:
         It sets up the database connection, optionally runs migrations, and initializes services.
 
         Example:
-            >>> auth = OutlabsAuth(database_url="...", secret_key="secret")
+            >>> auth = OutlabsAuth(database_url="...", secret_key="your-secret-key-at-least-32-characters")
             >>> await auth.initialize()
             >>> # Now ready to use
         """
@@ -413,6 +417,10 @@ class OutlabsAuth:
             db_config = DatabaseConfig(
                 database_url=database_url,
                 echo=self.config.echo_sql,
+                pool_size=self.config.db_pool_size,
+                max_overflow=self.config.db_max_overflow,
+                pool_timeout=self.config.db_pool_timeout,
+                pool_pre_ping=self.config.db_pool_pre_ping,
                 connect_args=connect_args,
             )
             self._engine = create_engine(db_config)

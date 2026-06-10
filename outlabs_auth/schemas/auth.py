@@ -9,7 +9,7 @@ class LoginRequest(BaseModel):
     """Login request schema."""
 
     email: EmailStr
-    password: str = Field(..., min_length=8)
+    password: str = Field(..., min_length=8, max_length=128)
 
 
 class LoginResponse(BaseModel):
@@ -25,7 +25,7 @@ class RegisterRequest(BaseModel):
     """User registration request schema."""
 
     email: EmailStr
-    password: str = Field(..., min_length=8)
+    password: str = Field(..., min_length=8, max_length=128)
     first_name: Optional[str] = None
     last_name: Optional[str] = None
 
@@ -55,7 +55,7 @@ class ResetPasswordRequest(BaseModel):
     """Reset password request schema."""
 
     token: str
-    new_password: str = Field(..., min_length=8)
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class MagicLinkRequest(BaseModel):
@@ -131,7 +131,7 @@ class AcceptInviteRequest(BaseModel):
     """Accept invite request schema."""
 
     token: str
-    new_password: str = Field(..., min_length=8)
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class AuthConfigResponse(BaseModel):

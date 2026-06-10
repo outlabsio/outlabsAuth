@@ -31,6 +31,8 @@ from outlabs_auth.schemas.membership_history import (
 from outlabs_auth.schemas.permission import PermissionResponse, UserPermissionSource
 from outlabs_auth.schemas.role import RoleResponse
 from outlabs_auth.schemas.user_audit import UserAuditEventResponse
+from outlabs_auth.core.exceptions import PermissionDeniedError
+from outlabs_auth.routers._authz_utils import require_can_delegate_permissions
 from outlabs_auth.schemas.user import (
     AdminResetPasswordRequest,
     ChangePasswordRequest,
@@ -1120,6 +1122,16 @@ def get_users_router(
             if not role:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
 
+            # SEC-2: assigning a role grants its permissions — the actor must already
+            # hold every permission the role carries (superusers bypass naturally).
+            role_permission_names = await auth.role_service.get_role_permission_names(session, role.id)
+            await require_can_delegate_permissions(
+                session,
+                auth=auth,
+                actor_user_id=UUID(obs.user_id),
+                permission_names=role_permission_names,
+            )
+
             # Assign role
             membership = await auth.role_service.assign_role_to_user(
                 session,
@@ -1155,6 +1167,9 @@ def get_users_router(
             )
 
         except HTTPException:
+            raise
+        except PermissionDeniedError:
+            # Delegation containment (SEC-2) — surface as 403, not a logged 500.
             raise
         except Exception as e:
             obs.log_500_error(e, target_user_id=str(user_id), role_id=data.role_id)

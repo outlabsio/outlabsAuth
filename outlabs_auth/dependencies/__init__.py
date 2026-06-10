@@ -8,6 +8,7 @@ OpenAPI/Swagger.
 
 import asyncio
 import inspect
+import logging
 from inspect import Parameter, Signature
 from typing import Any, Callable, Dict, Optional, Sequence, cast
 from uuid import UUID
@@ -18,6 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.authentication.backend import AuthBackend
 from outlabs_auth.core.exceptions import InvalidInputError
+
+logger = logging.getLogger(__name__)
 
 
 class _EnvContextSupplier:
@@ -386,7 +389,7 @@ class AuthDeps:
 
             if not api_key_service.scopes_allow_permission(api_key_scopes, permission):
                 return False
-            if not api_key_service.scopes_allow_permission(principal_allowed_scopes, permission):
+            if not api_key_service.principal_scopes_allow_permission(principal_allowed_scopes, permission):
                 return False
             if entity_id is not None:
                 has_entity_access = await api_key_service.check_entity_access_with_tree(
@@ -571,6 +574,15 @@ class AuthDeps:
                     return result
 
             except Exception:
+                # Fail closed (try the next backend) but surface unexpected backend
+                # failures instead of silently swallowing them (SEC-19). Backends signal
+                # an ordinary "no match" by returning None, not by raising — so anything
+                # reaching here is a real error worth a log line.
+                logger.warning(
+                    "auth_backend_error",
+                    exc_info=True,
+                    extra={"backend": type(backend).__name__},
+                )
                 continue
 
         if optional:

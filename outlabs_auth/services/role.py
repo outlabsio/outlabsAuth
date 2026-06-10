@@ -22,6 +22,7 @@ from outlabs_auth.core.exceptions import (
 )
 from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.entity import Entity
+from outlabs_auth.models.sql.entity_membership import EntityMembership, EntityMembershipRole
 from outlabs_auth.models.sql.enums import DefinitionStatus, MembershipStatus, RoleScope
 from outlabs_auth.models.sql.permission import Permission
 from outlabs_auth.models.sql.role import (
@@ -591,7 +592,7 @@ class RoleService(BaseService[Role]):
                 after=current_snapshot,
                 metadata={"changed_fields": changed_fields},
             )
-        await self._invalidate_all_permissions_cache()
+        await self._invalidate_role_permissions_cache(session, role_id)
         return current_role
 
     async def delete_role(
@@ -1324,7 +1325,7 @@ class RoleService(BaseService[Role]):
         # Clear existing role_permissions
         await self._replace_permissions_by_name(session, role_id, permission_names)
         await session.refresh(role, attribute_names=["permissions", "entity_type_permissions"])
-        await self._invalidate_all_permissions_cache()
+        await self._invalidate_role_permissions_cache(session, role_id)
 
         current_role = (
             await self.get_role_by_id(
@@ -1388,7 +1389,7 @@ class RoleService(BaseService[Role]):
 
         await self._add_permissions_by_name(session, role_id, permission_names)
         await session.refresh(role, attribute_names=["permissions", "entity_type_permissions"])
-        await self._invalidate_all_permissions_cache()
+        await self._invalidate_role_permissions_cache(session, role_id)
         current_role = (
             await self.get_role_by_id(
                 session,
@@ -1459,7 +1460,7 @@ class RoleService(BaseService[Role]):
             await session.flush()
 
         await session.refresh(role, attribute_names=["permissions", "entity_type_permissions"])
-        await self._invalidate_all_permissions_cache()
+        await self._invalidate_role_permissions_cache(session, role_id)
 
         current_role = (
             await self.get_role_by_id(
@@ -2381,6 +2382,69 @@ class RoleService(BaseService[Role]):
         cache_service = getattr(self, "cache_service", None)
         if cache_service is not None:
             await cache_service.publish_all_permissions_invalidation()
+
+    # PERF: a role-definition edit changes effective permissions only for users who
+    # actually hold that role, so invalidate just those users instead of flushing the
+    # whole permission cache cluster-wide (which bumps the GLOBAL snapshot version and
+    # forces every API-key snapshot to rebuild at once — a Postgres thundering herd).
+    # FAIL-SAFE: on any error, or when the role is held by more users than the fan-out
+    # cap, fall back to a global invalidation. We must never under-invalidate — a missed
+    # user would keep stale/elevated permissions until their snapshot TTL.
+    _ROLE_INVALIDATION_FANOUT_LIMIT = 200
+
+    async def _users_with_role(self, session: AsyncSession, role_id: UUID) -> set[UUID]:
+        """Every user who currently holds ``role_id`` via either grant path.
+
+        Covers both SimpleRBAC (``UserRoleMembership``) and EnterpriseRBAC
+        (``EntityMembership`` ↔ ``EntityMembershipRole``). Filters to ACTIVE, which is
+        safely *over*-inclusive (an ACTIVE-but-time-expired row just gets a harmless
+        extra invalidation) and never under-inclusive.
+        """
+        user_ids: set[UUID] = set()
+
+        direct = await session.execute(
+            select(cast(Any, UserRoleMembership.user_id))
+            .where(
+                cast(Any, UserRoleMembership.role_id) == role_id,
+                cast(Any, UserRoleMembership.status) == MembershipStatus.ACTIVE,
+            )
+            .distinct()
+        )
+        user_ids.update(direct.scalars().all())
+
+        entity = await session.execute(
+            select(cast(Any, EntityMembership.user_id))
+            .join(
+                EntityMembershipRole,
+                cast(Any, EntityMembershipRole.membership_id) == cast(Any, EntityMembership.id),
+            )
+            .where(
+                cast(Any, EntityMembershipRole.role_id) == role_id,
+                cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
+            )
+            .distinct()
+        )
+        user_ids.update(entity.scalars().all())
+
+        return user_ids
+
+    async def _invalidate_role_permissions_cache(self, session: AsyncSession, role_id: UUID) -> None:
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is None:
+            return
+        try:
+            user_ids = await self._users_with_role(session, role_id)
+        except Exception:
+            # Resolution failed — fail safe to a full invalidation rather than risk
+            # leaving a user with stale permissions.
+            await cache_service.publish_all_permissions_invalidation()
+            return
+        if len(user_ids) > self._ROLE_INVALIDATION_FANOUT_LIMIT:
+            # Too many holders to fan out efficiently; a single global bump is cheaper.
+            await cache_service.publish_all_permissions_invalidation()
+            return
+        for user_id in user_ids:
+            await cache_service.publish_user_permissions_invalidation(str(user_id))
 
     async def _get_mutable_role_for_definition_edit(
         self,

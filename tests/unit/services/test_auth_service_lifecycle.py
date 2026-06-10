@@ -447,7 +447,7 @@ async def test_auth_service_revoke_all_tokens_reset_password_and_accept_invite_c
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_auth_service_reset_password_expired_token_clears_token_and_commits():
-    config = AuthConfig(secret_key="test-secret-key")
+    config = AuthConfig(secret_key="test-secret-key-do-not-use-in-production-1234567890")
     service = AuthService(config=config)
     session = AsyncMock()
 

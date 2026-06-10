@@ -152,6 +152,7 @@ class ServiceTokenService:
                 self.config.secret_key,
                 algorithms=[self.config.algorithm],
                 audience=self.SERVICE_AUDIENCE,
+                options={"require": ["exp"]},  # SEC-6: never accept a token without expiry
             )
 
             # Verify it's a service token

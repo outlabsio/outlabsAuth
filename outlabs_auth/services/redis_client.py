@@ -451,6 +451,62 @@ class RedisClient:
             logger.debug(f"Increment with TTL failed for {key}: {e}")
             return None
 
+    async def record_api_key_usage_pipeline(
+        self,
+        *,
+        usage_key: str,
+        last_used_key: str,
+        last_used_value: str,
+        last_used_ttl: Optional[int] = None,
+        rate_windows: Optional[list[tuple[str, int]]] = None,
+    ) -> Optional[dict[str, int]]:
+        """Record per-request API-key usage and rate-limit counters in ONE round trip.
+
+        Pipelines (non-transactional) the writes that previously ran as 3-4 sequential
+        awaits on the API-key hot path:
+          - ``INCR usage_key``
+          - ``SET last_used_key`` (with optional TTL)
+          - for each ``(rate_limit_key, ttl)`` window: ``SET key 0 NX EX ttl`` then ``INCR``
+
+        The ``SET ... NX EX`` establishes the window TTL exactly once (on the first request
+        of the window) and is a no-op thereafter, preserving true fixed-window semantics
+        without a read-back — issuing a bare ``EXPIRE`` every request would instead keep
+        resetting the TTL and the counter would never roll over under steady traffic.
+
+        Returns ``{usage_key: count, <rate_limit_key>: count, ...}``, or ``None`` if Redis
+        is unavailable (callers fall back to their existing per-op path).
+        """
+        if not self._available or not self._client:
+            return None
+
+        windows = list(rate_windows or [])
+        try:
+            pipe = self._client.pipeline(transaction=False)
+            pipe.incrby(usage_key, 1)
+            if last_used_ttl:
+                pipe.set(last_used_key, last_used_value, ex=last_used_ttl)
+            else:
+                pipe.set(last_used_key, last_used_value)
+            for rate_key, ttl in windows:
+                pipe.set(rate_key, 0, nx=True, ex=ttl)
+                pipe.incrby(rate_key, 1)
+            results = await pipe.execute()
+        except RedisError as e:
+            logger.debug(f"API key usage pipeline failed: {e}")
+            return None
+
+        try:
+            counts: dict[str, int] = {usage_key: int(results[0] or 0)}
+            cursor = 2  # results[1] is the last_used SET
+            for rate_key, _ttl in windows:
+                # results[cursor] = SET NX result, results[cursor + 1] = INCR result
+                counts[rate_key] = int(results[cursor + 1] or 0)
+                cursor += 2
+        except (IndexError, TypeError, ValueError) as e:
+            logger.debug(f"API key usage pipeline result parse failed: {e}")
+            return None
+        return counts
+
     # Pub/Sub Operations (DD-037)
 
     async def publish(self, channel: str, message: str) -> bool:

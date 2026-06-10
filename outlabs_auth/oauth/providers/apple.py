@@ -267,20 +267,22 @@ class AppleProvider(OAuthProvider):
             "Override this method or pass id_token to extract user info."
         )
     
-    def parse_id_token(self, id_token: str, verify: bool = False) -> OAuthUserInfo:
+    def parse_id_token(self, id_token: str, verify: bool = True) -> OAuthUserInfo:
         """
         Parse Apple ID token to extract user info.
-        
+
         Args:
             id_token: Apple ID token (JWT)
-            verify: Whether to verify JWT signature (requires JWKS)
-        
+            verify: Whether to verify the JWT signature against Apple's JWKS.
+                Defaults to True (SEC-11). Pass verify=False ONLY for local debugging
+                — never establish identity from an unverified token in production.
+
         Returns:
             Standardized user info
-        
+
         Note:
-            If verify=True, signature, issuer, and audience are validated against
-            Apple's JWKS metadata.
+            With verify=True (default), signature, issuer, and audience are validated
+            against Apple's JWKS metadata.
         """
         try:
             if verify:

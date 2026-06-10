@@ -25,6 +25,11 @@ password_hasher = PasswordHash(
     (Argon2Hasher(time_cost=2, memory_cost=19456, parallelism=1), BcryptHasher())
 )
 
+# Lazily computed Argon2id hash used only to equalize timing on the login path
+# when no user matches the supplied email — prevents account enumeration via
+# response latency (SEC-7). Reset whenever the hasher is reconfigured.
+_DUMMY_PASSWORD_HASH: Optional[str] = None
+
 
 def configure_argon2(time_cost: int, memory_cost_kib: int, parallelism: int) -> None:
     """Rebuild the module-level password hasher with custom Argon2id params.
@@ -33,7 +38,7 @@ def configure_argon2(time_cost: int, memory_cost_kib: int, parallelism: int) -> 
     by AuthConfig rather than hard-coded. Bcrypt stays enabled for verifying
     legacy hashes.
     """
-    global password_hasher
+    global password_hasher, _DUMMY_PASSWORD_HASH
     password_hasher = PasswordHash(
         (
             Argon2Hasher(
@@ -44,6 +49,8 @@ def configure_argon2(time_cost: int, memory_cost_kib: int, parallelism: int) -> 
             BcryptHasher(),
         )
     )
+    # Recompute the timing-equalizer hash against the new cost on next use.
+    _DUMMY_PASSWORD_HASH = None
 
 
 def hash_password(password: str) -> str:
@@ -121,6 +128,26 @@ async def verify_and_upgrade_password_async(
     return await asyncio.to_thread(verify_and_upgrade_password, plain_password, hashed_password)
 
 
+def _get_dummy_password_hash() -> str:
+    """Return a cached Argon2id hash used solely for login timing equalization."""
+    global _DUMMY_PASSWORD_HASH
+    if _DUMMY_PASSWORD_HASH is None:
+        _DUMMY_PASSWORD_HASH = password_hasher.hash("outlabs-timing-equalizer")
+    return _DUMMY_PASSWORD_HASH
+
+
+async def verify_password_dummy_async() -> None:
+    """Run a throwaway password verification at the configured Argon2 cost.
+
+    Used on the login path when no account matches the supplied email so that the
+    "no such user" response costs the same as a "wrong password" response,
+    mitigating user enumeration via timing (SEC-7).
+    """
+    await asyncio.to_thread(
+        verify_password, "outlabs-timing-equalizer-probe", _get_dummy_password_hash()
+    )
+
+
 def validate_password_strength(
     password: str,
     min_length: int = 8,
@@ -185,7 +212,7 @@ def validate_password_with_config(password: str, config) -> None:
 
     Example:
         >>> from outlabs_auth.core.config import AuthConfig
-        >>> config = AuthConfig(secret_key="test", password_min_length=10)
+        >>> config = AuthConfig(secret_key="your-secret-key-at-least-32-characters", password_min_length=10)
         >>> validate_password_with_config("short", config)
         InvalidPasswordError: Password must be at least 10 characters long
     """
@@ -230,7 +257,7 @@ def generate_password_hash(password: str, config) -> str:
 
     Example:
         >>> from outlabs_auth.core.config import AuthConfig
-        >>> config = AuthConfig(secret_key="test")
+        >>> config = AuthConfig(secret_key="your-secret-key-at-least-32-characters")
         >>> hashed = generate_password_hash("StrongPass123!", config)
         >>> verify_password("StrongPass123!", hashed)
         True

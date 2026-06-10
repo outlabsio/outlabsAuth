@@ -8,7 +8,7 @@ def test_enterprise_preset_init_has_no_legacy_migration_warning():
         warnings.simplefilter("always")
         auth = EnterpriseRBAC(
             database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test",
-            secret_key="test-secret-key",
+            secret_key="test-secret-key-do-not-use-in-production-1234567890",
         )
 
     messages = [str(item.message) for item in caught]

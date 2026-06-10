@@ -1022,38 +1022,40 @@ class PermissionService(BaseService[Permission]):
             for perm in self._get_role_permissions_for_context(role, entity_type):
                 all_permissions.add(perm.name)
 
-        # Get active entity memberships with roles eagerly loaded
-        # EnterpriseRBAC stores role assignments via entity membership, so these
-        # permissions must be included for effective user permission resolution.
-        entity_stmt = (
-            select(EntityMembership)
-            .options(
-                *self._entity_membership_permission_options(
-                    entity_type=entity_type,
+        # Get active entity memberships with roles eagerly loaded.
+        # EnterpriseRBAC stores role assignments via entity membership. Skip this
+        # entirely under SimpleRBAC (enable_entity_hierarchy=False): it would always
+        # return zero rows and just adds ~2 round trips to every permission load (PERF).
+        if getattr(self.config, "enable_entity_hierarchy", True):
+            entity_stmt = (
+                select(EntityMembership)
+                .options(
+                    *self._entity_membership_permission_options(
+                        entity_type=entity_type,
+                    )
+                )
+                .where(
+                    cast(Any, EntityMembership.user_id) == user_id,
+                    cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
                 )
             )
-            .where(
-                cast(Any, EntityMembership.user_id) == user_id,
-                cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
-            )
-        )
-        entity_result = await session.execute(entity_stmt)
-        entity_memberships: list[EntityMembership] = list(entity_result.scalars().all())
+            entity_result = await session.execute(entity_stmt)
+            entity_memberships: list[EntityMembership] = list(entity_result.scalars().all())
 
-        for entity_membership in entity_memberships:
-            if not entity_membership.can_grant_permissions():
-                continue
-
-            for role in entity_membership.roles:
-                if not self._role_definition_is_live(role):
+            for entity_membership in entity_memberships:
+                if not entity_membership.can_grant_permissions():
                     continue
 
-                # DD-054: Filter out entity-local roles when include_entity_local=False
-                if not include_entity_local and role.scope_entity_id is not None:
-                    continue
+                for role in entity_membership.roles:
+                    if not self._role_definition_is_live(role):
+                        continue
 
-                for perm in self._get_role_permissions_for_context(role, entity_type):
-                    all_permissions.add(perm.name)
+                    # DD-054: Filter out entity-local roles when include_entity_local=False
+                    if not include_entity_local and role.scope_entity_id is not None:
+                        continue
+
+                    for perm in self._get_role_permissions_for_context(role, entity_type):
+                        all_permissions.add(perm.name)
 
         return list(all_permissions)
 

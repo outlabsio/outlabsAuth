@@ -122,6 +122,23 @@ class _SnapshotRedis:
         self.counters[key] = self.counters.get(key, 0) + amount
         return self.counters[key]
 
+    async def record_api_key_usage_pipeline(
+        self,
+        *,
+        usage_key: str,
+        last_used_key: str,
+        last_used_value: str,
+        last_used_ttl=None,
+        rate_windows=None,
+    ):
+        self.counters[usage_key] = self.counters.get(usage_key, 0) + 1
+        self.values[last_used_key] = last_used_value
+        counts = {usage_key: self.counters[usage_key]}
+        for rate_key, _ttl in (rate_windows or []):
+            self.counters[rate_key] = self.counters.get(rate_key, 0) + 1
+            counts[rate_key] = self.counters[rate_key]
+        return counts
+
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
@@ -135,7 +152,7 @@ class _SnapshotRedis:
         (
             {
                 "database_url": "postgresql+asyncpg://example:example@localhost:5432/test",
-                "secret_key": "test-secret",
+                "secret_key": "test-secret-key-do-not-use-in-production-1234567890",
                 "enable_context_aware_roles": True,
             },
             "enable_context_aware_roles requires enable_entity_hierarchy=True",
@@ -143,7 +160,7 @@ class _SnapshotRedis:
         (
             {
                 "database_url": "postgresql+asyncpg://example:example@localhost:5432/test",
-                "secret_key": "test-secret",
+                "secret_key": "test-secret-key-do-not-use-in-production-1234567890",
                 "enable_caching": True,
             },
             "enable_caching=True requires Redis",
@@ -159,7 +176,7 @@ def test_outlabs_auth_configuration_validation(kwargs: dict, message: str):
 def test_outlabs_auth_sets_redis_enabled_and_reports_features():
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         redis_url="redis://localhost:6379/0",
         enable_entity_hierarchy=True,
         enable_abac=True,
@@ -181,7 +198,7 @@ def test_outlabs_auth_sets_redis_enabled_and_reports_features():
 def test_outlabs_auth_allows_explicit_cache_opt_out_with_redis_url():
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         redis_url="redis://localhost:6379/0",
         enable_caching=False,
     )
@@ -195,7 +212,7 @@ def test_outlabs_auth_allows_explicit_cache_opt_out_with_redis_url():
 def test_outlabs_auth_allows_explicit_redis_opt_out_with_redis_url():
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         redis_url="redis://localhost:6379/0",
         redis_enabled=False,
     )
@@ -211,7 +228,7 @@ async def test_outlabs_auth_initialize_builds_engine_runs_migrations_and_starts_
 ):
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         database_schema="auth_schema",
         auto_migrate=True,
     )
@@ -275,7 +292,7 @@ async def test_outlabs_auth_initialize_builds_engine_runs_migrations_and_starts_
 async def test_outlabs_auth_initialize_times_out_with_configuration_error():
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         initialize_timeout_seconds=0.01,
     )
 
@@ -294,7 +311,7 @@ async def test_outlabs_auth_initialize_times_out_with_configuration_error():
 def test_outlabs_auth_init_backends_and_deps_and_wrappers():
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         enable_entity_hierarchy=True,
     )
     auth.api_key_service = object()
@@ -340,7 +357,7 @@ def test_outlabs_auth_init_backends_and_deps_and_wrappers():
 async def test_outlabs_auth_session_uow_and_property_guards():
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
     )
 
     with pytest.raises(ConfigurationError, match="Database not initialized"):
@@ -414,7 +431,7 @@ async def test_outlabs_auth_session_uow_and_property_guards():
 async def test_outlabs_auth_authorize_api_key_returns_host_safe_auth_result():
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
     )
     owner_id = uuid4()
     entity_id = uuid4()
@@ -481,7 +498,7 @@ async def test_outlabs_auth_authorize_api_key_returns_host_safe_auth_result():
 async def test_outlabs_auth_authorize_api_key_uses_cached_snapshot_without_db_auth():
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
     )
     api_key_string = "sk_live_direct_cached_key_123456"
     key_id = uuid4()
@@ -538,7 +555,7 @@ async def test_outlabs_auth_authorize_api_key_uses_cached_snapshot_without_db_au
 async def test_outlabs_auth_authorize_api_key_uses_entity_snapshot_without_db_auth():
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
     )
     api_key_string = "sk_live_entity_cached_key_123456"
     key_id = uuid4()
@@ -609,7 +626,7 @@ async def test_outlabs_auth_authorize_api_key_uses_entity_snapshot_without_db_au
 async def test_outlabs_auth_authorize_api_key_populates_direct_snapshot_after_slow_success():
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
     )
     api_key_string = "sk_live_direct_cache_fill_key_123456"
     key_id = uuid4()
@@ -663,7 +680,7 @@ async def test_outlabs_auth_authorize_api_key_populates_direct_snapshot_after_sl
 async def test_outlabs_auth_shutdown_cleans_up_background_resources():
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
     )
     auth._cleanup_task = asyncio.create_task(asyncio.sleep(3600))
     auth._activity_sync_task = asyncio.create_task(asyncio.sleep(3600))
@@ -685,7 +702,7 @@ async def test_outlabs_auth_shutdown_cleans_up_background_resources():
 async def test_outlabs_auth_run_migrations_forwards_database_url_and_schema(monkeypatch: pytest.MonkeyPatch):
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         database_schema="auth_schema",
         migration_statement_timeout="90s",
     )
@@ -707,7 +724,7 @@ async def test_outlabs_auth_run_migrations_forwards_database_url_and_schema(monk
 async def test_outlabs_auth_init_services_wires_redis_cache_enterprise_and_activity_tracking():
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         enable_entity_hierarchy=True,
         redis_url="redis://localhost:6379/0",
         enable_activity_tracking=True,
@@ -750,7 +767,7 @@ async def test_outlabs_auth_init_services_wires_redis_cache_enterprise_and_activ
 async def test_outlabs_auth_init_services_can_use_redis_without_permission_cache():
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         redis_url="redis://localhost:6379/0",
         enable_caching=False,
     )
@@ -773,7 +790,7 @@ async def test_outlabs_auth_init_services_can_use_redis_without_permission_cache
 async def test_outlabs_auth_init_services_rejects_activity_tracking_without_redis():
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         enable_activity_tracking=True,
     )
 
@@ -788,7 +805,7 @@ async def test_outlabs_auth_token_cleanup_scheduler_runs_success_and_error_paths
 ):
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
     )
     captured: dict[str, object] = {}
     sleep_calls = 0
@@ -833,7 +850,7 @@ async def test_outlabs_auth_activity_sync_scheduler_runs_success_and_error_paths
 ):
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
     )
     captured: dict[str, object] = {}
     sleep_calls = 0
@@ -881,7 +898,7 @@ def test_outlabs_auth_instrument_fastapi_registers_integrations_and_warns(
 ):
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         trust_resource_context_header=True,
     )
     auth.observability = SimpleNamespace(config=SimpleNamespace(metrics_path="/metrics"))
@@ -953,7 +970,7 @@ def test_outlabs_auth_instrument_fastapi_registers_integrations_and_warns(
 def test_outlabs_auth_instrument_fastapi_re_raises_unexpected_middleware_runtime_error():
     auth = OutlabsAuth(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
     )
     auth.observability = SimpleNamespace(config=SimpleNamespace(metrics_path="/metrics"))
 

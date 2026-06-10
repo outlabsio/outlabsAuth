@@ -702,6 +702,12 @@ async def test_user_with_role_update_can_update_role_permissions(
     )
     perm_name = perm_create_resp.json()["name"]
 
+    # SEC-3 (delegation containment): a role:update holder may only attach
+    # permissions they themselves hold, so grant the actor this permission first.
+    async with auth_instance.get_session() as session:
+        await auth_instance.role_service.add_permissions_by_name(session, role.id, [perm_name])
+        await session.commit()
+
     resp = await client.post(
         f"/v1/roles/{target_role_id}/permissions",
         headers={"Authorization": f"Bearer {token}"},
