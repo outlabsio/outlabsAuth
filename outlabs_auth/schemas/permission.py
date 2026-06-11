@@ -107,7 +107,10 @@ class PermissionCheckRequest(BaseModel):
 
     user_id: str
     permissions: List[str]
-    entity_id: Optional[str] = None  # Optional entity context
+    # Optional entity context: when set, checks are evaluated within that
+    # entity (direct membership grants plus tree permissions inherited from
+    # ancestors); when omitted, the user's global aggregate is used.
+    entity_id: Optional[str] = None
 
 
 class PermissionCheckResponse(BaseModel):

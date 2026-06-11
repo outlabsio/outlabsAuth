@@ -195,9 +195,13 @@ async def test_permissions_router_callback_crud_and_user_paths(
 
         # The /check endpoint delegates to get_effective_permission_names
         # (one membership-graph load + in-memory matching) instead of a full
-        # check_permission round per requested name.
+        # check_permission round per requested name, forwarding the optional
+        # entity context.
+        forwarded_entity_ids = []
+
         async def _effective_names(*args, **kwargs):
             assert set(kwargs["candidate_permission_names"]) == {"user:read", "role:update"}
+            forwarded_entity_ids.append(kwargs["entity_id"])
             return {"user:read"}
 
         monkeypatch.setattr(
@@ -215,6 +219,32 @@ async def test_permissions_router_callback_crud_and_user_paths(
         )
         assert checked.has_all_permissions is False
         assert checked.results == {"user:read": True, "role:update": False}
+
+        context_entity_id = uuid.uuid4()
+        await check_permissions(
+            data=PermissionCheckRequest(
+                user_id=str(actor.id),
+                permissions=["user:read", "role:update"],
+                entity_id=str(context_entity_id),
+            ),
+            session=session,
+            auth_result={"user_id": str(actor.id)},
+        )
+        # Omitted -> None; supplied -> parsed UUID (the field was accepted but
+        # silently ignored before 0.1.0a23).
+        assert forwarded_entity_ids == [None, context_entity_id]
+
+        with pytest.raises(HTTPException) as exc:
+            await check_permissions(
+                data=PermissionCheckRequest(
+                    user_id=str(actor.id),
+                    permissions=["user:read"],
+                    entity_id="not-a-uuid",
+                ),
+                session=session,
+                auth_result={"user_id": str(actor.id)},
+            )
+        assert exc.value.status_code == 400
 
         with pytest.raises(HTTPException) as exc:
             await get_user_permissions(

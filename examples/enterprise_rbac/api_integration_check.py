@@ -348,6 +348,37 @@ def main() -> int:
             f"http {response.status_code}",
         )
 
+        # POST /v1/permissions/check honors entity_id (accepted but silently
+        # ignored before 0.1.0a23): the same user+permission answers True in a
+        # descendant of their tree grant and False in the sibling branch.
+        def batched_check(payload: dict) -> httpx.Response:
+            return client.post(
+                "/v1/permissions/check",
+                json=payload,
+                headers={"Authorization": f"Bearer {tokens['admin']}"},
+            )
+
+        base = {"user_id": tree_user_id, "permissions": ["lead:create"]}
+        in_descendant = batched_check({**base, "entity_id": sf_residential})
+        in_sibling = batched_check({**base, "entity_id": east_coast})
+        verdict_descendant = in_descendant.json().get("results", {}).get("lead:create")
+        verdict_sibling = in_sibling.json().get("results", {}).get("lead:create")
+        check(
+            "permissions/check honors entity_id (descendant True, sibling False)",
+            in_descendant.status_code == 200
+            and in_sibling.status_code == 200
+            and verdict_descendant is True
+            and verdict_sibling is False,
+            f"descendant={verdict_descendant} sibling={verdict_sibling}",
+        )
+
+        malformed = batched_check({**base, "entity_id": "not-a-uuid"})
+        check(
+            "permissions/check rejects malformed entity_id (400)",
+            malformed.status_code == 400,
+            f"http {malformed.status_code}",
+        )
+
     # ---- 10. Role-permission edit -> next-request visibility ----------------
     # Adding/removing a permission on a role must affect its holders on their
     # very next request (the role-edit per-user fan-out invalidation).
