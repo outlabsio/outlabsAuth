@@ -80,7 +80,9 @@ async def reset_database():
 
     auth = EnterpriseRBAC(
         database_url=DATABASE_URL,
-        secret_key="example-reset-secret-key",
+        # The reset script never issues tokens; the secret only needs to pass
+        # the library's >=32-char HS256 validation (SEC hardening).
+        secret_key=os.getenv("SECRET_KEY", "example-reset-secret-key-needs-32-characters"),
         auto_migrate=False,
         enable_context_aware_roles=True,
         enable_abac=True,

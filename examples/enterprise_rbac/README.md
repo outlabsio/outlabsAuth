@@ -43,6 +43,27 @@ This example demonstrates OutlabsAuth's **EnterpriseRBAC** preset with real-worl
 - ✅ Lead assignment workflow
 - ✅ Status pipeline tracking
 
+## ✅ API Integration Check (Release Smoke Test)
+
+`api_integration_check.py` drives the **running** API over HTTP against the
+seeded scenarios and asserts the behavior an operator cares about before a
+release: persona logins, entity-scoped grants, sibling-team and cross-root
+isolation, cache-served verdict stability, the full role grant → next-request
+visible → revoke → next-request denied arc (proving versioned cache
+invalidation through the whole stack), and the API-key create/use/revoke
+lifecycle.
+
+```bash
+python reset_test_env.py                                  # seed known state
+uvicorn main:app --port 8004                              # start the API
+python api_integration_check.py                           # 28 checks, exit 0 on pass
+python api_integration_check.py --base-url http://staging-host:8004
+```
+
+It is rerunnable and non-destructive beyond the seeded dataset (it adds a few
+leads, one throwaway scoped user, a temporary membership it removes again, and
+an API key it revokes again).
+
 ## 🔑 Machine Credentials (Current v1 Surface)
 
 The current EnterpriseRBAC example also demonstrates the OutlabsAuth machine
