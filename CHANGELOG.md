@@ -175,6 +175,30 @@ Phase 4 (write paths, schema, observability):
   delete_role_condition[_group]`), whose global bump also keeps the new "conditions exist" flag
   honest.
 
+### Compatibility notes (hosts integrating below the router layer)
+
+- **REST API: no contract changes.** Request/response shapes are unchanged across all routers
+  (user-search totals are now *correct* beyond 1,000 matches, which is a fix, not a break).
+- **BREAKING for direct `CacheService` callers:** `get_permission_check` now returns
+  `(result, versions)` instead of a bare bool, and `set_permission_check` requires a `versions`
+  token (writes without one are refused). `PermissionService` shims host-*supplied* cache services
+  with the legacy contract, but host code *calling* `CacheService` directly must update.
+- **Redis floor: 6.2.** The API-key counter sync uses `GETDEL`; on older servers the sync logs a
+  failure and counters are not consumed. The opt-in helpers added this cycle (MGET validation,
+  pipelines) work on any modern Redis.
+- **Library versions older than this release cannot run migrations against a database already at
+  `20260611_0018`** (standard Alembic: unknown revision). Roll out the library before or together
+  with the migration, and don't leave old instances running `auto_migrate=True`. Old code merely
+  *running* against the migrated schema is fine — the migration is index-only.
+- **Monitoring-visible:** HTTP error metrics now label `endpoint` with the route template
+  (`/users/{user_id}`); dashboards filtering on concrete paths need their queries updated.
+- The pub/sub invalidation channel is still published, but subscribed instances no longer
+  SCAN-delete on messages (shared entries are version-validated). The DD-033 usage sync worker now
+  starts automatically; a host that also starts one manually just runs a redundant (safe) second
+  worker.
+- Permission caching assumes mutations flow through the library's services. Rows mutated via raw
+  SQL won't invalidate cached permission sets until the TTL (15 min default) expires.
+
 ### Database migrations
 
 - **New Alembic revision `20260611_0018_index_hygiene`** (index-only — no table or column changes,
