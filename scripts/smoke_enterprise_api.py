@@ -96,10 +96,9 @@ async def main() -> None:
         ).json()
         smoke_role_id = smoke_role["id"]
 
-        # Condition on USER attributes: always present in the ABAC context.
-        # (resource.* conditions need the resource-context middleware, which
-        # this example does not install — see api docs on
-        # trust_resource_context_header.)
+        # Scenario 1 conditions on USER attributes, which are always present
+        # in the ABAC context. Scenario 2 (further down) conditions on
+        # RESOURCE attributes supplied via the X-Resource-Context header.
         smoke_email = f"smoke-abac-{marker}@example.com"
         await _request(
             client,
@@ -193,7 +192,7 @@ async def main() -> None:
         # ABAC smoke (non-superuser): two users hold the SAME condition-guarded
         # role on the same entity; only the one matching the user.email
         # condition may create leads. Proves role-level ABAC gating end-to-end.
-        async def _register_member(email: str) -> str:
+        async def _register_member(email: str, role_id: str) -> str:
             registered = await _request(
                 client,
                 "POST",
@@ -213,14 +212,14 @@ async def main() -> None:
                 json={
                     "entity_id": agent_entity_id,
                     "user_id": user_id,
-                    "role_ids": [smoke_role_id],
+                    "role_ids": [role_id],
                 },
             )
             return user_id
 
         other_email = f"smoke-abac-other-{marker}@example.com"
-        await _register_member(smoke_email)
-        await _register_member(other_email)
+        await _register_member(smoke_email, smoke_role_id)
+        await _register_member(other_email, smoke_role_id)
 
         async def _login(email: str) -> str:
             response = await _request(
@@ -231,7 +230,15 @@ async def main() -> None:
             )
             return response.json()["access_token"]
 
-        def _lead_request(token: str, tag: str) -> dict:
+        def _lead_request(
+            token: str, tag: str, resource_context: dict | None = None
+        ) -> dict:
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "X-Entity-Context": agent_entity_id,
+            }
+            if resource_context is not None:
+                headers["X-Resource-Context"] = json.dumps(resource_context)
             return {
                 "json": {
                     "entity_id": agent_entity_id,
@@ -242,10 +249,7 @@ async def main() -> None:
                     "lead_type": "buyer",
                     "source": "smoke_test",
                 },
-                "headers": {
-                    "Authorization": f"Bearer {token}",
-                    "X-Entity-Context": agent_entity_id,
-                },
+                "headers": headers,
             }
 
         # Test 1: same role, wrong user attribute -> ABAC denies.
@@ -262,6 +266,78 @@ async def main() -> None:
             "/leads",
             **_lead_request(await _login(smoke_email), "allowed"),
         )
+
+        # Scenario 2: RESOURCE-attribute ABAC via X-Resource-Context. The
+        # example calls instrument_fastapi(include_resource_context=True) with
+        # trust_resource_context_header=True (demo-only wiring), so the
+        # client-supplied header JSON lands in the ABAC context as resource.*.
+        # This role may only act on draft leads.
+        res_role = (
+            await _request(
+                client,
+                "POST",
+                "/roles/",
+                json={
+                    "name": f"smoke-abac-res-{marker}",
+                    "display_name": "Smoke ABAC Resource Agent",
+                    "description": "Throwaway role for the resource-context ABAC smoke scenario",
+                    "permissions": agent_role.get("permissions", []),
+                    "is_global": agent_role.get("is_global", False),
+                    "root_entity_id": agent_role.get("root_entity_id"),
+                },
+            )
+        ).json()
+        res_role_id = res_role["id"]
+        await _request(
+            client,
+            "POST",
+            f"/roles/{res_role_id}/conditions",
+            json={
+                "attribute": "resource.lead_status",
+                "operator": "equals",
+                "value": "draft",
+                "value_type": "string",
+                "description": "Holders may only act on draft leads",
+            },
+        )
+
+        res_email = f"smoke-abac-res-{marker}@example.com"
+        await _register_member(res_email, res_role_id)
+        res_token = await _login(res_email)
+
+        # Test 3: resource context says draft -> ABAC allows.
+        await _request(
+            client,
+            "POST",
+            "/leads",
+            **_lead_request(
+                res_token, "res-allowed", resource_context={"lead_status": "draft"}
+            ),
+        )
+
+        # Test 4: resource context says published -> ABAC denies.
+        denied_resource = await client.post(
+            "/leads",
+            **_lead_request(
+                res_token, "res-denied", resource_context={"lead_status": "published"}
+            ),
+        )
+        if denied_resource.status_code != 403:
+            raise RuntimeError(
+                "Expected 403 for ABAC lead create with resource.lead_status=published, "
+                f"got {denied_resource.status_code}: {denied_resource.text}"
+            )
+
+        # Test 5: header absent -> resource.lead_status unresolvable -> ABAC
+        # fails closed and denies.
+        denied_missing = await client.post(
+            "/leads", **_lead_request(res_token, "res-missing")
+        )
+        if denied_missing.status_code != 403:
+            raise RuntimeError(
+                "Expected 403 for ABAC lead create without X-Resource-Context, "
+                f"got {denied_missing.status_code}: {denied_missing.text}"
+            )
 
 
 if __name__ == "__main__":

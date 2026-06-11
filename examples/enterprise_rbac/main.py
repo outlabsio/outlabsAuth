@@ -32,9 +32,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import SQLModel
 from team_directory import get_team_directory_router
 
-from outlabs_auth import EnterpriseRBAC, register_exception_handlers
-from outlabs_auth.middleware.resource_context import ResourceContextMiddleware
-from outlabs_auth.observability import ObservabilityPresets, create_metrics_router
+from outlabs_auth import EnterpriseRBAC
+from outlabs_auth.observability import ObservabilityPresets
 from outlabs_auth.routers import (
     get_api_key_admin_router,
     get_api_keys_router,
@@ -180,11 +179,49 @@ class LeadResponse(BaseModel):
 
 
 # ============================================================================
-# Global Variables
+# Auth Instance (module level)
 # ============================================================================
 
-# Auth instance (initialized in lifespan)
-auth: Optional[EnterpriseRBAC] = None
+# Constructing EnterpriseRBAC is synchronous; the async startup work happens
+# in lifespan via auth.initialize(). The instance must exist at import time so
+# auth.instrument_fastapi() below can install middleware before the app starts
+# serving — middleware added any later (e.g. inside lifespan) is skipped.
+
+if ENV == "production":
+    obs_config = ObservabilityPresets.production()
+else:
+    obs_config = ObservabilityPresets.development()
+    obs_config.enable_metrics = True
+
+auth = EnterpriseRBAC(
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
+    auto_migrate=False,
+    access_token_expire_minutes=480,  # 8 hours for dev (default: 15 min)
+    refresh_token_expire_days=7,  # 7 days for dev (default: 30 days)
+    redis_url=REDIS_URL,
+    enable_magic_links=ENABLE_MAGIC_LINKS,
+    enable_access_codes=ENABLE_ACCESS_CODES,
+    enable_context_aware_roles=True,
+    enable_abac=True,
+    # Demo only: trusts client-supplied X-Resource-Context headers so
+    # resource.* ABAC conditions can evaluate (wired via instrument_fastapi's
+    # include_resource_context below). Production hosts should derive resource
+    # context server-side (e.g. load the record and pass a
+    # resource_context_provider) instead of trusting the client.
+    trust_resource_context_header=True,
+    observability_config=obs_config,
+    transactional_mail_service=build_enterprise_example_transactional_mail_service(
+        frontend_url=FRONTEND_URL,
+        mailgun_api_base_url=MAILGUN_API_BASE_URL,
+        mailgun_domain=MAILGUN_DOMAIN,
+        mailgun_api_key=MAILGUN_API_KEY,
+        mailgun_from_email=MAILGUN_FROM_EMAIL,
+        mailgun_from_name=MAILGUN_FROM_NAME,
+        mailgun_recipient_override=MAILGUN_RECIPIENT_OVERRIDE,
+    ),
+)
+
 latest_magic_links: dict[str, dict[str, Any]] = {}
 latest_access_codes: dict[str, dict[str, Any]] = {}
 
@@ -219,60 +256,18 @@ def _build_frontend_access_code_url(redirect_url: Optional[str] = None) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
-    global auth
-
     # Startup
     print("Starting Real Estate API (EnterpriseRBAC) v1.0.0...")
 
-    # Connect to Redis (if available)
-    redis_client = None
-    if REDIS_URL:
-        try:
-            print("Connecting to Redis...")
-            import redis.asyncio as redis
-
-            redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-            # Test connection
-            await redis_client.ping()
-            print(f"Redis connected: {REDIS_URL}")
-        except Exception as e:
-            print(f"Redis connection failed: {e}")
-            print("Continuing without caching...")
-            redis_client = None
-
-    # Initialize EnterpriseRBAC
+    # The auth instance is constructed at module level (see above); async
+    # startup work happens here. Redis connection failures degrade gracefully
+    # inside the library (background reconnect probe).
     print("Initializing OutlabsAuth EnterpriseRBAC...")
-    if ENV == "production":
-        obs_config = ObservabilityPresets.production()
-    else:
-        obs_config = ObservabilityPresets.development()
-        obs_config.enable_metrics = True
-
-    auth = EnterpriseRBAC(
-        database_url=DATABASE_URL,
-        secret_key=SECRET_KEY,
-        auto_migrate=False,
-        access_token_expire_minutes=480,  # 8 hours for dev (default: 15 min)
-        refresh_token_expire_days=7,  # 7 days for dev (default: 30 days)
-        redis_client=redis_client,
-        redis_url=REDIS_URL if redis_client else None,
-        enable_magic_links=ENABLE_MAGIC_LINKS,
-        enable_access_codes=ENABLE_ACCESS_CODES,
-        enable_context_aware_roles=True,
-        enable_abac=True,
-        observability_config=obs_config,
-        transactional_mail_service=build_enterprise_example_transactional_mail_service(
-            frontend_url=FRONTEND_URL,
-            mailgun_api_base_url=MAILGUN_API_BASE_URL,
-            mailgun_domain=MAILGUN_DOMAIN,
-            mailgun_api_key=MAILGUN_API_KEY,
-            mailgun_from_email=MAILGUN_FROM_EMAIL,
-            mailgun_from_name=MAILGUN_FROM_NAME,
-            mailgun_recipient_override=MAILGUN_RECIPIENT_OVERRIDE,
-        ),
-    )
-
     await auth.initialize()
+
+    if REDIS_URL:
+        redis_ok = auth.redis_client is not None and auth.redis_client.is_available
+        print(f"Redis ({REDIS_URL}): {'connected' if redis_ok else 'unavailable, reconnect scheduled'}")
 
     if auth.config.enable_magic_links and MAGIC_LINK_DEBUG_TOKENS:
         print("Magic links enabled with dev token capture")
@@ -316,14 +311,6 @@ async def lifespan(app: FastAPI):
     print("Example domain tables ready")
     print("Transactional auth mail service enabled")
     print("Auth schema bootstrap: uv run outlabs-auth migrate")
-
-    if auth.observability and auth.observability.config.enable_metrics:
-        app.include_router(
-            create_metrics_router(
-                auth.observability,
-                path=auth.observability.config.metrics_path,
-            )
-        )
 
     # Include standard OutlabsAuth routers with /v1 prefix
     print("Including API routers...")
@@ -373,9 +360,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Register consistent JSON error envelopes before the app starts serving requests.
-register_exception_handlers(app, debug=DEBUG_MODE, mode="global")
-
 # CORS for development
 app.add_middleware(
     CORSMiddleware,
@@ -390,8 +374,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Resource context middleware for ABAC (must be added at module level, before app starts)
-app.add_middleware(ResourceContextMiddleware)
+# Install library FastAPI integrations: global JSON error envelopes, the
+# /metrics endpoint, request-scoped permission memos, and the resource-context
+# middleware that feeds X-Resource-Context into resource.* ABAC conditions
+# (honored because trust_resource_context_header=True above — demo wiring).
+# Must run at module level: middleware cannot be added after the app starts
+# serving, and instrument_fastapi() only warns when called too late.
+auth.instrument_fastapi(
+    app,
+    debug=DEBUG_MODE,
+    exception_handler_mode="global",
+    include_metrics=obs_config.enable_metrics,
+    include_resource_context=True,
+)
 
 
 # ============================================================================
@@ -401,8 +396,6 @@ app.add_middleware(ResourceContextMiddleware)
 
 def get_auth() -> EnterpriseRBAC:
     """Get the global auth instance"""
-    if auth is None:
-        raise HTTPException(status_code=500, detail="Auth not initialized")
     return auth
 
 
