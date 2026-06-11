@@ -102,13 +102,23 @@ async def main() -> None:
     if database_url:
         env["DATABASE_URL"] = database_url
 
+    # Everything runs with --project ROOT so the CURRENT library code is
+    # exercised. Without it, `uv run` resolves the example's own .venv, whose
+    # pinned (possibly stale) outlabs-auth silently tests the wrong version —
+    # and can't even resolve newer Alembic revisions.
     print("\n==> Resetting example DB/seed data")
-    await _run(["uv", "run", "python", str(RESET_SCRIPT)], cwd=EXAMPLE_DIR, env=env)
+    await _run(
+        ["uv", "run", "--project", str(ROOT), "python", str(RESET_SCRIPT)],
+        cwd=EXAMPLE_DIR,
+        env=env,
+    )
 
     print("\n==> Starting uvicorn")
     server_proc = await asyncio.create_subprocess_exec(
         "uv",
         "run",
+        "--project",
+        str(ROOT),
         "uvicorn",
         "main:app",
         "--host",
@@ -135,14 +145,34 @@ async def main() -> None:
         print("\n==> Waiting for readiness")
         await _wait_ready(base_url, timeout_s=40.0)
 
-        print("\n==> Running smoke script")
+        print("\n==> Running smoke script (admin + ABAC flow)")
         smoke_env = env.copy()
         smoke_env["BASE_URL"] = f"{base_url}/v1"
         smoke_env["EMAIL"] = _env("EMAIL", "admin@acme.com")
-        smoke_env["PASSWORD"] = _env("PASSWORD", "Test123!!")
-        await _run(["uv", "run", "python", str(SMOKE_SCRIPT)], cwd=ROOT, env=smoke_env)
+        smoke_env["PASSWORD"] = _env("PASSWORD", "Testpass1!")
+        await _run(
+            ["uv", "run", "--project", str(ROOT), "python", str(SMOKE_SCRIPT)],
+            cwd=ROOT,
+            env=smoke_env,
+        )
 
-        print("\n==> Smoke OK")
+        print("\n==> Running API integration check (assertion suite)")
+        await _run(
+            [
+                "uv",
+                "run",
+                "--project",
+                str(ROOT),
+                "python",
+                str(EXAMPLE_DIR / "api_integration_check.py"),
+                "--base-url",
+                base_url,
+            ],
+            cwd=ROOT,
+            env=env,
+        )
+
+        print("\n==> Smoke + integration checks OK")
     finally:
         print("\n==> Shutting down server")
         await _terminate(server_proc)

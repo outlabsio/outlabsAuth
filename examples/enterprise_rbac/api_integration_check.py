@@ -37,6 +37,7 @@ PERSONAS = {
     "sf_commercial": "commercial@sf.acme.com",
     "auditor": "auditor@acme.com",
     "summit_agent": "agent@austin.summit.com",
+    "summit_admin": "summit-admin@summit.com",
 }
 
 RESULTS: list[tuple[str, bool, str]] = []
@@ -272,6 +273,225 @@ def main() -> int:
             )
         else:
             check("revoked API key rejected on the NEXT request", False, "no key id in create response")
+
+    admin_headers = {"Authorization": f"Bearer {tokens['admin']}"}
+    marker = uuid.uuid4().hex[:6]
+    acme_org = by_name.get("acme_realty") or next((v for k, v in by_name.items() if "acme" in k.lower()), None)
+    west_coast = next((v for k, v in by_name.items() if "west" in k.lower()), None)
+    east_coast = next((v for k, v in by_name.items() if "east" in k.lower()), None)
+    sf_office = next((v for k, v in by_name.items() if "office" in k.lower()), None)
+
+    def register_user(label: str) -> tuple[str, str]:
+        email = f"{label}-{marker}@example.com"
+        reg = client.post(
+            "/v1/auth/register",
+            json={"email": email, "password": PASSWORD, "first_name": "ITC", "last_name": label},
+        )
+        token = client.post("/v1/auth/login", json={"email": email, "password": PASSWORD}).json().get("access_token")
+        return reg.json().get("id"), token
+
+    # ---- 9. Tree permissions: ancestor membership grants on descendants ----
+    # A *_tree permission held via a membership on west_coast must grant the
+    # base action on descendant entities (closure-table path), and must NOT
+    # grant on the sibling east_coast branch.
+    tree_ok = bool(acme_org and west_coast and east_coast)
+    check("tree-perm fixtures resolvable (org/west/east)", tree_ok)
+    if tree_ok:
+        # The seed defines lead:read_tree but not lead:create_tree — create it
+        # through the API (tolerating "already exists" on re-runs against an
+        # unreseeded database).
+        perm = client.post(
+            "/v1/permissions/",
+            json={"name": "lead:create_tree", "display_name": "Create leads (tree)"},
+            headers=admin_headers,
+        )
+        check(
+            "lead:create_tree permission available",
+            perm.status_code in (200, 201) or "already exists" in perm.text.lower(),
+            f"http {perm.status_code}",
+        )
+
+        tree_role = client.post(
+            "/v1/roles/",
+            json={
+                "name": f"itc-tree-{marker}",
+                "display_name": "ITC Tree Creator",
+                "permissions": ["lead:create_tree"],
+                "is_global": False,
+                "root_entity_id": acme_org,
+            },
+            headers=admin_headers,
+        )
+        tree_role_id = tree_role.json().get("id")
+        tree_user_id, tree_token = register_user("tree")
+        grant = client.post(
+            "/v1/memberships/",
+            json={"entity_id": west_coast, "user_id": tree_user_id, "role_ids": [tree_role_id]},
+            headers=admin_headers,
+        )
+        check(
+            "tree role created + granted at west_coast",
+            tree_role.status_code in (200, 201) and grant.status_code in (200, 201),
+            f"role http {tree_role.status_code}, grant http {grant.status_code}",
+        )
+
+        response = create_lead(client, tree_token, sf_residential)
+        check(
+            "tree permission grants on DESCENDANT entity (201)",
+            response.status_code == 201,
+            f"http {response.status_code}",
+        )
+        response = create_lead(client, tree_token, east_coast)
+        check(
+            "tree permission does NOT leak to sibling branch (403)",
+            response.status_code == 403,
+            f"http {response.status_code}",
+        )
+
+    # ---- 10. Role-permission edit -> next-request visibility ----------------
+    # Adding/removing a permission on a role must affect its holders on their
+    # very next request (the role-edit per-user fan-out invalidation).
+    edit_role = client.post(
+        "/v1/roles/",
+        json={
+            "name": f"itc-edit-{marker}",
+            "display_name": "ITC Editable Role",
+            "permissions": ["lead:read"],
+            "is_global": False,
+            "root_entity_id": acme_org,
+        },
+        headers=admin_headers,
+    )
+    edit_role_id = edit_role.json().get("id")
+    edit_user_id, edit_token = register_user("roleedit")
+    client.post(
+        "/v1/memberships/",
+        json={"entity_id": sf_commercial, "user_id": edit_user_id, "role_ids": [edit_role_id]},
+        headers=admin_headers,
+    )
+
+    response = create_lead(client, edit_token, sf_commercial)
+    check("holder starts without lead:create (403)", response.status_code == 403, f"http {response.status_code}")
+
+    added = client.post(f"/v1/roles/{edit_role_id}/permissions", json=["lead:create"], headers=admin_headers)
+    response = create_lead(client, edit_token, sf_commercial)
+    check(
+        "permission ADDED to role -> visible on NEXT request (201)",
+        added.status_code in (200, 201) and response.status_code == 201,
+        f"add http {added.status_code}, create http {response.status_code}",
+    )
+
+    removed = client.request(
+        "DELETE",
+        f"/v1/roles/{edit_role_id}/permissions",
+        json=["lead:create"],
+        headers=admin_headers,
+    )
+    response = create_lead(client, edit_token, sf_commercial)
+    check(
+        "permission REMOVED from role -> denied on NEXT request (403)",
+        removed.status_code in (200, 204) and response.status_code == 403,
+        f"remove http {removed.status_code}, create http {response.status_code}",
+    )
+
+    # ---- 11. Membership suspend / reactivate --------------------------------
+    # Uses the membership-only user from section 4 (agent role at commercial).
+    suspended = client.patch(
+        f"/v1/memberships/{sf_commercial}/{scoped_id}",
+        json={"status": "suspended", "reason": "integration check"},
+        headers=admin_headers,
+    )
+    response = create_lead(client, scoped_token, sf_commercial)
+    check(
+        "suspended membership denied on NEXT request (403)",
+        suspended.status_code == 200 and response.status_code == 403,
+        f"patch http {suspended.status_code}, create http {response.status_code}",
+    )
+
+    reactivated = client.patch(
+        f"/v1/memberships/{sf_commercial}/{scoped_id}",
+        json={"status": "active", "reason": "integration check"},
+        headers=admin_headers,
+    )
+    response = create_lead(client, scoped_token, sf_commercial)
+    check(
+        "reactivated membership allowed on NEXT request (201)",
+        reactivated.status_code == 200 and response.status_code == 201,
+        f"patch http {reactivated.status_code}, create http {response.status_code}",
+    )
+
+    # ---- 12. Entity archive revokes member access ---------------------------
+    archive_ok = bool(sf_office)
+    check("entity-archive fixture resolvable (sf office)", archive_ok)
+    if archive_ok:
+        created_entity = client.post(
+            "/v1/entities/",
+            json={
+                "name": f"itc_team_{marker}",
+                "display_name": f"ITC Team {marker}",
+                "slug": f"itc-team-{marker}",
+                "entity_class": "structural",
+                "entity_type": "team",
+                "parent_entity_id": sf_office,
+            },
+            headers=admin_headers,
+        )
+        temp_entity_id = created_entity.json().get("id")
+        arch_user_id, arch_token = register_user("archive")
+        client.post(
+            "/v1/memberships/",
+            json={"entity_id": temp_entity_id, "user_id": arch_user_id, "role_ids": [agent_role["id"]]},
+            headers=admin_headers,
+        )
+        response = create_lead(client, arch_token, temp_entity_id)
+        check(
+            "member creates lead in throwaway entity (201)",
+            created_entity.status_code in (200, 201) and response.status_code == 201,
+            f"entity http {created_entity.status_code}, create http {response.status_code}",
+        )
+
+        archived = client.delete(f"/v1/entities/{temp_entity_id}", headers=admin_headers)
+        response = create_lead(client, arch_token, temp_entity_id)
+        check(
+            "entity archived -> member denied on NEXT request (403/404)",
+            archived.status_code in (200, 204) and response.status_code in (403, 404),
+            f"archive http {archived.status_code}, create http {response.status_code}",
+        )
+
+    # ---- 13. Refresh-token flow + logout ------------------------------------
+    fresh_login = client.post("/v1/auth/login", json={"email": PERSONAS["sf_agent"], "password": PASSWORD}).json()
+    refresh_token = fresh_login.get("refresh_token")
+    refreshed = client.post("/v1/auth/refresh", json={"refresh_token": refresh_token})
+    new_access = refreshed.json().get("access_token") if refreshed.status_code == 200 else None
+    me_after = client.get("/v1/users/me", headers={"Authorization": f"Bearer {new_access}"})
+    check(
+        "refresh token rotates into a working access token",
+        bool(new_access) and me_after.status_code == 200,
+        f"refresh http {refreshed.status_code}, me http {me_after.status_code}",
+    )
+
+    logout = client.post(
+        "/v1/auth/logout",
+        json={"refresh_token": refresh_token},
+        headers={"Authorization": f"Bearer {new_access}"},
+    )
+    refreshed_again = client.post("/v1/auth/refresh", json={"refresh_token": refresh_token})
+    check(
+        "logout revokes the refresh token",
+        logout.status_code in (200, 204) and refreshed_again.status_code == 401,
+        f"logout http {logout.status_code}, refresh http {refreshed_again.status_code}",
+    )
+
+    # ---- 14. Cross-root admin isolation (DD-056) ----------------------------
+    response = client.get(
+        f"/v1/users/{auditor_id}",
+        headers={"Authorization": f"Bearer {tokens['summit_admin']}"},
+    )
+    check(
+        "other-root admin cannot read ACME user (404 anti-enumeration)",
+        response.status_code == 404,
+        f"http {response.status_code}",
+    )
 
     return finish()
 

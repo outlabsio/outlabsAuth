@@ -17,6 +17,7 @@ Environment:
 import asyncio
 import json
 import os
+import uuid
 from typing import Any
 
 import httpx
@@ -39,9 +40,10 @@ async def _request(
 async def main() -> None:
     base_url = _env("BASE_URL", "http://localhost:8004/v1").rstrip("/")
     email = _env("EMAIL", "admin@acme.com")
-    password = _env("PASSWORD", "Test123!!")
+    # Defaults must match examples/enterprise_rbac/reset_test_env.py.
+    password = _env("PASSWORD", "Testpass1!")
     agent_email = _env("AGENT_EMAIL", "agent@sf.acme.com")
-    agent_password = _env("AGENT_PASSWORD", "Test123!!")
+    agent_password = _env("AGENT_PASSWORD", "Testpass1!")
 
     async with httpx.AsyncClient(
         base_url=base_url, timeout=20.0, follow_redirects=True
@@ -60,8 +62,14 @@ async def main() -> None:
         access_token = tokens["access_token"]
         client.headers.update({"Authorization": f"Bearer {access_token}"})
 
-        # Seed ABAC via API: Agents can only act on draft leads.
-        # This demonstrates wiring from permission checks -> PolicyEvaluationEngine.
+        # Seed ABAC via API: a smoke-only role whose holders may only act on
+        # draft leads. This demonstrates wiring from permission checks ->
+        # PolicyEvaluationEngine (and flips the "any conditions exist" fast
+        # path, so the checks below run through full ABAC evaluation).
+        # NOTE: earlier versions attached the condition to the seeded "agent"
+        # role — that role is a protected system role now, and mutating shared
+        # seed data made reruns order-dependent, so the smoke creates its own
+        # role and user instead.
         roles = (
             await _request(client, "GET", "/roles/", params={"page": 1, "limit": 100})
         ).json()
@@ -69,28 +77,40 @@ async def main() -> None:
         agent_role = next((r for r in role_items if r.get("name") == "agent"), None)
         if not agent_role:
             raise RuntimeError("Could not find 'agent' role in /roles/")
-        agent_role_id = agent_role["id"]
 
-        existing_conditions = await _request(
-            client, "GET", f"/roles/{agent_role_id}/conditions"
-        )
-        for cond in existing_conditions.json():
+        marker = uuid.uuid4().hex[:6]
+        smoke_role = (
             await _request(
                 client,
-                "DELETE",
-                f"/roles/{agent_role_id}/conditions/{cond['id']}",
+                "POST",
+                "/roles/",
+                json={
+                    "name": f"smoke-abac-{marker}",
+                    "display_name": "Smoke ABAC Agent",
+                    "description": "Throwaway role for the ABAC smoke scenario",
+                    "permissions": agent_role.get("permissions", []),
+                    "is_global": agent_role.get("is_global", False),
+                    "root_entity_id": agent_role.get("root_entity_id"),
+                },
             )
+        ).json()
+        smoke_role_id = smoke_role["id"]
 
+        # Condition on USER attributes: always present in the ABAC context.
+        # (resource.* conditions need the resource-context middleware, which
+        # this example does not install — see api docs on
+        # trust_resource_context_header.)
+        smoke_email = f"smoke-abac-{marker}@example.com"
         await _request(
             client,
             "POST",
-            f"/roles/{agent_role_id}/conditions",
+            f"/roles/{smoke_role_id}/conditions",
             json={
-                "attribute": "resource.lead_status",
+                "attribute": "user.email",
                 "operator": "equals",
-                "value": "draft",
+                "value": smoke_email,
                 "value_type": "string",
-                "description": "Agents can only act on draft leads (smoke demo)",
+                "description": "Smoke role only grants to the designated smoke user",
             },
         )
 
@@ -104,11 +124,18 @@ async def main() -> None:
         if not items:
             raise RuntimeError("No entities returned from /entities/")
 
+        # Pick a parent that can hold a "team" child. The previous lookup keyed
+        # on a hardcoded slug and silently fell back to items[0] (the org root,
+        # which only allows "region" children) when the seed's slugs drifted.
         parent = next(
-            (e for e in items if e.get("slug") == "san-francisco-office"), None
+            (e for e in items if e.get("entity_type") == "office"),
+            None,
+        ) or next(
+            (e for e in items if "team" in (e.get("allowed_child_types") or [])),
+            None,
         )
         if parent is None:
-            parent = items[0]
+            raise RuntimeError("No seeded entity accepts 'team' children")
         parent_id = parent["id"]
 
         # Create a child entity under parent (requires entity:create_tree on parent context).
@@ -150,77 +177,90 @@ async def main() -> None:
         # Cleanup: archive the entity
         await _request(client, "DELETE", f"/entities/{child_id}")
 
-        # Find the agent's entity (sf-residential-team) for ABAC tests
-        # The agent has membership in sf_residential, so they can only create leads there
+        # Pick the entity for the ABAC scenario. It must NOT carry an
+        # auto-assigned default role: sf_residential's seeded
+        # sf_team_member_default grants lead:create unconditionally to every
+        # new member, which would mask the condition under test. The seeded
+        # sf_commercial team sits outside the auto-assignment scope.
         agent_entity = next(
-            (e for e in items if e.get("slug") == "sf-residential"), None
+            (e for e in items if "commercial" in (e.get("name") or "").lower()),
+            None,
         )
         if agent_entity is None:
-            # Fallback - try to find any team entity
-            agent_entity = next(
-                (e for e in items if e.get("entity_type") == "team"), None
-            )
-        if agent_entity is None:
-            raise RuntimeError("Could not find agent's entity (sf-residential)")
+            raise RuntimeError("Could not find the sf_commercial team entity")
         agent_entity_id = agent_entity["id"]
 
-        # ABAC smoke (non-superuser): agent should be denied unless resource.lead_status == "draft".
-        agent_login = await _request(
-            client,
-            "POST",
-            "/auth/login",
-            json={"email": agent_email, "password": agent_password},
-        )
-        agent_tokens = agent_login.json()
-        agent_access = agent_tokens["access_token"]
+        # ABAC smoke (non-superuser): two users hold the SAME condition-guarded
+        # role on the same entity; only the one matching the user.email
+        # condition may create leads. Proves role-level ABAC gating end-to-end.
+        async def _register_member(email: str) -> str:
+            registered = await _request(
+                client,
+                "POST",
+                "/auth/register",
+                json={
+                    "email": email,
+                    "password": agent_password,
+                    "first_name": "Smoke",
+                    "last_name": "Abac",
+                },
+            )
+            user_id = registered.json()["id"]
+            await _request(
+                client,
+                "POST",
+                "/memberships/",
+                json={
+                    "entity_id": agent_entity_id,
+                    "user_id": user_id,
+                    "role_ids": [smoke_role_id],
+                },
+            )
+            return user_id
 
-        # Test 1: Agent denied when lead_status is "published" (ABAC condition fails)
-        # X-Entity-Context header tells the permission check which entity to check against
-        denied_headers = {
-            "Authorization": f"Bearer {agent_access}",
-            "X-Entity-Context": agent_entity_id,
-            "X-Resource-Context": json.dumps({"lead_status": "published"}),
-        }
-        denied = await client.post(
-            "/leads",
-            json={
-                "entity_id": agent_entity_id,  # Use agent's entity
-                "first_name": "Smoke",
-                "last_name": "Lead",
-                "email": "smoke.lead.denied@example.com",
-                "phone": "+15555550123",
-                "lead_type": "buyer",
-                "status": "published",
-                "source": "smoke_test",
-            },
-            headers=denied_headers,
-        )
+        other_email = f"smoke-abac-other-{marker}@example.com"
+        await _register_member(smoke_email)
+        await _register_member(other_email)
+
+        async def _login(email: str) -> str:
+            response = await _request(
+                client,
+                "POST",
+                "/auth/login",
+                json={"email": email, "password": agent_password},
+            )
+            return response.json()["access_token"]
+
+        def _lead_request(token: str, tag: str) -> dict:
+            return {
+                "json": {
+                    "entity_id": agent_entity_id,
+                    "first_name": "Smoke",
+                    "last_name": "Lead",
+                    "email": f"smoke.lead.{tag}.{marker}@example.com",
+                    "phone": "+15555550123",
+                    "lead_type": "buyer",
+                    "source": "smoke_test",
+                },
+                "headers": {
+                    "Authorization": f"Bearer {token}",
+                    "X-Entity-Context": agent_entity_id,
+                },
+            }
+
+        # Test 1: same role, wrong user attribute -> ABAC denies.
+        denied = await client.post("/leads", **_lead_request(await _login(other_email), "denied"))
         if denied.status_code != 403:
             raise RuntimeError(
                 f"Expected 403 for ABAC denied lead create, got {denied.status_code}: {denied.text}"
             )
 
-        # Test 2: Agent allowed when lead_status is "draft" (ABAC condition passes)
-        allowed_headers = {
-            "Authorization": f"Bearer {agent_access}",
-            "X-Entity-Context": agent_entity_id,
-            "X-Resource-Context": json.dumps({"lead_status": "draft"}),
-        }
+        # Test 2: matching user attribute -> ABAC allows.
         await _request(
             client,
             "POST",
             "/leads",
-            json={
-                "entity_id": agent_entity_id,  # Use agent's entity
-                "first_name": "Smoke",
-                "last_name": "Lead",
-                "email": "smoke.lead.allowed@example.com",
-                "phone": "+15555550123",
-                "lead_type": "buyer",
-                "status": "draft",
-                "source": "smoke_test",
-            },
-            headers=allowed_headers,
+            **_lead_request(await _login(smoke_email), "allowed"),
         )
 
 
