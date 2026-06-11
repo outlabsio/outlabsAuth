@@ -92,6 +92,22 @@ class _SnapshotRedis:
         self.values[key] = value
         return True
 
+    async def set_raw(self, key: str, value: str, ttl=None):
+        self.values[key] = value
+        return True
+
+    async def mget_raw(self, keys):
+        out = []
+        for key in keys:
+            if key in self.values:
+                value = self.values[key]
+                out.append(value if isinstance(value, str) else None)
+            elif key in self.counters:
+                out.append(str(self.counters[key]))
+            else:
+                out.append(None)
+        return out
+
     async def delete(self, key: str):
         self.deleted.append(key)
         self.values.pop(key, None)
@@ -273,11 +289,17 @@ async def test_require_tree_permission_allows_cached_entity_snapshot_without_bac
         effective_permissions=[],
         ip_whitelist=[],
     )
+    _, perm_versions = await cache_service.get_permission_check(
+        str(user_id),
+        "pipeline:read_tree",
+        str(target_id),
+    )
     await cache_service.set_permission_check(
         str(user_id),
         "pipeline:read_tree",
         True,
         str(target_id),
+        versions=perm_versions,
     )
     await cache_service.set_entity_relation(
         str(anchor_id),

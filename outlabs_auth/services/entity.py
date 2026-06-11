@@ -1163,21 +1163,38 @@ class EntityService(BaseService[Entity]):
         if not self.redis_client or not self.redis_client.is_available:
             return 0
 
-        deleted = 0
-
         # Get all ancestors and descendants
         path = await self.get_entity_path(session, entity_id)
         descendants = await self.get_descendants(session, entity_id)
         current_entity = await self.get_by_id(session, entity_id)
 
-        # Invalidate cache for all related entities
         all_entities = path + descendants
         if current_entity:
             all_entities.append(current_entity)
 
-        for entity in all_entities:
-            if entity:
-                deleted += await self.invalidate_entity_cache(entity.id)
+        # Delete every node's path + descendants keys in one round trip and
+        # publish a single hierarchy message for the whole subtree (previously
+        # 2 DELETEs + 1 PUBLISH per node, sequentially).
+        keys: list[str] = []
+        for eid in {entity.id for entity in all_entities if entity}:
+            entity_id_str = str(eid)
+            keys.append(self.redis_client.make_entity_path_key(entity_id_str))
+            keys.append(self.redis_client.make_entity_descendants_key(entity_id_str))
+
+        delete_many = getattr(self.redis_client, "delete_many", None)
+        if delete_many is not None:
+            deleted = int(await delete_many(keys))
+        else:
+            deleted = 0
+            for key in keys:
+                if await self.redis_client.delete(key):
+                    deleted += 1
+
+        if deleted > 0:
+            await self.redis_client.publish(
+                self.config.redis_invalidation_channel,
+                f"entity:{entity_id}:hierarchy",
+            )
 
         return deleted
 

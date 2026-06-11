@@ -59,6 +59,51 @@ pipelining machinery that already existed into the hot paths that weren't using 
   batch-fetch entities with one `IN` query via `_get_entities_by_ids`; previously a 500-node subtree
   cache "hit" issued 500 sequential SELECTs — slower than the cache miss.
 
+Phase 2 (Redis resilience + invalidation correctness):
+
+- **Versioned permission-check cache — invalidation without SCAN.** Boolean permission verdicts now
+  embed the global/user (+entity) version counters and are validated in the same MGET that reads
+  them. Invalidating is the single version INCR the publishers already perform, so the pub/sub
+  listener no longer SCAN-deletes — previously **every** app instance SCANned the entire Redis
+  keyspace per invalidation event. Pre-upgrade boolean entries read as misses and age out via TTL
+  (mixed-version deployments stay safe). Permission TTLs now carry ±10% jitter to avoid rebuild
+  stampedes.
+- **Targeted invalidation for permission definitions.** Creating a permission (or editing
+  display/description/tags) no longer invalidates anything — previously each of these bumped the
+  GLOBAL snapshot version, instantly expiring every API-key snapshot cluster-wide. Status changes
+  and archival fan out only to users holding a role that references the permission (200-user cap
+  with fail-safe global fallback, mirroring the existing role-edit machinery); permissions carrying
+  ABAC conditions still invalidate globally because integration principals hold no roles.
+- **Redis circuit breaker with background reconnect.** A connection-class failure now flips the
+  client unavailable immediately (callers fall back instantly) instead of every wrapped call eating
+  up to a 2s socket timeout — previously a Redis outage added multi-second latency to every request,
+  and Redis being down **at startup** disabled caching for the process lifetime. A single background
+  probe re-pings with capped exponential backoff and restores availability when Redis answers.
+- **Invalidation fan-outs are pipelined.** Role/permission edits touching up to 200 users issued 2
+  sequential Redis round trips per user inside the admin write request (up to 400 RTTs); they now
+  bump all versions and publish all messages in one pipeline (`benchmarks/redis_roundtrips_bench.py`
+  measures ~18x on localhost). Entity-tree invalidation similarly batches per-node deletes into one
+  UNLINK and publishes a single hierarchy message instead of 3 sequential ops per node.
+
+Verification: `tests/integration/test_cached_hotpath_budgets.py` pins the warm-path budgets against
+real Postgres + Redis (warm aggregated reads and boolean checks = **0 SQL**; grants/revocations apply
+on the very next read), and `benchmarks/redis_roundtrips_bench.py` re-measures the round-trip wins on
+any box.
+
+### Fixed
+
+- **Cache-invalidation listener no longer dies permanently on the first Redis error.** The DD-037
+  pub/sub listener had no error handling: one `ConnectionError` killed the task silently and the
+  instance stopped reacting to invalidation messages for its lifetime. It now resubscribes with
+  capped backoff, and unexpected task death is logged.
+- **Rate-limit window counters are atomic.** `increment_with_ttl` was INCR-then-EXPIRE; if the EXPIRE
+  never landed (crash/timeout between the two), the window key never expired and that API key or
+  email stayed rate-limited forever. The window is now established atomically (`SET NX EX` + `INCRBY`
+  in one pipeline), and legacy TTL-less counters are healed on their next increment.
+- **ABAC condition and condition-group CRUD now invalidate the permission cache.** All six
+  condition/group mutation methods previously performed no invalidation, leaving stale ABAC verdicts
+  cached for up to the 15-minute TTL after a condition change.
+
 ### Database migrations
 
 - None. DD-056 uses existing tables; `enforce_user_scope` is a config flag. The performance work adds

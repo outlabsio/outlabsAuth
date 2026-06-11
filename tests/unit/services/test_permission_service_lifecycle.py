@@ -70,7 +70,9 @@ async def test_permission_service_status_cache_and_require_helpers(
         permission="user:read",
         entity_id=entity_id,
     )
-    assert cached is True
+    # Legacy bool-returning cache services are wrapped into the versioned
+    # (result, versions_token) contract with no token.
+    assert cached == (True, None)
 
     await service._cache_permission_result(
         use_cache=True,

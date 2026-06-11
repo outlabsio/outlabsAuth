@@ -2443,6 +2443,12 @@ class RoleService(BaseService[Role]):
             # Too many holders to fan out efficiently; a single global bump is cheaper.
             await cache_service.publish_all_permissions_invalidation()
             return
+        batch = getattr(cache_service, "publish_user_permissions_invalidation_batch", None)
+        if batch is not None:
+            # One pipelined round trip (was 2 sequential RTTs per user — up to
+            # 400 inside the role-update request at the fan-out cap).
+            await batch([str(user_id) for user_id in user_ids])
+            return
         for user_id in user_ids:
             await cache_service.publish_user_permissions_invalidation(str(user_id))
 

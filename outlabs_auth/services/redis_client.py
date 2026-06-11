@@ -5,6 +5,7 @@ Handles Redis connections with graceful fallback when Redis is unavailable.
 Provides caching operations with automatic serialization/deserialization.
 """
 
+import asyncio
 import json
 import logging
 from datetime import timedelta
@@ -15,6 +16,7 @@ try:
     from redis.asyncio import Redis
     from redis.exceptions import ConnectionError as RedisConnectionError
     from redis.exceptions import RedisError
+    from redis.exceptions import TimeoutError as RedisTimeoutError
 
     REDIS_AVAILABLE = True
 except ImportError:
@@ -22,6 +24,7 @@ except ImportError:
     Redis = None  # type: ignore
     RedisError = Exception  # type: ignore
     RedisConnectionError = Exception  # type: ignore
+    RedisTimeoutError = Exception  # type: ignore
 
 from outlabs_auth.core.config import AuthConfig
 
@@ -52,6 +55,26 @@ class RedisClient:
         self._client: Optional[Redis] = None
         self._pubsub = None
         self._available = False
+        self._reconnect_task: Optional["asyncio.Task[None]"] = None
+        self._closed = False
+
+    def _build_client(self) -> "Redis":
+        client_kwargs = {
+            "decode_responses": True,
+            "socket_connect_timeout": 2,
+            "socket_timeout": 2,
+            "retry_on_timeout": True,
+            "max_connections": 50,
+        }
+        if self.config.redis_url:
+            return redis.Redis.from_url(self.config.redis_url, **client_kwargs)
+        return redis.Redis(
+            host=self.config.redis_host,
+            port=self.config.redis_port,
+            db=self.config.redis_db,
+            password=self.config.redis_password,
+            **client_kwargs,
+        )
 
     async def connect(self) -> bool:
         """
@@ -59,6 +82,10 @@ class RedisClient:
 
         Returns:
             bool: True if connected, False if unavailable
+
+        A failed connection no longer disables caching for the process
+        lifetime: the background reconnect probe keeps pinging and re-enables
+        Redis features when the server answers again.
         """
         if not REDIS_AVAILABLE:
             logger.warning("redis package not installed - caching disabled")
@@ -68,27 +95,10 @@ class RedisClient:
             logger.info("Redis caching disabled in configuration")
             return False
 
+        self._closed = False
         try:
-            client_kwargs = {
-                "decode_responses": True,
-                "socket_connect_timeout": 2,
-                "socket_timeout": 2,
-                "retry_on_timeout": True,
-                "max_connections": 50,
-            }
-            if self.config.redis_url:
-                self._client = redis.Redis.from_url(
-                    self.config.redis_url,
-                    **client_kwargs,
-                )
-            else:
-                self._client = redis.Redis(
-                    host=self.config.redis_host,
-                    port=self.config.redis_port,
-                    db=self.config.redis_db,
-                    password=self.config.redis_password,
-                    **client_kwargs,
-                )
+            if self._client is None:
+                self._client = self._build_client()
 
             # Test connection
             await self._client.ping()
@@ -97,13 +107,23 @@ class RedisClient:
             logger.info(f"Connected to Redis at {location}")
             return True
 
-        except (RedisConnectionError, RedisError) as e:
-            logger.warning(f"Redis connection failed: {e} - caching disabled")
+        except (RedisConnectionError, RedisTimeoutError, RedisError, OSError) as e:
+            self._trip_breaker(e)
+            logger.warning(f"Redis connection failed: {e} - caching disabled until reconnect")
             self._available = False
+            self._schedule_reconnect()
             return False
 
     async def disconnect(self) -> None:
         """Disconnect from Redis."""
+        self._closed = True
+        if self._reconnect_task is not None:
+            self._reconnect_task.cancel()
+            try:
+                await self._reconnect_task
+            except asyncio.CancelledError:
+                pass
+            self._reconnect_task = None
         if self._client:
             await self._client.close()
             self._available = False
@@ -114,6 +134,56 @@ class RedisClient:
         """Check if Redis is available."""
         return self._available
 
+    # Circuit breaker: a Redis outage must not add per-call socket timeouts to
+    # every request, and an outage at startup must not disable caching for the
+    # process lifetime. On a connection-class failure we flip _available off
+    # (callers fall back instantly) and a single background probe re-pings with
+    # exponential backoff until Redis answers again.
+
+    _RECONNECT_BACKOFF_INITIAL = 1.0
+    _RECONNECT_BACKOFF_MAX = 30.0
+
+    def _trip_breaker(self, error: BaseException) -> None:
+        """Open the breaker on connection-class errors (server unreachable).
+
+        Data-shape errors (WRONGTYPE, decode failures, ...) don't mean the
+        server is down and must not disable caching.
+        """
+        if not isinstance(error, (RedisConnectionError, RedisTimeoutError, OSError)):
+            return
+        if not self._available:
+            return
+        self._available = False
+        logger.warning(f"Redis connection lost ({error}) - caching disabled until reconnect")
+        self._schedule_reconnect()
+
+    def _schedule_reconnect(self) -> None:
+        if self._closed or not REDIS_AVAILABLE or not self.config.redis_enabled:
+            return
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            return
+        try:
+            self._reconnect_task = asyncio.create_task(self._reconnect_probe())
+        except RuntimeError:
+            # No running event loop (sync construction/teardown) — the next
+            # connect() call retries instead.
+            self._reconnect_task = None
+
+    async def _reconnect_probe(self) -> None:
+        backoff = self._RECONNECT_BACKOFF_INITIAL
+        while not self._available and not self._closed:
+            await asyncio.sleep(backoff)
+            try:
+                if self._client is None:
+                    self._client = self._build_client()
+                await self._client.ping()
+            except (RedisConnectionError, RedisTimeoutError, RedisError, OSError):
+                backoff = min(backoff * 2, self._RECONNECT_BACKOFF_MAX)
+                continue
+            self._available = True
+            logger.info("Redis connection restored - caching re-enabled")
+            return
+
     # Low-level Redis passthroughs (used by activity tracking, etc.)
 
     async def sadd(self, key: str, *members: str) -> int:
@@ -121,7 +191,8 @@ class RedisClient:
             return 0
         try:
             return int(await cast(Any, self._client.sadd(key, *members)))
-        except RedisError:
+        except RedisError as e:
+            self._trip_breaker(e)
             return 0
 
     async def scard(self, key: str) -> int:
@@ -129,7 +200,8 @@ class RedisClient:
             return 0
         try:
             return int(await cast(Any, self._client.scard(key)))
-        except RedisError:
+        except RedisError as e:
+            self._trip_breaker(e)
             return 0
 
     async def smembers(self, key: str) -> set[str]:
@@ -138,7 +210,8 @@ class RedisClient:
         try:
             members = await cast(Any, self._client.smembers(key))
             return set(members) if members else set()
-        except RedisError:
+        except RedisError as e:
+            self._trip_breaker(e)
             return set()
 
     async def expire(self, key: str, seconds: int) -> bool:
@@ -146,7 +219,8 @@ class RedisClient:
             return False
         try:
             return bool(await self._client.expire(key, seconds))
-        except RedisError:
+        except RedisError as e:
+            self._trip_breaker(e)
             return False
 
     async def set_raw(self, key: str, value: str, ttl: Optional[int] = None) -> bool:
@@ -158,7 +232,8 @@ class RedisClient:
             else:
                 await self._client.set(key, value)
             return True
-        except RedisError:
+        except RedisError as e:
+            self._trip_breaker(e)
             return False
 
     async def get_raw(self, key: str) -> Optional[str]:
@@ -166,7 +241,8 @@ class RedisClient:
             return None
         try:
             return cast(Optional[str], await self._client.get(key))
-        except RedisError:
+        except RedisError as e:
+            self._trip_breaker(e)
             return None
 
     async def mget_raw(self, keys: List[str]) -> Optional[List[Optional[str]]]:
@@ -178,7 +254,8 @@ class RedisClient:
         try:
             values = await cast(Any, self._client.mget(keys))
             return [cast(Optional[str], value) for value in values]
-        except RedisError:
+        except RedisError as e:
+            self._trip_breaker(e)
             return None
 
     async def scan(
@@ -191,7 +268,8 @@ class RedisClient:
                 cursor=cursor, match=match, count=count
             )
             return int(next_cursor), list(keys) if keys else []
-        except RedisError:
+        except RedisError as e:
+            self._trip_breaker(e)
             return 0, []
 
     # Cache Operations
@@ -215,6 +293,7 @@ class RedisClient:
                 return json.loads(value)
             return None
         except (RedisError, json.JSONDecodeError) as e:
+            self._trip_breaker(e)
             logger.debug(f"Cache get failed for {key}: {e}")
             return None
 
@@ -241,6 +320,7 @@ class RedisClient:
                 await self._client.set(key, serialized)
             return True
         except (RedisError, TypeError, ValueError) as e:
+            self._trip_breaker(e)
             logger.debug(f"Cache set failed for {key}: {e}")
             return False
 
@@ -261,6 +341,7 @@ class RedisClient:
             await self._client.delete(key)
             return True
         except RedisError as e:
+            self._trip_breaker(e)
             logger.debug(f"Cache delete failed for {key}: {e}")
             return False
 
@@ -286,8 +367,26 @@ class RedisClient:
                 await self._client.delete(*keys)
             return len(keys)
         except RedisError as e:
+            self._trip_breaker(e)
             logger.debug(f"Cache delete pattern failed for {pattern}: {e}")
             return 0
+
+    async def delete_many(self, keys: List[str]) -> int:
+        """Delete several keys in one round trip (UNLINK, falling back to DEL)."""
+        if not self._available or not self._client:
+            return 0
+        if not keys:
+            return 0
+        try:
+            return int(await cast(Any, self._client.unlink(*keys)))
+        except RedisError as e:
+            self._trip_breaker(e)
+            try:
+                return int(await cast(Any, self._client.delete(*keys)))
+            except RedisError as e:
+                self._trip_breaker(e)
+                logger.debug(f"Delete many failed: {e}")
+                return 0
 
     async def exists(self, key: str) -> bool:
         """
@@ -305,6 +404,7 @@ class RedisClient:
         try:
             return bool(await self._client.exists(key))
         except RedisError as e:
+            self._trip_breaker(e)
             logger.debug(f"Cache exists check failed for {key}: {e}")
             return False
 
@@ -327,6 +427,7 @@ class RedisClient:
         try:
             return cast(Optional[int], await self._client.incrby(key, amount))
         except RedisError as e:
+            self._trip_breaker(e)
             logger.debug(f"Counter increment failed for {key}: {e}")
             return None
 
@@ -347,6 +448,7 @@ class RedisClient:
             value = await self._client.get(key)
             return int(value) if value else 0
         except (RedisError, ValueError) as e:
+            self._trip_breaker(e)
             logger.debug(f"Counter get failed for {key}: {e}")
             return 0
 
@@ -387,6 +489,7 @@ class RedisClient:
                 counters[key] = value
             return counters
         except RedisError as e:
+            self._trip_breaker(e)
             logger.debug(f"Get all counters failed for {pattern}: {e}")
             return {}
 
@@ -418,6 +521,7 @@ class RedisClient:
                 return int(value)
             return 0
         except (RedisError, ValueError) as e:
+            self._trip_breaker(e)
             logger.debug(f"Get and reset counter failed for {key}: {e}")
             return 0
 
@@ -451,15 +555,27 @@ class RedisClient:
             return None
 
         try:
-            # Increment counter
-            new_value = cast(int, await self._client.incrby(key, amount))
+            if not ttl:
+                return cast(int, await self._client.incrby(key, amount))
 
-            # Set TTL only if this is the first increment (value == amount)
-            if ttl and new_value == amount:
+            # SET NX EX + INCRBY in one pipelined round trip: the window TTL is
+            # established atomically with the first increment, so it can never
+            # be lost between an INCR and a separate EXPIRE (the old shape left
+            # an immortal counter — i.e. a permanently rate-limited key — when
+            # the EXPIRE never landed).
+            pipe = self._client.pipeline(transaction=False)
+            pipe.set(key, 0, nx=True, ex=ttl)
+            pipe.incrby(key, amount)
+            pipe.ttl(key)
+            results = await pipe.execute()
+            new_value = int(results[1])
+            if int(results[2]) < 0:
+                # Pre-existing key without a TTL (written by the old non-atomic
+                # shape) — heal it with the window TTL.
                 await self._client.expire(key, ttl)
-
             return new_value
-        except RedisError as e:
+        except (RedisError, IndexError, TypeError, ValueError) as e:
+            self._trip_breaker(e)
             logger.debug(f"Increment with TTL failed for {key}: {e}")
             return None
 
@@ -504,6 +620,7 @@ class RedisClient:
                 pipe.incrby(rate_key, 1)
             results = await pipe.execute()
         except RedisError as e:
+            self._trip_breaker(e)
             logger.debug(f"API key usage pipeline failed: {e}")
             return None
 
@@ -545,7 +662,35 @@ class RedisClient:
             await pipe.execute()
             return True
         except RedisError as e:
+            self._trip_breaker(e)
             logger.debug(f"Activity tracking pipeline failed: {e}")
+            return False
+
+    async def bump_versions_and_publish(
+        self,
+        *,
+        version_keys: List[str],
+        channel: str,
+        messages: List[str],
+    ) -> bool:
+        """INCR every version key and publish every message in ONE round trip.
+
+        Used by invalidation fan-outs (e.g. a role edit touching up to 200
+        users) that previously issued two sequential round trips per user.
+        """
+        if not self._available or not self._client:
+            return False
+        try:
+            pipe = self._client.pipeline(transaction=False)
+            for key in version_keys:
+                pipe.incrby(key, 1)
+            for message in messages:
+                pipe.publish(channel, message)
+            await pipe.execute()
+            return True
+        except RedisError as e:
+            self._trip_breaker(e)
+            logger.debug(f"Version bump/publish pipeline failed: {e}")
             return False
 
     # Pub/Sub Operations (DD-037)
@@ -568,6 +713,7 @@ class RedisClient:
             await self._client.publish(channel, message)
             return True
         except RedisError as e:
+            self._trip_breaker(e)
             logger.debug(f"Publish failed for {channel}: {e}")
             return False
 
@@ -589,6 +735,7 @@ class RedisClient:
             await pubsub.subscribe(*channels)
             return pubsub
         except RedisError as e:
+            self._trip_breaker(e)
             logger.debug(f"Subscribe failed: {e}")
             return None
 

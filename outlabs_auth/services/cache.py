@@ -5,9 +5,13 @@ Redis-backed cache service for permission checks.
 import asyncio
 import contextlib
 import json
-from typing import Any, Optional, cast
+import logging
+import random
+from typing import Any, Optional, Sequence, cast
 
 from outlabs_auth.core.config import AuthConfig
+
+logger = logging.getLogger(__name__)
 
 
 class CacheService:
@@ -234,7 +238,7 @@ class CacheService:
             await set_raw(
                 self.make_user_permissions_key(user_id, include_entity_local=include_entity_local),
                 payload,
-                ttl=self.config.cache_permission_ttl,
+                ttl=self._jittered_ttl(self.config.cache_permission_ttl),
             )
         )
 
@@ -244,13 +248,56 @@ class CacheService:
         permission: str,
         entity_id: Optional[str] = None,
         context_hash: Optional[str] = None,
-    ) -> Optional[bool]:
+    ) -> tuple[Optional[bool], Optional[dict[str, int]]]:
+        """Read a cached permission-check verdict.
+
+        Returns ``(result, current_versions)`` — ``result`` is None on a miss,
+        a legacy-format (plain boolean) entry, or a version mismatch. Entries
+        validate against the global/user (+entity when entity-scoped) version
+        counters read in the same MGET round trip, so invalidation is just the
+        version INCR that ``publish_*_invalidation`` performs — no SCAN-based
+        deletion, and no per-instance deletion work in the pub/sub listener.
+
+        ``current_versions`` must be echoed into ``set_permission_check`` (same
+        race rule as ``get_user_permission_names``).
+        """
         if not self.redis_client or not self.redis_client.is_available:
-            return None
-        cached = await self.redis_client.get(
-            self.make_permission_check_key(user_id, permission, entity_id, context_hash)
-        )
-        return cached if isinstance(cached, bool) else None
+            return None, None
+        mget_raw = getattr(self.redis_client, "mget_raw", None)
+        if mget_raw is None:
+            return None, None
+
+        keys = [
+            self.make_permission_check_key(user_id, permission, entity_id, context_hash),
+            self.make_api_key_auth_snapshot_version_key("global"),
+            self.make_api_key_auth_snapshot_version_key("user", user_id),
+        ]
+        if entity_id:
+            keys.append(self.make_api_key_auth_snapshot_version_key("entity", entity_id))
+        values = await mget_raw(keys)
+        if values is None or len(values) != len(keys):
+            return None, None
+
+        versions = {
+            "global": self._coerce_version(values[1]),
+            f"user:{user_id}": self._coerce_version(values[2]),
+        }
+        if entity_id:
+            versions[f"entity:{entity_id}"] = self._coerce_version(values[3])
+
+        if not values[0]:
+            return None, versions
+        try:
+            payload = json.loads(values[0])
+        except (TypeError, ValueError):
+            return None, versions
+        if not isinstance(payload, dict) or payload.get("versions") != versions:
+            # Legacy boolean entry or stale versions — both read as a miss.
+            return None, versions
+        result = payload.get("result")
+        if not isinstance(result, bool):
+            return None, versions
+        return result, versions
 
     async def set_permission_check(
         self,
@@ -259,16 +306,31 @@ class CacheService:
         result: bool,
         entity_id: Optional[str] = None,
         context_hash: Optional[str] = None,
+        *,
+        versions: Optional[dict[str, int]] = None,
     ) -> bool:
+        if versions is None:
+            return False
         if not self.redis_client or not self.redis_client.is_available:
             return False
+        set_raw = getattr(self.redis_client, "set_raw", None)
+        if set_raw is None:
+            return False
+        payload = json.dumps({"result": result, "versions": versions})
         return bool(
-            await self.redis_client.set(
+            await set_raw(
                 self.make_permission_check_key(user_id, permission, entity_id, context_hash),
-                result,
-                ttl=self.config.cache_permission_ttl,
+                payload,
+                ttl=self._jittered_ttl(self.config.cache_permission_ttl),
             )
         )
+
+    def _jittered_ttl(self, base_ttl: int) -> int:
+        """±10% jitter so entries written together don't expire (and rebuild) together."""
+        if base_ttl <= 10:
+            return base_ttl
+        spread = max(1, base_ttl // 10)
+        return base_ttl + random.randint(-spread, spread)
 
     async def get_entity_relation(
         self,
@@ -338,6 +400,34 @@ class CacheService:
         await self.bump_user_api_key_auth_snapshot_version(user_id)
         return bool(await self._publish(f"permissions:user:{user_id}"))
 
+    async def publish_user_permissions_invalidation_batch(self, user_ids: Sequence[str]) -> bool:
+        """Bump every user's version and publish their messages in ONE round trip.
+
+        Role/permission edits fan out to up to 200 holders; the per-user method
+        costs 2 sequential round trips each (INCR + PUBLISH), so large fan-outs
+        paid up to 400 RTTs inside the admin write request.
+        """
+        ids = [str(user_id) for user_id in user_ids]
+        if not ids:
+            return True
+        if not self.redis_client or not self.redis_client.is_available:
+            return False
+        helper = getattr(self.redis_client, "bump_versions_and_publish", None)
+        if helper is None:
+            ok = True
+            for user_id in ids:
+                ok = bool(await self.publish_user_permissions_invalidation(user_id)) and ok
+            return ok
+        return bool(
+            await helper(
+                version_keys=[
+                    self.make_api_key_auth_snapshot_version_key("user", user_id) for user_id in ids
+                ],
+                channel=self.config.redis_invalidation_channel,
+                messages=[f"permissions:user:{user_id}" for user_id in ids],
+            )
+        )
+
     async def publish_entity_permissions_invalidation(self, entity_id: str) -> bool:
         await self.bump_entity_api_key_auth_snapshot_version(entity_id)
         return bool(await self._publish(f"permissions:entity:{entity_id}"))
@@ -372,6 +462,14 @@ class CacheService:
             return
 
         self._listener_task = asyncio.create_task(self._listen())
+        self._listener_task.add_done_callback(self._on_listener_done)
+
+    def _on_listener_done(self, task: "asyncio.Task[None]") -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Cache invalidation listener task died", exc_info=exc)
 
     async def shutdown(self) -> None:
         if self._listener_task is not None:
@@ -389,41 +487,63 @@ class CacheService:
             self._pubsub = None
 
     async def _listen(self) -> None:
-        if self._pubsub is None:
-            return
+        """Pump invalidation messages forever, surviving Redis hiccups.
 
+        The previous shape had no error handling: the first ConnectionError
+        from ``get_message`` killed the task silently and the instance stopped
+        reacting to invalidation messages for the rest of its life. Any error
+        now drops the subscription and resubscribes with capped backoff.
+        """
+        backoff = 1.0
         while True:
-            pubsub = cast(Any, self._pubsub)
-            message = await pubsub.get_message(
-                ignore_subscribe_messages=True,
-                timeout=1.0,
-            )
-            if not message:
-                await asyncio.sleep(0.1)
-                continue
+            try:
+                if self._pubsub is None:
+                    self._pubsub = await self.redis_client.subscribe(
+                        self.config.redis_invalidation_channel
+                    )
+                    if self._pubsub is None:
+                        await asyncio.sleep(backoff)
+                        backoff = min(backoff * 2, 30.0)
+                        continue
 
-            payload = message.get("data")
-            if isinstance(payload, bytes):
-                payload = payload.decode("utf-8")
-            if isinstance(payload, str):
-                await self._handle_message(payload)
+                pubsub = cast(Any, self._pubsub)
+                message = await pubsub.get_message(
+                    ignore_subscribe_messages=True,
+                    timeout=1.0,
+                )
+                backoff = 1.0
+                if not message:
+                    await asyncio.sleep(0.1)
+                    continue
+
+                payload = message.get("data")
+                if isinstance(payload, bytes):
+                    payload = payload.decode("utf-8")
+                if isinstance(payload, str):
+                    await self._handle_message(payload)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — the listener must never die silently
+                logger.warning(f"Cache invalidation listener error ({exc}) - resubscribing")
+                close = getattr(self._pubsub, "close", None)
+                if close is not None:
+                    with contextlib.suppress(Exception):
+                        maybe_awaitable = close()
+                        if asyncio.iscoroutine(maybe_awaitable):
+                            await maybe_awaitable
+                self._pubsub = None
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
 
     async def _handle_message(self, payload: str) -> None:
-        if payload == "permissions:all":
-            await self.invalidate_all_permissions()
-            return
+        """Invalidation messages are informational for this cache (DD-037).
 
-        if payload == "all:entities":
-            await self.invalidate_all_permissions()
-            return
-
-        if payload.startswith("entity:") and payload.endswith(":hierarchy"):
-            await self.invalidate_all_permissions()
-            return
-
-        if payload.startswith("permissions:user:"):
-            await self.invalidate_user_permissions(payload.rsplit(":", 1)[-1])
-            return
-
-        if payload.startswith("permissions:entity:"):
-            await self.invalidate_entity_permissions(payload.rsplit(":", 1)[-1])
+        Shared-cache entries (permission checks, user permission sets, API-key
+        snapshots) embed the version counters that the publisher bumps, so every
+        instance already sees them as stale — there is nothing to delete here.
+        Older library versions SCAN-deleted matching keys in this handler,
+        which multiplied a full-keyspace SCAN by the number of subscribed
+        instances per event. The channel stays published for hosts (and older
+        instances during a rolling upgrade) that subscribe their own caches.
+        """
+        logger.debug(f"cache_invalidation_message: {payload}")

@@ -1276,6 +1276,9 @@ class APIKeyService(BaseService[APIKey]):
             permission,
             str(entity_id),
         )
+        if isinstance(cached, tuple):
+            # Versioned contract: (result, current_versions).
+            cached = cached[0]
         return cached if isinstance(cached, bool) else None
 
     async def auth_snapshot_allows_authorization(

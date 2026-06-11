@@ -276,6 +276,8 @@ async def auth_with_cache(test_secret_key: str) -> AsyncGenerator[SimpleRBAC, No
     finally:
         await probe.close()
 
+    from prometheus_client import CollectorRegistry
+
     from outlabs_auth.observability import ObservabilityConfig
 
     obs_config = ObservabilityConfig(
@@ -294,6 +296,10 @@ async def auth_with_cache(test_secret_key: str) -> AsyncGenerator[SimpleRBAC, No
         redis_enabled=True,
         enable_caching=True,
         observability_config=obs_config,
+        # Per-instance registry: metrics register against the global default
+        # otherwise, so a second auth_with_cache use in the same process would
+        # raise "Duplicated timeseries in CollectorRegistry".
+        observability_metrics_registry=CollectorRegistry(),
     )
 
     await auth_instance.initialize()

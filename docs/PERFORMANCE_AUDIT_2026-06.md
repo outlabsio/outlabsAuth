@@ -1,5 +1,10 @@
 # Performance Audit — 2026-06
 
+> **Status (2026-06-11)**: Phase 1 ✅ (commit `9fdcf5e`) and Phase 2 ✅ implemented on
+> `production-hardening`, with warm-path budget tests
+> (`tests/integration/test_cached_hotpath_budgets.py`) and round-trip benchmarks
+> (`benchmarks/redis_roundtrips_bench.py`). Phases 3–4 pending. See CHANGELOG `[Unreleased]`.
+
 **Scope**: `outlabs_auth/` package (library code only).
 **Method**: Five independent audit passes (DB/ORM, auth hot path, caching/Redis, permission resolution, async/observability), every finding verified against current source with file:line evidence. Index claims verified against rendered PostgreSQL DDL. Branch: `production-hardening`.
 
