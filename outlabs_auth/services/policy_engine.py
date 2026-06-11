@@ -111,17 +111,17 @@ class PolicyEvaluationEngine:
         if not condition_group.conditions:
             return True  # Empty condition group passes
 
-        results = [
+        operator = condition_group.operator
+        if operator not in ("AND", "OR"):
+            raise ValueError(f"Unknown logical operator: {operator}")
+
+        # Generator + all/any short-circuits: an AND group stops at the first
+        # False, an OR group at the first True.
+        evaluations = (
             self.evaluate_condition(condition, context)
             for condition in condition_group.conditions
-        ]
-
-        if condition_group.operator == "AND":
-            return all(results)
-        elif condition_group.operator == "OR":
-            return any(results)
-        else:
-            raise ValueError(f"Unknown logical operator: {condition_group.operator}")
+        )
+        return all(evaluations) if operator == "AND" else any(evaluations)
 
     def evaluate_conditions(
         self, conditions: List[Condition], context: Dict[str, Any]
@@ -404,32 +404,30 @@ class PolicyEvaluationEngine:
             ):
                 return False
 
-        # Grouped conditions
+        # Grouped conditions. Generator + all/any short-circuits: an AND group
+        # stops at the first False, an OR group at the first True (previously
+        # every condition in the group was evaluated and materialized first).
         for group_id, conds in grouped.items():
             op = (group_ops.get(group_id) or "AND").upper()
-            results: List[bool] = []
-            for cond in conds:
-                results.append(
-                    self.evaluate_condition(
-                        Condition(
-                            attribute=cond.attribute,
-                            operator=cond.operator,
-                            value=self._parse_value(
-                                cond.value, getattr(cond, "value_type", "string")
-                            ),
-                        ),
-                        context,
-                    )
-                )
-
-            if op == "AND":
-                if not all(results):
-                    return False
-            elif op == "OR":
-                if not any(results):
-                    return False
-            else:
+            if op not in ("AND", "OR"):
                 raise ValueError(f"Unknown logical operator: {op}")
+
+            evaluations = (
+                self.evaluate_condition(
+                    Condition(
+                        attribute=cond.attribute,
+                        operator=cond.operator,
+                        value=self._parse_value(
+                            cond.value, getattr(cond, "value_type", "string")
+                        ),
+                    ),
+                    context,
+                )
+                for cond in conds
+            )
+            group_passes = all(evaluations) if op == "AND" else any(evaluations)
+            if not group_passes:
+                return False
 
         return True
 

@@ -35,6 +35,7 @@ from outlabs_auth.models.sql.role import (
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
 from outlabs_auth.schemas.abac import serialize_condition_value
+from outlabs_auth.services import request_cache
 from outlabs_auth.services.base import BaseService
 from outlabs_auth.utils.validation import validate_name, validate_slug
 
@@ -680,6 +681,7 @@ class RoleService(BaseService[Role]):
             after=current_snapshot,
             metadata={"condition_group": self._build_condition_group_snapshot(group)},
         )
+        await self._invalidate_for_condition_change()
         return group
 
     async def update_role_condition_group(
@@ -730,6 +732,7 @@ class RoleService(BaseService[Role]):
                     "after_group": current_group_snapshot,
                 },
             )
+            await self._invalidate_for_condition_change()
         return group
 
     async def delete_role_condition_group(
@@ -775,6 +778,7 @@ class RoleService(BaseService[Role]):
                 "deleted_conditions": deleted_conditions,
             },
         )
+        await self._invalidate_for_condition_change()
         return True
 
     async def create_role_condition(
@@ -827,6 +831,7 @@ class RoleService(BaseService[Role]):
             after=current_snapshot,
             metadata={"condition": self._build_role_condition_snapshot(condition)},
         )
+        await self._invalidate_for_condition_change()
         return condition
 
     async def update_role_condition(
@@ -910,6 +915,7 @@ class RoleService(BaseService[Role]):
                     "after_condition": current_condition_snapshot,
                 },
             )
+            await self._invalidate_for_condition_change()
         return condition
 
     async def delete_role_condition(
@@ -942,6 +948,7 @@ class RoleService(BaseService[Role]):
             after=current_snapshot,
             metadata={"deleted_condition": deleted_condition_snapshot},
         )
+        await self._invalidate_for_condition_change()
         return True
 
     async def list_roles(
@@ -2379,9 +2386,24 @@ class RoleService(BaseService[Role]):
         return added_names, removed_names
 
     async def _invalidate_all_permissions_cache(self) -> None:
+        # Drop request-local memos too: a mutation followed by a check in the
+        # same request must observe its own change.
+        request_cache.reset()
         cache_service = getattr(self, "cache_service", None)
         if cache_service is not None:
             await cache_service.publish_all_permissions_invalidation()
+
+    async def _invalidate_for_condition_change(self) -> None:
+        """ABAC condition edits invalidate globally.
+
+        Mirrors PermissionService._invalidate_for_condition_change: the global
+        bump also refreshes the cached "any ABAC conditions exist?" flag, so
+        the very first authored condition immediately re-enables full ABAC
+        evaluation everywhere. (These condition/group CRUD methods previously
+        didn't invalidate at all, leaving stale ABAC verdicts cached for up to
+        the TTL.)
+        """
+        await self._invalidate_all_permissions_cache()
 
     # PERF: a role-definition edit changes effective permissions only for users who
     # actually hold that role, so invalidate just those users instead of flushing the
@@ -2429,6 +2451,7 @@ class RoleService(BaseService[Role]):
         return user_ids
 
     async def _invalidate_role_permissions_cache(self, session: AsyncSession, role_id: UUID) -> None:
+        request_cache.reset()  # same-request mutation visibility
         cache_service = getattr(self, "cache_service", None)
         if cache_service is None:
             return
@@ -2578,6 +2601,7 @@ class RoleService(BaseService[Role]):
         }
 
     async def _invalidate_user_permissions_cache(self, user_id: UUID) -> None:
+        request_cache.reset()  # same-request mutation visibility
         cache_service = getattr(self, "cache_service", None)
         if cache_service is not None:
             await cache_service.publish_user_permissions_invalidation(str(user_id))

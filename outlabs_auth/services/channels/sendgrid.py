@@ -4,6 +4,7 @@ SendGrid Email Notification Channel
 Sends email notifications for auth events via SendGrid API.
 Often preferred over SMTP for production due to better deliverability.
 """
+import asyncio
 from typing import Optional, List, Dict, Any, Callable, Awaitable
 
 try:
@@ -163,9 +164,9 @@ class SendGridChannel(NotificationChannel):
             if self.reply_to:
                 mail.reply_to = self.reply_to
             
-            # Send via SendGrid
-            # Note: SendGrid client is synchronous
-            response = self.client.send(mail)
+            # The SendGrid SDK is synchronous (blocking HTTPS) — run it in a
+            # worker thread so the event loop doesn't stall for the API call.
+            response = await asyncio.to_thread(self.client.send, mail)
             
             # SendGrid returns 202 Accepted for successful queuing
             # We don't need to check the response - just fire and forget

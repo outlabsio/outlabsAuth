@@ -369,6 +369,37 @@ async def test_cache_service_user_permission_names_racing_write_is_stored_stale(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_cache_service_abac_conditions_flag_roundtrip_and_invalidation(auth_config):
+    config = _cache_config(auth_config)
+    redis = _FakeRedis()
+    cache_service = CacheService(redis, config)
+
+    flag, versions = await cache_service.get_abac_conditions_flag()
+    assert flag is None
+    assert versions == {"global": 0}
+
+    assert await cache_service.set_abac_conditions_flag(False, versions=versions) is True
+    flag, _ = await cache_service.get_abac_conditions_flag()
+    assert flag is False
+
+    # Authoring the first condition bumps the global version (condition-change
+    # invalidation), which must immediately invalidate the cached "no
+    # conditions" flag so full ABAC evaluation resumes.
+    await cache_service.publish_all_permissions_invalidation()
+    flag, versions = await cache_service.get_abac_conditions_flag()
+    assert flag is None
+    assert versions == {"global": 1}
+
+    await cache_service.set_abac_conditions_flag(True, versions=versions)
+    flag, _ = await cache_service.get_abac_conditions_flag()
+    assert flag is True
+
+    # Writes without a versions token are refused.
+    assert await cache_service.set_abac_conditions_flag(True, versions=None) is False
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_cache_service_batch_user_invalidation_uses_pipeline_helper(auth_config):
     config = _cache_config(auth_config)
     redis = _FakeRedis()

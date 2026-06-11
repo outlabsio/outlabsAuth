@@ -90,6 +90,39 @@ real Postgres + Redis (warm aggregated reads and boolean checks = **0 SQL**; gra
 on the very next read), and `benchmarks/redis_roundtrips_bench.py` re-measures the round-trip wins on
 any box.
 
+Phase 3 (permission-resolution algorithmics + event-loop hygiene):
+
+- **Request-scoped memoization of the membership graph.** Multi-permission dependencies
+  (`require_permission("a", "b", ...)`, stacked checks, `POST /permissions/check`) re-enter the
+  permission service once per name; the UserRoleMembership / EntityMembership eager-loads (and
+  per-role context name sets, ABAC role conditions, condition-group operators) are now memoized for
+  the request — every check after the first is SQL-free (previously ~10 queries per additional name
+  on an entity route). Memos are keyed by the request's session (ORM rows never outlive it) and are
+  dropped by every permission-affecting mutation, so a mutation observes its own change within the
+  same request. Pinned by `tests/integration/test_request_memo_query_counts.py`.
+- **`POST /permissions/check` is one graph load.** The endpoint now delegates to
+  `get_effective_permission_names` (in-memory matching over the aggregated set) instead of a full
+  `check_permission` round per requested name.
+- **Condition-less ABAC deployments take the fast path.** With `enable_abac=True` but zero authored
+  conditions (a common rollout state), evaluation is vacuously RBAC-only — checks now fall through to
+  the non-ABAC path and its caches instead of paying the per-role condition-loading tax. The "any
+  conditions exist?" flag is request-memoized and Redis-cached against the global version counter,
+  which every condition mutation bumps. `get_effective_permission_names` applies the same gate, so
+  its ABAC fan-out (one full check per candidate name) only runs when conditions actually exist.
+- **Membership validity windows filter in SQL.** `valid_from`/`valid_until` predicates (matching
+  `is_currently_valid()`, which still runs) keep expired memberships from triggering the full
+  role+permission eager-load only to be discarded in Python.
+- **ABAC evaluation cost trims**: the stateless `PolicyEvaluationEngine` is a module singleton
+  (was constructed per check), and AND/OR condition groups short-circuit at the first
+  decisive result (previously every condition in a group was evaluated and materialized).
+- **Notification channels no longer block the event loop.** The synchronous Twilio (SMS/WhatsApp)
+  and SendGrid SDK calls — blocking HTTPS that stalled *every* in-flight request for 100ms-1s+ per
+  send — now run via `asyncio.to_thread`. The webhook channel and the SendGrid/Mailgun/webhook
+  transactional-mail providers reuse a pooled `httpx.AsyncClient` (was a fresh client + TCP/TLS
+  handshake per message; closed via the new `aclose()` seam in `OutlabsAuth.shutdown()`), and the
+  RabbitMQ channel resolves its exchange once instead of per publish. Pinned by
+  `tests/unit/services/test_channels_async.py`.
+
 ### Fixed
 
 - **Cache-invalidation listener no longer dies permanently on the first Redis error.** The DD-037
@@ -101,8 +134,11 @@ any box.
   email stayed rate-limited forever. The window is now established atomically (`SET NX EX` + `INCRBY`
   in one pipeline), and legacy TTL-less counters are healed on their next increment.
 - **ABAC condition and condition-group CRUD now invalidate the permission cache.** All six
-  condition/group mutation methods previously performed no invalidation, leaving stale ABAC verdicts
-  cached for up to the 15-minute TTL after a condition change.
+  permission-side condition/group mutation methods previously performed no invalidation, leaving
+  stale ABAC verdicts cached for up to the 15-minute TTL after a condition change. Phase 3 closed
+  the same gap in the six **role-side** condition/group CRUD methods (`RoleService.create/update/
+  delete_role_condition[_group]`), whose global bump also keeps the new "conditions exist" flag
+  honest.
 
 ### Database migrations
 

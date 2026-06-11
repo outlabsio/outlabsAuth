@@ -1,9 +1,17 @@
 # Performance Audit — 2026-06
 
-> **Status (2026-06-11)**: Phase 1 ✅ (commit `9fdcf5e`) and Phase 2 ✅ implemented on
+> **Status (2026-06-11)**: Phase 1 ✅ (`9fdcf5e`), Phase 2 ✅ (`16b8b0e`), Phase 3 ✅ implemented on
 > `production-hardening`, with warm-path budget tests
-> (`tests/integration/test_cached_hotpath_budgets.py`) and round-trip benchmarks
-> (`benchmarks/redis_roundtrips_bench.py`). Phases 3–4 pending. See CHANGELOG `[Unreleased]`.
+> (`tests/integration/test_cached_hotpath_budgets.py`,
+> `tests/integration/test_request_memo_query_counts.py`) and benchmarks
+> (`benchmarks/redis_roundtrips_bench.py`). Phase 4 pending. See CHANGELOG `[Unreleased]`.
+>
+> Phase 3 scope notes: finding 1.4's full single-permission SQL `EXISTS` rewrite was deliberately
+> **deferred** — after Phases 1–3, cold-graph loads amortize across the request (memo) and across
+> requests (versioned Redis caches), so re-encoding the override/tree/scope semantics in SQL is now
+> a small win against a large authorization-drift risk; revisit with differential testing if cold
+> checks show up in profiles. Finding 4.3 (post-commit transactional mail) also deferred to Phase 4:
+> it changes host-visible lifecycle-hook semantics and deserves its own change.
 
 **Scope**: `outlabs_auth/` package (library code only).
 **Method**: Five independent audit passes (DB/ORM, auth hot path, caching/Redis, permission resolution, async/observability), every finding verified against current source with file:line evidence. Index claims verified against rendered PostgreSQL DDL. Branch: `production-hardening`.

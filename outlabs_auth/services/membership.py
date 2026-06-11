@@ -1297,6 +1297,9 @@ class MembershipService(BaseService[EntityMembership]):
         return records, total_count
 
     async def _invalidate_membership_permissions_cache(self, user_id: UUID) -> None:
+        # Drop request-local permission memos too: a membership mutation
+        # followed by a check in the same request must observe its own change.
+        request_cache.reset()
         cache_service = getattr(self, "cache_service", None)
         if cache_service is None:
             return

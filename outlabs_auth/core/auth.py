@@ -1228,6 +1228,11 @@ class OutlabsAuth:
             await self._api_key_sync_worker.stop()
             self._api_key_sync_worker = None
 
+        if self.transactional_mail_service is not None:
+            mail_aclose = getattr(self.transactional_mail_service, "aclose", None)
+            if mail_aclose is not None:
+                await mail_aclose()
+
         if self.cache_service is not None:
             await self.cache_service.shutdown()
 

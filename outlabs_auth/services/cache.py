@@ -218,6 +218,67 @@ class CacheService:
             return None, versions
         return [str(name) for name in names], versions
 
+    def make_abac_conditions_flag_key(self) -> str:
+        return str(self.redis_client.make_key("auth", "abac-conditions-exist"))
+
+    async def get_abac_conditions_flag(self) -> tuple[Optional[bool], Optional[dict[str, int]]]:
+        """Read the cached "any ABAC conditions exist?" flag.
+
+        Validated against the global version counter only — every condition
+        mutation (role- and permission-side) bumps it, so a freshly authored
+        first condition is honored on the next read.
+        """
+        if not self.redis_client or not self.redis_client.is_available:
+            return None, None
+        mget_raw = getattr(self.redis_client, "mget_raw", None)
+        if mget_raw is None:
+            return None, None
+
+        values = await mget_raw(
+            [
+                self.make_abac_conditions_flag_key(),
+                self.make_api_key_auth_snapshot_version_key("global"),
+            ]
+        )
+        if values is None or len(values) != 2:
+            return None, None
+
+        versions = {"global": self._coerce_version(values[1])}
+        if not values[0]:
+            return None, versions
+        try:
+            payload = json.loads(values[0])
+        except (TypeError, ValueError):
+            return None, versions
+        if not isinstance(payload, dict) or payload.get("versions") != versions:
+            return None, versions
+        exists = payload.get("exists")
+        if not isinstance(exists, bool):
+            return None, versions
+        return exists, versions
+
+    async def set_abac_conditions_flag(
+        self,
+        exists: bool,
+        *,
+        versions: Optional[dict[str, int]],
+    ) -> bool:
+        if versions is None:
+            return False
+        if not self.redis_client or not self.redis_client.is_available:
+            return False
+        set_raw = getattr(self.redis_client, "set_raw", None)
+        if set_raw is None:
+            return False
+        payload = json.dumps({"exists": bool(exists), "versions": versions})
+        return bool(
+            await set_raw(
+                self.make_abac_conditions_flag_key(),
+                payload,
+                ttl=self._jittered_ttl(self.config.cache_permission_ttl),
+            )
+        )
+
     async def set_user_permission_names(
         self,
         user_id: str,

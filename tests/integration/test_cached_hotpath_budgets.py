@@ -17,6 +17,7 @@ import pytest
 import pytest_asyncio
 
 from outlabs_auth.models.sql.user import User
+from outlabs_auth.services import request_cache
 from tests.integration.query_budget_support import (
     SimpleQueryBudgetContext,
     attach_query_counter,
@@ -53,6 +54,10 @@ async def test_warm_user_permission_aggregation_is_sql_free(auth_with_cache, que
     user = await _detached_user(auth_with_cache, seeded.benchmark_user_id)
 
     async def aggregate():
+        # Each iteration simulates a fresh request: without the reset the
+        # request-scoped memo (Phase 3) would make this SQL-free on its own,
+        # and the assertion would no longer prove the REDIS cache works.
+        request_cache.reset()
         async with auth_with_cache.get_session() as session:
             return await service.get_user_permissions(
                 session,
@@ -85,6 +90,7 @@ async def test_warm_boolean_permission_checks_are_sql_free(auth_with_cache, quer
 
     def make_check(permission: str):
         async def check():
+            request_cache.reset()  # simulate a fresh request per iteration
             async with auth_with_cache.get_session() as session:
                 return await service.check_permission(
                     session,
@@ -124,6 +130,7 @@ async def test_role_mutations_invalidate_cached_permissions_immediately(auth_wit
     user = await _detached_user(auth_with_cache, seeded.benchmark_user_id)
 
     async def aggregated() -> set[str]:
+        request_cache.reset()  # each read simulates a separate request
         async with auth_with_cache.get_session() as session:
             return set(
                 await service.get_user_permissions(
@@ -135,6 +142,7 @@ async def test_role_mutations_invalidate_cached_permissions_immediately(auth_wit
             )
 
     async def verdict() -> bool:
+        request_cache.reset()  # each read simulates a separate request
         async with auth_with_cache.get_session() as session:
             return await service.check_permission(
                 session,

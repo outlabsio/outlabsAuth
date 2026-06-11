@@ -193,10 +193,18 @@ async def test_permissions_router_callback_crud_and_user_paths(
             )
         assert exc.value.status_code == 404
 
-        async def _check_permission(*args, **kwargs):
-            return kwargs["permission"] == "user:read"
+        # The /check endpoint delegates to get_effective_permission_names
+        # (one membership-graph load + in-memory matching) instead of a full
+        # check_permission round per requested name.
+        async def _effective_names(*args, **kwargs):
+            assert set(kwargs["candidate_permission_names"]) == {"user:read", "role:update"}
+            return {"user:read"}
 
-        monkeypatch.setattr(auth_instance.permission_service, "check_permission", _check_permission)
+        monkeypatch.setattr(
+            auth_instance.permission_service,
+            "get_effective_permission_names",
+            _effective_names,
+        )
         checked = await check_permissions(
             data=PermissionCheckRequest(
                 user_id=str(actor.id),
