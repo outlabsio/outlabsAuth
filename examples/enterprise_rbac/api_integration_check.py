@@ -48,6 +48,23 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(f"  {'PASS' if ok else 'FAIL'}  {name}{f'  ({detail})' if detail else ''}")
 
 
+def confirm_visible(client: httpx.Client, path: str, headers: dict, timeout_s: float = 5.0) -> None:
+    """Read-your-writes barrier after a create.
+
+    The library's unit-of-work commits in dependency teardown, which FastAPI
+    (>=0.106) runs AFTER the response is sent — an immediate dependent request
+    can race the commit on a loaded host (observed once in CI as a 404 for a
+    just-created role). Poll until the resource is readable.
+    """
+    deadline = time.time() + timeout_s
+    while True:
+        if client.get(path, headers=headers).status_code < 400:
+            return
+        if time.time() > deadline:
+            raise RuntimeError(f"{path} not visible within {timeout_s}s after create")
+        time.sleep(0.1)
+
+
 def lead_payload(entity_id: str) -> dict:
     marker = uuid.uuid4().hex[:8]
     return {
@@ -136,6 +153,10 @@ def main() -> int:
         json={"email": scoped_email, "password": PASSWORD, "first_name": "Scoped", "last_name": "Member"},
     )
     scoped_id = registered.json().get("id")
+    if scoped_id:
+        confirm_visible(
+            client, f"/v1/users/{scoped_id}", {"Authorization": f"Bearer {tokens['admin']}"}
+        )
     login = client.post("/v1/auth/login", json={"email": scoped_email, "password": PASSWORD})
     scoped_token = login.json().get("access_token")
     check(
@@ -252,6 +273,10 @@ def main() -> int:
     )
 
     if api_key:
+        if key_id:
+            confirm_visible(
+                client, f"/v1/api-keys/{key_id}", {"Authorization": f"Bearer {tokens['sf_agent']}"}
+            )
         first = client.get("/v1/leads", headers={"X-API-Key": api_key})
         second = client.get("/v1/leads", headers={"X-API-Key": api_key})
         check(
@@ -287,8 +312,11 @@ def main() -> int:
             "/v1/auth/register",
             json={"email": email, "password": PASSWORD, "first_name": "ITC", "last_name": label},
         )
+        user_id = reg.json().get("id")
+        if user_id:
+            confirm_visible(client, f"/v1/users/{user_id}", admin_headers)
         token = client.post("/v1/auth/login", json={"email": email, "password": PASSWORD}).json().get("access_token")
-        return reg.json().get("id"), token
+        return user_id, token
 
     # ---- 9. Tree permissions: ancestor membership grants on descendants ----
     # A *_tree permission held via a membership on west_coast must grant the
@@ -323,6 +351,8 @@ def main() -> int:
             headers=admin_headers,
         )
         tree_role_id = tree_role.json().get("id")
+        if tree_role_id:
+            confirm_visible(client, f"/v1/roles/{tree_role_id}", admin_headers)
         tree_user_id, tree_token = register_user("tree")
         grant = client.post(
             "/v1/memberships/",
@@ -394,6 +424,8 @@ def main() -> int:
         headers=admin_headers,
     )
     edit_role_id = edit_role.json().get("id")
+    if edit_role_id:
+        confirm_visible(client, f"/v1/roles/{edit_role_id}", admin_headers)
     edit_user_id, edit_token = register_user("roleedit")
     client.post(
         "/v1/memberships/",
@@ -468,6 +500,8 @@ def main() -> int:
             headers=admin_headers,
         )
         temp_entity_id = created_entity.json().get("id")
+        if temp_entity_id:
+            confirm_visible(client, f"/v1/entities/{temp_entity_id}", admin_headers)
         arch_user_id, arch_token = register_user("archive")
         client.post(
             "/v1/memberships/",

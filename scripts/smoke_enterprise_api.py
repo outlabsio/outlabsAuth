@@ -17,6 +17,7 @@ Environment:
 import asyncio
 import json
 import os
+import time
 import uuid
 from typing import Any
 
@@ -35,6 +36,28 @@ async def _request(
     if r.status_code >= 400:
         raise RuntimeError(f"{method} {path} -> {r.status_code}: {r.text}")
     return r
+
+
+async def _confirm_visible(
+    client: httpx.AsyncClient, path: str, timeout_s: float = 5.0
+) -> None:
+    """Read-your-writes barrier after a create.
+
+    The library's unit-of-work commits in dependency teardown, which FastAPI
+    (>=0.106) runs AFTER the response is sent — an immediate dependent request
+    can race the commit on a loaded host (observed once in CI as a 404 for a
+    just-created role). Poll until the resource is readable.
+    """
+    deadline = time.time() + timeout_s
+    while True:
+        r = await client.get(path)
+        if r.status_code < 400:
+            return
+        if time.time() > deadline:
+            raise RuntimeError(
+                f"{path} not visible within {timeout_s}s after create ({r.status_code})"
+            )
+        await asyncio.sleep(0.1)
 
 
 async def main() -> None:
@@ -95,6 +118,7 @@ async def main() -> None:
             )
         ).json()
         smoke_role_id = smoke_role["id"]
+        await _confirm_visible(client, f"/roles/{smoke_role_id}")
 
         # Scenario 1 conditions on USER attributes, which are always present
         # in the ABAC context. Scenario 2 (further down) conditions on
@@ -156,6 +180,7 @@ async def main() -> None:
         )
         child = created.json()
         child_id = child["id"]
+        await _confirm_visible(client, f"/entities/{child_id}")
 
         # Descendants read (requires entity:read_tree)
         await _request(client, "GET", f"/entities/{parent_id}/descendants")
@@ -205,6 +230,7 @@ async def main() -> None:
                 },
             )
             user_id = registered.json()["id"]
+            await _confirm_visible(client, f"/users/{user_id}")
             await _request(
                 client,
                 "POST",
@@ -288,6 +314,7 @@ async def main() -> None:
             )
         ).json()
         res_role_id = res_role["id"]
+        await _confirm_visible(client, f"/roles/{res_role_id}")
         await _request(
             client,
             "POST",
