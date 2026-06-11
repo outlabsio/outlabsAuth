@@ -35,7 +35,7 @@ class SimpleRBAC(OutlabsAuth):
         >>>
         >>> auth = SimpleRBAC(
         ...     database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
-        ...     secret_key="your-secret-key-here"
+        ...     secret_key="your-secret-key-at-least-32-characters"
         ... )
         >>> await auth.initialize()
         >>>

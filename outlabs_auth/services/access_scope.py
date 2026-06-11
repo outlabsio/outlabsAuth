@@ -19,8 +19,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.entity_membership import EntityMembership
-from outlabs_auth.models.sql.enums import MembershipStatus
+from outlabs_auth.models.sql.enums import DefinitionStatus, MembershipStatus
+from outlabs_auth.models.sql.role import Role
 from outlabs_auth.models.sql.user import User
+from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
 
 
 def _coerce_uuid(value: Any) -> Optional[UUID]:
@@ -147,7 +149,20 @@ class AccessScopeService:
     ) -> PrincipalEntityScope:
         """
         Resolve user scope from root entity + active memberships.
+
+        Holders of an active system-wide role (DD-056) span all trees,
+        exactly like superusers.
         """
+        if await self._user_has_active_system_wide_role(session, user_id):
+            return self._with_principal_member(
+                PrincipalEntityScope(
+                    source=source,
+                    is_global=True,
+                    principal_user_id=user_id,
+                ),
+                include_member_user_ids=include_member_user_ids,
+            )
+
         expand_descendants = bool(self.config.enable_entity_hierarchy)
         root_entity_ids, direct_entity_ids, descendant_entity_ids_by_ancestor = (
             await self._resolve_user_scope_inputs(
@@ -253,6 +268,42 @@ class AccessScopeService:
                 ),
             )
         return self._with_principal_member(scope, include_member_user_ids=include_member_user_ids)
+
+    async def _user_has_active_system_wide_role(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+    ) -> bool:
+        """
+        True if the user holds a currently-valid direct membership in a
+        system-wide role (is_global, no root/scope entity) — the explicit
+        global-scope grant defined by DD-056.
+        """
+        now = datetime.now(timezone.utc)
+        stmt = (
+            select(literal(True))
+            .select_from(UserRoleMembership)
+            .join(Role, cast(Any, Role.id) == cast(Any, UserRoleMembership.role_id))
+            .where(
+                cast(Any, UserRoleMembership.user_id) == user_id,
+                cast(Any, UserRoleMembership.status) == MembershipStatus.ACTIVE,
+                or_(
+                    cast(Any, UserRoleMembership.valid_from).is_(None),
+                    cast(Any, UserRoleMembership.valid_from) <= now,
+                ),
+                or_(
+                    cast(Any, UserRoleMembership.valid_until).is_(None),
+                    cast(Any, UserRoleMembership.valid_until) >= now,
+                ),
+                cast(Any, Role.is_global).is_(True),
+                cast(Any, Role.root_entity_id).is_(None),
+                cast(Any, Role.scope_entity_id).is_(None),
+                cast(Any, Role.status) == DefinitionStatus.ACTIVE,
+            )
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        return result.first() is not None
 
     async def _resolve_user_scope_inputs(
         self,

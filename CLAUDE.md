@@ -201,14 +201,13 @@ uv sync --extra all     # Everything
 
 ### Development
 ```bash
-# Run tests (new library tests, not old ones)
-uv run pytest
+# Run the full test suite (896+ tests). Redis-backed cache/budget tests need
+# a reachable Redis — without TEST_REDIS_URL they skip silently.
+TEST_REDIS_URL=redis://localhost:56379/15 uv run pytest
 
-# Code quality
-uv run black .
-uv run isort .
-uv run flake8 .
-uv run mypy .
+# Code quality (NOTE: the repo is only partially black-formatted — don't
+# blanket-run black; format only files you touched. ruff is the lint gate.)
+uv run ruff check .
 
 # Build package
 uv build
@@ -216,6 +215,30 @@ uv build
 # Install locally for testing
 pip install -e .
 ```
+
+### Release Validation (API integration suite + benchmarks)
+
+The release-grade validation lives at the repo root and in the EnterpriseRBAC
+example. Full documentation: `docs/PRIVATE_RELEASE.md` → "API Integration
+Validation" and "Database Upgrade Rehearsal".
+
+```bash
+# ONE command: seed -> boot the EnterpriseRBAC example -> admin/ABAC smoke ->
+# 45-check HTTP assertion suite -> teardown. Non-zero exit on any failure.
+uv run python scripts/run_enterprise_example_smoke.py
+
+# The assertion suite alone, against an already-running instance (or staging):
+uv run python examples/enterprise_rbac/api_integration_check.py --base-url http://localhost:8004
+
+# Redis round-trip benchmarks (re-verify the perf-audit numbers on any box):
+REDIS_URL=redis://localhost:56379/15 uv run python benchmarks/redis_roundtrips_bench.py
+```
+
+CI runs the full suite and the API integration suite on every PR and on
+`main`/tags (`.github/workflows/release-readiness.yml`: `full-suite` and
+`api-integration` jobs). Query-count budgets that pin the hot paths live in
+`tests/integration/test_cached_hotpath_budgets.py`,
+`test_request_memo_query_counts.py`, and `test_bulk_write_query_counts.py`.
 
 ## Development Testing Utilities
 

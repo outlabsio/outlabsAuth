@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from dataclasses import dataclass
 from typing import Any, Literal, Sequence, cast
 from uuid import UUID
@@ -181,14 +182,20 @@ async def bootstrap_superuser(
 
 def build_bootstrap_config(
     *,
-    secret_key: str = "outlabs-auth-bootstrap",
+    secret_key: str | None = None,
     database_url: str | None = None,
     database_schema: str | None = None,
 ) -> AuthConfig:
-    """Construct a minimal config for CLI bootstrap flows."""
+    """Construct a minimal config for CLI bootstrap flows.
+
+    Bootstrap only seeds DB records (permissions/config/admin user) and never issues
+    JWTs, so when no secret is supplied we generate a strong ephemeral one — this both
+    satisfies the secret-strength check (SEC-9) and avoids shipping a hardcoded default
+    signing key (SEC-16).
+    """
 
     return AuthConfig(
-        secret_key=secret_key,
+        secret_key=secret_key or secrets.token_urlsafe(48),
         database_url=database_url,
         database_schema=database_schema,
         enable_token_cleanup=False,

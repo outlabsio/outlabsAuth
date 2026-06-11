@@ -10,7 +10,7 @@ from outlabs_auth.observability import CorrelationIDMiddleware, ObservabilityCon
 def _build_auth(*, metrics_path: str = "/internal/auth/metrics") -> SimpleRBAC:
     return SimpleRBAC(
         database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/test_db",
-        secret_key="test-secret-key",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         observability_config=ObservabilityConfig(
             enable_metrics=True,
             metrics_path=metrics_path,

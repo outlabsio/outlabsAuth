@@ -14,7 +14,7 @@ from outlabs_auth.services.activity_tracker import ActivityTracker
 
 @pytest.fixture
 def mock_redis():
-    """Mock Redis client."""
+    """Mock Redis client without the pipeline helper (exercises the per-op fallback path)."""
     redis = AsyncMock()
     redis.sadd = AsyncMock(return_value=1)
     redis.expire = AsyncMock(return_value=True)
@@ -22,6 +22,7 @@ def mock_redis():
     redis.scard = AsyncMock(return_value=0)
     redis.scan = AsyncMock(return_value=(0, []))
     redis.get_raw = AsyncMock(return_value=None)
+    del redis.record_activity_pipeline
     return redis
 
 
@@ -95,6 +96,31 @@ class TestActivityTracking:
         assert any(
             last_activity_key in str(call) for call in mock_redis.set_raw.call_args_list
         )
+
+    @pytest.mark.asyncio
+    async def test_track_activity_uses_pipeline_when_available(self):
+        """All bookkeeping goes through one pipelined round trip when the helper exists."""
+        redis = AsyncMock()
+        redis.record_activity_pipeline = AsyncMock(return_value=True)
+        tracker = ActivityTracker(redis_client=redis, enabled=True)
+
+        await tracker.track_activity("user_123")
+
+        redis.record_activity_pipeline.assert_awaited_once()
+        kwargs = redis.record_activity_pipeline.await_args.kwargs
+        now = datetime.now(timezone.utc)
+        quarter = (now.month - 1) // 3 + 1
+        assert kwargs["member"] == "user_123"
+        assert kwargs["last_activity_key"] == "last_activity:user_123"
+        assert kwargs["last_activity_ttl"] == 7 * 86400
+        assert kwargs["set_ops"] == [
+            (f"active_users:daily:{now.date().isoformat()}", 48 * 3600),
+            (f"active_users:monthly:{now.year:04d}-{now.month:02d}", 90 * 86400),
+            (f"active_users:quarterly:{now.year:04d}-Q{quarter}", 365 * 86400),
+        ]
+        # The per-op path is skipped when the pipeline is available
+        redis.sadd.assert_not_called()
+        redis.set_raw.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_track_activity_when_disabled(self, mock_redis):

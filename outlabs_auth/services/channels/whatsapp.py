@@ -4,6 +4,7 @@ WhatsApp Notification Channel
 Sends notifications for auth events via WhatsApp (using Twilio).
 Popular globally, especially in international markets.
 """
+import asyncio
 from typing import Optional, List, Dict, Any, Callable, Awaitable
 
 try:
@@ -173,22 +174,24 @@ class WhatsAppChannel(NotificationChannel):
             if not to_number.startswith("whatsapp:"):
                 to_number = f"whatsapp:{to_number}"
             
-            # Send via Twilio WhatsApp API
-            # Note: Twilio client is synchronous
+            # The Twilio client is synchronous (blocking HTTPS) — run it in a
+            # worker thread so the event loop doesn't stall for the API call.
             if "content_sid" in message_data:
                 # Using approved template (production)
-                self.client.messages.create(
+                await asyncio.to_thread(
+                    self.client.messages.create,
                     from_=self.from_number,
                     to=to_number,
                     content_sid=message_data["content_sid"],
-                    content_variables=message_data.get("content_variables", {})
+                    content_variables=message_data.get("content_variables", {}),
                 )
             else:
                 # Using freeform text (sandbox only)
-                self.client.messages.create(
+                await asyncio.to_thread(
+                    self.client.messages.create,
                     from_=self.from_number,
                     to=to_number,
-                    body=message_data["body"]
+                    body=message_data["body"],
                 )
             
         except Exception:

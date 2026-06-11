@@ -136,10 +136,11 @@ async def test_cache_service_invalidates_permission_cache_for_entity_messages(au
     await cache_service._handle_message("all:entities")
     await cache_service._handle_message("entity:1234:hierarchy")
 
-    assert redis.deleted_patterns == [
-        "auth:permission-check:*",
-        "auth:permission-check:*",
-    ]
+    # Versioned cache entries made the listener-side SCAN+DEL redundant: the
+    # publisher's version bump already invalidates shared entries everywhere,
+    # so the handler must not run any deletion (previously every instance
+    # SCANned the whole keyspace per message).
+    assert redis.deleted_patterns == []
 
 
 @pytest.mark.unit

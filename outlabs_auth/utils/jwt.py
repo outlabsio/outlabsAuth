@@ -35,7 +35,7 @@ def create_access_token(
     Example:
         >>> token = create_access_token(
         ...     data={"sub": "user_id_123"},
-        ...     secret_key="my-secret-key",
+        ...     secret_key="your-secret-key-at-least-32-characters",
         ...     audience="my-app"
         ... )
         >>> # Token is valid for 15 minutes by default
@@ -89,7 +89,7 @@ def create_refresh_token(
     Example:
         >>> token = create_refresh_token(
         ...     data={"sub": "user_id_123"},
-        ...     secret_key="my-secret-key",
+        ...     secret_key="your-secret-key-at-least-32-characters",
         ...     audience="my-app"
         ... )
         >>> # Token is valid for 30 days by default
@@ -151,13 +151,25 @@ def verify_token(
         'user_123'
     """
     try:
-        # Decode with or without audience validation
-        decode_options: dict[str, Any] = {"algorithms": [algorithm]}
+        # Decode with or without audience validation.
+        # SEC-6: require `exp` to be present — PyJWT's verify_exp only checks an
+        # expiry that exists, so a token minted without `exp` would otherwise never
+        # expire. All tokens this library issues carry `exp`.
         if audience:
-            decode_options["audience"] = audience
-            payload = jwt.decode(token, secret_key, **decode_options)
+            payload = jwt.decode(
+                token,
+                secret_key,
+                algorithms=[algorithm],
+                audience=audience,
+                options={"require": ["exp"]},
+            )
         else:
-            payload = jwt.decode(token, secret_key, algorithms=[algorithm])
+            payload = jwt.decode(
+                token,
+                secret_key,
+                algorithms=[algorithm],
+                options={"require": ["exp"]},
+            )
 
         # Check token type if specified
         if expected_type:
@@ -217,6 +229,9 @@ def get_token_expiration(token: str) -> Optional[datetime]:
     """
     Get expiration time from token without verification.
 
+    WARNING (SEC-14): does NOT verify the signature — for inspection/display only, never
+    for an authorization or token-validity decision (use ``verify_token`` for that).
+
     Args:
         token: JWT token
 
@@ -244,6 +259,9 @@ def get_token_expiration(token: str) -> Optional[datetime]:
 def is_token_expired(token: str) -> bool:
     """
     Check if token is expired without full verification.
+
+    WARNING (SEC-14): does NOT verify the signature — a forged token can claim any ``exp``.
+    For inspection only, never for an auth decision (use ``verify_token``).
 
     Args:
         token: JWT token
@@ -290,7 +308,7 @@ def create_token_pair(
     Example:
         >>> access, refresh = create_token_pair(
         ...     user_id="user_123",
-        ...     secret_key="my-secret",
+        ...     secret_key="your-secret-key-at-least-32-characters",
         ...     audience="my-app"
         ... )
         >>> # access token valid for 15 min, refresh for 30 days

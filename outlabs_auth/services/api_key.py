@@ -8,13 +8,17 @@ Uses SQLAlchemy for PostgreSQL backend.
 from dataclasses import dataclass
 import logging
 import math
+import time
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 from uuid import UUID
 
+from sqlalchemy import bindparam
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, or_, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.util import identity_key
 from sqlalchemy.orm import selectinload
 
 from outlabs_auth.core.config import AuthConfig
@@ -90,6 +94,44 @@ class APIKeyService(BaseService[APIKey]):
         self.user_audit_service = user_audit_service
         self.observability = observability
         self.cache_service: Optional["CacheService"] = None
+        # Optional per-process API-key auth snapshot cache (PERF, opt-in via
+        # config.api_key_local_snapshot_cache_ttl). Maps key_hash -> (expiry_monotonic, snapshot).
+        self._local_snapshot_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._local_snapshot_cache_max = 50000
+
+    def _local_snapshot_cache_enabled(self) -> bool:
+        return (getattr(self.config, "api_key_local_snapshot_cache_ttl", 0) or 0) > 0
+
+    def _local_snapshot_get(self, key_hash: str) -> Optional[dict[str, Any]]:
+        """Return a fresh in-process snapshot for ``key_hash`` (miss/disabled/expired -> None).
+
+        NOTE: the returned dict is shared, not copied — callers must treat snapshots as
+        read-only (the existing hot path builds new auth_result dicts from them and never
+        mutates them).
+        """
+        if not self._local_snapshot_cache_enabled():
+            return None
+        entry = self._local_snapshot_cache.get(key_hash)
+        if entry is None:
+            return None
+        expires_at, snapshot = entry
+        if time.monotonic() >= expires_at:
+            self._local_snapshot_cache.pop(key_hash, None)
+            return None
+        return snapshot
+
+    def _local_snapshot_put(self, key_hash: str, snapshot: dict[str, Any]) -> None:
+        ttl = getattr(self.config, "api_key_local_snapshot_cache_ttl", 0) or 0
+        if ttl <= 0:
+            return
+        cache = self._local_snapshot_cache
+        if len(cache) >= self._local_snapshot_cache_max:
+            # Coarse bound to avoid unbounded growth; entries are short-lived anyway.
+            cache.clear()
+        cache[key_hash] = (time.monotonic() + ttl, snapshot)
+
+    def _local_snapshot_evict(self, key_hash: str) -> None:
+        self._local_snapshot_cache.pop(key_hash, None)
 
     async def resolve_api_key_owner(
         self,
@@ -448,19 +490,27 @@ class APIKeyService(BaseService[APIKey]):
                 )
                 return None, 0
 
-        # Increment usage counter in Redis (FAST - ~0.1ms)
+        # Record usage + last_used + rate-limit counters in ONE Redis round trip
+        # (was INCR + SET + up to 3× INCR/EXPIRE as sequential awaits), mirroring
+        # the snapshot path; limits are enforced from the returned counts.
         usage_count = 0
         if self.redis_client and self.redis_client.is_available:
-            counter_key = self._make_usage_counter_key(str(api_key.id))
-            usage_count = await self.redis_client.increment(counter_key, amount=1) or 0
-
-            # Also track last_used timestamp in Redis
-            last_used_key = self._make_last_used_key(str(api_key.id))
-            await self.redis_client.set(
-                last_used_key,
-                datetime.now(timezone.utc).isoformat(),
-                ttl=self.config.cache_ttl_seconds,
+            key_id = str(api_key.id)
+            usage_key = self._make_usage_counter_key(key_id)
+            windows = self._api_key_rate_windows(api_key)
+            counts = await self.redis_client.record_api_key_usage_pipeline(
+                usage_key=usage_key,
+                last_used_key=self._make_last_used_key(key_id),
+                last_used_value=datetime.now(timezone.utc).isoformat(),
+                last_used_ttl=self.config.cache_ttl_seconds,
+                rate_windows=[
+                    (self._make_rate_limit_key(key_id, window), ttl)
+                    for window, ttl, _limit in windows
+                ],
             )
+            if counts is not None:
+                usage_count = int(counts.get(usage_key, 0))
+                self._enforce_rate_limit_counts(api_key, windows, counts, key_id)
         else:
             # Fallback: Direct database write
             api_key.usage_count += 1
@@ -468,19 +518,38 @@ class APIKeyService(BaseService[APIKey]):
             await session.flush()
             usage_count = api_key.usage_count
 
-        # Check rate limits (using Redis counter)
-        if self.redis_client and self.redis_client.is_available:
-            await self._check_rate_limits(api_key)
-
         self._log_api_key_validation(prefix=api_key.prefix, status="valid")
         return api_key, usage_count
 
     @staticmethod
     def scopes_allow_permission(scopes: Optional[List[str]], required_scope: str) -> bool:
-        """Check whether API key scopes allow a permission."""
+        """Check whether API key scopes allow a permission.
+
+        This is an owner-NARROWING filter: an empty scope set means "no narrowing" — the
+        key may do whatever its owner can (still bounded by the owner's own permission check
+        elsewhere). For integration principals, which have no owner to bound them, use
+        ``principal_scopes_allow_permission`` instead, which fails CLOSED on empty (SEC-13).
+        """
         normalized = {("*:*" if scope == "*" else scope) for scope in (scopes or []) if scope}
         if not normalized:
             return True
+
+        from outlabs_auth.services.permission import PermissionService
+
+        return PermissionService._permission_set_allows(required_scope, normalized)
+
+    @staticmethod
+    def principal_scopes_allow_permission(
+        allowed_scopes: Optional[List[str]], required_scope: str
+    ) -> bool:
+        """Like ``scopes_allow_permission`` but FAILS CLOSED on an empty allow-list (SEC-13).
+
+        Integration principals / service accounts have no owner to bound them, so an empty
+        ``allowed_scopes`` must grant nothing rather than everything.
+        """
+        normalized = {("*:*" if scope == "*" else scope) for scope in (allowed_scopes or []) if scope}
+        if not normalized:
+            return False
 
         from outlabs_auth.services.permission import PermissionService
 
@@ -610,52 +679,105 @@ class APIKeyService(BaseService[APIKey]):
         }
 
         try:
-            # Get all usage counters from Redis
+            # Consume all usage counters atomically (pipelined GETDEL — the old
+            # per-key GET ... DELETE dropped increments that landed in between)
+            # with a per-op fallback for custom redis clients.
             pattern = self._make_usage_counter_key("*")
-            counters = await self.redis_client.get_all_counters(pattern)
+            collect = getattr(self.redis_client, "collect_counters_atomically", None)
+            counters_consumed = collect is not None
+            if collect is not None:
+                counters = await collect(pattern)
+            else:
+                counters = await self.redis_client.get_all_counters(pattern)
 
             logger.debug(f"Found {len(counters)} usage counters to sync")
 
-            # Sync each counter to database
+            # Parse key ids; drop malformed or zero counters up front.
+            entries: list[tuple[UUID, str, int]] = []
             for counter_key, usage_count in counters.items():
                 if usage_count <= 0:
                     continue
-
                 try:
-                    # Extract key_id from "apikey:{key_id}:usage"
-                    key_id = counter_key.split(":")[1]
+                    key_uuid = UUID(counter_key.split(":")[1])
+                except (IndexError, ValueError) as e:
+                    logger.error(f"Error syncing counter {counter_key}: {e}")
+                    stats["errors"] += 1
+                    continue
+                entries.append((key_uuid, counter_key, usage_count))
 
-                    # Get API key
-                    api_key = await self.get_by_id(session, UUID(key_id))
-                    if not api_key:
-                        logger.warning(f"API key not found for counter: {key_id}")
-                        await self.redis_client.delete(counter_key)
+            if entries:
+                # One MGET for every key's last_used timestamp. The hot path
+                # writes raw isoformat strings (pipelined SET); older writes
+                # were JSON-encoded — strip quotes to accept both.
+                last_used_keys = [self._make_last_used_key(str(key_uuid)) for key_uuid, _, _ in entries]
+                mget_raw = getattr(self.redis_client, "mget_raw", None)
+                raw_values = await mget_raw(last_used_keys) if mget_raw is not None else None
+                if raw_values is None or len(raw_values) != len(entries):
+                    raw_values = [await self.redis_client.get_raw(key) for key in last_used_keys]
+
+                now = datetime.now(timezone.utc)
+
+                def _parse_last_used(raw: Optional[str]) -> datetime:
+                    if raw:
+                        try:
+                            return datetime.fromisoformat(raw.strip('"'))
+                        except ValueError:
+                            return now
+                    return now
+
+                # Orphan counters (deleted/rotated keys) are dropped, not synced.
+                existing_result = await session.execute(
+                    select(cast(Any, APIKey.id)).where(
+                        cast(Any, APIKey.id).in_([key_uuid for key_uuid, _, _ in entries])
+                    )
+                )
+                existing_ids = set(existing_result.scalars().all())
+
+                params: list[dict[str, Any]] = []
+                for (key_uuid, counter_key, usage_count), raw in zip(entries, raw_values):
+                    if key_uuid not in existing_ids:
+                        logger.warning(f"API key not found for counter: {key_uuid}")
+                        if not counters_consumed:
+                            await self.redis_client.delete(counter_key)
                         continue
-
-                    # Update usage count in database
-                    api_key.usage_count += usage_count
-
-                    # Update last_used_at if we have it in Redis
-                    last_used_key = self._make_last_used_key(key_id)
-                    last_used_str = await self.redis_client.get(last_used_key)
-                    if last_used_str:
-                        api_key.last_used_at = datetime.fromisoformat(last_used_str)
-                    else:
-                        api_key.last_used_at = datetime.now(timezone.utc)
-
-                    await session.flush()
-
-                    # Reset Redis counter
-                    await self.redis_client.delete(counter_key)
-
+                    params.append(
+                        {
+                            "b_id": key_uuid,
+                            "b_delta": usage_count,
+                            "b_ts": _parse_last_used(raw),
+                        }
+                    )
                     stats["synced_keys"] += 1
                     stats["total_usage"] += usage_count
 
-                    logger.debug(f"Synced {usage_count} uses for API key {api_key.prefix}")
+                if params:
+                    # One executemany UPDATE (was one SELECT + one single-row
+                    # flush per key — 2K round trips per cycle for K hot keys).
+                    # Core-table form: the ORM-entity form would engage "bulk
+                    # update by primary key" mode, which can't express the
+                    # per-row usage_count increment.
+                    api_keys_table = APIKey.__table__
+                    stmt = (
+                        sa_update(api_keys_table)
+                        .where(api_keys_table.c.id == bindparam("b_id"))
+                        .values(
+                            usage_count=api_keys_table.c.usage_count + bindparam("b_delta"),
+                            last_used_at=bindparam("b_ts"),
+                        )
+                    )
+                    await session.execute(stmt, params)
+                    # Bulk UPDATEs bypass the unit of work; refresh rows this
+                    # session already materialized so in-session readers see
+                    # the change (the worker's fresh session skips this loop).
+                    identity_map = session.sync_session.identity_map
+                    for param in params:
+                        instance = identity_map.get(identity_key(APIKey, param["b_id"]))
+                        if instance is not None:
+                            await session.refresh(instance, ["usage_count", "last_used_at"])
 
-                except Exception as e:
-                    logger.error(f"Error syncing counter {counter_key}: {e}")
-                    stats["errors"] += 1
+                if not counters_consumed:
+                    for _, counter_key, _ in entries:
+                        await self.redis_client.delete(counter_key)
 
             logger.info(
                 f"Counter sync complete: {stats['synced_keys']} keys, "
@@ -838,6 +960,13 @@ class APIKeyService(BaseService[APIKey]):
             return None
 
         key_hash = APIKey.hash_key(api_key_string)
+
+        # PERF (opt-in): serve hot keys from the per-process cache, skipping the Redis
+        # snapshot GET + version reads entirely. Bounded staleness — see config docs.
+        local = self._local_snapshot_get(key_hash)
+        if local is not None:
+            return local
+
         cache_key = self._make_auth_snapshot_key(key_hash)
         snapshot = await self.redis_client.get(cache_key)
         if not isinstance(snapshot, dict):
@@ -856,6 +985,7 @@ class APIKeyService(BaseService[APIKey]):
             await self.redis_client.delete(cache_key)
             return None
 
+        self._local_snapshot_put(key_hash, snapshot)
         return snapshot
 
     async def set_api_key_auth_snapshot(
@@ -923,53 +1053,129 @@ class APIKeyService(BaseService[APIKey]):
             "versions": versions,
         }
 
-        return bool(
+        written = bool(
             await self.redis_client.set(
                 self._make_auth_snapshot_key(key_hash),
                 snapshot,
                 ttl=self._auth_snapshot_ttl(),
             )
         )
+        if written:
+            self._local_snapshot_put(key_hash, snapshot)
+        return written
 
     async def invalidate_api_key_auth_snapshot(self, api_key: APIKey) -> bool:
         """Invalidate the cached auth snapshot for a concrete API key row."""
+        # Evict the per-process copy first (best-effort; only affects this process —
+        # other processes age out via the local-cache TTL).
+        self._local_snapshot_evict(api_key.key_hash)
         if not self.redis_client or not self.redis_client.is_available:
             return False
         return bool(await self.redis_client.delete(self._make_auth_snapshot_key(api_key.key_hash)))
 
+    # Fixed-window TTLs (seconds) for the per-key rate-limit counters.
+    _RATE_LIMIT_WINDOW_TTLS: tuple[tuple[str, int], ...] = (
+        ("minute", 60),
+        ("hour", 3600),
+        ("day", 86400),
+    )
+
+    def _snapshot_rate_windows(self, snapshot: dict[str, Any]) -> list[tuple[str, int, int]]:
+        """Return ``[(window, ttl_seconds, limit), ...]`` for windows that have a configured limit."""
+        limits = {
+            "minute": snapshot.get("rate_limit_per_minute"),
+            "hour": snapshot.get("rate_limit_per_hour"),
+            "day": snapshot.get("rate_limit_per_day"),
+        }
+        windows: list[tuple[str, int, int]] = []
+        for window, ttl in self._RATE_LIMIT_WINDOW_TTLS:
+            limit = limits.get(window)
+            if limit:
+                windows.append((window, ttl, int(limit)))
+        return windows
+
+    def _api_key_rate_windows(self, api_key: APIKey) -> list[tuple[str, int, int]]:
+        """Like ``_snapshot_rate_windows`` but sourced from the APIKey row."""
+        limits = {
+            "minute": api_key.rate_limit_per_minute,
+            "hour": api_key.rate_limit_per_hour,
+            "day": api_key.rate_limit_per_day,
+        }
+        windows: list[tuple[str, int, int]] = []
+        for window, ttl in self._RATE_LIMIT_WINDOW_TTLS:
+            limit = limits.get(window)
+            if limit:
+                windows.append((window, ttl, int(limit)))
+        return windows
+
+    def _enforce_rate_limit_counts(
+        self,
+        api_key: APIKey,
+        windows: list[tuple[str, int, int]],
+        counts: dict[str, int],
+        key_id: str,
+    ) -> None:
+        """Raise InvalidInputError if any window's pipelined count exceeds its limit."""
+        for window, _ttl, limit in windows:
+            count = counts.get(self._make_rate_limit_key(key_id, window), 0)
+            if count <= limit:
+                continue
+            self._log_api_key_rate_limited(
+                api_key=api_key,
+                current_count=count,
+                limit=limit,
+                window=window,
+            )
+            raise InvalidInputError(
+                message=f"Rate limit exceeded: {limit} requests per {window}",
+                details={"limit": limit, "current": count, "window": window},
+            )
+
     async def record_api_key_auth_snapshot_usage(self, snapshot: dict[str, Any]) -> int:
-        """Record usage/rate limits for a cache-hit API-key authorization."""
+        """Record usage + rate-limit counters for a cache-hit authorization in ONE round trip.
+
+        Previously this issued the usage INCR, the last_used SET, and one INCR(+EXPIRE)
+        per rate-limit window as separate sequential awaits (3-4 Redis round trips on every
+        hot-path request). They are now pipelined into a single round trip; rate limits are
+        enforced afterward from the returned counts (raising InvalidInputError if exceeded).
+        """
         if not self.redis_client or not self.redis_client.is_available:
             return 0
 
         key_id = str(snapshot["key_id"])
-        usage_count = await self.redis_client.increment(self._make_usage_counter_key(key_id), amount=1) or 0
-        await self.redis_client.set(
-            self._make_last_used_key(key_id),
-            datetime.now(timezone.utc).isoformat(),
-            ttl=self.config.cache_ttl_seconds,
+        usage_key = self._make_usage_counter_key(key_id)
+        windows = self._snapshot_rate_windows(snapshot)
+        rate_windows = [
+            (self._make_rate_limit_key(key_id, window), ttl) for window, ttl, _limit in windows
+        ]
+
+        counts = await self.redis_client.record_api_key_usage_pipeline(
+            usage_key=usage_key,
+            last_used_key=self._make_last_used_key(key_id),
+            last_used_value=datetime.now(timezone.utc).isoformat(),
+            last_used_ttl=self.config.cache_ttl_seconds,
+            rate_windows=rate_windows,
         )
-        await self._check_rate_limits_from_snapshot(snapshot)
-        return usage_count
+        if counts is None:
+            return 0
 
-    async def _check_rate_limits_from_snapshot(self, snapshot: dict[str, Any]) -> None:
-        if not self.redis_client or not self.redis_client.is_available:
-            return
+        self._enforce_snapshot_rate_limits(snapshot, windows, counts, key_id)
+        return int(counts.get(usage_key, 0))
 
-        key_id = str(snapshot["key_id"])
+    def _enforce_snapshot_rate_limits(
+        self,
+        snapshot: dict[str, Any],
+        windows: list[tuple[str, int, int]],
+        counts: dict[str, int],
+        key_id: str,
+    ) -> None:
+        """Raise InvalidInputError if any window's pipelined count exceeds its limit."""
         prefix = str(snapshot.get("key_prefix") or "")
         key_kind = str(snapshot.get("key_kind") or "")
-
-        async def _check(window: str, limit: Optional[int], ttl: int) -> None:
-            if not limit:
-                return
-            count = await self.redis_client.increment_with_ttl(
-                self._make_rate_limit_key(key_id, window),
-                amount=1,
-                ttl=ttl,
-            ) or 0
+        for window, _ttl, limit in windows:
+            count = counts.get(self._make_rate_limit_key(key_id, window), 0)
             if count <= limit:
-                return
+                continue
             if self.observability is not None:
                 self.observability.log_api_key_rate_limited(
                     prefix=prefix,
@@ -982,10 +1188,6 @@ class APIKeyService(BaseService[APIKey]):
                 message=f"Rate limit exceeded: {limit} requests per {window}",
                 details={"limit": limit, "current": count, "window": window},
             )
-
-        await _check("minute", snapshot.get("rate_limit_per_minute"), 60)
-        await _check("hour", snapshot.get("rate_limit_per_hour"), 3600)
-        await _check("day", snapshot.get("rate_limit_per_day"), 86400)
 
     def auth_result_from_snapshot(self, snapshot: dict[str, Any], *, usage_count: int = 0) -> dict[str, Any]:
         """Build a host-safe auth result from a cached API-key snapshot."""
@@ -1108,7 +1310,7 @@ class APIKeyService(BaseService[APIKey]):
             return self.auth_snapshot_allows_permission(snapshot, permission)
 
         if snapshot.get("integration_principal_id"):
-            return self.scopes_allow_permission(
+            return self.principal_scopes_allow_permission(
                 snapshot.get("principal_allowed_scopes") or [],
                 permission,
             )
@@ -1125,6 +1327,9 @@ class APIKeyService(BaseService[APIKey]):
             permission,
             str(entity_id),
         )
+        if isinstance(cached, tuple):
+            # Versioned contract: (result, current_versions).
+            cached = cached[0]
         return cached if isinstance(cached, bool) else None
 
     async def auth_snapshot_allows_authorization(
@@ -1153,7 +1358,7 @@ class APIKeyService(BaseService[APIKey]):
             return False
 
         if snapshot.get("integration_principal_id"):
-            return self.scopes_allow_permission(
+            return self.principal_scopes_allow_permission(
                 snapshot.get("principal_allowed_scopes") or [],
                 permission,
             )

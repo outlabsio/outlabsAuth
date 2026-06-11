@@ -34,6 +34,12 @@ EXAMPLE_DIR = ROOT / "examples" / "enterprise_rbac"
 RESET_SCRIPT = EXAMPLE_DIR / "reset_test_env.py"
 SMOKE_SCRIPT = ROOT / "scripts" / "smoke_enterprise_api.py"
 
+# Every child command runs against the ROOT project WITH the `all` extra:
+# uvicorn lives in the dev/all extras, not the base dependencies, so a bare
+# `uv run --project ROOT uvicorn` fails on an unprimed environment — which is
+# exactly what a fresh CI runner provides.
+UV_RUN = ["uv", "run", "--project", str(ROOT), "--extra", "all"]
+
 
 def _env(name: str, default: str) -> str:
     val = os.getenv(name)
@@ -102,13 +108,16 @@ async def main() -> None:
     if database_url:
         env["DATABASE_URL"] = database_url
 
+    # Everything runs with --project ROOT so the CURRENT library code is
+    # exercised. Without it, `uv run` resolves the example's own .venv, whose
+    # pinned (possibly stale) outlabs-auth silently tests the wrong version —
+    # and can't even resolve newer Alembic revisions.
     print("\n==> Resetting example DB/seed data")
-    await _run(["uv", "run", "python", str(RESET_SCRIPT)], cwd=EXAMPLE_DIR, env=env)
+    await _run([*UV_RUN, "python", str(RESET_SCRIPT)], cwd=EXAMPLE_DIR, env=env)
 
     print("\n==> Starting uvicorn")
     server_proc = await asyncio.create_subprocess_exec(
-        "uv",
-        "run",
+        *UV_RUN,
         "uvicorn",
         "main:app",
         "--host",
@@ -135,14 +144,27 @@ async def main() -> None:
         print("\n==> Waiting for readiness")
         await _wait_ready(base_url, timeout_s=40.0)
 
-        print("\n==> Running smoke script")
+        print("\n==> Running smoke script (admin + ABAC flow)")
         smoke_env = env.copy()
         smoke_env["BASE_URL"] = f"{base_url}/v1"
         smoke_env["EMAIL"] = _env("EMAIL", "admin@acme.com")
-        smoke_env["PASSWORD"] = _env("PASSWORD", "Test123!!")
-        await _run(["uv", "run", "python", str(SMOKE_SCRIPT)], cwd=ROOT, env=smoke_env)
+        smoke_env["PASSWORD"] = _env("PASSWORD", "Testpass1!")
+        await _run([*UV_RUN, "python", str(SMOKE_SCRIPT)], cwd=ROOT, env=smoke_env)
 
-        print("\n==> Smoke OK")
+        print("\n==> Running API integration check (assertion suite)")
+        await _run(
+            [
+                *UV_RUN,
+                "python",
+                str(EXAMPLE_DIR / "api_integration_check.py"),
+                "--base-url",
+                base_url,
+            ],
+            cwd=ROOT,
+            env=env,
+        )
+
+        print("\n==> Smoke + integration checks OK")
     finally:
         print("\n==> Shutting down server")
         await _terminate(server_proc)

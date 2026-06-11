@@ -8,7 +8,7 @@ PostgreSQL backend with SQLModel/SQLAlchemy.
 
 Quick Start:
     >>> from outlabs_auth import OutlabsAuth
-    >>> auth = OutlabsAuth(database_url="postgresql+asyncpg://...", secret_key="your-secret-key")
+    >>> auth = OutlabsAuth(database_url="postgresql+asyncpg://...", secret_key="your-secret-key-at-least-32-characters")
     >>> await auth.initialize()
 """
 

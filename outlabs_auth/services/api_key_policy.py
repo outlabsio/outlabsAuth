@@ -297,7 +297,7 @@ class APIKeyPolicyService:
                 session,
                 principal,
             )
-            return APIKeyService.scopes_allow_permission(principal_allowed_scopes, required_scope)
+            return APIKeyService.principal_scopes_allow_permission(principal_allowed_scopes, required_scope)
 
         if self.permission_service is None or api_key.owner_id is None:
             return True

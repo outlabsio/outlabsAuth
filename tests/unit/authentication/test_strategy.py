@@ -22,6 +22,7 @@ def _make_access_token(secret: str, **claims: object) -> str:
     payload = {
         "sub": "user-123",
         "aud": "outlabs-auth",
+        "type": "access",
         "exp": int(time.time()) + 300,
         **claims,
     }
@@ -65,6 +66,7 @@ async def test_jwt_strategy_authenticates_active_user():
         "metadata": {
             "sub": "user-123",
             "aud": "outlabs-auth",
+            "type": "access",
             "exp": pytest.approx(result["metadata"]["exp"]),
             "jti": "jwt-123",
         },

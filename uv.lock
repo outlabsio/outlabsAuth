@@ -1587,7 +1587,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'all'", specifier = ">=5.0.0" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=5.0.0" },
     { name = "python-dateutil", specifier = ">=2.8.0" },
-    { name = "python-multipart", specifier = ">=0.0.6" },
+    { name = "python-multipart", specifier = ">=0.0.18" },
     { name = "python-telegram-bot", marker = "extra == 'all'", specifier = ">=20.0" },
     { name = "python-telegram-bot", marker = "extra == 'notifications'", specifier = ">=20.0" },
     { name = "questionary", marker = "extra == 'dev'", specifier = ">=2.0.0" },

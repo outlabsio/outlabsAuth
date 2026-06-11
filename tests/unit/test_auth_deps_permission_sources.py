@@ -92,6 +92,22 @@ class _SnapshotRedis:
         self.values[key] = value
         return True
 
+    async def set_raw(self, key: str, value: str, ttl=None):
+        self.values[key] = value
+        return True
+
+    async def mget_raw(self, keys):
+        out = []
+        for key in keys:
+            if key in self.values:
+                value = self.values[key]
+                out.append(value if isinstance(value, str) else None)
+            elif key in self.counters:
+                out.append(str(self.counters[key]))
+            else:
+                out.append(None)
+        return out
+
     async def delete(self, key: str):
         self.deleted.append(key)
         self.values.pop(key, None)
@@ -108,6 +124,23 @@ class _SnapshotRedis:
     async def increment_with_ttl(self, key: str, amount: int = 1, ttl: int | None = None):
         self.counters[key] = self.counters.get(key, 0) + amount
         return self.counters[key]
+
+    async def record_api_key_usage_pipeline(
+        self,
+        *,
+        usage_key: str,
+        last_used_key: str,
+        last_used_value: str,
+        last_used_ttl=None,
+        rate_windows=None,
+    ):
+        self.counters[usage_key] = self.counters.get(usage_key, 0) + 1
+        self.values[last_used_key] = last_used_value
+        counts = {usage_key: self.counters[usage_key]}
+        for rate_key, _ttl in (rate_windows or []):
+            self.counters[rate_key] = self.counters.get(rate_key, 0) + 1
+            counts[rate_key] = self.counters[rate_key]
+        return counts
 
 
 def _make_request(
@@ -256,11 +289,17 @@ async def test_require_tree_permission_allows_cached_entity_snapshot_without_bac
         effective_permissions=[],
         ip_whitelist=[],
     )
+    _, perm_versions = await cache_service.get_permission_check(
+        str(user_id),
+        "pipeline:read_tree",
+        str(target_id),
+    )
     await cache_service.set_permission_check(
         str(user_id),
         "pipeline:read_tree",
         True,
         str(target_id),
+        versions=perm_versions,
     )
     await cache_service.set_entity_relation(
         str(anchor_id),

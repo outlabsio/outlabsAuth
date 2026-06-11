@@ -338,7 +338,7 @@ class TestServiceIntegrationWithObservability:
 
         config = AuthConfig(
             database_url="postgresql+asyncpg://test:test@localhost/test",
-            secret_key="test-secret",
+            secret_key="test-secret-key-do-not-use-in-production-1234567890",
             enable_entity_hierarchy=True,
         )
 
@@ -359,7 +359,7 @@ class TestServiceIntegrationWithObservability:
 
         config = AuthConfig(
             database_url="postgresql+asyncpg://test:test@localhost/test",
-            secret_key="test-secret",
+            secret_key="test-secret-key-do-not-use-in-production-1234567890",
             enable_entity_hierarchy=True,
         )
 
@@ -406,7 +406,7 @@ class TestGracefulDegradation:
 
         config = AuthConfig(
             database_url="postgresql+asyncpg://test:test@localhost/test",
-            secret_key="test-secret",
+            secret_key="test-secret-key-do-not-use-in-production-1234567890",
             enable_entity_hierarchy=True,
         )
 
@@ -427,7 +427,7 @@ class TestGracefulDegradation:
 
         config = AuthConfig(
             database_url="postgresql+asyncpg://test:test@localhost/test",
-            secret_key="test-secret",
+            secret_key="test-secret-key-do-not-use-in-production-1234567890",
             enable_entity_hierarchy=True,
         )
 

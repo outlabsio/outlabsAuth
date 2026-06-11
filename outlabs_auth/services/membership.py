@@ -1063,10 +1063,21 @@ class MembershipService(BaseService[EntityMembership]):
         event_at = datetime.now(timezone.utc)
         previous_snapshots: Dict[UUID, Dict[str, Any]] = {}
 
+        # Shared lookups for the whole batch: one closure query for every
+        # distinct entity's path/root context and one user fetch (previously
+        # ~9 queries per membership — snapshots were built twice with ~4
+        # queries each, plus a per-row user SELECT and flush).
+        entity_contexts = await self._entity_snapshot_contexts(
+            session,
+            (membership.entity_id for membership in memberships),
+        )
+        subject_user = await session.get(User, user_id)
+
         for membership in memberships:
             previous_snapshots[membership.id] = await self._build_membership_history_snapshot(
                 session,
                 membership,
+                entity_context=entity_contexts.get(membership.entity_id),
             )
             membership.status = MembershipStatus.REVOKED
             membership.revoked_at = event_at
@@ -1085,7 +1096,15 @@ class MembershipService(BaseService[EntityMembership]):
                 reason=reason,
                 event_source=event_source,
                 event_at=event_at,
+                current_snapshot=await self._build_membership_history_snapshot(
+                    session,
+                    membership,
+                    entity_context=entity_contexts.get(membership.entity_id),
+                ),
+                subject_user=subject_user,
+                flush=False,
             )
+        await session.flush()
 
         await self._invalidate_membership_permissions_cache(user_id)
         return memberships
@@ -1117,8 +1136,25 @@ class MembershipService(BaseService[EntityMembership]):
         previous_snapshots: Dict[UUID, Dict[str, Any]] = {}
         affected_user_ids: set[UUID] = set()
 
+        # Shared lookups: every membership here is on the SAME entity, so its
+        # path/root context is one closure query, and all subject users come
+        # from one IN fetch (previously ~9 queries per membership — archiving
+        # an entity with 1,000 members ran ~9,000 statements in one
+        # transaction).
+        entity_contexts = await self._entity_snapshot_contexts(session, [entity_id])
+        entity_context = entity_contexts.get(entity_id)
+        user_ids = {membership.user_id for membership in memberships}
+        users_result = await session.execute(
+            select(User).where(cast(Any, User.id).in_(user_ids))
+        )
+        users_by_id = {user.id: user for user in users_result.scalars().all()}
+
         for membership in memberships:
-            previous_snapshots[membership.id] = await self._build_membership_history_snapshot(session, membership)
+            previous_snapshots[membership.id] = await self._build_membership_history_snapshot(
+                session,
+                membership,
+                entity_context=entity_context,
+            )
             membership.status = MembershipStatus.REVOKED
             membership.revoked_at = event_at
             membership.revoked_by_id = revoked_by_id
@@ -1137,7 +1173,15 @@ class MembershipService(BaseService[EntityMembership]):
                 reason=reason,
                 event_source=event_source,
                 event_at=event_at,
+                current_snapshot=await self._build_membership_history_snapshot(
+                    session,
+                    membership,
+                    entity_context=entity_context,
+                ),
+                subject_user=users_by_id.get(membership.user_id),
+                flush=False,
             )
+        await session.flush()
 
         for user_id in affected_user_ids:
             await self._invalidate_membership_permissions_cache(user_id)
@@ -1297,6 +1341,9 @@ class MembershipService(BaseService[EntityMembership]):
         return records, total_count
 
     async def _invalidate_membership_permissions_cache(self, user_id: UUID) -> None:
+        # Drop request-local permission memos too: a membership mutation
+        # followed by a check in the same request must observe its own change.
+        request_cache.reset()
         cache_service = getattr(self, "cache_service", None)
         if cache_service is None:
             return
@@ -1313,9 +1360,19 @@ class MembershipService(BaseService[EntityMembership]):
         reason: Optional[str] = None,
         event_source: str = "membership_service",
         event_at: Optional[datetime] = None,
+        current_snapshot: Optional[Dict[str, Any]] = None,
+        subject_user: Optional[User] = None,
+        flush: bool = True,
     ) -> EntityMembershipHistory:
-        """Append one membership lifecycle history event."""
-        current_snapshot = await self._build_membership_history_snapshot(session, membership)
+        """Append one membership lifecycle history event.
+
+        Bulk callers pass ``current_snapshot`` (already computed),
+        ``subject_user`` (prefetched), and ``flush=False`` so an
+        N-membership archive issues one batched INSERT flush instead of a
+        snapshot rebuild + user SELECT + flush round trip per row.
+        """
+        if current_snapshot is None:
+            current_snapshot = await self._build_membership_history_snapshot(session, membership)
         history = EntityMembershipHistory(
             membership_id=membership.id,
             user_id=membership.user_id,
@@ -1341,7 +1398,8 @@ class MembershipService(BaseService[EntityMembership]):
             root_entity_name=current_snapshot["root_entity_name"],
         )
         session.add(history)
-        await session.flush()
+        if flush:
+            await session.flush()
         await self._record_user_membership_audit_event(
             session,
             membership=membership,
@@ -1352,6 +1410,7 @@ class MembershipService(BaseService[EntityMembership]):
             previous_snapshot=previous_snapshot,
             current_snapshot=current_snapshot,
             occurred_at=history.event_at,
+            subject_user=subject_user,
         )
         return history
 
@@ -1367,6 +1426,7 @@ class MembershipService(BaseService[EntityMembership]):
         previous_snapshot: Optional[Dict[str, Any]] = None,
         current_snapshot: Dict[str, Any],
         occurred_at: Optional[datetime] = None,
+        subject_user: Optional[User] = None,
     ) -> None:
         if self.user_audit_service is None:
             return
@@ -1375,7 +1435,7 @@ class MembershipService(BaseService[EntityMembership]):
         if audit_event_type is None:
             return
 
-        user = await session.get(User, membership.user_id)
+        user = subject_user if subject_user is not None else await session.get(User, membership.user_id)
         if user is None:
             return
 
@@ -1406,18 +1466,38 @@ class MembershipService(BaseService[EntityMembership]):
         self,
         session: AsyncSession,
         membership: EntityMembership,
+        *,
+        entity_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Build a serializable snapshot of the current membership state."""
+        """Build a serializable snapshot of the current membership state.
+
+        ``entity_context`` (from ``_entity_snapshot_contexts``) carries the
+        entity/path/root display data so bulk callers don't re-derive it
+        (~4 queries) per membership — all members of one entity share it.
+        """
         roles = list(getattr(membership, "roles", []) or [])
         if not roles:
             await session.refresh(membership, ["roles"])
             roles = list(getattr(membership, "roles", []) or [])
 
         roles = sorted(roles, key=lambda role: str(role.id))
-        entity = await session.get(Entity, membership.entity_id)
-        entity_path = await self._get_entity_path_display_names(session, membership.entity_id)
-        root_entity_id = await self._get_root_entity_id(session, membership.entity_id)
-        root_entity = await session.get(Entity, root_entity_id) if root_entity_id else None
+
+        if entity_context is not None:
+            entity_display_name = entity_context["entity_display_name"]
+            entity_path = entity_context["entity_path"]
+            root_entity_id = entity_context["root_entity_id"]
+            root_entity_name = entity_context["root_entity_name"]
+        else:
+            entity = await session.get(Entity, membership.entity_id)
+            entity_display_name = entity.display_name if entity else None
+            entity_path = await self._get_entity_path_display_names(session, membership.entity_id)
+            root_entity_id = await self._get_root_entity_id(session, membership.entity_id)
+            root_entity = await session.get(Entity, root_entity_id) if root_entity_id else None
+            root_entity_name = (
+                root_entity.display_name
+                if root_entity is not None
+                else (entity_path[0] if entity_path else None)
+            )
 
         return {
             "status": self._membership_status_value(membership.status),
@@ -1429,15 +1509,71 @@ class MembershipService(BaseService[EntityMembership]):
                 for role in roles
                 if getattr(role, "name", None)
             ],
-            "entity_display_name": entity.display_name if entity else None,
+            "entity_display_name": entity_display_name,
             "entity_path": entity_path,
             "root_entity_id": root_entity_id,
-            "root_entity_name": (
-                root_entity.display_name
-                if root_entity is not None
-                else (entity_path[0] if entity_path else None)
-            ),
+            "root_entity_name": root_entity_name,
         }
+
+    async def _entity_snapshot_contexts(
+        self,
+        session: AsyncSession,
+        entity_ids: Iterable[UUID],
+    ) -> Dict[UUID, Dict[str, Any]]:
+        """Entity/path/root display context for many entities in ONE closure query.
+
+        Mirrors the per-entity logic in ``_build_membership_history_snapshot``:
+        path = root→entity display names (None names skipped), root = the
+        deepest ancestor, falling back to the entity itself when no closure
+        rows exist.
+        """
+        unique_ids = list({entity_id for entity_id in entity_ids})
+        if not unique_ids:
+            return {}
+
+        stmt = (
+            select(
+                cast(Any, EntityClosure.descendant_id),
+                cast(Any, EntityClosure.ancestor_id),
+                cast(Any, Entity.display_name),
+            )
+            .join(EntityClosure, cast(Any, EntityClosure.ancestor_id) == Entity.id)
+            .where(cast(Any, EntityClosure.descendant_id).in_(unique_ids))
+            .order_by(
+                cast(Any, EntityClosure.descendant_id),
+                cast(Any, EntityClosure.depth).desc(),
+            )
+        )
+        result = await session.execute(stmt)
+
+        contexts: Dict[UUID, Dict[str, Any]] = {}
+        for descendant_id, ancestor_id, display_name in result.all():
+            context = contexts.get(descendant_id)
+            if context is None:
+                # First row per descendant (highest depth) is the root.
+                context = {
+                    "entity_display_name": None,
+                    "entity_path": [],
+                    "root_entity_id": ancestor_id,
+                    "root_entity_name": display_name,
+                }
+                contexts[descendant_id] = context
+            if display_name:
+                context["entity_path"].append(display_name)
+            # The depth-0 self row arrives last and carries the entity's own name.
+            context["entity_display_name"] = display_name
+
+        for entity_id in unique_ids:
+            contexts.setdefault(
+                entity_id,
+                {
+                    "entity_display_name": None,
+                    "entity_path": [],
+                    "root_entity_id": entity_id,
+                    "root_entity_name": None,
+                },
+            )
+        return contexts
 
     async def _get_entity_path_display_names(
         self,

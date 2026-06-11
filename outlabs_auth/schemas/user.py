@@ -61,7 +61,7 @@ class UserCreateRequest(BaseModel):
     """
 
     email: EmailStr
-    password: str = Field(..., min_length=8)
+    password: str = Field(..., min_length=8, max_length=128)
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     is_superuser: bool = Field(default=False)
@@ -75,13 +75,13 @@ class ChangePasswordRequest(BaseModel):
     """Change password request schema."""
 
     current_password: str
-    new_password: str = Field(..., min_length=8)
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class AdminResetPasswordRequest(BaseModel):
     """Admin password reset request schema (no current password required)."""
 
-    new_password: str = Field(..., min_length=8)
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class UserStatusUpdateRequest(BaseModel):

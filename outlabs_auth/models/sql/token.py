@@ -48,7 +48,9 @@ class RefreshToken(BaseModel, table=True):
 
     # === Token ===
     token_hash: str = Field(
-        sa_column=Column(String(255), nullable=False, unique=True),
+        # uq_refresh_tokens_hash already materializes the unique btree; the
+        # column-level unique=True duplicated it (maintained on every login).
+        sa_column=Column(String(255), nullable=False),
         description="SHA-256 hash of the refresh token (never store plain token)",
     )
 

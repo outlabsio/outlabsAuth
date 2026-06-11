@@ -431,11 +431,19 @@ async def test_scoped_admin_role_management_is_limited_to_access_scope(
     visible_get_response = await client.get(f"/v1/roles/{visible_role.id}", headers=headers)
     assert visible_get_response.status_code == 200, visible_get_response.text
 
+    # Out-of-scope tenant roles return 404, indistinguishable from nonexistent
+    # roles (DD-056 anti-enumeration).
     hidden_get_response = await client.get(f"/v1/roles/{hidden_role.id}", headers=headers)
-    assert hidden_get_response.status_code == 403, hidden_get_response.text
+    assert hidden_get_response.status_code == 404, hidden_get_response.text
+    missing_get_response = await client.get(f"/v1/roles/{uuid.uuid4()}", headers=headers)
+    assert missing_get_response.status_code == 404, missing_get_response.text
+    assert hidden_get_response.json() == missing_get_response.json()
 
+    # System-wide roles keep the explanatory 403: their existence is platform
+    # data, already visible on in-scope users' role lists (DD-056).
     global_get_response = await client.get(f"/v1/roles/{global_role.id}", headers=headers)
     assert global_get_response.status_code == 403, global_get_response.text
+    assert global_get_response.json()["message"] == "Only superusers can access system-wide roles"
 
     allowed_create_response = await client.post(
         "/v1/roles/",
@@ -489,13 +497,26 @@ async def test_scoped_admin_role_management_is_limited_to_access_scope(
         headers=headers,
         json={"display_name": "Should Fail"},
     )
-    assert hidden_update_response.status_code == 403, hidden_update_response.text
+    assert hidden_update_response.status_code == 404, hidden_update_response.text
 
     hidden_delete_response = await client.delete(
         f"/v1/roles/{hidden_role.id}",
         headers=headers,
     )
-    assert hidden_delete_response.status_code == 403, hidden_delete_response.text
+    assert hidden_delete_response.status_code == 404, hidden_delete_response.text
+
+    hidden_permissions_response = await client.post(
+        f"/v1/roles/{hidden_role.id}/permissions",
+        headers=headers,
+        json=["role:read"],
+    )
+    assert hidden_permissions_response.status_code == 404, hidden_permissions_response.text
+
+    hidden_groups_response = await client.get(
+        f"/v1/roles/{hidden_role.id}/condition-groups",
+        headers=headers,
+    )
+    assert hidden_groups_response.status_code == 404, hidden_groups_response.text
 
 
 @pytest.mark.integration

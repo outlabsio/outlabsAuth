@@ -122,6 +122,12 @@ class CookieTransport(Transport):
     Extract credentials from cookie.
 
     Used for session-based authentication.
+
+    SECURITY (SEC-18): cookie auth is CSRF-exposed and this library neither sets the
+    cookie nor provides CSRF protection. If you opt into ``CookieTransport``, the host
+    app MUST (a) set the cookie with ``Secure``, ``HttpOnly`` and ``SameSite`` flags, and
+    (b) add CSRF protection (e.g. a double-submit token) for state-changing requests. The
+    default bearer-token transport is not affected.
     """
 
     def __init__(self, cookie_name: str = "access_token"):

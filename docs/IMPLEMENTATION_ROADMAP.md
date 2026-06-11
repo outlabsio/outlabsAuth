@@ -37,9 +37,11 @@
 | **Entity Type Config (DD-051)** | ✅ Complete | 2026-01-22 | **SystemConfig model, ConfigService, config router, frontend UI** |
 | **Frontend: Role Scoping UI** | ✅ Complete | 2026-01-22 | **Role create/edit with scope, roles list filtering by scope** |
 | **Frontend: Entity Type Settings** | ✅ Complete | 2026-01-22 | **System settings page for entity type configuration** |
+| **Security Hardening (2026-06 audit)** | ✅ Complete | 2026-06-10 | **SEC-1..SEC-8 fixed (see `SECURITY_AUDIT_2026-06-10.md`); SEC-4 resolved via DD-056** |
+| **Tenant Isolation (DD-056)** | ✅ Complete | 2026-06-10 | **User routes scoped to actor's trees; system-wide roles grant global scope; `enforce_user_scope` flag; tests in `test_users_scope_and_isolation.py`** |
 | Phase 7-10 | ⏸️ Not Started | - | Optional extensions |
 
-**Current Status**: Entity type configuration and role scoping complete. All backend and frontend features implemented for DD-050 and DD-051.
+**Current Status**: 2026-06 security hardening complete, including DD-056 tenant isolation on user-management routes.
 
 ---
 
@@ -2418,5 +2420,5 @@ Track changes to the roadmap:
 
 ---
 
-**Last Updated**: 2026-01-22 (DD-050 to DD-054 implemented, entity-centric management UI complete)
+**Last Updated**: 2026-06-10 (DD-056 implemented: tenant isolation on user-management routes)
 **Next Review**: End of Week 2 (after Milestone 1)

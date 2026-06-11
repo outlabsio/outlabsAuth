@@ -204,12 +204,17 @@ def get_permissions_router(
                 status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
             )
 
-        results = {}
-        for permission in data.permissions:
-            has_perm = await auth.permission_service.check_permission(
-                session, user_id=UUID(data.user_id), permission=permission
-            )
-            results[permission] = has_perm
+        # One membership-graph load + in-memory matching instead of a full
+        # check_permission round (multiple SELECTs) per requested name.
+        # NOTE: data.entity_id is intentionally not forwarded — this endpoint
+        # has always evaluated global-scope checks only.
+        granted = await auth.permission_service.get_effective_permission_names(
+            session,
+            UUID(data.user_id),
+            candidate_permission_names=data.permissions,
+            user=user,
+        )
+        results = {permission: permission in granted for permission in data.permissions}
 
         has_all = all(results.values())
         return PermissionCheckResponse(

@@ -39,7 +39,7 @@ dependencies = [
     # Authentication & Security
     "pwdlib[argon2,bcrypt]>=0.2.0",
     "pyjwt[crypto]>=2.8.0", # [crypto] required for ES256 (Apple Sign In) and RS256
-    "python-multipart>=0.0.6",
+    "python-multipart>=0.0.18",  # SEC-12: <0.0.18 has ReDoS/DoS CVEs (CVE-2024-24762, CVE-2024-53981)
     "email-validator>=2.0.0",
     # Dynamic dependency injection (DD-039)
     "makefun>=1.15.0",

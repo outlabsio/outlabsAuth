@@ -79,12 +79,21 @@ def register_exception_handlers(
 
     @app.exception_handler(RequestValidationError)
     async def _handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+        # SEC-8: Pydantic v2 includes the rejected `input` value (and sometimes
+        # input-derived `ctx`) in each error. For password/token fields that means
+        # the submitted secret would be echoed back into the response body — and
+        # from there into client logs, proxies, and error trackers. Strip those keys
+        # so only the field location and reason are returned.
+        sanitized_errors = [
+            {key: value for key, value in error.items() if key not in ("input", "ctx", "url")}
+            for error in exc.errors()
+        ]
         return JSONResponse(
             status_code=422,
             content={
                 "error": "VALIDATION_ERROR",
                 "message": "Request validation failed",
-                "details": {"errors": exc.errors()},
+                "details": {"errors": sanitized_errors},
             },
         )
 

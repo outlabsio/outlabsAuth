@@ -38,8 +38,12 @@ async def test_resolve_for_user_prefers_direct_entities_for_member_projection(mo
         captured["include_descendants"] = include_descendants
         return [member_user_id]
 
+    async def _no_system_wide_role(_session, _user_id):
+        return False
+
     monkeypatch.setattr(service, "_resolve_user_scope_inputs", _fake_resolve_user_scope_inputs)
     monkeypatch.setattr(service, "_resolve_member_user_ids", _fake_resolve_member_user_ids)
+    monkeypatch.setattr(service, "_user_has_active_system_wide_role", _no_system_wide_role)
 
     scope = await service.resolve_for_user(SimpleNamespace(), principal_user_id)
 
@@ -122,8 +126,12 @@ async def test_resolve_for_user_can_skip_member_projection(monkeypatch: pytest.M
     async def _unexpected_member_projection(*args, **kwargs):
         raise AssertionError("member projection should not run")
 
+    async def _no_system_wide_role(_session, _user_id):
+        return False
+
     monkeypatch.setattr(service, "_resolve_user_scope_inputs", _fake_resolve_user_scope_inputs)
     monkeypatch.setattr(service, "_resolve_member_user_ids", _unexpected_member_projection)
+    monkeypatch.setattr(service, "_user_has_active_system_wide_role", _no_system_wide_role)
 
     scope = await service.resolve_for_user(
         SimpleNamespace(),
@@ -133,6 +141,30 @@ async def test_resolve_for_user_can_skip_member_projection(monkeypatch: pytest.M
 
     assert scope.member_user_ids == []
     assert set(scope.entity_ids) == {root_entity_id, direct_entity_id, descendant_entity_id}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_resolve_for_user_with_system_wide_role_is_global(monkeypatch: pytest.MonkeyPatch):
+    service = AccessScopeService(SimpleNamespace(enable_entity_hierarchy=True))
+    principal_user_id = uuid4()
+
+    async def _has_system_wide_role(_session, user_id):
+        assert user_id == principal_user_id
+        return True
+
+    async def _unexpected_scope_inputs(*args, **kwargs):
+        raise AssertionError("scope inputs should not be resolved for global actors")
+
+    monkeypatch.setattr(service, "_user_has_active_system_wide_role", _has_system_wide_role)
+    monkeypatch.setattr(service, "_resolve_user_scope_inputs", _unexpected_scope_inputs)
+
+    scope = await service.resolve_for_user(SimpleNamespace(), principal_user_id)
+
+    assert scope.is_global is True
+    assert scope.principal_user_id == principal_user_id
+    assert scope.entity_ids == []
+    assert scope.member_user_ids == [principal_user_id]
 
 
 @pytest.mark.unit

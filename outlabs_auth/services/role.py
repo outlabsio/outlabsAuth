@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple, cast
 from uuid import UUID
 
-from sqlalchemy import and_, false, or_, select
+from sqlalchemy import and_, exists, false, func, literal, or_, select
 from sqlalchemy import delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -22,6 +22,7 @@ from outlabs_auth.core.exceptions import (
 )
 from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.entity import Entity
+from outlabs_auth.models.sql.entity_membership import EntityMembership, EntityMembershipRole
 from outlabs_auth.models.sql.enums import DefinitionStatus, MembershipStatus, RoleScope
 from outlabs_auth.models.sql.permission import Permission
 from outlabs_auth.models.sql.role import (
@@ -34,6 +35,7 @@ from outlabs_auth.models.sql.role import (
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.models.sql.user_role_membership import UserRoleMembership
 from outlabs_auth.schemas.abac import serialize_condition_value
+from outlabs_auth.services import request_cache
 from outlabs_auth.services.base import BaseService
 from outlabs_auth.utils.validation import validate_name, validate_slug
 
@@ -591,7 +593,7 @@ class RoleService(BaseService[Role]):
                 after=current_snapshot,
                 metadata={"changed_fields": changed_fields},
             )
-        await self._invalidate_all_permissions_cache()
+        await self._invalidate_role_permissions_cache(session, role_id)
         return current_role
 
     async def delete_role(
@@ -679,6 +681,7 @@ class RoleService(BaseService[Role]):
             after=current_snapshot,
             metadata={"condition_group": self._build_condition_group_snapshot(group)},
         )
+        await self._invalidate_for_condition_change()
         return group
 
     async def update_role_condition_group(
@@ -729,6 +732,7 @@ class RoleService(BaseService[Role]):
                     "after_group": current_group_snapshot,
                 },
             )
+            await self._invalidate_for_condition_change()
         return group
 
     async def delete_role_condition_group(
@@ -774,6 +778,7 @@ class RoleService(BaseService[Role]):
                 "deleted_conditions": deleted_conditions,
             },
         )
+        await self._invalidate_for_condition_change()
         return True
 
     async def create_role_condition(
@@ -826,6 +831,7 @@ class RoleService(BaseService[Role]):
             after=current_snapshot,
             metadata={"condition": self._build_role_condition_snapshot(condition)},
         )
+        await self._invalidate_for_condition_change()
         return condition
 
     async def update_role_condition(
@@ -909,6 +915,7 @@ class RoleService(BaseService[Role]):
                     "after_condition": current_condition_snapshot,
                 },
             )
+            await self._invalidate_for_condition_change()
         return condition
 
     async def delete_role_condition(
@@ -941,6 +948,7 @@ class RoleService(BaseService[Role]):
             after=current_snapshot,
             metadata={"deleted_condition": deleted_condition_snapshot},
         )
+        await self._invalidate_for_condition_change()
         return True
 
     async def list_roles(
@@ -1139,26 +1147,39 @@ class RoleService(BaseService[Role]):
         if include_auto_assigned_only:
             role_filter = and_(role_filter, cast(Any, Role.is_auto_assigned) == True)
 
+        # Entity-type assignability in SQL, mirroring _allows_entity_type:
+        # empty/NULL assignable_at_types allows everywhere; otherwise the
+        # (lowercased) entity type must appear in the array. Previously every
+        # matching role was loaded with permissions eagerly, then filtered and
+        # paginated in Python — unbounded per-org cost.
+        assignable_types = cast(Any, Role.assignable_at_types)
+        unnested_type = func.unnest(assignable_types).column_valued("assignable_type")
+        type_filter = or_(
+            assignable_types.is_(None),
+            func.cardinality(assignable_types) == 0,
+            exists(select(literal(1)).where(func.lower(unnested_type) == entity_type.lower())),
+        )
+        full_filter = and_(role_filter, type_filter)
+
+        total_count = (
+            await session.execute(select(func.count()).select_from(Role).where(full_filter))
+        ).scalar() or 0
+
+        skip = (page - 1) * limit
         stmt = (
             select(Role)
-            .where(role_filter)
+            .where(full_filter)
             .options(
                 selectinload(cast(Any, Role.permissions)),
                 selectinload(cast(Any, Role.root_entity)),
                 selectinload(cast(Any, Role.scope_entity)),
             )
             .order_by(cast(Any, Role.name))
+            .offset(skip)
+            .limit(limit)
         )
         result = await session.execute(stmt)
-        roles = [
-            role
-            for role in result.scalars().all()
-            if self._allows_entity_type(role, entity_type)
-        ]
-
-        total_count = len(roles)
-        skip = (page - 1) * limit
-        return roles[skip : skip + limit], total_count
+        return list(result.scalars().all()), int(total_count)
 
     async def get_auto_assigned_roles_for_entity(
         self,
@@ -1324,7 +1345,7 @@ class RoleService(BaseService[Role]):
         # Clear existing role_permissions
         await self._replace_permissions_by_name(session, role_id, permission_names)
         await session.refresh(role, attribute_names=["permissions", "entity_type_permissions"])
-        await self._invalidate_all_permissions_cache()
+        await self._invalidate_role_permissions_cache(session, role_id)
 
         current_role = (
             await self.get_role_by_id(
@@ -1388,7 +1409,7 @@ class RoleService(BaseService[Role]):
 
         await self._add_permissions_by_name(session, role_id, permission_names)
         await session.refresh(role, attribute_names=["permissions", "entity_type_permissions"])
-        await self._invalidate_all_permissions_cache()
+        await self._invalidate_role_permissions_cache(session, role_id)
         current_role = (
             await self.get_role_by_id(
                 session,
@@ -1459,7 +1480,7 @@ class RoleService(BaseService[Role]):
             await session.flush()
 
         await session.refresh(role, attribute_names=["permissions", "entity_type_permissions"])
-        await self._invalidate_all_permissions_cache()
+        await self._invalidate_role_permissions_cache(session, role_id)
 
         current_role = (
             await self.get_role_by_id(
@@ -2240,7 +2261,10 @@ class RoleService(BaseService[Role]):
         if self.role_history_service is None:
             return
 
-        snapshot = await self._build_role_definition_snapshot(session, role)
+        # Callers that just computed the post-mutation snapshot pass it as
+        # ``after``; rebuilding it here re-ran the ~7-query snapshot a third
+        # time on every role-definition edit.
+        snapshot = after if after is not None else await self._build_role_definition_snapshot(session, role)
         await self.role_history_service.record_event(
             session,
             role_id=role.id,
@@ -2378,9 +2402,94 @@ class RoleService(BaseService[Role]):
         return added_names, removed_names
 
     async def _invalidate_all_permissions_cache(self) -> None:
+        # Drop request-local memos too: a mutation followed by a check in the
+        # same request must observe its own change.
+        request_cache.reset()
         cache_service = getattr(self, "cache_service", None)
         if cache_service is not None:
             await cache_service.publish_all_permissions_invalidation()
+
+    async def _invalidate_for_condition_change(self) -> None:
+        """ABAC condition edits invalidate globally.
+
+        Mirrors PermissionService._invalidate_for_condition_change: the global
+        bump also refreshes the cached "any ABAC conditions exist?" flag, so
+        the very first authored condition immediately re-enables full ABAC
+        evaluation everywhere. (These condition/group CRUD methods previously
+        didn't invalidate at all, leaving stale ABAC verdicts cached for up to
+        the TTL.)
+        """
+        await self._invalidate_all_permissions_cache()
+
+    # PERF: a role-definition edit changes effective permissions only for users who
+    # actually hold that role, so invalidate just those users instead of flushing the
+    # whole permission cache cluster-wide (which bumps the GLOBAL snapshot version and
+    # forces every API-key snapshot to rebuild at once — a Postgres thundering herd).
+    # FAIL-SAFE: on any error, or when the role is held by more users than the fan-out
+    # cap, fall back to a global invalidation. We must never under-invalidate — a missed
+    # user would keep stale/elevated permissions until their snapshot TTL.
+    _ROLE_INVALIDATION_FANOUT_LIMIT = 200
+
+    async def _users_with_role(self, session: AsyncSession, role_id: UUID) -> set[UUID]:
+        """Every user who currently holds ``role_id`` via either grant path.
+
+        Covers both SimpleRBAC (``UserRoleMembership``) and EnterpriseRBAC
+        (``EntityMembership`` ↔ ``EntityMembershipRole``). Filters to ACTIVE, which is
+        safely *over*-inclusive (an ACTIVE-but-time-expired row just gets a harmless
+        extra invalidation) and never under-inclusive.
+        """
+        user_ids: set[UUID] = set()
+
+        direct = await session.execute(
+            select(cast(Any, UserRoleMembership.user_id))
+            .where(
+                cast(Any, UserRoleMembership.role_id) == role_id,
+                cast(Any, UserRoleMembership.status) == MembershipStatus.ACTIVE,
+            )
+            .distinct()
+        )
+        user_ids.update(direct.scalars().all())
+
+        entity = await session.execute(
+            select(cast(Any, EntityMembership.user_id))
+            .join(
+                EntityMembershipRole,
+                cast(Any, EntityMembershipRole.membership_id) == cast(Any, EntityMembership.id),
+            )
+            .where(
+                cast(Any, EntityMembershipRole.role_id) == role_id,
+                cast(Any, EntityMembership.status) == MembershipStatus.ACTIVE,
+            )
+            .distinct()
+        )
+        user_ids.update(entity.scalars().all())
+
+        return user_ids
+
+    async def _invalidate_role_permissions_cache(self, session: AsyncSession, role_id: UUID) -> None:
+        request_cache.reset()  # same-request mutation visibility
+        cache_service = getattr(self, "cache_service", None)
+        if cache_service is None:
+            return
+        try:
+            user_ids = await self._users_with_role(session, role_id)
+        except Exception:
+            # Resolution failed — fail safe to a full invalidation rather than risk
+            # leaving a user with stale permissions.
+            await cache_service.publish_all_permissions_invalidation()
+            return
+        if len(user_ids) > self._ROLE_INVALIDATION_FANOUT_LIMIT:
+            # Too many holders to fan out efficiently; a single global bump is cheaper.
+            await cache_service.publish_all_permissions_invalidation()
+            return
+        batch = getattr(cache_service, "publish_user_permissions_invalidation_batch", None)
+        if batch is not None:
+            # One pipelined round trip (was 2 sequential RTTs per user — up to
+            # 400 inside the role-update request at the fan-out cap).
+            await batch([str(user_id) for user_id in user_ids])
+            return
+        for user_id in user_ids:
+            await cache_service.publish_user_permissions_invalidation(str(user_id))
 
     async def _get_mutable_role_for_definition_edit(
         self,
@@ -2508,6 +2617,7 @@ class RoleService(BaseService[Role]):
         }
 
     async def _invalidate_user_permissions_cache(self, user_id: UUID) -> None:
+        request_cache.reset()  # same-request mutation visibility
         cache_service = getattr(self, "cache_service", None)
         if cache_service is not None:
             await cache_service.publish_user_permissions_invalidation(str(user_id))

@@ -96,9 +96,16 @@ class JWTStrategy:
                 self.secret,
                 algorithms=[self.algorithm],
                 audience=self.audience,
-                options={"verify_exp": self.verify_exp},
+                options={"verify_exp": self.verify_exp, "require": ["exp"]},
             )
             logger.debug("jwt_decode_success", extra={"user_id": payload.get("sub")})
+
+            # SEC-1: Only access tokens may authenticate a request. Refresh tokens
+            # share the same audience and signing key but carry type="refresh" and a
+            # 30-day TTL — they must never be usable as bearer access credentials.
+            if payload.get("type") != "access":
+                logger.info("jwt_wrong_token_type", extra={"token_type": payload.get("type")})
+                return None
 
             # Check Redis blacklist if available (for immediate logout)
             jti = payload.get("jti")
@@ -206,7 +213,10 @@ class ApiKeyStrategy:
     Verify API keys and return user information.
 
     Uses SHA-256 hashing for fast verification of high-entropy secrets (DD-028 corrected).
-    Checks temporary locks and tracks failures (DD-028).
+    Per-key rate limiting (minute/hour/day) is enforced via Redis counters. There is no
+    failure-based lockout on this path: online brute-forcing a 32-byte high-entropy key is
+    infeasible, and a per-IP lock here would throttle legitimate high-throughput workers —
+    edge/gateway throttling is the right layer for that if it is ever needed (SEC-5).
 
     Note: Activity tracking (DD-049) happens in AuthDeps middleware
     after successful authentication, not here. This keeps tracking

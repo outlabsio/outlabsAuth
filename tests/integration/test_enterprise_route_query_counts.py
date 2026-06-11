@@ -106,7 +106,10 @@ async def test_enterprise_admin_routes_stay_within_query_budgets(
             "roles_for_entity",
             f"/v1/roles/entity/{seeded_context.root_id}",
             {"page": "1", "limit": "100"},
-            5,
+            # +1 vs the old budget: pagination moved into SQL, which adds a
+            # COUNT(*) but stops loading every matching role (with permissions
+            # eagerly) to slice a page in Python.
+            6,
         ),
     ]
 

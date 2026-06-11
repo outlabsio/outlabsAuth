@@ -15,9 +15,12 @@ from uuid import UUID
 if TYPE_CHECKING:
     from outlabs_auth.observability import ObservabilityService
 
+from sqlalchemy import bindparam
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
+from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.util import identity_key
 
 from outlabs_auth.models.sql.activity_metric import ActivityMetric
 from outlabs_auth.models.sql.user import User
@@ -111,25 +114,34 @@ class ActivityTracker:
         try:
             now = datetime.now(timezone.utc)
 
-            # Add to daily set
             daily_key = self._make_daily_key(now.date())
-            await self.redis.sadd(daily_key, user_id)
-            await self.redis.expire(daily_key, 48 * 3600)  # 48 hours
-
-            # Add to monthly set
             monthly_key = self._make_monthly_key(now.year, now.month)
-            await self.redis.sadd(monthly_key, user_id)
-            await self.redis.expire(monthly_key, 90 * 86400)  # 90 days
-
-            # Add to quarterly set
             quarter = (now.month - 1) // 3 + 1
             quarterly_key = self._make_quarterly_key(now.year, quarter)
-            await self.redis.sadd(quarterly_key, user_id)
-            await self.redis.expire(quarterly_key, 365 * 86400)  # 1 year
-
-            # Update last_activity timestamp in Redis
             last_activity_key = f"last_activity:{user_id}"
-            await self.redis.set_raw(last_activity_key, now.isoformat(), ttl=7 * 86400)
+            set_ops = [
+                (daily_key, 48 * 3600),
+                (monthly_key, 90 * 86400),
+                (quarterly_key, 365 * 86400),
+            ]
+
+            pipeline = getattr(self.redis, "record_activity_pipeline", None)
+            if pipeline is not None:
+                # One pipelined round trip (was 7 sequential Redis awaits per
+                # authenticated request).
+                await pipeline(
+                    member=user_id,
+                    set_ops=set_ops,
+                    last_activity_key=last_activity_key,
+                    last_activity_value=now.isoformat(),
+                    last_activity_ttl=7 * 86400,
+                )
+            else:
+                # Custom redis clients without the pipeline helper: per-op path.
+                for set_key, ttl_seconds in set_ops:
+                    await self.redis.sadd(set_key, user_id)
+                    await self.redis.expire(set_key, ttl_seconds)
+                await self.redis.set_raw(last_activity_key, now.isoformat(), ttl=7 * 86400)
 
             # Emit observability metrics
             if self.observability:
@@ -380,18 +392,25 @@ class ActivityTracker:
             batch_size = 100
             batch = []
 
-            # Scan Redis for all last_activity keys
+            # Scan Redis for all last_activity keys, fetching each page's
+            # values in one MGET (was one GET per user — 10k RTTs at 10k DAU).
             while True:
-                cursor, keys = await self.redis.scan(cursor, match=pattern, count=100)
+                cursor, keys = await self.redis.scan(cursor, match=pattern, count=200)
 
-                for key in keys:
-                    # Extract user_id from key
-                    user_id = key.replace("last_activity:", "")
+                if keys:
+                    mget_raw = getattr(self.redis, "mget_raw", None)
+                    values = await mget_raw(keys) if mget_raw is not None else None
+                    if values is None or len(values) != len(keys):
+                        values = [await self.redis.get_raw(key) for key in keys]
 
-                    # Get timestamp from Redis
-                    timestamp_str = await self.redis.get_raw(key)
-                    if timestamp_str:
-                        timestamp = datetime.fromisoformat(timestamp_str)
+                    for key, timestamp_str in zip(keys, values):
+                        if not timestamp_str:
+                            continue
+                        user_id = key.replace("last_activity:", "")
+                        try:
+                            timestamp = datetime.fromisoformat(timestamp_str)
+                        except ValueError:
+                            continue
 
                         batch.append((user_id, timestamp))
 
@@ -426,26 +445,37 @@ class ActivityTracker:
             batch: List of (user_id, timestamp) tuples
 
         Returns:
-            Number of users successfully updated
+            Number of update attempts issued (unknown user ids no-op in SQL)
         """
-        updated = 0
+        params = []
         for user_id, timestamp in batch:
             try:
-                user_uuid = UUID(user_id)
+                params.append({"u_id": UUID(user_id), "u_ts": timestamp})
             except Exception:
                 continue
 
-            stmt = select(User).where(cast(Any, User.id) == user_uuid)
-            result = await session.execute(stmt)
-            user = result.scalar_one_or_none()
-            if not user:
-                continue
+        if not params:
+            return 0
 
-            user.last_activity = timestamp
-            updated += 1
-
-        await session.flush()
-        return updated
+        # One executemany UPDATE per batch — previously one SELECT plus an ORM
+        # dirty-flush UPDATE per user (≈2 round trips per active user).
+        # Core-table form avoids the ORM bulk-update-by-primary-key mode.
+        users_table = User.__table__
+        stmt = (
+            sql_update(users_table)
+            .where(users_table.c.id == bindparam("u_id"))
+            .values(last_activity=bindparam("u_ts"))
+        )
+        await session.execute(stmt, params)
+        # Bulk UPDATEs bypass the unit of work; refresh rows this session
+        # already materialized so in-session readers see the change (the sync
+        # scheduler's fresh session skips this loop).
+        identity_map = session.sync_session.identity_map
+        for param in params:
+            instance = identity_map.get(identity_key(User, param["u_id"]))
+            if instance is not None:
+                await session.refresh(instance, ["last_activity"])
+        return len(params)
 
     async def _cleanup_old_metrics(self, session: AsyncSession) -> None:
         """

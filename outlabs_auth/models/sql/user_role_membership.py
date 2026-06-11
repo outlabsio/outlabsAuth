@@ -33,8 +33,9 @@ class UserRoleMembership(BaseModel, table=True):
     """
     __tablename__ = "user_role_memberships"
     __table_args__ = (
+        # uq(user_id, role_id) and ix_urm_user_status both cover user_id via
+        # their leading prefix; the single-column index was redundant.
         UniqueConstraint("user_id", "role_id", name="uq_user_role_membership"),
-        Index("ix_urm_user_id", "user_id"),
         Index("ix_urm_role_id", "role_id"),
         Index("ix_urm_user_status", "user_id", "status"),
         Index("ix_urm_status", "status"),

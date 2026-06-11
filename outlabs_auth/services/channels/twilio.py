@@ -3,6 +3,7 @@ Twilio SMS Notification Channel
 
 Sends SMS notifications for auth events via Twilio.
 """
+import asyncio
 from typing import Optional, List, Dict, Any, Callable, Awaitable
 
 try:
@@ -132,13 +133,14 @@ class TwilioChannel(NotificationChannel):
             if not sms_data:
                 return
             
-            # Send SMS via Twilio (sync call - Twilio client is not async)
-            # In production, you might want to use asyncio.to_thread
-            # for better async handling
-            self.client.messages.create(
+            # The Twilio client is synchronous (blocking HTTPS) — run it in a
+            # worker thread so the event loop (and every in-flight request)
+            # doesn't stall for the duration of the API call.
+            await asyncio.to_thread(
+                self.client.messages.create,
                 to=sms_data["to"],
                 from_=self.from_number,
-                body=sms_data["body"]
+                body=sms_data["body"],
             )
             
         except Exception:

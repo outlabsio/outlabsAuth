@@ -23,6 +23,19 @@ class TransactionalMailProvider(ABC):
     """Abstract delivery transport for transactional mail."""
 
     provider_name: str = "unknown"
+    _http_client: Optional[httpx.AsyncClient] = None
+
+    def _get_http_client(self) -> httpx.AsyncClient:
+        """Shared pooled client — a per-send AsyncClient paid a fresh TCP+TLS
+        handshake to the provider on every message."""
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(timeout=getattr(self, "timeout", 10))
+        return self._http_client
+
+    async def aclose(self) -> None:
+        """Close the pooled HTTP client (called from OutlabsAuth.shutdown())."""
+        if self._http_client is not None and not self._http_client.is_closed:
+            await self._http_client.aclose()
 
     @abstractmethod
     async def send(self, message: AuthMailMessage) -> MailDeliveryResult:
@@ -151,15 +164,14 @@ class SendGridMailProvider(TransactionalMailProvider):
             payload["content"] = content
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/mail/send",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
+            response = await self._get_http_client().post(
+                f"{self.base_url}/mail/send",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
             response.raise_for_status()
             headers = dict(response.headers)
             message_id = headers.get("X-Message-Id") or headers.get("X-Message-ID")
@@ -220,8 +232,7 @@ class MailgunMailProvider(TransactionalMailProvider):
 
         url = f"{self.base_url}/v3/{self.domain}/messages"
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(url, auth=("api", self.api_key), data=payload)
+            response = await self._get_http_client().post(url, auth=("api", self.api_key), data=payload)
             response.raise_for_status()
             response_data = response.json()
             return MailDeliveryResult.queued(
@@ -270,8 +281,7 @@ class WebhookMailProvider(TransactionalMailProvider):
             headers["X-OutlabsAuth-Mail-Secret"] = self.secret
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(self.url, json=payload, headers=headers)
+            response = await self._get_http_client().post(self.url, json=payload, headers=headers)
             response.raise_for_status()
             response_data: dict[str, Any]
             try:

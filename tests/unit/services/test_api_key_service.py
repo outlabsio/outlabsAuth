@@ -45,6 +45,9 @@ class FakeRedis:
     async def get(self, key: str):
         return self.values.get(key)
 
+    async def get_raw(self, key: str):
+        return self.values.get(key)
+
     async def delete(self, key: str):
         self.deleted.append(key)
         self.counters.pop(key, None)
@@ -262,7 +265,7 @@ async def test_api_key_policy_enforces_enterprise_personal_key_rules_and_runtime
 ):
     enterprise_config = AuthConfig(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         enable_entity_hierarchy=True,
     )
     user_service = UserService(config=enterprise_config)
@@ -438,7 +441,7 @@ async def test_api_key_policy_evaluates_current_effectiveness_after_owner_permis
 ):
     enterprise_config = AuthConfig(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         enable_entity_hierarchy=True,
     )
     user_service = UserService(config=enterprise_config)
@@ -527,7 +530,7 @@ async def test_api_key_policy_and_service_emit_observability_for_enterprise_deni
     )
     enterprise_config = AuthConfig(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         enable_entity_hierarchy=True,
     )
     user_service = UserService(config=enterprise_config)
@@ -586,7 +589,7 @@ async def test_system_integration_keys_follow_principal_scope_and_entity_archive
 ):
     enterprise_config = AuthConfig(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         enable_entity_hierarchy=True,
     )
     permission_service = PermissionService(config=enterprise_config)
@@ -706,7 +709,7 @@ async def test_integration_principal_service_denies_cross_root_creation(
 ):
     enterprise_config = AuthConfig(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         enable_entity_hierarchy=True,
     )
     entity_service = EntityService(config=enterprise_config)
@@ -764,7 +767,7 @@ async def test_role_backed_integration_principal_derives_effective_scopes(
 ):
     simple_config = AuthConfig(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         enable_entity_hierarchy=False,
     )
     permission_service = PermissionService(config=simple_config)
@@ -839,7 +842,7 @@ async def test_integration_principal_service_logs_platform_global_creation_with_
 ):
     enterprise_config = AuthConfig(
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
-        secret_key="test-secret",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         enable_entity_hierarchy=True,
     )
     observability = Mock(log_api_key_lifecycle=Mock())

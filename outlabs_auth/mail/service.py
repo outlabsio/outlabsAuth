@@ -48,3 +48,9 @@ class ComposedAuthMailService:
                 "composer returned no message",
             )
         return await self.provider.send(message)
+
+    async def aclose(self) -> None:
+        """Release the provider's pooled HTTP client (application shutdown)."""
+        aclose = getattr(self.provider, "aclose", None)
+        if aclose is not None:
+            await aclose()

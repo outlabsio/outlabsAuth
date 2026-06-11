@@ -63,8 +63,9 @@ class EntityMembership(BaseModel, table=True):
     """
     __tablename__ = "entity_memberships"
     __table_args__ = (
+        # uq(user_id, entity_id) and ix_em_user_status both cover user_id via
+        # their leading prefix; the single-column index was redundant.
         UniqueConstraint("user_id", "entity_id", name="uq_entity_membership"),
-        Index("ix_em_user_id", "user_id"),
         Index("ix_em_entity_id", "entity_id"),
         Index("ix_em_user_status", "user_id", "status"),
         Index("ix_em_status", "status"),

@@ -43,6 +43,40 @@ This example demonstrates OutlabsAuth's **EnterpriseRBAC** preset with real-worl
 - ✅ Lead assignment workflow
 - ✅ Status pipeline tracking
 
+## ✅ API Integration Check (Release Smoke Test)
+
+`api_integration_check.py` drives the **running** API over HTTP against the
+seeded scenarios and asserts the behavior an operator cares about before a
+release (45 checks): persona logins across both org roots, entity-scoped
+grants, sibling-team and cross-root isolation (via a membership-only user),
+tree-permission inheritance down the hierarchy, cache-served verdict
+stability, and the next-request visibility arcs — role grant/revoke,
+role-permission add/remove, membership suspend/reactivate, entity archive,
+API-key revoke, and refresh-token logout all take effect on the very next
+request even with Redis caching enabled.
+
+The one-command release flow (seed → boot → admin/ABAC smoke → assertion
+suite → teardown) lives at the repo root:
+
+```bash
+uv run python scripts/run_enterprise_example_smoke.py
+```
+
+Or run the pieces individually (e.g. against a staging host):
+
+```bash
+python reset_test_env.py                                  # seed known state
+uvicorn main:app --port 8004                              # start the API
+python api_integration_check.py                           # 45 checks, exit 0 on pass
+python api_integration_check.py --base-url http://staging-host:8004
+```
+
+It is rerunnable and creates only throwaway data on top of the seed
+(unique-suffixed users/roles/leads, a temporary membership it removes again,
+an API key it revokes again, one archived entity). See
+`docs/PRIVATE_RELEASE.md` → "API Integration Validation" for the runbook
+entry and the seeded-data gotchas.
+
 ## 🔑 Machine Credentials (Current v1 Surface)
 
 The current EnterpriseRBAC example also demonstrates the OutlabsAuth machine

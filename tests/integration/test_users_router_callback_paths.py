@@ -237,6 +237,42 @@ async def test_users_router_callback_identity_and_cross_root_access_paths(
         assert exc.value.status_code == 401
         assert exc.value.detail == "User not found"
 
+        # DD-056: cross-root targets are hidden as 404 (anti-enumeration).
+        with pytest.raises(HTTPException) as exc:
+            await get_user(
+                user_id=other_root_user.id,
+                session=session,
+                obs=DummyObs(str(actor.id)),
+            )
+        assert exc.value.status_code == 404
+        assert exc.value.detail == "User not found"
+
+        # Same-root targets stay reachable.
+        same_root_user = await _create_user(
+            auth_instance,
+            session,
+            email_prefix="root-a-user",
+            root_entity_id=root_a.id,
+        )
+        same_root = await get_user(
+            user_id=same_root_user.id,
+            session=session,
+            obs=DummyObs(str(actor.id)),
+        )
+        assert same_root.id == str(same_root_user.id)
+
+        # An active system-wide role is the explicit global-scope grant (DD-056).
+        system_wide_role = await auth_instance.role_service.create_role(
+            session=session,
+            name=f"system_admin_{_suffix()}",
+            display_name="System Admin",
+            is_global=True,
+        )
+        await auth_instance.role_service.assign_role_to_user(
+            session,
+            user_id=actor.id,
+            role_id=system_wide_role.id,
+        )
         cross_root = await get_user(
             user_id=other_root_user.id,
             session=session,
@@ -651,6 +687,19 @@ async def test_users_router_callback_role_and_permission_paths(
             display_name="Direct Role",
             permission_names=[permission.name],
             is_global=True,
+        )
+
+        # SEC-2 (delegation containment): the acting user may only assign a role
+        # whose permissions they already hold, so grant the permission to the actor.
+        actor_grant_role = await auth_instance.role_service.create_role(
+            session=session,
+            name=f"actor_grant_{_suffix()}",
+            display_name="Actor Grant",
+            permission_names=[permission.name],
+            is_global=True,
+        )
+        await auth_instance.role_service.assign_role_to_user(
+            session, user_id=actor.id, role_id=actor_grant_role.id
         )
 
         assigned = await assign_role(

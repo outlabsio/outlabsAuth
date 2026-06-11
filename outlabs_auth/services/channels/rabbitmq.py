@@ -88,6 +88,7 @@ class RabbitMQChannel(NotificationChannel):
         self.routing_key = routing_key
         self.connection = None
         self.channel = None
+        self._exchange_obj = None
     
     async def connect(self) -> bool:
         """
@@ -111,6 +112,7 @@ class RabbitMQChannel(NotificationChannel):
             connection = await aio_pika.connect_robust(self.url)
             self.connection = connection
             self.channel = await connection.channel()
+            self._exchange_obj = None  # re-resolve against the new channel
             return True
         except Exception as e:
             # Connection failed - disable this channel
@@ -148,9 +150,12 @@ class RabbitMQChannel(NotificationChannel):
                 }
             )
             
-            # Get exchange (empty string = default exchange)
+            # Get exchange (empty string = default exchange). Resolved once and
+            # cached — previously re-fetched from the broker on every publish.
             if self.exchange:
-                exchange = await self.channel.get_exchange(self.exchange)
+                if self._exchange_obj is None:
+                    self._exchange_obj = await self.channel.get_exchange(self.exchange)
+                exchange = self._exchange_obj
             else:
                 # Use default exchange
                 exchange = self.channel.default_exchange

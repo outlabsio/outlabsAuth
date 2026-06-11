@@ -40,8 +40,9 @@ class EntityClosure(BaseModel, table=True):
     __tablename__ = "entity_closure"
     __table_args__ = (
         UniqueConstraint("ancestor_id", "descendant_id", name="uq_entity_closure"),
-        Index("ix_closure_ancestor_id", "ancestor_id"),
-        Index("ix_closure_descendant_id", "descendant_id"),
+        # The composite (id, depth) indexes cover single-column lookups via
+        # their leading prefix; closure inserts are O(depth x subtree) rows per
+        # entity create/move, so redundant single-column btrees were dropped.
         Index("ix_closure_ancestor_depth", "ancestor_id", "depth"),
         Index("ix_closure_descendant_depth", "descendant_id", "depth"),
     )

@@ -29,6 +29,7 @@ from outlabs_auth.schemas.abac import (
     ConditionGroupUpdateRequest,
     parse_uuid,
 )
+from outlabs_auth.routers._authz_utils import require_can_delegate_permissions
 from outlabs_auth.schemas.common import PaginatedResponse
 from outlabs_auth.schemas.role import (
     RoleCreateRequest,
@@ -135,13 +136,19 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         if _role_is_visible_in_scope(role, scope):
             return scope
 
-        detail = "Role is outside your accessible scope"
         if _role_is_system_wide(role):
-            detail = "Only superusers can access system-wide roles"
+            # 403, not 404: system-wide roles are platform objects, not tenant
+            # data — scoped admins already see them on in-scope users' role
+            # lists, so a 404 would mislead rather than protect (DD-056).
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only superusers can access system-wide roles",
+            )
 
+        # 404, not 403: don't confirm that roles exist in other trees (DD-056).
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=detail,
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Role not found",
         )
 
     async def _require_role_create_scope(
@@ -284,6 +291,14 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         """Create a new role."""
         await _require_role_create_scope(session, auth_result, data)
 
+        # SEC-2/SEC-3: a role may only be created carrying permissions the actor holds.
+        await require_can_delegate_permissions(
+            session,
+            auth=auth,
+            actor_user_id=UUID(auth_result["user_id"]),
+            permission_names=data.permissions or [],
+        )
+
         # Map schema scope enum to model enum
         scope = RoleScope.HIERARCHY
         if data.scope == RoleScopeEnum.ENTITY_ONLY:
@@ -346,6 +361,16 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         await _require_role_visibility(session, auth_result, current_role)
 
         update_dict = data.model_dump(exclude_unset=True)
+
+        # SEC-2/SEC-3: when replacing permissions, the actor must hold each new one.
+        if "permissions" in update_dict:
+            await require_can_delegate_permissions(
+                session,
+                auth=auth,
+                actor_user_id=UUID(auth_result["user_id"]),
+                permission_names=update_dict.get("permissions") or [],
+            )
+
         was_auto_assigned = current_role.is_auto_assigned
 
         # Map schema scope enum to model enum if provided
@@ -414,6 +439,14 @@ def get_roles_router(auth: Any, prefix: str = "", tags: Optional[list[str | Enum
         """Add permissions to a role."""
         current_role = await _get_role_or_404(session, role_id)
         await _require_role_visibility(session, auth_result, current_role)
+
+        # SEC-2/SEC-3: the actor must already hold each permission they're adding.
+        await require_can_delegate_permissions(
+            session,
+            auth=auth,
+            actor_user_id=UUID(auth_result["user_id"]),
+            permission_names=permissions,
+        )
 
         role = await auth.role_service.add_permissions_by_name(
             session,

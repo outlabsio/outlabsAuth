@@ -29,7 +29,7 @@ from outlabs_auth.services.user import UserService
 @pytest.fixture
 def config():
     return AuthConfig(
-        secret_key="test-secret-key",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
         enable_invitations=True,
         invite_token_expire_days=7,
     )
@@ -60,13 +60,13 @@ class TestInviteConfig:
     """Test invitation configuration."""
 
     def test_default_config(self):
-        config = AuthConfig(secret_key="test")
+        config = AuthConfig(secret_key="test-secret-key-do-not-use-in-production-1234567890")
         assert config.enable_invitations is True
         assert config.invite_token_expire_days == 7
 
     def test_custom_config(self):
         config = AuthConfig(
-            secret_key="test",
+            secret_key="test-secret-key-do-not-use-in-production-1234567890",
             enable_invitations=False,
             invite_token_expire_days=14,
         )

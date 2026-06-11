@@ -98,6 +98,18 @@ class WebhookChannel(NotificationChannel):
         self.secret = secret
         self.timeout = timeout
         self.custom_headers = custom_headers or {}
+        self._http_client: Optional["httpx.AsyncClient"] = None
+
+    def _get_http_client(self) -> "httpx.AsyncClient":
+        """Shared client — a per-send AsyncClient paid TCP+TLS setup every event."""
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(timeout=self.timeout)
+        return self._http_client
+
+    async def close(self) -> None:
+        """Close the pooled HTTP client (call during application shutdown)."""
+        if self._http_client is not None and not self._http_client.is_closed:
+            await self._http_client.aclose()
     
     def _sign_payload(self, payload: str) -> str:
         """
@@ -156,16 +168,14 @@ class WebhookChannel(NotificationChannel):
             if self.secret:
                 headers["X-OutlabsAuth-Signature"] = self._sign_payload(payload)
             
-            # POST to webhook URL
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    self.url,
-                    content=payload,
-                    headers=headers
-                )
-                
-                # We don't raise on bad status - just fail silently
-                # Webhook endpoints should return 2xx for success
+            # POST to webhook URL (pooled client — connection reuse).
+            # We don't raise on bad status - just fail silently;
+            # webhook endpoints should return 2xx for success.
+            await self._get_http_client().post(
+                self.url,
+                content=payload,
+                headers=headers
+            )
                 
         except Exception:
             # Fail silently - notifications should never break auth
