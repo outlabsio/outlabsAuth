@@ -204,13 +204,25 @@ def get_permissions_router(
                 status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
             )
 
+        entity_id: Optional[UUID] = None
+        if data.entity_id:
+            try:
+                entity_id = UUID(data.entity_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid entity_id: {data.entity_id}",
+                )
+
         # One membership-graph load + in-memory matching instead of a full
-        # check_permission round (multiple SELECTs) per requested name.
-        # NOTE: data.entity_id is intentionally not forwarded — this endpoint
-        # has always evaluated global-scope checks only.
+        # check_permission round (multiple SELECTs) per requested name. With
+        # entity_id, checks are evaluated in that entity's context (direct
+        # membership grants plus tree permissions inherited from ancestors) —
+        # the field was accepted but silently ignored before 0.1.0a23.
         granted = await auth.permission_service.get_effective_permission_names(
             session,
             UUID(data.user_id),
+            entity_id=entity_id,
             candidate_permission_names=data.permissions,
             user=user,
         )

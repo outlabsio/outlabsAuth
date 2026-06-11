@@ -160,6 +160,12 @@ Phase 4 (write paths, schema, observability):
 
 ### Fixed
 
+- **`POST /permissions/check` now honors `entity_id`.** The schema has always advertised an optional
+  entity context, but the endpoint silently ignored it and answered from the user's global aggregate.
+  With `entity_id` set, checks are now evaluated within that entity (direct membership grants plus
+  tree permissions inherited from ancestors), matching `check_permission` semantics; malformed ids
+  return 400. **Behavior change** for clients that were already sending the field — they previously
+  received global-scope answers.
 - **Cache-invalidation listener no longer dies permanently on the first Redis error.** The DD-037
   pub/sub listener had no error handling: one `ConnectionError` killed the task silently and the
   instance stopped reacting to invalidation messages for its lifetime. It now resubscribes with
