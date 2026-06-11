@@ -111,25 +111,34 @@ class ActivityTracker:
         try:
             now = datetime.now(timezone.utc)
 
-            # Add to daily set
             daily_key = self._make_daily_key(now.date())
-            await self.redis.sadd(daily_key, user_id)
-            await self.redis.expire(daily_key, 48 * 3600)  # 48 hours
-
-            # Add to monthly set
             monthly_key = self._make_monthly_key(now.year, now.month)
-            await self.redis.sadd(monthly_key, user_id)
-            await self.redis.expire(monthly_key, 90 * 86400)  # 90 days
-
-            # Add to quarterly set
             quarter = (now.month - 1) // 3 + 1
             quarterly_key = self._make_quarterly_key(now.year, quarter)
-            await self.redis.sadd(quarterly_key, user_id)
-            await self.redis.expire(quarterly_key, 365 * 86400)  # 1 year
-
-            # Update last_activity timestamp in Redis
             last_activity_key = f"last_activity:{user_id}"
-            await self.redis.set_raw(last_activity_key, now.isoformat(), ttl=7 * 86400)
+            set_ops = [
+                (daily_key, 48 * 3600),
+                (monthly_key, 90 * 86400),
+                (quarterly_key, 365 * 86400),
+            ]
+
+            pipeline = getattr(self.redis, "record_activity_pipeline", None)
+            if pipeline is not None:
+                # One pipelined round trip (was 7 sequential Redis awaits per
+                # authenticated request).
+                await pipeline(
+                    member=user_id,
+                    set_ops=set_ops,
+                    last_activity_key=last_activity_key,
+                    last_activity_value=now.isoformat(),
+                    last_activity_ttl=7 * 86400,
+                )
+            else:
+                # Custom redis clients without the pipeline helper: per-op path.
+                for set_key, ttl_seconds in set_ops:
+                    await self.redis.sadd(set_key, user_id)
+                    await self.redis.expire(set_key, ttl_seconds)
+                await self.redis.set_raw(last_activity_key, now.isoformat(), ttl=7 * 86400)
 
             # Emit observability metrics
             if self.observability:

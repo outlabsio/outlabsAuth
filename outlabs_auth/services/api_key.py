@@ -487,29 +487,33 @@ class APIKeyService(BaseService[APIKey]):
                 )
                 return None, 0
 
-        # Increment usage counter in Redis (FAST - ~0.1ms)
+        # Record usage + last_used + rate-limit counters in ONE Redis round trip
+        # (was INCR + SET + up to 3× INCR/EXPIRE as sequential awaits), mirroring
+        # the snapshot path; limits are enforced from the returned counts.
         usage_count = 0
         if self.redis_client and self.redis_client.is_available:
-            counter_key = self._make_usage_counter_key(str(api_key.id))
-            usage_count = await self.redis_client.increment(counter_key, amount=1) or 0
-
-            # Also track last_used timestamp in Redis
-            last_used_key = self._make_last_used_key(str(api_key.id))
-            await self.redis_client.set(
-                last_used_key,
-                datetime.now(timezone.utc).isoformat(),
-                ttl=self.config.cache_ttl_seconds,
+            key_id = str(api_key.id)
+            usage_key = self._make_usage_counter_key(key_id)
+            windows = self._api_key_rate_windows(api_key)
+            counts = await self.redis_client.record_api_key_usage_pipeline(
+                usage_key=usage_key,
+                last_used_key=self._make_last_used_key(key_id),
+                last_used_value=datetime.now(timezone.utc).isoformat(),
+                last_used_ttl=self.config.cache_ttl_seconds,
+                rate_windows=[
+                    (self._make_rate_limit_key(key_id, window), ttl)
+                    for window, ttl, _limit in windows
+                ],
             )
+            if counts is not None:
+                usage_count = int(counts.get(usage_key, 0))
+                self._enforce_rate_limit_counts(api_key, windows, counts, key_id)
         else:
             # Fallback: Direct database write
             api_key.usage_count += 1
             api_key.last_used_at = datetime.now(timezone.utc)
             await session.flush()
             usage_count = api_key.usage_count
-
-        # Check rate limits (using Redis counter)
-        if self.redis_client and self.redis_client.is_available:
-            await self._check_rate_limits(api_key)
 
         self._log_api_key_validation(prefix=api_key.prefix, status="valid")
         return api_key, usage_count
@@ -697,11 +701,16 @@ class APIKeyService(BaseService[APIKey]):
                     # Update usage count in database
                     api_key.usage_count += usage_count
 
-                    # Update last_used_at if we have it in Redis
+                    # Update last_used_at if we have it in Redis. The hot path
+                    # writes the timestamp as a raw string (pipelined SET); older
+                    # writes were JSON-encoded — strip quotes to accept both.
                     last_used_key = self._make_last_used_key(key_id)
-                    last_used_str = await self.redis_client.get(last_used_key)
+                    last_used_str = await self.redis_client.get_raw(last_used_key)
                     if last_used_str:
-                        api_key.last_used_at = datetime.fromisoformat(last_used_str)
+                        try:
+                            api_key.last_used_at = datetime.fromisoformat(last_used_str.strip('"'))
+                        except ValueError:
+                            api_key.last_used_at = datetime.now(timezone.utc)
                     else:
                         api_key.last_used_at = datetime.now(timezone.utc)
 
@@ -1033,6 +1042,43 @@ class APIKeyService(BaseService[APIKey]):
             if limit:
                 windows.append((window, ttl, int(limit)))
         return windows
+
+    def _api_key_rate_windows(self, api_key: APIKey) -> list[tuple[str, int, int]]:
+        """Like ``_snapshot_rate_windows`` but sourced from the APIKey row."""
+        limits = {
+            "minute": api_key.rate_limit_per_minute,
+            "hour": api_key.rate_limit_per_hour,
+            "day": api_key.rate_limit_per_day,
+        }
+        windows: list[tuple[str, int, int]] = []
+        for window, ttl in self._RATE_LIMIT_WINDOW_TTLS:
+            limit = limits.get(window)
+            if limit:
+                windows.append((window, ttl, int(limit)))
+        return windows
+
+    def _enforce_rate_limit_counts(
+        self,
+        api_key: APIKey,
+        windows: list[tuple[str, int, int]],
+        counts: dict[str, int],
+        key_id: str,
+    ) -> None:
+        """Raise InvalidInputError if any window's pipelined count exceeds its limit."""
+        for window, _ttl, limit in windows:
+            count = counts.get(self._make_rate_limit_key(key_id, window), 0)
+            if count <= limit:
+                continue
+            self._log_api_key_rate_limited(
+                api_key=api_key,
+                current_count=count,
+                limit=limit,
+                window=window,
+            )
+            raise InvalidInputError(
+                message=f"Rate limit exceeded: {limit} requests per {window}",
+                details={"limit": limit, "current": count, "window": window},
+            )
 
     async def record_api_key_auth_snapshot_usage(self, snapshot: dict[str, Any]) -> int:
         """Record usage + rate-limit counters for a cache-hit authorization in ONE round trip.

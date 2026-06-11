@@ -309,6 +309,7 @@ class OutlabsAuth:
         # Background task schedulers
         self._cleanup_task = None
         self._activity_sync_task = None
+        self._api_key_sync_worker = None
 
         # Track initialization state
         self._initialized = False
@@ -459,6 +460,20 @@ class OutlabsAuth:
 
         if self.config.enable_activity_tracking and self.activity_tracker:
             self._start_activity_sync_scheduler()
+
+        # DD-033: verify_api_key accumulates usage in Redis counters; without this
+        # worker they are never flushed, so api_keys.usage_count/last_used_at go
+        # permanently stale and the counter keys grow unbounded.
+        if self.api_key_service is not None and self.redis_client is not None and self.redis_client.is_available:
+            from outlabs_auth.workers.api_key_sync import APIKeyUsageSyncWorker
+
+            self._api_key_sync_worker = APIKeyUsageSyncWorker(
+                api_key_service=self.api_key_service,
+                config=self.config,
+                session_factory=self._session_factory,
+                interval_seconds=self.config.api_key_usage_sync_interval,
+            )
+            await self._api_key_sync_worker.start()
 
         self._initialized = True
 
@@ -630,11 +645,14 @@ class OutlabsAuth:
         self._backends = []
 
         # JWT Backend (always available)
+        # Blacklist entries are only written when enable_token_blacklist is on
+        # (logout paths), so without the flag the strategy's per-request blacklist
+        # EXISTS would be a guaranteed-miss Redis round trip — don't wire the client.
         jwt_strategy = JWTStrategy(
             secret=self.config.secret_key,
             algorithm=self.config.algorithm,
             audience=self.config.jwt_audience,
-            redis_client=self.redis_client,
+            redis_client=self.redis_client if self.config.enable_token_blacklist else None,
         )
         jwt_backend = AuthBackend(
             name="jwt",
@@ -1205,6 +1223,10 @@ class OutlabsAuth:
                 await self._activity_sync_task
             except asyncio.CancelledError:
                 pass
+
+        if self._api_key_sync_worker is not None:
+            await self._api_key_sync_worker.stop()
+            self._api_key_sync_worker = None
 
         if self.cache_service is not None:
             await self.cache_service.shutdown()

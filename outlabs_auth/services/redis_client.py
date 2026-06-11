@@ -169,6 +169,18 @@ class RedisClient:
         except RedisError:
             return None
 
+    async def mget_raw(self, keys: List[str]) -> Optional[List[Optional[str]]]:
+        """Fetch several keys in one round trip; None (vs a list) means Redis failed."""
+        if not self._available or not self._client:
+            return None
+        if not keys:
+            return []
+        try:
+            values = await cast(Any, self._client.mget(keys))
+            return [cast(Optional[str], value) for value in values]
+        except RedisError:
+            return None
+
     async def scan(
         self, cursor: int = 0, match: Optional[str] = None, count: int = 100
     ) -> tuple[int, list[str]]:
@@ -506,6 +518,35 @@ class RedisClient:
             logger.debug(f"API key usage pipeline result parse failed: {e}")
             return None
         return counts
+
+    async def record_activity_pipeline(
+        self,
+        *,
+        member: str,
+        set_ops: list[tuple[str, int]],
+        last_activity_key: str,
+        last_activity_value: str,
+        last_activity_ttl: int,
+    ) -> bool:
+        """Record activity-tracking bookkeeping in ONE round trip.
+
+        Pipelines (non-transactional) the SADD + EXPIRE pair for each
+        ``(set_key, ttl_seconds)`` in ``set_ops`` plus the last-activity SET —
+        previously 7 sequential awaits per authenticated request.
+        """
+        if not self._available or not self._client:
+            return False
+        try:
+            pipe = self._client.pipeline(transaction=False)
+            for set_key, ttl_seconds in set_ops:
+                pipe.sadd(set_key, member)
+                pipe.expire(set_key, ttl_seconds)
+            pipe.set(last_activity_key, last_activity_value, ex=last_activity_ttl)
+            await pipe.execute()
+            return True
+        except RedisError as e:
+            logger.debug(f"Activity tracking pipeline failed: {e}")
+            return False
 
     # Pub/Sub Operations (DD-037)
 

@@ -31,6 +31,8 @@ class _FakeRedis:
         self.get_values: dict[str, object] = {}
         self.counters: dict[str, int] = {}
         self.set_calls: list[tuple[str, object, int | None]] = []
+        self.raw_values: dict[str, str] = {}
+        self.raw_set_calls: list[tuple[str, str, int | None]] = []
         self.pubsub = _FakePubSub(messages=messages)
 
     def make_key(self, *parts: str) -> str:
@@ -45,6 +47,22 @@ class _FakeRedis:
 
     async def get_counter(self, key: str) -> int:
         return self.counters.get(key, 0)
+
+    async def set_raw(self, key: str, value: str, ttl: int | None = None) -> bool:
+        self.raw_values[key] = value
+        self.raw_set_calls.append((key, value, ttl))
+        return True
+
+    async def mget_raw(self, keys: list[str]) -> list[str | None]:
+        out: list[str | None] = []
+        for key in keys:
+            if key in self.raw_values:
+                out.append(self.raw_values[key])
+            elif key in self.counters:
+                out.append(str(self.counters[key]))
+            else:
+                out.append(None)
+        return out
 
     async def increment(self, key: str, amount: int = 1):
         self.counters[key] = self.counters.get(key, 0) + amount
@@ -258,6 +276,102 @@ async def test_cache_service_api_key_auth_snapshot_version_helpers(auth_config):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_cache_service_user_permission_names_roundtrip_and_version_invalidation(auth_config):
+    config = _cache_config(auth_config)
+    redis = _FakeRedis()
+    cache_service = CacheService(redis, config)
+
+    # Cold read: miss, but current versions come back for the follow-up write.
+    names, versions = await cache_service.get_user_permission_names(
+        "user-1", include_entity_local=False
+    )
+    assert names is None
+    assert versions == {"global": 0, "user:user-1": 0}
+
+    assert (
+        await cache_service.set_user_permission_names(
+            "user-1",
+            include_entity_local=False,
+            names=["post:read", "comment:create"],
+            versions=versions,
+        )
+        is True
+    )
+    key, _payload, ttl = redis.raw_set_calls[-1]
+    assert key == "auth:user-permissions:user-1:global"
+    assert ttl == config.cache_permission_ttl
+
+    # Warm read: hit (names stored sorted).
+    names, _ = await cache_service.get_user_permission_names(
+        "user-1", include_entity_local=False
+    )
+    assert names == ["comment:create", "post:read"]
+
+    # The include_entity_local variant is a distinct key — still cold.
+    other_names, _ = await cache_service.get_user_permission_names(
+        "user-1", include_entity_local=True
+    )
+    assert other_names is None
+
+    # A user-scoped invalidation (role assignment, membership change, ...)
+    # bumps the user version and makes the entry unreadable immediately.
+    await cache_service.publish_user_permissions_invalidation("user-1")
+    names, versions = await cache_service.get_user_permission_names(
+        "user-1", include_entity_local=False
+    )
+    assert names is None
+    assert versions == {"global": 0, "user:user-1": 1}
+
+    # Re-write at the new versions, then verify a global bump (role/permission
+    # definition CRUD) invalidates as well.
+    await cache_service.set_user_permission_names(
+        "user-1", include_entity_local=False, names=["post:read"], versions=versions
+    )
+    names, _ = await cache_service.get_user_permission_names(
+        "user-1", include_entity_local=False
+    )
+    assert names == ["post:read"]
+
+    await cache_service.publish_all_permissions_invalidation()
+    names, _ = await cache_service.get_user_permission_names(
+        "user-1", include_entity_local=False
+    )
+    assert names is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cache_service_user_permission_names_racing_write_is_stored_stale(auth_config):
+    """A write that lost a race with a concurrent version bump must never be served."""
+    config = _cache_config(auth_config)
+    redis = _FakeRedis()
+    cache_service = CacheService(redis, config)
+
+    _, versions = await cache_service.get_user_permission_names(
+        "user-1", include_entity_local=False
+    )
+    # A mutation bumps the user version between our read and our write.
+    await cache_service.publish_user_permissions_invalidation("user-1")
+    await cache_service.set_user_permission_names(
+        "user-1", include_entity_local=False, names=["post:read"], versions=versions
+    )
+
+    names, _ = await cache_service.get_user_permission_names(
+        "user-1", include_entity_local=False
+    )
+    assert names is None
+
+    # versions=None (Redis was unavailable at read time) makes the write a no-op.
+    assert (
+        await cache_service.set_user_permission_names(
+            "user-1", include_entity_local=False, names=["x:y"], versions=None
+        )
+        is False
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_cache_service_handle_message_routes_targeted_invalidations(auth_config):
     config = _cache_config(auth_config)
     redis = _FakeRedis()
@@ -334,3 +448,12 @@ async def test_cache_service_noops_when_redis_is_unavailable(auth_config):
     assert await cache_service.publish_entity_permissions_invalidation("entity-123") is False
     assert await cache_service.publish_all_permissions_invalidation() is False
     assert await cache_service.publish_role_permissions_invalidation("role-999") is False
+    assert await cache_service.get_user_permission_names(
+        "user-1", include_entity_local=False
+    ) == (None, None)
+    assert (
+        await cache_service.set_user_permission_names(
+            "user-1", include_entity_local=False, names=[], versions={"global": 0}
+        )
+        is False
+    )

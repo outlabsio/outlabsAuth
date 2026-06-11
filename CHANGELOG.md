@@ -30,9 +30,39 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
   access system-wide roles"): they are platform objects, not tenant data, and their IDs already
   surface on in-scope users' role lists.
 
+### Performance
+
+Phase 1 of the 2026-06 performance audit (`docs/PERFORMANCE_AUDIT_2026-06.md`): wire the caching and
+pipelining machinery that already existed into the hot paths that weren't using it.
+
+- **Aggregated user permission sets are Redis-cached on the hot path.**
+  `PermissionService.get_user_permissions` — what every JWT `require_permission` dependency resolves
+  through — now serves from a versioned-key Redis entry (`CacheService.get/set_user_permission_names`)
+  validated against the same global/user invalidation counters the API-key snapshots use. Every role,
+  permission, and membership mutation already bumps those counters, so revocations take effect on the
+  next request. Warm authenticated requests drop from 3–6 SQL queries to one Redis MGET.
+- **JWT blacklist check gated by `enable_token_blacklist`.** With the flag off (default), every JWT
+  request previously paid a guaranteed-miss Redis `EXISTS`; the strategy now only gets the Redis
+  client when blacklisting is enabled.
+- **API-key snapshot version validation uses one MGET** instead of 2–4 sequential GETs
+  (snapshot-validated requests go from 4–5 Redis round trips to 2).
+- **`verify_api_key` records usage, `last_used`, and rate-limit windows in one pipelined round trip**
+  (was up to 8 sequential Redis ops), enforcing limits from the returned counts — same semantics as
+  the snapshot path. The counter-sync job now reads `last_used` in both raw and legacy JSON encodings.
+- **DD-033 usage sync worker is actually started.** `OutlabsAuth._initialize()` now launches
+  `APIKeyUsageSyncWorker` when Redis is available (new `api_key_usage_sync_interval` config, default
+  300s) and stops it on shutdown. Previously the worker existed but was never wired in, so
+  `api_keys.usage_count`/`last_used_at` went permanently stale and counter keys accumulated forever.
+- **Activity tracking pipelined**: the per-request DAU/MAU/QAU bookkeeping (3×SADD + 3×EXPIRE + SET)
+  collapses from 7 sequential Redis round trips to 1.
+- **Entity cache hits no longer N+1.** `get_descendants` (cache-hit path) and `get_ancestors`
+  batch-fetch entities with one `IN` query via `_get_entities_by_ids`; previously a 500-node subtree
+  cache "hit" issued 500 sequential SELECTs — slower than the cache miss.
+
 ### Database migrations
 
-- None. DD-056 uses existing tables; `enforce_user_scope` is a config flag. The latest Alembic
+- None. DD-056 uses existing tables; `enforce_user_scope` is a config flag. The performance work adds
+  only the `api_key_usage_sync_interval` config field — no schema changes. The latest Alembic
   revision remains `20260425_0017`.
 
 ## [0.1.0a22] - 2026-04-25

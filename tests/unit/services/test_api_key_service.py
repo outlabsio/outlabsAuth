@@ -45,6 +45,9 @@ class FakeRedis:
     async def get(self, key: str):
         return self.values.get(key)
 
+    async def get_raw(self, key: str):
+        return self.values.get(key)
+
     async def delete(self, key: str):
         self.deleted.append(key)
         self.counters.pop(key, None)

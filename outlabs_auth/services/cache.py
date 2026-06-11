@@ -4,6 +4,7 @@ Redis-backed cache service for permission checks.
 
 import asyncio
 import contextlib
+import json
 from typing import Any, Optional, cast
 
 from outlabs_auth.core.config import AuthConfig
@@ -68,18 +69,38 @@ class CacheService:
         if not self.redis_client or not self.redis_client.is_available:
             return {}
 
-        versions = {
-            "global": await self._get_version("global"),
-        }
+        scopes: list[tuple[str, str, Optional[str]]] = [("global", "global", None)]
         if user_id:
-            versions[f"user:{user_id}"] = await self._get_version("user", user_id)
+            scopes.append((f"user:{user_id}", "user", user_id))
         if integration_principal_id:
-            versions[f"integration_principal:{integration_principal_id}"] = await self._get_version(
-                "integration_principal",
-                integration_principal_id,
+            scopes.append(
+                (
+                    f"integration_principal:{integration_principal_id}",
+                    "integration_principal",
+                    integration_principal_id,
+                )
             )
         if entity_id:
-            versions[f"entity:{entity_id}"] = await self._get_version("entity", entity_id)
+            scopes.append((f"entity:{entity_id}", "entity", entity_id))
+
+        # One MGET round trip for all version keys (was one sequential GET per
+        # scope — 2-4 extra round trips on every snapshot-validated request).
+        mget_raw = getattr(self.redis_client, "mget_raw", None)
+        if mget_raw is not None:
+            keys = [
+                self.make_api_key_auth_snapshot_version_key(scope, subject_id)
+                for _label, scope, subject_id in scopes
+            ]
+            values = await mget_raw(keys)
+            if values is not None and len(values) == len(scopes):
+                return {
+                    label: self._coerce_version(value)
+                    for (label, _scope, _subject_id), value in zip(scopes, values)
+                }
+
+        versions: dict[str, int] = {}
+        for label, scope, subject_id in scopes:
+            versions[label] = await self._get_version(scope, subject_id)
         return versions
 
     async def bump_api_key_auth_snapshot_version(
@@ -124,6 +145,98 @@ class CacheService:
             return int(value)
         except (TypeError, ValueError):
             return 0
+
+    @staticmethod
+    def _coerce_version(raw: Any) -> int:
+        if raw is None:
+            return 0
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return 0
+
+    # Aggregated user permission sets — versioned keys, so invalidation is the
+    # version INCR that publish_*_invalidation already performs (no SCAN needed).
+
+    def make_user_permissions_key(self, user_id: str, *, include_entity_local: bool) -> str:
+        scope = "all" if include_entity_local else "global"
+        return str(self.redis_client.make_key("auth", "user-permissions", user_id, scope))
+
+    async def get_user_permission_names(
+        self,
+        user_id: str,
+        *,
+        include_entity_local: bool,
+    ) -> tuple[Optional[list[str]], Optional[dict[str, int]]]:
+        """Read the cached aggregated permission-name set for a user.
+
+        Returns ``(names, current_versions)`` — ``names`` is None on miss or
+        version mismatch. Entries validate against the same global/user version
+        counters the API-key snapshots use; every role, permission, and
+        membership mutation already bumps them via ``publish_*_invalidation``,
+        so stale entries become unreadable immediately and age out via TTL.
+
+        ``current_versions`` is read in the same MGET round trip and must be
+        echoed into ``set_user_permission_names``: a write that lost a race with
+        a concurrent bump is then stored already-stale instead of masking the
+        newer state.
+        """
+        if not self.redis_client or not self.redis_client.is_available:
+            return None, None
+        mget_raw = getattr(self.redis_client, "mget_raw", None)
+        if mget_raw is None:
+            return None, None
+
+        values = await mget_raw(
+            [
+                self.make_user_permissions_key(user_id, include_entity_local=include_entity_local),
+                self.make_api_key_auth_snapshot_version_key("global"),
+                self.make_api_key_auth_snapshot_version_key("user", user_id),
+            ]
+        )
+        if values is None or len(values) != 3:
+            return None, None
+
+        versions = {
+            "global": self._coerce_version(values[1]),
+            f"user:{user_id}": self._coerce_version(values[2]),
+        }
+
+        if not values[0]:
+            return None, versions
+        try:
+            payload = json.loads(values[0])
+        except (TypeError, ValueError):
+            return None, versions
+
+        names = payload.get("permissions") if isinstance(payload, dict) else None
+        if not isinstance(names, list) or payload.get("versions") != versions:
+            return None, versions
+        return [str(name) for name in names], versions
+
+    async def set_user_permission_names(
+        self,
+        user_id: str,
+        *,
+        include_entity_local: bool,
+        names: list[str],
+        versions: Optional[dict[str, int]],
+    ) -> bool:
+        if versions is None:
+            return False
+        if not self.redis_client or not self.redis_client.is_available:
+            return False
+        set_raw = getattr(self.redis_client, "set_raw", None)
+        if set_raw is None:
+            return False
+        payload = json.dumps({"versions": versions, "permissions": sorted(names)})
+        return bool(
+            await set_raw(
+                self.make_user_permissions_key(user_id, include_entity_local=include_entity_local),
+                payload,
+                ttl=self.config.cache_permission_ttl,
+            )
+        )
 
     async def get_permission_check(
         self,

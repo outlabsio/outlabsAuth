@@ -986,6 +986,26 @@ class PermissionService(BaseService[Permission]):
         if resolved_user.is_superuser:
             return ["*:*"]
 
+        # PERF: serve the aggregated set from Redis. This is the per-request hot
+        # path for every JWT permission dependency (the deps-layer fast path calls
+        # straight into here), so a hit replaces the 3-6 membership/role/permission
+        # SELECTs below with one Redis MGET. Entries validate against the
+        # global/user authz version counters that every role, permission, and
+        # membership mutation already bumps — see CacheService.get_user_permission_names.
+        # entity_type-shaped aggregations vary per context and are not cached.
+        cache_service = getattr(self, "cache_service", None)
+        use_cache = (
+            entity_type is None and cache_service is not None and self._can_use_permission_cache()
+        )
+        cached_versions: Optional[Dict[str, int]] = None
+        if use_cache:
+            cached_names, cached_versions = await cache_service.get_user_permission_names(
+                str(user_id),
+                include_entity_local=include_entity_local,
+            )
+            if cached_names is not None:
+                return cached_names
+
         all_permissions: Set[str] = set()
 
         # Get active role memberships with roles eagerly loaded
@@ -1056,6 +1076,14 @@ class PermissionService(BaseService[Permission]):
 
                     for perm in self._get_role_permissions_for_context(role, entity_type):
                         all_permissions.add(perm.name)
+
+        if use_cache:
+            await cache_service.set_user_permission_names(
+                str(user_id),
+                include_entity_local=include_entity_local,
+                names=list(all_permissions),
+                versions=cached_versions,
+            )
 
         return list(all_permissions)
 

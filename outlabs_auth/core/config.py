@@ -207,6 +207,10 @@ class AuthConfig(BaseModel):
         default=0.0,
         description="In-process API-key auth snapshot cache TTL in seconds (0 disables; opt-in perf)",
     )
+    api_key_usage_sync_interval: int = Field(
+        default=300,
+        description="Interval in seconds for flushing Redis API-key usage counters to the database (DD-033)",
+    )
 
     # Pub/Sub Channels
     redis_invalidation_channel: str = Field(

@@ -677,12 +677,8 @@ class EntityService(BaseService[Entity]):
             cached = await self.redis_client.get(cache_key)
             if cached is not None:
                 entity_ids = [UUID(e["id"]) for e in cached]
-                entities = []
-                for eid in entity_ids:
-                    entity = await self.get_by_id(session, eid)
-                    if entity:
-                        entities.append(entity)
-                return entities
+                entity_map = await self._get_entities_by_ids(session, entity_ids)
+                return [entity_map[eid] for eid in entity_ids if eid in entity_map]
 
         # Get all descendants from closure table (excluding self)
         stmt = select(cast(Any, EntityClosure.descendant_id)).where(
@@ -1273,10 +1269,6 @@ class EntityService(BaseService[Entity]):
         result = await session.execute(stmt)
         rows = result.all()
 
-        entities = []
-        for ancestor_id, _ in rows:
-            entity = await self.get_by_id(session, ancestor_id)
-            if entity:
-                entities.append(entity)
-
-        return entities
+        ancestor_ids = [ancestor_id for ancestor_id, _ in rows]
+        entity_map = await self._get_entities_by_ids(session, ancestor_ids)
+        return [entity_map[aid] for aid in ancestor_ids if aid in entity_map]
