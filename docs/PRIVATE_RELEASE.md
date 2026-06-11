@@ -31,12 +31,17 @@ Trusted publishing is the default path. No long-lived PyPI token is required for
    - `uv run --extra test python -m pytest tests/unit/test_release_packaging.py tests/unit/test_bootstrap.py -q`
    - `TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test uv run --extra test python -m pytest tests/integration/test_packaged_cli_migrations.py -q`
 5. Run the full test suite and the API integration suite (see
-   [API Integration Validation](#api-integration-validation) below):
+   [API Integration Validation](#api-integration-validation) below). The
+   `Release Readiness` workflow runs both automatically (`full-suite` and
+   `api-integration` jobs with ephemeral Postgres + Redis services) on every
+   PR and on `main`/tags — run locally to iterate faster than CI:
    - `TEST_REDIS_URL=redis://localhost:56379/15 uv run pytest -q`
    - `uv run python scripts/run_enterprise_example_smoke.py`
 6. If the release contains new Alembic revisions, run the
    [Database Upgrade Rehearsal](#database-upgrade-rehearsal) against a copy of
-   a real (staging or long-lived dev) database.
+   a real (staging or long-lived dev) database. (CI exercises migrations on
+   fresh databases only — the rehearsal against a populated copy is the manual
+   step that cannot be automated away.)
 7. Build distributions locally:
    - `uv build --no-sources`
 8. Push the branch and wait for the `Release Readiness` workflow to pass.
