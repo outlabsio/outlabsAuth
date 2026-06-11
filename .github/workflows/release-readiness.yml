@@ -127,7 +127,6 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/realestate_enterprise_rbac
       REDIS_URL: redis://127.0.0.1:6379/14
-      SECRET_KEY: enterprise-rbac-secret-change-in-production-please
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -137,6 +136,12 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
+
+      # The seed, the app, and the checks only need to SHARE a key for the
+      # job's lifetime — generate one per run instead of committing a
+      # secret-shaped string for scanners to flag.
+      - name: Generate ephemeral SECRET_KEY
+        run: echo "SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" >> "$GITHUB_ENV"
 
       - name: Run API integration suite (seed, boot, smoke, 45 checks)
         run: uv run python scripts/run_enterprise_example_smoke.py
