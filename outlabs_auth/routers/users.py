@@ -368,22 +368,18 @@ def get_users_router(
                     )
 
             if search:
-                # Use search functionality (no pagination for search)
-                all_users = await auth.user_service.search_users(
+                # SQL-side pagination + COUNT (previously fetched up to 1,000
+                # rows to slice a page of `limit` in Python).
+                users, total = await auth.user_service.search_users_with_total(
                     session,
                     search_term=search,
-                    limit=1000,
+                    skip=(page - 1) * limit,
+                    limit=limit,
                     status=parsed_status,
                     is_superuser=is_superuser,
                     root_entity_id=root_entity_id,
                     scope_entity_ids=scope_entity_ids,
                 )
-
-                # Manual pagination of search results
-                total = len(all_users)
-                start_idx = (page - 1) * limit
-                end_idx = start_idx + limit
-                users = all_users[start_idx:end_idx]
             else:
                 # Use standard list with pagination
                 users, total = await auth.user_service.list_users(

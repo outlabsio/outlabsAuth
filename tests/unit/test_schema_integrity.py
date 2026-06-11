@@ -50,10 +50,14 @@ def test_entity_closure_has_fks_unique_and_indexes():
     assert _fk_ondelete(table, "ancestor_id") == "CASCADE"
     assert _fk_ondelete(table, "descendant_id") == "CASCADE"
 
-    assert _has_index(table, "ix_closure_ancestor_id", "ancestor_id")
-    assert _has_index(table, "ix_closure_descendant_id", "descendant_id")
+    # The composite (id, depth) indexes cover single-column lookups via their
+    # leading prefix; the redundant single-column btrees were dropped in
+    # migration 20260611_0018 (closure inserts are O(depth x subtree) rows per
+    # entity create/move, so each extra index is pure write amplification).
     assert _has_index(table, "ix_closure_ancestor_depth", "ancestor_id", "depth")
     assert _has_index(table, "ix_closure_descendant_depth", "descendant_id", "depth")
+    assert not any(index.name == "ix_closure_ancestor_id" for index in table.indexes)
+    assert not any(index.name == "ix_closure_descendant_id" for index in table.indexes)
     assert not _has_column(table, "tenant_id")
 
 

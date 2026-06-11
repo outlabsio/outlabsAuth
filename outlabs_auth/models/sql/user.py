@@ -17,6 +17,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -55,6 +56,19 @@ class User(BaseModel, table=True):
         UniqueConstraint("email", name="uq_users_email"),
         Index("ix_users_status", "status"),
         Index("ix_users_root_entity_id", "root_entity_id"),
+        # Reset-password / accept-invite are unauthenticated, attacker-reachable
+        # endpoints that look tokens up by value — without these partial
+        # indexes each attempt sequentially scanned the users table.
+        Index(
+            "ix_users_password_reset_token",
+            "password_reset_token",
+            postgresql_where=text("password_reset_token IS NOT NULL"),
+        ),
+        Index(
+            "ix_users_invite_token",
+            "invite_token",
+            postgresql_where=text("invite_token IS NOT NULL"),
+        ),
     )
 
     # === Organization Binding (EnterpriseRBAC) ===

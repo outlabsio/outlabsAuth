@@ -50,7 +50,23 @@ class _EventLogger:
     def error(self, event: str, **fields: Any) -> None:
         self._log("error", event, **fields)
 
+    _LEVEL_NUMBERS = {
+        "debug": logging.DEBUG,
+        "info": logging.INFO,
+        "warning": logging.WARNING,
+        "error": logging.ERROR,
+    }
+
     def _log(self, level: str, event: str, **fields: Any) -> None:
+        # Skip payload construction entirely for filtered levels: per-request
+        # debug emits previously built (and JSON-serialized) the full payload
+        # only for the stdlib level filter to drop it.
+        is_enabled_for = getattr(self._base_logger, "isEnabledFor", None)
+        if is_enabled_for is not None and not is_enabled_for(
+            self._LEVEL_NUMBERS.get(level, logging.INFO)
+        ):
+            return
+
         log_method = getattr(self._base_logger, level, self._base_logger.info)
         payload = self._build_payload(event, level, fields)
 

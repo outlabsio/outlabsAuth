@@ -123,6 +123,41 @@ Phase 3 (permission-resolution algorithmics + event-loop hygiene):
   RabbitMQ channel resolves its exchange once instead of per publish. Pinned by
   `tests/unit/services/test_channels_async.py`.
 
+Phase 4 (write paths, schema, observability):
+
+- **Index hygiene (migration `20260611_0018`).** Verified against the rendered DDL: `api_keys.prefix`
+  carried **three** identical btrees and `refresh_tokens.token_hash` two (every login maintained
+  both); `permissions.name`/`permission_tags.name` duplicated their unique constraints; the closure
+  table and both membership tables carried single-column indexes fully covered by composite
+  prefixes. All dropped — pure write amplification removed from the hottest-write tables. Added:
+  partial indexes on `users.password_reset_token` / `users.invite_token` (reset/invite are
+  unauthenticated, attacker-reachable lookups that previously **sequentially scanned the users
+  table** per attempt) and `permission_tag_links.tag_id`.
+- **Bulk membership archival batched.** Archiving an entity's memberships cost ~9 queries per
+  membership (two ~4-query history snapshots, a user SELECT, and a flush per row — ~9,000 statements
+  in one transaction for 1,000 members). The batch now shares one closure-context query and one user
+  `IN` fetch, passes precomputed snapshots into the history writer, and flushes inserts together:
+  measured 14 memberships in 33 queries vs ~126 before
+  (`tests/integration/test_bulk_write_query_counts.py`). Same treatment for user-deletion membership
+  revocation.
+- **Background syncs batched.** API-key usage sync consumes counters with pipelined atomic `GETDEL`
+  (the old GET→DELETE silently dropped increments landing in between), MGETs `last_used` timestamps,
+  and applies one executemany UPDATE — was a SELECT + single-row flush + 2 Redis ops per key.
+  Activity sync MGETs each SCAN page and bulk-updates `users.last_activity` — was one GET + one
+  SELECT + one UPDATE per active user (≈30k round trips per cycle at 10k DAU).
+- **Role/permission definition edits stop rebuilding snapshots a third time.** History events reuse
+  the caller-computed post-mutation snapshot (a role edit previously ran the ~7-query snapshot
+  build three times, ~27 queries per admin edit).
+- **SQL-side pagination.** User search pushes `OFFSET/LIMIT` + `COUNT(*)` into SQL (previously
+  fetched up to 1,000 full rows to slice a page of 20, with a wrong total beyond the cap);
+  `get_roles_for_entity` filters `assignable_at_types` in SQL (`unnest` + `lower()` parity with the
+  Python matcher) and paginates with `COUNT`/`OFFSET`/`LIMIT` instead of eagerly loading every
+  matching role.
+- **Observability**: HTTP error metrics label by route template (`/users/{user_id}`) instead of the
+  concrete path — concrete IDs minted a new Prometheus series per distinct value that ever errored
+  (unbounded registry growth under scanners); structured log emits below the configured level now
+  skip payload construction and JSON serialization entirely.
+
 ### Fixed
 
 - **Cache-invalidation listener no longer dies permanently on the first Redis error.** The DD-037
@@ -142,9 +177,17 @@ Phase 3 (permission-resolution algorithmics + event-loop hygiene):
 
 ### Database migrations
 
-- None. DD-056 uses existing tables; `enforce_user_scope` is a config flag. The performance work adds
-  only the `api_key_usage_sync_interval` config field — no schema changes. The latest Alembic
-  revision remains `20260425_0017`.
+- **New Alembic revision `20260611_0018_index_hygiene`** (index-only — no table or column changes,
+  no data migration). Drops the duplicate/prefix-redundant indexes listed under Performance Phase 4
+  and creates `ix_users_password_reset_token` (partial), `ix_users_invite_token` (partial), and
+  `ix_permission_tag_links_tag_id`. Applied automatically with `auto_migrate=True`, or run
+  `outlabs-auth bootstrap` / the packaged Alembic migrations before upgrading app instances. The
+  migration is idempotent (existence-checked) and safe to run online; index creation is
+  non-concurrent, so on very large `users` tables expect a brief write lock while the two partial
+  indexes build. Downgrade restores the dropped indexes (except the redundant column-level unique
+  constraints, which carried no semantics).
+- DD-056 itself uses existing tables; `enforce_user_scope` and `api_key_usage_sync_interval` are
+  config flags only.
 
 ## [0.1.0a22] - 2026-04-25
 

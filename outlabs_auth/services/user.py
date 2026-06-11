@@ -1082,6 +1082,35 @@ class UserService(BaseService[User]):
         Returns:
             List of matching users
         """
+        users, _total = await self.search_users_with_total(
+            session,
+            search_term=search_term,
+            limit=limit,
+            status=status,
+            is_superuser=is_superuser,
+            root_entity_id=root_entity_id,
+            scope_entity_ids=scope_entity_ids,
+            include_total=False,
+        )
+        return users
+
+    async def search_users_with_total(
+        self,
+        session: AsyncSession,
+        search_term: str,
+        skip: int = 0,
+        limit: int = 20,
+        status: Optional[UserStatus] = None,
+        is_superuser: Optional[bool] = None,
+        root_entity_id: Optional[UUID] = None,
+        scope_entity_ids: Optional[List[UUID]] = None,
+        include_total: bool = True,
+    ) -> tuple[List[User], int]:
+        """``search_users`` with SQL-side pagination and a COUNT(*) total.
+
+        The users router previously fetched up to 1,000 full rows to serve a
+        page of 20 and sliced in Python (with a wrong total beyond the cap).
+        """
         # Case-insensitive search using ILIKE
         pattern = f"%{search_term}%"
         status_col = cast(Any, User.status)
@@ -1090,7 +1119,13 @@ class UserService(BaseService[User]):
         email_col = cast(Any, User.email)
         first_name_col = cast(Any, User.first_name)
         last_name_col = cast(Any, User.last_name)
-        filters: list[Any] = []
+        filters: list[Any] = [
+            or_(
+                email_col.ilike(pattern),
+                first_name_col.ilike(pattern),
+                last_name_col.ilike(pattern),
+            )
+        ]
         if status:
             filters.append(status_col == status)
         if is_superuser is not None:
@@ -1100,17 +1135,16 @@ class UserService(BaseService[User]):
         if scope_entity_ids is not None:
             filters.append(self._scope_filter(scope_entity_ids))
 
+        total = await self.count(session, *filters) if include_total else 0
+
         users = await self.get_many(
             session,
-            or_(
-                email_col.ilike(pattern),
-                first_name_col.ilike(pattern),
-                last_name_col.ilike(pattern),
-            ),
             *filters,
+            skip=skip,
             limit=limit,
+            order_by=email_col,
         )
-        return users
+        return users, int(total)
 
     async def verify_email(
         self,

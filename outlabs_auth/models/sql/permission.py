@@ -27,8 +27,8 @@ class PermissionTag(BaseModel, table=True):
     """
     __tablename__ = "permission_tags"
     __table_args__ = (
+        # The unique constraint already materializes the btree on name.
         UniqueConstraint("name", name="uq_permission_tags_name"),
-        Index("ix_permission_tags_name", "name"),
     )
 
     name: str = Field(
@@ -49,6 +49,11 @@ class PermissionTagLink(SQLModel, table=True):
     Table: permission_tag_links
     """
     __tablename__ = "permission_tag_links"
+    __table_args__ = (
+        # The composite PK leads with permission_id; tag-driven joins
+        # (get_permissions_by_tag) need the reverse direction covered.
+        Index("ix_permission_tag_links_tag_id", "tag_id"),
+    )
 
     permission_id: UUID = Field(
         sa_column=Column(
@@ -136,8 +141,8 @@ class Permission(BaseModel, table=True):
     """
     __tablename__ = "permissions"
     __table_args__ = (
+        # The unique constraint already materializes the btree on name.
         UniqueConstraint("name", name="uq_permissions_name"),
-        Index("ix_permissions_name", "name"),
         Index("ix_permissions_resource", "resource"),
         Index("ix_permissions_is_system", "is_system"),
         Index("ix_permissions_status", "status"),

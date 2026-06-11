@@ -2896,7 +2896,14 @@ class PermissionService(BaseService[Permission]):
         if self.permission_history_service is None:
             return
 
-        snapshot = await self._build_permission_definition_snapshot(session, permission)
+        # Callers that just computed the post-mutation snapshot pass it as
+        # ``after``; rebuilding it here re-ran the multi-query snapshot a third
+        # time on every permission-definition edit.
+        snapshot = (
+            after
+            if after is not None
+            else await self._build_permission_definition_snapshot(session, permission)
+        )
         await self.permission_history_service.record_event(
             session,
             permission_id=permission.id,

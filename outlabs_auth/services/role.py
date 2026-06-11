@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple, cast
 from uuid import UUID
 
-from sqlalchemy import and_, false, or_, select
+from sqlalchemy import and_, exists, false, func, literal, or_, select
 from sqlalchemy import delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -1147,26 +1147,39 @@ class RoleService(BaseService[Role]):
         if include_auto_assigned_only:
             role_filter = and_(role_filter, cast(Any, Role.is_auto_assigned) == True)
 
+        # Entity-type assignability in SQL, mirroring _allows_entity_type:
+        # empty/NULL assignable_at_types allows everywhere; otherwise the
+        # (lowercased) entity type must appear in the array. Previously every
+        # matching role was loaded with permissions eagerly, then filtered and
+        # paginated in Python — unbounded per-org cost.
+        assignable_types = cast(Any, Role.assignable_at_types)
+        unnested_type = func.unnest(assignable_types).column_valued("assignable_type")
+        type_filter = or_(
+            assignable_types.is_(None),
+            func.cardinality(assignable_types) == 0,
+            exists(select(literal(1)).where(func.lower(unnested_type) == entity_type.lower())),
+        )
+        full_filter = and_(role_filter, type_filter)
+
+        total_count = (
+            await session.execute(select(func.count()).select_from(Role).where(full_filter))
+        ).scalar() or 0
+
+        skip = (page - 1) * limit
         stmt = (
             select(Role)
-            .where(role_filter)
+            .where(full_filter)
             .options(
                 selectinload(cast(Any, Role.permissions)),
                 selectinload(cast(Any, Role.root_entity)),
                 selectinload(cast(Any, Role.scope_entity)),
             )
             .order_by(cast(Any, Role.name))
+            .offset(skip)
+            .limit(limit)
         )
         result = await session.execute(stmt)
-        roles = [
-            role
-            for role in result.scalars().all()
-            if self._allows_entity_type(role, entity_type)
-        ]
-
-        total_count = len(roles)
-        skip = (page - 1) * limit
-        return roles[skip : skip + limit], total_count
+        return list(result.scalars().all()), int(total_count)
 
     async def get_auto_assigned_roles_for_entity(
         self,
@@ -2248,7 +2261,10 @@ class RoleService(BaseService[Role]):
         if self.role_history_service is None:
             return
 
-        snapshot = await self._build_role_definition_snapshot(session, role)
+        # Callers that just computed the post-mutation snapshot pass it as
+        # ``after``; rebuilding it here re-ran the ~7-query snapshot a third
+        # time on every role-definition edit.
+        snapshot = after if after is not None else await self._build_role_definition_snapshot(session, role)
         await self.role_history_service.record_event(
             session,
             role_id=role.id,

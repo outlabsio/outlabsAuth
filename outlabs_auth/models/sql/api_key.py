@@ -96,8 +96,10 @@ class APIKey(BaseModel, table=True):
 
     __tablename__ = "api_keys"
     __table_args__ = (
+        # The unique constraint materializes a btree; the column-level
+        # unique=True and a separate ix_api_keys_prefix used to stack two more
+        # identical indexes on top — pure write amplification on every key write.
         UniqueConstraint("prefix", name="uq_api_keys_prefix"),
-        Index("ix_api_keys_prefix", "prefix"),
         Index("ix_api_keys_owner_id", "owner_id"),
         Index("ix_api_keys_integration_principal_id", "integration_principal_id"),
         Index("ix_api_keys_key_kind", "key_kind"),
@@ -122,7 +124,7 @@ class APIKey(BaseModel, table=True):
         sa_column=Column(String(1000), nullable=True),
     )
     prefix: str = Field(
-        sa_column=Column(String(20), nullable=False, unique=True),
+        sa_column=Column(String(20), nullable=False),
         description="Key prefix for identification (e.g., 'sk_live_abc123')",
     )
     key_hash: str = Field(

@@ -493,6 +493,46 @@ class RedisClient:
             logger.debug(f"Get all counters failed for {pattern}: {e}")
             return {}
 
+    async def collect_counters_atomically(self, pattern: str) -> dict[str, int]:
+        """SCAN matching counter keys and GETDEL them, pipelined per page.
+
+        Returns ``{key: value}`` for every counter consumed. GETDEL is atomic,
+        so an increment landing after collection goes into a fresh key picked
+        up by the next sync cycle — the old GET ... DELETE shape silently
+        dropped increments that arrived in between. Requires Redis >= 6.2.
+        """
+        if not self._available or not self._client:
+            return {}
+
+        counters: dict[str, int] = {}
+        try:
+            page: list[str] = []
+            async for key in self._client.scan_iter(match=pattern, count=500):
+                page.append(key)
+                if len(page) >= 500:
+                    await self._getdel_page(page, counters)
+                    page = []
+            if page:
+                await self._getdel_page(page, counters)
+        except RedisError as e:
+            self._trip_breaker(e)
+            logger.debug(f"Atomic counter collection failed for {pattern}: {e}")
+        return counters
+
+    async def _getdel_page(self, keys: List[str], counters: dict[str, int]) -> None:
+        assert self._client is not None
+        pipe = self._client.pipeline(transaction=False)
+        for key in keys:
+            pipe.getdel(key)
+        values = await pipe.execute()
+        for key, value in zip(keys, values):
+            if value is None:
+                continue
+            try:
+                counters[key] = counters.get(key, 0) + int(value)
+            except (TypeError, ValueError):
+                continue
+
     async def get_and_reset_counter(self, key: str) -> int:
         """
         Get counter value and reset it to 0 atomically.

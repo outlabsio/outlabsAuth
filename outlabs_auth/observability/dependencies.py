@@ -57,8 +57,16 @@ class ObservabilityContext:
         self.observability = observability
         self.user_id = user_id
 
-        # Extract request context
-        self.endpoint = request.url.path
+        # Extract request context. Metric labels use the route TEMPLATE
+        # ("/users/{user_id}"), not the concrete path — concrete IDs mint a new
+        # Prometheus series per distinct value that ever errors (unbounded
+        # registry growth under per-ID errors or a scanner).
+        route = request.scope.get("route")
+        self.endpoint = (
+            getattr(route, "path_format", None)
+            or getattr(route, "path", None)
+            or request.url.path
+        )
         self.method = request.method
         self.correlation_id = (
             observability.get_correlation_id() if observability else None

@@ -13,9 +13,12 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 from uuid import UUID
 
+from sqlalchemy import bindparam
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, or_, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.util import identity_key
 from sqlalchemy.orm import selectinload
 
 from outlabs_auth.core.config import AuthConfig
@@ -676,57 +679,105 @@ class APIKeyService(BaseService[APIKey]):
         }
 
         try:
-            # Get all usage counters from Redis
+            # Consume all usage counters atomically (pipelined GETDEL — the old
+            # per-key GET ... DELETE dropped increments that landed in between)
+            # with a per-op fallback for custom redis clients.
             pattern = self._make_usage_counter_key("*")
-            counters = await self.redis_client.get_all_counters(pattern)
+            collect = getattr(self.redis_client, "collect_counters_atomically", None)
+            counters_consumed = collect is not None
+            if collect is not None:
+                counters = await collect(pattern)
+            else:
+                counters = await self.redis_client.get_all_counters(pattern)
 
             logger.debug(f"Found {len(counters)} usage counters to sync")
 
-            # Sync each counter to database
+            # Parse key ids; drop malformed or zero counters up front.
+            entries: list[tuple[UUID, str, int]] = []
             for counter_key, usage_count in counters.items():
                 if usage_count <= 0:
                     continue
-
                 try:
-                    # Extract key_id from "apikey:{key_id}:usage"
-                    key_id = counter_key.split(":")[1]
+                    key_uuid = UUID(counter_key.split(":")[1])
+                except (IndexError, ValueError) as e:
+                    logger.error(f"Error syncing counter {counter_key}: {e}")
+                    stats["errors"] += 1
+                    continue
+                entries.append((key_uuid, counter_key, usage_count))
 
-                    # Get API key
-                    api_key = await self.get_by_id(session, UUID(key_id))
-                    if not api_key:
-                        logger.warning(f"API key not found for counter: {key_id}")
-                        await self.redis_client.delete(counter_key)
-                        continue
+            if entries:
+                # One MGET for every key's last_used timestamp. The hot path
+                # writes raw isoformat strings (pipelined SET); older writes
+                # were JSON-encoded — strip quotes to accept both.
+                last_used_keys = [self._make_last_used_key(str(key_uuid)) for key_uuid, _, _ in entries]
+                mget_raw = getattr(self.redis_client, "mget_raw", None)
+                raw_values = await mget_raw(last_used_keys) if mget_raw is not None else None
+                if raw_values is None or len(raw_values) != len(entries):
+                    raw_values = [await self.redis_client.get_raw(key) for key in last_used_keys]
 
-                    # Update usage count in database
-                    api_key.usage_count += usage_count
+                now = datetime.now(timezone.utc)
 
-                    # Update last_used_at if we have it in Redis. The hot path
-                    # writes the timestamp as a raw string (pipelined SET); older
-                    # writes were JSON-encoded — strip quotes to accept both.
-                    last_used_key = self._make_last_used_key(key_id)
-                    last_used_str = await self.redis_client.get_raw(last_used_key)
-                    if last_used_str:
+                def _parse_last_used(raw: Optional[str]) -> datetime:
+                    if raw:
                         try:
-                            api_key.last_used_at = datetime.fromisoformat(last_used_str.strip('"'))
+                            return datetime.fromisoformat(raw.strip('"'))
                         except ValueError:
-                            api_key.last_used_at = datetime.now(timezone.utc)
-                    else:
-                        api_key.last_used_at = datetime.now(timezone.utc)
+                            return now
+                    return now
 
-                    await session.flush()
+                # Orphan counters (deleted/rotated keys) are dropped, not synced.
+                existing_result = await session.execute(
+                    select(cast(Any, APIKey.id)).where(
+                        cast(Any, APIKey.id).in_([key_uuid for key_uuid, _, _ in entries])
+                    )
+                )
+                existing_ids = set(existing_result.scalars().all())
 
-                    # Reset Redis counter
-                    await self.redis_client.delete(counter_key)
-
+                params: list[dict[str, Any]] = []
+                for (key_uuid, counter_key, usage_count), raw in zip(entries, raw_values):
+                    if key_uuid not in existing_ids:
+                        logger.warning(f"API key not found for counter: {key_uuid}")
+                        if not counters_consumed:
+                            await self.redis_client.delete(counter_key)
+                        continue
+                    params.append(
+                        {
+                            "b_id": key_uuid,
+                            "b_delta": usage_count,
+                            "b_ts": _parse_last_used(raw),
+                        }
+                    )
                     stats["synced_keys"] += 1
                     stats["total_usage"] += usage_count
 
-                    logger.debug(f"Synced {usage_count} uses for API key {api_key.prefix}")
+                if params:
+                    # One executemany UPDATE (was one SELECT + one single-row
+                    # flush per key — 2K round trips per cycle for K hot keys).
+                    # Core-table form: the ORM-entity form would engage "bulk
+                    # update by primary key" mode, which can't express the
+                    # per-row usage_count increment.
+                    api_keys_table = APIKey.__table__
+                    stmt = (
+                        sa_update(api_keys_table)
+                        .where(api_keys_table.c.id == bindparam("b_id"))
+                        .values(
+                            usage_count=api_keys_table.c.usage_count + bindparam("b_delta"),
+                            last_used_at=bindparam("b_ts"),
+                        )
+                    )
+                    await session.execute(stmt, params)
+                    # Bulk UPDATEs bypass the unit of work; refresh rows this
+                    # session already materialized so in-session readers see
+                    # the change (the worker's fresh session skips this loop).
+                    identity_map = session.sync_session.identity_map
+                    for param in params:
+                        instance = identity_map.get(identity_key(APIKey, param["b_id"]))
+                        if instance is not None:
+                            await session.refresh(instance, ["usage_count", "last_used_at"])
 
-                except Exception as e:
-                    logger.error(f"Error syncing counter {counter_key}: {e}")
-                    stats["errors"] += 1
+                if not counters_consumed:
+                    for _, counter_key, _ in entries:
+                        await self.redis_client.delete(counter_key)
 
             logger.info(
                 f"Counter sync complete: {stats['synced_keys']} keys, "
