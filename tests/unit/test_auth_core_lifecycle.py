@@ -11,6 +11,7 @@ from cryptography.fernet import Fernet
 
 from outlabs_auth.core.auth import OutlabsAuth
 from outlabs_auth.core.exceptions import ConfigurationError
+from outlabs_auth.core.uow import UOW_SCOPE_KEY
 from outlabs_auth.models.sql.api_key import APIKey
 from outlabs_auth.models.sql.enums import APIKeyKind, APIKeyStatus
 from outlabs_auth.services.api_key import APIKeyService
@@ -381,7 +382,7 @@ async def test_outlabs_auth_session_uow_and_property_guards():
     with pytest.raises(ConfigurationError, match="Database not initialized"):
         await auth.session().__anext__()
     with pytest.raises(ConfigurationError, match="Database not initialized"):
-        await auth.uow(SimpleNamespace(method="GET")).__anext__()
+        await auth.uow(SimpleNamespace(method="GET", scope={})).__anext__()
     with pytest.raises(ConfigurationError, match="OutlabsAuth not initialized"):
         await auth.get_current_user(object(), "token")
     with pytest.raises(ConfigurationError, match="Database not initialized"):
@@ -411,7 +412,7 @@ async def test_outlabs_auth_session_uow_and_property_guards():
         await session_dep.athrow(RuntimeError("boom"))
     fake_session_factory.sessions[1].rollback.assert_awaited_once_with()
 
-    post_uow = auth.uow(SimpleNamespace(method="POST"))
+    post_uow = auth.uow(SimpleNamespace(method="POST", scope={}))
     post_session = await post_uow.__anext__()
     assert post_session is fake_session_factory.sessions[2]
     with pytest.raises(StopAsyncIteration):
@@ -419,7 +420,7 @@ async def test_outlabs_auth_session_uow_and_property_guards():
     post_session.commit.assert_awaited_once_with()
     post_session.rollback.assert_not_awaited()
 
-    get_uow = auth.uow(SimpleNamespace(method="GET"))
+    get_uow = auth.uow(SimpleNamespace(method="GET", scope={}))
     get_session = await get_uow.__anext__()
     assert get_session is fake_session_factory.sessions[3]
     with pytest.raises(StopAsyncIteration):
@@ -427,12 +428,27 @@ async def test_outlabs_auth_session_uow_and_property_guards():
     get_session.rollback.assert_awaited_once_with()
     get_session.commit.assert_not_awaited()
 
-    error_uow = auth.uow(SimpleNamespace(method="DELETE"))
+    error_uow = auth.uow(SimpleNamespace(method="DELETE", scope={}))
     error_session = await error_uow.__anext__()
     assert error_session is fake_session_factory.sessions[4]
     with pytest.raises(RuntimeError, match="write failed"):
         await error_uow.athrow(RuntimeError("write failed"))
     error_session.rollback.assert_awaited_once_with()
+
+    # When UnitOfWorkMiddleware finalized the session at response start,
+    # teardown must not commit or roll back a second time.
+    finalized_scope: dict = {}
+    finalized_uow = auth.uow(SimpleNamespace(method="POST", scope=finalized_scope))
+    finalized_session = await finalized_uow.__anext__()
+    state = finalized_scope[UOW_SCOPE_KEY][0]
+    assert state.session is finalized_session
+    assert not state.finalized
+    state.finalized = True
+    await state.session.commit()  # what the middleware does before http.response.start
+    with pytest.raises(StopAsyncIteration):
+        await finalized_uow.__anext__()
+    finalized_session.commit.assert_awaited_once_with()
+    finalized_session.rollback.assert_not_awaited()
 
     assert await auth.get_current_user("db-session", "jwt-token") == "user"
     auth.auth_service.get_current_user.assert_awaited_once_with("db-session", "jwt-token")
@@ -934,6 +950,7 @@ def test_outlabs_auth_instrument_fastapi_registers_integrations_and_warns(
     correlation_middleware = type("CorrelationIDMiddleware", (), {})
     resource_context_middleware = type("ResourceContextMiddleware", (), {})
     request_cache_middleware = type("RequestCacheMiddleware", (), {})
+    uow_middleware = type("UnitOfWorkMiddleware", (), {})
     monkeypatch.setattr(
         "outlabs_auth.observability.CorrelationIDMiddleware",
         correlation_middleware,
@@ -949,6 +966,10 @@ def test_outlabs_auth_instrument_fastapi_registers_integrations_and_warns(
     monkeypatch.setattr(
         "outlabs_auth.middleware.RequestCacheMiddleware",
         request_cache_middleware,
+    )
+    monkeypatch.setattr(
+        "outlabs_auth.middleware.UnitOfWorkMiddleware",
+        uow_middleware,
     )
 
     app = _FakeApp(fail_middleware=False)
@@ -969,6 +990,7 @@ def test_outlabs_auth_instrument_fastapi_registers_integrations_and_warns(
         }
     ]
     assert app.middleware_calls == [
+        (uow_middleware, {}),
         (request_cache_middleware, {}),
         (correlation_middleware, {"obs_service": auth.observability}),
         (resource_context_middleware, {"trust_client_header": True}),

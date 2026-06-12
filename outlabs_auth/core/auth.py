@@ -18,6 +18,7 @@ from starlette.requests import Request
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import ConfigurationError
+from outlabs_auth.core.uow import UOW_SCOPE_KEY, WRITE_METHODS, UnitOfWorkState
 from outlabs_auth.database import DatabaseConfig, create_engine, create_session_factory
 from outlabs_auth.fastapi import ExceptionHandlerMode
 
@@ -754,6 +755,15 @@ class OutlabsAuth:
         - on error: rollback
         - always: close session
 
+        Commit timing: FastAPI (>=0.106) runs this teardown only after the response
+        has been sent, so committing here would let a client receive its 2xx and race
+        the commit with an immediate follow-up request (read-after-create 404s). The
+        session is therefore registered in the ASGI scope for ``UnitOfWorkMiddleware``
+        — installed by ``instrument_fastapi()`` — which finalizes the unit of work
+        just before the response starts. The teardown below only finalizes as a
+        fallback when that middleware is not installed (the legacy
+        response-then-commit ordering).
+
         Use this for request handlers and wire auth/permission dependencies to it
         so the whole request shares a single session.
         """
@@ -761,14 +771,20 @@ class OutlabsAuth:
             raise ConfigurationError("Database not initialized. Call await auth.initialize() first.")
 
         async with self._session_factory() as session:
+            state = UnitOfWorkState(session)
+            request.scope.setdefault(UOW_SCOPE_KEY, []).append(state)
             try:
                 yield session
-                if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
-                    await session.commit()
-                else:
-                    await session.rollback()
+                if not state.finalized:
+                    state.finalized = True
+                    if request.method in WRITE_METHODS:
+                        await session.commit()
+                    else:
+                        await session.rollback()
             except Exception:
-                await session.rollback()
+                if not state.finalized:
+                    state.finalized = True
+                    await session.rollback()
                 raise
 
     async def get_current_user(self, session: AsyncSession, token: str):
@@ -1265,6 +1281,11 @@ class OutlabsAuth:
         - do not mount a metrics endpoint
         - do not add correlation-ID or resource-context middleware
 
+        Always installed (no flag): ``UnitOfWorkMiddleware`` (commits the request's
+        ``uow`` session before the response starts, so clients can read their own
+        writes immediately) and ``RequestCacheMiddleware`` (request-scoped permission
+        memos). Both are no-ops for requests that don't touch the library.
+
         Standalone/demo apps can opt into the broader behavior with:
         - `exception_handler_mode="global"`
         - `include_metrics=True`
@@ -1294,7 +1315,10 @@ class OutlabsAuth:
 
         middleware_added = True
 
-        from outlabs_auth.middleware import RequestCacheMiddleware
+        from outlabs_auth.middleware import RequestCacheMiddleware, UnitOfWorkMiddleware
+
+        if not _safe_add_middleware(UnitOfWorkMiddleware):
+            middleware_added = False
 
         if not _safe_add_middleware(RequestCacheMiddleware):
             middleware_added = False
@@ -1331,7 +1355,8 @@ class OutlabsAuth:
             warnings.warn(
                 "instrument_fastapi() called after app started - middleware was skipped. "
                 "Move instrument_fastapi() call to module level (before lifespan) for "
-                "full functionality including CorrelationIDMiddleware and ResourceContextMiddleware.",
+                "full functionality including UnitOfWorkMiddleware (commit-before-response "
+                "read-your-writes), CorrelationIDMiddleware and ResourceContextMiddleware.",
                 UserWarning,
                 stacklevel=2,
             )
