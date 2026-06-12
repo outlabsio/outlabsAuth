@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from models import BlogPost, Comment
 from pydantic import BaseModel, Field
@@ -110,11 +110,23 @@ class CommentResponse(BaseModel):
 
 
 # ============================================================================
-# Global Variables
+# Auth Instance (module level)
 # ============================================================================
 
-# Auth instance (initialized in lifespan)
-auth: Optional[SimpleRBAC] = None
+# Constructing SimpleRBAC is synchronous; the async startup work happens in
+# lifespan via auth.initialize(). The instance must exist at import time so
+# auth.instrument_fastapi() below can install middleware before the app starts
+# serving — middleware added any later (e.g. inside lifespan) is skipped.
+
+auth = SimpleRBAC(
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
+    access_token_expire_minutes=480,  # 8 hours for dev
+    refresh_token_expire_days=7,
+    redis_url=REDIS_URL if REDIS_URL else None,
+    auto_migrate=False,  # We'll handle migrations manually
+    echo_sql=os.getenv("ECHO_SQL", "false").lower() == "true",
+)
 
 
 def _ensure_example_tables(sync_conn) -> None:
@@ -133,39 +145,20 @@ def _ensure_example_tables(sync_conn) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
-    global auth
-
     # Startup
     print("🚀 Starting Blog API (SimpleRBAC) v2.0.0...")
 
-    # Initialize SimpleRBAC with PostgreSQL
+    # The auth instance is constructed at module level (see above); only the
+    # async startup work happens here.
     print("📦 Connecting to PostgreSQL...")
-    auth = SimpleRBAC(
-        database_url=DATABASE_URL,
-        secret_key=SECRET_KEY,
-        access_token_expire_minutes=480,  # 8 hours for dev
-        refresh_token_expire_days=7,
-        redis_url=REDIS_URL if REDIS_URL else None,
-        auto_migrate=False,  # We'll handle migrations manually
-        echo_sql=os.getenv("ECHO_SQL", "false").lower() == "true",
-    )
-
     await auth.initialize()
     print("✅ OutlabsAuth initialized")
 
-    # Include library routers for user/role/permission management
+    # Include library routers for user/role/permission management. Routes —
+    # unlike middleware — can still be added during lifespan, and these router
+    # factories need auth.deps, which only exists after auth.initialize().
     include_auth_routers(app, auth)
     print("✅ Library routers included")
-
-    # Install centralized exception handlers (and observability if configured)
-    auth.instrument_fastapi(
-        app,
-        debug=True,
-        exception_handler_mode="global",
-        include_metrics=True,
-        include_correlation_id=True,
-        include_resource_context=True,
-    )
 
     # Create blog-specific tables if they don't exist
     print("📝 Creating blog tables...")
@@ -181,7 +174,7 @@ async def lifespan(app: FastAPI):
     print(f"📍 API: http://localhost:8003")
     print(f"📚 Docs: http://localhost:8003/docs")
     print("🛠️  Auth schema bootstrap: uv run outlabs-auth migrate")
-    print(f"🔑 Default roles created: reader, writer, editor, admin")
+    print(f"🔑 Default roles created: reader, writer, editor, service_reader, admin")
 
     yield
 
@@ -207,11 +200,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Install library FastAPI integrations: global JSON error envelopes, the
+# unit-of-work middleware (commits the request's session before the response
+# starts, so clients can read their own writes), request-scoped permission
+# memos, and the correlation-ID / resource-context middleware. Must run at
+# module level: middleware cannot be added after the app starts serving, and
+# instrument_fastapi() only warns when called too late.
+auth.instrument_fastapi(
+    app,
+    debug=True,
+    exception_handler_mode="global",
+    include_metrics=True,
+    include_correlation_id=True,
+    include_resource_context=True,
+)
+
 
 # ============================================================================
-# Include Library Routers (after auth is initialized via lifespan)
+# Include Library Routers (called from lifespan, after auth.initialize())
 # ============================================================================
-# Note: These are added dynamically in lifespan since they need the auth instance
+# Note: the router factories build dependencies from auth.deps, which only
+# exists after auth.initialize() — so these are included in lifespan, not at
+# module level. Adding routes during lifespan is fine; only middleware isn't.
 
 
 def include_auth_routers(app: FastAPI, auth_instance: SimpleRBAC):
@@ -243,15 +253,17 @@ def include_auth_routers(app: FastAPI, auth_instance: SimpleRBAC):
 
 def get_auth() -> SimpleRBAC:
     """Get the global auth instance"""
-    if auth is None:
-        raise HTTPException(status_code=500, detail="Auth not initialized")
     return auth
 
 
-async def get_session() -> AsyncSession:
-    """Get database session dependency"""
-    auth_instance = get_auth()
-    async with auth_instance.get_session() as session:
+async def get_session(request: Request):
+    """Get database session from auth.uow.
+
+    The whole request — auth dependencies and route handler — shares this one
+    session; the unit-of-work middleware installed by instrument_fastapi()
+    commits it before the response starts.
+    """
+    async for session in get_auth().uow(request):
         yield session
 
 
@@ -397,6 +409,93 @@ async def create_default_roles():
 
 
 # ============================================================================
+# Auth Dependencies for Domain Routes
+# ============================================================================
+# auth.deps is created by auth.initialize() during lifespan, so module-level
+# routes can't capture it at decoration time. Each wrapper resolves it per
+# request instead (the same reason the library routers are included from
+# lifespan). They share the request's session via Depends(get_session).
+
+
+async def require_post_create(request: Request, session: AsyncSession = Depends(get_session)) -> dict:
+    """Dependency for post:create permission (writer, editor, or admin)."""
+    dep_fn = get_auth().deps.require_permission("post:create")
+    return await dep_fn(request=request, session=session)
+
+
+async def require_post_update(request: Request, session: AsyncSession = Depends(get_session)) -> dict:
+    """Dependency for post:update or post:update_own (ownership enforced in the route)."""
+    dep_fn = get_auth().deps.require_permission("post:update", "post:update_own")
+    return await dep_fn(request=request, session=session)
+
+
+async def require_post_delete(request: Request, session: AsyncSession = Depends(get_session)) -> dict:
+    """Dependency for post:delete permission (admin only)."""
+    dep_fn = get_auth().deps.require_permission("post:delete")
+    return await dep_fn(request=request, session=session)
+
+
+async def require_comment_create(request: Request, session: AsyncSession = Depends(get_session)) -> dict:
+    """Dependency for comment:create permission (writer, editor, or admin)."""
+    dep_fn = get_auth().deps.require_permission("comment:create")
+    return await dep_fn(request=request, session=session)
+
+
+async def require_comment_delete(request: Request, session: AsyncSession = Depends(get_session)) -> dict:
+    """Dependency for comment:delete or comment:delete_own (ownership enforced in the route)."""
+    dep_fn = get_auth().deps.require_permission("comment:delete", "comment:delete_own")
+    return await dep_fn(request=request, session=session)
+
+
+def _acting_user_id(auth_result: dict) -> UUID:
+    """Resolve the acting user's id from an auth result.
+
+    JWT logins carry the full user object; API-key auth (snapshot path) may
+    carry only user_id. Principals with no user identity (e.g. integration
+    principals) can't author blog content.
+    """
+    user = auth_result.get("user")
+    if user is not None:
+        return user.id
+    raw_user_id = auth_result.get("user_id")
+    if raw_user_id:
+        return raw_user_id if isinstance(raw_user_id, UUID) else UUID(str(raw_user_id))
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="This action requires a user principal",
+    )
+
+
+async def _require_owner_or_permission(
+    session: AsyncSession,
+    auth_result: dict,
+    *,
+    owner_id: UUID,
+    permission: str,
+) -> None:
+    """Resource-level check: the owner passes, anyone else needs `permission`.
+
+    Pairs with the `_own` gates above — the dependency proves the user holds
+    the `_own` variant at least; this enforces that it only applies to their
+    own resources.
+    """
+    actor_id = _acting_user_id(auth_result)
+    if actor_id == owner_id:
+        return
+    allowed = await get_auth().permission_service.check_permission(
+        session,
+        user_id=actor_id,
+        permission=permission,
+        user=auth_result.get("user"),
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions",
+        )
+
+
+# ============================================================================
 # Domain-Specific Routes: Blog Posts
 # ============================================================================
 
@@ -410,6 +509,7 @@ async def create_default_roles():
 )
 async def create_post(
     data: PostCreateRequest,
+    auth_result: dict = Depends(require_post_create),
     session: AsyncSession = Depends(get_session),
 ):
     """
@@ -417,17 +517,11 @@ async def create_post(
 
     Requires `post:create` permission (writer, editor, or admin role).
     """
-    auth_instance = get_auth()
-
-    # TODO: Get current user from auth dependency
-    # For now, we'll create without auth check
-    # current_user = await auth_instance.deps.requires("post:create")
-
-    # Create post
+    # Create post authored by the authenticated user
     post = BlogPost(
         title=data.title,
         content=data.content,
-        author_id=UUID("00000000-0000-0000-0000-000000000000"),  # Placeholder
+        author_id=_acting_user_id(auth_result),
         status=data.status,
         tags=data.tags or [],
     )
@@ -559,6 +653,7 @@ async def get_post(
 async def update_post(
     post_id: str,
     data: PostUpdateRequest,
+    auth_result: dict = Depends(require_post_update),
     session: AsyncSession = Depends(get_session),
 ):
     """
@@ -574,7 +669,13 @@ async def update_post(
     if not post:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
 
-    # TODO: Add permission checks via auth dependency
+    # post:update_own only covers the author's posts; others need post:update
+    await _require_owner_or_permission(
+        session,
+        auth_result,
+        owner_id=post.author_id,
+        permission="post:update",
+    )
 
     # Update fields
     update_data = data.model_dump(exclude_unset=True)
@@ -606,6 +707,7 @@ async def update_post(
 )
 async def delete_post(
     post_id: str,
+    auth_result: dict = Depends(require_post_delete),
     session: AsyncSession = Depends(get_session),
 ):
     """
@@ -639,6 +741,7 @@ async def delete_post(
 async def add_comment(
     post_id: str,
     data: CommentCreateRequest,
+    auth_result: dict = Depends(require_comment_create),
     session: AsyncSession = Depends(get_session),
 ):
     """
@@ -654,10 +757,10 @@ async def add_comment(
     if not post:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
 
-    # Create comment
+    # Create comment authored by the authenticated user
     comment = Comment(
         post_id=UUID(post_id),
-        author_id=UUID("00000000-0000-0000-0000-000000000000"),  # Placeholder
+        author_id=_acting_user_id(auth_result),
         content=data.content,
     )
 
@@ -713,13 +816,14 @@ async def list_comments(
 )
 async def delete_comment(
     comment_id: str,
+    auth_result: dict = Depends(require_comment_delete),
     session: AsyncSession = Depends(get_session),
 ):
     """
     Delete comment.
 
-    - Users can delete their own comments
-    - Admins can delete any comment (comment:delete permission)
+    - Editors can delete their own comments (comment:delete_own)
+    - Admins can delete any comment (comment:delete)
     """
     stmt = select(Comment).where(Comment.id == UUID(comment_id))
     result = await session.execute(stmt)
@@ -728,7 +832,13 @@ async def delete_comment(
     if not comment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
 
-    # TODO: Add permission checks via auth dependency
+    # comment:delete_own only covers the author's comments; others need comment:delete
+    await _require_owner_or_permission(
+        session,
+        auth_result,
+        owner_id=comment.author_id,
+        permission="comment:delete",
+    )
 
     await session.delete(comment)
     await session.commit()

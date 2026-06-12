@@ -27,6 +27,19 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
   asserts immediate visibility again, and a regression test drives the ASGI app by hand to assert the
   created row is visible from a second DB connection at the moment the client has the response
   (`tests/integration/test_uow_commit_before_response.py`).
+- **The SimpleRBAC example now actually installs the library middleware.**
+  `examples/simple_rbac/main.py` called `instrument_fastapi()` inside lifespan — after the app had
+  started — so Starlette rejected every middleware add and the example booted with a UserWarning and
+  the legacy response-then-commit ordering. The example now constructs `SimpleRBAC` and calls
+  `instrument_fastapi()` at module level (mirroring the EnterpriseRBAC example), so
+  `UnitOfWorkMiddleware`, `RequestCacheMiddleware`, and `ResourceContextMiddleware` install cleanly.
+  Its blog routes also now enforce the permissions their docstrings always claimed
+  (`post:create/update/update_own/delete`, `comment:create/delete/delete_own`): `author_id` comes
+  from the authenticated principal instead of an all-zeros placeholder, and the `_own` variants are
+  gated by ownership checks. Its `reset_test_env.py` was also unblocked: the hardcoded
+  password-hashing secret was shorter than the 32-character HS256 minimum introduced in 0.1.0a23 and
+  crashed the script on startup.
+
 ## [0.1.0a23] - 2026-06-11
 
 ### Security (breaking)

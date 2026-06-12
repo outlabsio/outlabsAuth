@@ -261,8 +261,9 @@ async def reset_database():
         await session.flush()
         print(f"   Created {len(roles_map)} roles\n")
 
-        # Create config for password hashing
-        config = AuthConfig(secret_key="test-secret-key")
+        # Create config for password hashing (secret only needs to satisfy the
+        # >=32-char HS256 validation; it is not used to sign anything here)
+        config = AuthConfig(secret_key="reset-test-env-local-password-hashing-secret")
 
         # Create test users with role assignments
         print("👥 Creating test users...")
