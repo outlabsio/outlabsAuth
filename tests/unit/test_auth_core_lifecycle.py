@@ -51,6 +51,47 @@ class _SessionContext:
         return False
 
 
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_run_background_jobs_once_is_explicit_and_commits_owned_work(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """External schedulers get one deterministic cycle without embedded loops."""
+    auth = OutlabsAuth(
+        database_url="postgresql+asyncpg://example:example@localhost:5432/test",
+        secret_key="test-secret-key-do-not-use-in-production-1234567890",
+    )
+    session = _FakeSession()
+    auth._session_factory = _FakeSessionFactory()
+    auth.get_session = lambda: _SessionContext(session)  # type: ignore[method-assign]
+    auth.config.enable_token_cleanup = True
+    auth.config.store_refresh_tokens = True
+    auth.config.enable_activity_tracking = False
+    auth.api_key_service = object()
+    auth.redis_client = SimpleNamespace(is_available=True)
+
+    cleanup = AsyncMock(return_value={"expired_tokens": 2})
+    monkeypatch.setattr("outlabs_auth.workers.token_cleanup.cleanup_all", cleanup)
+
+    class _Worker:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+        async def sync_now(self):
+            return {"synced_keys": 3, "total_usage": 9, "errors": 0}
+
+    monkeypatch.setattr("outlabs_auth.workers.api_key_sync.APIKeyUsageSyncWorker", _Worker)
+
+    result = await auth.run_background_jobs_once()
+
+    assert result == {
+        "token_cleanup": {"expired_tokens": 2},
+        "api_key_usage_sync": {"synced_keys": 3, "total_usage": 9, "errors": 0},
+    }
+    cleanup.assert_awaited_once_with(session)
+    session.commit.assert_awaited_once_with()
+
+
 def _snapshot_api_key_model(
     key_id,
     *,
@@ -195,6 +236,7 @@ def test_outlabs_auth_sets_redis_enabled_and_reports_features():
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
         secret_key="test-secret-key-do-not-use-in-production-1234567890",
         redis_url="redis://localhost:6379/0",
+        redis_key_prefix="outlabs-auth:test:core-lifecycle",
         enable_entity_hierarchy=True,
         enable_abac=True,
         enable_audit_log=True,
@@ -217,6 +259,7 @@ def test_outlabs_auth_allows_explicit_cache_opt_out_with_redis_url():
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
         secret_key="test-secret-key-do-not-use-in-production-1234567890",
         redis_url="redis://localhost:6379/0",
+        redis_key_prefix="outlabs-auth:test:core-lifecycle",
         enable_caching=False,
     )
 
@@ -248,6 +291,7 @@ async def test_outlabs_auth_initialize_builds_engine_runs_migrations_and_starts_
         secret_key="test-secret-key-do-not-use-in-production-1234567890",
         database_schema="auth_schema",
         auto_migrate=True,
+        background_job_mode="embedded",
     )
     fake_engine = SimpleNamespace()
     fake_session_factory = _FakeSessionFactory()
@@ -765,6 +809,7 @@ async def test_outlabs_auth_init_services_wires_redis_cache_enterprise_and_activ
         secret_key="test-secret-key-do-not-use-in-production-1234567890",
         enable_entity_hierarchy=True,
         redis_url="redis://localhost:6379/0",
+        redis_key_prefix="outlabs-auth:test:core-lifecycle",
         enable_activity_tracking=True,
         store_oauth_provider_tokens=True,
         oauth_token_encryption_key=Fernet.generate_key().decode(),
@@ -807,6 +852,7 @@ async def test_outlabs_auth_init_services_can_use_redis_without_permission_cache
         database_url="postgresql+asyncpg://example:example@localhost:5432/test",
         secret_key="test-secret-key-do-not-use-in-production-1234567890",
         redis_url="redis://localhost:6379/0",
+        redis_key_prefix="outlabs-auth:test:core-lifecycle",
         enable_caching=False,
     )
 

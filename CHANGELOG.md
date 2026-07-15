@@ -5,7 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
-## [Unreleased]
+## [0.1.0a24] - 2026-07-15
+
+### Security and robustness
+
+- **OAuth authorization responses are now browser-bound and single-use.** Signed state claims are
+  backed by a short-lived server-side record and a binding cookie; callbacks reject replayed,
+  expired, or cross-browser state. OAuth account association applies the same check.
+- **Refresh-token rotation now detects reuse.** Tokens are tracked as a family, each refresh token
+  may be used once, and reuse revokes the affected user's active token families.
+- **Service tokens are isolated from human JWTs.** They use a separate derived signing key and now
+  require issuer, audience, token ID, and a bounded lifetime (30 days maximum).
+- **API-key protection fails closed when configured Redis rate limiting is unavailable.** Requests
+  receive a retryable 503 rather than silently bypassing the configured rate limit. Redis key,
+  scan-pattern, and pub/sub channel names are also consistently namespaced.
+- **Background maintenance is explicit by default.** Embedded schedulers are disabled unless opted
+  in; operators can instead run one deterministic cycle with `outlabs-auth run-maintenance`.
+
+### Performance and correctness
+
+- **API-key usage sync is durable across worker failures.** Counter batches are staged in Redis,
+  recorded with an idempotency receipt in PostgreSQL, and acknowledged only after a successful
+  commit, preventing usage loss or double-counting on retry.
+- **Current production dependency minimums and lockfile are refreshed.** Release CI now performs a
+  production-only dependency vulnerability audit.
+
+### Database migrations
+
+- **`20260715_0019_add_api_key_usage_sync_batches`** adds idempotency receipts for durable API-key
+  usage synchronization.
+- **`20260715_0020_add_refresh_token_families`** adds refresh-token family and replacement fields
+  required for single-use rotation and reuse detection.
+- Apply with `auto_migrate=True`, `outlabs-auth bootstrap`, or `outlabs-auth migrate` before
+  deploying code that enables the new behavior. Rehearse both migrations against a populated
+  staging copy before production rollout.
 
 ### Fixed
 

@@ -125,7 +125,8 @@ class RedisClient:
                 pass
             self._reconnect_task = None
         if self._client:
-            await self._client.close()
+            close = getattr(self._client, "aclose", self._client.close)
+            await close()
             self._available = False
             logger.info("Disconnected from Redis")
 
@@ -190,7 +191,7 @@ class RedisClient:
         if not self._available or not self._client:
             return 0
         try:
-            return int(await cast(Any, self._client.sadd(key, *members)))
+            return int(await cast(Any, self._client.sadd(self._qualify_key(key), *members)))
         except RedisError as e:
             self._trip_breaker(e)
             return 0
@@ -199,7 +200,7 @@ class RedisClient:
         if not self._available or not self._client:
             return 0
         try:
-            return int(await cast(Any, self._client.scard(key)))
+            return int(await cast(Any, self._client.scard(self._qualify_key(key))))
         except RedisError as e:
             self._trip_breaker(e)
             return 0
@@ -208,7 +209,7 @@ class RedisClient:
         if not self._available or not self._client:
             return set()
         try:
-            members = await cast(Any, self._client.smembers(key))
+            members = await cast(Any, self._client.smembers(self._qualify_key(key)))
             return set(members) if members else set()
         except RedisError as e:
             self._trip_breaker(e)
@@ -218,7 +219,7 @@ class RedisClient:
         if not self._available or not self._client:
             return False
         try:
-            return bool(await self._client.expire(key, seconds))
+            return bool(await self._client.expire(self._qualify_key(key), seconds))
         except RedisError as e:
             self._trip_breaker(e)
             return False
@@ -227,6 +228,7 @@ class RedisClient:
         if not self._available or not self._client:
             return False
         try:
+            key = self._qualify_key(key)
             if ttl is not None:
                 await self._client.setex(key, ttl, value)
             else:
@@ -240,7 +242,7 @@ class RedisClient:
         if not self._available or not self._client:
             return None
         try:
-            return cast(Optional[str], await self._client.get(key))
+            return cast(Optional[str], await self._client.get(self._qualify_key(key)))
         except RedisError as e:
             self._trip_breaker(e)
             return None
@@ -252,7 +254,7 @@ class RedisClient:
         if not keys:
             return []
         try:
-            values = await cast(Any, self._client.mget(keys))
+            values = await cast(Any, self._client.mget([self._qualify_key(key) for key in keys]))
             return [cast(Optional[str], value) for value in values]
         except RedisError as e:
             self._trip_breaker(e)
@@ -264,8 +266,9 @@ class RedisClient:
         if not self._available or not self._client:
             return 0, []
         try:
+            qualified_match = self._qualify_key(match) if match else None
             next_cursor, keys = await self._client.scan(
-                cursor=cursor, match=match, count=count
+                cursor=cursor, match=qualified_match, count=count
             )
             return int(next_cursor), list(keys) if keys else []
         except RedisError as e:
@@ -288,7 +291,7 @@ class RedisClient:
             return None
 
         try:
-            value = await self._client.get(key)
+            value = await self._client.get(self._qualify_key(key))
             if value:
                 return json.loads(value)
             return None
@@ -313,6 +316,7 @@ class RedisClient:
             return False
 
         try:
+            key = self._qualify_key(key)
             serialized = json.dumps(value)
             if ttl:
                 await self._client.setex(key, ttl, serialized)
@@ -338,7 +342,7 @@ class RedisClient:
             return False
 
         try:
-            await self._client.delete(key)
+            await self._client.delete(self._qualify_key(key))
             return True
         except RedisError as e:
             self._trip_breaker(e)
@@ -359,6 +363,7 @@ class RedisClient:
             return 0
 
         try:
+            pattern = self._qualify_key(pattern)
             keys = []
             async for key in self._client.scan_iter(match=pattern):
                 keys.append(key)
@@ -378,11 +383,12 @@ class RedisClient:
         if not keys:
             return 0
         try:
-            return int(await cast(Any, self._client.unlink(*keys)))
+            qualified_keys = [self._qualify_key(key) for key in keys]
+            return int(await cast(Any, self._client.unlink(*qualified_keys)))
         except RedisError as e:
             self._trip_breaker(e)
             try:
-                return int(await cast(Any, self._client.delete(*keys)))
+                return int(await cast(Any, self._client.delete(*qualified_keys)))
             except RedisError as e:
                 self._trip_breaker(e)
                 logger.debug(f"Delete many failed: {e}")
@@ -402,7 +408,7 @@ class RedisClient:
             return False
 
         try:
-            return bool(await self._client.exists(key))
+            return bool(await self._client.exists(self._qualify_key(key)))
         except RedisError as e:
             self._trip_breaker(e)
             logger.debug(f"Cache exists check failed for {key}: {e}")
@@ -425,7 +431,7 @@ class RedisClient:
             return None
 
         try:
-            return cast(Optional[int], await self._client.incrby(key, amount))
+            return cast(Optional[int], await self._client.incrby(self._qualify_key(key), amount))
         except RedisError as e:
             self._trip_breaker(e)
             logger.debug(f"Counter increment failed for {key}: {e}")
@@ -445,7 +451,7 @@ class RedisClient:
             return 0
 
         try:
-            value = await self._client.get(key)
+            value = await self._client.get(self._qualify_key(key))
             return int(value) if value else 0
         except (RedisError, ValueError) as e:
             self._trip_breaker(e)
@@ -484,6 +490,7 @@ class RedisClient:
 
         try:
             counters = {}
+            pattern = self._qualify_key(pattern)
             async for key in self._client.scan_iter(match=pattern):
                 value = await self.get_counter(key)
                 counters[key] = value
@@ -506,6 +513,7 @@ class RedisClient:
 
         counters: dict[str, int] = {}
         try:
+            pattern = self._qualify_key(pattern)
             page: list[str] = []
             async for key in self._client.scan_iter(match=pattern, count=500):
                 page.append(key)
@@ -518,6 +526,52 @@ class RedisClient:
             self._trip_breaker(e)
             logger.debug(f"Atomic counter collection failed for {pattern}: {e}")
         return counters
+
+    async def stage_counters_atomically(self, pattern: str, batch_id: str) -> dict[str, int]:
+        """Atomically move live counters into a durable, namespaced processing batch.
+
+        ``RENAME NX`` makes the transition from a request-writable counter to a
+        worker-owned staged key atomic. New request increments immediately start a
+        fresh live counter. Staged keys are retained until PostgreSQL has recorded
+        the corresponding batch receipt and the worker explicitly acknowledges
+        them, so a process crash cannot lose a collected delta.
+
+        The returned mapping is ``{physical_staged_key: count}``.
+        """
+        if not self._available or not self._client:
+            return {}
+
+        try:
+            pattern = self._qualify_key(pattern)
+            source_keys = [key async for key in self._client.scan_iter(match=pattern, count=500)]
+            if not source_keys:
+                return {}
+
+            targets = [
+                self.make_key("usage-sync", batch_id, self.strip_key_prefix(source_key))
+                for source_key in source_keys
+            ]
+            pipe = self._client.pipeline(transaction=False)
+            for source_key, target_key in zip(source_keys, targets):
+                pipe.renamenx(source_key, target_key)
+            moved = await pipe.execute()
+            staged_keys = [target_key for target_key, did_move in zip(targets, moved) if did_move]
+            if not staged_keys:
+                return {}
+
+            values = await self._client.mget(staged_keys)
+            counters: dict[str, int] = {}
+            for staged_key, value in zip(staged_keys, values):
+                try:
+                    if value is not None and int(value) > 0:
+                        counters[staged_key] = int(value)
+                except (TypeError, ValueError):
+                    logger.warning("Discarding malformed staged Redis counter %s", staged_key)
+            return counters
+        except RedisError as e:
+            self._trip_breaker(e)
+            logger.debug(f"Counter staging failed for {pattern}: {e}")
+            return {}
 
     async def _getdel_page(self, keys: List[str], counters: dict[str, int]) -> None:
         assert self._client is not None
@@ -555,9 +609,8 @@ class RedisClient:
 
         try:
             # Use GETDEL to atomically get and delete
-            value = await self._client.get(key)
-            if value:
-                await self._client.delete(key)
+            value = await self._client.getdel(self._qualify_key(key))
+            if value is not None:
                 return int(value)
             return 0
         except (RedisError, ValueError) as e:
@@ -595,6 +648,7 @@ class RedisClient:
             return None
 
         try:
+            key = self._qualify_key(key)
             if not ttl:
                 return cast(int, await self._client.incrby(key, amount))
 
@@ -649,15 +703,18 @@ class RedisClient:
 
         windows = list(rate_windows or [])
         try:
+            qualified_usage_key = self._qualify_key(usage_key)
+            qualified_last_used_key = self._qualify_key(last_used_key)
+            qualified_windows = [(rate_key, self._qualify_key(rate_key), ttl) for rate_key, ttl in windows]
             pipe = self._client.pipeline(transaction=False)
-            pipe.incrby(usage_key, 1)
+            pipe.incrby(qualified_usage_key, 1)
             if last_used_ttl:
-                pipe.set(last_used_key, last_used_value, ex=last_used_ttl)
+                pipe.set(qualified_last_used_key, last_used_value, ex=last_used_ttl)
             else:
-                pipe.set(last_used_key, last_used_value)
-            for rate_key, ttl in windows:
-                pipe.set(rate_key, 0, nx=True, ex=ttl)
-                pipe.incrby(rate_key, 1)
+                pipe.set(qualified_last_used_key, last_used_value)
+            for _rate_key, qualified_rate_key, ttl in qualified_windows:
+                pipe.set(qualified_rate_key, 0, nx=True, ex=ttl)
+                pipe.incrby(qualified_rate_key, 1)
             results = await pipe.execute()
         except RedisError as e:
             self._trip_breaker(e)
@@ -667,7 +724,7 @@ class RedisClient:
         try:
             counts: dict[str, int] = {usage_key: int(results[0] or 0)}
             cursor = 2  # results[1] is the last_used SET
-            for rate_key, _ttl in windows:
+            for rate_key, _qualified_rate_key, _ttl in qualified_windows:
                 # results[cursor] = SET NX result, results[cursor + 1] = INCR result
                 counts[rate_key] = int(results[cursor + 1] or 0)
                 cursor += 2
@@ -696,9 +753,10 @@ class RedisClient:
         try:
             pipe = self._client.pipeline(transaction=False)
             for set_key, ttl_seconds in set_ops:
-                pipe.sadd(set_key, member)
-                pipe.expire(set_key, ttl_seconds)
-            pipe.set(last_activity_key, last_activity_value, ex=last_activity_ttl)
+                qualified_set_key = self._qualify_key(set_key)
+                pipe.sadd(qualified_set_key, member)
+                pipe.expire(qualified_set_key, ttl_seconds)
+            pipe.set(self._qualify_key(last_activity_key), last_activity_value, ex=last_activity_ttl)
             await pipe.execute()
             return True
         except RedisError as e:
@@ -723,9 +781,9 @@ class RedisClient:
         try:
             pipe = self._client.pipeline(transaction=False)
             for key in version_keys:
-                pipe.incrby(key, 1)
+                pipe.incrby(self._qualify_key(key), 1)
             for message in messages:
-                pipe.publish(channel, message)
+                pipe.publish(self.make_channel(channel), message)
             await pipe.execute()
             return True
         except RedisError as e:
@@ -750,7 +808,7 @@ class RedisClient:
             return False
 
         try:
-            await self._client.publish(channel, message)
+            await self._client.publish(self.make_channel(channel), message)
             return True
         except RedisError as e:
             self._trip_breaker(e)
@@ -772,7 +830,7 @@ class RedisClient:
 
         try:
             pubsub = self._client.pubsub()
-            await pubsub.subscribe(*channels)
+            await pubsub.subscribe(*(self.make_channel(channel) for channel in channels))
             return pubsub
         except RedisError as e:
             self._trip_breaker(e)
@@ -780,6 +838,28 @@ class RedisClient:
             return None
 
     # Cache Key Helpers
+
+    @property
+    def redis_key_prefix(self) -> str:
+        """Configured deployment namespace for keys and Pub/Sub channels."""
+        prefix = self.config.redis_key_prefix
+        if not prefix:
+            raise RuntimeError("RedisClient requires AuthConfig.redis_key_prefix")
+        return prefix
+
+    def _qualify_key(self, key: str) -> str:
+        """Apply the deployment namespace exactly once, including to scan patterns."""
+        prefix = self.redis_key_prefix
+        return key if key == prefix or key.startswith(f"{prefix}:") else f"{prefix}:{key}"
+
+    def strip_key_prefix(self, key: str) -> str:
+        """Return a logical key from a physical key in this deployment namespace."""
+        prefix = f"{self.redis_key_prefix}:"
+        return key[len(prefix) :] if key.startswith(prefix) else key
+
+    def make_channel(self, channel: str) -> str:
+        """Create a deployment-scoped Pub/Sub channel name."""
+        return self._qualify_key(f"channel:{channel}")
 
     def make_key(self, *parts: str) -> str:
         """
@@ -791,7 +871,7 @@ class RedisClient:
         Returns:
             str: Cache key (e.g., "auth:user:123:permissions")
         """
-        return ":".join(str(p) for p in parts)
+        return self._qualify_key(":".join(str(p) for p in parts))
 
     def make_permission_key(self, user_id: str, entity_id: Optional[str] = None) -> str:
         """

@@ -18,7 +18,11 @@ from makefun import with_signature
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.authentication.backend import AuthBackend
-from outlabs_auth.core.exceptions import InvalidInputError
+from outlabs_auth.core.exceptions import (
+    AuthenticationInfrastructureError,
+    InvalidInputError,
+    RateLimitError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +220,10 @@ class AuthDeps:
 
         try:
             usage_count = await api_key_service.record_api_key_auth_snapshot_usage(snapshot)
+        except RateLimitError as exc:
+            raise self._rate_limit_http_exception(exc) from exc
+        except AuthenticationInfrastructureError as exc:
+            raise self._authentication_infrastructure_http_exception(exc) from exc
         except InvalidInputError:
             return None
 
@@ -573,6 +581,10 @@ class AuthDeps:
 
                     return result
 
+            except RateLimitError as exc:
+                raise self._rate_limit_http_exception(exc) from exc
+            except AuthenticationInfrastructureError as exc:
+                raise self._authentication_infrastructure_http_exception(exc) from exc
             except Exception:
                 # Fail closed (try the next backend) but surface unexpected backend
                 # failures instead of silently swallowing them (SEC-19). Backends signal
@@ -590,6 +602,29 @@ class AuthDeps:
 
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+        )
+
+    @staticmethod
+    def _rate_limit_http_exception(exc: RateLimitError) -> HTTPException:
+        """Translate a terminal API-key quota decision into a stable 429 response."""
+        retry_after = exc.details.get("retry_after_seconds") or exc.details.get("window_seconds")
+        headers = {"Retry-After": str(retry_after)} if retry_after else None
+        return HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=exc.to_dict(),
+            headers=headers,
+        )
+
+    @staticmethod
+    def _authentication_infrastructure_http_exception(
+        exc: AuthenticationInfrastructureError,
+    ) -> HTTPException:
+        retry_after = exc.details.get("retry_after_seconds")
+        headers = {"Retry-After": str(retry_after)} if retry_after else None
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=exc.to_dict(),
+            headers=headers,
         )
 
     def require_auth(

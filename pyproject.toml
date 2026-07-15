@@ -26,7 +26,7 @@ classifiers = [
 urls = {Homepage = "https://outlabs.io", Documentation = "https://github.com/outlabsio/outlabsAuth#readme", Repository = "https://github.com/outlabsio/outlabsAuth", Issues = "https://github.com/outlabsio/outlabsAuth/issues"}
 dependencies = [
     # Core FastAPI dependencies
-    "fastapi>=0.104.0",
+    "fastapi>=0.139.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     # Database (PostgreSQL via SQLModel/SQLAlchemy)
@@ -35,11 +35,12 @@ dependencies = [
     "asyncpg>=0.29.0",
     "alembic>=1.13.0",
     # CLI
-    "click>=8.1.0",
+    "click>=8.4.2",
     # Authentication & Security
     "pwdlib[argon2,bcrypt]>=0.2.0",
-    "pyjwt[crypto]>=2.8.0", # [crypto] required for ES256 (Apple Sign In) and RS256
-    "python-multipart>=0.0.18",  # SEC-12: <0.0.18 has ReDoS/DoS CVEs (CVE-2024-24762, CVE-2024-53981)
+    "pyjwt[crypto]>=2.13.0", # [crypto] required for ES256 (Apple Sign In) and RS256
+    "cryptography>=48.0.1",
+    "python-multipart>=0.0.31",
     "email-validator>=2.0.0",
     # Dynamic dependency injection (DD-039)
     "makefun>=1.15.0",
@@ -67,7 +68,7 @@ oauth = [
 # Notification system support (optional)
 notifications = [
     "aio-pika>=9.0.0",              # RabbitMQ support
-    "aiosmtplib>=3.0.0",            # SMTP/Email support
+    "aiosmtplib>=5.1.2",            # SMTP/Email support
     "sendgrid>=6.10.0",             # SendGrid email support
     "httpx>=0.25.0",                # Webhook support (already in test deps)
     "twilio>=8.0.0",                # SMS + WhatsApp support via Twilio
@@ -97,8 +98,8 @@ test = [
 stress = [
     "locust>=2.17.0",
     "httpx>=0.25.0",
-    "aiohttp>=3.9.0",
-    "requests>=2.31.0",
+    "aiohttp>=3.14.1",
+    "requests>=2.34.2",
     "asyncio-throttle>=1.0.2",
     "uvloop>=0.19.0",
     "psutil>=5.9.0",
@@ -119,7 +120,7 @@ all = [
     "redis>=5.0.0",
     "httpx-oauth>=0.13.0",
     "aio-pika>=9.0.0",
-    "aiosmtplib>=3.0.0",
+    "aiosmtplib>=5.1.2",
     "sendgrid>=6.10.0",
     "httpx>=0.25.0",
     "twilio>=8.0.0",

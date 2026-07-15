@@ -19,6 +19,8 @@ def test_enterprise_example_wires_transactional_mail_service():
     assert "tables=[Lead.__table__, LeadNote.__table__]" in example_main
     assert 'get_team_directory_router(auth, prefix="/v1")' in example_main
     assert 'get_integration_principals_router(auth, prefix="/v1/admin")' in example_main
+    assert 'f"outlabs-auth:{ENV}:enterprise-rbac"' in example_main
+    assert "redis_key_prefix=REDIS_KEY_PREFIX" in example_main
 
 
 def test_enterprise_example_documents_host_query_integration_route():

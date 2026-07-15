@@ -215,7 +215,7 @@ async def test_auth_router_callback_happy_paths(
             obs=DummyObs(),
         )
         assert refreshed.access_token
-        assert refreshed.refresh_token == login_response.refresh_token
+        assert refreshed.refresh_token != login_response.refresh_token
 
         logout_result = await logout(
             data=LogoutRequest(immediate=True),

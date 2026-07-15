@@ -25,7 +25,7 @@ def test_health_check():
 
 def test_user_registration():
     """Test user registration"""
-    timestamp = int(time.time())
+    timestamp = time.time_ns()
     response = requests.post(
         f"{BASE_URL}/v1/auth/register",
         json={
@@ -35,16 +35,15 @@ def test_user_registration():
     )
     assert response.status_code == 201
     data = response.json()
-    assert "access_token" in data
-    assert "refresh_token" in data
+    assert "id" in data
+    assert data["email"] == f"testuser_{timestamp}@example.com"
     print("✅ User registration passed")
-    return data["access_token"]
 
 
 def test_login():
     """Test user login"""
     # First register a user
-    timestamp = int(time.time())
+    timestamp = time.time_ns()
     email = f"logintest_{timestamp}@example.com"
     password = "TestPassword123!"
 
@@ -88,14 +87,14 @@ def test_logout():
         f"{BASE_URL}/v1/auth/logout",
         headers={"Authorization": f"Bearer {token}"}
     )
-    assert response.status_code == 200
+    assert response.status_code == 204
     print("✅ User logout passed")
 
 
 def test_create_post_with_writer_role():
     """Test creating a post with writer role"""
     # Register and assign writer role
-    timestamp = int(time.time())
+    timestamp = time.time_ns()
     email = f"writer_{timestamp}@example.com"
     password = "TestPassword123!"
 
@@ -104,7 +103,7 @@ def test_create_post_with_writer_role():
         json={"email": email, "password": password}
     )
     assert register_response.status_code == 201
-    token = register_response.json()["access_token"]
+    token = test_login()
 
     # TODO: Assign writer role (need user ID and role ID)
     # For now, this will fail without the writer role
@@ -129,7 +128,7 @@ def test_create_post_with_writer_role():
 def test_create_post_without_permission():
     """Test that users without writer role cannot create posts"""
     # Register user (no role assigned)
-    timestamp = int(time.time())
+    timestamp = time.time_ns()
     email = f"reader_{timestamp}@example.com"
     password = "TestPassword123!"
 
@@ -138,7 +137,7 @@ def test_create_post_without_permission():
         json={"email": email, "password": password}
     )
     assert register_response.status_code == 201
-    token = register_response.json()["access_token"]
+    token = test_login()
 
     # Try to create a post (should fail)
     response = requests.post(

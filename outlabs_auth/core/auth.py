@@ -9,7 +9,7 @@ All features are controlled by configuration flags.
 import asyncio
 import logging
 import time
-from typing import Any, AsyncGenerator, Dict, Optional, cast
+from typing import Any, AsyncGenerator, Dict, Literal, Optional, cast
 from uuid import UUID
 
 from fastapi import FastAPI
@@ -100,7 +100,9 @@ class OutlabsAuth:
         # Optional dependencies
         redis_enabled: Optional[bool] = None,
         redis_url: Optional[str] = None,
+        redis_key_prefix: Optional[str] = None,
         cache_ttl_seconds: int = 300,
+        background_job_mode: Literal["disabled", "embedded"] = "disabled",
         notification_service: Optional[Any] = None,
         transactional_mail_service: Optional[Any] = None,
         # Observability
@@ -158,6 +160,11 @@ class OutlabsAuth:
                 when redis_url is provided.
             redis_url: Redis connection URL. If omitted with redis_enabled=True,
                 redis_host/redis_port/redis_db settings are used.
+            redis_key_prefix: Required unique namespace for this application and
+                environment's Redis keys and Pub/Sub channels when Redis is enabled.
+            background_job_mode: 'disabled' (production default) requires an
+                explicit worker owner; 'embedded' starts periodic jobs in this
+                process for single-process development only.
             notification_service: NotificationService instance (optional)
             transactional_mail_service: Optional transactional auth mail service
             observability_logger: Optional host-managed logger adapter for auth events
@@ -235,7 +242,9 @@ class OutlabsAuth:
             access_code_verify_rate_limit_max=access_code_verify_rate_limit_max,
             access_code_verify_rate_limit_window_seconds=access_code_verify_rate_limit_window_seconds,
             redis_url=redis_url,
+            redis_key_prefix=redis_key_prefix,
             cache_ttl_seconds=cache_ttl_seconds,
+            background_job_mode=background_job_mode,
             **kwargs,
         )
 
@@ -455,26 +464,8 @@ class OutlabsAuth:
         # Initialize dependency injection
         self._init_deps()
 
-        # Start background tasks
-        if self.config.enable_token_cleanup and self.config.store_refresh_tokens:
-            self._start_token_cleanup_scheduler()
-
-        if self.config.enable_activity_tracking and self.activity_tracker:
-            self._start_activity_sync_scheduler()
-
-        # DD-033: verify_api_key accumulates usage in Redis counters; without this
-        # worker they are never flushed, so api_keys.usage_count/last_used_at go
-        # permanently stale and the counter keys grow unbounded.
-        if self.api_key_service is not None and self.redis_client is not None and self.redis_client.is_available:
-            from outlabs_auth.workers.api_key_sync import APIKeyUsageSyncWorker
-
-            self._api_key_sync_worker = APIKeyUsageSyncWorker(
-                api_key_service=self.api_key_service,
-                config=self.config,
-                session_factory=self._session_factory,
-                interval_seconds=self.config.api_key_usage_sync_interval,
-            )
-            await self._api_key_sync_worker.start()
+        if self.config.background_job_mode == "embedded":
+            await self.start_background_jobs()
 
         self._initialized = True
 
@@ -654,6 +645,7 @@ class OutlabsAuth:
             algorithm=self.config.algorithm,
             audience=self.config.jwt_audience,
             redis_client=self.redis_client if self.config.enable_token_blacklist else None,
+            blacklist_failure_mode=self.config.token_blacklist_failure_mode,
         )
         jwt_backend = AuthBackend(
             name="jwt",
@@ -1176,6 +1168,74 @@ class OutlabsAuth:
         features = [k for k, v in self.features.items() if v and k != "entity_hierarchy"]
         features_str = f" + {', '.join(features)}" if features else ""
         return f"<OutlabsAuth: {preset}{features_str}>"
+
+    async def start_background_jobs(self) -> None:
+        """Explicitly start periodic maintenance jobs in this process.
+
+        Web processes should leave ``background_job_mode`` at ``disabled`` and
+        run this from exactly one dedicated worker process. ``embedded`` mode
+        calls this automatically for single-process development.
+        """
+        if self._session_factory is None:
+            raise ConfigurationError("Initialize OutlabsAuth before starting background jobs")
+
+        if self.config.enable_token_cleanup and self.config.store_refresh_tokens and self._cleanup_task is None:
+            self._start_token_cleanup_scheduler()
+
+        if self.config.enable_activity_tracking and self.activity_tracker and self._activity_sync_task is None:
+            self._start_activity_sync_scheduler()
+
+        if (
+            self._api_key_sync_worker is None
+            and self.api_key_service is not None
+            and self.redis_client is not None
+            and self.redis_client.is_available
+        ):
+            from outlabs_auth.workers.api_key_sync import APIKeyUsageSyncWorker
+
+            self._api_key_sync_worker = APIKeyUsageSyncWorker(
+                api_key_service=self.api_key_service,
+                config=self.config,
+                session_factory=self._session_factory,
+                interval_seconds=self.config.api_key_usage_sync_interval,
+            )
+            await self._api_key_sync_worker.start()
+
+    async def run_background_jobs_once(self) -> Dict[str, Any]:
+        """Run one deterministic maintenance cycle for an external scheduler.
+
+        This is the preferred production integration point for Cron, a worker
+        deployment, or another host-owned scheduler. It intentionally starts no
+        long-lived task in the web process.
+        """
+        if self._session_factory is None:
+            raise ConfigurationError("Initialize OutlabsAuth before running background jobs")
+
+        results: Dict[str, Any] = {}
+        if self.config.enable_token_cleanup and self.config.store_refresh_tokens:
+            from outlabs_auth.workers.token_cleanup import cleanup_all
+
+            async with self.get_session() as session:
+                results["token_cleanup"] = await cleanup_all(session)
+                await session.commit()
+
+        if self.config.enable_activity_tracking and self.activity_tracker:
+            async with self.get_session() as session:
+                results["activity_sync"] = await self.activity_tracker.sync_to_database(session)
+                await session.commit()
+
+        if self.api_key_service is not None and self.redis_client is not None and self.redis_client.is_available:
+            from outlabs_auth.workers.api_key_sync import APIKeyUsageSyncWorker
+
+            worker = APIKeyUsageSyncWorker(
+                api_key_service=self.api_key_service,
+                config=self.config,
+                session_factory=self._session_factory,
+                interval_seconds=self.config.api_key_usage_sync_interval,
+            )
+            results["api_key_usage_sync"] = await worker.sync_now()
+
+        return results
 
     def _start_token_cleanup_scheduler(self):
         """Start background task for token cleanup."""

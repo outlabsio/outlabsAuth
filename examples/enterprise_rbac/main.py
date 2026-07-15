@@ -100,6 +100,11 @@ DATABASE_URL = os.getenv(
 SECRET_KEY = os.getenv("SECRET_KEY", "enterprise-rbac-secret-change-in-production-please")
 REDIS_URL = os.getenv("REDIS_URL", None)
 ENV = os.getenv("ENV", "development")
+REDIS_KEY_PREFIX = (
+    os.getenv("REDIS_KEY_PREFIX", f"outlabs-auth:{ENV}:enterprise-rbac")
+    if REDIS_URL
+    else None
+)
 DEBUG_MODE = ENV != "production"
 ENABLE_MAGIC_LINKS = _env_flag("ENABLE_MAGIC_LINKS", default=DEBUG_MODE)
 ENABLE_ACCESS_CODES = _env_flag("ENABLE_ACCESS_CODES", default=DEBUG_MODE)
@@ -200,6 +205,7 @@ auth = EnterpriseRBAC(
     access_token_expire_minutes=480,  # 8 hours for dev (default: 15 min)
     refresh_token_expire_days=7,  # 7 days for dev (default: 30 days)
     redis_url=REDIS_URL,
+    redis_key_prefix=REDIS_KEY_PREFIX,
     enable_magic_links=ENABLE_MAGIC_LINKS,
     enable_access_codes=ENABLE_ACCESS_CODES,
     enable_context_aware_roles=True,

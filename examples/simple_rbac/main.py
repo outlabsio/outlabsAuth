@@ -47,6 +47,7 @@ DATABASE_URL = os.getenv(
 )
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production-please")
 REDIS_URL = os.getenv("REDIS_URL", None)
+REDIS_KEY_PREFIX = os.getenv("REDIS_KEY_PREFIX", "outlabs-auth:development:simple-rbac") if REDIS_URL else None
 
 
 # ============================================================================
@@ -124,6 +125,7 @@ auth = SimpleRBAC(
     access_token_expire_minutes=480,  # 8 hours for dev
     refresh_token_expire_days=7,
     redis_url=REDIS_URL if REDIS_URL else None,
+    redis_key_prefix=REDIS_KEY_PREFIX,
     auto_migrate=False,  # We'll handle migrations manually
     echo_sql=os.getenv("ECHO_SQL", "false").lower() == "true",
 )

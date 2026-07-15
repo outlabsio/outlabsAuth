@@ -1317,6 +1317,48 @@ def migrate(revision: str):
     click.echo("Done!")
 
 
+@main.command("run-maintenance")
+def run_maintenance_command():
+    """Run one deterministic auth-maintenance cycle for an external scheduler.
+
+    Invoke this from exactly one CronJob, worker deployment, or host scheduler.
+    It deliberately does not start an in-web-process loop.
+    """
+    database_url = os.environ.get("DATABASE_URL")
+    secret_key = os.environ.get("SECRET_KEY")
+    redis_url = os.environ.get("REDIS_URL")
+    redis_key_prefix = os.environ.get("OUTLABS_AUTH_REDIS_KEY_PREFIX")
+    if not database_url:
+        raise click.UsageError("DATABASE_URL environment variable not set")
+    if not secret_key:
+        raise click.UsageError("SECRET_KEY environment variable not set")
+    if redis_url and not redis_key_prefix:
+        raise click.UsageError(
+            "OUTLABS_AUTH_REDIS_KEY_PREFIX is required when REDIS_URL is configured"
+        )
+
+    async def run_once() -> dict[str, object]:
+        from outlabs_auth.core.auth import SimpleRBAC
+
+        auth = SimpleRBAC(
+            database_url=normalize_database_url(database_url),
+            database_schema=get_target_schema_from_env(),
+            secret_key=secret_key,
+            redis_enabled=bool(redis_url),
+            redis_url=redis_url,
+            redis_key_prefix=redis_key_prefix,
+            background_job_mode="disabled",
+        )
+        try:
+            await auth.initialize()
+            return await auth.run_background_jobs_once()
+        finally:
+            await auth.shutdown()
+
+    results = asyncio.run(run_once())
+    click.echo(json.dumps(results, default=str, sort_keys=True))
+
+
 @main.command("adopt-existing-schema")
 @click.option("--revision", default="head", show_default=True, help="Alembic revision to stamp")
 def adopt_existing_schema_command(revision: str):

@@ -11,7 +11,11 @@ from typing import Any, Mapping, Optional, Protocol
 
 import jwt
 
-from outlabs_auth.core.exceptions import TokenInvalidError
+from outlabs_auth.core.exceptions import (
+    AuthenticationInfrastructureError,
+    RateLimitError,
+    TokenInvalidError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +56,7 @@ class JWTStrategy:
         audience: Optional[str] = None,
         verify_exp: bool = True,
         redis_client: Optional[Any] = None,
+        blacklist_failure_mode: str = "fail_open",
     ):
         """
         Initialize JWT strategy.
@@ -62,12 +67,14 @@ class JWTStrategy:
             audience: Expected JWT audience (default: "outlabs-auth")
             verify_exp: Whether to verify token expiration (default: True)
             redis_client: Optional Redis client for blacklist checking
+            blacklist_failure_mode: Whether an unavailable blacklist is rejected or bypassed
         """
         self.secret = secret
         self.algorithm = algorithm
         self.audience = audience or "outlabs-auth"
         self.verify_exp = verify_exp
         self.redis_client = redis_client
+        self.blacklist_failure_mode = blacklist_failure_mode
 
     async def authenticate(
         self,
@@ -107,10 +114,17 @@ class JWTStrategy:
                 logger.info("jwt_wrong_token_type", extra={"token_type": payload.get("type")})
                 return None
 
-            # Check Redis blacklist if available (for immediate logout)
+            # Immediate revocation is only meaningful if the blacklist can be
+            # consulted. Production wires this as fail-closed; standalone JWT
+            # callers retain the historical fail-open default unless opted in.
             jti = payload.get("jti")
             if jti and self.redis_client:
-                if hasattr(self.redis_client, "is_available") and self.redis_client.is_available:
+                redis_available = not hasattr(self.redis_client, "is_available") or self.redis_client.is_available
+                if not redis_available:
+                    if self.blacklist_failure_mode == "fail_closed":
+                        logger.warning("jwt_blacklist_unavailable_rejected")
+                        return None
+                else:
                     is_blacklisted = await self.redis_client.exists(f"blacklist:jwt:{jti}")
                     if is_blacklisted:
                         logger.info("jwt_blacklisted", extra={"jti": jti})
@@ -339,6 +353,10 @@ class ApiKeyStrategy:
 
             return None
 
+        except (RateLimitError, AuthenticationInfrastructureError):
+            # A valid key exceeding its quota is a terminal policy decision,
+            # not an authentication miss that should try another backend.
+            raise
         except Exception:
             logger.exception("api_key_auth_error")
             return None

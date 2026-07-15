@@ -37,11 +37,13 @@ Trusted publishing is the default path. No long-lived PyPI token is required for
    PR and on `main`/tags — run locally to iterate faster than CI:
    - `TEST_REDIS_URL=redis://localhost:56379/15 uv run pytest -q`
    - `uv run python scripts/run_enterprise_example_smoke.py`
-6. If the release contains new Alembic revisions, run the
-   [Database Upgrade Rehearsal](#database-upgrade-rehearsal) against a copy of
-   a real (staging or long-lived dev) database. (CI exercises migrations on
-   fresh databases only — the rehearsal against a populated copy is the manual
-   step that cannot be automated away.)
+6. If the release contains new Alembic revisions, wait for the required
+   [`seeded-upgrade-rehearsal`](#database-upgrade-rehearsal) CI job. It
+   reconstructs the preceding release's schema shape in a disposable Postgres
+   container, seeds affected auth records, upgrades to the current head, checks
+   the transformed data and schema, then verifies a second upgrade is a no-op.
+   This is the standard release rehearsal; it does not require a consumer
+   application's database or credentials.
 7. Build distributions locally:
    - `uv build --no-sources`
 8. Push the branch and wait for the `Release Readiness` workflow to pass.
@@ -94,33 +96,20 @@ role (don't mutate shared seed data — create throwaway roles), and
 
 ## Database Upgrade Rehearsal
 
-For releases that ship Alembic revisions, rehearse the upgrade against a copy
-of a real database before applying it anywhere shared:
+For releases that ship Alembic revisions, the `seeded-upgrade-rehearsal` CI job
+is required. It uses the repository's disposable Postgres container and does
+the following:
 
-```sql
-CREATE DATABASE upgrade_rehearsal TEMPLATE <real_db>;  -- requires no active connections
-```
+- creates the preceding release's schema shape;
+- inserts affected user, refresh-token, and API-key rows;
+- upgrades through the new revisions and verifies row counts, refresh-token
+  family backfill, indexes, and the new receipt table; and
+- reruns the upgrade to prove idempotency.
 
-```python
-# uv run python - <<'EOF'
-import asyncio
-from outlabs_auth.cli import run_migrations
-asyncio.run(run_migrations("postgresql+asyncpg://.../upgrade_rehearsal"))
-# EOF
-```
-
-Then verify before repeating on the real database:
-
-- `<schema>.outlabs_auth_alembic_version` is at the expected head (legacy
-  `create_all` databases without a version table are auto-stamped by the
-  doctor machinery first).
-- Row counts on the core tables are unchanged.
-- Expected index/constraint changes are present (`pg_indexes`), and a second
-  `run_migrations` run is a no-op.
-- Roll out the library **before or together with** the migration: older
-  library versions cannot run migrations against a database stamped at a newer
-  revision (standard Alembic), though merely *running* against the upgraded
-  schema is fine for index-only migrations.
+The `api-integration` and `simple-example-integration` jobs separately seed,
+start, and exercise the EnterpriseRBAC and SimpleRBAC FastAPI examples over
+HTTP. A consuming application may still choose to rehearse its own deployment,
+but it is not a prerequisite for publishing this library release.
 
 ## GitHub Actions Publish Flow
 

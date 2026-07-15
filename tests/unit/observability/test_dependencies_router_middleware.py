@@ -351,4 +351,13 @@ def test_create_metrics_router_respects_enablement_and_serves_metrics():
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/plain; version=0.0.4")
     assert "outlabs_auth_test_metric_total" in response.text
-    assert any(route.path == "/internal/metrics" for route in app.routes)
+    # Recent FastAPI versions retain included routers as a marker in ``app.routes``.
+    # Inspect both concrete routes and that marker's original router.
+    assert any(
+        getattr(route, "path", None) == "/internal/metrics"
+        or any(
+            getattr(child, "path", None) == "/internal/metrics"
+            for child in getattr(getattr(route, "original_router", None), "routes", ())
+        )
+        for route in app.routes
+    )

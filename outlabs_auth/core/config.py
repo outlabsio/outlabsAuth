@@ -2,7 +2,7 @@
 Configuration classes for OutlabsAuth library
 """
 
-from typing import Optional, Self
+from typing import Literal, Optional, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -59,6 +59,28 @@ class AuthConfig(BaseModel):
         default="outlabs-auth",
         description="JWT audience claim for cross-application security",
     )
+    service_token_secret_key: Optional[str] = Field(
+        default=None,
+        min_length=32,
+        description=(
+            "Optional dedicated service-token signing key. When omitted, a separate key is derived from "
+            "secret_key for domain separation; set this explicitly to rotate service credentials independently."
+        ),
+    )
+    service_token_audience: Optional[str] = Field(
+        default=None,
+        description="Service-token audience; defaults to '<jwt_audience>:service'",
+    )
+    service_token_issuer: Optional[str] = Field(
+        default=None,
+        description="Service-token issuer; defaults to '<jwt_audience>:service'",
+    )
+    service_token_max_expire_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description="Maximum lifetime for a service token in days",
+    )
     access_token_expire_minutes: int = Field(default=15, description="Access token TTL in minutes")
     refresh_token_expire_days: int = Field(default=30, description="Refresh token TTL in days")
 
@@ -84,12 +106,26 @@ class AuthConfig(BaseModel):
         default=False,
         description="Enable immediate access token blacklisting (requires Redis)",
     )
+    token_blacklist_failure_mode: Literal["fail_closed", "fail_open"] = Field(
+        default="fail_closed",
+        description=(
+            "Behavior when immediate JWT blacklist checking is enabled but Redis is unavailable. "
+            "Production default is fail_closed so a revoked token cannot be accepted during an outage."
+        ),
+    )
     store_refresh_tokens: bool = Field(
         default=True,
         description="Store refresh tokens in PostgreSQL for revocation. Set to False for stateless-only JWT.",
     )
     enable_token_cleanup: bool = Field(default=True, description="Enable automatic cleanup of expired/revoked tokens")
     token_cleanup_interval_hours: int = Field(default=24, description="Hours between token cleanup runs")
+    background_job_mode: Literal["disabled", "embedded"] = Field(
+        default="disabled",
+        description=(
+            "How periodic maintenance jobs are owned. Production should use 'disabled' and start jobs from "
+            "one explicit worker process; 'embedded' is a single-process development convenience."
+        ),
+    )
 
     # Feature Flags (Core - controlled by OutlabsAuth base class)
     enable_entity_hierarchy: bool = Field(default=False, description="Enable entity hierarchy (EnterpriseRBAC)")
@@ -189,6 +225,16 @@ class AuthConfig(BaseModel):
     redis_db: int = Field(default=0, description="Redis database number")
     redis_password: Optional[str] = Field(default=None, description="Redis password")
     redis_url: Optional[str] = Field(default=None, description="Redis connection URL (overrides host/port)")
+    redis_key_prefix: Optional[str] = Field(
+        default=None,
+        min_length=3,
+        max_length=120,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9:_-]*$",
+        description=(
+            "Required unique application/environment namespace for every Redis key and Pub/Sub channel "
+            "when Redis is enabled, for example 'outlabs-auth:production:billing-api'."
+        ),
+    )
 
     # Cache TTL Settings
     cache_ttl_seconds: int = Field(default=300, description="Default cache TTL in seconds (5 minutes)")
@@ -198,11 +244,12 @@ class AuthConfig(BaseModel):
         default=60,
         description="Compiled API-key auth snapshot TTL in seconds for permission-dependency hot paths",
     )
-    # PERF (opt-in): when > 0, each process caches the validated API-key auth snapshot
+    # PERF (opt-in): each process caches the validated API-key auth snapshot
     # in memory for this many seconds, skipping the Redis snapshot GET + version reads on
     # hot keys (e.g. high-throughput workers). Tradeoff: this also skips the per-read
     # version check, so a permission/role/revocation change may take up to this long to be
-    # honored *per process*. Keep it small (1-5s) and leave at 0 to disable.
+    # honored *per process*. Keep it small (1-5s) for workloads that explicitly
+    # accept this tradeoff; leave at 0 for immediate invalidation.
     api_key_local_snapshot_cache_ttl: float = Field(
         default=0.0,
         description="In-process API-key auth snapshot cache TTL in seconds (0 disables; opt-in perf)",
@@ -210,6 +257,13 @@ class AuthConfig(BaseModel):
     api_key_usage_sync_interval: int = Field(
         default=300,
         description="Interval in seconds for flushing Redis API-key usage counters to the database (DD-033)",
+    )
+    api_key_rate_limit_failure_mode: Literal["fail_closed", "fail_open"] = Field(
+        default="fail_closed",
+        description=(
+            "Behavior when Redis-backed API-key rate limiting is configured but unavailable. "
+            "The production default rejects machine authentication instead of silently disabling quotas."
+        ),
     )
 
     # Pub/Sub Channels
@@ -306,6 +360,12 @@ class AuthConfig(BaseModel):
 
         if self.enable_caching and not self.redis_enabled:
             raise ValueError("enable_caching=True requires Redis; provide redis_url or redis_enabled=True")
+
+        if self.redis_enabled and not self.redis_key_prefix:
+            raise ValueError(
+                "redis_key_prefix is required when Redis is enabled. Use a unique application/environment "
+                "namespace such as 'outlabs-auth:production:billing-api'."
+            )
 
         return self
 
