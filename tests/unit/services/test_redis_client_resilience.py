@@ -47,6 +47,7 @@ def _make_client() -> tuple[RedisClient, _FlakyClient]:
         secret_key="test-secret-key-do-not-use-in-production-12345678",
         redis_enabled=True,
         redis_url="redis://breaker.test:6379/0",
+        redis_key_prefix="outlabs-auth:test:breaker",
     )
     client = RedisClient(config)
     fake = _FlakyClient()
@@ -121,6 +122,7 @@ async def test_failed_startup_connect_schedules_probe_and_recovers():
         secret_key="test-secret-key-do-not-use-in-production-12345678",
         redis_enabled=True,
         redis_url="redis://breaker.test:6379/0",
+        redis_key_prefix="outlabs-auth:test:breaker",
     )
     client = RedisClient(config)
     client._RECONNECT_BACKOFF_INITIAL = 0.01  # type: ignore[misc]

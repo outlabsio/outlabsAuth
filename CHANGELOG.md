@@ -5,6 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project is in alpha (pre-1.0); breaking changes are allowed between alpha releases.
 
+## [0.1.0a24] - 2026-07-15
+
+### Security and robustness
+
+- **OAuth authorization responses are now browser-bound and single-use.** Signed state claims are
+  backed by a short-lived server-side record and a binding cookie; callbacks reject replayed,
+  expired, or cross-browser state. OAuth account association applies the same check.
+- **Refresh-token rotation now detects reuse.** Tokens are tracked as a family, each refresh token
+  may be used once, and reuse revokes the affected user's active token families.
+- **Service tokens are isolated from human JWTs.** They use a separate derived signing key and now
+  require issuer, audience, token ID, and a bounded lifetime (30 days maximum).
+- **API-key protection fails closed when configured Redis rate limiting is unavailable.** Requests
+  receive a retryable 503 rather than silently bypassing the configured rate limit. Redis key,
+  scan-pattern, and pub/sub channel names are also consistently namespaced.
+- **Background maintenance is explicit by default.** Embedded schedulers are disabled unless opted
+  in; operators can instead run one deterministic cycle with `outlabs-auth run-maintenance`.
+
+### Performance and correctness
+
+- **API-key usage sync is durable across worker failures.** Counter batches are staged in Redis,
+  recorded with an idempotency receipt in PostgreSQL, and acknowledged only after a successful
+  commit, preventing usage loss or double-counting on retry.
+- **Current production dependency minimums and lockfile are refreshed.** Release CI now performs a
+  production-only dependency vulnerability audit.
+
+### Database migrations
+
+- **`20260715_0019_add_api_key_usage_sync_batches`** adds idempotency receipts for durable API-key
+  usage synchronization.
+- **`20260715_0020_add_refresh_token_families`** adds refresh-token family and replacement fields
+  required for single-use rotation and reuse detection.
+- Apply with `auto_migrate=True`, `outlabs-auth bootstrap`, or `outlabs-auth migrate` before
+  deploying code that enables the new behavior. Rehearse both migrations against a populated
+  staging copy before production rollout.
+
+### Fixed
+
+- **Write commits now complete before the response reaches the client (read-your-writes).**
+  `OutlabsAuth.uow` committed in dependency teardown, which FastAPI (>=0.106) runs only after the
+  response has been sent — so a client could receive its 201 and race the commit with an immediate
+  dependent request (observed in CI as a 404 for a role created by the preceding request, Release
+  Readiness run 27383495356). A new pure-ASGI `UnitOfWorkMiddleware` — installed unconditionally by
+  `instrument_fastapi()` — now finalizes the unit of work just before `http.response.start` is
+  forwarded: commit for write methods, rollback for reads, exactly once per request (teardown only
+  finalizes as a fallback when the middleware is not installed, preserving the legacy
+  response-then-commit behavior for un-instrumented apps). Service-level cache-version bumps still
+  happen during the handler, so the bump-before-commit invalidation ordering from the 2026-06
+  performance audit is unchanged. Two deliberate side effects: a commit failure now aborts the
+  response (the client gets a 500 instead of a success status for data that was never persisted),
+  and Starlette background tasks now run after the commit instead of before it. The read-after-create
+  polling barriers (`confirm_visible`) carried by `scripts/smoke_enterprise_api.py` and
+  `examples/enterprise_rbac/api_integration_check.py` as a workaround are removed — the release gate
+  asserts immediate visibility again, and a regression test drives the ASGI app by hand to assert the
+  created row is visible from a second DB connection at the moment the client has the response
+  (`tests/integration/test_uow_commit_before_response.py`).
+- **The SimpleRBAC example now actually installs the library middleware.**
+  `examples/simple_rbac/main.py` called `instrument_fastapi()` inside lifespan — after the app had
+  started — so Starlette rejected every middleware add and the example booted with a UserWarning and
+  the legacy response-then-commit ordering. The example now constructs `SimpleRBAC` and calls
+  `instrument_fastapi()` at module level (mirroring the EnterpriseRBAC example), so
+  `UnitOfWorkMiddleware`, `RequestCacheMiddleware`, and `ResourceContextMiddleware` install cleanly.
+  Its blog routes also now enforce the permissions their docstrings always claimed
+  (`post:create/update/update_own/delete`, `comment:create/delete/delete_own`): `author_id` comes
+  from the authenticated principal instead of an all-zeros placeholder, and the `_own` variants are
+  gated by ownership checks. Its `reset_test_env.py` was also unblocked: the hardcoded
+  password-hashing secret was shorter than the 32-character HS256 minimum introduced in 0.1.0a23 and
+  crashed the script on startup.
+
 ## [0.1.0a23] - 2026-06-11
 
 ### Security (breaking)

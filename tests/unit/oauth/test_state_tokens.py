@@ -97,6 +97,7 @@ class TestOAuthStateTokens:
         # Create token with wrong audience manually
         payload = {
             "aud": "wrong-audience",
+            "iat": datetime.now(timezone.utc),
             "exp": datetime.now(timezone.utc) + timedelta(seconds=600),
         }
         token = jwt.encode(payload, secret, algorithm="HS256")

@@ -40,6 +40,9 @@ htmlcov/
 dmypy.json
 .ruff_cache/
 
+# Claude Code agent worktrees
+.claude/worktrees/
+
 # Frontend - Node/React/Vite
 admin-ui/node_modules/
 admin-ui/dist/

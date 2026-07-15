@@ -6,7 +6,7 @@ JWT refresh token storage with device tracking and revocation support.
 
 from datetime import datetime, timezone
 from typing import Optional, TYPE_CHECKING
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlmodel import Field, Relationship, SQLModel
 from sqlalchemy import Column, Index, UniqueConstraint, ForeignKey, String, Boolean, Integer, DateTime
@@ -34,6 +34,7 @@ class RefreshToken(BaseModel, table=True):
         Index("ix_refresh_tokens_expires_at", "expires_at"),
         Index("ix_refresh_tokens_is_revoked", "is_revoked"),
         Index("ix_refresh_tokens_device", "device_fingerprint"),
+        Index("ix_refresh_tokens_family_id", "family_id"),
     )
 
     # === Foreign Key ===
@@ -52,6 +53,20 @@ class RefreshToken(BaseModel, table=True):
         # column-level unique=True duplicated it (maintained on every login).
         sa_column=Column(String(255), nullable=False),
         description="SHA-256 hash of the refresh token (never store plain token)",
+    )
+    family_id: UUID = Field(
+        default_factory=uuid4,
+        sa_column=Column(PG_UUID(as_uuid=True), nullable=False),
+        description="Refresh-token family used to detect replay after rotation",
+    )
+    replaced_by_token_id: Optional[UUID] = Field(
+        default=None,
+        sa_column=Column(
+            PG_UUID(as_uuid=True),
+            ForeignKey("refresh_tokens.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+        description="Replacement token created when this token was rotated",
     )
 
     # === Expiration ===

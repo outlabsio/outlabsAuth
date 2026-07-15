@@ -40,6 +40,17 @@ def test_redact_database_url_redacts_password():
     assert "localhost:5432/mydb" in redacted
 
 
+def test_run_maintenance_requires_explicit_runtime_configuration(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    runner = CliRunner()
+
+    result = runner.invoke(cli_main, ["run-maintenance"])
+
+    assert result.exit_code == 2
+    assert "DATABASE_URL environment variable not set" in result.output
+
+
 def test_redact_database_url_preserves_url_without_password():
     url = "postgresql+asyncpg://reader@localhost:5432/mydb"
     assert _redact_database_url(url) == url

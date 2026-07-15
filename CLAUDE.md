@@ -253,8 +253,8 @@ python reset_test_env.py
 
 **What it does:**
 - ✅ Clears all test data (users, roles, permissions, memberships)
-- ✅ Creates 21 permissions (user:*, role:*, permission:*, apikey:*, post:*, comment:*)
-- ✅ Creates 4 default roles (reader, writer, editor, admin) with appropriate permissions
+- ✅ Creates 24 permissions (user:*, role:*, permission:*, api_key:*, post:*, comment:*)
+- ✅ Creates 5 default roles (reader, writer, editor, service_reader, admin) with appropriate permissions
 - ✅ Creates 3 test users with different permission levels
 - ✅ Takes ~2 seconds to complete
 
@@ -262,9 +262,9 @@ python reset_test_env.py
 
 | Email | Password | Role | Permissions |
 |-------|----------|------|-------------|
-| `admin@test.com` | `Testpass1` | Admin | Full system access (user:*, role:*, post:*, comment:*) |
-| `editor@test.com` | `Testpass1` | Editor | Content management (post:*, comment:*) |
-| `writer@test.com` | `Testpass1` | Writer | Content creation (post:read/create/update, comment:create) |
+| `admin@test.com` | `Test123!!` | Admin | Full system access (user:*, role:*, post:*, comment:*) |
+| `editor@test.com` | `Test123!!` | Editor | Content management (post:*, comment:*) |
+| `writer@test.com` | `Test123!!` | Writer | Content creation (post:read/create/update, comment:create) |
 
 **When to use this:**
 - 🔄 After breaking auth/permissions during development

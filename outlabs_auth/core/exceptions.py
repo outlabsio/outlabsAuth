@@ -86,6 +86,13 @@ class APIKeyLockedError(AuthenticationError):
     error_code = "API_KEY_LOCKED"
 
 
+class AuthenticationInfrastructureError(OutlabsAuthException):
+    """A required authentication control is unavailable (for example Redis rate limits)."""
+
+    error_code = "AUTH_INFRASTRUCTURE_UNAVAILABLE"
+    status_code = 503
+
+
 class AccountLockedError(AuthenticationError):
     """User account is locked due to failed login attempts"""
     error_code = "ACCOUNT_LOCKED"

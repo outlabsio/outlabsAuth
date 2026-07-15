@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from outlabs_auth.core.config import AuthConfig
-from outlabs_auth.core.exceptions import InvalidInputError
+from outlabs_auth.core.exceptions import InvalidInputError, RateLimitError
 from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.enums import (
@@ -226,15 +226,15 @@ async def test_api_key_service_tree_access_rate_limits_and_counter_sync(
     day_key = service._make_rate_limit_key(str(tree_key.id), "day")
 
     fake_redis.rate_limit_counts = {minute_key: 2}
-    with pytest.raises(InvalidInputError, match="per minute"):
+    with pytest.raises(RateLimitError, match="per minute"):
         await service._check_rate_limits(minute_limited)
 
     fake_redis.rate_limit_counts = {hour_key: 3}
-    with pytest.raises(InvalidInputError, match="per hour"):
+    with pytest.raises(RateLimitError, match="per hour"):
         await service._check_rate_limits(hour_limited)
 
     fake_redis.rate_limit_counts = {day_key: 4}
-    with pytest.raises(InvalidInputError, match="per day"):
+    with pytest.raises(RateLimitError, match="per day"):
         await service._check_rate_limits(day_limited)
 
     good_counter = service._make_usage_counter_key(str(global_key.id))

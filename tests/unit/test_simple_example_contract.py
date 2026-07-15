@@ -19,6 +19,8 @@ def test_simple_example_mounts_shared_admin_routers_only():
     assert 'get_roles_router(auth_instance, prefix="/v1/roles"' in example_main
     assert 'get_permissions_router(auth_instance, prefix="/v1/permissions"' in example_main
     assert 'get_api_keys_router(auth_instance, prefix="/v1/api-keys"' in example_main
+    assert '"outlabs-auth:development:simple-rbac"' in example_main
+    assert "redis_key_prefix=REDIS_KEY_PREFIX" in example_main
 
     assert "get_entities_router(" not in example_main
     assert "get_memberships_router(" not in example_main

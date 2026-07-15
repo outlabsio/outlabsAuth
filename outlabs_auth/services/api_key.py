@@ -11,22 +11,26 @@ import math
 import time
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import bindparam
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, or_, select
 from sqlalchemy import update as sa_update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.util import identity_key
 from sqlalchemy.orm import selectinload
 
 from outlabs_auth.core.config import AuthConfig
 from outlabs_auth.core.exceptions import (
+    AuthenticationInfrastructureError,
     InvalidInputError,
+    RateLimitError,
     UserNotFoundError,
 )
 from outlabs_auth.models.sql.api_key import APIKey, APIKeyIPWhitelist, APIKeyScope
+from outlabs_auth.models.sql.api_key_usage_sync_batch import APIKeyUsageSyncBatch
 from outlabs_auth.models.sql.closure import EntityClosure
 from outlabs_auth.models.sql.integration_principal import IntegrationPrincipal
 from outlabs_auth.models.sql.enums import APIKeyKind, APIKeyStatus
@@ -58,6 +62,14 @@ class ResolvedAPIKeyOwner:
         if self.user is not None:
             return self.user.id
         raise RuntimeError("API key owner resolution is missing both user and integration principal")
+
+
+@dataclass(slots=True)
+class APIKeyUsageCounterBatch:
+    """Counter entries owned by one durable Redis-to-PostgreSQL sync batch."""
+
+    batch_id: UUID
+    counters: dict[str, int]
 
 
 class APIKeyService(BaseService[APIKey]):
@@ -490,6 +502,8 @@ class APIKeyService(BaseService[APIKey]):
                 )
                 return None, 0
 
+        self._require_rate_limit_backend()
+
         # Record usage + last_used + rate-limit counters in ONE Redis round trip
         # (was INCR + SET + up to 3× INCR/EXPIRE as sequential awaits), mirroring
         # the snapshot path; limits are enforced from the returned counts.
@@ -511,6 +525,8 @@ class APIKeyService(BaseService[APIKey]):
             if counts is not None:
                 usage_count = int(counts.get(usage_key, 0))
                 self._enforce_rate_limit_counts(api_key, windows, counts, key_id)
+            else:
+                self._require_rate_limit_backend()
         else:
             # Fallback: Direct database write
             api_key.usage_count += 1
@@ -520,6 +536,19 @@ class APIKeyService(BaseService[APIKey]):
 
         self._log_api_key_validation(prefix=api_key.prefix, status="valid")
         return api_key, usage_count
+
+    def _require_rate_limit_backend(self) -> None:
+        """Reject when a configured distributed quota cannot be enforced."""
+        redis_available = bool(self.redis_client and self.redis_client.is_available)
+        if (
+            self.config.redis_enabled
+            and not redis_available
+            and self.config.api_key_rate_limit_failure_mode == "fail_closed"
+        ):
+            raise AuthenticationInfrastructureError(
+                "API-key authentication is temporarily unavailable because rate limiting is unavailable",
+                details={"control": "api_key_rate_limit", "retry_after_seconds": 5},
+            )
 
     @staticmethod
     def scopes_allow_permission(scopes: Optional[List[str]], required_scope: str) -> bool:
@@ -586,7 +615,7 @@ class APIKeyService(BaseService[APIKey]):
             api_key: API key to check
 
         Raises:
-            InvalidInputError: If rate limit exceeded
+            RateLimitError: If rate limit exceeded
         """
         if not self.redis_client or not self.redis_client.is_available:
             return
@@ -605,12 +634,13 @@ class APIKeyService(BaseService[APIKey]):
                     limit=api_key.rate_limit_per_minute,
                     window="minute",
                 )
-                raise InvalidInputError(
+                raise RateLimitError(
                     message=f"Rate limit exceeded: {api_key.rate_limit_per_minute} requests per minute",
                     details={
                         "limit": api_key.rate_limit_per_minute,
                         "current": count,
                         "window": "minute",
+                        "retry_after_seconds": 60,
                     },
                 )
 
@@ -626,12 +656,13 @@ class APIKeyService(BaseService[APIKey]):
                     limit=api_key.rate_limit_per_hour,
                     window="hour",
                 )
-                raise InvalidInputError(
+                raise RateLimitError(
                     message=f"Rate limit exceeded: {api_key.rate_limit_per_hour} requests per hour",
                     details={
                         "limit": api_key.rate_limit_per_hour,
                         "current": count,
                         "window": "hour",
+                        "retry_after_seconds": 3600,
                     },
                 )
 
@@ -647,21 +678,25 @@ class APIKeyService(BaseService[APIKey]):
                     limit=api_key.rate_limit_per_day,
                     window="day",
                 )
-                raise InvalidInputError(
+                raise RateLimitError(
                     message=f"Rate limit exceeded: {api_key.rate_limit_per_day} requests per day",
                     details={
                         "limit": api_key.rate_limit_per_day,
                         "current": count,
                         "window": "day",
+                        "retry_after_seconds": 86400,
                     },
                 )
 
     async def sync_usage_counters_to_db(self, session: AsyncSession) -> Dict[str, int]:
         """
-        Sync API key usage counters from Redis to database.
+        Durably sync API-key usage counters from Redis to PostgreSQL.
 
-        This is called by background worker (every 5 minutes).
-        Implements the Redis counter pattern for 99% DB write reduction.
+        Live counters are first atomically moved to Redis processing keys. Each
+        batch receives a PostgreSQL receipt in the same transaction as the usage
+        update; only then are its staged Redis keys acknowledged. A crash before
+        commit leaves the staged counters retryable, while a crash after commit
+        cannot duplicate the update because the receipt already exists.
 
         Returns:
             Dict[str, int]: Stats about sync operation
@@ -670,8 +705,6 @@ class APIKeyService(BaseService[APIKey]):
             logger.debug("Redis not available - skipping counter sync")
             return {"synced_keys": 0, "total_usage": 0, "errors": 0}
 
-        logger.info("Starting API key usage counter sync...")
-
         stats = {
             "synced_keys": 0,
             "total_usage": 0,
@@ -679,84 +712,137 @@ class APIKeyService(BaseService[APIKey]):
         }
 
         try:
-            # Consume all usage counters atomically (pipelined GETDEL — the old
-            # per-key GET ... DELETE dropped increments that landed in between)
-            # with a per-op fallback for custom redis clients.
-            pattern = self._make_usage_counter_key("*")
-            collect = getattr(self.redis_client, "collect_counters_atomically", None)
-            counters_consumed = collect is not None
-            if collect is not None:
-                counters = await collect(pattern)
-            else:
-                counters = await self.redis_client.get_all_counters(pattern)
+            for batch in await self._collect_usage_counter_batches():
+                acknowledged = await self._persist_usage_counter_batch(session, batch, stats)
+                if acknowledged:
+                    deleted = await self._acknowledge_usage_counter_batch(list(batch.counters))
+                    if deleted != len(batch.counters):
+                        # The PostgreSQL receipt makes this safe: a later retry
+                        # will see the applied batch and only acknowledge it.
+                        logger.warning(
+                            "API-key usage batch %s committed but only acknowledged %s/%s Redis counters",
+                            batch.batch_id,
+                            deleted,
+                            len(batch.counters),
+                        )
+        except Exception as e:
+            await session.rollback()
+            logger.error(f"Error during durable counter sync: {e}", exc_info=True)
+            stats["errors"] += 1
 
-            logger.debug(f"Found {len(counters)} usage counters to sync")
+        return stats
 
-            # Parse key ids; drop malformed or zero counters up front.
+    async def _acknowledge_usage_counter_batch(self, counter_keys: list[str]) -> int:
+        """Remove staged keys after their PostgreSQL receipt committed.
+
+        The per-key fallback keeps lightweight test doubles compatible; the
+        production Redis client uses a single UNLINK/DEL operation.
+        """
+        assert self.redis_client is not None
+        delete_many = getattr(self.redis_client, "delete_many", None)
+        if delete_many is not None:
+            return int(await delete_many(counter_keys))
+        deleted = 0
+        for counter_key in counter_keys:
+            if await self.redis_client.delete(counter_key):
+                deleted += 1
+        return deleted
+
+    async def _collect_usage_counter_batches(self) -> list[APIKeyUsageCounterBatch]:
+        """Return retryable staged batches plus a newly claimed live batch."""
+        assert self.redis_client is not None
+        batches: dict[UUID, dict[str, int]] = {}
+
+        staged_counters = await self.redis_client.get_all_counters(
+            self._make_staged_usage_counter_pattern()
+        )
+        for counter_key, usage_count in staged_counters.items():
+            parsed = self._parse_staged_usage_counter_key(counter_key)
+            if parsed is None or usage_count <= 0:
+                continue
+            batch_id, _key_id = parsed
+            batches.setdefault(batch_id, {})[counter_key] = usage_count
+
+        batch_id = uuid4()
+        stage = getattr(self.redis_client, "stage_counters_atomically", None)
+        if stage is not None:
+            live_counters = await stage(self._make_usage_counter_key("*"), str(batch_id))
+        else:
+            # Compatibility path for minimal test doubles. Production RedisClient
+            # always provides durable staging.
+            live_counters = await self.redis_client.get_all_counters(self._make_usage_counter_key("*"))
+        if live_counters:
+            batches.setdefault(batch_id, {}).update(live_counters)
+
+        return [
+            APIKeyUsageCounterBatch(batch_id=known_batch_id, counters=counters)
+            for known_batch_id, counters in batches.items()
+        ]
+
+    async def _persist_usage_counter_batch(
+        self,
+        session: AsyncSession,
+        batch: APIKeyUsageCounterBatch,
+        stats: Dict[str, int],
+    ) -> bool:
+        """Apply one batch exactly once and return whether it may be acknowledged."""
+        batch_table = cast(Any, getattr(APIKeyUsageSyncBatch, "__table__"))
+        receipt = (
+            pg_insert(batch_table)
+            .values(
+                id=batch.batch_id,
+                applied_at=datetime.now(timezone.utc),
+                key_count=len(batch.counters),
+                total_usage=sum(batch.counters.values()),
+            )
+            .on_conflict_do_nothing(index_elements=[batch_table.c.id])
+            .returning(batch_table.c.id)
+        )
+        applied_now = (await session.execute(receipt)).scalar_one_or_none() is not None
+
+        if applied_now:
             entries: list[tuple[UUID, str, int]] = []
-            for counter_key, usage_count in counters.items():
-                if usage_count <= 0:
-                    continue
-                try:
-                    key_uuid = UUID(counter_key.split(":")[1])
-                except (IndexError, ValueError) as e:
-                    logger.error(f"Error syncing counter {counter_key}: {e}")
+            for counter_key, usage_count in batch.counters.items():
+                key_id = self._parse_usage_counter_key(counter_key)
+                if key_id is None:
+                    logger.warning("Discarding malformed API-key usage counter %s", counter_key)
                     stats["errors"] += 1
                     continue
-                entries.append((key_uuid, counter_key, usage_count))
+                entries.append((key_id, counter_key, usage_count))
 
             if entries:
-                # One MGET for every key's last_used timestamp. The hot path
-                # writes raw isoformat strings (pipelined SET); older writes
-                # were JSON-encoded — strip quotes to accept both.
-                last_used_keys = [self._make_last_used_key(str(key_uuid)) for key_uuid, _, _ in entries]
+                last_used_keys = [self._make_last_used_key(str(key_id)) for key_id, _, _ in entries]
                 mget_raw = getattr(self.redis_client, "mget_raw", None)
                 raw_values = await mget_raw(last_used_keys) if mget_raw is not None else None
                 if raw_values is None or len(raw_values) != len(entries):
-                    raw_values = [await self.redis_client.get_raw(key) for key in last_used_keys]
+                    redis_client = self.redis_client
+                    assert redis_client is not None
+                    raw_values = [await redis_client.get_raw(key) for key in last_used_keys]
 
-                now = datetime.now(timezone.utc)
-
-                def _parse_last_used(raw: Optional[str]) -> datetime:
-                    if raw:
-                        try:
-                            return datetime.fromisoformat(raw.strip('"'))
-                        except ValueError:
-                            return now
-                    return now
-
-                # Orphan counters (deleted/rotated keys) are dropped, not synced.
                 existing_result = await session.execute(
                     select(cast(Any, APIKey.id)).where(
-                        cast(Any, APIKey.id).in_([key_uuid for key_uuid, _, _ in entries])
+                        cast(Any, APIKey.id).in_([key_id for key_id, _, _ in entries])
                     )
                 )
                 existing_ids = set(existing_result.scalars().all())
-
                 params: list[dict[str, Any]] = []
-                for (key_uuid, counter_key, usage_count), raw in zip(entries, raw_values):
-                    if key_uuid not in existing_ids:
-                        logger.warning(f"API key not found for counter: {key_uuid}")
-                        if not counters_consumed:
-                            await self.redis_client.delete(counter_key)
+                now = datetime.now(timezone.utc)
+                for (key_id, _counter_key, usage_count), raw in zip(entries, raw_values):
+                    if key_id not in existing_ids:
+                        logger.warning("API key not found for usage counter: %s", key_id)
                         continue
                     params.append(
                         {
-                            "b_id": key_uuid,
+                            "b_id": key_id,
                             "b_delta": usage_count,
-                            "b_ts": _parse_last_used(raw),
+                            "b_ts": self._parse_last_used_timestamp(raw, now),
                         }
                     )
                     stats["synced_keys"] += 1
                     stats["total_usage"] += usage_count
 
                 if params:
-                    # One executemany UPDATE (was one SELECT + one single-row
-                    # flush per key — 2K round trips per cycle for K hot keys).
-                    # Core-table form: the ORM-entity form would engage "bulk
-                    # update by primary key" mode, which can't express the
-                    # per-row usage_count increment.
-                    api_keys_table = APIKey.__table__
+                    api_keys_table = cast(Any, getattr(APIKey, "__table__"))
                     stmt = (
                         sa_update(api_keys_table)
                         .where(api_keys_table.c.id == bindparam("b_id"))
@@ -766,35 +852,61 @@ class APIKeyService(BaseService[APIKey]):
                         )
                     )
                     await session.execute(stmt, params)
-                    # Bulk UPDATEs bypass the unit of work; refresh rows this
-                    # session already materialized so in-session readers see
-                    # the change (the worker's fresh session skips this loop).
                     identity_map = session.sync_session.identity_map
                     for param in params:
                         instance = identity_map.get(identity_key(APIKey, param["b_id"]))
                         if instance is not None:
                             await session.refresh(instance, ["usage_count", "last_used_at"])
 
-                if not counters_consumed:
-                    for _, counter_key, _ in entries:
-                        await self.redis_client.delete(counter_key)
+        await session.commit()
+        return True
 
-            logger.info(
-                f"Counter sync complete: {stats['synced_keys']} keys, "
-                f"{stats['total_usage']} total uses, {stats['errors']} errors"
-            )
+    def _parse_usage_counter_key(self, counter_key: str) -> Optional[UUID]:
+        logical_key = counter_key
+        strip_prefix = getattr(self.redis_client, "strip_key_prefix", None)
+        if strip_prefix is not None:
+            logical_key = strip_prefix(counter_key)
+        parts = logical_key.split(":")
+        if len(parts) >= 5 and parts[0] == "usage-sync":
+            parts = parts[2:]
+        if len(parts) != 3 or parts[0] != "apikey" or parts[2] != "usage":
+            return None
+        try:
+            return UUID(parts[1])
+        except ValueError:
+            return None
 
-        except Exception as e:
-            logger.error(f"Error during counter sync: {e}")
-            stats["errors"] += 1
+    def _parse_staged_usage_counter_key(self, counter_key: str) -> Optional[tuple[UUID, UUID]]:
+        logical_key = counter_key
+        strip_prefix = getattr(self.redis_client, "strip_key_prefix", None)
+        if strip_prefix is not None:
+            logical_key = strip_prefix(counter_key)
+        parts = logical_key.split(":")
+        if len(parts) != 5 or parts[0] != "usage-sync" or parts[2] != "apikey" or parts[4] != "usage":
+            return None
+        try:
+            return UUID(parts[1]), UUID(parts[3])
+        except ValueError:
+            return None
 
-        return stats
+    @staticmethod
+    def _parse_last_used_timestamp(raw: Optional[str], fallback: datetime) -> datetime:
+        if raw:
+            try:
+                return datetime.fromisoformat(raw.strip('"'))
+            except ValueError:
+                pass
+        return fallback
 
     # Helper methods for Redis keys
 
     def _make_usage_counter_key(self, key_id: str) -> str:
         """Make Redis key for usage counter."""
         return f"apikey:{key_id}:usage"
+
+    def _make_staged_usage_counter_pattern(self) -> str:
+        """Pattern for unacknowledged, crash-recoverable usage-counter batches."""
+        return "usage-sync:*:apikey:*:usage"
 
     def _make_last_used_key(self, key_id: str) -> str:
         """Make Redis key for last_used timestamp."""
@@ -1115,8 +1227,8 @@ class APIKeyService(BaseService[APIKey]):
         counts: dict[str, int],
         key_id: str,
     ) -> None:
-        """Raise InvalidInputError if any window's pipelined count exceeds its limit."""
-        for window, _ttl, limit in windows:
+        """Raise RateLimitError if any window's pipelined count exceeds its limit."""
+        for window, ttl, limit in windows:
             count = counts.get(self._make_rate_limit_key(key_id, window), 0)
             if count <= limit:
                 continue
@@ -1126,9 +1238,9 @@ class APIKeyService(BaseService[APIKey]):
                 limit=limit,
                 window=window,
             )
-            raise InvalidInputError(
+            raise RateLimitError(
                 message=f"Rate limit exceeded: {limit} requests per {window}",
-                details={"limit": limit, "current": count, "window": window},
+                details={"limit": limit, "current": count, "window": window, "retry_after_seconds": ttl},
             )
 
     async def record_api_key_auth_snapshot_usage(self, snapshot: dict[str, Any]) -> int:
@@ -1137,7 +1249,7 @@ class APIKeyService(BaseService[APIKey]):
         Previously this issued the usage INCR, the last_used SET, and one INCR(+EXPIRE)
         per rate-limit window as separate sequential awaits (3-4 Redis round trips on every
         hot-path request). They are now pipelined into a single round trip; rate limits are
-        enforced afterward from the returned counts (raising InvalidInputError if exceeded).
+        enforced afterward from the returned counts (raising RateLimitError if exceeded).
         """
         if not self.redis_client or not self.redis_client.is_available:
             return 0
@@ -1169,10 +1281,10 @@ class APIKeyService(BaseService[APIKey]):
         counts: dict[str, int],
         key_id: str,
     ) -> None:
-        """Raise InvalidInputError if any window's pipelined count exceeds its limit."""
+        """Raise RateLimitError if any window's pipelined count exceeds its limit."""
         prefix = str(snapshot.get("key_prefix") or "")
         key_kind = str(snapshot.get("key_kind") or "")
-        for window, _ttl, limit in windows:
+        for window, ttl, limit in windows:
             count = counts.get(self._make_rate_limit_key(key_id, window), 0)
             if count <= limit:
                 continue
@@ -1184,9 +1296,9 @@ class APIKeyService(BaseService[APIKey]):
                     window=window,
                     key_kind=key_kind,
                 )
-            raise InvalidInputError(
+            raise RateLimitError(
                 message=f"Rate limit exceeded: {limit} requests per {window}",
-                details={"limit": limit, "current": count, "window": window},
+                details={"limit": limit, "current": count, "window": window, "retry_after_seconds": ttl},
             )
 
     def auth_result_from_snapshot(self, snapshot: dict[str, Any], *, usage_count: int = 0) -> dict[str, Any]:

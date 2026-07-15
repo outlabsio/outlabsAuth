@@ -10,13 +10,14 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.exceptions import InvalidInputError
 from outlabs_auth.models.sql.social_account import SocialAccount
 from outlabs_auth.oauth.state import decode_state_token, generate_state_token
+from outlabs_auth.routers.oauth_state_store import consume_oauth_state, issue_oauth_state
 from outlabs_auth.routers.oauth_utils import encrypt_provider_token, get_oauth_user_info
 from outlabs_auth.schemas.oauth import OAuthAuthorizeResponse
 from outlabs_auth.utils.validation import validate_email
@@ -116,6 +117,8 @@ def get_oauth_router(
     )
     async def authorize(
         request: Request,
+        response: Response,
+        session: AsyncSession = Depends(auth.uow),
         scopes: list[str] = Query(None, description="OAuth scopes to request"),
     ) -> OAuthAuthorizeResponse:
         if redirect_url is not None:
@@ -125,6 +128,13 @@ def get_oauth_router(
 
         state_data: dict[str, str] = {}
         state = generate_state_token(state_data, state_secret, lifetime_seconds=600)
+        await issue_oauth_state(
+            session=session,
+            response=response,
+            state=state,
+            provider=oauth_client.name,
+            flow="login",
+        )
 
         authorization_url = await oauth_client.get_authorization_url(
             authorize_redirect_url,
@@ -169,14 +179,13 @@ def get_oauth_router(
     )
     async def callback(
         request: Request,
+        response: Response,
         session: AsyncSession = Depends(auth.uow),
         access_token_state: tuple[dict[str, Any], str] = Depends(
             oauth2_authorize_callback
         ),
     ):
         token, state = access_token_state
-
-        user_info = await get_oauth_user_info(oauth_client, token)
 
         try:
             decode_state_token(state, state_secret)
@@ -185,6 +194,17 @@ def get_oauth_router(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid OAuth state token",
             )
+
+        await consume_oauth_state(
+            session=session,
+            request=request,
+            response=response,
+            state=state,
+            provider=oauth_client.name,
+            flow="login",
+        )
+
+        user_info = await get_oauth_user_info(oauth_client, token)
 
         user = await oauth_callback(
             auth=auth,

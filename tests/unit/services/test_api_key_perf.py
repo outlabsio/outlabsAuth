@@ -8,10 +8,12 @@ Performance regression tests for the API-key hot-path optimizations
 - Perf #1: an opt-in per-process snapshot cache serves hot keys without a Redis read.
 """
 from unittest.mock import AsyncMock
+from types import SimpleNamespace
 
 import pytest
 
 from outlabs_auth.core.config import AuthConfig
+from outlabs_auth.core.exceptions import AuthenticationInfrastructureError
 from outlabs_auth.models.sql.enums import APIKeyStatus
 from outlabs_auth.services.api_key import APIKeyService
 
@@ -23,6 +25,7 @@ def _service(local_ttl: float = 0.0, redis_client=None) -> APIKeyService:
         secret_key=SECRET,
         enable_caching=True,
         redis_enabled=True,  # satisfies the enable_caching validator; tests inject the client
+        redis_key_prefix="outlabs-auth:test:api-key-perf",
         api_key_local_snapshot_cache_ttl=local_ttl,
     )
     return APIKeyService(config=config, redis_client=redis_client)
@@ -69,7 +72,7 @@ async def test_usage_pipeline_counts_and_fixed_window(redis_client):
     assert counts is not None
     assert counts[usage_key] == 1
     assert counts[rl_key] == 1
-    ttl_after_first = await redis_client._client.ttl(rl_key)
+    ttl_after_first = await redis_client._client.ttl(redis_client.make_key(rl_key))
     assert 0 < ttl_after_first <= 60
 
     counts2 = await redis_client.record_api_key_usage_pipeline(
@@ -81,7 +84,7 @@ async def test_usage_pipeline_counts_and_fixed_window(redis_client):
     )
     assert counts2[usage_key] == 2
     assert counts2[rl_key] == 2
-    ttl_after_second = await redis_client._client.ttl(rl_key)
+    ttl_after_second = await redis_client._client.ttl(redis_client.make_key(rl_key))
     # Fixed window: SET ... NX EX must NOT reset the TTL on later requests, so the
     # window expires relative to the FIRST request (TTL is non-increasing). A bare
     # EXPIRE-every-request would instead keep the counter alive forever under steady
@@ -111,6 +114,17 @@ def test_local_snapshot_cache_disabled_by_default():
     svc = _service(local_ttl=0.0)
     svc._local_snapshot_put("h1", {"key_id": "k1"})
     assert svc._local_snapshot_get("h1") is None
+
+
+@pytest.mark.unit
+def test_configured_api_key_rate_limits_fail_closed_when_redis_is_unavailable():
+    svc = _service(redis_client=SimpleNamespace(is_available=False))
+
+    with pytest.raises(AuthenticationInfrastructureError) as exc_info:
+        svc._require_rate_limit_backend()
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.details["control"] == "api_key_rate_limit"
 
 
 @pytest.mark.unit

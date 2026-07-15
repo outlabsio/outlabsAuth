@@ -98,6 +98,46 @@ async def test_jwt_strategy_rejects_blacklisted_token_before_db_lookup():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_jwt_strategy_fails_closed_when_required_blacklist_is_unavailable():
+    redis_client = SimpleNamespace(is_available=False)
+    user_service = SimpleNamespace(get_user_by_id=AsyncMock(side_effect=AssertionError("should not fetch user")))
+    strategy = JWTStrategy(
+        secret="test-secret",
+        redis_client=redis_client,
+        blacklist_failure_mode="fail_closed",
+    )
+
+    result = await strategy.authenticate(
+        _make_access_token("test-secret", jti="jwt-revocation-check"),
+        user_service=user_service,
+        session=object(),
+    )
+
+    assert result is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_jwt_strategy_can_explicitly_fail_open_for_blacklist_outage():
+    redis_client = SimpleNamespace(is_available=False)
+    user = _make_user(last_password_change=None)
+    strategy = JWTStrategy(
+        secret="test-secret",
+        redis_client=redis_client,
+        blacklist_failure_mode="fail_open",
+    )
+
+    result = await strategy.authenticate(
+        _make_access_token("test-secret", jti="jwt-revocation-check"),
+        user_service=SimpleNamespace(get_user_by_id=AsyncMock(return_value=user)),
+        session=object(),
+    )
+
+    assert result is not None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_jwt_strategy_rejects_stale_token_after_password_change():
     last_password_change = datetime.now(timezone.utc)
     stale_iat = last_password_change - timedelta(minutes=5)

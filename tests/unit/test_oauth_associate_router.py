@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 
 import outlabs_auth.routers.oauth_associate as oauth_associate_module
 from outlabs_auth.models.sql.social_account import SocialAccount
@@ -95,6 +95,10 @@ def stub_httpx_oauth_fastapi_integration(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "httpx_oauth", httpx_oauth_module)
     monkeypatch.setitem(sys.modules, "httpx_oauth.integrations", integrations_module)
     monkeypatch.setitem(sys.modules, "httpx_oauth.integrations.fastapi", fastapi_module)
+    # Browser-bound state persistence is covered by the integration router
+    # suite; these unit tests focus on association branches.
+    monkeypatch.setattr(oauth_associate_module, "issue_oauth_state", AsyncMock())
+    monkeypatch.setattr(oauth_associate_module, "consume_oauth_state", AsyncMock())
 
 
 @pytest.mark.unit
@@ -156,6 +160,7 @@ async def test_oauth_associate_authorize_uses_route_name_when_redirect_url_missi
 
     response = await authorize(
         request=request,
+        response=Response(),
         auth_context={"user_id": str(uuid4())},
         scopes=["user:email"],
     )
@@ -205,6 +210,7 @@ async def test_oauth_associate_callback_rejects_invalid_state_and_invalid_authen
     with pytest.raises(HTTPException) as invalid_state_exc_info:
         await callback(
             request=SimpleNamespace(),
+            response=Response(),
             session=DummySession(),
             auth_context={"user_id": str(uuid4())},
             access_token_state=(
@@ -226,6 +232,7 @@ async def test_oauth_associate_callback_rejects_invalid_state_and_invalid_authen
     with pytest.raises(HTTPException) as invalid_user_exc_info:
         await callback(
             request=SimpleNamespace(),
+            response=Response(),
             session=DummySession(),
             auth_context={"user_id": bad_user_id},
             access_token_state=(
@@ -272,6 +279,7 @@ async def test_oauth_associate_callback_rejects_missing_user(
     with pytest.raises(HTTPException) as exc_info:
         await callback(
             request=SimpleNamespace(),
+            response=Response(),
             session=DummySession(),
             auth_context={"user_id": user_id},
             access_token_state=(
@@ -331,6 +339,7 @@ async def test_oauth_associate_callback_updates_existing_linked_account_for_same
 
     response = await callback(
         request=SimpleNamespace(),
+        response=Response(),
         session=session,
         auth_context={"user_id": str(user_id)},
         access_token_state=(
@@ -407,6 +416,7 @@ async def test_oauth_associate_callback_rejects_different_existing_account_for_s
     with pytest.raises(HTTPException) as exc_info:
         await callback(
             request=SimpleNamespace(),
+            response=Response(),
             session=session,
             auth_context={"user_id": str(user_id)},
             access_token_state=(
@@ -471,6 +481,7 @@ async def test_oauth_associate_callback_updates_existing_provider_account_branch
 
     response = await callback(
         request=SimpleNamespace(),
+        response=Response(),
         session=session,
         auth_context={"user_id": str(user_id)},
         access_token_state=(

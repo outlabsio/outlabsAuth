@@ -231,6 +231,7 @@ async def redis_client() -> AsyncGenerator["object", None]:
         secret_key="test-secret-key-do-not-use-in-production-12345678",
         redis_url=TEST_REDIS_URL,
         redis_enabled=True,
+        redis_key_prefix="outlabs-auth:test:redis-client",
     )
     client = RedisClient(config)
     connected = await client.connect()
@@ -294,6 +295,7 @@ async def auth_with_cache(test_secret_key: str) -> AsyncGenerator[SimpleRBAC, No
         enable_token_cleanup=False,
         redis_url=TEST_REDIS_URL,
         redis_enabled=True,
+        redis_key_prefix="outlabs-auth:test:auth-cache",
         enable_caching=True,
         observability_config=obs_config,
         # Per-instance registry: metrics register against the global default

@@ -9,12 +9,13 @@ from enum import Enum
 from typing import Any, Optional, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.models.sql.social_account import SocialAccount
 from outlabs_auth.oauth.state import decode_state_token, generate_state_token
+from outlabs_auth.routers.oauth_state_store import consume_oauth_state, issue_oauth_state
 from outlabs_auth.routers.oauth_utils import encrypt_provider_token, get_oauth_user_info
 from outlabs_auth.schemas.oauth import OAuthAuthorizeResponse, SocialAccountResponse
 
@@ -93,6 +94,8 @@ def get_oauth_associate_router(
     )
     async def authorize(
         request: Request,
+        response: Response,
+        session: AsyncSession = Depends(auth.uow),
         auth_context=Depends(get_current_user),
         scopes: list[str] = Query(None, description="OAuth scopes to request"),
     ) -> OAuthAuthorizeResponse:
@@ -105,6 +108,21 @@ def get_oauth_associate_router(
 
         state_data = {"sub": user_id}
         state = generate_state_token(state_data, state_secret, lifetime_seconds=600)
+        try:
+            user_uuid = UUID(str(user_id))
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid authenticated user ID",
+            )
+        await issue_oauth_state(
+            session=session,
+            response=response,
+            state=state,
+            provider=oauth_client.name,
+            flow="associate",
+            user_id=user_uuid,
+        )
 
         authorization_url = await oauth_client.get_authorization_url(
             authorize_redirect_url,
@@ -150,6 +168,7 @@ def get_oauth_associate_router(
     )
     async def callback(
         request: Request,
+        response: Response,
         session: AsyncSession = Depends(auth.uow),
         auth_context=Depends(get_current_user),
         access_token_state: tuple[dict[str, Any], str] = Depends(
@@ -159,20 +178,12 @@ def get_oauth_associate_router(
         token, state = access_token_state
         user_id = auth_context.get("user_id")
 
-        user_info = await get_oauth_user_info(oauth_client, token)
-
         try:
             state_data = decode_state_token(state, state_secret)
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid OAuth state token",
-            )
-
-        if state_data.get("sub") != user_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="OAuth state user mismatch (security)",
             )
 
         try:
@@ -182,6 +193,24 @@ def get_oauth_associate_router(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid authenticated user ID",
             )
+
+        if state_data.get("sub") != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OAuth state user mismatch (security)",
+            )
+
+        await consume_oauth_state(
+            session=session,
+            request=request,
+            response=response,
+            state=state,
+            provider=oauth_client.name,
+            flow="associate",
+            expected_user_id=user_uuid,
+        )
+
+        user_info = await get_oauth_user_info(oauth_client, token)
 
         user = await auth.user_service.get_user_by_id(session, user_uuid)
         if not user:

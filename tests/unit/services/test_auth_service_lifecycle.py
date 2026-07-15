@@ -321,7 +321,7 @@ async def test_auth_service_refresh_access_token_revokes_stale_token_and_tracks_
     token_pair = await service.create_tokens_for_user(test_session, user)
 
     refreshed = await service.refresh_access_token(test_session, token_pair.refresh_token)
-    assert refreshed.refresh_token == token_pair.refresh_token
+    assert refreshed.refresh_token != token_pair.refresh_token
     observability.log_token_refreshed.assert_called_with(user_id=str(user.id), status="success")
     activity_tracker.track_activity_detached.assert_called_once_with(str(user.id))
 
@@ -329,14 +329,31 @@ async def test_auth_service_refresh_access_token_revokes_stale_token_and_tracks_
     await test_session.flush()
 
     with pytest.raises(RefreshTokenInvalidError, match="no longer valid"):
-        await service.refresh_access_token(test_session, token_pair.refresh_token)
+        await service.refresh_access_token(test_session, refreshed.refresh_token)
 
-    token_hash = service._hash_token(token_pair.refresh_token)
     stored_token = (
-        await test_session.execute(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
+        await test_session.execute(select(RefreshToken).where(RefreshToken.token_hash == service._hash_token(refreshed.refresh_token)))
     ).scalar_one()
     assert stored_token.is_revoked is True
     assert stored_token.revoked_reason == "Password changed"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_auth_service_refresh_token_reuse_revokes_entire_family(test_session, auth_config: AuthConfig):
+    service = AuthService(config=auth_config)
+    user = await _create_user(test_session, auth_config, email="refresh-reuse@example.com")
+    original = await service.create_tokens_for_user(test_session, user)
+    replacement = await service.refresh_access_token(test_session, original.refresh_token)
+
+    with pytest.raises(RefreshTokenInvalidError, match="reuse detected") as exc_info:
+        await service.refresh_access_token(test_session, original.refresh_token)
+    assert exc_info.value.details["reason"] == "reuse_detected"
+
+    tokens = (await test_session.execute(select(RefreshToken).where(RefreshToken.user_id == user.id))).scalars().all()
+    assert len(tokens) == 2
+    assert all(token.is_revoked for token in tokens)
+    assert any(token.token_hash == service._hash_token(replacement.refresh_token) for token in tokens)
 
 
 @pytest.mark.unit

@@ -33,7 +33,7 @@ def test_create_service_token(service_token_service):
         service_id="test-service",
         service_name="Test Service",
         permissions=["data:read", "data:write"],
-        expires_days=365,
+        expires_days=30,
         metadata={"environment": "test"}
     )
 
@@ -236,8 +236,8 @@ def test_user_token_rejected_as_service_token(service_token_service, config):
     """Test that user tokens are rejected when validating as service token"""
     import jwt
 
-    # A token with the correct audience but the wrong `type` claim — this
-    # is what the `not a service token` branch is designed to catch.
+    # A user token must not validate as a service token even if an attacker
+    # supplies the service audience: service tokens use a separate signing key.
     user_token = jwt.encode(
         {
             "sub": "user-123",
@@ -253,7 +253,7 @@ def test_user_token_rejected_as_service_token(service_token_service, config):
     with pytest.raises(TokenInvalidError) as exc_info:
         service_token_service.validate_service_token(user_token)
 
-    assert "not a service token" in str(exc_info.value)
+    assert "Invalid service token" in str(exc_info.value)
 
 
 def test_custom_expiration(service_token_service):
@@ -274,6 +274,17 @@ def test_custom_expiration(service_token_service):
 
     # Should be within 1 minute of expected
     assert abs((exp_date - expected_exp).total_seconds()) < 60
+
+
+def test_service_token_lifetime_is_bounded(service_token_service):
+    """Long-lived bearer credentials need an explicit, finite production bound."""
+    with pytest.raises(ValueError, match="between 1 and 30"):
+        service_token_service.create_service_token(
+            service_id="too-long",
+            service_name="Too Long",
+            permissions=["data:read"],
+            expires_days=31,
+        )
 
 
 def test_token_with_many_permissions_still_fast(service_token_service):

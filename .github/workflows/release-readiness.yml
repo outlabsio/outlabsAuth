@@ -9,6 +9,27 @@ on:
       - "v*"
 
 jobs:
+  production-dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Audit production dependency set
+        # Audit the exact locked runtime dependency graph, excluding this unreleased
+        # local package (which is intentionally absent from PyPI until publication).
+        # Dev/stress extras remain out of scope for this production gate.
+        run: >-
+          uv export --locked --no-dev --no-emit-project --format requirements-txt
+          | uv run --no-project --with pip-audit pip-audit --strict --progress-spinner off
+          --no-deps --disable-pip -r /dev/stdin
+
   library:
     runs-on: ubuntu-latest
     services:
@@ -16,7 +37,7 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: outlabs_auth_test
         ports:
           - 5432:5432
@@ -26,7 +47,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/outlabs_auth_test
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres@127.0.0.1:5432/outlabs_auth_test
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -51,6 +72,41 @@ jobs:
 
       - name: Verify CLI version command
         run: uv run outlabs-auth --version
+
+  # Reconstruct the preceding release's populated schema, upgrade it to the
+  # current Alembic head, and assert both data preservation and a no-op retry.
+  # This is the release rehearsal for the library itself; it never requires a
+  # consuming application's database or credentials.
+  seeded-upgrade-rehearsal:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: outlabs_auth_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d outlabs_auth_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres@127.0.0.1:5432/outlabs_auth_test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Rehearse populated pre-release upgrade
+        run: uv run --extra test python -m pytest tests/integration/test_seeded_upgrade_rehearsal.py -q
 
   # The complete library test suite, with BOTH backing services. Without the
   # Redis service every cache/budget/invalidation test skips silently, so the
@@ -145,3 +201,49 @@ jobs:
 
       - name: Run API integration suite (seed, boot, smoke, 45 checks)
         run: uv run python scripts/run_enterprise_example_smoke.py
+
+  # Seed and validate the running SimpleRBAC FastAPI example independently of
+  # EnterpriseRBAC so both supported presets are release-gated over HTTP.
+  simple-example-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: blog_simple_rbac
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d blog_simple_rbac"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres@127.0.0.1:5432/blog_simple_rbac
+      REDIS_URL: redis://127.0.0.1:6379/13
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Generate ephemeral SECRET_KEY
+        run: echo "SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" >> "$GITHUB_ENV"
+
+      - name: Run SimpleRBAC integration suite (seed, boot, live API checks)
+        run: uv run python scripts/run_simple_example_smoke.py

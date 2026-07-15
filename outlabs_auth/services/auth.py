@@ -525,7 +525,7 @@ class AuthService:
             refresh_token: Valid refresh token
 
         Returns:
-            New token pair with same refresh token
+            New access and single-use refresh token pair
 
         Raises:
             RefreshTokenInvalidError: If refresh token is invalid or revoked
@@ -574,7 +574,11 @@ class AuthService:
         # If refresh token storage is enabled, check database
         if self.config.store_refresh_tokens:
             token_hash = self._hash_token(refresh_token)
-            refresh_token_stmt = select(RefreshToken).where(cast(Any, RefreshToken.token_hash) == token_hash)
+            refresh_token_stmt = (
+                select(RefreshToken)
+                .where(cast(Any, RefreshToken.token_hash) == token_hash)
+                .with_for_update()
+            )
             result = await session.execute(refresh_token_stmt)
             token_model = result.scalar_one_or_none()
 
@@ -586,6 +590,23 @@ class AuthService:
 
             if not token_model.is_valid():
                 if token_model.is_revoked:
+                    if token_model.revoked_reason == "rotated":
+                        # A rotated token is single-use. Reuse means the prior
+                        # credential was copied or raced, so revoke every active
+                        # session rather than guessing which child is trusted.
+                        revoked_count = await self.revoke_all_user_tokens(
+                            session,
+                            token_model.user_id,
+                            reason="Refresh token reuse detected",
+                        )
+                        raise RefreshTokenInvalidError(
+                            message="Refresh token reuse detected; all sessions were revoked",
+                            details={
+                                "reason": "reuse_detected",
+                                "family_id": str(token_model.family_id),
+                                "revoked_session_count": revoked_count,
+                            },
+                        )
                     raise RefreshTokenInvalidError(
                         message="Refresh token has been revoked",
                         details={
@@ -625,8 +646,11 @@ class AuthService:
                 details={"reason": "password_changed"},
             )
 
-        # Create new access token
-        access_token, _ = create_token_pair(
+        # Rotate the stored refresh token atomically with its replacement. The
+        # SELECT ... FOR UPDATE above serializes concurrent refresh attempts for
+        # the same credential; the loser sees ``rotated`` and triggers replay
+        # containment instead of minting a second child token.
+        access_token, replacement_refresh_token = create_token_pair(
             user_id=str(user.id),
             secret_key=self.config.secret_key,
             algorithm=self.config.algorithm,
@@ -635,9 +659,24 @@ class AuthService:
             audience=self.config.jwt_audience,
         )
 
-        # Update token usage stats
+        # Store the replacement before revoking the old token so the lineage is
+        # auditable and the database never contains a dangling replacement link.
         if self.config.store_refresh_tokens and token_model:
+            replacement = RefreshToken(
+                user_id=user.id,
+                token_hash=self._hash_token(replacement_refresh_token),
+                family_id=token_model.family_id,
+                expires_at=datetime.now(timezone.utc) + timedelta(days=self.config.refresh_token_expire_days),
+                device_name=token_model.device_name,
+                device_fingerprint=token_model.device_fingerprint,
+                ip_address=token_model.ip_address,
+                user_agent=token_model.user_agent,
+            )
+            session.add(replacement)
+            await session.flush()
             token_model.record_usage()
+            token_model.revoke("rotated")
+            token_model.replaced_by_token_id = replacement.id
             await session.flush()
 
         # Log successful refresh
@@ -653,7 +692,7 @@ class AuthService:
 
         return TokenPair(
             access_token=access_token,
-            refresh_token=refresh_token,
+            refresh_token=replacement_refresh_token,
             expires_in=self.config.access_token_expire_minutes * 60,
         )
 

@@ -29,6 +29,7 @@ from .api_key import (
     APIKeyIPWhitelist,
     APIKeyScope,
 )
+from .api_key_usage_sync_batch import APIKeyUsageSyncBatch
 from .closure import EntityClosure
 
 # === EnterpriseRBAC Models ===
@@ -130,6 +131,7 @@ __all__ = [
     "APIKey",
     "APIKeyScope",
     "APIKeyIPWhitelist",
+    "APIKeyUsageSyncBatch",
     # OAuth
     "SocialAccount",
     "OAuthState",
@@ -183,6 +185,7 @@ API_KEY_MODELS = [
     APIKey,
     APIKeyScope,
     APIKeyIPWhitelist,
+    APIKeyUsageSyncBatch,
 ]
 
 OAUTH_MODELS = [

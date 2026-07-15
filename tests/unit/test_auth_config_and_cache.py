@@ -81,6 +81,7 @@ def test_auth_config_enables_redis_and_caching_from_redis_url(test_secret_key: s
     config = AuthConfig(
         secret_key=test_secret_key,
         redis_url="redis://localhost:6379/0",
+        redis_key_prefix="outlabs-auth:test:config",
     )
 
     assert config.redis_enabled is True
@@ -92,6 +93,7 @@ def test_auth_config_preserves_explicit_cache_opt_out(test_secret_key: str):
     config = AuthConfig(
         secret_key=test_secret_key,
         redis_url="redis://localhost:6379/0",
+        redis_key_prefix="outlabs-auth:test:config",
         enable_caching=False,
     )
 
@@ -117,6 +119,20 @@ def test_auth_config_rejects_cache_without_redis(test_secret_key: str):
         AuthConfig(
             secret_key=test_secret_key,
             enable_caching=True,
+        )
+
+
+@pytest.mark.unit
+def test_background_jobs_are_disabled_by_default(auth_config):
+    assert auth_config.background_job_mode == "disabled"
+
+
+@pytest.mark.unit
+def test_auth_config_requires_namespace_when_redis_is_enabled(test_secret_key: str):
+    with pytest.raises(ValidationError, match="redis_key_prefix is required"):
+        AuthConfig(
+            secret_key=test_secret_key,
+            redis_url="redis://localhost:6379/0",
         )
 
 

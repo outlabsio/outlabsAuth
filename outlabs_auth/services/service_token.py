@@ -11,9 +11,12 @@ Key differences from user tokens:
 - No refresh mechanism (recreate when expired)
 """
 
+import hashlib
+import hmac
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, cast
+from uuid import uuid4
 
 import jwt
 
@@ -61,12 +64,31 @@ class ServiceTokenService:
         """
         self.config = config
 
+    @property
+    def audience(self) -> str:
+        return self.config.service_token_audience or f"{self.config.jwt_audience}:service"
+
+    @property
+    def issuer(self) -> str:
+        return self.config.service_token_issuer or f"{self.config.jwt_audience}:service"
+
+    @property
+    def signing_key(self) -> str:
+        """Use a dedicated or domain-separated key, never the user-JWT key directly."""
+        if self.config.service_token_secret_key:
+            return self.config.service_token_secret_key
+        return hmac.new(
+            self.config.secret_key.encode("utf-8"),
+            b"outlabs-auth:service-token:v1",
+            hashlib.sha256,
+        ).hexdigest()
+
     def create_service_token(
         self,
         service_id: str,
         service_name: str,
         permissions: List[str],
-        expires_days: int = 365,
+        expires_days: int = 30,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
@@ -90,6 +112,12 @@ class ServiceTokenService:
             ...     metadata={"version": "2.0", "environment": "prod"}
             ... )
         """
+        if not 1 <= expires_days <= self.config.service_token_max_expire_days:
+            raise ValueError(
+                "expires_days must be between 1 and "
+                f"{self.config.service_token_max_expire_days} for service tokens"
+            )
+
         # Calculate expiration
         expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days)
 
@@ -97,7 +125,9 @@ class ServiceTokenService:
         payload = {
             "sub": service_id,  # Subject (service ID)
             "type": "service",  # Token type
-            "aud": self.SERVICE_AUDIENCE,
+            "aud": self.audience,
+            "iss": self.issuer,
+            "jti": str(uuid4()),
             "service_name": service_name,
             "permissions": permissions,  # Embedded permissions
             "iat": datetime.now(timezone.utc),  # Issued at
@@ -110,7 +140,7 @@ class ServiceTokenService:
 
         token = jwt.encode(
             payload,
-            self.config.secret_key,
+            self.signing_key,
             algorithm=self.config.algorithm,
         )
 
@@ -149,10 +179,13 @@ class ServiceTokenService:
             # Verify token (includes expiration check)
             payload = jwt.decode(
                 token,
-                self.config.secret_key,
+                self.signing_key,
                 algorithms=[self.config.algorithm],
-                audience=self.SERVICE_AUDIENCE,
-                options={"require": ["exp"]},  # SEC-6: never accept a token without expiry
+                audience=self.audience,
+                issuer=self.issuer,
+                options={
+                    "require": ["exp", "iat", "aud", "iss", "jti", "sub", "type", "permissions"],
+                },
             )
 
             # Verify it's a service token
@@ -272,7 +305,7 @@ class ServiceTokenService:
         self,
         api_name: str,
         permissions: List[str],
-        expires_days: int = 365,
+        expires_days: int = 30,
     ) -> str:
         """
         Convenience method for creating API service tokens.
@@ -303,7 +336,7 @@ class ServiceTokenService:
         self,
         worker_name: str,
         permissions: List[str],
-        expires_days: int = 365,
+        expires_days: int = 30,
     ) -> str:
         """
         Convenience method for creating background worker service tokens.

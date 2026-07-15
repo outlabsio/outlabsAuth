@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from sqlalchemy import select
 
 import outlabs_auth.routers.oauth as oauth_router_module
@@ -16,9 +16,11 @@ import outlabs_auth.routers.oauth_associate as oauth_associate_module
 from outlabs_auth import SimpleRBAC
 from outlabs_auth.core.exceptions import AccountLockedError
 from outlabs_auth.models.sql.social_account import SocialAccount
+from outlabs_auth.models.sql.oauth_state import OAuthState
 from outlabs_auth.oauth.state import decode_state_token, generate_state_token
 from outlabs_auth.routers.oauth import get_oauth_router
 from outlabs_auth.routers.oauth_associate import get_oauth_associate_router
+from outlabs_auth.routers.oauth_state_store import oauth_state_cookie_name
 
 
 class DummyOAuthClient:
@@ -50,11 +52,45 @@ def _endpoint(router, path: str, method: str):
     raise AssertionError(f"Route not found for {method} {path}")
 
 
-def _request() -> SimpleNamespace:
+def _request(cookies: dict[str, str] | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         client=SimpleNamespace(host="127.0.0.1"),
         headers={"user-agent": "pytest"},
+        cookies=cookies or {},
     )
+
+
+async def _store_oauth_state(
+    auth: SimpleRBAC,
+    state: str,
+    provider: str,
+    *,
+    user_id=None,
+    flow: str = "login",
+) -> dict[str, str]:
+    binding = f"test-binding-{uuid4().hex}"
+    async with auth.get_session() as session:
+        session.add(
+            OAuthState(
+                state=state,
+                provider=provider,
+                user_id=user_id,
+                nonce=binding,
+            )
+        )
+        await session.commit()
+    return {oauth_state_cookie_name(provider, flow): binding}
+
+
+async def _oauth_state_cookies(
+    auth: SimpleRBAC, state: str, provider: str, flow: str = "login"
+) -> dict[str, str]:
+    async with auth.get_session() as session:
+        record = (
+            await session.execute(select(OAuthState).where(OAuthState.state == state))
+        ).scalar_one()
+    assert record.nonce is not None
+    return {oauth_state_cookie_name(provider, flow): record.nonce}
 
 
 @pytest.fixture(autouse=True)
@@ -123,13 +159,17 @@ async def test_oauth_authorize_returns_signed_state_and_callback_creates_user(
         fake_get_oauth_user_info,
     )
 
-    authorize_response = await authorize(
-        request=SimpleNamespace(),
-        scopes=["user:email", "read:user"],
-    )
+    async with auth_instance.get_session() as session:
+        authorize_response = await authorize(
+            request=SimpleNamespace(),
+            response=Response(),
+            session=session,
+            scopes=["user:email", "read:user"],
+        )
     parsed = urlparse(authorize_response.authorization_url)
     params = parse_qs(parsed.query)
     state = params["state"][0]
+    state_cookies = await _oauth_state_cookies(auth_instance, state, "github")
     decoded = decode_state_token(state, "oauth-state-secret")
     assert decoded.get("aud") == "outlabs-auth:oauth-state"
     assert decoded.get("sub") is None
@@ -140,7 +180,8 @@ async def test_oauth_authorize_returns_signed_state_and_callback_creates_user(
     email = None
     async with auth_instance.get_session() as session:
         callback_result = await callback(
-            request=_request(),
+            request=_request(state_cookies),
+            response=Response(),
             session=session,
             access_token_state=(
                 {
@@ -208,6 +249,7 @@ async def test_oauth_callback_rejects_invalid_state_token(
         with pytest.raises(HTTPException) as exc_info:
             await callback(
                 request=_request(),
+                response=Response(),
                 session=session,
                 access_token_state=(
                     {"access_token": "provider-access-token"},
@@ -217,6 +259,70 @@ async def test_oauth_callback_rejects_invalid_state_token(
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == "Invalid OAuth state token"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_oauth_state_is_browser_bound_and_single_use(
+    auth_instance: SimpleRBAC,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    oauth_client = DummyOAuthClient("github")
+    router = get_oauth_router(
+        oauth_client,
+        auth_instance,
+        state_secret="oauth-state-secret",
+        prefix="/v1/oauth/github",
+        redirect_url="https://app.example.com/oauth/github/callback",
+    )
+    authorize = _endpoint(router, "/v1/oauth/github/authorize", "GET")
+    callback = _endpoint(router, "/v1/oauth/github/callback", "GET")
+
+    async def fake_get_oauth_user_info(oauth_client, token):
+        return SimpleNamespace(
+            provider_user_id=f"github-state-{uuid4().hex}",
+            email=f"oauth-state-{uuid4().hex[:8]}@example.com",
+            email_verified=True,
+        )
+
+    monkeypatch.setattr(oauth_router_module, "get_oauth_user_info", fake_get_oauth_user_info)
+
+    async with auth_instance.get_session() as session:
+        authorize_response = await authorize(
+            request=SimpleNamespace(), response=Response(), session=session, scopes=[]
+        )
+    state = parse_qs(urlparse(authorize_response.authorization_url).query)["state"][0]
+    valid_cookies = await _oauth_state_cookies(auth_instance, state, "github")
+    callback_args = {"access_token": "provider-access-token"}, state
+
+    async with auth_instance.get_session() as session:
+        with pytest.raises(HTTPException) as mismatch:
+            await callback(
+                request=_request({oauth_state_cookie_name("github", "login"): "wrong-browser"}),
+                response=Response(),
+                session=session,
+                access_token_state=callback_args,
+            )
+    assert mismatch.value.status_code == 400
+
+    async with auth_instance.get_session() as session:
+        result = await callback(
+            request=_request(valid_cookies),
+            response=Response(),
+            session=session,
+            access_token_state=callback_args,
+        )
+    assert result["access_token"]
+
+    async with auth_instance.get_session() as session:
+        with pytest.raises(HTTPException) as replay:
+            await callback(
+                request=_request(valid_cookies),
+                response=Response(),
+                session=session,
+                access_token_state=callback_args,
+            )
+    assert replay.value.status_code == 400
 
 
 @pytest.mark.integration
@@ -233,13 +339,23 @@ async def test_oauth_associate_authorize_embeds_authenticated_user_in_state(
         redirect_url="https://app.example.com/oauth/associate/github/callback",
     )
     authorize = _endpoint(router, "/v1/oauth-associate/github/authorize", "GET")
-    user_id = str(uuid4())
+    async with auth_instance.get_session() as session:
+        user = await auth_instance.user_service.create_user(
+            session=session,
+            email=f"oauth-authorize-{uuid4().hex[:8]}@example.com",
+            password="AuthorizePass123!",
+        )
+        await session.commit()
+        user_id = str(user.id)
 
-    response = await authorize(
-        request=SimpleNamespace(),
-        auth_context={"user_id": user_id},
-        scopes=["user:email"],
-    )
+    async with auth_instance.get_session() as session:
+        response = await authorize(
+            request=SimpleNamespace(),
+            response=Response(),
+            session=session,
+            auth_context={"user_id": user_id},
+            scopes=["user:email"],
+        )
     params = parse_qs(urlparse(response.authorization_url).query)
     state = params["state"][0]
     decoded = decode_state_token(state, "oauth-associate-secret")
@@ -294,10 +410,14 @@ async def test_oauth_associate_callback_links_account_for_authenticated_user(
     )
 
     state = generate_state_token({"sub": user_id}, "oauth-associate-secret", lifetime_seconds=600)
+    state_cookies = await _store_oauth_state(
+        auth_instance, state, "github", user_id=user_uuid, flow="associate"
+    )
 
     async with auth_instance.get_session() as session:
         result = await callback(
-            request=_request(),
+            request=_request(state_cookies),
+            response=Response(),
             session=session,
             auth_context={"user_id": user_id},
             access_token_state=(
@@ -374,11 +494,15 @@ async def test_oauth_associate_callback_rejects_state_user_mismatch(
         "oauth-associate-secret",
         lifetime_seconds=600,
     )
+    state_cookies = await _store_oauth_state(
+        auth_instance, state, "github", user_id=user.id, flow="associate"
+    )
 
     async with auth_instance.get_session() as session:
         with pytest.raises(HTTPException) as exc_info:
             await callback(
-                request=_request(),
+                request=_request(state_cookies),
+                response=Response(),
                 session=session,
                 auth_context={"user_id": str(user.id)},
                 access_token_state=(
@@ -446,11 +570,15 @@ async def test_oauth_associate_callback_rejects_provider_account_linked_to_anoth
     )
 
     state = generate_state_token({"sub": owner_id}, "oauth-associate-secret", lifetime_seconds=600)
+    state_cookies = await _store_oauth_state(
+        auth_instance, state, "github", user_id=owner.id, flow="associate"
+    )
 
     async with auth_instance.get_session() as session:
         with pytest.raises(HTTPException) as exc_info:
             await callback(
-                request=_request(),
+                request=_request(state_cookies),
+                response=Response(),
                 session=session,
                 auth_context={"user_id": owner_id},
                 access_token_state=(
@@ -512,11 +640,13 @@ async def test_oauth_callback_rejects_locked_existing_user(
     )
 
     state = generate_state_token({}, "oauth-state-secret", lifetime_seconds=600)
+    state_cookies = await _store_oauth_state(auth_instance, state, "github")
 
     async with auth_instance.get_session() as session:
         with pytest.raises(AccountLockedError):
             await callback(
-                request=_request(),
+                request=_request(state_cookies),
+                response=Response(),
                 session=session,
                 access_token_state=(
                     {"access_token": "provider-access-token"},

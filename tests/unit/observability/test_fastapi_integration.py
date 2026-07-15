@@ -7,6 +7,22 @@ from outlabs_auth.middleware import ResourceContextMiddleware
 from outlabs_auth.observability import CorrelationIDMiddleware, ObservabilityConfig
 
 
+def _route_paths(app: FastAPI) -> set[str]:
+    """Return paths from both concrete and lazily-included FastAPI routers."""
+    paths = {
+        route.path
+        for route in app.routes
+        if hasattr(route, "path")
+    }
+    for route in app.routes:
+        paths.update(
+            child.path
+            for child in getattr(getattr(route, "original_router", None), "routes", ())
+            if hasattr(child, "path")
+        )
+    return paths
+
+
 def _build_auth(*, metrics_path: str = "/internal/auth/metrics") -> SimpleRBAC:
     return SimpleRBAC(
         database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/test_db",
@@ -35,7 +51,7 @@ def test_instrument_fastapi_safe_defaults_do_not_override_host_surfaces():
 
     auth.instrument_fastapi(app)
 
-    route_paths = {route.path for route in app.routes}
+    route_paths = _route_paths(app)
     middleware_classes = {middleware.cls for middleware in app.user_middleware}
 
     assert OutlabsAuthException in app.exception_handlers
@@ -57,7 +73,7 @@ def test_instrument_fastapi_standalone_mode_adds_explicit_integrations():
         include_resource_context=True,
     )
 
-    route_paths = {route.path for route in app.routes}
+    route_paths = _route_paths(app)
     middleware_classes = {middleware.cls for middleware in app.user_middleware}
 
     assert Exception in app.exception_handlers

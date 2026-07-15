@@ -1,9 +1,9 @@
 """
 JWT-based OAuth state token management (DD-042).
 
-Instead of storing OAuth state in the database, we use signed JWT tokens
-for CSRF protection. This eliminates database writes and makes OAuth flows
-completely stateless.
+Signed state tokens protect integrity. The OAuth routers additionally persist a
+short-lived ``OAuthState`` record for one-time use and bind it to an HttpOnly
+browser cookie, closing the replay gap of a signed-but-stateless token.
 
 Key advantages:
 - No database writes (faster, simpler)
@@ -141,8 +141,9 @@ def decode_state_token(
             algorithms=algorithms,
             audience=STATE_TOKEN_AUDIENCE,  # Validate audience
             options={
-                "require_exp": True,  # Require expiration
-                "require_iat": True,  # Require issued at
+                # PyJWT requires claim names through this option. The former
+                # ``require_exp`` / ``require_iat`` keys were ignored.
+                "require": ["exp", "iat"],
                 "verify_exp": True,  # Verify not expired
                 "verify_aud": True,  # Verify audience
             },

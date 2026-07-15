@@ -16,13 +16,13 @@ import pytest
 async def test_increment_with_ttl_sets_window_ttl_atomically(redis_client):
     count = await redis_client.increment_with_ttl("bench:window", amount=1, ttl=60)
     assert count == 1
-    ttl = await redis_client._client.ttl("bench:window")
+    ttl = await redis_client._client.ttl(redis_client.make_key("bench:window"))
     assert 0 < ttl <= 60
 
     # Subsequent increments keep counting inside the same window.
     count = await redis_client.increment_with_ttl("bench:window", amount=1, ttl=60)
     assert count == 2
-    assert 0 < await redis_client._client.ttl("bench:window") <= 60
+    assert 0 < await redis_client._client.ttl(redis_client.make_key("bench:window")) <= 60
 
 
 @pytest.mark.unit
@@ -31,11 +31,11 @@ async def test_increment_with_ttl_heals_legacy_immortal_counter(redis_client):
     # A counter left behind by the old non-atomic INCR-then-EXPIRE shape:
     # value present, no TTL — previously rate-limited the key forever.
     await redis_client.set_raw("bench:immortal", "7")
-    assert await redis_client._client.ttl("bench:immortal") == -1
+    assert await redis_client._client.ttl(redis_client.make_key("bench:immortal")) == -1
 
     count = await redis_client.increment_with_ttl("bench:immortal", amount=1, ttl=60)
     assert count == 8
-    assert 0 < await redis_client._client.ttl("bench:immortal") <= 60
+    assert 0 < await redis_client._client.ttl(redis_client.make_key("bench:immortal")) <= 60
 
 
 @pytest.mark.unit
@@ -43,7 +43,7 @@ async def test_increment_with_ttl_heals_legacy_immortal_counter(redis_client):
 async def test_increment_without_ttl_keeps_plain_incr_semantics(redis_client):
     assert await redis_client.increment_with_ttl("bench:plain", amount=5) == 5
     assert await redis_client.increment_with_ttl("bench:plain", amount=5) == 10
-    assert await redis_client._client.ttl("bench:plain") == -1
+    assert await redis_client._client.ttl(redis_client.make_key("bench:plain")) == -1
 
 
 @pytest.mark.unit
