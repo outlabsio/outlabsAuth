@@ -1,24 +1,14 @@
 # DD-095: Testing Guide
 
-> [!WARNING]
-> **Written for the pre-Postgres design and not updated since. Do not follow it.**
->
-> This predates the move to Postgres/SQLModel and still describes MongoDB/Beanie —
-> `AsyncIOMotorClient`, `Link[...]` fields, and module paths that no longer exist.
-> Code samples here will not run, and file references will not resolve.
->
-> For how the library actually works today: **`examples/`** (the only integration
-> reference kept honest by tests), then `README.md`, then the source. Retained for
-> history — the reasoning is often still sound even where the mechanics are not.
-
-
 **Status**: Complete
 **Created**: 2025-01-24
 **Related**: DD-048 (User Status), DD-049 (Activity Tracking)
 
 ## Overview
 
-OutlabsAuth has a comprehensive test suite covering authentication, authorization, token management, and user status workflows. Tests are organized by feature and include both unit and integration tests.
+OutlabsAuth has a comprehensive test suite covering authentication, authorization, token management, RBAC, entities, API keys, and observability. Tests are organized into unit and integration suites and run against **PostgreSQL**, with Redis-dependent tests skipping automatically when Redis is unreachable.
+
+**Scale**: 80 unit test files + 56 integration test files.
 
 ---
 
@@ -26,20 +16,25 @@ OutlabsAuth has a comprehensive test suite covering authentication, authorizatio
 
 ```
 tests/
-├── integration/
-│   └── login_logout/
-│       ├── conftest.py                    # Shared fixtures
-│       ├── test_user_status.py            # User status system (28 tests)
-│       ├── test_logout_standard.py        # Standard logout (11 tests)
-│       ├── test_logout_stateless.py       # Stateless mode (10 tests)
-│       ├── test_token_cleanup.py          # Token cleanup worker (23 tests)
-│       └── test_immediate_logout.py       # Redis blacklisting (15 tests)
-└── unit/
-    └── services/
-        └── ...                            # Unit tests for services
+├── README.md
+├── conftest.py            # Shared fixtures (engine, session, auth instances, test data)
+├── fixtures/
+│
+├── unit/                  # Isolated component testing
+│   ├── authentication/    # backend, strategy, transport
+│   ├── database/          # engine, registry
+│   ├── integrations/      # host query service
+│   ├── oauth/             # provider flows, state tokens, security
+│   ├── observability/     # metrics, logging, FastAPI integration
+│   ├── services/          # activity_tracker, api_key, auth lifecycle, access scope, ...
+│   └── test_*.py          # jwt utils, password, presets, schema integrity, CLI, ...
+│
+└── integration/           # End-to-end workflows against a real database
+    └── test_*.py          # auth/user/role/permission routers, entity hierarchy,
+                           # API key lifecycle, session lifecycle, query budgets, ...
 ```
 
-**Total: 87+ tests** covering login/logout functionality
+Both suites talk to a real PostgreSQL instance; "unit" here means narrow in scope, not necessarily database-free. Tests that mock their dependencies entirely (for example `tests/unit/services/test_activity_tracker.py`, which mocks Redis) need no services at all.
 
 ---
 
@@ -48,320 +43,140 @@ tests/
 ### All Tests
 ```bash
 # Run entire test suite
-pytest
+uv run pytest
 
 # Run with coverage
-pytest --cov=outlabs_auth --cov-report=html
+uv run pytest --cov=outlabs_auth --cov-report=html
+```
+
+### By Suite
+```bash
+# All unit tests
+uv run pytest tests/unit/ -v
+
+# All integration tests
+uv run pytest tests/integration/ -v
+
+# A subdirectory
+uv run pytest tests/unit/oauth/ -v
 ```
 
 ### Specific Test Files
 ```bash
-# User status tests
-pytest tests/integration/login_logout/test_user_status.py -v
+uv run pytest tests/unit/services/test_activity_tracker.py -v
+uv run pytest tests/integration/test_session_lifecycle.py -v
 
-# Token cleanup tests
-pytest tests/integration/login_logout/test_token_cleanup.py -v
-
-# Immediate logout (requires Redis)
-pytest tests/integration/login_logout/test_immediate_logout.py -v
+# A single test function
+uv run pytest tests/unit/test_password.py::test_name
 ```
 
-### By Feature
+### By Marker
+
+`conftest.py` registers three markers:
+
 ```bash
-# All login/logout tests
-pytest tests/integration/login_logout/ -v
-
-# All unit tests
-pytest tests/unit/ -v
+uv run pytest -m unit           # marked unit tests
+uv run pytest -m integration    # marked integration tests
+uv run pytest -m "not slow"     # skip slow tests
 ```
 
----
-
-## Test Coverage
-
-### 1. User Status System (28 tests)
-
-**File**: `test_user_status.py`
-
-Tests all user status workflows and authentication blocking:
-
-#### ACTIVE Status (4 tests)
-- Can authenticate normally
-- Receives access + refresh tokens
-- Both tokens work correctly
-- Can refresh access token
-
-#### SUSPENDED Status (6 tests)
-- Cannot authenticate (blocked)
-- Error message shows status
-- Optional expiry date (suspended_until)
-- Auto-unsuspend after expiry passes
-- Error includes suspension details
-
-#### BANNED Status (4 tests)
-- Cannot authenticate (permanently blocked)
-- Clear error message
-- No auto-expiry (manual intervention required)
-
-#### DELETED Status (4 tests)
-- Cannot authenticate (soft delete)
-- Preserves data for recovery
-- Error shows deleted status
-- Includes deleted_at timestamp
-
-#### LOCKED Status (5 tests)
-- Account locked after max failed login attempts
-- Temporary lockout (30 minutes default)
-- Auto-unlock after lockout period
-- ACTIVE status but temporarily blocked
-- Error message shows unlock time
-
-#### Multiple Users (5 tests)
-- Different users, different statuses work independently
-- Status transitions don't affect other users
-- Concurrent authentication checks
-
-**Key Features Tested**:
-- ✅ All 4 status types (ACTIVE, SUSPENDED, BANNED, DELETED)
-- ✅ Account lockout (failed login attempts)
-- ✅ Status-specific error messages
-- ✅ Suspended_until auto-expiry
-- ✅ Deleted_at soft delete tracking
-
----
-
-### 2. Standard Logout (11 tests)
-
-**File**: `test_logout_standard.py`
-
-**Mode**: MongoDB token storage (default)
-**Security Window**: 15 minutes (access token lifetime)
-
-#### Token Revocation (5 tests)
-- Login returns access + refresh tokens
-- Logout revokes refresh token in MongoDB
-- Access token still works (15-min window)
-- Refresh token fails after logout
-- Already-revoked token handling
-
-#### Multi-Device Support (3 tests)
-- Multiple sessions per user
-- Each session has unique tokens
-- Logout revokes one session only
-- Other sessions remain active
-
-#### Error Scenarios (3 tests)
-- Invalid refresh token
-- Token not found
-- Already revoked token
-
-**Key Features Tested**:
-- ✅ Refresh token revocation in MongoDB
-- ✅ 15-minute access token window
-- ✅ Multi-device session management
-- ✅ Graceful error handling
-
----
-
-### 3. Stateless Logout (10 tests)
-
-**File**: `test_logout_stateless.py`
-
-**Mode**: No token storage (stateless JWT)
-**Tradeoff**: Cannot revoke tokens until expiry
-
-#### Stateless Behavior (4 tests)
-- No tokens stored in MongoDB
-- Logout returns False (can't revoke)
-- Access token works after logout
-- Refresh token works after logout
-
-#### Security Tradeoffs (3 tests)
-- Documents 30-day security window
-- Both tokens valid until expiry
-- Clear error messages about tradeoffs
-
-#### Multiple Sessions (3 tests)
-- All sessions independent
-- No database writes for tokens
-- Performance benefits of stateless mode
-
-**Key Features Tested**:
-- ✅ Stateless JWT mode (no storage)
-- ✅ Cannot revoke tokens (documented tradeoff)
-- ✅ Performance characteristics
-- ✅ Security considerations
-
----
-
-### 4. Token Cleanup (23 tests)
-
-**File**: `test_token_cleanup.py`
-
-**Purpose**: Background worker to clean up expired/old tokens
-
-#### Expired Token Cleanup (4 tests)
-- Deletes tokens past expires_at
-- Keeps valid tokens
-- Handles multiple expired tokens
-- Edge case: just expired (1 second ago)
-
-#### Revoked Token Cleanup (4 tests)
-- Deletes old revoked tokens (>7 days)
-- Keeps recent revoked tokens (<7 days)
-- Custom retention periods (2, 5, 7 days)
-- Exact cutoff boundary handling
-
-#### Mixed Scenarios (3 tests)
-- Deletes both expired AND old revoked
-- Correctly filters (delete some, keep others)
-- Accurate statistics reporting
-
-#### OAuth State Cleanup (3 tests)
-- Deletes expired OAuth states (>1 hour)
-- Keeps recent OAuth states
-- Graceful handling if OAuth not installed
-
-#### Performance Tests (3 tests)
-- Large batch (500 tokens in <5 seconds)
-- Idempotent (safe to run multiple times)
-- Preserves user data (only deletes tokens)
-
-#### Edge Cases (6 tests)
-- Empty database returns zeros
-- Only valid tokens returns zero deleted
-- Timezone-naive datetime handling
-- Statistics accuracy
-- cleanup_all() runs all tasks
-
-**Key Features Tested**:
-- ✅ Expired token cleanup
-- ✅ Old revoked token cleanup (7-day retention)
-- ✅ OAuth state cleanup
-- ✅ Custom retention periods
-- ✅ Performance with large datasets
-- ✅ Accurate statistics reporting
-
----
-
-### 5. Immediate Logout (15 tests)
-
-**File**: `test_immediate_logout.py`
-
-**Mode**: High security (MongoDB + Redis blacklist)
-**Security**: Immediate access token revocation
-
-#### Immediate Revocation (4 tests)
-- Access token blacklisted in Redis
-- Access token rejected immediately
-- Refresh token also revoked
-- TTL matches access token lifetime
-
-#### Multi-Device (2 tests)
-- Each session blacklisted independently
-- Other sessions unaffected by logout
-
-#### Stateless + Redis Mode (2 tests)
-- No token storage but blacklisting works
-- Access token revoked, refresh still works (tradeoff)
-
-#### Edge Cases (4 tests)
-- Logout without JTI doesn't blacklist
-- Graceful degradation if Redis unavailable
-- Already-blacklisted tokens rejected
-- Different users independent
-
-#### Performance Tests (2 tests)
-- Blacklist 10 tokens in <1 second
-- Auth check with blacklist <50ms
-
-#### Advanced (1 test)
-- TTL auto-expiry after token lifetime
-
-**Key Features Tested**:
-- ✅ Redis JTI blacklisting
-- ✅ Immediate access token revocation
-- ✅ TTL management (auto-expire)
-- ✅ Multi-device independence
-- ✅ Stateless + Redis hybrid mode
-- ✅ Graceful degradation without Redis
-- ✅ Performance benchmarks
-
-**Note**: 13 tests require Redis and skip if unavailable
+### By Pattern
+```bash
+uv run pytest -k "user"
+uv run pytest -k "login"
+uv run pytest -k "not slow"
+```
 
 ---
 
 ## Test Fixtures
 
+All shared fixtures live in `tests/conftest.py`.
+
 ### Database Fixtures
 
-**`mongo_db`** (function-scoped)
-- Fresh MongoDB database per test
-- Auto-cleanup after test completes
-- Isolation between tests
+**`test_engine`** (function-scoped)
+- Creates an async engine against `TEST_DATABASE_URL`
+- Creates an **isolated PostgreSQL schema per test** (`test_<uuid>`), sets `search_path` to it, and runs `SQLModel.metadata.create_all`
+- Drops the schema (CASCADE) after the test
+
+**`test_session`** (function-scoped)
+- An `AsyncSession` bound to `test_engine`, with `expire_on_commit=False`
+
+Schema-per-test is what provides isolation - tests do not share tables and can run without cross-contamination.
+
+### Configuration Fixtures
+
+**`test_secret_key`** - a fixed test JWT secret
+
+**`auth_config`** - an `AuthConfig` with the standard test policy: HS256, 15-min access tokens, 30-day refresh tokens, `max_login_attempts=5`, `lockout_duration_minutes=30`
 
 ### Auth Instance Fixtures
 
-**`auth_standard`**
-- Mode: Standard (MongoDB token storage)
-- store_refresh_tokens=True
-- enable_token_blacklist=False
-- Result: 15-min security window
+**`auth`**
+- An initialized `SimpleRBAC` against `TEST_DATABASE_URL`
+- `enable_token_cleanup=False`, observability disabled
+- Creates tables on entry, drops them and calls `shutdown()` on exit
 
-**`auth_high_security`**
-- Mode: High security (MongoDB + Redis)
-- store_refresh_tokens=True
-- enable_token_blacklist=True
-- Result: Immediate revocation
-- Skips if Redis unavailable
+**`auth_with_cache`**
+- `SimpleRBAC` wired with **real Redis** and permission caching enabled
+- Exercises the cache service, pub/sub invalidation, and API-key counters
+- **Skips** if Redis is unreachable
 
-**`auth_stateless`**
-- Mode: Stateless JWT (no storage)
-- store_refresh_tokens=False
-- enable_token_blacklist=False
-- Result: Cannot revoke tokens
+### Redis Fixtures
 
-**`auth_redis_only`**
-- Mode: Redis-only (stateless + blacklist)
-- store_refresh_tokens=False
-- enable_token_blacklist=True
-- Result: Stateless + access token blacklisting
-- Skips if Redis unavailable
+**`redis_client`**
+- A connected `RedisClient` pointing at `TEST_REDIS_URL` (DB 15 by default)
+- Flushes the test DB before and after each test
+- **Skips** if the `redis` package is missing or the server is unreachable
 
-**`auth_with_cleanup`**
-- Mode: Standard with token cleanup enabled
-- enable_token_cleanup=True
-- token_cleanup_interval_hours=1
+**Important**: `redis_client` and `auth_with_cache` call `FLUSHDB`. Never point `TEST_REDIS_URL` at a shared or production Redis database.
 
-### User Fixtures
+### User & Data Fixtures
 
-**`active_user`** - ACTIVE status, can authenticate
-**`suspended_user`** - SUSPENDED status, blocked
-**`suspended_user_with_expiry`** - SUSPENDED with auto-expiry
-**`banned_user`** - BANNED status, permanently blocked
-**`deleted_user`** - DELETED status (soft delete)
-**`locked_user`** - ACTIVE but temporarily locked (failed attempts)
+**`test_password`** - `"TestPass123!"` (meets all policy requirements)
+**`test_user`** - ACTIVE, non-superuser, `test@example.com`
+**`test_admin`** - admin user
+**`test_role`** - a `test_role` / "Test Role" with `is_system_role=False`
+**`test_permissions`** - pre-created permissions
+**`sample_user_data`** / **`invalid_user_data`** - request payloads for validation tests
 
 ### Token Fixtures
 
-**`user_with_tokens`** - Active user with valid access + refresh tokens
-**`expired_refresh_token`** - Token expired 1 day ago
-**`old_revoked_token`** - Revoked 8 days ago (should be cleaned up)
-**`recent_revoked_token`** - Revoked 2 days ago (should be kept)
+**`test_access_token`** - a valid 15-minute access token for `test_user`
+**`test_expired_token`** - an already-expired access token
 
 ---
 
 ## Test Requirements
 
 ### Required
-- **MongoDB**: Running on `localhost:27017`
+- **PostgreSQL** - reachable at `TEST_DATABASE_URL`, which defaults to
+  `postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test`
 - **Python 3.12+**
 - **pytest**, **pytest-asyncio**
 
-### Optional (for full test coverage)
-- **Redis**: Running on `localhost:6379` (for blacklist tests)
-  - Without Redis: 13 tests in `test_immediate_logout.py` are skipped
-  - All other tests pass without Redis
+The test user needs `CREATE SCHEMA` rights - `test_engine` creates and drops a schema per test.
+
+### Optional
+- **Redis** - `TEST_REDIS_URL`, defaults to `redis://localhost:6379/15`
+  - Without Redis, tests using `redis_client` / `auth_with_cache` **skip**; the rest of the suite runs
+
+### Environment
+
+```bash
+export TEST_DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test"
+export TEST_REDIS_URL="redis://localhost:6379/15"
+```
+
+```bash
+# Start services locally
+docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16
+docker run -d -p 6379:6379 redis:7
+
+# Create the test database
+createdb -h localhost -U postgres outlabs_auth_test
+```
 
 ---
 
@@ -379,35 +194,44 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
-      mongodb:
-        image: mongo:7
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: outlabs_auth_test
         ports:
-          - 27017:27017
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
       redis:
         image: redis:7
         ports:
           - 6379:6379
 
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test
+      TEST_REDIS_URL: redis://localhost:6379/15
+
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: |
-          pip install -e .
-          pip install pytest pytest-asyncio pytest-cov
+        run: uv sync --extra test
 
       - name: Run tests with coverage
-        run: |
-          pytest --cov=outlabs_auth --cov-report=xml --cov-report=html
+        run: uv run pytest --cov=outlabs_auth --cov-report=xml --cov-report=html
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v4
         with:
           file: ./coverage.xml
 ```
@@ -422,7 +246,7 @@ jobs:
 # ✅ GOOD: Clear, descriptive names
 async def test_login_with_active_user_returns_tokens()
 async def test_suspended_user_cannot_authenticate()
-async def test_logout_revokes_refresh_token_in_mongodb()
+async def test_logout_revokes_refresh_token()
 
 # ❌ BAD: Vague names
 async def test_login()
@@ -434,78 +258,66 @@ async def test_token()
 
 ```python
 @pytest.mark.asyncio
-async def test_feature_name(fixture1, fixture2):
+async def test_feature_name(auth, test_user, test_password):
     """
     Brief description of what this test verifies.
 
     Include mode/configuration if relevant.
     """
-    # 1. Setup - create test data
-    user, tokens = await auth.auth_service.login(...)
+    # 1. Arrange
+    async with auth.get_session() as session:
 
-    # 2. Action - perform the operation being tested
-    result = await auth.auth_service.logout(tokens.refresh_token)
+        # 2. Act
+        user, tokens = await auth.auth_service.login(
+            session,
+            email=test_user.email,
+            password=test_password,
+        )
 
-    # 3. Assert - verify expected behavior
-    assert result is True
-
-    # 4. Additional verifications
-    token_model = await RefreshTokenModel.find_one(...)
-    assert token_model.is_revoked is True
+        # 3. Assert
+        assert tokens.access_token is not None
 ```
 
-### Using Fixtures
+Note that the services take an `AsyncSession` as their first argument - get one
+from `auth.get_session()` or the `test_session` fixture.
+
+### Asserting on Persisted State
 
 ```python
-@pytest.mark.asyncio
-async def test_example(auth_standard, active_user, password):
-    """Example using common fixtures."""
-    # auth_standard: OutlabsAuth instance (standard mode)
-    # active_user: UserModel with ACTIVE status
-    # password: "Password123!" (standard test password)
+from sqlmodel import select
 
-    user, tokens = await auth_standard.auth_service.login(
-        email=active_user.email,
-        password=password
-    )
+from outlabs_auth.models.sql.token import RefreshToken
 
-    assert tokens.access_token is not None
+result = await session.execute(
+    select(RefreshToken).where(RefreshToken.user_id == test_user.id)
+)
+token_row = result.scalar_one()
+assert token_row.is_revoked is True
 ```
-
----
-
-## Test Coverage Goals
-
-### Current Coverage
-- **User Status System**: 100% (all 4 statuses + locked)
-- **Standard Logout**: 100% (MongoDB revocation)
-- **Stateless Logout**: 100% (cannot revoke)
-- **Token Cleanup**: 100% (expired + revoked + OAuth)
-- **Immediate Logout**: 100% (Redis blacklisting)
-
-### Target Coverage
-- **Overall**: 90%+ code coverage
-- **Critical paths**: 100% (authentication, authorization)
-- **Error handling**: 100% (all exception paths)
-- **Edge cases**: 100% (boundary conditions, race conditions)
 
 ---
 
 ## Common Issues
 
-### MongoDB Connection Errors
+### PostgreSQL Connection Errors
 
 ```bash
-# Error: ConnectionError: localhost:27017
-# Solution: Start MongoDB
-docker run -d -p 27017:27017 mongo:7
+# Error: connection refused on localhost:5432
+# Solution: start PostgreSQL and create the test database
+docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16
+createdb -h localhost -U postgres outlabs_auth_test
 ```
+
+### Permission Denied Creating Schema
+
+`test_engine` creates a schema per test. Grant the test role `CREATE` on the
+test database, or use a superuser role locally.
 
 ### Redis Tests Skipped
 
 ```bash
-# Skipped: Redis not available for high security testing
-# Solution: Start Redis (optional, most tests work without it)
+# Skipped: Redis not reachable
+# Solution: start Redis (optional — most tests run without it)
 docker run -d -p 6379:6379 redis:7
 ```
 
@@ -517,7 +329,7 @@ from datetime import datetime, timezone
 now = datetime.now(timezone.utc)
 
 # ❌ NEVER use naive datetimes
-now = datetime.now()  # BAD
+now = datetime.now()     # BAD
 now = datetime.utcnow()  # DEPRECATED in Python 3.12
 ```
 
@@ -550,15 +362,14 @@ async def test_example():  # Will fail!
 
 - Use function-scoped fixtures (isolation)
 - Avoid unnecessary database writes
-- Use mocks for external services
-- Parallel test execution where possible
+- Use mocks for external services (see `test_activity_tracker.py` for a mocked-Redis example)
+- Prefer asserting on call shape over wall-clock timings — timing assertions are flaky on shared CI
 
 ### Test Data Cleanup
 
-Tests automatically clean up:
-- MongoDB databases (function-scoped)
-- Redis keys (via fixtures)
-- Temporary files
+Tests clean up automatically:
+- The per-test PostgreSQL schema is dropped (CASCADE) by `test_engine`
+- The Redis test DB is flushed before and after by `redis_client`
 
 No manual cleanup required.
 
@@ -567,31 +378,18 @@ No manual cleanup required.
 ## Related Documentation
 
 - **DD-048**: User Status System design
-- **DD-049**: Activity Tracking design (tests pending)
-- **74-Auth-Service.md**: AuthService API reference
+- **DD-049**: Activity Tracking design
+- **12-Data-Models.md**: Model and schema reference
 - **22-JWT-Tokens.md**: JWT token architecture
 
 ---
 
 ## Summary
 
-✅ **87+ comprehensive tests** covering:
-- User status workflows (ACTIVE, SUSPENDED, BANNED, DELETED)
-- Standard logout (MongoDB revocation)
-- Stateless mode (cannot revoke)
-- Token cleanup worker (expired + old revoked)
-- Immediate logout (Redis blacklisting)
+✅ **80 unit + 56 integration test files** covering authentication, authorization, tokens, RBAC, entities, API keys, OAuth, and observability
 
-✅ **Multiple test configurations**:
-- Standard mode (MongoDB storage)
-- High security mode (MongoDB + Redis)
-- Stateless mode (no storage)
-- Redis-only mode (stateless + blacklist)
+✅ **Real-database testing** with per-test schema isolation on PostgreSQL
 
-✅ **Comprehensive coverage**:
-- Happy paths (normal flows)
-- Error scenarios (edge cases)
-- Performance tests (large datasets)
-- Security tests (blacklisting, revocation)
+✅ **Graceful degradation** — Redis-dependent tests skip automatically when Redis is unavailable
 
-**Next**: Activity Tracking tests (DD-049 implementation)
+✅ **Coverage** of happy paths, error scenarios, query budgets, and security behavior

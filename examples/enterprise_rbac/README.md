@@ -456,11 +456,8 @@ The same system handles:
 ### Environment Variables
 
 ```bash
-# MongoDB connection
-MONGODB_URL=mongodb://localhost:27017
-
-# Database name
-DATABASE_NAME=realestate_leads_platform
+# PostgreSQL connection (matches the default in main.py)
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_enterprise_rbac
 
 # JWT secret (CHANGE IN PRODUCTION!)
 SECRET_KEY=your-secret-key-change-in-production-please

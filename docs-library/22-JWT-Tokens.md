@@ -199,7 +199,7 @@ POST /auth/refresh
 from outlabs_auth import SimpleRBAC
 
 auth = SimpleRBAC(
-    database=db,
+    database_url=database_url,
     secret_key="your-super-secret-key-change-in-production",
     algorithm="HS256",  # or "RS256" for asymmetric
     jwt_audience="your-app-name",  # Prevents cross-app token reuse
@@ -244,7 +244,7 @@ JWT_SECRET=xvKp7gHN3jF9mP2qR5sT8wY1zA3bC6dE9fG2hJ5kL8m
 
 ```python
 auth = SimpleRBAC(
-    database=db,
+    database_url=database_url,
     secret_key="shared-secret",
     algorithm="HS256",
     jwt_audience="my-app"
@@ -294,7 +294,7 @@ public_pem = public_key.public_bytes(
 
 # Use in OutlabsAuth
 auth = SimpleRBAC(
-    database=db,
+    database_url=database_url,
     secret_key=private_pem,  # Private key for signing
     algorithm="RS256",
     jwt_audience="my-app"
@@ -477,7 +477,7 @@ async def refresh_token(refresh_token: str):
 
 ```python
 auth = SimpleRBAC(
-    database=db,
+    database_url=database_url,
     access_token_expire_minutes=15  # 15 minutes
 )
 ```
@@ -777,22 +777,22 @@ OutlabsAuth supports **configurable token revocation strategies**:
 
 | Mode | Access Token Revocation | Refresh Token Revocation | Configuration |
 |------|------------------------|-------------------------|---------------|
-| **Standard** | 15-min window | Immediate (MongoDB) | `store_refresh_tokens=True`<br>`enable_token_blacklist=False` |
-| **High Security** | Immediate (Redis) | Immediate (MongoDB) | `store_refresh_tokens=True`<br>`enable_token_blacklist=True` |
+| **Standard** | 15-min window | Immediate (PostgreSQL) | `store_refresh_tokens=True`<br>`enable_token_blacklist=False` |
+| **High Security** | Immediate (Redis) | Immediate (PostgreSQL) | `store_refresh_tokens=True`<br>`enable_token_blacklist=True` |
 | **Stateless** | 15-min window | N/A (no storage) | `store_refresh_tokens=False`<br>`enable_token_blacklist=False` |
 
 ### Standard Mode (Default)
 
 ```python
 auth = EnterpriseRBAC(
-    database=db,
+    database_url=database_url,
     secret_key=secret,
-    store_refresh_tokens=True,      # Store refresh tokens in MongoDB
+    store_refresh_tokens=True,      # Store refresh tokens in the refresh_tokens table
     enable_token_blacklist=False    # Access tokens valid until expiration
 )
 
 # Logout behavior:
-# - Refresh token: Revoked immediately in MongoDB
+# - Refresh token: Revoked immediately in PostgreSQL
 # - Access token: Valid for remaining lifetime (up to 15 min)
 ```
 
@@ -805,15 +805,15 @@ auth = EnterpriseRBAC(
 
 ```python
 auth = EnterpriseRBAC(
-    database=db,
+    database_url=database_url,
     secret_key=secret,
     redis_url="redis://localhost:6379",
-    store_refresh_tokens=True,       # Store refresh tokens in MongoDB
+    store_refresh_tokens=True,       # Store refresh tokens in the refresh_tokens table
     enable_token_blacklist=True      # Blacklist access tokens in Redis
 )
 
 # Logout behavior:
-# - Refresh token: Revoked immediately in MongoDB
+# - Refresh token: Revoked immediately in PostgreSQL
 # - Access token: Blacklisted immediately in Redis
 ```
 
@@ -834,9 +834,9 @@ await redis.set(
     ttl=remaining_token_lifetime  # Auto-expires with token
 )
 
-# 2. Refresh token revoked in MongoDB
-token.is_revoked = True
-await token.save()
+# 2. Refresh token revoked in PostgreSQL
+token.revoke(reason="User logout")
+await session.commit()
 ```
 
 **On Authentication:**
@@ -875,7 +875,7 @@ Expired and revoked tokens are automatically cleaned up:
 
 ```python
 auth = EnterpriseRBAC(
-    database=db,
+    database_url=database_url,
     secret_key=secret,
     enable_token_cleanup=True,           # Enable automatic cleanup
     token_cleanup_interval_hours=24      # Run every 24 hours

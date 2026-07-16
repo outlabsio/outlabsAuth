@@ -1,16 +1,5 @@
 # OutlabsAuth Testing Guide
 
-> [!WARNING]
-> **Written for the pre-Postgres design and not updated since. Do not follow it.**
->
-> This predates the move to Postgres/SQLModel and still describes MongoDB/Beanie —
-> `AsyncIOMotorClient`, `Link[...]` fields, and module paths that no longer exist.
-> Code samples here will not run, and file references will not resolve.
->
-> For how the library actually works today: **`examples/`** (the only integration
-> reference kept honest by tests), then `README.md`, then the source. Retained for
-> history — the reasoning is often still sound even where the mechanics are not.
-
 
 **Version**: 1.4
 **Date**: 2025-01-14
@@ -213,45 +202,64 @@ access_token = tokens.access_token
 
 ### Test Database Setup
 
+The suite's fixtures live in `tests/conftest.py` — this is the shape they use, not
+a parallel example to copy-paste. Each test function gets its **own throwaway
+Postgres schema**, created before the test and dropped after, so tests are
+isolated without needing a separate database per worker.
+
 ```python
-# conftest.py
-import pytest
+# tests/conftest.py (abridged)
+import os
+from uuid import uuid4
+
 import pytest_asyncio
-from motor.motor_asyncio import AsyncIOMotorClient
-from outlabs_auth import SimpleRBAC
-from beanie import init_beanie
+from sqlalchemy.ext.asyncio import create_async_engine
 
-@pytest_asyncio.fixture
-async def test_db():
-    """Create test database"""
-    client = AsyncIOMotorClient("mongodb://localhost:27017")
-    db = client["outlabs_auth_test"]
+TEST_DATABASE_URL = os.getenv(
+    "TEST_DATABASE_URL",
+    "postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test",
+)
 
-    # Initialize Beanie with models
-    await init_beanie(
-        database=db,
-        document_models=[
-            UserModel,
-            RoleModel,
-            EntityModel,
-            PermissionModel,
-            RefreshTokenModel
-        ]
+@pytest_asyncio.fixture(scope="function")
+async def test_engine():
+    """Async engine bound to a per-test schema, dropped on teardown."""
+    schema_name = f"test_{uuid4().hex}"
+
+    engine = create_async_engine(
+        TEST_DATABASE_URL,
+        pool_pre_ping=True,
+        # Scope this engine's tables to the throwaway schema.
+        connect_args={"server_settings": {"search_path": schema_name}},
     )
-
-    yield db
-
-    # Cleanup
-    await client.drop_database("outlabs_auth_test")
-    client.close()
-
-@pytest_asyncio.fixture
-async def auth(test_db):
-    """Create auth instance"""
-    auth = SimpleRBAC(database=test_db)
-    await auth.initialize()
-    return auth
+    ...
 ```
+
+Auth instances are constructed from a `database_url` — there is no separate
+"database" object to pass in:
+
+```python
+from outlabs_auth import SimpleRBAC
+
+auth = SimpleRBAC(
+    database_url=TEST_DATABASE_URL,
+    secret_key="test-secret-key-at-least-32-characters-long",
+)
+await auth.initialize()
+```
+
+**`secret_key` must be at least 32 characters** under the default HS256
+algorithm — construction raises otherwise. Short keys are a common cause of a
+fixture failing before any assertion runs.
+
+### Redis-backed fixtures
+
+Redis is optional. The `redis_client` / `auth_with_cache` fixtures read
+`TEST_REDIS_URL` (default `redis://localhost:6379/15`) and **skip automatically
+when Redis is unreachable** — so a green local run does not necessarily mean the
+caching layer was exercised. CI runs a Redis service specifically to stop those
+tests from silently skipping.
+
+When Redis is enabled, `redis_key_prefix` is **required** (as of 0.1.0a24).
 
 ---
 
@@ -2162,76 +2170,100 @@ async def test_permission_check_performance(auth):
 
 ### GitHub Actions Workflow
 
+CI is `.github/workflows/release-readiness.yml` (plus `publish-pypi.yml` for
+releases). It runs on every pull request and on pushes to `main` and `v*` tags.
+Every job that touches the database stands up a **Postgres 16 service** and
+points `TEST_DATABASE_URL` at it.
+
+The workflow is deliberately split into several jobs rather than one `pytest`
+call:
+
+| Job | What it guards |
+|-----|----------------|
+| `production-dependency-audit` | `pip-audit --strict` over the locked runtime dependency graph (dev/stress extras out of scope) |
+| `library` | Release metadata, packaging + bootstrap tests, the packaged-CLI migration flow, `uv build`, `outlabs-auth --version` |
+| `seeded-upgrade-rehearsal` | Rebuilds the previous release's populated schema, upgrades it to the current Alembic head, asserts data preservation **and** a no-op retry |
+| `full-suite` | The whole suite with **both** Postgres and Redis running |
+| `api-integration` | Black-box HTTP validation of the running EnterpriseRBAC example |
+
+The shape of a database-backed job:
+
 ```yaml
-# .github/workflows/test.yml
-name: Tests
-
-on: [push, pull_request]
-
+# .github/workflows/release-readiness.yml (abridged)
 jobs:
-  test:
+  full-suite:
     runs-on: ubuntu-latest
-
     services:
-      mongodb:
-        image: mongo:6.0
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: outlabs_auth_test
         ports:
-          - 27017:27017
+          - 5432:5432
         options: >-
-          --health-cmd "mongosh --eval 'db.adminCommand({ping: 1})'"
+          --health-cmd "pg_isready -U postgres -d outlabs_auth_test"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/outlabs_auth_test
+      TEST_REDIS_URL: redis://127.0.0.1:6379/15
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
         with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          pip install -e .
-          pip install pytest pytest-asyncio pytest-cov
-
-      - name: Run tests
-        run: |
-          pytest --cov=outlabs_auth --cov-report=xml --cov-report=term
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v3
-        with:
-          file: ./coverage.xml
-          fail_ci_if_error: true
+          python-version: "3.12"
+          enable-cache: true
+      - name: Run full test suite (Postgres + Redis)
+        run: uv run --extra all --extra test python -m pytest -q
 ```
+
+**Why `full-suite` runs Redis:** without the Redis service every cache, budget,
+and invalidation test skips silently, so the caching layer would ship
+unexercised. That job exists to make those tests actually run.
+
+**Why `seeded-upgrade-rehearsal` exists:** it is the release rehearsal for the
+library's own migrations. It never needs a consuming application's database or
+credentials.
 
 ### Pytest Configuration
 
-```ini
-# pytest.ini
-[pytest]
-asyncio_mode = auto
-testpaths = tests
-python_files = test_*.py
-python_classes = Test*
-python_functions = test_*
-addopts =
-    --verbose
-    --strict-markers
-    --cov=outlabs_auth
-    --cov-report=html
-    --cov-report=term-missing
-    --cov-fail-under=90
+Pytest is configured in `pyproject.toml`, not a `pytest.ini`:
 
-markers =
-    unit: Unit tests
-    integration: Integration tests
-    e2e: End-to-end tests
-    slow: Slow tests
-    security: Security-related tests
+```toml
+# pyproject.toml
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
 ```
+
+Markers are registered in `tests/conftest.py` via `pytest_configure`:
+
+```python
+def pytest_configure(config):
+    config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
+    config.addinivalue_line("markers", "integration: marks tests as integration tests")
+    config.addinivalue_line("markers", "unit: marks tests as unit tests")
+```
+
+Those three — `unit`, `integration`, `slow` — are the markers that exist. Note
+there is **no coverage gate** wired into `addopts`; coverage is available via the
+`pytest-cov` test extra but is not enforced in CI.
 
 ---
 

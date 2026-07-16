@@ -1,10 +1,9 @@
 # OutlabsAuth Library - Feature Comparison Matrix
 
-**Version**: 1.4
-**Date**: 2025-01-14
 **Purpose**: Help choose the right preset for your needs
+**Source of truth**: `outlabs_auth/presets/simple.py`, `outlabs_auth/presets/enterprise.py`, `outlabs_auth/database/registry.py`
 
-**Architecture Note (v1.4)**: SimpleRBAC and EnterpriseRBAC are thin wrappers (5-10 LOC each) around a single unified `OutlabsAuth` core. All features are controlled by configuration flags. This means zero code duplication and easy migration between presets.
+**Architecture Note**: SimpleRBAC and EnterpriseRBAC are thin wrappers around a single unified `OutlabsAuth` core, and differ only by three booleans — `enable_entity_hierarchy`, `enable_context_aware_roles`, `enable_abac`. SimpleRBAC forces all three off; EnterpriseRBAC forces hierarchy on and leaves the other two configurable (both default off). Everything else is shared. Storage is PostgreSQL throughout (SQLModel + SQLAlchemy async + asyncpg): 33 tables, applied by the library's own packaged Alembic migrations via `outlabs-auth migrate` and tracked in its own `outlabs_auth_alembic_version` table so it never collides with the host app's migration history. Pass `database_schema="outlabs_auth"` to keep the tables in a dedicated schema; by default they follow the connection's search path.
 
 ---
 
@@ -22,7 +21,7 @@ Start here: Do you need organizational hierarchy (departments/teams)?
 └─ YES ──> EnterpriseRBAC
            ✓ Entity hierarchy (always included)
            ✓ Tree permissions (always included)
-           ✓ Multiple roles per user (always included)
+           ✓ Roles per entity membership (always included)
            ✓ Optional: Context-aware roles (enable_context_aware_roles=True)
            ✓ Optional: ABAC conditions (enable_abac=True)
            ✓ Recommended: Redis counters + caching (redis_url)
@@ -44,30 +43,30 @@ Start here: Do you need organizational hierarchy (departments/teams)?
 | JWT authentication | ✅ | ✅ |
 | Password management | ✅ | ✅ |
 | Refresh tokens | ✅ | ✅ |
-| **API Key Authentication (Core v1.0 - DD-028, DD-033)** |
+| **API Key Authentication (DD-028, DD-033)** |
 | API key authentication | ✅ | ✅ |
-| API key 12-char prefixes | ✅ (DD-028) | ✅ (DD-028) |
-| API key argon2id hashing | ✅ (DD-028) | ✅ (DD-028) |
+| Prefixed keys (`sk_live_...`) | ✅ (DD-028) | ✅ (DD-028) |
+| API key SHA-256 hashing | ✅ (DD-028) | ✅ (DD-028) |
 | Temporary locks (30-min cooldown) | ✅ (DD-028) | ✅ (DD-028) |
 | Redis usage counters | ✅ (DD-033) | ✅ (DD-033) |
 | API key rate limiting | ✅ (in-memory) | ✅ (in-memory + Redis optional) |
 | API key IP whitelisting | ✅ | ✅ |
 | API key rotation | ✅ | ✅ |
 | Entity-scoped API keys | ❌ | ✅ |
-| **JWT Service Tokens (Core v1.0 - DD-034)** |
+| **JWT Service Tokens (DD-034)** |
 | JWT service token authentication | ✅ | ✅ |
 | Zero DB hits (~0.5ms validation) | ✅ | ✅ |
 | Internal microservices auth | ✅ | ✅ |
-| **Multi-Source Authentication (Core v1.0)** |
+| **Multi-Source Authentication** |
 | Multi-source authentication | ✅ | ✅ |
-| AuthContext abstraction | ✅ | ✅ |
+| Auth result as plain dict | ✅ | ✅ |
 | Unified AuthDeps class | ✅ (DD-035) | ✅ (DD-035) |
 | **Hierarchy (Always Included in EnterpriseRBAC)** |
 | Entity hierarchy | ❌ | ✅ |
 | Tree permissions | ❌ | ✅ |
 | Closure table (O(1) queries) | ❌ | ✅ (DD-036) |
 | 20x tree permission performance | ❌ | ✅ (DD-036) |
-| Multiple roles per user | ❌ | ✅ |
+| Multiple roles per user | ✅ (flat, via `user_role_memberships`) | ✅ (per entity membership) |
 | Entity memberships | ❌ | ✅ |
 | Access groups | ❌ | ✅ |
 | **Role Scoping (DD-050)** |
@@ -87,10 +86,10 @@ Start here: Do you need organizational hierarchy (departments/teams)?
 | Redis Pub/Sub cache invalidation | ✅ via `redis_url` | ✅ via `redis_url` |
 | Tenant isolation mode | ❌ | ❌ (removed; use entity/root scoping) |
 | Core lifecycle history | ✅ user/definition history | ✅ user/membership/definition history |
-| **Performance (Updated v1.4)** |
+| **Performance** |
 | Permission check | ~10ms | ~10ms (uncached)<br>~5ms (cached) |
 | Tree permission check | N/A | ~10ms (O(1) via closure table) |
-| API key validation | ~50-100ms (argon2id) | ~50-100ms (argon2id) |
+| API key validation | DB lookup-bound | DB lookup-bound |
 | JWT service token validation | ~0.5ms (zero DB) | ~0.5ms (zero DB) |
 | Cache invalidation | N/A | <100ms (Redis Pub/Sub) |
 | Setup complexity | ⭐ | ⭐⭐ (basic)<br>⭐⭐⭐ (all features) |
@@ -109,178 +108,116 @@ Legend:
 
 ---
 
-## Authentication Extensions (v1.1-v1.4, Optional)
+## Authentication Extensions (Optional)
 
-**Status**: Post-v1.0 features
-**Timeline**: Weeks 8-16 (9 weeks after v1.0)
-**Compatibility**: Work with **both** SimpleRBAC and EnterpriseRBAC
-
-All authentication extensions are **optional** and can be adopted independently based on your needs. They do not block v1.0 delivery.
+**Compatibility**: Work with **both** SimpleRBAC and EnterpriseRBAC — they are core
+feature flags, not preset-specific.
 
 ### Extension Feature Comparison
 
-| Extension Feature | SimpleRBAC | EnterpriseRBAC | Available | Requires |
-|-------------------|-----------|----------------|-----------|----------|
-| **v1.1: Notification System** |
-| Notification handler abstraction | ⭕ | ⭕ | v1.1 (Week 8-9) | None |
-| WebhookHandler | ⭕ | ⭕ | v1.1 | None |
-| QueueHandler | ⭕ | ⭕ | v1.1 | Queue service (Redis, RabbitMQ, SQS) |
-| CallbackHandler | ⭕ | ⭕ | v1.1 | None |
-| CompositeHandler | ⭕ | ⭕ | v1.1 | None |
-| **v1.2: OAuth/Social Login** |
-| Google OAuth | ⭕ | ⭕ | v1.2 (Week 10-12) | v1.1 Notifications |
-| Facebook OAuth | ⭕ | ⭕ | v1.2 | v1.1 Notifications |
-| Apple Sign-In | ⭕ | ⭕ | v1.2 | v1.1 Notifications |
-| GitHub OAuth | ⭕ | ⭕ | v1.2 | v1.1 Notifications |
-| Microsoft OAuth | ⭕ | ⭕ | v1.2 | v1.1 Notifications |
-| Account linking (by verified email) | ⭕ | ⭕ | v1.2 | v1.1 Notifications |
-| Custom OAuth providers | ⭕ | ⭕ | v1.2 | v1.1 Notifications |
-| **v1.3: Passwordless Authentication** |
-| Magic links (email) | ⭕ | ⭕ | v1.3 (Week 13-14) | v1.1 Notifications |
-| Email OTP | ⭕ | ⭕ | v1.3 | v1.1 Notifications |
-| SMS OTP | ⭕ | ⭕ | v1.3 | v1.1 Notifications + SMS gateway |
-| Challenge management | ⭕ | ⭕ | v1.3 | v1.1 Notifications |
-| Rate limiting | ⭕ | ⭕ | v1.3 | v1.1 Notifications |
-| **v1.4: Advanced Features** |
-| TOTP/MFA | ⭕ | ⭕ | v1.4 (Week 15-16) | None |
-| Backup codes | ⭕ | ⭕ | v1.4 | None |
-| WhatsApp OTP | ⭕ | ⭕ | v1.4 | v1.1 Notifications + WhatsApp Business API |
-| Telegram OTP | ⭕ | ⭕ | v1.4 | v1.1 Notifications + Telegram Bot API |
-| Account recovery | ⭕ | ⭕ | v1.4 | v1.1 Notifications |
-| WebAuthn/Passkeys | 🔬 | 🔬 | v1.4 (research) | Browser support |
+| Extension Feature | SimpleRBAC | EnterpriseRBAC | Enabled by |
+|-------------------|-----------|----------------|------------|
+| **Notifications** |
+| Notification service injection | ⭕ | ⭕ | `enable_notifications=True` + `notification_service=` |
+| Transactional mail service | ⭕ | ⭕ | `transactional_mail_service=` |
+| Transactional messaging service | ⭕ | ⭕ | `transactional_messaging_service=` |
+| **OAuth / Social Login** (`outlabs_auth/oauth/`) |
+| Google OAuth | ⭕ | ⭕ | provider config |
+| Facebook OAuth | ⭕ | ⭕ | provider config |
+| Apple Sign-In (JWKS-verified ID tokens) | ⭕ | ⭕ | provider config |
+| GitHub OAuth | ⭕ | ⭕ | provider config |
+| Additional providers via `httpx-oauth` | ⭕ | ⭕ | `provider_factories.py` (optional dep) |
+| Account linking (by verified email) | ⭕ | ⭕ | built in |
+| PKCE + nonce + browser-bound state | ⭕ | ⭕ | built in |
+| Provider token storage (encrypted) | ⭕ | ⭕ | `store_oauth_provider_tokens=True` + `oauth_token_encryption_key=` |
+| **Passwordless** (`auth_challenges`) |
+| Magic links (email) | ⭕ | ⭕ | `enable_magic_links=True` |
+| Access codes (email) | ⭕ | ⭕ | `enable_access_codes=True` |
+| WhatsApp OTP | ⭕ | ⭕ | challenge type + messaging service |
+| SMS OTP | ⭕ | ⭕ | challenge type + messaging service |
+| Per-challenge rate limiting | ✅ | ✅ | `*_rate_limit_*` settings |
 
 Legend:
-- ⭕ = Optional extension (adopt as needed)
-- 🔬 = Research/prototype phase
+- ✅ = Always on
+- ⭕ = Optional (enable via feature flag / injected service)
+
+**Not implemented**: TOTP/MFA, backup codes, and WebAuthn/passkeys do not exist in
+the codebase. Do not plan against them.
 
 ### Extension Configuration Example
 
+Verified against `examples/notifications/main.py`:
+
 ```python
 from outlabs_auth import SimpleRBAC  # or EnterpriseRBAC
-from outlabs_auth.extensions.notifications import WebhookHandler
-from outlabs_auth.extensions.oauth import GoogleProvider, FacebookProvider
 
-# Configure extensions
-notification_handler = WebhookHandler(
-    webhook_url="https://api.internal/notifications",
-    headers={"X-API-Key": os.getenv("API_KEY")}
+auth = SimpleRBAC(
+    database_url=os.getenv("DATABASE_URL"),   # postgresql+asyncpg://...
+    secret_key=os.getenv("SECRET_KEY"),       # >=32 chars, required for HS256
+    notification_service=notification_service,
+    enable_notifications=True,
+    enable_magic_links=True,
+    enable_access_codes=True,
 )
 
-oauth_providers = {
-    "google": GoogleProvider(
-        client_id=os.getenv("GOOGLE_CLIENT_ID"),
-        client_secret=os.getenv("GOOGLE_CLIENT_SECRET")
-    ),
-    "facebook": FacebookProvider(
-        client_id=os.getenv("FACEBOOK_CLIENT_ID"),
-        client_secret=os.getenv("FACEBOOK_CLIENT_SECRET")
-    )
-}
-
-# Enable extensions (works with both presets!)
-auth = SimpleRBAC(  # or EnterpriseRBAC
-    database=db,
-    notification_handler=notification_handler,  # v1.1
-    oauth_providers=oauth_providers,            # v1.2
-    enable_magic_links=True,                    # v1.3
-    enable_otp=True,                            # v1.3
-    enable_mfa=True                             # v1.4
-)
+await auth.initialize()
 ```
+
+Notification, mail, and messaging services are **injected instances**, not classes
+the library constructs for you. See `outlabs_auth/mail/` and
+`outlabs_auth/messaging/` for the expected shapes, and
+`examples/enterprise_rbac/challenge_messaging.py` for a working challenge-delivery
+wiring.
 
 ### Extension Dependencies
 
-**Dependency Chain**:
-```
-v1.0 (Core) → v1.1 (Notifications) → v1.2 (OAuth) ┐
-                                   → v1.3 (Passwordless) ┤→ v1.4 (Advanced)
-```
-
 **Key Points**:
-- v1.1 (Notifications) is **prerequisite** for v1.2 (OAuth) and v1.3 (Passwordless)
-- v1.4 (Advanced features) builds on previous extensions
-- You can skip extensions you don't need
-- All extensions work with both SimpleRBAC and EnterpriseRBAC
+- Notification/mail/messaging services are injected by the host app — the library
+  defines the interface and calls it; it does not ship a vendor integration.
+- Magic links and access codes deliver through the injected mail service, so they
+  need `enable_notifications` + a `transactional_mail_service`.
+- WhatsApp/SMS OTP challenge types need an injected
+  `transactional_messaging_service`.
+- OAuth stands alone — it does not require the notification system.
+- Every extension works with both SimpleRBAC and EnterpriseRBAC. Enabling one
+  later needs no migration between presets, but may add tables — run
+  `outlabs-auth migrate`.
 
 ### Extension Use Cases
 
-**Notification System (v1.1)**:
-- Send welcome emails
-- Password reset notifications
-- Alert on suspicious activity
-- Integration with existing notification infrastructure
+**Notifications**:
+- Welcome emails, password-reset mail, invite delivery
+- Integration with existing notification infrastructure, no vendor lock-in
 
-**OAuth/Social Login (v1.2)**:
-- "Login with Google" button
-- Reduce friction for users
-- Auto-link by verified email
-- Support multiple providers
+**OAuth/Social Login**:
+- "Login with Google" and similar
+- Auto-link by verified email (blocked when the provider does not verify it)
+- Reduce signup friction
 
-**Passwordless Authentication (v1.3)**:
-- Magic link login (no password needed)
-- SMS OTP for phone verification
-- Email OTP for 2FA
-- Improved UX for mobile users
-
-**Advanced Features (v1.4)**:
-- TOTP for authenticator apps (Google Authenticator, Authy)
-- WhatsApp/Telegram OTP
-- Multi-factor authentication
-- Account recovery flows
-- WebAuthn/Passkeys (future)
-
-### Extension Timeline
-
-| Version | Duration | Deliverable | Dependency |
-|---------|----------|-------------|------------|
-| v1.0 | Week 1-7 | Core library (SimpleRBAC + EnterpriseRBAC) | None |
-| v1.1 | Week 8-9 | Notification system | v1.0 |
-| v1.2 | Week 10-12 | OAuth/social login | v1.1 |
-| v1.3 | Week 13-14 | Passwordless auth | v1.1 |
-| v1.4 | Week 15-16 | Advanced features (MFA, etc.) | v1.1-v1.3 |
-
-**Total Timeline**: 15-16 weeks for complete system (6-7 weeks core + 9 weeks extensions)
+**Passwordless**:
+- Magic-link login (no password)
+- Email access codes
+- WhatsApp/SMS OTP for phone-first users
 
 ### When to Adopt Extensions
 
-**Start with v1.0 (Core)**:
-- ✅ Focus on delivering core functionality first
-- ✅ Get production-ready auth working
-- ✅ Extensions can be added later without migration
+**Add Notifications** when:
+- You need to send auth-related mail
+- You want to decouple from a specific email/SMS vendor
+- You plan to use magic links or access codes (they depend on it)
 
-**Add v1.1 (Notifications)** when:
-- Need to send auth-related notifications
-- Want to decouple from specific email/SMS vendors
-- Planning to add OAuth or passwordless later
-
-**Add v1.2 (OAuth)** when:
-- Want to reduce signup friction
+**Add OAuth** when:
 - Users expect social login
-- Need to support multiple identity providers
-- Want to leverage existing social accounts
+- You need multiple identity providers
+- You want to leverage existing social accounts
 
-**Add v1.3 (Passwordless)** when:
-- Want to eliminate passwords
-- Need SMS verification
+**Add Passwordless** when:
+- You want to eliminate passwords
+- You need phone verification
 - Mobile-first authentication
-- Improve security with magic links
 
-**Add v1.4 (Advanced)** when:
-- Need multi-factor authentication
-- Require TOTP support
-- Need additional OTP channels
-- Compliance requires MFA
-
-### Extension Pricing (Implementation Cost)
-
-| Extension | Implementation Time | External Services Cost |
-|-----------|---------------------|------------------------|
-| v1.1 Notifications | 2 weeks | Free (webhook), Varies (SMS/email provider) |
-| v1.2 OAuth | 3 weeks | Free (OAuth providers are free) |
-| v1.3 Passwordless | 2 weeks | Varies (SMS: Twilio ~$0.0075/msg) |
-| v1.4 Advanced | 2 weeks | Varies (WhatsApp Business API) |
-
-**Note**: Extensions are designed to use your existing infrastructure. No vendor lock-in.
+**External service cost**: OAuth providers are free. Mail and SMS/WhatsApp cost
+whatever your chosen provider charges — the library is agnostic.
 
 ---
 
@@ -298,7 +235,10 @@ v1.0 (Core) → v1.1 (Notifications) → v1.2 (OAuth) ┐
 ```python
 from outlabs_auth import SimpleRBAC
 
-auth = SimpleRBAC(database=db)
+auth = SimpleRBAC(
+    database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
+    secret_key=os.getenv("SECRET_KEY"),  # >=32 chars
+)
 
 # Users
 user = await auth.user_service.create_user(email, password)
@@ -315,7 +255,7 @@ has_perm = await auth.permission_service.check_permission(
     user.id, "user:delete"
 )
 
-# API keys (v1.0 core feature)
+# API keys
 raw_key, api_key = await auth.api_key_service.create_api_key(
     name="Production Service",
     permissions=["user:read", "entity:read"],
@@ -324,28 +264,36 @@ raw_key, api_key = await auth.api_key_service.create_api_key(
     rate_limit_per_minute=60
 )
 
-# Multi-source authentication (v1.0 core feature - DD-035)
-from outlabs_auth.dependencies import AuthDeps  # Unified dependency class
-deps = AuthDeps(auth=auth, redis=redis)
+# Multi-source authentication. `auth.deps` only exists after `await auth.initialize()`,
+# so build route dependencies at request time rather than at import time.
+async def require_user_read(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    dep_fn = auth.deps.require_permission("user:read")
+    return await dep_fn(request=request, session=session)
 
 @app.get("/users")
-async def list_users(context = Depends(deps.require_auth())):
-    # Accepts JWT, API key, JWT service token, or superuser token
-    if not context.has_permission("user:read"):
-        raise HTTPException(403)
-    return await auth.user_service.list_users()
+async def list_users(auth_result: dict = Depends(require_user_read)):
+    # Accepts JWT, API key, JWT service token, or superuser token.
+    # Permission is already enforced; auth_result is a plain dict.
+    async with auth.get_session() as session:
+        return await auth.user_service.list_users(session)
 ```
 
 **Limitations:**
 - No entity hierarchy
-- One role per user
 - No tree permissions
 - No organizational structure
+- Roles are flat and global — no scoping to a root entity
+
+**Models added by this preset** (on top of the shared core models):
+- `UserRoleMembership` → `user_role_memberships`
 
 **Dependencies:**
-- MongoDB (via Beanie)
+- PostgreSQL (via SQLModel + SQLAlchemy async + asyncpg)
 - FastAPI
-- Python 3.10+
+- Python 3.12+
 
 **Performance:**
 - Permission check: ~10ms (database query)
@@ -368,7 +316,10 @@ async def list_users(context = Depends(deps.require_auth())):
 from outlabs_auth import EnterpriseRBAC
 
 # Basic setup: Entity hierarchy + tree permissions
-auth = EnterpriseRBAC(database=db)
+auth = EnterpriseRBAC(
+    database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
+    secret_key=os.getenv("SECRET_KEY"),  # >=32 chars
+)
 
 # Entity hierarchy (always included)
 company = await auth.entity_service.create_entity(
@@ -411,26 +362,32 @@ raw_key, api_key = await auth.api_key_service.create_api_key(
     allowed_ips=["10.0.1.0/24"]
 )
 
-# Multi-source authentication (v1.0 core feature - DD-035)
-from outlabs_auth.dependencies import AuthDeps  # Unified dependency class
-deps = AuthDeps(auth=auth, redis=redis)
+# Entity-scoped permission checks. `require_permission` picks the entity context up
+# from the `entity_id` path/query param automatically.
+async def require_entity_read(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    dep_fn = auth.deps.require_permission("entity:read")
+    return await dep_fn(request=request, session=session)
 
 @app.get("/entities/{entity_id}")
 async def get_entity(
-    entity_id: str,
-    context = Depends(deps.require_auth())
+    entity_id: UUID,
+    auth_result: dict = Depends(require_entity_read),
+    session: AsyncSession = Depends(get_session),
 ):
-    # Accepts JWT, API key, JWT service token, or superuser token
-    # Works with entity-scoped API keys automatically
-    entity = await auth.entity_service.get_entity(entity_id, context)
-    return entity
+    # Accepts JWT, API key, JWT service token, or superuser token.
+    # Works with entity-scoped API keys and tree permissions automatically.
+    return await auth.entity_service.get_entity(session, entity_id)
 ```
 
 **Optional Features (Enable as Needed):**
 ```python
 # Full-featured setup with all options
 auth = EnterpriseRBAC(
-    database=db,
+    database_url=os.getenv("DATABASE_URL"),
+    secret_key=os.getenv("SECRET_KEY"),  # >=32 chars
     redis_url="redis://localhost:6379",
     enable_context_aware_roles=True,  # Opt-in
     enable_abac=True,                 # Opt-in
@@ -482,16 +439,23 @@ invoice_approval = await auth.permission_service.create_permission(
 - Redis recommended for production API-key counters and permission caching
 - Steeper learning curve with all features enabled
 
+**Models added by this preset** (on top of the shared core models):
+- `Entity` → `entities`
+- `EntityMembership` → `entity_memberships`
+- `EntityMembershipRole` → `entity_membership_roles` (junction)
+- `EntityClosure` → `entity_closure`
+- `EntityMembershipHistory` → `entity_membership_history`
+
 **Dependencies:**
-- MongoDB (via Beanie)
+- PostgreSQL (via SQLModel + SQLAlchemy async + asyncpg)
 - FastAPI
-- Python 3.10+
+- Python 3.12+
 - Redis (recommended in production when using API keys)
 
-**Performance (Updated v1.4):**
+**Performance:**
 - Permission check: ~10ms (uncached with closure table), ~5ms (cached)
 - **Tree permission check: ~10ms (O(1) via closure table - DD-036)** - 20x improvement
-- **API key validation: ~50-100ms (argon2id hashing - DD-028)**
+- **API key validation: DB lookup-bound** — keys are SHA-256 hashed (DD-028), so the hash is negligible; the cost is the indexed lookup on `key_hash`
 - **JWT service token: ~0.5ms (zero DB hits - DD-034)**
 - **Cache invalidation: <100ms across all instances (Redis Pub/Sub - DD-037)**
 - ABAC evaluation: +5-10ms per condition (if enabled)
@@ -674,7 +638,10 @@ EnterpriseRBAC with optional features:
 # BEFORE (SimpleRBAC)
 from outlabs_auth import SimpleRBAC
 
-auth = SimpleRBAC(database=db)
+auth = SimpleRBAC(
+    database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
+    secret_key=os.getenv("SECRET_KEY"),  # >=32 chars
+)
 
 # Users have one role
 await auth.user_service.assign_role(user.id, manager_role.id)
@@ -682,7 +649,10 @@ await auth.user_service.assign_role(user.id, manager_role.id)
 # AFTER (EnterpriseRBAC - basic setup)
 from outlabs_auth import EnterpriseRBAC
 
-auth = EnterpriseRBAC(database=db)
+auth = EnterpriseRBAC(
+    database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
+    secret_key=os.getenv("SECRET_KEY"),  # >=32 chars
+)
 
 # Create entity hierarchy
 department = await auth.entity_service.create_entity(
@@ -722,11 +692,15 @@ await auth.membership_service.add_member(
 **Example:**
 ```python
 # BEFORE (EnterpriseRBAC - basic)
-auth = EnterpriseRBAC(database=db)
+auth = EnterpriseRBAC(
+    database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
+    secret_key=os.getenv("SECRET_KEY"),  # >=32 chars
+)
 
 # AFTER (EnterpriseRBAC - with optional features)
 auth = EnterpriseRBAC(
-    database=db,
+    database_url=os.getenv("DATABASE_URL"),
+    secret_key=os.getenv("SECRET_KEY"),  # >=32 chars
     redis_url="redis://localhost:6379",
     enable_context_aware_roles=True,  # Enable as needed
     enable_abac=True,                 # Enable as needed
@@ -745,18 +719,18 @@ manager_role = await auth.role_service.create_role(
 
 ---
 
-## Performance Comparison (Updated v1.4)
+## Performance Comparison
 
 ### Permission Check Latency
 
 | Preset | Basic Check | Tree Check | Cached Check | API Key | JWT Service Token |
 |--------|-------------|------------|--------------|---------|-------------------|
-| SimpleRBAC | ~10ms | N/A | N/A | ~50-100ms | ~0.5ms |
-| EnterpriseRBAC (basic) | ~10ms | **~10ms (O(1))** | ~10ms | ~50-100ms | ~0.5ms |
-| EnterpriseRBAC (cached) | ~5ms | **~5ms** | ~5ms | ~50-100ms | ~0.5ms |
-| EnterpriseRBAC (ABAC) | ~10ms + 5-10ms/condition | **~10ms** + 5-10ms/condition | ~5ms + 5-10ms/condition | ~50-100ms | ~0.5ms |
+| SimpleRBAC | ~10ms | N/A | N/A | lookup-bound | ~0.5ms |
+| EnterpriseRBAC (basic) | ~10ms | **~10ms (O(1))** | ~10ms | lookup-bound | ~0.5ms |
+| EnterpriseRBAC (cached) | ~5ms | **~5ms** | ~5ms | lookup-bound | ~0.5ms |
+| EnterpriseRBAC (ABAC) | ~10ms + 5-10ms/condition | **~10ms** + 5-10ms/condition | ~5ms + 5-10ms/condition | lookup-bound | ~0.5ms |
 
-**Key Improvements (v1.4)**:
+**Key Improvements**:
 - **Closure table (DD-036)**: 20x improvement in tree permission queries
 - **JWT service tokens (DD-034)**: Zero DB hits for internal services
 - **Redis Pub/Sub (DD-037)**: <100ms cache invalidation across all instances
@@ -880,10 +854,10 @@ manager_role = await auth.role_service.create_role(
 
 ## Next Steps
 
-1. **Chosen a preset?** → See [API_DESIGN.md](API_DESIGN.md) for code examples
-2. **Ready to implement?** → See [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)
-3. **Migrating from API?** → See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)
-4. **Have questions?** → See [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)
+1. **Chosen a preset?** → See `examples/simple_rbac/` or `examples/enterprise_rbac/` — the only integration reference kept honest by tests
+2. **Ready to implement?** → `README.md` for the quickstart, then the source (`core/auth.py`, `routers/`, `dependencies/__init__.py`)
+3. **What's actually built?** → See [CURRENT_IMPLEMENTATION_STATUS.md](CURRENT_IMPLEMENTATION_STATUS.md) and `CHANGELOG.md`
+4. **Why is it built this way?** → See [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)
 
 ---
 

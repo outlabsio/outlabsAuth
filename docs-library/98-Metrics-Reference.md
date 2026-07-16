@@ -834,13 +834,17 @@ sum(rate(outlabs_auth_cache_hits_total[5m]))
 ### outlabs_auth_db_query_duration_seconds
 
 **Type:** Histogram
-**Description:** MongoDB query duration (in seconds)
+**Description:** PostgreSQL query duration (in seconds)
+
+Emitted automatically for every statement executed on the SQLAlchemy async
+engine, via `before_cursor_execute` / `after_cursor_execute` listeners.
 
 **Labels:**
-- `operation` - Type of operation (find, insert, update, delete)
-- `collection` - MongoDB collection (users, roles, permissions, etc.)
+- `operation` - SQL verb, taken as the first token of the statement, lowercased
+  (`select`, `insert`, `update`, `delete`, `begin`, `commit`, ...; `unknown` if
+  the statement is empty)
 
-**Buckets:** `[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]`
+**Buckets:** `[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5]`
 
 **Example Queries:**
 
@@ -848,8 +852,11 @@ sum(rate(outlabs_auth_cache_hits_total[5m]))
 # P95 database query latency
 histogram_quantile(0.95, rate(outlabs_auth_db_query_duration_seconds_bucket[5m]))
 
-# Slow queries by collection
-histogram_quantile(0.95, sum by (collection, le) (rate(outlabs_auth_db_query_duration_seconds_bucket[5m])))
+# P95 latency by SQL operation
+histogram_quantile(0.95, sum by (operation, le) (rate(outlabs_auth_db_query_duration_seconds_bucket[5m])))
+
+# SELECT throughput
+sum(rate(outlabs_auth_db_query_duration_seconds_count{operation="select"}[5m]))
 ```
 
 **Recommended Alerts:**

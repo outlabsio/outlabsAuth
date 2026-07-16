@@ -17,21 +17,26 @@ Comprehensive test suite for the OutlabsAuth library covering Phase 2 (SimpleRBA
 
 ### Prerequisites
 
-1. **MongoDB**: Tests require a running MongoDB instance
-   ```bash
-   # Using Docker (recommended)
-   docker run -d -p 27017:27017 --name mongo-test mongo:latest
-
-   # Or use local MongoDB installation
-   mongod --dbpath /path/to/test/db
-   ```
-
-2. **Install test dependencies**:
+1. **Install test dependencies**:
    ```bash
    uv sync --extra test
-   # or
-   pip install -e ".[test]"
    ```
+
+2. **PostgreSQL** — only needed for the integration tests. The unit suite runs with
+   no database at all.
+   ```bash
+   docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres \
+     --name outlabs-auth-test postgres:16
+   createdb -h localhost -U postgres outlabs_auth_test
+   ```
+   Override the default with `TEST_DATABASE_URL`; it defaults to
+   `postgresql+asyncpg://postgres:postgres@localhost:5432/outlabs_auth_test`
+   (`conftest.py`).
+
+3. **Redis** — optional. Tests that use the `redis_client` / `auth_with_cache`
+   fixtures **skip themselves** if it isn't reachable, so you can ignore this unless
+   you're working on caching. `TEST_REDIS_URL` defaults to
+   `redis://localhost:6379/15` (DB index 15, to stay clear of anything else local).
 
 ### Run All Tests
 
@@ -257,8 +262,14 @@ async def test_create_user_with_duplicate_email_raises_error(
 
 ### Database Fixtures
 
-- **`mongo_client`**: Motor AsyncIOMotorClient instance
-- **`test_db`**: Clean test database (auto-cleaned after each test)
+- **`test_engine`**: Async SQLAlchemy engine against `TEST_DATABASE_URL`
+- **`test_session`**: `AsyncSession` for a test (rolled back afterwards)
+
+### Cache Fixtures
+
+- **`redis_client`**: Redis client on `TEST_REDIS_URL`. **Skips the test** if Redis
+  isn't reachable — you don't need Redis to run the suite.
+- **`auth_with_cache`**: an auth instance with caching enabled; skips likewise.
 
 ### Auth Instance Fixtures
 
@@ -306,20 +317,30 @@ async def test_with_fixtures(
 
 ## Troubleshooting
 
-### MongoDB Connection Issues
+### Database Connection Issues
 
-**Problem**: `ServerSelectionTimeoutError`
+**Problem**: `ConnectionRefusedError` / `OperationalError` from the integration tests
+
+The unit suite needs no database — if only integration tests fail, that's the cause.
 
 ```bash
-# Check if MongoDB is running
-docker ps | grep mongo
+# Is Postgres up?
+docker ps | grep postgres
 
-# Start MongoDB
-docker start mongo-test
+# Start it
+docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres \
+  --name outlabs-auth-test postgres:16
+createdb -h localhost -U postgres outlabs_auth_test
 
-# Or start new container
-docker run -d -p 27017:27017 --name mongo-test mongo:latest
+# Or point at your own
+export TEST_DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname
 ```
+
+**Problem**: Redis-related tests are being skipped
+
+That is by design — `redis_client` / `auth_with_cache` skip when `TEST_REDIS_URL`
+(default `redis://localhost:6379/15`) is unreachable. Start Redis only if you're
+working on caching.
 
 **Problem**: Test database not cleaning up
 
@@ -414,10 +435,18 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
-      mongodb:
-        image: mongo:latest
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: outlabs_auth_test
         ports:
-          - 27017:27017
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@v3

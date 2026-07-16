@@ -2,34 +2,17 @@
 
 This directory contains **design specifications and architectural decisions** for maintainers and contributors.
 
-> [!WARNING]
-> **Much of this directory is pre-Postgres and describes a MongoDB/Beanie library
-> that no longer exists.** Those files are dated 2025-01-14 and were never updated
-> through the rewrite: they reference `AsyncIOMotorClient`, Beanie `Link[...]`
-> fields, and module paths absent from the repo. Their code samples do not run.
->
-> They each carry a banner now, and `../CLAUDE.md` marks which are stale. Nothing
-> here has been deleted — the reasoning is frequently still right even where the
-> mechanics are wrong — but **do not treat this directory as how-to material.**
->
-> **How the library actually works, in order:** `../examples/` (kept honest by
-> tests) → `../README.md` (its quickstart is executed by
-> `tests/unit/test_readme_quickstart.py`) → the source.
-
 ## For Library Users
-Looking for usage documentation? See **[docs-library/](../docs-library/)** instead —
-noting that `95-Testing-Guide.md` and `96-Extending-UserModel.md` are stale too.
+Looking for usage documentation? See **[docs-library/](../docs-library/)** instead.
 
 ## Design Documents
 
-### Core Vision
-- **REDESIGN_VISION.md** - Project vision and architectural approach
+### Architecture
 - **LIBRARY_ARCHITECTURE.md** - Technical architecture details
-- **IMPLEMENTATION_ROADMAP.md** - Development phases and timeline
 - **ENTITY_AUTHORIZATION_ROLE_ONLY.md** - Decision memo for role-only entity authorization
 
 ### Design Decisions
-- **DESIGN_DECISIONS.md** - Complete record of architectural decisions (DD-001 to DD-037+)
+- **DESIGN_DECISIONS.md** - Why the architecture is the way it is (DD-001 onward)
 - **CURRENT_IMPLEMENTATION_STATUS.md** - Current delivered slices, accepted implementation nuances, and known remaining gaps
 - **COMPARISON_MATRIX.md** - SimpleRBAC vs EnterpriseRBAC feature comparison
 
@@ -50,8 +33,10 @@ noting that `95-Testing-Guide.md` and `96-Extending-UserModel.md` are stale too.
 - **AUTH_EXTENSIONS.md** - Optional features (OAuth, MFA, passwordless)
 - **WHATSAPP_ACCOUNT_MESSAGING.md** - WhatsApp/OTP delivery via host-owned providers (intents vs NotificationService)
 - **ERROR_HANDLING.md** - Exception hierarchy specification
-- **MIGRATION_GUIDE.md** - Migration from centralized API
 
 ---
 
-**Note**: These are planning/specification documents. Actual implementation may differ - always check the code and `docs-library/` for current behavior.
+**Note**: These describe the current system and were verified against the source on
+2026-07-16. Where a doc and the code disagree, **the code wins** — and that is a bug in
+the doc worth fixing rather than working around. The `examples/` are the reference
+integration, and `README.md`'s quickstart is executed by a test.

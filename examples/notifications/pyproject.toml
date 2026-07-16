@@ -7,7 +7,6 @@ dependencies = [
     "outlabs-auth",
     "fastapi>=0.100.0",
     "uvicorn[standard]>=0.20.0",
-    "motor>=3.0.0",
     # Notification channel dependencies
     "aio-pika>=9.0.0",      # RabbitMQ
     "aiosmtplib>=3.0.0",    # SMTP email

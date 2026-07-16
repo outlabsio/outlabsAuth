@@ -40,9 +40,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - ✅ SimpleRBAC and EnterpriseRBAC presets working
 - ✅ Observability instrumentation complete (all services)
 
-**PROJECT MANAGEMENT**: We use [IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md) as the primary project management tool. All phase tracking, status updates, and task breakdowns are maintained in the roadmap. Always update the roadmap when completing phases or tasks.
-
-**For complete implementation status and detailed task breakdown, see [IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md)**
+**For what is delivered vs outstanding, see [CURRENT_IMPLEMENTATION_STATUS.md](docs/CURRENT_IMPLEMENTATION_STATUS.md)** and [NEXT_PASS_BACKLOG.md](docs/NEXT_PASS_BACKLOG.md).
 
 ### Documentation Structure
 
@@ -50,37 +48,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 #### `docs/` - System Specifications (For Maintainers)
 
-> [!WARNING]
-> **Most of `docs/` predates the Postgres rewrite and describes a MongoDB/Beanie
-> library that no longer exists.** Dated 2025-01-14, never updated. They cite
-> `AsyncIOMotorClient`, `Link[...]` fields, and modules that aren't in the repo.
-> Following them does not work — this index used to call them "source of truth",
-> which is how readers ended up there.
->
-> **To learn how the library actually works, in order:**
-> 1. **`examples/`** — the only integration reference kept honest by tests
-> 2. **`README.md`** — quickstart, executed by `tests/unit/test_readme_quickstart.py`
-> 3. **the source** — `core/auth.py`, `routers/`, `dependencies/__init__.py`
->
-> Each stale file now carries its own banner. Marked below.
+Design specs and architectural decisions describing the current system: PostgreSQL
++ SQLModel throughout.
 
-| File | Status |
+To learn how the library works, in order:
+1. **`examples/`** — working apps, kept honest by tests
+2. **`README.md`** — quickstart, executed by `tests/unit/test_readme_quickstart.py`
+3. **the source** — `core/auth.py`, `routers/`, `dependencies/__init__.py`
+
+| File | What it's for |
 |---|---|
-| **CURRENT_IMPLEMENTATION_STATUS.md** | Current |
-| **COMPARISON_MATRIX.md** | Current — SimpleRBAC vs EnterpriseRBAC |
-| **ERROR_HANDLING.md** | Current — exception hierarchy |
-| **HOST_INTEGRATION_QUERIES.md** | Current — host query boundary |
-| **DESIGN_DECISIONS.md** | **Historical log.** DD-001..DD-0xx, period-accurate. The *reasoning* is source of truth; the Mongo-era mechanics are not. |
-| **REDESIGN_VISION.md** | **Stale** — pre-Postgres |
-| **LIBRARY_ARCHITECTURE.md** | **Stale** — pre-Postgres |
-| **IMPLEMENTATION_ROADMAP.md** | **Stale** — pre-Postgres |
-| **API_DESIGN.md** | **Stale** — still opens with `AsyncIOMotorClient`; header says "Design Phase" |
-| **DEPENDENCY_PATTERNS.md** | **Stale** — cites five modules that don't exist; there is no `AuthContext` |
-| **SECURITY.md** | **Stale** — pre-Postgres |
-| **TESTING_GUIDE.md** | **Stale** — pre-Postgres |
-| **DEPLOYMENT_GUIDE.md** | **Stale** — the worst offender |
-| **AUTH_EXTENSIONS.md** | **Stale** — cites `models/user.py`, `providers/base.py` etc.; real paths differ |
-| **MIGRATION_GUIDE.md** | **Stale** — centralized-API era |
+| **CURRENT_IMPLEMENTATION_STATUS.md** | What's delivered, accepted nuances, known gaps |
+| **DESIGN_DECISIONS.md** | Why the architecture is the way it is (DD-001..DD-05x) |
+| **COMPARISON_MATRIX.md** | SimpleRBAC vs EnterpriseRBAC |
+| **LIBRARY_ARCHITECTURE.md** | Technical architecture |
+| **API_DESIGN.md** | Public API surface and developer experience |
+| **DEPENDENCY_PATTERNS.md** | FastAPI dependency injection patterns |
+| **AUTH_EXTENSIONS.md** | OAuth, passwordless, messaging — and what is *not* built |
+| **ERROR_HANDLING.md** | Exception hierarchy |
+| **HOST_INTEGRATION_QUERIES.md** | Auth-owned query boundary for host apps |
+| **SECURITY.md** | Security hardening |
+| **DEPLOYMENT_GUIDE.md** | Production deployment, schema ownership, migrations |
+| **TESTING_GUIDE.md** | Testing strategy |
+| **ARCHITECTURE_SECURITY_PERFORMANCE_AUDIT_2026-07-15.md** | Latest audit |
+| **SECURITY_AUDIT_2026-06-10.md**, **PERFORMANCE_AUDIT_*.md** | Point-in-time audits |
 
 #### `docs-library/` - User Documentation (Implementation-Specific)
 Currently only 9 files - being rebuilt to match actual implementation:
@@ -301,12 +292,10 @@ Uses environment variables (can override):
 outlabsAuth/
 ├── docs/                           # 📋 SYSTEM SPECS (for maintainers)
 │   ├── README.md                   # Explains design docs vs user docs
-│   ├── REDESIGN_VISION.md          # Project vision
 │   ├── LIBRARY_ARCHITECTURE.md     # Technical architecture
 │   ├── DESIGN_DECISIONS.md         # DD-001 to DD-037+ decisions
 │   ├── API_DESIGN.md               # API design patterns
 │   ├── COMPARISON_MATRIX.md        # SimpleRBAC vs EnterpriseRBAC
-│   ├── IMPLEMENTATION_ROADMAP.md   # Development phases
 │   ├── AUTH_UI.md                  # External admin UI repo location and boundary
 │   └── ... (14 design spec files)
 │
@@ -316,7 +305,6 @@ outlabsAuth/
 │   ├── 48-User-Status-System.md    # User status
 │   ├── 49-Activity-Tracking.md     # DAU/MAU tracking
 │   ├── 95-Testing-Guide.md         # Testing implementation
-│   ├── 96-Extending-UserModel.md   # Extending users
 │   ├── 97-Observability.md         # Logging & metrics
 │   ├── 98-Metrics-Reference.md     # Metrics catalog
 │   └── 99-Log-Events-Reference.md  # Log events catalog
@@ -326,12 +314,6 @@ outlabsAuth/
 │   # Nuxt-based admin UI now maintained outside this repo
 │   # See docs/AUTH_UI.md for the handoff location
 │
-├── _reference/                     # 📁 Archived reference code
-│   ├── models/                     # Old Beanie models from centralized API
-│   └── services/                   # Old service logic from centralized API
-│
-├── _archive/                       # 📁 Archived old UI
-│   └── frontend-old/               # Old Nuxt 3 admin UI (for reference)
 │
 ├── outlabs_auth/                   # 📦 THE LIBRARY PACKAGE
 │   ├── __init__.py
@@ -488,7 +470,7 @@ The `_reference/` directory contains well-designed code from the old centralized
 
 ## Implementation Phases
 
-Following **IMPLEMENTATION_ROADMAP.md**:
+Current status: **CURRENT_IMPLEMENTATION_STATUS.md**
 
 ### Core Library (6-7 weeks)
 - **Phase 1** (Week 1): Core foundation + SimpleRBAC
@@ -593,11 +575,15 @@ All 37 design decisions documented in **DESIGN_DECISIONS.md**:
 - **DD-031**: Superseded by corrected DD-028
 
 ### Core Decisions
-- **DD-001**: ~~MongoDB with Beanie ODM~~ → **DD-049**: PostgreSQL with SQLAlchemy/SQLModel
-- **DD-002**: FastAPI native (not framework-agnostic)
-- **DD-003**: Two presets (Simple, Enterprise)
-- **DD-005**: Entity hierarchy always in Enterprise
-- **DD-008**: No cross-app SSO (each app is independent)
+- **DD-001**: Library, not a centralized service
+- **DD-002**: Entity-isolated deployment model
+- **DD-004**: PostgreSQL as the database, via SQLAlchemy async
+- **DD-011**: SQLModel as the ORM
+- **DD-012**: FastAPI-first (not framework-agnostic)
+- **DD-015**: Two presets, Simple and Enterprise (superseding DD-003's three)
+- **DD-005**: No `platform_id` — isolation is entity-based
+- **DD-008**: Context-aware roles preserved
+- **DD-036**: Closure table for tree permissions
 
 ## Admin UI
 
@@ -623,8 +609,8 @@ See **`docs/AUTH_UI.md`** for the current handoff note and repo boundary.
 
 ## Development Workflow
 
-1. **Read the vision**: Start with `docs/REDESIGN_VISION.md`
-2. **Check the roadmap**: Follow phases in `IMPLEMENTATION_ROADMAP.md`
+1. **Run an example**: `examples/simple_rbac/` or `examples/enterprise_rbac/`
+2. **Check status**: `docs/CURRENT_IMPLEMENTATION_STATUS.md`
 3. **Reference models**: Look at `_reference/models/` for structure
 4. **Reference services**: Look at `_reference/services/` for logic patterns
 5. **Follow API design**: Use patterns from `API_DESIGN.md`
@@ -633,9 +619,7 @@ See **`docs/AUTH_UI.md`** for the current handoff note and repo boundary.
 
 ## Questions?
 
-- **Vision**: `docs/REDESIGN_VISION.md`
 - **Architecture**: `docs/LIBRARY_ARCHITECTURE.md`
-- **Implementation**: `docs/IMPLEMENTATION_ROADMAP.md`
 - **API Examples**: `docs/API_DESIGN.md`
 - **Decisions**: `docs/DESIGN_DECISIONS.md`
 

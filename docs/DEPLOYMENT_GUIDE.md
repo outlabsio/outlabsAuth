@@ -1,16 +1,5 @@
 # OutlabsAuth Deployment Guide
 
-> [!WARNING]
-> **Written for the pre-Postgres design and not updated since. Do not follow it.**
->
-> This predates the move to Postgres/SQLModel and still describes MongoDB/Beanie —
-> `AsyncIOMotorClient`, `Link[...]` fields, and module paths that no longer exist.
-> Code samples here will not run, and file references will not resolve.
->
-> For how the library actually works today: **`examples/`** (the only integration
-> reference kept honest by tests), then `README.md`, then the source. Retained for
-> history — the reasoning is often still sound even where the mechanics are not.
-
 
 **Version**: 1.4
 **Date**: 2025-01-14
@@ -69,13 +58,28 @@ OutlabsAuth is a library, not a service, so it gets embedded in your application
     └───┬────┘
         │
 ┌───────▼────────┐
-│   MongoDB      │  (Shared database)
+│   PostgreSQL   │  (Shared database)
 └───────┬────────┘
         │
 ┌───────▼────────┐
 │   Redis        │  (Shared cache - optional)
 └────────────────┘
 ```
+
+### Schema ownership
+
+OutlabsAuth ships its own Alembic migrations **inside the package**
+(`outlabs_auth/migrations/versions/`) and applies them with its own CLI:
+
+```bash
+outlabs-auth migrate
+```
+
+It tracks its revisions in a namespaced version table,
+**`outlabs_auth_alembic_version`**, so it cannot collide with a host
+application's `alembic_version`. Your application's own `alembic upgrade head`
+does **not** touch the auth schema, and `outlabs-auth migrate` does not touch
+yours. The two histories are independent — deploy both.
 
 ---
 
@@ -97,8 +101,8 @@ OutlabsAuth is a library, not a service, so it gets embedded in your application
 
 ### Software Dependencies
 
-- **Python**: 3.11+
-- **MongoDB**: 6.0+
+- **Python**: 3.12+ (the package requires `>=3.12`)
+- **PostgreSQL**: 16+ (what CI runs against)
 - **Redis**: 7.0+ recommended for production API-key counters, rate limits, and permission caching
 - **Docker**: 24.0+ (for containerized deployments)
 - **Kubernetes**: 1.28+ (for K8s deployments)
@@ -109,16 +113,22 @@ OutlabsAuth is a library, not a service, so it gets embedded in your application
 
 ### Dockerfile
 
+> **Note**: OutlabsAuth is a library — it ships no image and no Dockerfile of its
+> own. The `docker-compose.yml` at the root of *this repository* exists only to
+> develop the library: it starts Postgres and Redis, nothing else, and the examples
+> run directly via `uv`. Everything below is a template for **your** application.
+
 ```dockerfile
 # Dockerfile
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 # Set working directory
 WORKDIR /app
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
@@ -139,56 +149,114 @@ EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health')"
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # Run application
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
+### Running Migrations
+
+The auth schema is deployed by the library's CLI, which reads `DATABASE_URL` and
+`OUTLABS_AUTH_SCHEMA` from the environment. Run it as a **release/init step
+before the app starts** — not from application code:
+
+```bash
+# Apply the library's migrations up to head
+outlabs-auth migrate
+
+# Verify connectivity, schema, revision, and core tables
+outlabs-auth doctor
+
+# Inspect revision state
+outlabs-auth current
+outlabs-auth heads
+outlabs-auth history
+```
+
+Other subcommands: `seed-system`, `bootstrap-admin`, `init-db`, `downgrade`,
+`adopt-existing-schema` (stamp an already-populated schema), and
+`run-maintenance`.
+
+`auto_migrate=True` exists as a config field and is convenient for local
+development. **Do not use it in production** — concurrent instances starting at
+once will race on the same migration. Use the CLI as a discrete step, so a
+failed migration fails the deploy instead of a subset of your pods.
+
+In compose, that's a one-shot service the app waits on:
+
+```yaml
+  migrate:
+    image: your-registry.com/outlabs-auth-app:latest
+    command: outlabs-auth migrate
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/appdb
+      - OUTLABS_AUTH_SCHEMA=auth
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+```
+
+In Kubernetes, the same thing is an init container or a `Job` gating the rollout.
+
 ### Docker Compose (Development)
 
 ```yaml
 # docker-compose.yml
-version: '3.8'
-
 services:
   app:
     build: .
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=mongodb://mongodb:27017/outlabs_auth
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/appdb
+      - OUTLABS_AUTH_SCHEMA=auth
       - REDIS_URL=redis://redis:6379
+      - REDIS_KEY_PREFIX=myapp:development
       - SECRET_KEY=${SECRET_KEY}
       - ENVIRONMENT=development
     depends_on:
-      - mongodb
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - ./:/app
     restart: unless-stopped
 
-  mongodb:
-    image: mongo:6.0
+  postgres:
+    image: postgres:16
     ports:
-      - "27017:27017"
-    volumes:
-      - mongo_data:/data/db
+      - "5432:5432"
     environment:
-      - MONGO_INITDB_ROOT_USERNAME=admin
-      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASSWORD}
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=appdb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
-    image: redis:7.0-alpine
+    image: redis:7-alpine
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
-  mongo_data:
+  postgres_data:
   redis_data:
 ```
 
@@ -196,8 +264,6 @@ volumes:
 
 ```yaml
 # docker-compose.prod.yml
-version: '3.8'
-
 services:
   app:
     image: your-registry.com/outlabs-auth-app:latest
@@ -213,12 +279,14 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=mongodb://mongodb:27017/outlabs_auth
+      - DATABASE_URL=postgresql+asyncpg://app:${POSTGRES_PASSWORD}@postgres:5432/appdb?ssl=verify-full
+      - OUTLABS_AUTH_SCHEMA=auth
       - REDIS_URL=redis://redis:6379
+      - REDIS_KEY_PREFIX=myapp:production
       - SECRET_KEY=${SECRET_KEY}
       - ENVIRONMENT=production
     depends_on:
-      - mongodb
+      - postgres
       - redis
     restart: always
     healthcheck:
@@ -227,23 +295,32 @@ services:
       timeout: 3s
       retries: 3
 
-  mongodb:
-    image: mongo:6.0
+  postgres:
+    image: postgres:16
     volumes:
-      - /data/mongodb:/data/db
+      - /data/postgres:/var/lib/postgresql/data
     environment:
-      - MONGO_INITDB_ROOT_USERNAME=${MONGO_USERNAME}
-      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASSWORD}
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=appdb
     restart: always
-    command: mongod --auth --replSet rs0
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
-    image: redis:7.0-alpine
+    image: redis:7-alpine
     volumes:
       - /data/redis:/data
     restart: always
     command: redis-server --appendonly yes
 ```
+
+> For anything beyond a single box, prefer a managed Postgres (RDS/Aurora, Cloud
+> SQL, Neon) over a compose-managed database. Replication, failover, backups, and
+> PITR are the whole job, and a single-container Postgres gives you none of them.
 
 ### Building and Running
 
@@ -252,19 +329,22 @@ services:
 docker build -t outlabs-auth-app:latest .
 
 # Run with Docker Compose
-docker-compose up -d
+docker compose up -d
+
+# Apply the auth schema (one-shot, before first app start)
+docker compose run --rm app outlabs-auth migrate
 
 # View logs
-docker-compose logs -f app
+docker compose logs -f app
 
 # Scale app instances
-docker-compose up -d --scale app=3
+docker compose up -d --scale app=3
 
 # Stop services
-docker-compose down
+docker compose down
 
 # Production deployment
-docker-compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 ---
@@ -292,10 +372,14 @@ metadata:
   namespace: outlabs-auth
 data:
   ENVIRONMENT: "production"
-  DATABASE_URL: "mongodb://mongodb-service:27017/outlabs_auth"
+  OUTLABS_AUTH_SCHEMA: "auth"
   REDIS_URL: "redis://redis-service:6379"
+  REDIS_KEY_PREFIX: "myapp:production"
   LOG_LEVEL: "INFO"
 ```
+
+`DATABASE_URL` carries a password, so it belongs in the Secret below — not in a
+ConfigMap.
 
 ### Secrets
 
@@ -309,9 +393,11 @@ metadata:
 type: Opaque
 data:
   # Base64 encoded values
+  # SECRET_KEY must be >= 32 chars under HS256: openssl rand -hex 32
   SECRET_KEY: <base64-encoded-secret-key>
-  MONGO_USERNAME: <base64-encoded-username>
-  MONGO_PASSWORD: <base64-encoded-password>
+  # Full SQLAlchemy/asyncpg URL, including credentials:
+  #   postgresql+asyncpg://app:PASSWORD@postgres-service:5432/appdb?ssl=verify-full
+  DATABASE_URL: <base64-encoded-database-url>
 ```
 
 ### Deployment
@@ -363,6 +449,37 @@ spec:
           initialDelaySeconds: 10
           periodSeconds: 5
 ```
+
+### Migration Job
+
+Run the auth migrations as a `Job` before rolling out the Deployment, so a
+failed migration blocks the release rather than half-starting your pods:
+
+```yaml
+# migrate-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: outlabs-auth-migrate
+  namespace: outlabs-auth
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: migrate
+        image: your-registry.com/outlabs-auth-app:latest
+        command: ["outlabs-auth", "migrate"]
+        envFrom:
+        - configMapRef:
+            name: outlabs-auth-config
+        - secretRef:
+            name: outlabs-auth-secrets
+```
+
+`outlabs-auth migrate` is idempotent — re-running it when the schema is already
+at head is a no-op, which is what makes it safe as a release step.
 
 ### Service
 
@@ -455,11 +572,16 @@ kubectl apply -f namespace.yaml
 kubectl create secret generic outlabs-auth-secrets \
   --namespace=outlabs-auth \
   --from-literal=SECRET_KEY=$SECRET_KEY \
-  --from-literal=MONGO_USERNAME=$MONGO_USERNAME \
-  --from-literal=MONGO_PASSWORD=$MONGO_PASSWORD
+  --from-literal=DATABASE_URL=$DATABASE_URL
 
 # Apply configurations
 kubectl apply -f configmap.yaml
+
+# Migrate the auth schema BEFORE rolling out the app
+kubectl apply -f migrate-job.yaml
+kubectl wait --for=condition=complete --timeout=300s \
+  job/outlabs-auth-migrate -n outlabs-auth
+
 kubectl apply -f deployment.yaml
 kubectl apply -f service.yaml
 kubectl apply -f ingress.yaml
@@ -599,35 +721,44 @@ gunicorn main:app \
 ### Database Optimization
 
 **Connection Pooling**:
-```python
-from motor.motor_asyncio import AsyncIOMotorClient
 
-client = AsyncIOMotorClient(
-    DATABASE_URL,
-    maxPoolSize=50,        # Max connections
-    minPoolSize=10,        # Min connections
-    maxIdleTimeMS=45000,   # Close idle connections after 45s
-    serverSelectionTimeoutMS=3000
+The library builds its own async engine from `database_url`. Pool sizing is a
+deployment decision — the constraint is that **every instance holds its own
+pool**, so total connections is `replicas x (pool_size + max_overflow)`, which
+must stay under Postgres's `max_connections` (default 100).
+
+```python
+from outlabs_auth import EnterpriseRBAC
+
+auth = EnterpriseRBAC(
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
 )
 ```
 
-**Indexes** (critical for performance):
-```python
-# Create indexes on startup
-async def create_indexes():
-    # User indexes
-    await UserModel.get_motor_collection().create_index("email", unique=True)
-    await UserModel.get_motor_collection().create_index("is_active")
+Three pods at `pool_size=20, max_overflow=10` is already 90 connections. For
+high replica counts or serverless, put **PgBouncer** (transaction pooling) in
+front and keep each app's pool small. Note that transaction-mode pooling is
+incompatible with prepared-statement caching — asyncpg needs
+`statement_cache_size=0` behind PgBouncer.
 
-    # Role indexes
-    await RoleModel.get_motor_collection().create_index("name")
-    await RoleModel.get_motor_collection().create_index("is_global")
+**Indexes**:
 
-    # Entity indexes (EnterpriseRBAC)
-    await EntityModel.get_motor_collection().create_index("slug", unique=True)
-    await EntityModel.get_motor_collection().create_index("parent_entity")
-    await EntityModel.get_motor_collection().create_index("entity_class")
+Indexes are **created by the library's own migrations** — do not hand-create
+them on startup. `outlabs-auth migrate` brings the schema, including all
+indexes, to the current head. The migration history contains dedicated index
+work (for example `20260422_0015_add_api_key_status_expires_at_compound_index`,
+`20260422_0016_drop_redundant_unique_indexes`, and `20260611_0018_index_hygiene`).
+
+Verify the deployed schema matches the code's expectations:
+
+```bash
+outlabs-auth doctor    # checks connectivity, schema, revision, core tables
+outlabs-auth current   # the revision the database is actually on
+outlabs-auth heads     # the revision the installed code expects
 ```
+
+If `current` lags `heads`, you have shipped code ahead of its schema.
 
 ### Caching Strategy
 
@@ -636,11 +767,19 @@ async def create_indexes():
 from outlabs_auth import EnterpriseRBAC
 
 auth = EnterpriseRBAC(
-    database=db,
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
     redis_url="redis://redis:6379",
-    cache_ttl_seconds=300  # 5 minutes
+    redis_key_prefix="myapp:production",  # REQUIRED when Redis is enabled
+    cache_ttl_seconds=300,  # 5 minutes
 )
 ```
+
+**`redis_key_prefix` is required whenever Redis is enabled** (0.1.0a24+) —
+construction raises without it. Use a namespace that is unique per application
+*and* per environment (`myapp:production`, `myapp:staging`). Two deployments
+sharing one Redis database without distinct prefixes will consume and discard
+each other's counters and cached authorization state.
 
 `redis_url` enables both Redis counters and the permission cache by default. If
 you need Redis counters/rate limits but want to disable permission caching while
@@ -697,9 +836,11 @@ Redis Master (Pub/Sub + Cache)
 from outlabs_auth import EnterpriseRBAC
 
 auth = EnterpriseRBAC(
-    database=db,
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
     redis_url="redis://redis:6379",
-    cache_ttl_seconds=300
+    redis_key_prefix="myapp:production",
+    cache_ttl_seconds=300,
 )
 
 # Start Pub/Sub subscriber in background
@@ -726,7 +867,7 @@ services:
       - ENABLE_PUBSUB_INVALIDATION=true
     depends_on:
       - redis
-      - mongodb
+      - postgres
 
   app2:
     build: .
@@ -735,7 +876,7 @@ services:
       - ENABLE_PUBSUB_INVALIDATION=true
     depends_on:
       - redis
-      - mongodb
+      - postgres
 
   app3:
     build: .
@@ -744,7 +885,7 @@ services:
       - ENABLE_PUBSUB_INVALIDATION=true
     depends_on:
       - redis
-      - mongodb
+      - postgres
 
   redis:
     image: redis:7.0-alpine
@@ -887,18 +1028,21 @@ services:
 ```
 
 **Application Configuration with Sentinel**:
+
+The library does not take Sentinel topology directly — it accepts a `redis_url`.
+Point that URL at a proxy or a service address that resolves to the current
+master (for example HAProxy fronting the Sentinel set, or a Kubernetes Service
+managed by your Redis operator), and let the failover machinery live outside the
+application:
+
 ```python
 from outlabs_auth import EnterpriseRBAC
 
 auth = EnterpriseRBAC(
-    database=db,
-    redis_url="redis://redis-master:6379",
-    redis_sentinel_hosts=[
-        ("redis-sentinel-1", 26379),
-        ("redis-sentinel-2", 26379),
-        ("redis-sentinel-3", 26379)
-    ],
-    redis_sentinel_master="mymaster",
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
+    redis_url="redis://redis-master-proxy:6379",
+    redis_key_prefix="myapp:production",
 )
 ```
 
@@ -933,8 +1077,10 @@ Providing `redis_url` enables Redis by default. That moves the usage counter to 
 ```python
 # Enable Redis counters for API keys
 auth = EnterpriseRBAC(
-    database=db,
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
     redis_url="redis://redis:6379",  # Enables Redis counters + permission cache
+    redis_key_prefix="myapp:production",
 )
 
 # Start background sync task
@@ -1010,49 +1156,30 @@ server {
 
 ## High Availability
 
-### MongoDB Replica Set
+### PostgreSQL High Availability
 
-**Configuration**:
-```yaml
-# docker-compose.prod.yml
-services:
-  mongodb-primary:
-    image: mongo:6.0
-    command: mongod --replSet rs0 --bind_ip_all
-    volumes:
-      - mongo_data_primary:/data/db
+**Use a managed Postgres for this.** Replication, automatic failover, backups,
+and point-in-time recovery are the substance of database HA, and hand-rolling
+them in compose is a reliable way to discover you have none of them during an
+incident. RDS/Aurora Multi-AZ, Cloud SQL HA, and Neon all provide a single
+endpoint that survives a failover — point `DATABASE_URL` at it and you are done.
 
-  mongodb-secondary1:
-    image: mongo:6.0
-    command: mongod --replSet rs0 --bind_ip_all
-    volumes:
-      - mongo_data_secondary1:/data/db
+If you must self-manage, the shape is streaming replication plus a failover
+manager (Patroni, or the CloudNativePG operator on Kubernetes) that owns leader
+election and moves a stable endpoint across nodes. The application requirement is
+the same either way: **`DATABASE_URL` must resolve to whatever is currently
+primary**, without an app redeploy.
 
-  mongodb-secondary2:
-    image: mongo:6.0
-    command: mongod --replSet rs0 --bind_ip_all
-    volumes:
-      - mongo_data_secondary2:/data/db
-```
+What the application must tolerate, whichever route you take:
 
-**Initialize Replica Set**:
-```javascript
-// Connect to primary
-mongo mongodb://mongodb-primary:27017
-
-// Initialize replica set
-rs.initiate({
-  _id: "rs0",
-  members: [
-    { _id: 0, host: "mongodb-primary:27017", priority: 2 },
-    { _id: 1, host: "mongodb-secondary1:27017", priority: 1 },
-    { _id: 2, host: "mongodb-secondary2:27017", priority: 1 }
-  ]
-})
-
-// Check status
-rs.status()
-```
+- **Failover drops in-flight connections.** The pool must recycle them rather
+  than serve errors from dead sockets — `pool_pre_ping` is what makes a stale
+  connection get discarded instead of raising.
+- **Read replicas are not a target for this library.** The auth path writes
+  (usage counters, refresh-token rotation, audit events). Routing it at a
+  read-only replica fails at runtime, not at startup.
+- **Migrations run against the primary**, as a discrete step — see
+  [Running Migrations](#running-migrations).
 
 ### Redis Sentinel (High Availability)
 
@@ -1080,8 +1207,14 @@ services:
 ### Health Checks
 
 **Application Health Endpoint**:
+
+The library does not ship a health router — health is your application's
+endpoint, since it owns the other dependencies too. Probe the database through
+a real session:
+
 ```python
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from sqlalchemy import text
 
 @app.get("/health")
 async def health_check():
@@ -1092,12 +1225,12 @@ async def health_check():
 async def readiness_check():
     """Readiness check (includes dependencies)"""
     try:
-        # Check database
-        await auth.health.check_database()
+        async with auth.get_session() as session:
+            await session.execute(text("SELECT 1"))
 
-        # Check Redis (if enabled)
-        if auth.config.enable_caching:
-            await auth.health.check_redis()
+        # Check Redis only if it's actually configured
+        if auth.config.redis_enabled:
+            await auth.cache.redis_client.ping()
 
         return {"status": "ready"}
     except Exception as e:
@@ -1108,6 +1241,14 @@ async def liveness_check():
     """Liveness check (app is running)"""
     return {"status": "alive"}
 ```
+
+Keep `/health/live` free of dependency checks. If liveness fails when Postgres
+blips, Kubernetes restarts every pod during a database incident — turning a
+recoverable outage into a crash loop. Dependencies belong in readiness, which
+pulls a pod out of the load balancer without killing it.
+
+To assert the *schema* is correct — not merely reachable — use
+`outlabs-auth doctor` as a deploy-time check rather than a request-path probe.
 
 ---
 
@@ -1246,10 +1387,10 @@ groups:
           summary: "High login failure rate"
 
       - alert: DatabaseDown
-        expr: up{job="mongodb"} == 0
+        expr: up{job="postgres"} == 0
         for: 1m
         annotations:
-          summary: "MongoDB is down"
+          summary: "PostgreSQL is down"
 
       - alert: HighResponseTime
         expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 1
@@ -1262,34 +1403,52 @@ groups:
 
 ## Backup & Recovery
 
-### MongoDB Backup
+### PostgreSQL Backup
+
+On a managed instance, use the provider's automated backups and PITR — they are
+better than a cron'd dump and do not compete with your database for I/O. The
+script below is for self-managed deployments.
 
 **Automated Backup Script**:
 ```bash
 #!/bin/bash
 # backup.sh
+set -euo pipefail
 
-BACKUP_DIR="/backups/mongodb"
+BACKUP_DIR="/backups/postgres"
 DATE=$(date +%Y%m%d_%H%M%S)
-BACKUP_PATH="$BACKUP_DIR/backup_$DATE"
+BACKUP_FILE="$BACKUP_DIR/backup_$DATE.dump"
 
-# Create backup
-mongodump \
-  --uri="mongodb://username:password@localhost:27017/outlabs_auth" \
-  --out="$BACKUP_PATH"
+mkdir -p "$BACKUP_DIR"
 
-# Compress backup
-tar -czf "$BACKUP_PATH.tar.gz" "$BACKUP_PATH"
-rm -rf "$BACKUP_PATH"
+# Create backup. --format=custom is compressed and restores selectively.
+# Credentials come from the environment / ~/.pgpass, never the command line.
+pg_dump "$DATABASE_DSN" \
+  --format=custom \
+  --no-owner --no-privileges \
+  --file="$BACKUP_FILE"
 
 # Upload to S3
-aws s3 cp "$BACKUP_PATH.tar.gz" "s3://backups/mongodb/" --sse AES256
+aws s3 cp "$BACKUP_FILE" "s3://backups/postgres/" --sse AES256
 
 # Cleanup old backups (keep last 30 days)
-find "$BACKUP_DIR" -name "backup_*.tar.gz" -mtime +30 -delete
+find "$BACKUP_DIR" -name "backup_*.dump" -mtime +30 -delete
 
-echo "Backup completed: $BACKUP_PATH.tar.gz"
+echo "Backup completed: $BACKUP_FILE"
 ```
+
+Set `DATABASE_DSN` to a libpq URL (`postgresql://user@host:5432/appdb`) — note
+this is the **plain libpq form, without the `+asyncpg` driver suffix** that
+`DATABASE_URL` carries. `pg_dump` is a standard client and does not understand
+the SQLAlchemy dialect prefix.
+
+A dump only captures the database. If you have set `OUTLABS_AUTH_SCHEMA`, the
+auth tables are inside that schema and are included in a full-database dump —
+use `--schema=auth` if you want that schema alone.
+
+**`pg_dump` is not point-in-time recovery.** A nightly dump means up to 24h of
+loss. If that is unacceptable, run continuous WAL archiving (pgBackRest, WAL-G)
+or use a managed provider's PITR.
 
 **Cron Job**:
 ```bash
@@ -1302,28 +1461,41 @@ echo "Backup completed: $BACKUP_PATH.tar.gz"
 ```bash
 #!/bin/bash
 # restore.sh
+set -euo pipefail
 
-BACKUP_FILE=$1
+BACKUP_FILE=${1:-}
 
 if [ -z "$BACKUP_FILE" ]; then
-    echo "Usage: ./restore.sh <backup_file.tar.gz>"
+    echo "Usage: ./restore.sh <backup_file.dump>"
     exit 1
 fi
 
 # Download from S3
-aws s3 cp "s3://backups/mongodb/$BACKUP_FILE" .
+aws s3 cp "s3://backups/postgres/$BACKUP_FILE" .
 
-# Extract backup
-tar -xzf "$BACKUP_FILE"
-
-# Restore to MongoDB
-mongorestore \
-  --uri="mongodb://username:password@localhost:27017/outlabs_auth" \
-  --drop \
-  backup_*
+# Restore. --clean --if-exists drops existing objects first.
+# Stop the application before running this.
+pg_restore \
+  --dbname="$DATABASE_DSN" \
+  --clean --if-exists \
+  --no-owner --no-privileges \
+  --jobs=4 \
+  "$BACKUP_FILE"
 
 echo "Restore completed"
 ```
+
+After restoring, confirm the schema matches the running code before serving
+traffic:
+
+```bash
+outlabs-auth doctor
+outlabs-auth current   # must match `outlabs-auth heads`
+```
+
+A restore from an older dump can land the database on an **earlier Alembic
+revision** than the deployed code expects. Run `outlabs-auth migrate` to bring
+it back to head.
 
 ### Disaster Recovery Plan
 
@@ -1353,8 +1525,8 @@ ufw enable
 ```
 
 **Private Networking**:
-- Keep MongoDB and Redis on private network
-- Don't expose database ports publicly
+- Keep PostgreSQL and Redis on a private network
+- Don't expose 5432 or 6379 publicly
 - Use VPN for administrative access
 
 ### Application Security
@@ -1362,8 +1534,9 @@ ufw enable
 **Environment Variables**:
 ```bash
 # Never commit these
+# SECRET_KEY must be >= 32 chars under HS256 — construction fails otherwise
 export SECRET_KEY="$(openssl rand -hex 32)"
-export MONGO_PASSWORD="$(openssl rand -base64 32)"
+export POSTGRES_PASSWORD="$(openssl rand -base64 32)"
 export REDIS_PASSWORD="$(openssl rand -base64 32)"
 ```
 
@@ -1387,33 +1560,49 @@ async def add_security_headers(request: Request, call_next):
 
 ### Database Security
 
-**MongoDB Authentication**:
-```javascript
-// Create admin user
-use admin
-db.createUser({
-  user: "admin",
-  pwd: passwordPrompt(),
-  roles: [{ role: "root", db: "admin" }]
-})
+**PostgreSQL Authentication**:
+```sql
+-- Migration role: owns the schema, has DDL. Used by `outlabs-auth migrate`.
+CREATE ROLE outlabs_auth_owner LOGIN PASSWORD 'REDACTED';
+CREATE SCHEMA auth AUTHORIZATION outlabs_auth_owner;
 
-// Create application user
-use outlabs_auth
-db.createUser({
-  user: "outlabs_auth_app",
-  pwd: passwordPrompt(),
-  roles: [{ role: "readWrite", db: "outlabs_auth" }]
-})
+-- Runtime role: what the application connects as. No DDL.
+CREATE ROLE outlabs_auth_app LOGIN PASSWORD 'REDACTED';
+
+GRANT USAGE ON SCHEMA auth TO outlabs_auth_app;
+GRANT SELECT, INSERT, UPDATE, DELETE
+  ON ALL TABLES IN SCHEMA auth TO outlabs_auth_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA auth TO outlabs_auth_app;
+
+-- Keep the grant true for tables future migrations add.
+ALTER DEFAULT PRIVILEGES FOR ROLE outlabs_auth_owner IN SCHEMA auth
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO outlabs_auth_app;
 ```
 
+Splitting the roles means a leaked application credential cannot drop or alter
+the auth schema. Ensure `pg_hba.conf` requires `scram-sha-256` and never
+`trust` for non-local connections.
+
 **TLS/SSL**:
+
+TLS is configured in the URL; asyncpg honours the standard parameters:
+
 ```python
-client = AsyncIOMotorClient(
-    DATABASE_URL,
-    tls=True,
-    tlsCAFile="/path/to/ca.pem",
-    tlsCertificateKeyFile="/path/to/client.pem"
+auth = EnterpriseRBAC(
+    database_url=(
+        "postgresql+asyncpg://outlabs_auth_app:PASSWORD@db.internal:5432/appdb"
+        "?ssl=verify-full"
+    ),
+    secret_key=SECRET_KEY,
 )
+```
+
+Use `ssl=verify-full`. It validates the certificate chain **and** the hostname;
+`ssl=require` encrypts the connection but authenticates nothing, so it does not
+stop an active MITM. For a private CA, point at the root cert:
+
+```bash
+export DATABASE_URL="postgresql+asyncpg://user:pass@db.internal:5432/appdb?ssl=verify-full&sslrootcert=/path/to/ca.pem"
 ```
 
 ---
@@ -1447,37 +1636,83 @@ python -m memory_profiler app.py
 
 **Diagnosis**:
 ```bash
-# Test MongoDB connection
-mongosh mongodb://localhost:27017
+# The single best first command — checks connectivity, schema,
+# the version table, revision state, and core tables in one pass.
+outlabs-auth doctor
 
-# Check connection pool
-db.serverStatus().connections
+# Test raw connectivity (libpq form — no +asyncpg suffix)
+psql "postgresql://user@host:5432/appdb" -c "SELECT 1"
+```
+
+```sql
+-- Connection count vs the server limit
+SELECT count(*) FROM pg_stat_activity;
+SHOW max_connections;
+
+-- Who is holding connections
+SELECT state, count(*) FROM pg_stat_activity GROUP BY state;
 ```
 
 **Solutions**:
-- Check network connectivity
-- Verify credentials
-- Increase connection pool size
-- Check MongoDB status
+- Check network connectivity and that TLS settings match the server
+- Verify credentials and `pg_hba.conf` rules
+- **Check total pool demand**: `replicas x (pool_size + max_overflow)` must stay
+  under `max_connections`. "Too many connections" is usually too many pools, not
+  too small a pool — adding replicas makes it worse. Put PgBouncer in front.
+- Confirm the URL uses the `postgresql+asyncpg://` scheme; a bare
+  `postgresql://` will try to load a sync driver
+
+#### Schema / Migration Issues
+
+**Symptoms**: `UndefinedTableError`, `UndefinedColumnError`, or errors naming a
+column that exists in the code but not the database.
+
+**Diagnosis**:
+```bash
+outlabs-auth current   # revision the database is on
+outlabs-auth heads     # revision the installed code expects
+outlabs-auth doctor
+```
+
+**Solutions**:
+- If `current` lags `heads`, code shipped ahead of its schema — run
+  `outlabs-auth migrate`
+- If the schema exists but was never stamped, use
+  `outlabs-auth adopt-existing-schema`
+- Remember the auth history is tracked in `outlabs_auth_alembic_version`, and
+  your application's `alembic upgrade head` does **not** advance it — the auth
+  migration is its own deploy step
 
 #### Slow Performance
 
 **Symptoms**: High response times, timeouts
 
 **Diagnosis**:
-```python
-# Enable query profiling
-db.setProfilingLevel(1, { slowms: 100 })
+```sql
+-- Currently blocked queries and what they're waiting on
+SELECT pid, state, wait_event_type, wait_event, left(query, 80)
+FROM pg_stat_activity
+WHERE state <> 'idle'
+ORDER BY query_start;
 
-# View slow queries
-db.system.profile.find().sort({ ts: -1 }).limit(10)
+-- Slowest statements (requires the pg_stat_statements extension)
+SELECT calls, round(mean_exec_time::numeric, 2) AS avg_ms, left(query, 80)
+FROM pg_stat_statements
+ORDER BY mean_exec_time DESC
+LIMIT 10;
 ```
 
 **Solutions**:
-- Add database indexes
-- Enable caching
-- Optimize queries
-- Scale horizontally
+- If you see many connections with `wait_event_type=Lock, wait_event=tuple` all
+  on `UPDATE api_keys SET ... usage_count ...`, that is the API-key hot-row
+  contention described under
+  [Background Sync for API Keys](#background-sync-for-api-keys-v14---dd-033).
+  **Enable Redis** — scaling out workers cannot fix it, because the contention is
+  on a single Postgres row.
+- Confirm the schema is at head (`outlabs-auth doctor`) — the migrations carry
+  the library's index work; a lagging schema can be missing indexes entirely
+- Enable caching (`redis_url` + `redis_key_prefix`)
+- Scale horizontally, *after* confirming the bottleneck is not a single row
 
 ---
 
@@ -1485,15 +1720,25 @@ db.system.profile.find().sort({ ts: -1 }).limit(10)
 
 ### Pre-Deployment
 
-- [ ] All tests passing (90%+ coverage)
-- [ ] Security audit completed
+- [ ] All tests passing
+- [ ] Security audit reviewed (see `docs/SECURITY_AUDIT_2026-06-10.md` and
+      `docs/ARCHITECTURE_SECURITY_PERFORMANCE_AUDIT_2026-07-15.md`)
 - [ ] Load testing completed
-- [ ] Database indexes created
-- [ ] Backup strategy in place
+- [ ] `SECRET_KEY` is >= 32 chars and unique per environment
+- [ ] `DATABASE_URL` uses `postgresql+asyncpg://` and `ssl=verify-full`
+- [ ] Auth schema migrated with `outlabs-auth migrate` as a discrete deploy step
+- [ ] `auto_migrate` is **off** in production
+- [ ] `outlabs-auth doctor` green; `current` == `heads`
+- [ ] `OUTLABS_AUTH_SCHEMA` set if isolating auth tables
+- [ ] `redis_key_prefix` set and unique per app+environment (if Redis is on)
+- [ ] Before first enabling Redis: audited `rate_limit_per_minute` on every row
+      in `api_keys` (the limiter is a silent no-op without Redis — see
+      [Background Sync for API Keys](#background-sync-for-api-keys-v14---dd-033))
+- [ ] Total connection demand (`replicas x pool`) under `max_connections`
+- [ ] Backup strategy in place, and a restore actually tested
 - [ ] Monitoring configured
 - [ ] Secrets properly managed
 - [ ] HTTPS configured
-- [ ] Rate limiting enabled
 - [ ] Error handling tested
 
 ### Post-Deployment
@@ -1572,10 +1817,24 @@ kubectl logs -f deployment/outlabs-auth-app -n outlabs-auth
 kubectl describe pod <pod-name> -n outlabs-auth
 kubectl exec -it <pod-name> -n outlabs-auth -- /bin/bash
 
-# MongoDB
-mongosh "mongodb://localhost:27017"
-db.serverStatus()
-db.currentOp()
+# OutlabsAuth CLI (reads DATABASE_URL + OUTLABS_AUTH_SCHEMA from env)
+outlabs-auth doctor              # connectivity, schema, revision, core tables
+outlabs-auth migrate             # apply migrations to head
+outlabs-auth current             # revision the database is on
+outlabs-auth heads               # revision the code expects
+outlabs-auth history             # full revision history
+outlabs-auth downgrade           # step back a revision
+outlabs-auth seed-system         # seed system permissions/config
+outlabs-auth bootstrap-admin     # create the initial admin user
+outlabs-auth adopt-existing-schema  # stamp an already-populated schema
+outlabs-auth run-maintenance     # one-off maintenance pass
+outlabs-auth --version
+
+# PostgreSQL
+psql "postgresql://user@host:5432/appdb"
+\dt auth.*                       # list auth tables (if using a schema)
+SELECT * FROM pg_stat_activity;
+SELECT count(*) FROM pg_stat_activity;
 
 # Redis
 redis-cli

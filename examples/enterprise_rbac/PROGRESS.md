@@ -100,7 +100,7 @@ See [REQUIREMENTS.md](./REQUIREMENTS.md) for complete use case documentation.
 - [x] Domain models (Lead, LeadNote)
 - [x] Main FastAPI application
 - [x] EnterpriseRBAC initialization
-- [x] Database setup (MongoDB + Beanie)
+- [x] Database setup (PostgreSQL + SQLModel)
 - [x] CORS middleware for frontend
 
 ### Phase 2: Standard Routers ✅
@@ -287,7 +287,7 @@ Developers can use these as-is or build custom routes using the services directl
 ### Dependencies
 
 - **Python**: 3.12+
-- **MongoDB**: Running locally or via Docker
+- **PostgreSQL**: Running locally or via Docker
 - **Redis**: Optional (for caching)
 - **Node.js/Bun**: For frontend
 - **Nuxt 4**: Admin UI framework
@@ -296,7 +296,7 @@ Developers can use these as-is or build custom routes using the services directl
 
 - 8002: Backend API
 - 3000: Frontend admin UI
-- 27017: MongoDB (default)
+- 5432: PostgreSQL (default)
 - 6379: Redis (optional)
 
 ---

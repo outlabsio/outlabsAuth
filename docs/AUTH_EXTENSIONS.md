@@ -1,45 +1,22 @@
 # OutlabsAuth Library - Authentication Extensions & Notifications
 
-> [!WARNING]
-> **Written for the pre-Postgres design and not updated since. Do not follow it.**
->
-> This predates the move to Postgres/SQLModel and still describes MongoDB/Beanie —
-> `AsyncIOMotorClient`, `Link[...]` fields, and module paths that no longer exist.
-> Code samples here will not run, and file references will not resolve.
->
-> For how the library actually works today: **`examples/`** (the only integration
-> reference kept honest by tests), then `README.md`, then the source. Retained for
-> history — the reasoning is often still sound even where the mechanics are not.
+**Applies to**: both SimpleRBAC and EnterpriseRBAC
 
+This document covers the authentication methods that sit alongside email/password, and
+the notification system that delivers their messages:
 
-**Version**: 1.4 (Updated)
-**Date**: 2025-01-14
-**Status**: Post-v1.0 Optional Extensions Design
-**Applies to**: Both SimpleRBAC and EnterpriseRBAC
+- **OAuth / social login** — Google, Facebook, Apple, GitHub
+- **Passwordless** — magic links and email access codes
+- **Notifications** — a pluggable channel system for auth-related messages
 
-**⚠️ IMPORTANT**: This document describes **optional post-v1.0 extensions** (v1.1-v1.4). These are **NOT part of core v1.0**.
+All of it is optional. The library works with email/password alone, and every feature
+below is off until you turn it on.
 
-**Core v1.0 Authentication Features** (Already Included):
-- Email/password authentication
-- JWT access tokens (15 min expiry)
-- Refresh tokens (30 days expiry)
-- API keys with argon2id hashing (DD-028, DD-033)
-- JWT service tokens for microservices (DD-034)
-- Multi-source authentication (JWT, API keys, service tokens, superuser)
-- Single unified `AuthDeps` class (DD-035)
-
-**This Document Covers** (Optional Extensions, Weeks 8-16):
-- **v1.1** (Week 8-9): Notification system
-- **v1.2** (Week 10-12): OAuth/social login (Google, Facebook, Apple, GitHub)
-- **v1.3** (Week 13-14): Passwordless authentication (magic links, OTP)
-- **v1.4** (Week 15-16): Advanced features (TOTP/MFA, WebAuthn research)
-
-**Related Core v1.0 Documentation**:
-- [REDESIGN_VISION.md](REDESIGN_VISION.md) - Core v1.0 features and architecture
-- [LIBRARY_ARCHITECTURE.md](LIBRARY_ARCHITECTURE.md) - Technical architecture (v1.4 updates)
-- [DEPENDENCY_PATTERNS.md](DEPENDENCY_PATTERNS.md) - Single AuthDeps class (DD-035)
-- [SECURITY.md](SECURITY.md) - API key security, JWT service tokens
-- [API_DESIGN.md](API_DESIGN.md) - Core authentication patterns and examples
+**Related documentation**:
+- [API_DESIGN.md](API_DESIGN.md) - core authentication patterns and examples
+- [DEPENDENCY_PATTERNS.md](DEPENDENCY_PATTERNS.md) - `AuthDeps` in depth
+- [LIBRARY_ARCHITECTURE.md](LIBRARY_ARCHITECTURE.md) - technical architecture
+- [SECURITY.md](SECURITY.md) - security hardening
 
 ---
 
@@ -50,1046 +27,665 @@
 3. [OAuth/Social Login Integration](#oauthsocial-login-integration)
 4. [Alternative Authentication Methods](#alternative-authentication-methods)
 5. [Notification System Design](#notification-system-design)
-6. [Implementation Roadmap](#implementation-roadmap)
+6. [Status](#status)
 7. [Security Considerations](#security-considerations)
 8. [Configuration Examples](#configuration-examples)
 9. [Testing Strategies](#testing-strategies)
-10. [Migration Guide](#migration-guide)
 
 ---
 
 ## Overview
 
-This document outlines the design for extending OutlabsAuth beyond basic email/password authentication to support:
-
-- **OAuth/Social Login** (Google, Facebook, Apple, etc.) - v1.2
-- **Passwordless Methods** (Magic links, OTP via SMS/WhatsApp/Telegram) - v1.3
-- **Notification Handling** (Pluggable system for all auth-related communications) - v1.1
-
-**Important**: All extensions are **optional** and work with both **SimpleRBAC** and **EnterpriseRBAC** presets. The v1.0 core library works perfectly fine with just email/password authentication.
-
 ### Design Principles
 
-1. **Optional Complexity**: Basic email/password works without any of these features
-2. **No Vendor Lock-in**: Library doesn't depend on specific email/SMS providers
-3. **Pluggable Architecture**: Bring your own notification service
-4. **Secure by Default**: State validation, CSRF protection, rate limiting
-5. **Minimal Dependencies**: OAuth support doesn't require heavy libraries
-6. **Universal**: Extensions work identically with both SimpleRBAC and EnterpriseRBAC
-
-### Extension Timeline
-
-- **v1.0** (Core): SimpleRBAC + EnterpriseRBAC
-- **v1.1** (Week 8-9): Notification system
-- **v1.2** (Week 10-12): OAuth/social login
-- **v1.3** (Week 13-14): Passwordless authentication
-- **v1.4** (Week 15-16): Advanced features (MFA, WebAuthn)
+1. **Optional complexity**: email/password works without any of this.
+2. **No vendor lock-in**: the library does not depend on a specific email or SMS
+   provider. Bring your own, or use one of the bundled channels.
+3. **Host-owned delivery**: the library mints tokens and codes; it hands them to a
+   service you supply for delivery. It never assumes an SMTP server exists.
+4. **Secure by default**: state validation, PKCE, nonce checks, single-use tokens,
+   hashed challenge storage, and rate limiting are on by default where they apply.
+5. **Universal**: everything here works identically with SimpleRBAC and EnterpriseRBAC.
 
 ---
 
 ## Authentication Methods Architecture
 
-### Core Model Changes
+### Users and social accounts
+
+The user model is `outlabs_auth/models/sql/user.py`, class `User`. A linked social
+identity is a separate row rather than an embedded document:
+`outlabs_auth/models/sql/social_account.py`, class `SocialAccount`, related to `User`
+via `user.social_accounts`.
+
+Selected `SocialAccount` columns:
+
+- `user_id`, `provider`, `provider_user_id` — the identity link
+- `provider_email`, `provider_email_verified`, `provider_username`
+- `access_token`, `refresh_token`, `token_expires_at` — only populated when
+  `store_oauth_provider_tokens=True`
+- `display_name`, `avatar_url`, `profile_url`
+- `last_login_at`, `token_refreshed_at`
+
+Because a social account is its own table, a user can link several providers, and
+unlinking is a row delete rather than a rewrite of the user document.
+
+### Authentication challenges
+
+Temporary challenges — magic links, access codes — live in
+`outlabs_auth/models/sql/auth_challenge.py`, class `AuthChallenge`.
+
+Columns of note:
+
+- `user_id`, `challenge_type`, `recipient`
+- `token_hash` — **only a hash is stored**. The plaintext token exists exactly once,
+  in the return value of the method that generated it, so a database leak does not
+  yield usable magic links.
+- `expires_at`, `used_at` — `used_at` is what makes a challenge single-use
+- `redirect_url`
+- `requested_ip_address`, `requested_user_agent`
+
+`AuthChallengeType` (`outlabs_auth/models/sql/enums.py`) is:
 
 ```python
-# outlabs_auth/models/user.py
-from enum import Enum
-from typing import List, Optional
-from datetime import datetime
-
-class AuthMethod(str, Enum):
-    PASSWORD = "password"
-    GOOGLE = "google"
-    FACEBOOK = "facebook"
-    APPLE = "apple"
-    MAGIC_LINK = "magic_link"
-    SMS_OTP = "sms_otp"
-    WHATSAPP_OTP = "whatsapp_otp"
-    TELEGRAM_OTP = "telegram_otp"
-
-class SocialAccount(BaseModel):
-    """Linked social account"""
-    provider: str  # "google", "facebook", "apple"
-    provider_user_id: str
-    email: Optional[str]
-    display_name: Optional[str]
-    avatar_url: Optional[str]
-    connected_at: datetime
-    last_used: Optional[datetime]
-    is_primary: bool = False
-    raw_data: Dict[str, Any] = Field(default_factory=dict)
-
-class UserModel(BaseDocument):
-    # Core fields
-    email: EmailStr
-    hashed_password: Optional[str] = None  # Optional for social-only users
-
-    # Authentication
-    auth_methods: List[AuthMethod] = Field(default_factory=list)
-    social_accounts: List[SocialAccount] = Field(default_factory=list)
-    primary_auth_method: AuthMethod = AuthMethod.PASSWORD
-
-    # Security
-    requires_password_setup: bool = False  # For social users who need password
-    mfa_enabled: bool = False
-    mfa_methods: List[str] = Field(default_factory=list)
+MAGIC_LINK = "magic_link"
+ACCESS_CODE = "access_code"
+WHATSAPP_OTP = "whatsapp_otp"
+SMS_OTP = "sms_otp"
+PHONE_VERIFY = "phone_verify"
 ```
 
-### Authentication Challenge System
-
-For temporary auth challenges (magic links, OTPs):
-
-```python
-# outlabs_auth/models/auth_challenge.py
-class ChallengeType(str, Enum):
-    MAGIC_LINK = "magic_link"
-    EMAIL_OTP = "email_otp"
-    SMS_OTP = "sms_otp"
-    WHATSAPP_OTP = "whatsapp_otp"
-    PASSWORD_RESET = "password_reset"
-    EMAIL_VERIFICATION = "email_verification"
-
-class AuthChallenge(BaseDocument):
-    """Temporary authentication challenges"""
-    user_id: str
-    challenge_type: ChallengeType
-    code: str  # Random token or OTP code
-    recipient: str  # Email or phone number
-    expires_at: datetime
-    attempts: int = 0
-    max_attempts: int = 3
-    used: bool = False
-    used_at: Optional[datetime] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
-    class Settings:
-        indexes = [
-            IndexModel([("code", 1)], unique=True),
-            IndexModel([("expires_at", 1)], expireAfterSeconds=0),
-        ]
-```
+Expired challenges are cleaned up by the `token_cleanup` worker
+(`outlabs_auth/workers/token_cleanup.py`).
 
 ---
 
 ## OAuth/Social Login Integration
 
-### Provider Abstraction
+### Provider abstraction
+
+The base class is `OAuthProvider` in `outlabs_auth/oauth/provider.py`. Its abstract
+surface:
+
+- `get_authorization_url(redirect_uri, state=None, use_pkce=True, use_nonce=None, **extra)`
+  — returns an `OAuthAuthorizationURL` (`url`, `state`). PKCE is on by default.
+- `exchange_code(...)` (abstract) — authorization code to tokens
+- `get_user_info(...)` (abstract) — fetch the profile
+- `refresh_token(...)` — refresh an access token
+- `revoke_token(...)` — revoke, where the provider supports it
+
+Providers are constructed as `Provider(client_id, client_secret, scopes=None)`, with
+`scopes` falling back to the provider's `default_scopes`.
+
+Data types are exported from `outlabs_auth.oauth`: `OAuthTokenResponse`,
+`OAuthUserInfo`, `OAuthAuthorizationURL`, `OAuthCallbackResult`.
+
+The package also defines a full exception hierarchy — `OAuthError`,
+`InvalidStateError`, `InvalidCodeError`, `ProviderError`, `AccountLinkError`,
+`ProviderNotConfiguredError`, `EmailNotVerifiedError`, `AccountAlreadyLinkedError`,
+`ProviderAlreadyLinkedError`, `CannotUnlinkLastMethodError`, `TokenRefreshError`,
+`InvalidNonceError`, `PKCEValidationError` — so a caller can distinguish "this user
+already linked that provider" from "the provider is down".
+
+### Pre-built providers
+
+Concrete classes live in `outlabs_auth/oauth/providers/`:
+
+| Class | Module |
+|---|---|
+| `GoogleProvider` | `oauth/providers/google.py` |
+| `FacebookProvider` | `oauth/providers/facebook.py` |
+| `AppleProvider` | `oauth/providers/apple.py` |
+| `GitHubProvider` | `oauth/providers/github.py` |
+
+`outlabs_auth/oauth/provider_factories.py` additionally exposes client factories used
+by the OAuth router: `get_google_client`, `get_facebook_client`, `get_github_client`,
+`get_microsoft_client`, `get_discord_client`.
 
 ```python
-# outlabs_auth/providers/base.py
-from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any
-from pydantic import BaseModel
+from outlabs_auth.oauth.providers import get_google_client
 
-class OAuthToken(BaseModel):
-    access_token: str
-    token_type: str
-    expires_in: Optional[int]
-    refresh_token: Optional[str]
-    scope: Optional[str]
-    id_token: Optional[str]  # For OIDC providers
-
-class OAuthUserInfo(BaseModel):
-    id: str  # Provider's user ID
-    email: Optional[str]
-    email_verified: Optional[bool]
-    name: Optional[str]
-    given_name: Optional[str]
-    family_name: Optional[str]
-    picture: Optional[str]
-    locale: Optional[str]
-    raw_data: Dict[str, Any]
-
-class OAuthProvider(ABC):
-    """Base OAuth provider interface"""
-
-    name: str
-    display_name: str
-
-    @abstractmethod
-    def get_authorization_url(
-        self,
-        state: str,
-        redirect_uri: str,
-        scopes: Optional[List[str]] = None
-    ) -> str:
-        """Generate authorization URL"""
-        pass
-
-    @abstractmethod
-    async def exchange_code(
-        self,
-        code: str,
-        redirect_uri: str
-    ) -> OAuthToken:
-        """Exchange authorization code for tokens"""
-        pass
-
-    @abstractmethod
-    async def get_user_info(self, token: OAuthToken) -> OAuthUserInfo:
-        """Get user information from provider"""
-        pass
-
-    @abstractmethod
-    async def revoke_token(self, token: str) -> bool:
-        """Revoke access token (optional)"""
-        return True
+google_client = get_google_client(
+    client_id=os.environ["GOOGLE_CLIENT_ID"],
+    client_secret=os.environ["GOOGLE_CLIENT_SECRET"],
+)
 ```
 
-### Pre-built Providers
+### Mounting the OAuth routes
+
+There is no `auth.setup_oauth_routes(...)`. OAuth is mounted like every other part of
+the library — with a router factory, one per provider.
 
 ```python
-# outlabs_auth/providers/google.py
-import httpx
-from urllib.parse import urlencode
+from outlabs_auth.routers.oauth import get_oauth_router
 
-class GoogleProvider(OAuthProvider):
-    name = "google"
-    display_name = "Google"
-
-    AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-    TOKEN_URL = "https://oauth2.googleapis.com/token"
-    USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
-
-    def __init__(self, client_id: str, client_secret: str):
-        self.client_id = client_id
-        self.client_secret = client_secret
-
-    def get_authorization_url(
-        self,
-        state: str,
-        redirect_uri: str,
-        scopes: Optional[List[str]] = None
-    ) -> str:
-        scopes = scopes or ["openid", "email", "profile"]
-        params = {
-            "client_id": self.client_id,
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": " ".join(scopes),
-            "state": state,
-            "access_type": "offline",  # For refresh token
-            "prompt": "consent"
-        }
-        return f"{self.AUTHORIZE_URL}?{urlencode(params)}"
-
-    async def exchange_code(
-        self,
-        code: str,
-        redirect_uri: str
-    ) -> OAuthToken:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self.TOKEN_URL,
-                data={
-                    "code": code,
-                    "client_id": self.client_id,
-                    "client_secret": self.client_secret,
-                    "redirect_uri": redirect_uri,
-                    "grant_type": "authorization_code"
-                }
-            )
-            response.raise_for_status()
-            return OAuthToken(**response.json())
-
-    async def get_user_info(self, token: OAuthToken) -> OAuthUserInfo:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                self.USERINFO_URL,
-                headers={"Authorization": f"Bearer {token.access_token}"}
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            return OAuthUserInfo(
-                id=data["id"],
-                email=data.get("email"),
-                email_verified=data.get("verified_email"),
-                name=data.get("name"),
-                given_name=data.get("given_name"),
-                family_name=data.get("family_name"),
-                picture=data.get("picture"),
-                locale=data.get("locale"),
-                raw_data=data
-            )
-
-# Similar implementations for:
-# - FacebookProvider
-# - AppleProvider (more complex due to JWT)
-# - GitHubProvider
-# - MicrosoftProvider
+app.include_router(
+    get_oauth_router(
+        oauth_client=google_client,
+        auth=auth,
+        state_secret=os.environ["OAUTH_STATE_SECRET"],
+        prefix="/auth/google",
+        tags=["OAuth"],
+        associate_by_email=True,        # link to an existing user with the same email
+        is_verified_by_default=False,   # trust the provider's email verification?
+        require_existing_user=False,    # True = invite-only, reject unknown emails
+        success_redirect_url="https://app.example.com/welcome",
+        error_redirect_url="https://app.example.com/login?error=1",
+        cookie_secure=True,
+    )
+)
 ```
 
-### OAuth Service Integration
+Note `get_oauth_router` is imported from `outlabs_auth.routers.oauth` — unlike the
+core factories, it is not re-exported from `outlabs_auth.routers`.
+
+Parameters worth understanding before you ship:
+
+- **`require_existing_user=True`** rejects unknown emails, which is how you get
+  invite-only OAuth with no self-registration.
+- **`associate_by_email=True`** links a provider identity to an existing local account
+  with the same email. Only enable this for providers whose email verification you
+  trust — otherwise it is an account-takeover path.
+- **`state_secret`** signs the OAuth state parameter. It is required.
+
+To let an already-authenticated user link an additional provider, mount
+`get_oauth_associate_router` from `outlabs_auth.routers.oauth_associate`.
+
+### Provider token storage
+
+By default, provider access and refresh tokens are **not** persisted. To keep them —
+so you can call the provider's API on the user's behalf later — opt in, and supply an
+encryption key:
 
 ```python
-# outlabs_auth/services/oauth.py
-class OAuthService:
-    """Handle OAuth authentication flows"""
-
-    def __init__(
-        self,
-        user_service: UserService,
-        providers: Dict[str, OAuthProvider],
-        notification_handler: NotificationHandler
-    ):
-        self.user_service = user_service
-        self.providers = providers
-        self.notification_handler = notification_handler
-
-    async def authenticate_with_provider(
-        self,
-        provider_name: str,
-        code: str,
-        redirect_uri: str,
-        create_if_not_exists: bool = True,
-        auto_link_by_email: bool = True
-    ) -> Tuple[UserModel, TokenPair, bool]:  # (user, tokens, is_new_user)
-        """
-        Complete OAuth authentication flow
-        Returns user, tokens, and whether this is a new user
-        """
-        provider = self.providers.get(provider_name)
-        if not provider:
-            raise ValueError(f"Unknown provider: {provider_name}")
-
-        # Exchange code for tokens
-        oauth_token = await provider.exchange_code(code, redirect_uri)
-
-        # Get user info
-        user_info = await provider.get_user_info(oauth_token)
-
-        # Find existing user
-        user = await self._find_existing_user(
-            provider_name,
-            user_info,
-            auto_link_by_email
-        )
-
-        is_new_user = False
-
-        if user:
-            # Update existing user
-            await self._update_social_account(user, provider_name, user_info)
-        elif create_if_not_exists:
-            # Create new user
-            user = await self._create_user_from_oauth(provider_name, user_info)
-            is_new_user = True
-        else:
-            raise UserNotFoundError(
-                f"No user found for {provider_name} account"
-            )
-
-        # Generate tokens
-        tokens = await self.user_service.generate_tokens(user)
-
-        # Send notification if new user
-        if is_new_user:
-            await self.notification_handler.send(NotificationEvent(
-                type="welcome_oauth",
-                recipient=user.email,
-                data={
-                    "provider": provider.display_name,
-                    "name": user.profile.full_name,
-                    "requires_password": user.requires_password_setup
-                }
-            ))
-
-        return user, tokens, is_new_user
-
-    async def link_provider_to_user(
-        self,
-        user_id: str,
-        provider_name: str,
-        code: str,
-        redirect_uri: str
-    ) -> SocialAccount:
-        """Link a social account to existing user"""
-        # Implementation...
-        pass
-
-    async def unlink_provider(
-        self,
-        user_id: str,
-        provider_name: str
-    ) -> bool:
-        """Unlink a social account"""
-        # Verify user has alternative auth method
-        # Remove social account
-        pass
+auth = SimpleRBAC(
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
+    store_oauth_provider_tokens=True,
+    oauth_token_encryption_key=os.environ["OAUTH_TOKEN_ENCRYPTION_KEY"],  # Fernet key
+)
 ```
+
+The key is validated at construction: enabling storage without one is a
+`ConfigurationError` rather than a silent plaintext write.
+
+### OAuth security helpers
+
+`outlabs_auth/oauth/security.py` and `outlabs_auth/oauth/state.py` implement the state
+parameter, PKCE, and nonce handling. `outlabs_auth/models/sql/oauth_state.py` backs
+state persistence, with `outlabs_auth/routers/oauth_state_store.py` as the store.
 
 ---
 
 ## Alternative Authentication Methods
 
-### Magic Link Implementation
+Both passwordless methods are off by default and are implemented on `AuthService`.
+Both follow the same shape: **the library mints the token and stores only its hash;
+you deliver it.**
+
+### Magic links
 
 ```python
-# outlabs_auth/services/passwordless.py
-class PasswordlessService:
-    """Handle magic links and OTP authentication"""
-
-    def __init__(
-        self,
-        database: Any,
-        notification_handler: NotificationHandler,
-        config: PasswordlessConfig
-    ):
-        self.database = database
-        self.notification_handler = notification_handler
-        self.config = config
-
-    async def send_magic_link(
-        self,
-        email: str,
-        redirect_url: Optional[str] = None
-    ) -> bool:
-        """Send magic link to email"""
-        # Find or create user
-        user = await self.user_service.find_by_email(email)
-        if not user and self.config.create_users_on_first_login:
-            user = await self.user_service.create_user(
-                email=email,
-                auth_methods=[AuthMethod.MAGIC_LINK]
-            )
-        elif not user:
-            # Don't reveal if user exists
-            return True
-
-        # Create challenge
-        challenge = await self.create_challenge(
-            user_id=str(user.id),
-            challenge_type=ChallengeType.MAGIC_LINK,
-            recipient=email,
-            expires_in_minutes=self.config.magic_link_expiry_minutes
-        )
-
-        # Build magic link
-        magic_link = f"{self.config.app_url}/auth/magic/{challenge.code}"
-        if redirect_url:
-            magic_link += f"?redirect={redirect_url}"
-
-        # Send notification
-        await self.notification_handler.send(NotificationEvent(
-            type="magic_link",
-            recipient=email,
-            data={
-                "link": magic_link,
-                "expires_in_minutes": self.config.magic_link_expiry_minutes,
-                "user_name": user.profile.first_name
-            }
-        ))
-
-        return True
-
-    async def verify_magic_link(self, code: str) -> TokenPair:
-        """Verify magic link and generate tokens"""
-        challenge = await self.get_valid_challenge(
-            code,
-            ChallengeType.MAGIC_LINK
-        )
-
-        # Mark as used
-        await self.mark_challenge_used(challenge)
-
-        # Generate tokens
-        user = await self.user_service.get(challenge.user_id)
-        return await self.user_service.generate_tokens(user)
-
-    async def send_otp(
-        self,
-        recipient: str,
-        channel: str = "email"  # email, sms, whatsapp, telegram
-    ) -> bool:
-        """Send OTP code"""
-        # Determine challenge type based on channel
-        challenge_type = {
-            "email": ChallengeType.EMAIL_OTP,
-            "sms": ChallengeType.SMS_OTP,
-            "whatsapp": ChallengeType.WHATSAPP_OTP,
-        }[channel]
-
-        # Generate 6-digit code
-        code = ''.join(random.choices('0123456789', k=6))
-
-        # Create challenge
-        challenge = await self.create_challenge(
-            user_id=str(user.id),
-            challenge_type=challenge_type,
-            recipient=recipient,
-            code=code,
-            expires_in_minutes=self.config.otp_expiry_minutes
-        )
-
-        # Send notification
-        await self.notification_handler.send(NotificationEvent(
-            type=f"otp_{channel}",
-            recipient=recipient,
-            data={
-                "code": code,
-                "expires_in_minutes": self.config.otp_expiry_minutes
-            }
-        ))
-
-        return True
-
-    async def verify_otp(
-        self,
-        recipient: str,
-        code: str,
-        channel: str = "email"
-    ) -> TokenPair:
-        """Verify OTP and generate tokens"""
-        # Implementation similar to magic link
-        pass
+auth = SimpleRBAC(
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
+    enable_magic_links=True,
+    magic_link_expire_minutes=15,
+    magic_link_request_rate_limit_max=3,
+    magic_link_request_rate_limit_window_seconds=300,
+)
 ```
+
+The service methods:
+
+```python
+# Generate — returns the plaintext token. Only its hash is stored.
+token: str = await auth.auth_service.generate_magic_link_token(
+    session,
+    user,
+    redirect_url="https://app.example.com/dashboard",
+    ip_address=request.client.host,
+    user_agent=request.headers.get("user-agent"),
+)
+
+# Verify — single use. Returns (User, TokenPair).
+user, tokens = await auth.auth_service.verify_magic_link(
+    session,
+    token,
+    device_name="iPhone",
+    ip_address=request.client.host,
+)
+```
+
+`verify_magic_link` raises `TokenInvalidError` when the token is unknown, expired, or
+already used.
+
+### Access codes
+
+Short numeric codes sent to a verified channel.
+
+```python
+auth = SimpleRBAC(
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
+    enable_access_codes=True,
+    access_code_expire_minutes=10,
+    access_code_length=6,
+    access_code_request_rate_limit_max=3,
+    access_code_request_rate_limit_window_seconds=300,
+    access_code_verify_rate_limit_max=10,
+    access_code_verify_rate_limit_window_seconds=300,
+)
+```
+
+```python
+code: str = await auth.auth_service.generate_access_code(session, user)
+user, tokens = await auth.auth_service.verify_access_code(session, email, code)
+```
+
+Access codes are rate limited on **both** sides — requesting and verifying. The verify
+limit is what stops a 6-digit code from being brute-forced; do not raise it casually.
+
+### The bundled routes
+
+`get_auth_router` already exposes these, so in most cases you mount the router rather
+than call the service:
+
+```
+POST /register              POST /magic-link/request
+POST /login                 POST /magic-link/verify
+POST /refresh               POST /access-code/request
+POST /logout                POST /access-code/verify
+POST /forgot-password       POST /invite
+POST /reset-password        POST /accept-invite
+GET  /config
+```
+
+The magic-link and access-code routes are only wired when their feature flag is on.
+
+### Delivering the message
+
+The router needs a way to send what it generated. That is
+`transactional_messaging_service` — a host-owned service for challenge delivery
+(email, WhatsApp), whose types are in `outlabs_auth/messaging/types.py`:
+`AuthChallengeDeliveryIntent`, `DeliveryRecipient`, `MessageDeliveryResult`.
+
+For the transactional auth mails (invite, forgot-password, reset confirmation, access
+granted), the equivalent is `transactional_mail_service`, with
+`ComposedAuthMailService` (`outlabs_auth/mail/service.py`) as the bundled
+implementation:
+
+```python
+from outlabs_auth.mail.providers import SMTPMailProvider
+
+auth = SimpleRBAC(
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
+    transactional_mail_service=ComposedAuthMailService(
+        composer=my_composer,
+        provider=SMTPMailProvider(...),
+    ),
+)
+```
+
+Bundled mail providers (`outlabs_auth/mail/providers.py`): `SMTPMailProvider`,
+`SendGridMailProvider`, `MailgunMailProvider`, all implementing
+`TransactionalMailProvider`.
+
+Delivery results are values, not exceptions — `MailDeliveryResult.queued()`,
+`.failed()`, `.skipped_result()` — so a bounced invite does not take down the request
+that triggered it.
 
 ---
 
 ## Notification System Design
 
-### Core Abstraction
+Distinct from transactional mail: notifications are **fire-and-forget events** about
+auth activity (someone logged in, an account locked), not messages a user is waiting
+on.
+
+### Core abstraction
+
+`NotificationChannel` (`outlabs_auth/services/channels/base.py`) is the interface:
 
 ```python
-# outlabs_auth/notifications/base.py
-from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
-from pydantic import BaseModel
-from datetime import datetime
-
-class NotificationEvent(BaseModel):
-    """Standard notification event"""
-    type: str  # Type of notification
-    recipient: str  # Email, phone, or user ID
-    data: Dict[str, Any]  # Event-specific data
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-    priority: str = "normal"  # low, normal, high
-
-    class Config:
-        # Define standard data contracts per type
-        schema_extra = {
-            "examples": {
-                "magic_link": {
-                    "type": "magic_link",
-                    "recipient": "user@example.com",
-                    "data": {
-                        "link": "https://app.com/auth/magic/abc123",
-                        "expires_in_minutes": 15,
-                        "user_name": "John"
-                    }
-                },
-                "otp_sms": {
-                    "type": "otp_sms",
-                    "recipient": "+1234567890",
-                    "data": {
-                        "code": "123456",
-                        "expires_in_minutes": 5
-                    }
-                }
-            }
-        }
-
-class NotificationHandler(ABC):
-    """Base notification handler interface"""
+class NotificationChannel(ABC):
+    def __init__(self, enabled: bool = True, event_filter: Optional[List[str]] = None):
+        ...
 
     @abstractmethod
-    async def send(self, event: NotificationEvent) -> bool:
-        """Send notification"""
-        pass
-
-    async def validate_event(self, event: NotificationEvent) -> bool:
-        """Optional validation before sending"""
-        return True
-
-class NoOpHandler(NotificationHandler):
-    """No-operation handler for testing"""
-    async def send(self, event: NotificationEvent) -> bool:
-        return True
+    async def send(self, event: Dict[str, Any]) -> None:
+        ...
 ```
 
-### Pre-built Handlers
+`event_filter` lets a channel subscribe to a subset of event types, so an SMS channel
+can take only the security-relevant ones.
+
+`NotificationService` (`outlabs_auth/services/notification.py`) fans an event out to
+its channels:
 
 ```python
-# outlabs_auth/notifications/handlers.py
-import httpx
-import json
-from typing import Optional, Dict, Any
-
-class WebhookHandler(NotificationHandler):
-    """Send notifications via webhook"""
-
+class NotificationService:
     def __init__(
         self,
-        webhook_url: str,
-        headers: Optional[Dict[str, str]] = None,
-        timeout: int = 30,
-        retry_count: int = 3
+        enabled: bool = False,
+        channels: Optional[List[NotificationChannel]] = None,
+        observability: Optional["ObservabilityService"] = None,
     ):
-        self.webhook_url = webhook_url
-        self.headers = headers or {}
-        self.timeout = timeout
-        self.retry_count = retry_count
-
-    async def send(self, event: NotificationEvent) -> bool:
-        payload = event.dict()
-
-        for attempt in range(self.retry_count):
-            try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.post(
-                        self.webhook_url,
-                        json=payload,
-                        headers=self.headers
-                    )
-                    response.raise_for_status()
-                    return True
-            except Exception as e:
-                if attempt == self.retry_count - 1:
-                    raise
-                await asyncio.sleep(2 ** attempt)  # Exponential backoff
-
-        return False
-
-class QueueHandler(NotificationHandler):
-    """Push notifications to a message queue"""
-
-    def __init__(self, queue_client: Any, queue_name: str = "auth_notifications"):
-        self.queue_client = queue_client
-        self.queue_name = queue_name
-
-    async def send(self, event: NotificationEvent) -> bool:
-        message = event.dict()
-        await self.queue_client.publish(self.queue_name, message)
-        return True
-
-class CallbackHandler(NotificationHandler):
-    """Direct callback function handler"""
-
-    def __init__(self, callback: Callable[[NotificationEvent], Awaitable[bool]]):
-        self.callback = callback
-
-    async def send(self, event: NotificationEvent) -> bool:
-        return await self.callback(event)
-
-class CompositeHandler(NotificationHandler):
-    """Combine multiple handlers"""
-
-    def __init__(self, handlers: List[NotificationHandler]):
-        self.handlers = handlers
-
-    async def send(self, event: NotificationEvent) -> bool:
-        results = await asyncio.gather(
-            *[handler.send(event) for handler in self.handlers],
-            return_exceptions=True
-        )
-        return all(r for r in results if not isinstance(r, Exception))
-
-class FilteredHandler(NotificationHandler):
-    """Apply filters to notifications"""
-
-    def __init__(
-        self,
-        handler: NotificationHandler,
-        filter_func: Callable[[NotificationEvent], bool]
-    ):
-        self.handler = handler
-        self.filter_func = filter_func
-
-    async def send(self, event: NotificationEvent) -> bool:
-        if self.filter_func(event):
-            return await self.handler.send(event)
-        return True
+        ...
 ```
 
-### Integration with Auth System
+Note `enabled` defaults to `False` — constructing the service is not enough to turn
+notifications on.
+
+Emitting is fire-and-forget by design:
 
 ```python
-# outlabs_auth/presets/simple.py
-class SimpleRBAC(OutlabsAuth):
-    def __init__(
-        self,
-        database: Any,
-        config: Optional[SimpleConfig] = None,
-        notification_handler: Optional[NotificationHandler] = None,
-        oauth_providers: Optional[Dict[str, OAuthProvider]] = None
-    ):
-        super().__init__(database, config)
-
-        # Set notification handler (default to NoOp)
-        self.notification_handler = notification_handler or NoOpHandler()
-
-        # Initialize OAuth if providers given
-        if oauth_providers:
-            self.oauth_service = OAuthService(
-                user_service=self.user_service,
-                providers=oauth_providers,
-                notification_handler=self.notification_handler
-            )
-
-        # Initialize passwordless if configured
-        if config.enable_magic_links or config.enable_otp:
-            self.passwordless_service = PasswordlessService(
-                database=database,
-                notification_handler=self.notification_handler,
-                config=config.passwordless_config
-            )
+await auth.notification_service.emit(
+    event_type="user.login",
+    data={"user_id": str(user.id), "email": user.email},
+    metadata={"ip": request.client.host},
+)
 ```
+
+`emit` returns immediately and does not wait for delivery. **Notification failures
+never affect auth operations** — a dead webhook cannot fail a login.
+
+Event types include `user.login`, `user.login_failed`, `user.locked`, `user.unlocked`,
+`user.logout`, `user.created`, `user.email_verified`, `user.status_changed`,
+`user.deleted`. See the `emit` docstring for the current list.
+
+### Bundled channels
+
+In `outlabs_auth/services/channels/`:
+
+| Channel | Module | Purpose |
+|---|---|---|
+| `RabbitMQChannel` | `rabbitmq.py` | Publish events to a queue |
+| `SMTPChannel` | `smtp.py` | Email via SMTP |
+| `SendGridChannel` | `sendgrid.py` | Email via the SendGrid API |
+| `WebhookChannel` | `webhook.py` | POST events to an HTTP endpoint |
+| `TwilioChannel` | `twilio.py` | SMS |
+| `TelegramChannel` | `telegram.py` | Telegram Bot API |
+| `WhatsAppChannel` | `whatsapp.py` | WhatsApp via Twilio |
+
+Each import is guarded: a channel whose optional dependency is missing imports as
+`None`, with a matching `<NAME>_AVAILABLE` flag, so the package installs without
+pulling in every provider SDK.
+
+### Wiring it up
+
+```python
+from outlabs_auth.services.notification import NotificationService
+from outlabs_auth.services.channels import WebhookChannel
+
+notification_service = NotificationService(
+    enabled=True,
+    channels=[
+        WebhookChannel(url="https://api.internal/notifications", secret=WEBHOOK_SECRET),
+    ],
+)
+
+auth = SimpleRBAC(
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
+    enable_notifications=True,
+    notification_service=notification_service,
+)
+```
+
+Channels can be managed after construction with `add_channel()`, `remove_channel()`,
+and inspected via `active_channels`.
 
 ---
 
-## Implementation Roadmap
+## Status
 
-### Phase 1: Core Authentication (v1.0) ✅
-**Status**: Completed
-- Basic email/password
-- JWT tokens
-- No external dependencies
+Implemented and shipping:
 
-### Phase 2: Notification System (v1.1)
-**Timeline**: Week 8-9 (2 weeks)
-**Goal**: Pluggable notification abstraction
+- **OAuth / social login** — Google, Facebook, Apple, GitHub providers; Microsoft and
+  Discord client factories; state, PKCE, and nonce validation; account linking and
+  association; optional encrypted provider-token storage.
+- **Passwordless** — magic links and email access codes, with hashed single-use
+  challenges and rate limiting on request and verify.
+- **Notifications** — `NotificationService` plus RabbitMQ, SMTP, SendGrid, Webhook,
+  Twilio, Telegram, and WhatsApp channels.
+- **Transactional auth mail** — invite, forgot-password, reset confirmation, and
+  access-granted flows, with SMTP, SendGrid, and Mailgun providers.
 
-**Deliverables**:
-- NotificationHandler abstraction
-- Pre-built handlers (Webhook, Queue, Callback)
-- Integration with existing auth flows
-- Notification event types
-- Testing utilities
-- Documentation and examples
+Present in the schema but without a full flow built on them: the `WHATSAPP_OTP`,
+`SMS_OTP`, and `PHONE_VERIFY` challenge types exist in `AuthChallengeType`, and
+`verify_phone_verify_code` exists on `AuthService`, but these are not surfaced by
+`get_auth_router` the way magic links and access codes are.
 
-### Phase 3: OAuth Support (v1.2)
-**Timeline**: Week 10-12 (3 weeks)
-**Goal**: Social login integration
+Not implemented — do not plan around these:
 
-**Deliverables**:
-- Provider abstraction
-- Google, Facebook, Apple providers
-- Account linking logic
-- Auto-registration flow
-- OAuth routes helper
-- Security (state validation, PKCE)
-
-### Phase 4: Passwordless Auth (v1.3)
-**Timeline**: Week 13-14 (2 weeks)
-**Goal**: Magic links and OTP
-
-**Deliverables**:
-- AuthChallenge model
-- Magic links
-- OTP support (Email, SMS)
-- Challenge management system
-- Rate limiting
-
-### Phase 5: Advanced Features (v1.4)
-**Timeline**: Week 15-16 (2 weeks)
-**Goal**: MFA, WebAuthn, advanced channels
-
-**Deliverables**:
-- WhatsApp/Telegram OTP
-- MFA support (TOTP)
-- Backup codes
-- Device tracking
-- WebAuthn research
+- **MFA / TOTP** and backup codes
+- **WebAuthn / passkeys**
 
 ---
 
 ## Security Considerations
 
-### OAuth Security
+### OAuth security
 
-1. **State Parameter**: Always validate state to prevent CSRF
-2. **PKCE**: Implement for public clients
-3. **Token Storage**: Never log tokens
-4. **Scope Limitation**: Request minimal scopes
-5. **Account Takeover**: Verify email ownership before linking
+1. **State parameter**: always validated; `state_secret` is a required argument.
+2. **PKCE**: implemented in `outlabs_auth/oauth/security.py`.
+3. **Token storage**: off by default. Turning it on without
+   `oauth_token_encryption_key` is a construction error, not a plaintext write.
+4. **Scope limitation**: request minimal scopes via the client factory's `scopes`.
+5. **Account takeover**: `associate_by_email=True` links a provider identity to a
+   local account by matching email. Enable it only for providers whose email
+   verification you trust, and consider `is_verified_by_default=False` so a provider's
+   unverified email cannot mark a local account verified.
 
-**See**: [SECURITY.md](SECURITY.md#oauth-security) for detailed OAuth security guidelines
+### Magic link security
 
-### Magic Link Security
+1. **Single use**: enforced by `used_at` on the challenge row.
+2. **Hashed at rest**: only `token_hash` is stored; the plaintext is returned once.
+3. **Time limited**: `magic_link_expire_minutes`, default 15.
+4. **Rate limited**: `magic_link_request_rate_limit_max` per window, default 3 per 300s.
+5. **Secure random**: tokens come from `secrets`, not `random`.
+6. **HTTPS only**: enforce it at your edge — the library cannot.
 
-1. **Single Use**: Links expire after first use
-2. **Time Limited**: Short expiry (15 minutes default)
-3. **Rate Limiting**: Prevent abuse
-4. **Secure Random**: Use cryptographically secure tokens
-5. **HTTPS Only**: Enforce secure transport
+### Access code security
 
-**See**: [SECURITY.md](SECURITY.md#magic-link-security) for detailed magic link security guidelines
+1. **Rate limited on both sides**: requesting *and* verifying. The verify limit
+   (default 10 per 300s) is the control that makes a 6-digit code safe. Raising it
+   materially weakens the mechanism.
+2. **Length**: `access_code_length`, default 6.
+3. **Short expiry**: `access_code_expire_minutes`, default 10.
+4. **Single use**: same `used_at` mechanism as magic links.
+5. **Channel ownership**: verify the recipient owns the address before treating a code
+   sent there as proof of identity.
 
-### OTP Security
+### Notification security
 
-1. **Rate Limiting**: Max attempts per code
-2. **Code Complexity**: 6+ digits minimum
-3. **Expiry**: 5-10 minute window
-4. **Channel Verification**: Verify phone/email ownership
-5. **Replay Protection**: Prevent code reuse
-
-**See**: [SECURITY.md](SECURITY.md#otp-security) for detailed OTP security guidelines
+Notifications carry auth event data to external systems. Filter with `event_filter`
+so a channel only receives what it needs, and remember that `emit` swallows failures —
+a channel that is silently down produces no error at the auth layer. Monitor delivery
+at the channel, not through auth.
 
 ---
 
 ## Configuration Examples
 
-### Minimal Setup (Email/Password Only)
+### Minimal (email/password only)
 
 ```python
-auth = SimpleRBAC(database=db)
-# No notifications, no OAuth, just basic auth
+auth = SimpleRBAC(database_url=DATABASE_URL, secret_key=SECRET_KEY)
 ```
 
-### With Internal Notification API
+### With notifications
 
 ```python
-notification_handler = WebhookHandler(
-    webhook_url="https://api.internal/notifications/send",
-    headers={"X-API-Key": os.getenv("INTERNAL_API_KEY")}
-)
+from outlabs_auth.services.notification import NotificationService
+from outlabs_auth.services.channels import WebhookChannel
 
 auth = SimpleRBAC(
-    database=db,
-    notification_handler=notification_handler
-)
-```
-
-### With OAuth Providers
-
-```python
-oauth_providers = {
-    "google": GoogleProvider(
-        client_id=os.getenv("GOOGLE_CLIENT_ID"),
-        client_secret=os.getenv("GOOGLE_CLIENT_SECRET")
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
+    enable_notifications=True,
+    notification_service=NotificationService(
+        enabled=True,
+        channels=[WebhookChannel(url="https://api.internal/notifications", secret=WEBHOOK_SECRET)],
     ),
-    "facebook": FacebookProvider(
-        client_id=os.getenv("FACEBOOK_CLIENT_ID"),
-        client_secret=os.getenv("FACEBOOK_CLIENT_SECRET")
+)
+```
+
+### With OAuth providers
+
+```python
+import os
+from outlabs_auth.oauth.providers import get_google_client, get_github_client
+from outlabs_auth.routers.oauth import get_oauth_router
+
+auth = SimpleRBAC(database_url=DATABASE_URL, secret_key=SECRET_KEY)
+auth.prime_fastapi_routing()
+
+state_secret = os.environ["OAUTH_STATE_SECRET"]
+
+for name, client in {
+    "google": get_google_client(
+        client_id=os.environ["GOOGLE_CLIENT_ID"],
+        client_secret=os.environ["GOOGLE_CLIENT_SECRET"],
+    ),
+    "github": get_github_client(
+        client_id=os.environ["GITHUB_CLIENT_ID"],
+        client_secret=os.environ["GITHUB_CLIENT_SECRET"],
+    ),
+}.items():
+    app.include_router(
+        get_oauth_router(
+            oauth_client=client,
+            auth=auth,
+            state_secret=state_secret,
+            prefix=f"/auth/{name}",
+            tags=["OAuth"],
+        )
     )
-}
-
-auth = SimpleRBAC(
-    database=db,
-    notification_handler=notification_handler,
-    oauth_providers=oauth_providers
-)
-
-# Auto-register OAuth routes
-auth.setup_oauth_routes(app, base_url="https://myapp.com")
 ```
 
-### With Magic Links and OTP
+### With magic links and access codes
 
 ```python
-passwordless_config = PasswordlessConfig(
+auth = SimpleRBAC(
+    database_url=DATABASE_URL,
+    secret_key=SECRET_KEY,
     enable_magic_links=True,
-    enable_otp=True,
-    magic_link_expiry_minutes=15,
-    otp_expiry_minutes=5,
-    otp_length=6
+    magic_link_expire_minutes=15,
+    enable_access_codes=True,
+    access_code_expire_minutes=10,
+    access_code_length=6,
+    transactional_messaging_service=my_delivery_service,
 )
+auth.prime_fastapi_routing()
 
-auth = SimpleRBAC(
-    database=db,
-    notification_handler=notification_handler,
-    config=SimpleConfig(passwordless_config=passwordless_config)
-)
-
-# Routes
-@app.post("/auth/magic-link")
-async def send_magic_link(email: str):
-    await auth.passwordless_service.send_magic_link(email)
-    return {"message": "Check your email"}
-
-@app.post("/auth/magic-link/verify")
-async def verify_magic_link(code: str):
-    tokens = await auth.passwordless_service.verify_magic_link(code)
-    return tokens
+# The bundled router already exposes the request/verify routes for both.
+app.include_router(get_auth_router(auth, prefix="/auth", tags=["Auth"]))
 ```
 
-### Multi-Channel Notifications
+### Testing configuration
+
+Supply a capturing delivery service instead of a real one, and assert on what it was
+handed:
+
+The contract is a single method, `async send_auth_challenge(intent)`, returning a
+`MessageDeliveryResult`. The library only reads `.accepted` off the result.
 
 ```python
-# Different handlers for different notification types
-email_handler = WebhookHandler("https://email-service.internal")
-sms_handler = WebhookHandler("https://sms-gateway.internal")
+from outlabs_auth.messaging.types import MessageDeliveryResult
 
-# Route notifications based on type
-def route_notification(event: NotificationEvent) -> NotificationHandler:
-    if event.type.startswith("otp_sms"):
-        return sms_handler
-    return email_handler
 
-notification_handler = CallbackHandler(
-    lambda event: route_notification(event).send(event)
-)
-```
+class CapturingMessagingService:
+    def __init__(self):
+        self.sent = []
 
-### Testing Configuration
+    async def send_auth_challenge(self, intent) -> MessageDeliveryResult:
+        self.sent.append(intent)
+        return MessageDeliveryResult.queued(provider="capture")
 
-```python
-# For tests, capture notifications instead of sending
-captured_notifications = []
 
-test_handler = CallbackHandler(
-    lambda event: captured_notifications.append(event)
-)
-
+capturing = CapturingMessagingService()
 auth = SimpleRBAC(
-    database=test_db,
-    notification_handler=test_handler
+    database_url=TEST_DATABASE_URL,
+    secret_key="test-secret-key-at-least-32-characters-long",
+    enable_magic_links=True,
+    transactional_messaging_service=capturing,
 )
 
-# In tests, assert on captured_notifications
+# Assert on what the library handed the delivery layer:
+#   capturing.sent[0].secret        -> the plaintext token
+#   capturing.sent[0].challenge_type -> "magic_link"
 ```
 
 ---
 
 ## Testing Strategies
 
-### Unit Tests for Providers
+### Provider unit tests
+
+`get_authorization_url` returns an `OAuthAuthorizationURL` (fields: `url`, `state`),
+not a bare string:
 
 ```python
-@pytest.mark.asyncio
-async def test_google_provider():
-    provider = GoogleProvider("client_id", "client_secret")
-
-    # Test authorization URL generation
-    url = provider.get_authorization_url("state123", "http://localhost/callback")
-    assert "state=state123" in url
-    assert "client_id=client_id" in url
-```
-
-### Integration Tests for OAuth Flow
-
-```python
-@pytest.mark.asyncio
-async def test_oauth_complete_flow(auth, mock_google_provider):
-    # Mock provider responses
-    mock_google_provider.get_user_info.return_value = OAuthUserInfo(
-        id="google123",
-        email="user@gmail.com",
-        name="Test User"
+def test_google_authorization_url():
+    provider = GoogleProvider(client_id="cid", client_secret="secret")
+    result = provider.get_authorization_url(
+        redirect_uri="http://localhost/callback",
+        state="state123",
     )
-
-    # Complete OAuth flow
-    user, tokens, is_new = await auth.oauth_service.authenticate_with_provider(
-        "google", "auth_code_123", "http://localhost/callback"
-    )
-
-    assert user.email == "user@gmail.com"
-    assert AuthMethod.GOOGLE in user.auth_methods
-    assert is_new == True
+    assert result.state == "state123"
+    assert "client_id=cid" in result.url
 ```
 
-### Testing Notifications
+Omit `state` and one is generated for you and handed back on `result.state` — store it
+and compare it on the callback. PKCE is on by default (`use_pkce=True`).
+
+### Magic link round trip
+
+Passwordless flows touch the `auth_challenges` table, so these are integration tests
+against a real PostgreSQL database.
 
 ```python
 @pytest.mark.asyncio
-async def test_magic_link_sends_notification(auth, notification_capture):
-    # Send magic link
-    await auth.passwordless_service.send_magic_link("test@example.com")
+async def test_magic_link_round_trip(auth, test_user):
+    async with auth.get_session() as session:
+        token = await auth.auth_service.generate_magic_link_token(session, test_user)
+        await session.commit()
 
-    # Check notification was sent
-    assert len(notification_capture) == 1
-    event = notification_capture[0]
-    assert event.type == "magic_link"
-    assert event.recipient == "test@example.com"
-    assert "link" in event.data
+        user, tokens = await auth.auth_service.verify_magic_link(session, token)
+        await session.commit()
+
+        assert user.id == test_user.id
+        assert tokens.access_token
+
+
+@pytest.mark.asyncio
+async def test_magic_link_is_single_use(auth, test_user):
+    async with auth.get_session() as session:
+        token = await auth.auth_service.generate_magic_link_token(session, test_user)
+        await session.commit()
+
+        await auth.auth_service.verify_magic_link(session, token)
+        await session.commit()
+
+        with pytest.raises(TokenInvalidError):
+            await auth.auth_service.verify_magic_link(session, token)
 ```
 
-**See**: [TESTING_GUIDE.md](TESTING_GUIDE.md) for comprehensive testing patterns
+### Notification tests
 
----
-
-## Migration Guide
-
-### From Hardcoded Email Sending
+Because `emit` is fire-and-forget, a test that asserts on delivery must await the
+background task rather than checking immediately after the call. Prefer testing a
+channel's `send()` directly:
 
 ```python
-# BEFORE: Email sending in auth logic
-async def send_verification_email(user):
-    msg = create_email_message(user.email, "Verify your email")
-    await smtp_client.send(msg)
-
-# AFTER: Notification handler
-async def handle_notification(event: NotificationEvent):
-    if event.type == "email_verification":
-        msg = create_email_message(
-            event.recipient,
-            "Verify your email",
-            event.data["link"]
-        )
-        await smtp_client.send(msg)
-    return True
-
-auth = SimpleRBAC(
-    database=db,
-    notification_handler=CallbackHandler(handle_notification)
-)
+@pytest.mark.asyncio
+async def test_webhook_channel_posts_event(httpx_mock):
+    channel = WebhookChannel(url="https://example.test/hook")
+    await channel.send({"event_type": "user.login", "data": {"user_id": "abc"}})
+    assert httpx_mock.get_requests()
 ```
 
-### Adding OAuth to Existing App
-
-```python
-# 1. Add OAuth configuration
-oauth_providers = {
-    "google": GoogleProvider(...)
-}
-
-# 2. Update auth initialization
-auth = SimpleRBAC(
-    database=db,
-    notification_handler=existing_handler,
-    oauth_providers=oauth_providers
-)
-
-# 3. Register OAuth routes
-auth.setup_oauth_routes(app, base_url="https://myapp.com")
-
-# 4. Update frontend to show social login buttons
-```
-
----
-
-## Future Enhancements
-
-### Near Term (v1.5)
-- WebAuthn/Passkeys support
-- Session management improvements
-- Enhanced account linking strategies
-- Notification templates system
-
-### Medium Term (v2.0)
-- Plugin system for custom providers
-- GraphQL subscription support
-- Real-time auth events
-- Advanced MFA flows
-
-### Long Term
-- Biometric authentication
-- Decentralized identity support
-- Zero-knowledge proofs
-
----
-
-## Related Documentation
-
-- **[SECURITY.md](SECURITY.md)** - Security best practices for OAuth, magic links, and OTP
-- **[TESTING_GUIDE.md](TESTING_GUIDE.md)** - Testing patterns for authentication extensions
-- **[API_DESIGN.md](API_DESIGN.md)** - Configuration examples and code patterns
-- **[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)** - DD-022 through DD-027 (extension decisions)
-- **[IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)** - Phases 7-10 (post-v1.0)
-
----
-
-## Revision History
-
-| Version | Date | Changes |
-|---------|------|---------|
-| 1.4 | 2025-01-14 | Updated header to clearly distinguish post-v1.0 extensions from core v1.0 features; added list of core v1.0 features already included (JWT auth, API keys, service tokens, AuthDeps); added references to core v1.0 documentation |
-| 1.0 | 2025-01-14 | Initial authentication extensions design |
-
----
-
-**Last Updated**: 2025-01-14 (v1.4 - Clarified post-v1.0 extensions vs core v1.0 features)
-**Next Review**: After Phase 7 (v1.1) implementation
-**Status**: Design phase - ready for v1.1 implementation (post-v1.0 optional extensions)
+See [TESTING_GUIDE.md](TESTING_GUIDE.md) for the full harness.

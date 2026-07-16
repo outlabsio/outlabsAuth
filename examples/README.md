@@ -323,14 +323,16 @@ curl -H "Authorization: Bearer $TOKEN_USER" http://localhost:8000/admin/users  #
 Create a `docker-compose.yml` for your example:
 
 ```yaml
-version: '3.8'
 services:
-  mongodb:
-    image: mongo:latest
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: blog_simple_rbac
     ports:
-      - "27017:27017"
+      - "5432:5432"
 
-  redis:
+  redis:   # optional — only if you enable caching
     image: redis:latest
     ports:
       - "6379:6379"
@@ -340,24 +342,39 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - MONGODB_URL=mongodb://mongodb:27017
-      - SECRET_KEY=your-secret-key
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/blog_simple_rbac
+      # Must be >=32 chars, or the app refuses to start:
+      #   python -c "import secrets; print(secrets.token_urlsafe(48))"
+      - SECRET_KEY=${SECRET_KEY:?generate one, see above}
     depends_on:
-      - mongodb
+      - postgres
 ```
 
 ---
 
 ## Troubleshooting
 
-### MongoDB Connection Failed
+### Database Connection Failed
+
+The examples default to `postgresql+asyncpg://postgres:postgres@localhost:5432/<example_db>`
+(`blog_simple_rbac` or `realestate_enterprise_rbac`) — override with `DATABASE_URL`.
 
 ```bash
-# Check if MongoDB is running
-docker ps | grep mongo
+# Is Postgres up?
+docker ps | grep postgres
 
-# Start MongoDB
-docker run -d -p 27017:27017 --name mongodb mongo:latest
+# Start it and create the example's database
+docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres --name postgres postgres:16
+createdb -h localhost -U postgres blog_simple_rbac
+```
+
+### App Won't Start: secret_key
+
+`secret_key` must be at least 32 characters for HS256 — a short placeholder fails at
+construction, before the first request.
+
+```bash
+export SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
 ```
 
 ### Permission Denied Errors

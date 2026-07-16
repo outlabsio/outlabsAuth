@@ -10,14 +10,13 @@ This file contains credentials for the seeded demo data in the SimpleRBAC exampl
 # Make sure Docker stack is running
 docker compose up -d
 
-# Run seed script pointing to Docker MongoDB (port 27018)
+# Run the seed script (reads DATABASE_URL; defaults to localhost:5432/blog_simple_rbac)
 cd examples/simple_rbac
-MONGODB_URL="mongodb://localhost:27018" \
-DATABASE_NAME="blog_simple_rbac" \
+DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac" \
 uv run python reset_test_env.py
 ```
 
-### For Local MongoDB
+### For a local PostgreSQL
 
 ```bash
 cd examples/simple_rbac
@@ -152,14 +151,13 @@ To start fresh:
 # Stop Docker stack
 docker compose down
 
-# Remove MongoDB volume
-docker volume rm outlabs-mongodb-data
+# Remove the Postgres volume
+docker volume rm outlabs-postgres-data
 
 # Restart and reseed
 docker compose up -d
 cd examples/simple_rbac
-MONGODB_URL="mongodb://localhost:27018" \
-DATABASE_NAME="blog_simple_rbac" \
+DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/blog_simple_rbac" \
 uv run python reset_test_env.py
 ```
 

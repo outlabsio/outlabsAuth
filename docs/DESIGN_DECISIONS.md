@@ -1,8 +1,14 @@
 # OutlabsAuth Library - Design Decisions Log
 
-**Version**: 2.0
-**Date**: 2025-01-14
 **Purpose**: Document key architectural decisions and trade-offs
+
+## How to read this
+
+A record of the architectural decisions behind this library — the options weighed and
+why one won. Read it to understand *why* something is the way it is.
+
+**For what the system currently does**, read `examples/` and `README.md`, then the
+source. For delivered-vs-outstanding status: `CURRENT_IMPLEMENTATION_STATUS.md`.
 
 ---
 
@@ -163,61 +169,62 @@ Three preset classes that build on each other:
 
 ---
 
-## DD-004: Database Support (MongoDB First)
+## DD-004: PostgreSQL as the Database
 
-**Date**: 2025-01-14
-**Status**: ~~Accepted~~ **SUPERSEDED by DD-049**
+**Status**: Accepted
 **Deciders**: Core team
-**Context**: Need to choose primary database, possibly support others
+**Context**: The library needs one database. Auth data is relational (users, roles,
+permissions, entity trees) and correctness matters more than schema flexibility.
 
 ### Options Considered
 
-1. **MongoDB Only**
-   - Pros: Already using Beanie, simple implementation
-   - Cons: Limits some users
+1. **PostgreSQL with SQLAlchemy async + SQLModel**
+   - Pros: ACID guarantees on auth data; native recursive CTEs and efficient
+     closure-table queries for the entity hierarchy (DD-036); mature migration
+     tooling (Alembic); SQLModel gives Pydantic-integrated models for free
+   - Cons: Relational modelling is stricter — schema changes need migrations
 
-2. **PostgreSQL Only**
-   - Pros: SQL familiarity, ACID guarantees
-   - Cons: Don't know it as well, more complex queries
+2. **A document store**
+   - Pros: Flexible schema, fast to start
+   - Cons: Hierarchical permission checks are the core read path here, and they
+     are awkward without joins/CTEs; no ACID guarantees across the tables that
+     authorize a request
 
-3. **Database Agnostic (SQLAlchemy + Beanie)**
-   - Pros: Maximum flexibility
-   - Cons: High complexity, abstraction leaks
+3. **Database-agnostic (support both)**
+   - Pros: Maximum flexibility for consumers
+   - Cons: Double maintenance, leaky abstractions, doubled test burden — for a
+     library whose whole value is being correct about authorization
 
-4. **MongoDB First, PostgreSQL Later**
-   - Pros: Ship faster, can add PostgreSQL in v1.1
-   - Cons: Delayed PostgreSQL support
+### Decision
 
-### Decision (Original - Superseded)
-MongoDB primary, PostgreSQL in future version.
+PostgreSQL only, via SQLAlchemy async + SQLModel, with `asyncpg` as the driver.
 
-**UPDATE 2025-01-14**: This decision has been superseded by DD-049. The library now uses PostgreSQL as the primary (and only) database.
-
-**Reasoning**:
-- Team expertise in MongoDB
-- Beanie ODM is excellent
-- Can ship faster
-- Most internal projects use MongoDB anyway
-- PostgreSQL support deferred to v1.1
-
-### Consequences
-- **Positive**: Faster development, leverage existing knowledge
-- **Negative**: No PostgreSQL support initially
-- **Neutral**: Architecture should allow PostgreSQL later
-
-### Implementation
 ```python
-# v1.0
 from outlabs_auth import SimpleRBAC
 
-auth = SimpleRBAC(database=mongo_client)
-
-# v1.1 (planned)
-auth = SimpleRBAC(database=postgres_url, backend="postgres")
+auth = SimpleRBAC(
+    database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
+    secret_key="...",  # >=32 chars for HS256
+)
+await auth.initialize()
 ```
 
+**Reasoning**:
+- The entity tree is the hot read path; Postgres closure-table queries answer
+  "does U have P on E, including via ancestors" in one indexed lookup (DD-036)
+- ACID compliance on the data that authorizes requests
+- Alembic gives the library its own versioned schema, shipped in-package
+- SQLModel keeps model definitions and API contracts in one place
+- Boring, industry-standard, and easy for a consuming app to already have
+
+### Consequences
+- **Positive**: Efficient tree queries, ACID, mature ecosystem, one thing to support
+- **Negative**: Schema changes require migrations
+- **Neutral**: Consumers must have Postgres available; the async driver is mandatory
+
 ### Related Decisions
-- DD-011 (Beanie ODM)
+- DD-011 (SQLModel as the ORM)
+- DD-036 (Closure table for the entity hierarchy)
 
 ---
 
@@ -261,9 +268,6 @@ class EntityModel:
 - **Positive**: Simpler model, standard naming
 - **Negative**: Requires database migration
 - **Neutral**: Models slightly changed
-
-### Migration
-See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) for details.
 
 ### Related Decisions
 - DD-001 (Library approach)
@@ -519,44 +523,44 @@ auth = SimpleRBAC(
 
 ---
 
-## DD-011: Beanie ODM for MongoDB
+## DD-011: SQLModel as the ORM
 
-**Date**: 2025-01-14
 **Status**: Accepted
 **Deciders**: Core team
-**Context**: Need ODM for MongoDB, Beanie is current choice
+**Context**: Given Postgres (DD-004), the library needs a way to define models and
+talk to the database asynchronously.
 
 ### Options Considered
 
-1. **Beanie ODM**
-   - Pros: Modern, async, Pydantic integration
-   - Cons: Smaller community than MongoEngine
+1. **SQLAlchemy Core / raw SQL**
+   - Pros: Full control
+   - Cons: Hand-written mapping for ~33 tables; no Pydantic integration, so API
+     schemas would be defined twice
 
-2. **MongoEngine**
-   - Pros: Mature, large community
-   - Cons: Sync-only, older design
+2. **SQLAlchemy ORM alone**
+   - Pros: Mature, complete
+   - Cons: Still a second set of Pydantic models for the FastAPI surface
 
-3. **Motor (Raw)**
-   - Pros: No abstraction layer
-   - Cons: More boilerplate, no typing
+3. **SQLModel (SQLAlchemy + Pydantic)**
+   - Pros: One model definition serves persistence and API contracts; sits on
+     SQLAlchemy so nothing is given up; same author as FastAPI, so the idioms match
+   - Cons: Thinner library; occasionally you drop to SQLAlchemy directly
 
 ### Decision
-Continue using Beanie ODM.
+
+SQLModel, over SQLAlchemy async. Drop to SQLAlchemy Core where SQLModel doesn't
+reach (bulk operations, `ON CONFLICT` upserts, closure-table maintenance).
 
 **Reasoning**:
-- Already using it successfully
-- Async-native
-- Great Pydantic integration
-- Clean API
-- FastAPI native
+- One model, two jobs — table definition and request/response schema
+- The library is FastAPI-first (DD-012); SQLModel is built for that
+- Full SQLAlchemy escape hatch whenever needed
 
 ### Consequences
-- **Positive**: Modern, async, type-safe
-- **Negative**: Smaller community than MongoEngine
-- **Neutral**: Specific to MongoDB
-
-### Related Decisions
-- DD-004 (Database choice)
+- **Positive**: Less duplication; models read as the source of truth
+- **Negative**: SQLModel's own surface is small — expect to use SQLAlchemy directly
+- **Neutral**: Its models register on the global `SQLModel.metadata`, which a
+  consuming app's Alembic must account for (see DEPLOYMENT_GUIDE, schema ownership)
 
 ---
 
@@ -601,7 +605,7 @@ FastAPI-first design, core could work elsewhere.
 - **Neutral**: Core logic is framework-independent
 
 ### Related Decisions
-- DD-011 (Beanie ODM)
+- DD-011 (SQLModel ORM)
 
 ---
 
@@ -1955,7 +1959,7 @@ Single `OutlabsAuth` core implementation with thin convenience wrappers.
 class OutlabsAuth:
     def __init__(
         self,
-        database: AsyncIOMotorClient,
+        database_url: str,
         enable_entity_hierarchy: bool = False,
         enable_context_aware_roles: bool = False,
         enable_abac: bool = False,
@@ -1974,7 +1978,7 @@ class OutlabsAuth:
 # Thin convenience wrappers (5-10 LOC each)
 class SimpleRBAC(OutlabsAuth):
     """Flat RBAC for simple applications."""
-    def __init__(self, database: AsyncIOMotorClient, **kwargs):
+    def __init__(self, database_url: str, **kwargs):
         super().__init__(
             database,
             enable_entity_hierarchy=False,
@@ -1987,7 +1991,7 @@ class EnterpriseRBAC(OutlabsAuth):
     """Hierarchical RBAC with optional advanced features."""
     def __init__(
         self,
-        database: AsyncIOMotorClient,
+        database_url: str,
         enable_context_aware_roles: bool = False,
         enable_abac: bool = False,
         **kwargs
@@ -2035,18 +2039,18 @@ class EnterpriseRBAC(OutlabsAuth):
 **Context**: Database writes on every API request create bottleneck
 
 ### The Problem
-Original design wrote `usage_count` and `error_count` to MongoDB on every API key request:
+Writing `usage_count` and `error_count` to PostgreSQL on every API key request:
 ```python
 # BAD: DB write on every request
 api_key.usage_count += 1
 await api_key.save()  # Bottleneck!
 ```
 
-At 1000 req/sec, this means 1000 MongoDB writes/sec just for counters.
+At 1000 req/sec, that is 1000 database writes/sec just for counters.
 
 ### Options Considered
 
-1. **MongoDB Writes on Every Request**
+1. **Database Writes on Every Request**
    - Pros: Real-time counts, simple implementation
    - Cons: Massive bottleneck, doesn't scale
 
@@ -2059,7 +2063,7 @@ At 1000 req/sec, this means 1000 MongoDB writes/sec just for counters.
    - Cons: Requires Redis for API keys (but already needed for caching)
 
 ### Decision
-Use Redis counters with periodic sync to MongoDB.
+Use Redis counters with periodic sync to PostgreSQL.
 
 **Architecture**:
 ```python
@@ -2078,15 +2082,15 @@ async def sync_api_key_metrics():
 **Features**:
 - Redis INCR for O(1) counter updates
 - Hourly breakdown: `api_key:usage:{key_id}:hour:{hour}`
-- Periodic sync to MongoDB (every 5 minutes)
+- Periodic sync to PostgreSQL (every 5 minutes)
 - Background task handles sync automatically
 - In-memory fallback if Redis unavailable
 
 **Reasoning**:
 - Redis counters are extremely fast (100k+ ops/sec per instance)
-- Periodic sync reduces MongoDB load by 99%+
+- Periodic sync reduces database write load by 99%+
 - Hourly breakdowns enable rate limiting
-- Analytics still available in MongoDB (slightly delayed)
+- Analytics still available in PostgreSQL (slightly delayed)
 - In-memory fallback for development without Redis
 
 ### Consequences
@@ -2096,7 +2100,7 @@ async def sync_api_key_metrics():
 
 ### Implementation
 - `RedisCounterService` handles all counter operations
-- `MongoDBSyncService` runs background sync every 5 minutes
+- `APIKeyUsageSyncWorker` (outlabs_auth/workers/api_key_sync.py) runs the background sync
 - Graceful degradation to in-memory if Redis unavailable
 - Metrics available via `/api/keys/{id}/metrics` endpoint
 
@@ -2700,7 +2704,7 @@ SimpleRBAC preset needs a way to assign roles to users. Three approaches were co
 
 2. **Metadata Hack (user.metadata["role_ids"])**
    - Pros: Fastest to implement, no schema changes
-   - Cons: Bypasses Beanie ORM, no type safety, no audit trail, loses all ORM features
+   - Cons: Bypasses SQLModel ORM, no type safety, no audit trail, loses all ORM features
 
 3. **Membership Table (UserRoleMembership collection)**
    - Pros: Full audit trail, time-based assignments, consistent with EnterpriseRBAC, extensible
@@ -2869,7 +2873,7 @@ This provides much richer information than a binary active/inactive flag, essent
 - ✅ Approval workflow ready (PENDING/REJECTED states)
 
 **Negative**:
-- ❌ One extra collection (negligible in MongoDB)
+- ❌ One extra collection (negligible in PostgreSQL)
 - ❌ One extra query (~5ms with indexes, cacheable)
 - ❌ Slightly more complex than boolean flag
 
@@ -3017,71 +3021,6 @@ auth = SimpleRBAC(
 - DD-010 (Redis caching optional)
 - DD-033 (Redis counters for API keys)
 - DD-037 (Redis Pub/Sub cache invalidation)
-
----
-
-## DD-049: PostgreSQL as Primary Database
-
-**Date**: 2025-01-14
-**Status**: Accepted
-**Deciders**: Core team
-**Context**: Need a robust, production-ready database with strong SQL support for hierarchical queries
-
-### Options Considered
-
-1. **Keep MongoDB with Beanie**
-   - Pros: Already implemented, document flexibility
-   - Cons: Closure table queries less efficient, harder to reason about relationships
-
-2. **PostgreSQL with SQLAlchemy/SQLModel**
-   - Pros: ACID compliance, native recursive CTE support, mature ecosystem, better for hierarchical data
-   - Cons: Migration effort required, different query patterns
-
-3. **Support Both**
-   - Pros: Maximum flexibility
-   - Cons: Double maintenance, abstraction complexity, testing burden
-
-### Decision
-Migrate fully to PostgreSQL with SQLAlchemy async and SQLModel.
-
-**Implementation**:
-```python
-from outlabs_auth import SimpleRBAC
-
-auth = SimpleRBAC(
-    database_url="postgresql+asyncpg://user:pass@localhost:5432/mydb",
-    secret_key="your-secret-key"
-)
-await auth.initialize()
-```
-
-**Reasoning**:
-- PostgreSQL excels at hierarchical data with closure table pattern
-- SQLAlchemy async provides mature, production-ready ORM
-- SQLModel simplifies model definitions with Pydantic integration
-- Better tooling for migrations (Alembic)
-- ACID compliance for authentication data
-- Recursive CTEs for tree queries if needed
-- Industry standard for enterprise applications
-
-### Consequences
-- **Positive**: Better performance for tree queries, ACID compliance, mature ecosystem, industry standard
-- **Negative**: Migration effort required, MongoDB users need to migrate
-- **Neutral**: Different query patterns to learn
-
-### Migration Details
-All services migrated from Beanie to SQLAlchemy async:
-- `auth.py` - User authentication
-- `user.py` - User management
-- `role.py` - Role management
-- `permission.py` - Permission management
-- `entity.py` - Entity hierarchy with closure table
-- `membership.py` - User-entity memberships
-- `api_key.py` - API key management
-
-### Related Decisions
-- DD-004 (MongoDB First - SUPERSEDED by this decision)
-- DD-036 (Closure table for tree permissions)
 
 ---
 
@@ -3244,7 +3183,7 @@ allowed_child_classes: List[str] = Field(default_factory=list)
 ### Related Decisions
 - DD-050 (Role scoping to root entities)
 - DD-005 (Entity hierarchy in EnterpriseRBAC)
-- DD-049 (PostgreSQL as primary database)
+- DD-004 (PostgreSQL as the Database)
 
 ---
 
@@ -3753,7 +3692,7 @@ Multi-instance-without-Redis (option 2) is explicitly **out of scope for this DD
 ## DD-058: WhatsApp as Host-Owned Delivery Channel for Auth Challenges
 
 **Date**: 2026-07-16
-**Status**: Accepted (Phase A/B/C phone registration + verify OTP + Twilio host path shipped; WhatsApp-as-login still deferred)
+**Status**: Accepted (Phase A/B/C phone registration + verify OTP + Twilio WhatsApp/SMS host paths + verified-phone access-code login shipped; `SMS_OTP` / `WHATSAPP_OTP` challenge types + per-channel rate keys shipped)
 **Deciders**: Maintainer
 **Context**: Hosts want optional WhatsApp delivery for account messages (especially access-code OTPs) while keeping the same integration model as transactional email: the library supplies typed payloads; each FastAPI host owns providers, templates, and credentials. A Twilio `WhatsAppChannel` already exists under `NotificationService`, but notification events intentionally omit plain challenge secrets.
 
@@ -3773,8 +3712,9 @@ Multi-instance-without-Redis (option 2) is explicitly **out of scope for this DD
 
 ### Decision
 
-- Keep **email as the login identifier** for magic-link / access-code request APIs.
-- Treat `User.phone` / `phone_verified` as an optional **registered delivery destination**, not a login identity (Phase C may add verification / request-by-phone later).
+- Keep **email as the primary login identity** for magic-link and most account flows.
+- Access-code request/verify accepts exactly one of `email` or verified E.164 `phone` (WhatsApp-as-login). Phone matches only when `phone_verified` is true; request remains non-enumerating (204).
+- Challenge HMAC recipient is the identifier used to request the code (email or phone).
 - Deliver challenge secrets via typed `AuthChallengeDeliveryIntent` and optional `transactional_messaging_service`, or via host hook overrides (Phase A).
 - Use `NotificationService` + `WhatsAppChannel` only for ambient/security events without plain OTP/magic-link secrets.
 - Document the contract in [`docs/WHATSAPP_ACCOUNT_MESSAGING.md`](./WHATSAPP_ACCOUNT_MESSAGING.md).
@@ -3783,8 +3723,9 @@ Multi-instance-without-Redis (option 2) is explicitly **out of scope for this DD
 
 - **Positive**: WhatsApp OTP is possible without vendor lock-in or secret leakage on notification buses.
 - **Positive**: Same mental model as enterprise transactional mail wiring.
+- **Positive**: Verified phone can request/verify access codes without inventing a separate login challenge type yet.
 - **Negative**: Hosts still must implement composers/providers (including Meta template approval).
-- **Neutral**: Phase C (phone as login, new challenge types, console UI) stays explicitly out of scope.
+- **Neutral**: `SMS_OTP` rows and `delivery_channel=sms` intents are first-class; hosts wire their own SMS provider (enterprise example: Twilio Messages via `TWILIO_SMS_FROM`, else console spike / skip).
 
 ### Related Decisions
 
@@ -3796,9 +3737,6 @@ Multi-instance-without-Redis (option 2) is explicitly **out of scope for this DD
 
 Track questions that need decisions:
 
-### Q-001: PostgreSQL Support in v1.0?
-**Status**: ~~Open~~ **RESOLVED** (DD-049)
-**Resolution**: PostgreSQL is now the primary and only database.
 
 ### Q-002: Multi-Tenant in v1.0 or v1.1?
 **Status**: Open
@@ -3824,9 +3762,7 @@ Track questions that need decisions:
 | 2025-01-14 | DD-038 through DD-046 | All Accepted (FastAPI-Users Inspired Patterns) |
 | 2025-01-14 | DD-047 | Accepted (UserRoleMembership for SimpleRBAC) |
 | 2025-01-26 | DD-048 | Accepted (Redis Configuration Simplification) |
-| 2025-01-14 | **DD-049** | **Accepted (PostgreSQL as Primary Database)** |
 | 2025-01-14 | DD-003 | Superseded by DD-015 |
-| 2025-01-14 | DD-004 | **Superseded by DD-049** |
 | 2025-01-26 | DD-028 | **CORRECTED** - Changed from argon2id to SHA-256 for API keys; made refresh token rotation optional |
 | 2025-01-26 | DD-031 | Superseded by DD-028 (corrected) |
 | 2025-01-14 | DD-030 | Superseded by DD-035 |
