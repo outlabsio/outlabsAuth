@@ -233,6 +233,97 @@ class UserService(BaseService[User]):
         result = await self.transactional_messaging_service.send_auth_challenge(intent)
         return bool(getattr(result, "accepted", False))
 
+    async def send_phone_verify_delivery(
+        self,
+        user: User,
+        code: str,
+        *,
+        request: Optional[Request] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        **extra_metadata: Any,
+    ) -> bool:
+        """Deliver a phone-verify secret via the configured transactional messaging service."""
+        if self.transactional_messaging_service is None:
+            return False
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            minutes=self.config.access_code_expire_minutes
+        )
+        intent = AuthChallengeDeliveryIntent(
+            challenge_type="phone_verify",
+            recipient=self._build_delivery_recipient(user),
+            secret=code,
+            expires_at=expires_at,
+            request_base_url=self._request_base_url(request),
+            metadata=self._merge_mail_metadata(metadata, extra_metadata),
+        )
+        result = await self.transactional_messaging_service.send_auth_challenge(intent)
+        return bool(getattr(result, "accepted", False))
+
+    async def request_phone_verification(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        *,
+        request: Optional[Request] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> tuple[User, str]:
+        """Generate and deliver a phone verification code for the current user."""
+        user = await self.get_by_id(session, user_id)
+        if not user:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": str(user_id)},
+            )
+        if not (user.phone or "").strip():
+            raise InvalidInputError(
+                message="Add a phone number before requesting verification",
+                details={"field": "phone"},
+            )
+        if self.auth_service is None:
+            raise InvalidInputError(
+                message="Phone verification is unavailable",
+                details={"reason": "auth_service_missing"},
+            )
+
+        code = await self.auth_service.generate_phone_verify_code(
+            session,
+            user,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+        await self.send_phone_verify_delivery(user, code, request=request)
+        return user, code
+
+    async def confirm_phone_verification(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        *,
+        code: str,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> User:
+        """Confirm a phone verification code and mark the phone verified."""
+        user = await self.get_by_id(session, user_id)
+        if not user:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": str(user_id)},
+            )
+        if self.auth_service is None:
+            raise InvalidInputError(
+                message="Phone verification is unavailable",
+                details={"reason": "auth_service_missing"},
+            )
+        return await self.auth_service.verify_phone_verify_code(
+            session,
+            user,
+            code=code,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+
     async def send_invitation_email(
         self,
         user: User,

@@ -25,6 +25,7 @@ from outlabs_auth.core.exceptions import (
     AccountInactiveError,
     AccountLockedError,
     InvalidCredentialsError,
+    InvalidInputError,
     RefreshTokenInvalidError,
     TokenExpiredError,
     TokenInvalidError,
@@ -1010,6 +1011,86 @@ class AuthService:
 
         return code
 
+    async def generate_phone_verify_code(
+        self,
+        session: AsyncSession,
+        user: User,
+        *,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> str:
+        """
+        Generate a short-lived code to verify the user's registered phone.
+
+        Plain code is for host-owned WhatsApp/SMS delivery. Stored verifier is
+        a nonce-prefixed HMAC bound to the E.164 phone number.
+        """
+        phone = (user.phone or "").strip()
+        if not phone:
+            raise InvalidInputError(
+                message="Phone number is required before verification",
+                details={"field": "phone"},
+            )
+
+        code = self._generate_access_code()
+        token_hash = self._hash_phone_verify_code(code, phone)
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(minutes=self.config.access_code_expire_minutes)
+
+        prior_stmt = select(AuthChallenge).where(
+            cast(Any, AuthChallenge.user_id) == user.id,
+            cast(Any, AuthChallenge.challenge_type) == AuthChallengeType.PHONE_VERIFY.value,
+            cast(Any, AuthChallenge.used_at).is_(None),
+            cast(Any, AuthChallenge.expires_at) > now,
+        )
+        prior_result = await session.execute(prior_stmt)
+        for challenge in prior_result.scalars().all():
+            challenge.used_at = now
+
+        challenge = AuthChallenge(
+            user_id=user.id,
+            challenge_type=AuthChallengeType.PHONE_VERIFY,
+            token_hash=token_hash,
+            recipient=phone,
+            expires_at=expires,
+            requested_ip_address=ip_address,
+            requested_user_agent=user_agent,
+        )
+        session.add(challenge)
+        await session.flush()
+
+        if self.notifications:
+            await self.notifications.emit(
+                "user.phone_verify_requested",
+                data={
+                    "user_id": str(user.id),
+                    "phone": phone,
+                    "expires_at": expires.isoformat(),
+                },
+                metadata={"ip": ip_address, "user_agent": user_agent},
+            )
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="profile",
+                event_type="user.phone_verify_requested",
+                event_source="auth_service.generate_phone_verify_code",
+                subject_user_id=user.id,
+                subject_email_snapshot=user.email,
+                root_entity_id=user.root_entity_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                after={
+                    "phone_verify_expires_at": expires,
+                    "recipient": phone,
+                },
+                metadata={"delivery_channel": "whatsapp"},
+                occurred_at=now,
+            )
+
+        return code
+
     async def reset_password(
         self,
         session: AsyncSession,
@@ -1243,6 +1324,107 @@ class AuthService:
 
         return user, tokens
 
+    async def verify_phone_verify_code(
+        self,
+        session: AsyncSession,
+        user: User,
+        *,
+        code: str,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> User:
+        """
+        Verify a phone verification code and mark ``phone_verified``.
+
+        Does not issue login tokens — this is account verification only.
+        """
+        user_stmt = (
+            select(User)
+            .where(cast(Any, User.id) == user.id)
+            .with_for_update()
+        )
+        user_result = await session.execute(user_stmt)
+        locked_user = user_result.scalar_one_or_none()
+        if locked_user is None:
+            raise UserNotFoundError(
+                message="User not found",
+                details={"user_id": str(user.id)},
+            )
+
+        phone = (locked_user.phone or "").strip()
+        if not phone:
+            raise InvalidInputError(
+                message="Phone number is required before verification",
+                details={"field": "phone"},
+            )
+
+        normalized_code = self._normalize_access_code(code)
+        challenge_stmt = (
+            select(AuthChallenge)
+            .where(
+                cast(Any, AuthChallenge.user_id) == locked_user.id,
+                cast(Any, AuthChallenge.challenge_type) == AuthChallengeType.PHONE_VERIFY.value,
+                cast(Any, AuthChallenge.used_at).is_(None),
+            )
+            .order_by(cast(Any, AuthChallenge.created_at).desc())
+            .with_for_update()
+        )
+        challenge_result = await session.execute(challenge_stmt)
+        matching_challenge = None
+        for challenge in challenge_result.scalars().all():
+            if self._verify_phone_verify_code_hash(
+                normalized_code, phone, challenge.token_hash
+            ):
+                matching_challenge = challenge
+                break
+
+        if matching_challenge is None:
+            raise TokenInvalidError(
+                message="Invalid or expired verification code",
+                details={"reason": "token_not_found"},
+            )
+
+        now = datetime.now(timezone.utc)
+        expires_at = matching_challenge.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at < now:
+            raise TokenExpiredError(
+                message="Verification code has expired",
+                details={"expired_at": matching_challenge.expires_at.isoformat()},
+            )
+
+        if matching_challenge.recipient != phone:
+            raise TokenInvalidError(
+                message="Invalid or expired verification code",
+                details={"reason": "phone_mismatch"},
+            )
+
+        previous_phone_verified = locked_user.phone_verified
+        matching_challenge.used_at = now
+        locked_user.phone_verified = True
+        await session.flush()
+
+        if self.user_audit_service is not None:
+            await self.user_audit_service.record_event(
+                session,
+                event_category="profile",
+                event_type="user.phone_verified",
+                event_source="auth_service.verify_phone_verify_code",
+                subject_user_id=locked_user.id,
+                subject_email_snapshot=locked_user.email,
+                root_entity_id=locked_user.root_entity_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                before={"phone_verified": previous_phone_verified, "phone": phone},
+                after={"phone_verified": True, "phone": phone},
+                metadata={"phone_verify_used_at": matching_challenge.used_at},
+                occurred_at=now,
+            )
+
+        await session.refresh(locked_user)
+        return locked_user
+
     async def verify_magic_link(
         self,
         session: AsyncSession,
@@ -1412,6 +1594,28 @@ class AuthService:
 
     def _access_code_digest(self, code: str, recipient: str, nonce: str) -> str:
         message = f"access_code:{nonce}:{recipient.lower()}:{code}".encode()
+        return hmac.new(self.config.secret_key.encode(), message, hashlib.sha256).hexdigest()
+
+    def _hash_phone_verify_code(self, code: str, phone: str) -> str:
+        """Hash a phone-verify code bound to an E.164 phone number."""
+        nonce = secrets.token_urlsafe(16)
+        digest = self._phone_verify_digest(code, phone, nonce)
+        return f"v1:{nonce}:{digest}"
+
+    def _verify_phone_verify_code_hash(self, code: str, phone: str, stored_hash: str) -> bool:
+        parts = stored_hash.split(":", 2)
+        if len(parts) != 3:
+            return False
+
+        version, nonce, expected_digest = parts
+        if version != "v1" or not nonce or not expected_digest:
+            return False
+
+        actual_digest = self._phone_verify_digest(code, phone, nonce)
+        return hmac.compare_digest(actual_digest, expected_digest)
+
+    def _phone_verify_digest(self, code: str, phone: str, nonce: str) -> str:
+        message = f"phone_verify:{nonce}:{phone}:{code}".encode()
         return hmac.new(self.config.secret_key.encode(), message, hashlib.sha256).hexdigest()
 
     @staticmethod

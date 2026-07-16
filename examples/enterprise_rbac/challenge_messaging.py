@@ -73,10 +73,10 @@ def _guard_access_code_whatsapp(
             details={"challenge_type": intent.challenge_type, "phone": phone},
         )
 
-    if intent.challenge_type != "access_code":
+    if intent.challenge_type not in {"access_code", "phone_verify"}:
         return None, MessageDeliveryResult.skipped_result(
             provider_name,
-            "WhatsApp host path only implements access_code templates",
+            "WhatsApp host path only implements access_code and phone_verify templates",
             details={"challenge_type": intent.challenge_type},
         )
 

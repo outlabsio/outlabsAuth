@@ -84,6 +84,12 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=8, max_length=128)
 
 
+class PhoneVerifyCodeRequest(BaseModel):
+    """Confirm a WhatsApp/SMS phone verification code."""
+
+    code: str = Field(..., min_length=4, max_length=12)
+
+
 class AdminResetPasswordRequest(BaseModel):
     """Admin password reset request schema (no current password required)."""
 

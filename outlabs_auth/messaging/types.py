@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, Mapping, Optional
 
-AuthChallengeTypeName = Literal["magic_link", "access_code"]
+AuthChallengeTypeName = Literal["magic_link", "access_code", "phone_verify"]
 
 
 @dataclass(slots=True, frozen=True)

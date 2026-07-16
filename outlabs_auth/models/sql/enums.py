@@ -22,6 +22,7 @@ class AuthChallengeType(str, Enum):
 
     MAGIC_LINK = "magic_link"
     ACCESS_CODE = "access_code"
+    PHONE_VERIFY = "phone_verify"
 
 
 class MembershipStatus(str, Enum):

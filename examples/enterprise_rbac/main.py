@@ -119,6 +119,9 @@ ACCESS_CODE_DEBUG_CODES = DEBUG_MODE and _env_flag(
 INVITE_DEBUG_TOKENS = DEBUG_MODE and _env_flag(
     "INVITE_DEBUG_TOKENS", default=DEBUG_MODE
 )
+PHONE_VERIFY_DEBUG_CODES = DEBUG_MODE and _env_flag(
+    "PHONE_VERIFY_DEBUG_CODES", default=DEBUG_MODE
+)
 FRONTEND_URL = _trim_trailing_slash(os.getenv("FRONTEND_URL", "http://localhost:3000"))
 MAILGUN_API_BASE_URL = _trim_trailing_slash(os.getenv("MAILGUN_API_BASE_URL", "https://api.mailgun.net"))
 MAILGUN_DOMAIN = os.getenv("MAILGUN_DOMAIN")
@@ -252,6 +255,7 @@ auth = EnterpriseRBAC(
 latest_magic_links: dict[str, dict[str, Any]] = {}
 latest_access_codes: dict[str, dict[str, Any]] = {}
 latest_invites: dict[str, dict[str, Any]] = {}
+latest_phone_verifies: dict[str, dict[str, Any]] = {}
 
 
 # ============================================================================
@@ -363,6 +367,31 @@ async def lifespan(app: FastAPI):
 
         auth.user_service.on_after_invite = capture_invite
 
+    if PHONE_VERIFY_DEBUG_CODES:
+        print("Phone verify enabled with dev code capture")
+        original_send_phone_verify = auth.user_service.send_phone_verify_delivery
+
+        async def capture_phone_verify(
+            user, code, request=None, metadata=None, **extra_metadata
+        ):
+            email = str(user.email).lower()
+            latest_phone_verifies[email] = {
+                "email": email,
+                "phone": getattr(user, "phone", None),
+                "code": code,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            print(f"Phone verify code for {email}: {code}")
+            return await original_send_phone_verify(
+                user,
+                code,
+                request=request,
+                metadata=metadata,
+                **extra_metadata,
+            )
+
+        auth.user_service.send_phone_verify_delivery = capture_phone_verify
+
     # Create example-owned domain tables only. Auth tables come from migrations.
     print("Ensuring example domain tables exist...")
     async with auth.engine.begin() as conn:
@@ -399,6 +428,8 @@ async def lifespan(app: FastAPI):
         print("Access code debug endpoint: /dev/auth/access-code/latest?email=<email>")
     if INVITE_DEBUG_TOKENS:
         print("Invite debug endpoint: /dev/auth/invite/latest?email=<email>")
+    if PHONE_VERIFY_DEBUG_CODES:
+        print("Phone verify debug endpoint: /dev/auth/phone-verify/latest?email=<email>")
     if MAILGUN_DOMAIN and MAILGUN_API_KEY and MAILGUN_FROM_EMAIL:
         print(f"Mailgun domain: {MAILGUN_DOMAIN}")
         if MAILGUN_RECIPIENT_OVERRIDE:
@@ -540,6 +571,21 @@ async def open_latest_invite(email: str = Query(..., min_length=1)):
     """Redirect to the latest captured invite accept URL for local development only."""
     captured = await latest_invite(email=email)
     return RedirectResponse(str(captured["invite_url"]))
+
+
+@app.get("/dev/auth/phone-verify/latest", include_in_schema=False)
+async def latest_phone_verify(email: str = Query(..., min_length=1)):
+    """Return the latest captured phone-verify code for local development only."""
+    if not PHONE_VERIFY_DEBUG_CODES:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    captured = latest_phone_verifies.get(email.lower())
+    if not captured:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No phone verification code has been requested for that email",
+        )
+    return captured
 
 
 async def get_session(request: Request):

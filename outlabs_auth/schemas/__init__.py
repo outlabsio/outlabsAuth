@@ -82,6 +82,7 @@ from outlabs_auth.schemas.role import (
 # User schemas
 from outlabs_auth.schemas.user import (
     ChangePasswordRequest,
+    PhoneVerifyCodeRequest,
     UserCreateRequest,
     UserResponse,
     UserUpdateRequest,
@@ -119,6 +120,7 @@ __all__ = [
     "UserCreateRequest",
     "UserUpdateRequest",
     "ChangePasswordRequest",
+    "PhoneVerifyCodeRequest",
     "UserAuditEventResponse",
     # Role
     "RoleResponse",

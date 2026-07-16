@@ -112,7 +112,7 @@ class HostChallengeMessagingService:
         ...
 ```
 
-### Phase C — Host wire-up (partially shipped)
+### Phase C — Host wire-up
 
 Shipped:
 
@@ -120,15 +120,20 @@ Shipped:
 - `phone_verified` on `UserResponse`
 - Sidecar Account + admin user profile fields for WhatsApp phone (E.164)
 - Enterprise host Twilio WhatsApp Content API path when `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM`, and `TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID` are set (otherwise console spike)
+- Phone verification OTP:
+  - `AuthChallengeType.PHONE_VERIFY`
+  - `POST /users/me/phone/request-code` (204) + `POST /users/me/phone/verify-code` → `UserResponse`
+  - Delivery via `AuthChallengeDeliveryIntent(challenge_type="phone_verify")`
+  - Sidecar Account verify UI
+  - Enterprise capture: `GET /dev/auth/phone-verify/latest?email=`
 
 Still deferred:
 
-- Phone verification OTP flow that sets `phone_verified`
 - Request-by-phone / WhatsApp as login identifier
-- New `AuthChallengeType` values (`SMS_OTP`, `WHATSAPP_OTP`)
-- Channel query params and per-channel rate limits
+- Separate `SMS_OTP` / `WHATSAPP_OTP` login challenge types
+- Channel query params and per-channel rate limits on login endpoints
 
-Roadmap/AUTH_EXTENSIONS language about multi-channel OTP as a login method is aspirational relative to the live enum (`magic_link` / `access_code` only).
+Roadmap/AUTH_EXTENSIONS language about multi-channel OTP as a login method is aspirational relative to the live enum (`magic_link` / `access_code` / `phone_verify`).
 
 ## What not to do
 

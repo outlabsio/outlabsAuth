@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Any, List, Optional, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -35,17 +35,25 @@ from outlabs_auth.schemas.user_audit import UserAuditEventResponse
 from outlabs_auth.core.exceptions import (
     InvalidInputError,
     MembershipNotFoundError,
+    OutlabsAuthException,
     PermissionDeniedError,
+    TokenExpiredError,
+    TokenInvalidError,
 )
 from outlabs_auth.routers._authz_utils import require_can_delegate_permissions
 from outlabs_auth.schemas.user import (
     AdminResetPasswordRequest,
     ChangePasswordRequest,
+    PhoneVerifyCodeRequest,
     UserCreateRequest,
     UserResponse,
     UserStatusUpdateRequest,
     UserSuperuserUpdateRequest,
     UserUpdateRequest,
+)
+from outlabs_auth.utils.rate_limit import (
+    check_phone_verify_confirm_rate_limit,
+    check_phone_verify_request_rate_limit,
 )
 from outlabs_auth.routers._api_key_response import build_api_key_responses
 from outlabs_auth.schemas.api_key import ApiKeyResponse
@@ -509,6 +517,115 @@ def get_users_router(
             raise
 
         return None
+
+    @router.post(
+        "/me/phone/request-code",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Request phone verification code",
+        description=(
+            "Generate a one-time code to verify the authenticated user's registered "
+            "phone number and deliver it via the host messaging service (WhatsApp/SMS)."
+        ),
+    )
+    async def request_phone_verification_code(
+        request: Request,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_auth(verified=requires_verification),
+            )
+        ),
+    ):
+        is_limited, seconds_until_reset = await check_phone_verify_request_rate_limit(
+            str(obs.user_id),
+            redis_client=getattr(auth, "redis_client", None),
+            max_requests=auth.config.access_code_request_rate_limit_max,
+            window_seconds=auth.config.access_code_request_rate_limit_window_seconds,
+        )
+        if is_limited:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "message": "Too many phone verification requests. Please try again later.",
+                    "retry_after_seconds": seconds_until_reset,
+                    "retry_after_minutes": round(seconds_until_reset / 60, 1),
+                },
+                headers={"Retry-After": str(max(seconds_until_reset, 1))},
+            )
+
+        try:
+            await auth.user_service.request_phone_verification(
+                session,
+                user_id=UUID(obs.user_id),
+                request=request,
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+            obs.log_event("phone_verify_requested", user_id=obs.user_id)
+        except OutlabsAuthException:
+            raise
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e)
+            raise
+
+        return None
+
+    @router.post(
+        "/me/phone/verify-code",
+        response_model=UserResponse,
+        summary="Confirm phone verification code",
+        description="Confirm a phone verification code and mark the phone as verified.",
+    )
+    async def confirm_phone_verification_code(
+        data: PhoneVerifyCodeRequest,
+        request: Request,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_auth(verified=requires_verification),
+            )
+        ),
+    ):
+        is_limited, seconds_until_reset = await check_phone_verify_confirm_rate_limit(
+            str(obs.user_id),
+            redis_client=getattr(auth, "redis_client", None),
+            max_requests=auth.config.access_code_verify_rate_limit_max,
+            window_seconds=auth.config.access_code_verify_rate_limit_window_seconds,
+        )
+        if is_limited:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "message": "Too many phone verification attempts. Please try again later.",
+                    "retry_after_seconds": seconds_until_reset,
+                    "retry_after_minutes": round(seconds_until_reset / 60, 1),
+                },
+                headers={"Retry-After": str(max(seconds_until_reset, 1))},
+            )
+
+        try:
+            user = await auth.user_service.confirm_phone_verification(
+                session,
+                user_id=UUID(obs.user_id),
+                code=data.code,
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+            obs.log_event("phone_verified", user_id=obs.user_id)
+            return await build_user_response_async(session, user)
+        except (TokenInvalidError, TokenExpiredError, InvalidInputError):
+            raise
+        except OutlabsAuthException:
+            raise
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e)
+            raise
 
     @router.get(
         "/orphaned",
