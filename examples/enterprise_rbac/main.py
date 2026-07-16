@@ -108,8 +108,12 @@ REDIS_KEY_PREFIX = (
 DEBUG_MODE = ENV != "production"
 ENABLE_MAGIC_LINKS = _env_flag("ENABLE_MAGIC_LINKS", default=DEBUG_MODE)
 ENABLE_ACCESS_CODES = _env_flag("ENABLE_ACCESS_CODES", default=DEBUG_MODE)
-MAGIC_LINK_DEBUG_TOKENS = DEBUG_MODE and _env_flag("MAGIC_LINK_DEBUG_TOKENS")
-ACCESS_CODE_DEBUG_CODES = DEBUG_MODE and _env_flag("ACCESS_CODE_DEBUG_CODES", default=DEBUG_MODE)
+MAGIC_LINK_DEBUG_TOKENS = DEBUG_MODE and _env_flag(
+    "MAGIC_LINK_DEBUG_TOKENS", default=DEBUG_MODE
+)
+ACCESS_CODE_DEBUG_CODES = DEBUG_MODE and _env_flag(
+    "ACCESS_CODE_DEBUG_CODES", default=DEBUG_MODE
+)
 FRONTEND_URL = _trim_trailing_slash(os.getenv("FRONTEND_URL", "http://localhost:3000"))
 MAILGUN_API_BASE_URL = _trim_trailing_slash(os.getenv("MAILGUN_API_BASE_URL", "https://api.mailgun.net"))
 MAILGUN_DOMAIN = os.getenv("MAILGUN_DOMAIN")
