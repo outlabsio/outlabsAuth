@@ -275,7 +275,7 @@ async def lifespan(app: FastAPI):
         redis_ok = auth.redis_client is not None and auth.redis_client.is_available
         print(f"Redis ({REDIS_URL}): {'connected' if redis_ok else 'unavailable, reconnect scheduled'}")
 
-    if auth.config.enable_magic_links and MAGIC_LINK_DEBUG_TOKENS:
+    if getattr(auth.config, "enable_magic_links", False) and MAGIC_LINK_DEBUG_TOKENS:
         print("Magic links enabled with dev token capture")
 
         async def capture_magic_link(user, token, request=None, redirect_url=None):
@@ -292,7 +292,7 @@ async def lifespan(app: FastAPI):
 
         auth.user_service.on_after_magic_link_requested = capture_magic_link
 
-    if auth.config.enable_access_codes and ACCESS_CODE_DEBUG_CODES:
+    if getattr(auth.config, "enable_access_codes", False) and ACCESS_CODE_DEBUG_CODES:
         print("Access codes enabled with dev code capture")
 
         async def capture_access_code(user, code, request=None, redirect_url=None):

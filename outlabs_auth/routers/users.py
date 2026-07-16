@@ -32,7 +32,11 @@ from outlabs_auth.schemas.membership_history import (
 from outlabs_auth.schemas.permission import PermissionResponse, UserPermissionSource
 from outlabs_auth.schemas.role import RoleResponse
 from outlabs_auth.schemas.user_audit import UserAuditEventResponse
-from outlabs_auth.core.exceptions import PermissionDeniedError
+from outlabs_auth.core.exceptions import (
+    InvalidInputError,
+    MembershipNotFoundError,
+    PermissionDeniedError,
+)
 from outlabs_auth.routers._authz_utils import require_can_delegate_permissions
 from outlabs_auth.schemas.user import (
     AdminResetPasswordRequest,
@@ -43,10 +47,13 @@ from outlabs_auth.schemas.user import (
     UserSuperuserUpdateRequest,
     UserUpdateRequest,
 )
+from outlabs_auth.routers._api_key_response import build_api_key_responses
+from outlabs_auth.schemas.api_key import ApiKeyResponse
 from outlabs_auth.schemas.user_role_membership import (
     AssignRoleRequest,
     UserRoleMembershipDetailResponse,
     UserRoleMembershipResponse,
+    UserRoleMembershipUpdate,
 )
 
 
@@ -1325,6 +1332,185 @@ def get_users_router(
             raise
         except Exception as e:
             obs.log_500_error(e, target_user_id=str(user_id), role_id=str(role_id))
+            raise
+
+
+    def _serialize_user_role_membership(membership: Any) -> UserRoleMembershipResponse:
+        return UserRoleMembershipResponse(
+            id=str(membership.id),
+            user_id=str(membership.user_id),
+            role_id=str(membership.role_id),
+            assigned_at=membership.assigned_at,
+            assigned_by_id=str(membership.assigned_by_id) if membership.assigned_by_id else None,
+            valid_from=membership.valid_from,
+            valid_until=membership.valid_until,
+            status=membership.status,
+            revoked_at=membership.revoked_at,
+            revoked_by_id=str(membership.revoked_by_id) if membership.revoked_by_id else None,
+            revocation_reason=membership.revocation_reason,
+            is_currently_valid=membership.is_currently_valid(),
+            can_grant_permissions=membership.can_grant_permissions(),
+        )
+
+    @router.patch(
+        "/{user_id}/role-memberships/{membership_id}",
+        response_model=UserRoleMembershipResponse,
+        summary="Update user role membership",
+        description=(
+            "Update a direct role membership validity window and/or status "
+            "(requires user:update permission)."
+        ),
+    )
+    async def update_user_role_membership_endpoint(
+        user_id: UUID,
+        membership_id: UUID,
+        data: UserRoleMembershipUpdate,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        """Update a direct role membership for a user."""
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
+
+            fields_set = data.model_fields_set
+            if not fields_set:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No fields provided to update",
+                )
+
+            membership = await auth.role_service.update_user_role_membership(
+                session,
+                user_id=user_id,
+                membership_id=membership_id,
+                valid_from=data.valid_from,
+                update_valid_from="valid_from" in fields_set,
+                valid_until=data.valid_until,
+                update_valid_until="valid_until" in fields_set,
+                status=data.status,
+                update_status="status" in fields_set,
+                updated_by_id=UUID(obs.user_id),
+            )
+
+            if auth.observability:
+                auth.observability.logger.info(
+                    "role_membership_updated",
+                    user_id=str(user_id),
+                    membership_id=str(membership_id),
+                    updated_by=obs.user_id,
+                    fields=sorted(fields_set),
+                )
+
+            return _serialize_user_role_membership(membership)
+
+        except HTTPException:
+            raise
+        except (InvalidInputError, MembershipNotFoundError):
+            raise
+        except Exception as e:
+            obs.log_500_error(
+                e,
+                target_user_id=str(user_id),
+                membership_id=str(membership_id),
+            )
+            raise
+
+    @router.get(
+        "/{user_id}/api-keys",
+        response_model=List[ApiKeyResponse],
+        summary="List a user's personal API keys",
+        description=(
+            "List personal API keys owned by a user (requires user:read permission). "
+            "Does not return key secrets."
+        ),
+    )
+    async def list_user_api_keys_endpoint(
+        user_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
+    ):
+        """List personal API keys for another user (admin)."""
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
+
+            api_keys = await auth.api_key_service.list_user_api_keys(session, user_id)
+            return await build_api_key_responses(auth, session, api_keys)
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+    @router.delete(
+        "/{user_id}/api-keys/{key_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Revoke a user's personal API key",
+        description=(
+            "Revoke a personal API key owned by a user (requires user:update permission)."
+        ),
+    )
+    async def revoke_user_api_key_endpoint(
+        user_id: UUID,
+        key_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        """Revoke a personal API key owned by another user (admin)."""
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user, for_mutation=True)
+
+            api_key = await auth.api_key_service.get_api_key(session, key_id)
+            if not api_key or api_key.owner_id != user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="API key not found",
+                )
+
+            await auth.api_key_service.revoke_api_key(
+                session,
+                key_id,
+                actor_user_id=UUID(obs.user_id),
+                reason="API key revoked by admin",
+                event_source="users_router.revoke_user_api_key",
+            )
+
+            if auth.observability:
+                auth.observability.logger.info(
+                    "user_api_key_revoked",
+                    user_id=str(user_id),
+                    key_id=str(key_id),
+                    revoked_by=obs.user_id,
+                )
+
+            return None
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(
+                e,
+                target_user_id=str(user_id),
+                key_id=str(key_id),
+            )
             raise
 
     @router.get(
