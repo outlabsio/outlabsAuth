@@ -14,6 +14,10 @@ def test_enterprise_example_wires_transactional_mail_service():
     example_main = (ROOT / "examples/enterprise_rbac/main.py").read_text()
 
     assert "transactional_mail_service=build_enterprise_example_transactional_mail_service(" in example_main
+    assert (
+        "transactional_messaging_service=build_enterprise_example_challenge_messaging_service("
+        in example_main
+    )
     assert "auth.user_service = RealEstateUserService(" not in example_main
     assert "Custom user service with invite/reset email hooks enabled" not in example_main
     assert "tables=[Lead.__table__, LeadNote.__table__]" in example_main
@@ -21,6 +25,14 @@ def test_enterprise_example_wires_transactional_mail_service():
     assert 'get_integration_principals_router(auth, prefix="/v1/admin")' in example_main
     assert 'f"outlabs-auth:{ENV}:enterprise-rbac"' in example_main
     assert "redis_key_prefix=REDIS_KEY_PREFIX" in example_main
+
+
+def test_enterprise_example_ships_challenge_messaging_spike():
+    challenge_messaging = (ROOT / "examples/enterprise_rbac/challenge_messaging.py").read_text()
+
+    assert "ConsoleWhatsAppChallengeMessagingService" in challenge_messaging
+    assert "send_auth_challenge" in challenge_messaging
+    assert "access_code" in challenge_messaging
 
 
 def test_enterprise_example_documents_host_query_integration_route():

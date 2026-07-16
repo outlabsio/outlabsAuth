@@ -48,8 +48,10 @@ from outlabs_auth.routers import (
 )
 
 try:
+    from .challenge_messaging import build_enterprise_example_challenge_messaging_service
     from .transactional_mail import build_enterprise_example_transactional_mail_service
 except ImportError:
+    from challenge_messaging import build_enterprise_example_challenge_messaging_service
     from transactional_mail import build_enterprise_example_transactional_mail_service
 
 # ============================================================================
@@ -113,6 +115,9 @@ MAGIC_LINK_DEBUG_TOKENS = DEBUG_MODE and _env_flag(
 )
 ACCESS_CODE_DEBUG_CODES = DEBUG_MODE and _env_flag(
     "ACCESS_CODE_DEBUG_CODES", default=DEBUG_MODE
+)
+INVITE_DEBUG_TOKENS = DEBUG_MODE and _env_flag(
+    "INVITE_DEBUG_TOKENS", default=DEBUG_MODE
 )
 FRONTEND_URL = _trim_trailing_slash(os.getenv("FRONTEND_URL", "http://localhost:3000"))
 MAILGUN_API_BASE_URL = _trim_trailing_slash(os.getenv("MAILGUN_API_BASE_URL", "https://api.mailgun.net"))
@@ -230,10 +235,12 @@ auth = EnterpriseRBAC(
         mailgun_from_name=MAILGUN_FROM_NAME,
         mailgun_recipient_override=MAILGUN_RECIPIENT_OVERRIDE,
     ),
+    transactional_messaging_service=build_enterprise_example_challenge_messaging_service(),
 )
 
 latest_magic_links: dict[str, dict[str, Any]] = {}
 latest_access_codes: dict[str, dict[str, Any]] = {}
+latest_invites: dict[str, dict[str, Any]] = {}
 
 
 # ============================================================================
@@ -263,6 +270,11 @@ def _build_frontend_access_code_url(redirect_url: Optional[str] = None) -> str:
     return f"{FRONTEND_URL}/auth/access-code?{urlencode(params)}"
 
 
+def _build_frontend_invite_link(token: str) -> str:
+    params = {"token": token}
+    return f"{FRONTEND_URL}/auth/accept-invite?{urlencode(params)}"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
@@ -281,6 +293,7 @@ async def lifespan(app: FastAPI):
 
     if getattr(auth.config, "enable_magic_links", False) and MAGIC_LINK_DEBUG_TOKENS:
         print("Magic links enabled with dev token capture")
+        original_on_after_magic_link = auth.user_service.on_after_magic_link_requested
 
         async def capture_magic_link(user, token, request=None, redirect_url=None):
             email = str(user.email).lower()
@@ -293,11 +306,15 @@ async def lifespan(app: FastAPI):
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             print(f"Magic link for {email}: {magic_link_url}")
+            await original_on_after_magic_link(
+                user, token, request, redirect_url=redirect_url
+            )
 
         auth.user_service.on_after_magic_link_requested = capture_magic_link
 
     if getattr(auth.config, "enable_access_codes", False) and ACCESS_CODE_DEBUG_CODES:
         print("Access codes enabled with dev code capture")
+        original_on_after_access_code = auth.user_service.on_after_access_code_requested
 
         async def capture_access_code(user, code, request=None, redirect_url=None):
             email = str(user.email).lower()
@@ -311,8 +328,29 @@ async def lifespan(app: FastAPI):
             }
             print(f"Access code for {email}: {code}")
             print(f"Access code entry URL for {email}: {access_code_url}")
+            await original_on_after_access_code(
+                user, code, request, redirect_url=redirect_url
+            )
 
         auth.user_service.on_after_access_code_requested = capture_access_code
+
+    if INVITE_DEBUG_TOKENS:
+        print("Invites enabled with dev token capture")
+        original_on_after_invite = auth.user_service.on_after_invite
+
+        async def capture_invite(user, token, request=None):
+            email = str(user.email).lower()
+            invite_url = _build_frontend_invite_link(token)
+            latest_invites[email] = {
+                "email": email,
+                "token": token,
+                "invite_url": invite_url,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            print(f"Invite for {email}: {invite_url}")
+            await original_on_after_invite(user, token, request)
+
+        auth.user_service.on_after_invite = capture_invite
 
     # Create example-owned domain tables only. Auth tables come from migrations.
     print("Ensuring example domain tables exist...")
@@ -348,12 +386,18 @@ async def lifespan(app: FastAPI):
         print("Magic link debug endpoint: /dev/auth/magic-link/latest?email=<email>")
     if ACCESS_CODE_DEBUG_CODES:
         print("Access code debug endpoint: /dev/auth/access-code/latest?email=<email>")
+    if INVITE_DEBUG_TOKENS:
+        print("Invite debug endpoint: /dev/auth/invite/latest?email=<email>")
     if MAILGUN_DOMAIN and MAILGUN_API_KEY and MAILGUN_FROM_EMAIL:
         print(f"Mailgun domain: {MAILGUN_DOMAIN}")
         if MAILGUN_RECIPIENT_OVERRIDE:
             print(f"Mailgun sandbox override recipient: {MAILGUN_RECIPIENT_OVERRIDE}")
     else:
         print("Mailgun: not configured, falling back to console email output")
+    print(
+        "Challenge messaging: console WhatsApp spike "
+        "(access codes to user.phone when set; see docs/WHATSAPP_ACCOUNT_MESSAGING.md)"
+    )
 
     yield
 
@@ -451,6 +495,28 @@ async def open_latest_access_code(email: str = Query(..., min_length=1)):
     """Redirect to the access-code entry page for local development only."""
     captured = await latest_access_code(email=email)
     return RedirectResponse(str(captured["access_code_url"]))
+
+
+@app.get("/dev/auth/invite/latest", include_in_schema=False)
+async def latest_invite(email: str = Query(..., min_length=1)):
+    """Return the latest captured invite token for local development only."""
+    if not INVITE_DEBUG_TOKENS:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    captured = latest_invites.get(email.lower())
+    if not captured:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No invite has been issued for that email",
+        )
+    return captured
+
+
+@app.get("/dev/auth/invite/open", include_in_schema=False)
+async def open_latest_invite(email: str = Query(..., min_length=1)):
+    """Redirect to the latest captured invite accept URL for local development only."""
+    captured = await latest_invite(email=email)
+    return RedirectResponse(str(captured["invite_url"]))
 
 
 async def get_session(request: Request):

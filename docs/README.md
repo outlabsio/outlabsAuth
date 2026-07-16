@@ -33,6 +33,7 @@ Looking for usage documentation? See **[docs-library/](../docs-library/)** inste
 
 ### Extensions
 - **AUTH_EXTENSIONS.md** - Optional features (OAuth, MFA, passwordless)
+- **WHATSAPP_ACCOUNT_MESSAGING.md** - WhatsApp/OTP delivery via host-owned providers (intents vs NotificationService)
 - **ERROR_HANDLING.md** - Exception hierarchy specification
 - **MIGRATION_GUIDE.md** - Migration from centralized API
 

@@ -3684,6 +3684,114 @@ Entities do not store live direct permission grants. Access is granted through:
 
 ---
 
+## DD-057: Cache Backend Abstraction (Redis-Optional Permission Caching)
+
+**Date**: 2026-06-26
+**Status**: Proposed (direction accepted 2026-06-26; implementation pending — task breakdown in `docs/NEXT_PASS_BACKLOG.md`)
+**Deciders**: Maintainer
+**Context**: Permission/authorization caching is currently Redis-only. `AuthConfig` rejects `enable_caching=True` unless `redis_enabled` (`core/config.py` `_resolve_redis_defaults`), `CacheService` is constructed with a `RedisClient` (`core/auth.py:552-554`), and every `CacheService` method early-returns a miss/no-op when `redis_client.is_available` is False. The practical effect: with Redis disabled there is **no cross-request cache at all** — every authorization check runs full resolution against Postgres (closure-table ancestor walk, role/permission aggregation, optional ABAC evaluation). The gap is large and measured: the benchmark table in `NEXT_PASS_BACKLOG.md` shows the API-key dependency paths at 12–21 SQL queries / ~80–144 ms p95 with Redis off versus 0 queries / ~4–8 ms with the Redis cache warm. Single-instance consumers that do not want to operate a Redis server (the personal/Outlabs stack on a home server; small OSS adopters) therefore either run an unnecessary Redis or eat the uncached cost — and on a remote-Postgres (Neon) deployment the uncached cost is worse, since each check crosses the network.
+
+Two existing facts make a Redis-free fast path tractable rather than a rewrite:
+
+- The cache backend is a single injected dependency (`CacheService(redis_client, config)`), so the storage layer can be swapped without touching cache logic.
+- Invalidation is already **version-stamped, not delete-based** (the DD-037 evolution): cache entries embed the `{global, user:X, entity:Y}` epoch counters and are validated against the current counters on read; the pub/sub listener is a no-op for the local cache (`CacheService._handle_message` — "there is nothing to delete here"). A single-instance in-process cache is therefore correct **without** any pub/sub, because its counters are local and always current.
+- Precedent already exists in-tree: `api_key_local_snapshot_cache_ttl` (an opt-in per-process API-key snapshot cache with documented bounded staleness) and `utils/rate_limit.py` (an in-memory limiter).
+
+### Options Considered
+
+1. **Pluggable cache backend with an in-process `memory` option** (chosen)
+   - Introduce `cache_backend: redis | memory | none`. `memory` is a `MemoryCacheBackend` implementing the same method surface `CacheService` already calls on `RedisClient` (`make_key`, `mget_raw`, `set_raw`, `get`, `set`, `increment`/`get_counter`, `delete_pattern`, `bump_versions_and_publish`, `publish`/`subscribe` as no-ops, `is_available`), backed by a bounded TTL map (`cachetools.TTLCache` or equivalent) with local-integer epoch counters.
+   - Pros: single-instance consumers get essentially all the cache speedup with zero external dependency (local RAM beats a Redis round trip); reuses the version-stamped invalidation that already exists; the injection seam already exists; correct with instant invalidation for a single instance; unlocks the personal/home-server deployment and lowers OSS adoption friction.
+   - Cons: a pure in-process cache only gives instant invalidation for a single process — multi-process/multi-instance deployments get TTL-bounded staleness unless the counters are shared; per-process memory must be bounded; rate-limit/usage counters become per-process.
+
+2. **Postgres-backed shared cache (no Redis, multi-instance-correct)**
+   - Hold the epoch counters (and optionally entries) in Postgres; fan out invalidation via `LISTEN/NOTIFY` instead of Redis pub/sub.
+   - Pros: removes Redis even for multi-instance deployments; fits a Postgres-native stack.
+   - Cons: a cache that hits the DB it is meant to spare is self-defeating unless paired with an in-process layer; `LISTEN/NOTIFY` plumbing is real work; only worth it for multi-instance-without-Redis, which is not the motivating case. Kept as a documented future extension layered over option 1.
+
+3. **Status quo (Redis-only caching)**
+   - Pros: no change; correct cross-instance invalidation for the multi-instance deployments that already run Redis.
+   - Cons: forces a Redis dependency on single-instance consumers or leaves them uncached; misrepresents the library as needing Redis for acceptable authz latency.
+
+### Decision
+
+Add a cache backend abstraction with three modes, selected by `cache_backend: redis | memory | none`, and reconcile the existing `enable_caching`/`redis_enabled` flags so `memory` no longer trips the "caching requires Redis" validator:
+
+- **`redis`** — current behavior. Shared cache + Redis pub/sub epoch fan-out. Recommended for multi-instance / higher-traffic deployments.
+- **`memory`** — in-process bounded TTL cache with local epoch counters and no-op pub/sub. For **single-instance** deployments this is correct with instant invalidation and recovers essentially all of the Redis speedup with no external service. For multi-instance it degrades to TTL-bounded staleness (acceptable for many permission-change SLAs; lower `cache_permission_ttl` accordingly) — documented, not silent.
+- **`none`** — no cross-request cache (today's no-Redis behavior). Retained as the floor.
+
+`CacheService` logic is unchanged; only the injected client and the config wiring change. The version-stamped read-validation contract is the invariant that makes `memory` correct without pub/sub.
+
+Multi-instance-without-Redis (option 2) is explicitly **out of scope for this DD** and recorded as a future extension: hold the epoch counters in a small Postgres table and fan out bumps via `LISTEN/NOTIFY`, keeping the in-process payload cache from option 1.
+
+### Consequences
+
+- **Positive**: single-instance consumers get full-speed authz with `cache_backend=memory` and no Redis; on remote-Postgres (Neon) deployments this avoids a per-check network round trip.
+- **Positive**: clean deployment split — `memory` for single-instance, `redis` for multi-instance — from one config flag, no code fork.
+- **Positive**: improves the library's standalone story (no mandatory Redis) without weakening the Redis path.
+- **Negative**: `memory` gives only TTL-bounded invalidation across processes; multi-worker single-host and multi-instance deployments that need instant invalidation must use `redis` (or the future Postgres-`NOTIFY` extension). Must be documented prominently so no one ships multi-instance `memory` expecting Redis semantics.
+- **Negative**: per-process memory must be size-bounded (LRU + TTL); rate-limit windows and usage counters become per-process under `memory` (exact for single instance, N× for N instances — usage still reconciles additively in the DB).
+- **Neutral**: this is authz-verdict caching, a security-sensitive surface, so it rides the existing safety net — the cache unit tests, `tests/integration/test_cached_hotpath_budgets.py`, `test_request_memo_query_counts.py`, the role-invalidation-fanout tests, and `benchmarks/redis_roundtrips_bench.py` / `scripts/benchmark_auth_paths.py` must all run green against `memory`, plus new memory-backend equivalents of the invalidation tests.
+
+### Implementation (proposed)
+
+- `outlabs_auth/services/cache_backend.py` (new) — `MemoryCacheBackend` mirroring the `RedisClient` method surface `CacheService` consumes, over a bounded TTL map + local epoch ints; `publish`/`subscribe` no-op; `is_available` always True.
+- `outlabs_auth/core/config.py` — add `cache_backend: Literal["redis","memory","none"]`; reconcile `_resolve_redis_defaults` so `enable_caching` is satisfied by `memory` (drop the hard "requires Redis" coupling); keep `redis_*` fields for the `redis` backend.
+- `outlabs_auth/core/auth.py:552-554` — select and inject the backend by `cache_backend`; `CacheService` construction unchanged.
+- `outlabs_auth/services/cache.py` — no logic change expected; confirm every `redis_client.*` call used has a `MemoryCacheBackend` equivalent (notably `mget_raw`, `set_raw`, `increment`, `get_counter`, `delete_pattern`, `bump_versions_and_publish`).
+- Tests: parametrize the cache + hot-path-budget suites over `redis`/`memory`; add memory-backend invalidation + TTL-staleness tests; run the benchmarks in `memory` mode and record the numbers next to the Redis baseline.
+- Docs: `README` + `CURRENT_IMPLEMENTATION_STATUS.md` — document the three backends and the single-instance (instant invalidation) vs multi-instance (TTL-bounded staleness) correctness contract, with the recommended setting per deployment.
+
+### Related Decisions
+
+- DD-033 (Redis Counters), DD-037 (Redis Pub/Sub cache invalidation), DD-048 (Redis Configuration Simplification) — this generalizes the cache storage layer those introduced.
+- Backlog: "Cache Backend Abstraction (Redis-Optional Caching)" in `docs/NEXT_PASS_BACKLOG.md` for the task breakdown.
+
+---
+
+## DD-058: WhatsApp as Host-Owned Delivery Channel for Auth Challenges
+
+**Date**: 2026-07-16
+**Status**: Accepted (Phase A/B); Phase C deferred
+**Deciders**: Maintainer
+**Context**: Hosts want optional WhatsApp delivery for account messages (especially access-code OTPs) while keeping the same integration model as transactional email: the library supplies typed payloads; each FastAPI host owns providers, templates, and credentials. A Twilio `WhatsAppChannel` already exists under `NotificationService`, but notification events intentionally omit plain challenge secrets.
+
+### Options Considered
+
+1. **Put OTP/magic-link secrets on `NotificationService` emit + `WhatsAppChannel`**
+   - Pros: reuses existing channel.
+   - Cons: secrets on fire-and-forget buses/queues; weak fit for account-critical delivery; conflates ambient alerts with challenge delivery.
+
+2. **Host-only hook overrides forever (no library intents for passwordless)**
+   - Pros: zero library change; already works via `on_after_access_code_requested` / `on_after_magic_link_requested`.
+   - Cons: every host re-invents payload shape; invite/reset already have typed mail intents, so passwordless stays inconsistent.
+
+3. **Channel-agnostic challenge delivery intents + optional host messaging service** (chosen)
+   - Pros: mirrors transactional mail; host chooses email and/or WhatsApp templates; no Meta/Twilio in core; secrets stay off notification buses.
+   - Cons: another optional injection seam; hosts must wire it (acceptable under DD-025).
+
+### Decision
+
+- Keep **email as the login identifier** for magic-link / access-code request APIs.
+- Treat `User.phone` / `phone_verified` as an optional **registered delivery destination**, not a login identity (Phase C may add verification / request-by-phone later).
+- Deliver challenge secrets via typed `AuthChallengeDeliveryIntent` and optional `transactional_messaging_service`, or via host hook overrides (Phase A).
+- Use `NotificationService` + `WhatsAppChannel` only for ambient/security events without plain OTP/magic-link secrets.
+- Document the contract in [`docs/WHATSAPP_ACCOUNT_MESSAGING.md`](./WHATSAPP_ACCOUNT_MESSAGING.md).
+
+### Consequences
+
+- **Positive**: WhatsApp OTP is possible without vendor lock-in or secret leakage on notification buses.
+- **Positive**: Same mental model as enterprise transactional mail wiring.
+- **Negative**: Hosts still must implement composers/providers (including Meta template approval).
+- **Neutral**: Phase C (phone as login, new challenge types, console UI) stays explicitly out of scope.
+
+### Related Decisions
+
+- DD-023 (notifications), DD-024 (passwordless), DD-025 (no built-in email/SMS)
+
+---
+
 ## Questions Still Open
 
 Track questions that need decisions:
@@ -3729,8 +3837,9 @@ Track questions that need decisions:
 | 2026-01-22 | **DD-054** | **Accepted (Permission Scope Enforcement)** |
 | 2026-03-17 | **DD-055** | **Accepted (Entity Authorization Remains Role-Only)** |
 | 2026-06-10 | **DD-056** | **Accepted (Tenant Isolation on User Routes; System-Wide Roles Grant Global Scope)** |
+| 2026-06-26 | **DD-057** | **Proposed (Cache Backend Abstraction — Redis-optional permission caching)** |
 
 ---
 
-**Last Updated**: 2026-06-10 (DD-056 added: tenant isolation on user-management routes; roles router aligned to the 404 anti-enumeration contract)
+**Last Updated**: 2026-06-26 (DD-057 proposed: cache backend abstraction — Redis-optional in-process permission caching; implementation tracked in `NEXT_PASS_BACKLOG.md`)
 **Next Review**: After testing all examples

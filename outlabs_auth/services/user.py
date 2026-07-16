@@ -31,6 +31,10 @@ from outlabs_auth.mail.types import (
     PasswordResetConfirmationMailIntent,
     coerce_metadata,
 )
+from outlabs_auth.messaging.types import (
+    AuthChallengeDeliveryIntent,
+    DeliveryRecipient,
+)
 from outlabs_auth.models.sql.entity import Entity
 from outlabs_auth.models.sql.entity_membership import EntityMembership
 from outlabs_auth.models.sql.enums import MembershipStatus, UserStatus
@@ -62,6 +66,7 @@ class UserService(BaseService[User]):
         api_key_service: Optional[Any] = None,
         user_audit_service: Optional[Any] = None,
         transactional_mail_service: Optional[Any] = None,
+        transactional_messaging_service: Optional[Any] = None,
     ):
         """
         Initialize UserService.
@@ -69,6 +74,9 @@ class UserService(BaseService[User]):
         Args:
             config: Authentication configuration
             notification_service: Optional notification service for events
+            transactional_mail_service: Optional invite/reset mail service
+            transactional_messaging_service: Optional challenge delivery service
+                (email and/or WhatsApp via host-owned providers)
         """
         super().__init__(User)
         self.config = config
@@ -79,6 +87,7 @@ class UserService(BaseService[User]):
         self.api_key_service = api_key_service
         self.user_audit_service = user_audit_service
         self.transactional_mail_service = transactional_mail_service
+        self.transactional_messaging_service = transactional_messaging_service
 
     # =========================================================================
     # Lifecycle hooks (override in subclasses)
@@ -127,8 +136,13 @@ class UserService(BaseService[User]):
         request: Optional[Request] = None,
         redirect_url: Optional[str] = None,
     ) -> None:
-        """Hook called after a magic-link token is generated. Override to send email."""
-        pass
+        """Hook called after a magic-link token is generated. Override or use messaging service."""
+        await self.send_magic_link_delivery(
+            user,
+            token,
+            request=request,
+            redirect_url=redirect_url,
+        )
 
     async def on_after_access_code_requested(
         self,
@@ -137,8 +151,13 @@ class UserService(BaseService[User]):
         request: Optional[Request] = None,
         redirect_url: Optional[str] = None,
     ) -> None:
-        """Hook called after an access code is generated. Override to send email."""
-        pass
+        """Hook called after an access code is generated. Override or use messaging service."""
+        await self.send_access_code_delivery(
+            user,
+            code,
+            request=request,
+            redirect_url=redirect_url,
+        )
 
     async def on_failed_login(
         self,
@@ -157,6 +176,62 @@ class UserService(BaseService[User]):
 
     async def on_after_oauth_associate(self, user: User, provider: str, request: Optional[Request] = None) -> None:
         pass
+
+    async def send_magic_link_delivery(
+        self,
+        user: User,
+        token: str,
+        *,
+        request: Optional[Request] = None,
+        redirect_url: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        **extra_metadata: Any,
+    ) -> bool:
+        """Deliver a magic-link secret via the configured transactional messaging service."""
+        if self.transactional_messaging_service is None:
+            return False
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            minutes=self.config.magic_link_expire_minutes
+        )
+        intent = AuthChallengeDeliveryIntent(
+            challenge_type="magic_link",
+            recipient=self._build_delivery_recipient(user),
+            secret=token,
+            expires_at=expires_at,
+            redirect_url=redirect_url,
+            request_base_url=self._request_base_url(request),
+            metadata=self._merge_mail_metadata(metadata, extra_metadata),
+        )
+        result = await self.transactional_messaging_service.send_auth_challenge(intent)
+        return bool(getattr(result, "accepted", False))
+
+    async def send_access_code_delivery(
+        self,
+        user: User,
+        code: str,
+        *,
+        request: Optional[Request] = None,
+        redirect_url: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        **extra_metadata: Any,
+    ) -> bool:
+        """Deliver an access-code secret via the configured transactional messaging service."""
+        if self.transactional_messaging_service is None:
+            return False
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            minutes=self.config.access_code_expire_minutes
+        )
+        intent = AuthChallengeDeliveryIntent(
+            challenge_type="access_code",
+            recipient=self._build_delivery_recipient(user),
+            secret=code,
+            expires_at=expires_at,
+            redirect_url=redirect_url,
+            request_base_url=self._request_base_url(request),
+            metadata=self._merge_mail_metadata(metadata, extra_metadata),
+        )
+        result = await self.transactional_messaging_service.send_auth_challenge(intent)
+        return bool(getattr(result, "accepted", False))
 
     async def send_invitation_email(
         self,
@@ -1387,6 +1462,19 @@ class UserService(BaseService[User]):
             email=user.email,
             first_name=user.first_name,
             last_name=user.last_name,
+            phone=getattr(user, "phone", None),
+            phone_verified=bool(getattr(user, "phone_verified", False)),
+        )
+
+    @staticmethod
+    def _build_delivery_recipient(user: User) -> DeliveryRecipient:
+        return DeliveryRecipient(
+            user_id=str(user.id),
+            email=user.email,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            phone=getattr(user, "phone", None),
+            phone_verified=bool(getattr(user, "phone_verified", False)),
         )
 
     @staticmethod

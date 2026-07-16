@@ -15,6 +15,8 @@ class MailRecipient:
     email: str
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+    phone: Optional[str] = None
+    phone_verified: bool = False
 
     @property
     def display_name(self) -> str:

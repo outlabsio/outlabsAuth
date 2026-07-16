@@ -105,6 +105,7 @@ class OutlabsAuth:
         background_job_mode: Literal["disabled", "embedded"] = "disabled",
         notification_service: Optional[Any] = None,
         transactional_mail_service: Optional[Any] = None,
+        transactional_messaging_service: Optional[Any] = None,
         # Observability
         observability_config: Optional[Any] = None,
         observability_logger: Optional[Any] = None,
@@ -167,6 +168,8 @@ class OutlabsAuth:
                 process for single-process development only.
             notification_service: NotificationService instance (optional)
             transactional_mail_service: Optional transactional auth mail service
+            transactional_messaging_service: Optional channel-agnostic challenge
+                delivery service (magic link / access code; host-owned email/WhatsApp)
             observability_logger: Optional host-managed logger adapter for auth events
             observability_metrics_registry: Optional Prometheus registry for auth metrics
             observability_instrument_external_engine: Allow DB query instrumentation when the engine is host-owned
@@ -260,6 +263,7 @@ class OutlabsAuth:
         # Store notification service
         self.notification_service = notification_service
         self.transactional_mail_service = transactional_mail_service
+        self.transactional_messaging_service = transactional_messaging_service
 
         # Initialize observability
         self.observability_config = observability_config
@@ -513,6 +517,7 @@ class OutlabsAuth:
             auth_service=self.auth_service,
             user_audit_service=self.user_audit_service,
             transactional_mail_service=self.transactional_mail_service,
+            transactional_messaging_service=self.transactional_messaging_service,
         )
         self.role_service = RoleService(
             self.config,
@@ -1308,6 +1313,11 @@ class OutlabsAuth:
             mail_aclose = getattr(self.transactional_mail_service, "aclose", None)
             if mail_aclose is not None:
                 await mail_aclose()
+
+        if self.transactional_messaging_service is not None:
+            messaging_aclose = getattr(self.transactional_messaging_service, "aclose", None)
+            if messaging_aclose is not None:
+                await messaging_aclose()
 
         if self.cache_service is not None:
             await self.cache_service.shutdown()
