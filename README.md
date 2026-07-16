@@ -40,32 +40,61 @@ The consuming app owns its own configuration. In practice that means you provide
 ## Quickstart
 
 ```python
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from outlabs_auth import SimpleRBAC, register_exception_handlers
+from outlabs_auth import SimpleRBAC
 from outlabs_auth.routers import get_auth_router
 
 auth = SimpleRBAC(
     database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/app",
-    secret_key="change-me",
-    auto_migrate=True,
+    # Must be at least 32 characters when signing with HS256, or construction
+    # fails. Generate one with:
+    #   python -c "import secrets; print(secrets.token_urlsafe(48))"
+    secret_key=os.environ["SECRET_KEY"],
 )
+
+# Builds the engine, services and dependencies synchronously. Required *before*
+# any router factory runs: they dereference `auth.deps`, which otherwise only
+# exists after `initialize()` — and that's async, so it cannot run at import.
+auth.prime_fastapi_routing()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await auth.initialize()
+    await auth.initialize()  # async work: migrations, Redis, service wiring
     yield
     await auth.shutdown()
 
 
 app = FastAPI(lifespan=lifespan)
-register_exception_handlers(app)
+
+# Installs the exception handlers *and* the UnitOfWork/RequestCache middleware.
+# Prefer this over bare register_exception_handlers(): the middleware commits
+# before the response is sent, which is what makes a create immediately readable.
+auth.instrument_fastapi(app)
+
 app.include_router(get_auth_router(auth, prefix="/auth"))
 ```
 
-This example uses `auto_migrate=True` for convenience. For production, run migrations explicitly with the packaged CLI instead of relying on startup migration.
+`tests/unit/test_readme_quickstart.py` executes this block, so it cannot rot.
+
+Two things it is deliberate about, both of which the previous version of this
+quickstart got wrong and would have failed on:
+
+- **`prime_fastapi_routing()` before mounting.** Router factories resolve
+  `auth.deps` at call time. Mounting at import without priming raises
+  `ConfigurationError: Dependencies not initialized`.
+- **A real `secret_key`.** Anything under 32 characters is rejected during
+  construction for HS256 — a placeholder like `"change-me"` never gets as far as
+  the first request.
+
+If you would rather mount inside `lifespan()` (after `initialize()`), that works
+too and needs no priming — see `examples/simple_rbac/main.py`.
+
+For production, run migrations explicitly with the packaged CLI rather than
+`auto_migrate=True`.
 
 ## CLI Bootstrap
 

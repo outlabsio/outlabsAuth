@@ -1,5 +1,17 @@
 # OutlabsAuth Library - Implementation Roadmap
 
+> [!WARNING]
+> **Written for the pre-Postgres design and not updated since. Do not follow it.**
+>
+> This predates the move to Postgres/SQLModel and still describes MongoDB/Beanie —
+> `AsyncIOMotorClient`, `Link[...]` fields, and module paths that no longer exist.
+> Code samples here will not run, and file references will not resolve.
+>
+> For how the library actually works today: **`examples/`** (the only integration
+> reference kept honest by tests), then `README.md`, then the source. Retained for
+> history — the reasoning is often still sound even where the mechanics are not.
+
+
 **Version**: 2.0
 **Date**: 2025-01-14 (Updated)
 **Total Duration**: 15-16 weeks (6-7 weeks core + 9 weeks extensions)
@@ -39,9 +51,11 @@
 | **Frontend: Entity Type Settings** | ✅ Complete | 2026-01-22 | **System settings page for entity type configuration** |
 | **Security Hardening (2026-06 audit)** | ✅ Complete | 2026-06-10 | **SEC-1..SEC-8 fixed (see `SECURITY_AUDIT_2026-06-10.md`); SEC-4 resolved via DD-056** |
 | **Tenant Isolation (DD-056)** | ✅ Complete | 2026-06-10 | **User routes scoped to actor's trees; system-wide roles grant global scope; `enforce_user_scope` flag; tests in `test_users_scope_and_isolation.py`** |
+| **Redis/API-key Perf Overhaul + doctor/bootstrap CLI** | ✅ Complete | 2026-06-16 | **Shipped v0.1.0a23: 4-phase Redis/API-key perf overhaul, `outlabs-auth doctor`/`bootstrap`, SEC-1/SEC-9, index-hygiene migration `0018`** |
+| **Cache Backend Abstraction (DD-057)** | ⏸️ Proposed | - | **Redis-optional caching via injectable backend (`cache_backend: redis\|memory\|none`); design in DD-057, task breakdown in `NEXT_PASS_BACKLOG.md`** |
 | Phase 7-10 | ⏸️ Not Started | - | Optional extensions |
 
-**Current Status**: 2026-06 security hardening complete, including DD-056 tenant isolation on user-management routes.
+**Current Status**: 2026-06 release train shipped (security hardening SEC-1..SEC-9, DD-056 tenant isolation, v0.1.0a23 Redis/API-key perf overhaul + doctor/bootstrap CLI). Next proposed: cache backend abstraction (DD-057 — Redis-optional caching).
 
 ---
 

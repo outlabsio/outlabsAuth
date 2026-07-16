@@ -1,5 +1,17 @@
 # 96. Extending UserModel with Beanie Links
 
+> [!WARNING]
+> **Written for the pre-Postgres design and not updated since. Do not follow it.**
+>
+> This predates the move to Postgres/SQLModel and still describes MongoDB/Beanie —
+> `AsyncIOMotorClient`, `Link[...]` fields, and module paths that no longer exist.
+> Code samples here will not run, and file references will not resolve.
+>
+> For how the library actually works today: **`examples/`** (the only integration
+> reference kept honest by tests), then `README.md`, then the source. Retained for
+> history — the reasoning is often still sound even where the mechanics are not.
+
+
 > **Quick Reference**: How to extend UserModel to link to business-specific collections (profiles, organizations, subscriptions) using Beanie's Link feature for efficient querying.
 
 ## Overview

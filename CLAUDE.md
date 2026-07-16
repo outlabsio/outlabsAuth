@@ -49,22 +49,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **IMPORTANT**: There are TWO documentation folders with different purposes:
 
 #### `docs/` - System Specifications (For Maintainers)
-Complete design specs and architectural decisions (13 files):
-1. **REDESIGN_VISION.md** - Main vision document (start here)
-2. **LIBRARY_ARCHITECTURE.md** - Technical architecture details
-3. **IMPLEMENTATION_ROADMAP.md** - 15-16 week implementation plan
-4. **API_DESIGN.md** - Developer experience and code examples
-5. **COMPARISON_MATRIX.md** - SimpleRBAC vs EnterpriseRBAC
-6. **DEPENDENCY_PATTERNS.md** - FastAPI dependency injection patterns
-7. **SECURITY.md** - Security hardening guide
-8. **TESTING_GUIDE.md** - Testing strategies
-9. **DEPLOYMENT_GUIDE.md** - Production deployment
-10. **ERROR_HANDLING.md** - Exception hierarchy
-11. **DESIGN_DECISIONS.md** - 37+ architectural decisions (DD-001 to DD-037+)
-12. **AUTH_EXTENSIONS.md** - Optional OAuth, passwordless, MFA (v1.1-v1.4)
-13. **MIGRATION_GUIDE.md** - For external users migrating from centralized API
 
-**Use these as source of truth for architectural decisions.**
+> [!WARNING]
+> **Most of `docs/` predates the Postgres rewrite and describes a MongoDB/Beanie
+> library that no longer exists.** Dated 2025-01-14, never updated. They cite
+> `AsyncIOMotorClient`, `Link[...]` fields, and modules that aren't in the repo.
+> Following them does not work — this index used to call them "source of truth",
+> which is how readers ended up there.
+>
+> **To learn how the library actually works, in order:**
+> 1. **`examples/`** — the only integration reference kept honest by tests
+> 2. **`README.md`** — quickstart, executed by `tests/unit/test_readme_quickstart.py`
+> 3. **the source** — `core/auth.py`, `routers/`, `dependencies/__init__.py`
+>
+> Each stale file now carries its own banner. Marked below.
+
+| File | Status |
+|---|---|
+| **CURRENT_IMPLEMENTATION_STATUS.md** | Current |
+| **COMPARISON_MATRIX.md** | Current — SimpleRBAC vs EnterpriseRBAC |
+| **ERROR_HANDLING.md** | Current — exception hierarchy |
+| **HOST_INTEGRATION_QUERIES.md** | Current — host query boundary |
+| **DESIGN_DECISIONS.md** | **Historical log.** DD-001..DD-0xx, period-accurate. The *reasoning* is source of truth; the Mongo-era mechanics are not. |
+| **REDESIGN_VISION.md** | **Stale** — pre-Postgres |
+| **LIBRARY_ARCHITECTURE.md** | **Stale** — pre-Postgres |
+| **IMPLEMENTATION_ROADMAP.md** | **Stale** — pre-Postgres |
+| **API_DESIGN.md** | **Stale** — still opens with `AsyncIOMotorClient`; header says "Design Phase" |
+| **DEPENDENCY_PATTERNS.md** | **Stale** — cites five modules that don't exist; there is no `AuthContext` |
+| **SECURITY.md** | **Stale** — pre-Postgres |
+| **TESTING_GUIDE.md** | **Stale** — pre-Postgres |
+| **DEPLOYMENT_GUIDE.md** | **Stale** — the worst offender |
+| **AUTH_EXTENSIONS.md** | **Stale** — cites `models/user.py`, `providers/base.py` etc.; real paths differ |
+| **MIGRATION_GUIDE.md** | **Stale** — centralized-API era |
 
 #### `docs-library/` - User Documentation (Implementation-Specific)
 Currently only 9 files - being rebuilt to match actual implementation:

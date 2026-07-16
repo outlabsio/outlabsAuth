@@ -2,8 +2,23 @@
 
 This directory contains **design specifications and architectural decisions** for maintainers and contributors.
 
+> [!WARNING]
+> **Much of this directory is pre-Postgres and describes a MongoDB/Beanie library
+> that no longer exists.** Those files are dated 2025-01-14 and were never updated
+> through the rewrite: they reference `AsyncIOMotorClient`, Beanie `Link[...]`
+> fields, and module paths absent from the repo. Their code samples do not run.
+>
+> They each carry a banner now, and `../CLAUDE.md` marks which are stale. Nothing
+> here has been deleted — the reasoning is frequently still right even where the
+> mechanics are wrong — but **do not treat this directory as how-to material.**
+>
+> **How the library actually works, in order:** `../examples/` (kept honest by
+> tests) → `../README.md` (its quickstart is executed by
+> `tests/unit/test_readme_quickstart.py`) → the source.
+
 ## For Library Users
-Looking for usage documentation? See **[docs-library/](../docs-library/)** instead.
+Looking for usage documentation? See **[docs-library/](../docs-library/)** instead —
+noting that `95-Testing-Guide.md` and `96-Extending-UserModel.md` are stale too.
 
 ## Design Documents
 

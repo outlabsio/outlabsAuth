@@ -1,5 +1,17 @@
 # OutlabsAuth - Authentication Dependency Patterns
 
+> [!WARNING]
+> **Written for the pre-Postgres design and not updated since. Do not follow it.**
+>
+> This predates the move to Postgres/SQLModel and still describes MongoDB/Beanie —
+> `AsyncIOMotorClient`, `Link[...]` fields, and module paths that no longer exist.
+> Code samples here will not run, and file references will not resolve.
+>
+> For how the library actually works today: **`examples/`** (the only integration
+> reference kept honest by tests), then `README.md`, then the source. Retained for
+> history — the reasoning is often still sound even where the mechanics are not.
+
+
 **Version**: 1.4
 **Date**: 2025-01-14
 **Status**: Core Feature (v1.0)
