@@ -112,13 +112,21 @@ class HostChallengeMessagingService:
         ...
 ```
 
-### Phase C — Explicitly later
+### Phase C — Host wire-up (partially shipped)
 
-- Phone verification flow that sets `phone_verified`
+Shipped:
+
+- `UserUpdateRequest.phone` + `update_user_fields(..., phone_provided=...)` — changing phone clears `phone_verified`
+- `phone_verified` on `UserResponse`
+- Sidecar Account + admin user profile fields for WhatsApp phone (E.164)
+- Enterprise host Twilio WhatsApp Content API path when `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM`, and `TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID` are set (otherwise console spike)
+
+Still deferred:
+
+- Phone verification OTP flow that sets `phone_verified`
 - Request-by-phone / WhatsApp as login identifier
 - New `AuthChallengeType` values (`SMS_OTP`, `WHATSAPP_OTP`)
 - Channel query params and per-channel rate limits
-- Sidecar UI for “WhatsApp number” on account + admin user details
 
 Roadmap/AUTH_EXTENSIONS language about multi-channel OTP as a login method is aspirational relative to the live enum (`magic_link` / `access_code` only).
 
@@ -132,5 +140,15 @@ Roadmap/AUTH_EXTENSIONS language about multi-channel OTP as a login method is as
 ## Example wiring pointers
 
 - Enterprise mail (email intents): `examples/enterprise_rbac/transactional_mail.py`
-- Enterprise challenge messaging (console WhatsApp spike): `examples/enterprise_rbac/challenge_messaging.py`
+- Enterprise challenge messaging (console spike + optional Twilio): `examples/enterprise_rbac/challenge_messaging.py`
 - Optional Twilio ambient channel (non-secret events): `outlabs_auth/services/channels/whatsapp.py`
+
+### Enterprise Twilio env vars
+
+| Variable | Purpose |
+|---|---|
+| `TWILIO_ACCOUNT_SID` | Twilio account |
+| `TWILIO_AUTH_TOKEN` | Twilio auth token |
+| `TWILIO_WHATSAPP_FROM` | Sender (`whatsapp:+...` or `+...`) |
+| `TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID` | Approved Content SID for access codes |
+| `TWILIO_WHATSAPP_REQUIRE_VERIFIED` | When `true`, skip send unless `phone_verified` |

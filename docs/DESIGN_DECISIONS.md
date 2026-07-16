@@ -3753,7 +3753,7 @@ Multi-instance-without-Redis (option 2) is explicitly **out of scope for this DD
 ## DD-058: WhatsApp as Host-Owned Delivery Channel for Auth Challenges
 
 **Date**: 2026-07-16
-**Status**: Accepted (Phase A/B); Phase C deferred
+**Status**: Accepted (Phase A/B shipped; Phase C host wire-up partially shipped — phone registration + Twilio host path; phone-verify OTP and WhatsApp-as-login still deferred)
 **Deciders**: Maintainer
 **Context**: Hosts want optional WhatsApp delivery for account messages (especially access-code OTPs) while keeping the same integration model as transactional email: the library supplies typed payloads; each FastAPI host owns providers, templates, and credentials. A Twilio `WhatsAppChannel` already exists under `NotificationService`, but notification events intentionally omit plain challenge secrets.
 

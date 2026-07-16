@@ -41,7 +41,7 @@ from outlabs_auth.models.sql.enums import MembershipStatus, UserStatus
 from outlabs_auth.models.sql.user import User
 from outlabs_auth.services.base import BaseService
 from outlabs_auth.utils.password import generate_password_hash_async, verify_password_async
-from outlabs_auth.utils.validation import validate_email, validate_name
+from outlabs_auth.utils.validation import validate_email, validate_name, validate_phone
 
 
 class UserService(BaseService[User]):
@@ -498,12 +498,18 @@ class UserService(BaseService[User]):
         email: Optional[str] = None,
         first_name: Optional[str] = None,
         last_name: Optional[str] = None,
+        phone: Optional[str] = None,
+        phone_provided: bool = False,
         changed_by_id: Optional[UUID] = None,
     ) -> User:
         """
         Update user fields (email and/or profile).
 
         This is a convenience wrapper used by the HTTP routers.
+
+        Pass ``phone_provided=True`` when the client included ``phone`` in the
+        request body (including null/empty to clear). Changing phone resets
+        ``phone_verified`` so hosts can re-run verification before WhatsApp OTP.
         """
         user = await self.get_by_id(session, user_id)
         if not user:
@@ -516,7 +522,10 @@ class UserService(BaseService[User]):
         previous_email_verified = user.email_verified
         previous_first_name = user.first_name
         previous_last_name = user.last_name
+        previous_phone = user.phone
+        previous_phone_verified = user.phone_verified
         email_changed = False
+        phone_changed = False
         changed_profile_fields: List[str] = []
 
         if email is not None:
@@ -547,6 +556,17 @@ class UserService(BaseService[User]):
                 changed_profile_fields.append("last_name")
             user.last_name = validated_last_name
 
+        if phone_provided:
+            if phone is None or (isinstance(phone, str) and not phone.strip()):
+                next_phone = None
+            else:
+                next_phone = validate_phone(phone)
+            if next_phone != user.phone:
+                user.phone = next_phone
+                user.phone_verified = False
+                phone_changed = True
+                changed_profile_fields.append("phone")
+
         await self.update(session, user)
 
         if self.user_audit_service and email_changed:
@@ -571,6 +591,20 @@ class UserService(BaseService[User]):
             )
 
         if self.user_audit_service and changed_profile_fields:
+            before_profile: Dict[str, Any] = {
+                "first_name": previous_first_name,
+                "last_name": previous_last_name,
+            }
+            after_profile: Dict[str, Any] = {
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+            }
+            if phone_changed:
+                before_profile["phone"] = previous_phone
+                before_profile["phone_verified"] = previous_phone_verified
+                after_profile["phone"] = user.phone
+                after_profile["phone_verified"] = user.phone_verified
+
             await self.user_audit_service.record_event(
                 session,
                 event_category="profile",
@@ -580,14 +614,8 @@ class UserService(BaseService[User]):
                 subject_user_id=user.id,
                 subject_email_snapshot=user.email,
                 root_entity_id=user.root_entity_id,
-                before={
-                    "first_name": previous_first_name,
-                    "last_name": previous_last_name,
-                },
-                after={
-                    "first_name": user.first_name,
-                    "last_name": user.last_name,
-                },
+                before=before_profile,
+                after=after_profile,
                 metadata={"changed_fields": changed_profile_fields},
             )
 

@@ -126,6 +126,12 @@ MAILGUN_API_KEY = os.getenv("MAILGUN_API_KEY")
 MAILGUN_FROM_EMAIL = os.getenv("MAILGUN_FROM_EMAIL")
 MAILGUN_FROM_NAME = os.getenv("MAILGUN_FROM_NAME", "Outlabs Auth")
 MAILGUN_RECIPIENT_OVERRIDE = os.getenv("MAILGUN_RECIPIENT_OVERRIDE")
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM")
+TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID = os.getenv(
+    "TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID"
+)
 FRONTEND_ORIGIN = _extract_origin(FRONTEND_URL)
 
 
@@ -235,7 +241,12 @@ auth = EnterpriseRBAC(
         mailgun_from_name=MAILGUN_FROM_NAME,
         mailgun_recipient_override=MAILGUN_RECIPIENT_OVERRIDE,
     ),
-    transactional_messaging_service=build_enterprise_example_challenge_messaging_service(),
+    transactional_messaging_service=build_enterprise_example_challenge_messaging_service(
+        access_code_content_sid=TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID,
+        twilio_account_sid=TWILIO_ACCOUNT_SID,
+        twilio_auth_token=TWILIO_AUTH_TOKEN,
+        twilio_whatsapp_from=TWILIO_WHATSAPP_FROM,
+    ),
 )
 
 latest_magic_links: dict[str, dict[str, Any]] = {}
@@ -394,10 +405,22 @@ async def lifespan(app: FastAPI):
             print(f"Mailgun sandbox override recipient: {MAILGUN_RECIPIENT_OVERRIDE}")
     else:
         print("Mailgun: not configured, falling back to console email output")
-    print(
-        "Challenge messaging: console WhatsApp spike "
-        "(access codes to user.phone when set; see docs/WHATSAPP_ACCOUNT_MESSAGING.md)"
-    )
+    if (
+        TWILIO_ACCOUNT_SID
+        and TWILIO_AUTH_TOKEN
+        and TWILIO_WHATSAPP_FROM
+        and TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID
+    ):
+        print(
+            "Challenge messaging: Twilio WhatsApp "
+            f"(from {TWILIO_WHATSAPP_FROM}; content SID configured)"
+        )
+    else:
+        print(
+            "Challenge messaging: console WhatsApp spike "
+            "(set TWILIO_ACCOUNT_SID/AUTH_TOKEN/WHATSAPP_FROM/"
+            "WHATSAPP_ACCESS_CODE_CONTENT_SID for live Twilio delivery)"
+        )
 
     yield
 

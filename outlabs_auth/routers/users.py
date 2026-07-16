@@ -456,6 +456,8 @@ def get_users_router(
                 email=update_dict.get("email"),
                 first_name=update_dict.get("first_name"),
                 last_name=update_dict.get("last_name"),
+                phone=update_dict.get("phone"),
+                phone_provided="phone" in update_dict,
                 changed_by_id=UUID(obs.user_id),
             )
             obs.log_event("user_updated", user_id=obs.user_id)
@@ -736,6 +738,8 @@ def get_users_router(
                 email=update_data.get("email"),
                 first_name=update_data.get("first_name"),
                 last_name=update_data.get("last_name"),
+                phone=update_data.get("phone"),
+                phone_provided="phone" in update_data,
                 changed_by_id=actor_user.id,
             )
             await auth.user_service.on_after_update(user, update_data, None)

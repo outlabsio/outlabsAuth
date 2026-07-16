@@ -161,3 +161,19 @@ async def test_mail_recipient_includes_optional_phone():
     )
     assert recipient.phone == "+15551234567"
     assert recipient.phone_verified is True
+
+
+@pytest.mark.unit
+def test_enterprise_factory_uses_console_without_twilio_env(monkeypatch):
+    from examples.enterprise_rbac.challenge_messaging import (
+        ConsoleWhatsAppChallengeMessagingService,
+        build_enterprise_example_challenge_messaging_service,
+    )
+
+    monkeypatch.delenv("TWILIO_ACCOUNT_SID", raising=False)
+    monkeypatch.delenv("TWILIO_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("TWILIO_WHATSAPP_FROM", raising=False)
+    monkeypatch.delenv("TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID", raising=False)
+
+    service = build_enterprise_example_challenge_messaging_service()
+    assert isinstance(service, ConsoleWhatsAppChallengeMessagingService)
