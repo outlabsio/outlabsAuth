@@ -1,8 +1,13 @@
 # EnterpriseRBAC Real Estate Example - Implementation Progress
 
+> **Historical note (2026-07):** This tracker is outdated. The example backend is the
+> current ACME/Summit seed in `reset_test_env.py`, and the admin UI is the sister
+> Vite/React repo [OutlabsAuthUI](https://github.com/outlabsio/OutlabsAuthUI) — not
+> an in-tree Nuxt app. Prefer [README.md](./README.md) and [QUICKSTART.md](./QUICKSTART.md).
+
 **Started**: 2025-01-23
 **Updated**: 2025-10-23
-**Status**: ✅ Backend Complete | 🚧 Integrating Frontend
+**Status**: Backend example maintained; UI is external (see note above)
 
 ---
 

@@ -1,6 +1,14 @@
 # 23. User Management API
 
-This document describes the API endpoints for managing users and their role assignments in OutlabsAuth.
+> **Status: partially stale.** Path shapes, ID formats, and some response fields in
+> this file may not match the current routers. Prefer:
+>
+> - Live OpenAPI at `{api}/docs` on a running example
+> - [02-Routers-and-Prefixes.md](./02-Routers-and-Prefixes.md)
+> - `outlabs_auth/routers/users.py` and related schemas
+>
+> Keep this page as historical narrative until it is rewritten against the current
+> SQLModel / UUID surface.
 
 ## Overview
 
@@ -11,7 +19,7 @@ The User Management API provides endpoints for:
 
 All endpoints require authentication via JWT access token and appropriate permissions.
 
-**Base Path**: `/v1/users`
+**Base Path** (examples): `/v1/users` — your host may use `/iam/users` or another prefix.
 
 ---
 

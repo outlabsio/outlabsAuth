@@ -25,7 +25,7 @@
 - Python: 4-space indentation, type hints preferred; format with `black`.
 - Static checks: `ruff` and `mypy` are configured in `pyproject.toml`.
 - Tests: files named `test_*.py`, pytest markers like `@pytest.mark.unit` and `@pytest.mark.integration` are used.
-- Frontend: keep existing Nuxt/TypeScript patterns; follow file-local conventions.
+- Frontend: admin UI lives in sibling `../OutlabsAuthUI` (Vite/React/TypeScript); follow that repo’s conventions.
 
 ## Testing Guidelines
 - Frameworks: `pytest` + `pytest-asyncio`.

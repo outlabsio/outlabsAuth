@@ -174,9 +174,9 @@ These are intentional implementation details that are slightly more specific tha
 
 ### Admin UI Repository Boundary
 
-- The Nuxt admin UI no longer lives inside this Python repository.
-- The active frontend codebase now lives in the sibling repository `../OutlabsAuthUI` (local workspace `/Users/macbookm3/Documents/projects/OutlabsAuthUI`).
-- Reason: backend and frontend lifecycle now move independently, and keeping the UI in its own repository removes stale in-repo build/release assumptions from this package.
+- The admin console is the sister repository [OutlabsAuthUI](https://github.com/outlabsio/OutlabsAuthUI) (Vite/React), not an in-tree frontend.
+- Local clone is typically `../OutlabsAuthUI`. Contract and wiring: `docs/AUTH_UI.md`.
+- Reason: backend and frontend lifecycle move independently; this package stays library-first.
 
 ### API Key Host Boundary
 

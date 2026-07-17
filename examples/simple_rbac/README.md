@@ -46,6 +46,34 @@ export SECRET_KEY=development-secret-key-change-in-production
 export REDIS_URL=redis://localhost:6379/0
 ```
 
+### Optional: OutlabsAuth UI
+
+[OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) can manage this SimpleRBAC
+backend (flat roles — no entity controls):
+
+```bash
+cd ../../../OutlabsAuthUI   # sibling of the outlabsAuth repo
+bun install
+cp public/app-config.template.json public/app-config.json
+```
+
+```json
+{
+  "apiBaseUrl": "http://localhost:8003",
+  "authApiPrefix": "/v1",
+  "appName": "OutlabsAuth UI",
+  "appSubtitle": "SimpleRBAC example",
+  "authBrand": "OutlabsAuth",
+  "signInDescription": "Sign in with a seeded test admin from this example."
+}
+```
+
+```bash
+bun run dev
+```
+
+Sign in with `admin@test.com` / `Test123!!`. Details: [`docs/AUTH_UI.md`](../../docs/AUTH_UI.md).
+
 ## Development & Testing
 
 ### Quick Test Environment Reset

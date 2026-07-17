@@ -23,7 +23,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Security",
 ]
-urls = {Homepage = "https://outlabs.io", Documentation = "https://github.com/outlabsio/outlabsAuth#readme", Repository = "https://github.com/outlabsio/outlabsAuth", Issues = "https://github.com/outlabsio/outlabsAuth/issues"}
+urls = {Homepage = "https://outlabs.io", Documentation = "https://github.com/outlabsio/outlabsAuth/tree/main/docs-library", Repository = "https://github.com/outlabsio/outlabsAuth", Issues = "https://github.com/outlabsio/outlabsAuth/issues"}
 dependencies = [
     # Core FastAPI dependencies
     "fastapi>=0.139.0",

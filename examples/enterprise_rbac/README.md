@@ -1,47 +1,30 @@
 # EnterpriseRBAC Example - Real Estate Leads Platform
 
-This example demonstrates OutlabsAuth's **EnterpriseRBAC** preset with real-world complexity through an entity-isolated real estate leads platform.
+This example demonstrates OutlabsAuth's **EnterpriseRBAC** preset: entity hierarchy,
+tree permissions, multi-root orgs, and a host lead domain on top of the library.
 
-## 🎯 What This Demonstrates
+Seed data comes from `reset_test_env.py` (ACME Realty + Summit orgs). Run that
+script before relying on the credentials below.
 
-### Entity Flexibility
-- **No hardcoded entity types** - Organizations define their own structure
-- **RE/MAX** uses: `corporate → state → region → brokerage → team`
-- **Keller Williams** uses: `company → market_center → division`
-- **Solo agents** use: `workspace` only
-- **Entity type suggestions** prevent naming inconsistencies within organizations
+## What This Demonstrates
 
-### Tree Permissions
-- Franchise executives see ALL leads across entire hierarchy
-- Regional managers see leads in their region and below
-- Brokers see only their brokerage's leads
-- Agents see only their team's leads
+- **Flexible entity types** — orgs define their own tree vocabulary (no hardcoded enum of “department”)
+- **Tree permissions** — `_tree` actions inherit down the hierarchy
+- **Multi-root isolation** — ACME and Summit are separate roots; scope does not leak
+- **Scoped admins** — org / region / office personas for permission review
+- **Host integration** — leads CRUD, team directory via `auth.host_query_service`, transactional mail wiring
+- **Machine credentials** — personal API keys, integration principals, service tokens
+- **Optional admin UI** — [OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) pointed at `/v1`
 
-### 5 Real-World Scenarios
-1. **RE/MAX National** - Full 5-level franchise hierarchy
-2. **RE/MAX Regional** - 3 brokerages under one account (subset of franchise)
-3. **Keller Williams** - Independent brokerage with different terminology
-4. **Solo Agent with Team** - Minimal 2-level hierarchy
-5. **Solo Agent Only** - Flattest structure (single workspace)
+## Features
 
-### Internal Teams
-- Support team with read-only global access
-- Finance team for billing visibility
-- Leadership with full system access
-
-## 📋 Features
-
-- ✅ Entity hierarchy with flexible naming
-- ✅ Tree permissions (`lead:read_tree`, `lead:update_tree`)
-- ✅ Entity type suggestions API
-- ✅ Host app team directory via `auth.host_query_service`
-- ✅ Host-owned transactional auth mail wiring
-- ✅ Granular permissions (buyer vs seller specialists)
-- ✅ Multiple organizational structures
-- ✅ Internal teams with global access
-- ✅ Lead management (CRUD operations)
-- ✅ Lead assignment workflow
-- ✅ Status pipeline tracking
+- Entity hierarchy + entity type suggestions
+- Tree permissions (`lead:read_tree`, `lead:update_tree`, …)
+- Host app team directory via `auth.host_query_service`
+- Host-owned transactional auth mail wiring
+- Granular roles and ABAC condition demos in the seed
+- Lead management (CRUD, assignment, status pipeline)
+- API-key and integration-principal admin surfaces under `/v1`
 
 ## ✅ API Integration Check (Release Smoke Test)
 
@@ -154,19 +137,31 @@ The wiring lives in `examples/enterprise_rbac/transactional_mail.py`.
 
 Current behavior:
 
-- if Mailgun env vars are configured, the example sends through Mailgun
-- if `MAILGUN_RECIPIENT_OVERRIDE` is set, all mail is redirected to that sandbox address
-- if Mailgun is not configured, the example falls back to a console provider for local development
+- `OUTLABS_AUTH_MAIL_PROVIDER` selects the host transport (`auto|mailgun|sendgrid|postmark|resend|smtp|webhook|console`)
+- `auto` picks the first fully configured provider; otherwise console
+- `MAIL_RECIPIENT_OVERRIDE` (or legacy `MAILGUN_RECIPIENT_OVERRIDE`) redirects all invite/reset mail to a sandbox inbox while stamping `intended_recipient` metadata
 
 Relevant env vars from `.env.example`:
 
 - `FRONTEND_URL`
-- `MAILGUN_API_BASE_URL`
-- `MAILGUN_DOMAIN`
-- `MAILGUN_API_KEY`
-- `MAILGUN_FROM_EMAIL`
-- `MAILGUN_FROM_NAME`
-- `MAILGUN_RECIPIENT_OVERRIDE`
+- `API_PUBLIC_URL` (public API origin used for OAuth callback URLs; default `http://localhost:8004`)
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (optional; mounts invite-only Google login at `/v1/oauth/google` and account linking at `/v1/oauth-associate/google`)
+- `OUTLABS_AUTH_MAIL_PROVIDER`
+- `MAIL_FROM` / `MAIL_FROM_NAME` / `MAIL_RECIPIENT_OVERRIDE`
+- Mailgun: `MAILGUN_*`
+- SendGrid: `SENDGRID_API_KEY`
+- Postmark: `POSTMARK_SERVER_TOKEN`
+- Resend: `RESEND_API_KEY`
+- SMTP / webhook: see `.env.example`
+
+### Challenge messaging (WhatsApp + SMS)
+
+Host-owned delivery for access-code / OTP intents lives in `challenge_messaging.py`:
+
+- Without Twilio env: console spikes print WhatsApp Content API and SMS-shaped payloads
+- WhatsApp live when `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM`, and a real `TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID` are set
+- SMS live when the same account credentials plus `TWILIO_SMS_FROM` (E.164) are set
+- Multiplex routes by `delivery_channel` (`whatsapp` vs `sms`); email challenges stay on transactional mail
 
 ### Environment
 
@@ -186,11 +181,9 @@ export REDIS_URL=redis://localhost:6379/0
 uv run python reset_test_env.py
 ```
 
-This creates:
-- **13 roles** (agent, team_lead, broker_owner, etc.)
-- **18 users** across all scenarios
-- **38+ entities** in various organizational structures
-- **11 sample leads** demonstrating different types
+This creates review personas and hierarchy for **ACME Realty** and **Summit**
+(users, roles, entities, sample leads, lifecycle fixtures). Exact counts are
+printed at the end of `reset_test_env.py`.
 
 ### Explore the API
 
@@ -198,58 +191,43 @@ Visit the interactive documentation:
 - **Swagger UI**: http://localhost:8004/docs
 - **Health Check**: http://localhost:8004/health
 
-## 🔐 Demo Credentials
+## Demo Credentials
 
-### Scenario 1: RE/MAX National (5-level hierarchy)
+All seeded passwords are `Testpass1!` unless noted. Source of truth:
+`reset_test_env.py` (printed again at the end of a reset).
 
-```
-Franchise Executive:  exec@remax.com          / password123
-Broker/Owner:         broker@remax-sv.com     / password123
-Team Lead:            downtown@remax-sv.com   / password123
-Agent:                agent1@remax-sv.com     / password123
-```
+### Start here
 
-**Test Tree Permissions:**
-- Login as `exec@remax.com` → Can see ALL leads across entire franchise
-- Login as `broker@remax-sv.com` → Can see only Silicon Valley brokerage leads
-- Login as `agent1@remax-sv.com` → Can see only Downtown Team leads
+| Email | Persona |
+|-------|---------|
+| `admin@acme.com` | Superuser |
+| `org-admin@acme.com` | ACME root-scoped admin |
+| `regional-admin@acme.com` | West Coast hierarchy admin |
+| `east-admin@acme.com` | East Coast hierarchy admin |
+| `manager@sf.acme.com` | San Francisco office admin |
+| `auditor@acme.com` | Read-only ACME auditor |
+| `lead@sf.acme.com` | SF residential team lead |
+| `agent@sf.acme.com` | SF residential agent |
+| `commercial@sf.acme.com` | SF commercial agent |
+| `summit-admin@summit.com` | Second-root (Summit) admin |
+| `agent@austin.summit.com` | Summit growth agent |
 
-### Scenario 2: RE/MAX Regional (3 brokerages)
+### Lifecycle fixtures
 
-```
-Regional Manager:     manager@remax-eastbay.com / password123
-Oakland Agent:        agent@remax-oakland.com   / password123
-Berkeley Agent:       agent@remax-berkeley.com  / password123
-```
+| Email | Notes |
+|-------|-------|
+| `invited@acme.com` | Pending invite (no password) |
+| `suspended@ny.acme.com` | Suspended operator |
+| `locked@la.acme.com` | Locked account fixture |
+| `unverified@austin.summit.com` | Unverified email fixture |
 
-### Scenario 3: Keller Williams (Different naming)
+### What to try
 
-```
-Market Center Leader: leader@kw-paloalto.com  / password123
-Luxury Agent:         luxury@kw-paloalto.com  / password123
-FTB Agent:            ftb@kw-paloalto.com     / password123
-```
-
-### Scenario 4: Solo Agent with Team
-
-```
-Solo Agent:           jane@janesrealestate.com / password123
-Assistant:            assistant@janesrealestate.com / password123
-```
-
-### Scenario 5: Solo Agent Only
-
-```
-Solo Agent:           mike@mikesproperties.com / password123
-```
-
-### Internal Teams (Global Access)
-
-```
-Support:              support@outlabs.com     / password123
-Finance:              finance@outlabs.com     / password123
-System Admin:         ceo@outlabs.com         / password123
-```
+- Login as `admin@acme.com` → full admin + API-key / integration surfaces
+- Login as `org-admin@acme.com` → ACME root; not platform-global superuser
+- Login as `agent@sf.acme.com` vs `east-admin@acme.com` → sibling branch isolation
+- Login as `summit-admin@summit.com` → second root; ACME data stays out of scope
+- Point [OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) at `http://localhost:8004` with `authApiPrefix: /v1`
 
 ## 📚 API Endpoints
 
@@ -295,137 +273,101 @@ All implementations include these standardized routes:
 - `POST /v1/leads/{lead_id}/notes` - Add note to lead
 - `GET /v1/entities/{entity_id}/team-directory` - Example host-side team directory using `auth.host_query_service`
 
-## 🧪 Test Scenarios
+## Test Scenarios
 
-### 1. Test Entity Type Suggestions
+### 1. Entity type suggestions
 
 ```bash
-# Get suggestions for entities under RE/MAX California
-curl -X GET "http://localhost:8004/v1/entities/suggestions?parent_id={remax_ca_id}" \
+# After login, pick a parent entity id from GET /v1/entities
+curl -s "http://localhost:8004/v1/entities/suggestions?parent_id={parent_id}" \
   -H "Authorization: Bearer {TOKEN}"
 ```
 
-**Expected**: Shows "region" as existing type with count and examples
+Expected: existing child types at that level (counts + examples) so hosts can
+steer naming without hardcoding a global taxonomy.
 
-**Why It Matters**: Prevents creating "reigon" (typo) or "area" instead of consistent "region"
+### 2. Tree / branch isolation
 
-### 2. Test Tree Permissions
+| Login as | Expect |
+|----------|--------|
+| `admin@acme.com` | Broad admin access across ACME (superuser) |
+| `regional-admin@acme.com` | West Coast scope; not East Coast admin |
+| `east-admin@acme.com` | East Coast scope; sibling of West |
+| `agent@sf.acme.com` | SF residential team leads only |
+| `summit-admin@summit.com` | Summit root; ACME entities/leads out of scope |
 
-**Franchise executive sees ALL leads:**
+Use `POST /v1/auth/login` then `GET /v1/leads` and `GET /v1/entities` to compare.
 
-```bash
-# Login as exec@remax.com
-# GET /v1/leads
+### 3. Multi-root
+
+ACME and Summit are separate roots. Switching identity should not leak
+memberships or lead visibility across roots (except true superuser paths).
+
+## Architecture Notes
+
+### Example hierarchy shape (ACME)
+
+```
+ACME Realty (root)
+├── West Coast
+│   └── San Francisco office
+│       ├── SF Residential (team)
+│       └── SF Commercial (team)
+└── East Coast
+    └── NYC office
 ```
 
-**Expected**: Sees leads from all teams in entire franchise
+Summit is a second root used for multi-org tests. Exact keys and display names
+come from the seed script.
 
-**Agent sees only their team:**
+### Entity classifications
 
-```bash
-# Login as agent1@remax-sv.com
-# GET /v1/leads
-```
+**STRUCTURAL** — organizational containers in the tree.
 
-**Expected**: Sees only Downtown Team leads
+**ACCESS_GROUP** — work locations where domain objects (leads) typically attach.
 
-### 3. Test Entity Hierarchy Differences
+### Permission model (host + library)
 
-Compare RE/MAX vs Keller Williams entity structures via `/v1/entities/{id}/children`
-
-**Key Insight**: Different organizations use different terminology, but the system handles it seamlessly
-
-### 4. Test Internal Team Global Access
-
-```bash
-# Login as support@outlabs.com
-# GET /v1/leads
-```
-
-**Expected**: Sees ALL leads from all clients (RE/MAX, Keller Williams, solo agents)
-
-## 🏗️ Architecture
-
-### Entity Structure Examples
-
-#### RE/MAX National (5 levels)
-```
-RE/MAX Corporate (STRUCTURAL)
-└── RE/MAX California (STRUCTURAL)
-    └── RE/MAX Bay Area (STRUCTURAL)
-        └── RE/MAX Silicon Valley (STRUCTURAL)
-            └── Downtown Team (ACCESS_GROUP) ← Leads stored here
-```
-
-#### Keller Williams (Different naming)
-```
-Keller Williams Realty (STRUCTURAL)
-└── Palo Alto Market Center (STRUCTURAL) ← Different term!
-    └── Luxury Division (ACCESS_GROUP) ← Different term!
-```
-
-#### Solo Agent (Flattest)
-```
-Mike's Properties (ACCESS_GROUP) ← Single entity, leads stored here
-```
-
-### Entity Classifications
-
-**STRUCTURAL** - Organizational containers:
-- Cannot have leads directly
-- Used for hierarchical organization
-- Examples: corporate, state, brokerage, market_center
-
-**ACCESS_GROUP** - Work locations:
-- Where leads are created and stored
-- Where users actually work
-- Examples: team, division, workspace
-
-### Permission Model
-
-#### Basic Lead Permissions
-- `lead:read` - Read leads in user's entities
-- `lead:create` - Create new leads
-- `lead:update` - Update leads
-- `lead:delete` - Delete leads
-- `lead:assign` - Assign leads to agents
-
-#### Tree Permissions (Hierarchical)
-- `lead:read_tree` - Read leads in entire subtree
-- `lead:update_tree` - Update leads in entire subtree
-- `lead:delete_tree` - Delete leads in entire subtree
-
-**Example**: Broker with `lead:read_tree` at brokerage level sees ALL team leads below
-
-#### Granular Permissions (Specialist Roles)
-- `lead:update_buyers` - Can only update buyer leads
-- `lead:update_sellers` - Can only update seller leads
-
-#### Internal Team Permissions (Global)
-- `support:read_leads` - Read ALL leads across ALL clients
-- `finance:read_all` - Read-only global access
+Host lead permissions in this example include `lead:read`, `lead:create`,
+`lead:update`, `lead:delete`, `lead:assign`, plus `_tree` variants for subtree
+access. Specialist and after-hours ABAC demos are seeded for review — inspect
+roles/permissions in Swagger or OutlabsAuth UI after login.
 
 ## 🔗 Connect Admin UI
 
-The external `OutlabsAuthUI` repo can connect to this example:
+[OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) is a sister Vite/React
+admin console. Point it at this example’s API:
 
 ```bash
-# In the external UI repo
-cd ../../../OutlabsAuthUI
-
-# The .env is already configured to point to port 8002
-
-# Start Nuxt dev server
-bun dev
+# Sibling of the outlabsAuth repo (not inside examples/)
+cd ../../../OutlabsAuthUI   # or: git clone https://github.com/outlabsio/OutlabsAuthUI.git
+bun install
+cp public/app-config.template.json public/app-config.json
 ```
 
-Visit `http://localhost:3000` and login with any demo credentials.
+Set `public/app-config.json` to:
 
-The UI will automatically:
-- Detect EnterpriseRBAC features
-- Show entity hierarchy management
-- Display entity type suggestions
-- Adapt based on system capabilities
+```json
+{
+  "apiBaseUrl": "http://localhost:8004",
+  "authApiPrefix": "/v1",
+  "appName": "OutlabsAuth UI",
+  "appSubtitle": "EnterpriseRBAC example",
+  "authBrand": "OutlabsAuth",
+  "signInDescription": "Sign in with a seeded demo admin from this example."
+}
+```
+
+```bash
+bun run dev
+```
+
+Open the Vite URL (default `http://localhost:5173`) and sign in with a seeded
+account from `reset_test_env.py` (for example `admin@acme.com` / `Testpass1!`).
+
+The UI reads `GET /v1/auth/config` and adapts for Enterprise features (entity
+hierarchy, memberships, entity-type settings). More detail:
+[`docs/AUTH_UI.md`](../../docs/AUTH_UI.md).
 
 ## 📖 Key Concepts
 

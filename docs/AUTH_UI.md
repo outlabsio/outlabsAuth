@@ -1,49 +1,121 @@
-# External Admin UI
+# OutlabsAuth UI
 
-The Nuxt admin UI is no longer stored in this repository.
+[OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) is an optional sister
+repository: a shared admin console for any FastAPI app that mounts OutlabsAuth.
 
-## Current Location
+It is **not** bundled with the Python package. You run (or deploy) it separately and
+point it at your mounted auth API.
 
-- Sibling repository: `../OutlabsAuthUI`
-- Current local workspace path: `/Users/macbookm3/Documents/projects/OutlabsAuthUI`
+## What It Is
+
+- Vite + React + TypeScript SPA (Bun toolchain)
+- Plugs into hosts using SimpleRBAC or EnterpriseRBAC
+- Discovers capabilities from `GET {authApiPrefix}/auth/config`
+- Manages users, roles, invitations, API keys, sessions/audit surfaces (as the
+  backend advertises them), and entity hierarchy when Enterprise features are on
+
+Backend capabilities still come from the mounted auth API. The UI does not embed a
+second auth stack.
 
 ## Boundary
 
-- This repository owns the backend library, routers, services, migrations, and backend tests.
-- The `OutlabsAuthUI` repository owns the Nuxt application, Bun toolchain, and frontend-specific tests/builds.
-- Backend documentation in this repo should treat the external UI as a consumer of the backend contract, not as a tracked subproject.
+| Repository | Owns |
+|------------|------|
+| **outlabsAuth** (this repo) | Library, routers, services, migrations, backend tests |
+| **OutlabsAuthUI** | Admin SPA, Bun toolchain, frontend tests/builds |
 
-## SimpleRBAC Invite Contract
+Treat the UI as a consumer of the backend contract, not as a subproject of this repo.
 
-For `SimpleRBAC`, the backend advertises `features.entity_hierarchy=false` and
-`features.context_aware_roles=false` from `GET /auth/config`.
+## Point the UI at Your API
 
-Admin UIs must treat that as a flat RBAC contract:
-
-- Do not show entity membership or entity scope controls.
-- Do not send `entity_id` when inviting a user.
-- Send selected `role_ids` to `POST /auth/invite`.
-- The backend applies those `role_ids` as direct account role memberships.
-
-For `EnterpriseRBAC`, selected invite roles may be applied through an entity
-membership when an `entity_id` is supplied.
-
-## Local Development
-
-Run the backend from this repository and the UI from the sibling repo.
+1. Mount the library routers your product needs (at minimum `get_auth_router`).
+   Examples use prefix `/v1/auth`, `/v1/users`, and so on.
+2. Clone and run the UI:
 
 ```bash
-# Backend
-cd /Users/macbookm3/Documents/projects/outlabsAuth
-uv run start.py
-
-# UI
-cd /Users/macbookm3/Documents/projects/OutlabsAuthUI
+git clone https://github.com/outlabsio/OutlabsAuthUI.git
+cd OutlabsAuthUI
 bun install
+cp public/app-config.template.json public/app-config.json
+```
+
+3. Edit `public/app-config.json`:
+
+```json
+{
+  "apiBaseUrl": "http://localhost:8004",
+  "authApiPrefix": "/v1",
+  "appName": "OutlabsAuth UI",
+  "appSubtitle": "Shared auth admin console",
+  "authBrand": "OutlabsAuth",
+  "signInDescription": "Sign in against the configured auth backend to access this console."
+}
+```
+
+- `apiBaseUrl` — origin of the FastAPI host (no trailing slash)
+- `authApiPrefix` — common prefix under which auth routers are mounted
+  (examples use `/v1`; production often uses `/iam`)
+
+With `authApiPrefix: "/v1"`, the UI calls `/v1/auth/config`, `/v1/auth/login`,
+`/v1/users`, etc.
+
+4. Start the UI:
+
+```bash
 bun run dev
 ```
 
+Default Vite URL is `http://localhost:5173`. Sign in with a bootstrap or seeded admin
+from the host app.
+
+Config precedence and deploy options: see the UI repo’s
+[`docs/runtime-configuration.md`](https://github.com/outlabsio/OutlabsAuthUI/blob/main/docs/runtime-configuration.md).
+
+## SimpleRBAC vs EnterpriseRBAC
+
+`GET {authApiPrefix}/auth/config` advertises the preset and feature flags. The UI
+adapts navigation and forms from that snapshot.
+
+### SimpleRBAC invite contract
+
+When `features.entity_hierarchy=false` and `features.context_aware_roles=false`:
+
+- Do not show entity membership or entity scope controls
+- Do not send `entity_id` when inviting a user
+- Send selected `role_ids` to `POST {authApiPrefix}/auth/invite`
+- The backend applies those `role_ids` as direct account role memberships
+
+### EnterpriseRBAC
+
+Selected invite roles may be applied through an entity membership when an
+`entity_id` is supplied. Entity hierarchy, memberships, and related admin surfaces
+appear when the backend advertises them.
+
+## Local Development (Both Repos)
+
+```bash
+# Backend — from this repository
+cd examples/enterprise_rbac   # or examples/simple_rbac
+uv sync
+uv run outlabs-auth migrate
+uv run python reset_test_env.py
+uv run uvicorn main:app --reload --port 8004   # simple_rbac: 8003
+
+# UI — sibling of the outlabsAuth repo (from repo root: ../OutlabsAuthUI)
+cd ../../../OutlabsAuthUI
+bun install
+cp public/app-config.template.json public/app-config.json
+# apiBaseUrl + authApiPrefix must match the backend above
+bun run dev
+```
+
+| Example | API port | Suggested `app-config.json` |
+|---------|----------|-------------------------------|
+| `examples/simple_rbac` | `8003` | `apiBaseUrl: http://localhost:8003`, `authApiPrefix: /v1` |
+| `examples/enterprise_rbac` | `8004` | `apiBaseUrl: http://localhost:8004`, `authApiPrefix: /v1` |
+
 ## Historical Note
 
-Older docs and design notes may still mention `auth-ui/`. Those references are historical.
-The source of truth for the active UI codebase is now `OutlabsAuthUI`.
+Older docs may mention `auth-ui/` or a Nuxt admin UI inside this repository. Those
+references are historical. The active UI codebase is
+[OutlabsAuthUI](https://github.com/outlabsio/OutlabsAuthUI) (Vite/React).

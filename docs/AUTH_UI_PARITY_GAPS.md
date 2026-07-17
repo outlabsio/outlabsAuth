@@ -1,14 +1,14 @@
 # UI Parity Tracking Moved
 
-The old in-repo `auth-ui/` parity tracking no longer applies because the Nuxt admin UI
-now lives in the sibling repository `../OutlabsAuthUI` (local workspace:
-`/Users/macbookm3/Documents/projects/OutlabsAuthUI`).
+Frontend parity work lives in the sister repository
+[OutlabsAuthUI](https://github.com/outlabsio/OutlabsAuthUI) (Vite/React), not in
+this Python package.
 
 Use that repository for:
 
 - UI build and test status
-- frontend/backend contract reconciliation tasks
+- frontend/backend contract reconciliation
 - remaining UI parity gaps
 
-This backend repository should only retain backend-side contract tests and backend
-documentation about the API surface the UI consumes.
+This backend repository retains backend-side contract tests and documentation for
+the API surface the UI consumes (`docs/AUTH_UI.md`, OpenAPI on the examples).

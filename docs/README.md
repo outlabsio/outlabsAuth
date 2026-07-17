@@ -3,7 +3,15 @@
 This directory contains **design specifications and architectural decisions** for maintainers and contributors.
 
 ## For Library Users
-Looking for usage documentation? See **[docs-library/](../docs-library/)** instead.
+
+Start with the user handbook, not this folder:
+
+- **[docs-library/](../docs-library/)** — index of implementer guides
+- **[docs-library/01-Getting-Started.md](../docs-library/01-Getting-Started.md)** — install through first login
+- **[AUTH_UI.md](./AUTH_UI.md)** — [OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) sister admin console
+- **[../examples/](../examples/)** — runnable SimpleRBAC / EnterpriseRBAC apps
+
+This `docs/` tree is design specs and maintainer material.
 
 ## Design Documents
 

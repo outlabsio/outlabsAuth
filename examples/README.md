@@ -1,58 +1,52 @@
 # OutlabsAuth Examples
 
-Complete example applications demonstrating OutlabsAuth usage patterns.
+Runnable consumer apps that show how to mount the library. Prefer these over
+abstract specs when you are learning the integration shape.
+
+Also see the [user docs index](../docs-library/) and
+[OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI).
 
 ## Available Examples
 
-### 1. [SimpleRBAC - Blog API](./simple_rbac/)
+### 1. [SimpleRBAC — Blog API](./simple_rbac/)
 
-**Best for**: Simple applications with flat role structure
+**Best for**: Flat role structure
 
-A blog API demonstrating:
-- ✅ User registration and JWT authentication
-- ✅ Flat role hierarchy (Reader, Writer, Editor, Admin)
-- ✅ Permission-based access control
-- ✅ Owner-based permissions
-- ✅ Public and authenticated endpoints
+- JWT auth, roles (reader / writer / editor / admin)
+- Permission checks and owner-based access
+- Optional [OutlabsAuth UI](../docs/AUTH_UI.md) against port `8003`
 
-**Complexity**: ⭐️ Beginner
-**Lines of Code**: ~500
-**Running**: `cd simple_rbac && uv sync && uv run uvicorn main:app --reload --port 8003`
+**Run**: `cd simple_rbac && uv sync && uv run uvicorn main:app --reload --port 8003`
 
-[View Documentation →](./simple_rbac/README.md)
+[Documentation →](./simple_rbac/README.md)
 
 ---
 
-### 2. [EnterpriseRBAC - Project Management](./enterprise_rbac/)
+### 2. [EnterpriseRBAC — Real Estate Leads](./enterprise_rbac/)
 
-**Best for**: Organizations with departments, teams, or complex hierarchy
+**Best for**: Org hierarchy, multi-root isolation, tree permissions
 
-A project management system demonstrating:
-- ✅ Entity hierarchy (Company → Department → Team)
-- ✅ Multiple roles per user in different entities
-- ✅ Tree permissions (manage descendants)
-- ✅ Closure table for O(1) queries
-- ✅ Entity-scoped permission checking
+- ACME + Summit seeded personas (`reset_test_env.py`)
+- Entities, memberships, leads domain, API-key admin surfaces
+- Optional OutlabsAuth UI against port `8004`
 
-**Complexity**: ⭐️⭐️⭐️ Intermediate
-**Lines of Code**: ~700
-**Running**: `cd enterprise_rbac && uv sync && uv run uvicorn main:app --reload --port 8004`
+**Run**: `cd enterprise_rbac && uv sync && uv run uvicorn main:app --reload --port 8004`
 
-[View Documentation →](./enterprise_rbac/README.md)
+[Documentation →](./enterprise_rbac/README.md) · [Quick start →](./enterprise_rbac/QUICKSTART.md)
 
 ---
 
 ### 3. [ABAC Cookbook](./abac_cookbook/)
 
-**Best for**: Understanding ABAC conditions + condition groups
+**Best for**: ABAC conditions + condition groups
 
-Demonstrates:
-- ✅ ABAC role conditions + condition groups (AND/OR)
-- ✅ Server-derived `resource.*` context for permission checks (no client trust)
-- ✅ Public API configuration of ABAC via `/roles/{id}/conditions` endpoints
+- Role conditions / groups (AND/OR)
+- Server-derived `resource.*` context
+- Public `/roles/{id}/conditions` configuration
 
-**Complexity**: ⭐️⭐️⭐️ Intermediate
-**Running**: `cd abac_cookbook && uv run uvicorn main:app --port 8005`
+**Run**: `cd abac_cookbook && uv run uvicorn main:app --port 8005`
+
+[Documentation →](./abac_cookbook/README.md)
 
 ---
 
@@ -64,7 +58,7 @@ Demonstrates:
 # PostgreSQL (required for all examples)
 docker run -d -p 5432:5432 --name postgres -e POSTGRES_PASSWORD=postgres postgres:16
 
-# Redis (required for full-featured example)
+# Redis (optional; recommended for cache-backed flows)
 docker run -d -p 6379:6379 --name redis redis:latest
 ```
 
@@ -132,14 +126,12 @@ examples.
 
 ---
 
-### Use Full-Featured Example if:
+### Use ABAC Cookbook if:
 - ✅ You need attribute-based conditions (budget limits, etc.)
-- ✅ Permissions should adapt based on context
-- ✅ High-performance requirements (Redis-backed permission cache)
-- ✅ Complex permission evaluation logic
-- ✅ Advanced use cases
+- ✅ Permissions should adapt based on resource context
+- ✅ You want a focused lab for `/roles/{id}/conditions` (not a full product demo)
 
-**Examples**: Financial systems, healthcare, government
+**Examples**: Financial rules, ownership checks, multi-condition groups
 
 ---
 
@@ -150,35 +142,40 @@ examples.
 - Learn JWT token handling
 - Practice permission checks
 - Implement owner-based access
+- Optionally connect [OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI)
 
 ### 2. Progress to EnterpriseRBAC (1-2 hours)
 - Create entity hierarchies
 - Assign multiple roles
 - Use tree permissions
 - Implement entity-scoped checks
+- Connect OutlabsAuth UI for hierarchy admin
 
-### 3. Master Full-Featured (2-3 hours)
-- Add ABAC conditions
-- Implement context-aware roles
-- Configure `REDIS_URL` for Redis-backed counters and permission caching
-- Optimize performance
+### 3. Explore ABAC (optional)
+- Add ABAC conditions via the cookbook example
+- Enable `enable_abac=True` on EnterpriseRBAC when you need it in-product
+- Configure `REDIS_URL` for production counters and permission caching
 
 ---
 
 ## Example Comparison
 
-| Feature | SimpleRBAC | EnterpriseRBAC | Full-Featured |
+| Feature | SimpleRBAC | EnterpriseRBAC | ABAC Cookbook |
 |---------|-----------|----------------|---------------|
-| **Authentication** | ✅ JWT | ✅ JWT | ✅ JWT + API Keys |
-| **Roles per User** | 1 | Multiple | Multiple |
-| **Entity Hierarchy** | ❌ | ✅ | ✅ |
+| **Authentication** | ✅ JWT | ✅ JWT + API keys | ✅ JWT |
+| **Roles per User** | Multiple (flat) | Multiple (per entity) | Multiple |
+| **Entity Hierarchy** | ❌ | ✅ | ✅ (minimal) |
 | **Tree Permissions** | ❌ | ✅ | ✅ |
-| **ABAC Conditions** | ❌ | ❌ | ✅ |
-| **Context-Aware Roles** | ❌ | ❌ | ✅ |
-| **Redis Caching** | ❌ | ❌ | ✅ |
-| **Complexity** | Low | Medium | High |
-| **Setup Time** | 15 min | 30 min | 45 min |
-| **Best For** | Simple apps | Enterprises | Complex systems |
+| **ABAC Conditions** | ❌ | Optional flag | ✅ Focus |
+| **Context-Aware Roles** | ❌ | Optional flag | ❌ |
+| **Redis Caching** | Optional | Optional | Optional |
+| **Complexity** | Low | Medium | Intermediate |
+| **Setup Time** | 15 min | 30 min | 20 min |
+| **Best For** | Simple apps | Orgs with hierarchy | Learning ABAC |
+| **Admin UI** | Optional | Optional | Not primary |
+
+Optional shared admin console for Simple/Enterprise hosts:
+[OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) — see [`docs/AUTH_UI.md`](../docs/AUTH_UI.md).
 
 ---
 

@@ -299,20 +299,15 @@ outlabsAuth/
 │   ├── AUTH_UI.md                  # External admin UI repo location and boundary
 │   └── ... (14 design spec files)
 │
-├── docs-library/                   # 📚 USER DOCS (implementation-specific)
-│   ├── 12-Data-Models.md           # Database models
-│   ├── 22-JWT-Tokens.md            # JWT authentication
-│   ├── 48-User-Status-System.md    # User status
-│   ├── 49-Activity-Tracking.md     # DAU/MAU tracking
-│   ├── 95-Testing-Guide.md         # Testing implementation
-│   ├── 97-Observability.md         # Logging & metrics
-│   ├── 98-Metrics-Reference.md     # Metrics catalog
-│   └── 99-Log-Events-Reference.md  # Log events catalog
-│   # Note: Only 9 files - user docs being rebuilt from scratch
+├── docs-library/                   # 📚 USER DOCS (implementer handbook)
+│   ├── README.md                   # Index
+│   ├── 01-Getting-Started.md
+│   ├── 02-Routers-and-Prefixes.md
+│   ├── 03-Configuration.md
+│   └── … topic guides (JWT, invites, observability, …)
 │
-├── ../OutlabsAuthUI                # 🎨 EXTERNAL ADMIN UI REPOSITORY
-│   # Nuxt-based admin UI now maintained outside this repo
-│   # See docs/AUTH_UI.md for the handoff location
+├── ../OutlabsAuthUI                # 🎨 SISTER ADMIN UI (Vite/React)
+│   # https://github.com/outlabsio/OutlabsAuthUI — see docs/AUTH_UI.md
 │
 │
 ├── outlabs_auth/                   # 📦 THE LIBRARY PACKAGE
@@ -587,13 +582,13 @@ All 37 design decisions documented in **DESIGN_DECISIONS.md**:
 
 ## Admin UI
 
-The Nuxt admin UI is no longer stored in this repository.
+[OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) is a sister Vite/React
+admin console (not part of this Python package).
 
-- Repository: `../OutlabsAuthUI`
-- Local workspace path: `/Users/macbookm3/Documents/projects/OutlabsAuthUI`
-- Runs separately from this backend repo
+- Repository: `../OutlabsAuthUI` (local) or https://github.com/outlabsio/OutlabsAuthUI
+- Runs separately; configure `apiBaseUrl` + `authApiPrefix` via `app-config.json`
 
-See **`docs/AUTH_UI.md`** for the current handoff note and repo boundary.
+See **`docs/AUTH_UI.md`** for the plug-in contract and Simple vs Enterprise invite rules.
 
 ---
 
