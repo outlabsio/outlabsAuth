@@ -1,5 +1,11 @@
 # Real Estate Leads Platform - Requirements & Use Cases
 
+> **Historical design note (2026-07):** This document captured the original RE/MAX /
+> Keller Williams scenario planning. The **live** example seed and credentials are
+> ACME Realty + Summit in `reset_test_env.py` — see [README.md](./README.md) and
+> [QUICKSTART.md](./QUICKSTART.md). Keep this file for product/requirements context;
+> do not treat its emails or ports as runnable truth.
+
 **Created**: 2025-01-23
 **Purpose**: Demonstrate OutlabsAuth's entity flexibility through real-world complex scenarios
 **Preset**: EnterpriseRBAC

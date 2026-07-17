@@ -240,12 +240,21 @@ All implementations include these standardized routes:
 - `POST /v1/auth/login` - Login with email/password
 - `POST /v1/auth/refresh` - Refresh access token
 - `POST /v1/auth/logout` - Logout
+- `GET /v1/auth/config` - Preset + feature flags (admin UI discovery)
 - `GET /v1/auth/me` - Get current user info
+- Magic link / access-code / invite routes when those flags are enabled (see OpenAPI)
 
-#### Entity Management ⭐
+#### Sessions, social accounts, audit
+- `GET/DELETE /v1/users/me/sessions` — list / revoke own sessions (also revoke-all)
+- `GET/DELETE /v1/users/{user_id}/sessions` — admin session inventory (`user:read` / `user:update`)
+- `GET/DELETE /v1/users/me/social-accounts` — list / unlink linked OAuth providers
+- `GET /v1/users/{user_id}/audit-events` — per-user audit timeline
+- `GET /v1/audit-events` — cross-user audit search (`get_audit_router`)
+
+#### Entity Management
 - `GET /v1/entities` - List entities
 - `POST /v1/entities` - Create entity
-- `GET /v1/entities/suggestions` - **Get entity type suggestions** ⭐
+- `GET /v1/entities/suggestions` - Entity type suggestions
 - `GET /v1/entities/{entity_id}` - Get entity details
 - `GET /v1/entities/{entity_id}/children` - Get child entities
 - `GET /v1/entities/{entity_id}/descendants` - Get descendant tree
@@ -260,7 +269,7 @@ All implementations include these standardized routes:
   - apply membership validity windows (`valid_from`, `valid_until`)
   - remove one entity membership with audit-preserving soft revoke
 - Permission checking endpoints
-- See Swagger UI for complete list
+- See Swagger UI (`/docs`) for the complete live list
 
 ### Domain-Specific Routes (Lead Management)
 

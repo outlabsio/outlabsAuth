@@ -1,9 +1,15 @@
 # Next Pass Backlog
 
-**Updated**: 2026-06-26
+**Updated**: 2026-07-17
 **Purpose**: Lightweight maintainer backlog for known follow-up work that is too current or too small to keep re-threading through the larger roadmap.
 
 This document is intentionally short. It is not a full project plan. It is a working list of already-known follow-ups that came out of real integration, deployment, and performance work.
+
+## Shipped Since Last Backlog Update (2026-07)
+
+- ✅ **Implementer docs spine** — root README product front door; `docs-library/` Getting Started / routers / configuration / OAuth / sessions+audit / passwordless+messaging; OutlabsAuth UI documented as Vite/React sister console (`docs/AUTH_UI.md`).
+- ✅ **Session inventory + social unlink + audit search APIs** — users-router session/social surfaces; `get_audit_router`; focused integration tests; OAuth-only accounts cannot unlink their last social method.
+- ✅ **Verified-phone access codes + host messaging recipes** — `whatsapp_otp` / `sms_otp` / phone verify; per-channel rate limits; Postmark/Resend mail providers; enterprise Twilio WhatsApp Content + SMS Messages wiring; OAuth SPA redirects / invite-only login DX.
 
 ## Shipped Since Last Backlog Update (2026-06)
 
