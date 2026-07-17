@@ -63,6 +63,7 @@ from outlabs_auth.schemas.oauth import (
     OAuthCallbackError,
     SocialAccountResponse,
 )
+from outlabs_auth.schemas.session import UserSessionResponse
 
 # Permission schemas
 from outlabs_auth.schemas.permission import (
@@ -162,4 +163,6 @@ __all__ = [
     "OAuthAuthorizeResponse",
     "OAuthCallbackError",
     "SocialAccountResponse",
+    # Sessions
+    "UserSessionResponse",
 ]

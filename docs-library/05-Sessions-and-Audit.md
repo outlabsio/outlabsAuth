@@ -48,9 +48,12 @@ plus `get_users_router` for session list/revoke.
 
 ## Audit events
 
-User-centric audit is driven by `user_audit_service` when present on the auth
-instance. Enable audit logging via config when your deployment expects it
-(`enable_audit_log` and related wiring — see `AuthConfig` / status docs).
+User-centric audit is driven by `user_audit_service`, which is created during
+`auth.initialize()` (always available after init). Mount the routers below to
+expose it over HTTP.
+
+`enable_audit_log` on `AuthConfig` is a separate/legacy feature-status flag — it
+does **not** gate these routes.
 
 ### Per-user history
 

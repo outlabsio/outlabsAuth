@@ -10,7 +10,7 @@ from typing import Any, List, Optional, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -57,6 +57,10 @@ from outlabs_auth.utils.rate_limit import (
 )
 from outlabs_auth.routers._api_key_response import build_api_key_responses
 from outlabs_auth.schemas.api_key import ApiKeyResponse
+from outlabs_auth.models.sql.social_account import SocialAccount
+from outlabs_auth.oauth.exceptions import CannotUnlinkLastMethodError
+from outlabs_auth.schemas.oauth import SocialAccountResponse
+from outlabs_auth.schemas.session import UserSessionResponse
 from outlabs_auth.schemas.user_role_membership import (
     AssignRoleRequest,
     UserRoleMembershipDetailResponse,
@@ -626,6 +630,205 @@ def get_users_router(
         except Exception as e:
             obs.log_500_error(e)
             raise
+
+    def _serialize_user_session(token: Any) -> UserSessionResponse:
+        return UserSessionResponse(
+            id=token.id,
+            device_name=token.device_name,
+            ip_address=token.ip_address,
+            user_agent=token.user_agent,
+            created_at=token.created_at,
+            last_used_at=token.last_used_at,
+            expires_at=token.expires_at,
+            usage_count=int(token.usage_count or 0),
+        )
+
+    async def _record_admin_session_revoke_audit(
+        session: AsyncSession,
+        *,
+        actor_user: Any,
+        subject_user: Any,
+        session_id: Optional[UUID],
+        revoked_count: int,
+        reason: str,
+        request: Optional[Request] = None,
+    ) -> None:
+        if not getattr(auth, "user_audit_service", None) or revoked_count <= 0:
+            return
+        await auth.user_audit_service.record_event(
+            session,
+            event_category="authentication",
+            event_type="user.sessions_revoked",
+            event_source="users_router.revoke_user_sessions",
+            subject_user_id=subject_user.id,
+            subject_email_snapshot=subject_user.email,
+            actor_user_id=actor_user.id,
+            root_entity_id=getattr(subject_user, "root_entity_id", None),
+            ip_address=request.client.host if request and request.client else None,
+            user_agent=request.headers.get("user-agent") if request else None,
+            reason=reason,
+            after={
+                "revoked_count": revoked_count,
+                "session_id": str(session_id) if session_id else None,
+            },
+            metadata={"admin_action": True},
+        )
+
+    @router.get(
+        "/me/sessions",
+        response_model=List[UserSessionResponse],
+        summary="List my active sessions",
+        description="List the authenticated user's active refresh-token sessions.",
+    )
+    async def list_my_sessions(
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
+    ):
+        tokens = await auth.auth_service.list_user_sessions(
+            session, UUID(str(auth_result["user_id"]))
+        )
+        return [_serialize_user_session(token) for token in tokens]
+
+    @router.delete(
+        "/me/sessions/{session_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Revoke one of my sessions",
+        description="Revoke a single active session belonging to the authenticated user.",
+    )
+    async def revoke_my_session(
+        session_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
+    ):
+        try:
+            await auth.auth_service.revoke_user_session(
+                session,
+                UUID(str(auth_result["user_id"])),
+                session_id,
+                reason="User revoked session",
+            )
+            return None
+        except TokenInvalidError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Session not found",
+            ) from exc
+
+    @router.delete(
+        "/me/sessions",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Revoke all of my sessions",
+        description="Revoke every active refresh-token session for the authenticated user.",
+    )
+    async def revoke_all_my_sessions(
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
+    ):
+        await auth.auth_service.revoke_all_user_tokens(
+            session,
+            UUID(str(auth_result["user_id"])),
+            reason="User revoked all sessions",
+        )
+        return None
+
+    def _to_social_account_response(account: SocialAccount) -> SocialAccountResponse:
+        return SocialAccountResponse(
+            id=account.id,
+            provider=account.provider,
+            provider_user_id=account.provider_user_id,
+            email=account.provider_email or "",
+            email_verified=account.provider_email_verified,
+            display_name=account.display_name,
+            avatar_url=account.avatar_url,
+            linked_at=account.created_at.isoformat(),
+            last_used_at=(
+                account.last_login_at.isoformat() if account.last_login_at else None
+            ),
+        )
+
+    @router.get(
+        "/me/social-accounts",
+        response_model=List[SocialAccountResponse],
+        summary="List my linked social accounts",
+        description="List OAuth/social accounts linked to the authenticated user.",
+    )
+    async def list_my_social_accounts(
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
+    ):
+        user_id = UUID(str(auth_result["user_id"]))
+        result = await session.execute(
+            select(SocialAccount)
+            .where(cast(Any, SocialAccount.user_id) == user_id)
+            .order_by(cast(Any, SocialAccount.created_at).desc())
+        )
+        return [_to_social_account_response(account) for account in result.scalars().all()]
+
+    @router.delete(
+        "/me/social-accounts/{account_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Unlink a social account",
+        description=(
+            "Unlink one OAuth/social account from the authenticated user. "
+            "Fails if it would remove the last authentication method."
+        ),
+    )
+    async def unlink_my_social_account(
+        account_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        auth_result=Depends(auth.deps.require_auth(verified=requires_verification)),
+    ):
+        user_id = UUID(str(auth_result["user_id"]))
+        user = await auth.user_service.get_user_by_id(session, user_id)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated",
+            )
+
+        account_result = await session.execute(
+            select(SocialAccount).where(
+                cast(Any, SocialAccount.id) == account_id,
+                cast(Any, SocialAccount.user_id) == user_id,
+            )
+        )
+        account = account_result.scalar_one_or_none()
+        if account is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Social account not found",
+            )
+
+        remaining_accounts = await session.execute(
+            select(func.count())
+            .select_from(SocialAccount)
+            .where(cast(Any, SocialAccount.user_id) == user_id)
+        )
+        social_count = int(remaining_accounts.scalar_one())
+        # Usable password login is tracked via auth_methods, not merely a hash
+        # (OAuth self-register used to leave a placeholder hash + PASSWORD flag).
+        has_password_login = bool(
+            getattr(user, "has_auth_method", None)
+            and user.has_auth_method("PASSWORD")
+            and getattr(user, "hashed_password", None)
+        )
+        if social_count <= 1 and not has_password_login:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(CannotUnlinkLastMethodError()),
+            )
+
+        await session.delete(account)
+
+        provider_method = str(account.provider).upper()
+        methods = [
+            method
+            for method in list(getattr(user, "auth_methods", None) or [])
+            if str(method).upper() != provider_method
+        ]
+        user.auth_methods = methods
+        await session.flush()
+        return None
 
     @router.get(
         "/orphaned",
@@ -1540,6 +1743,137 @@ def get_users_router(
                 target_user_id=str(user_id),
                 membership_id=str(membership_id),
             )
+            raise
+
+    @router.get(
+        "/{user_id}/sessions",
+        response_model=List[UserSessionResponse],
+        summary="List a user's active sessions",
+        description=(
+            "List active refresh-token sessions for a user (requires user:read permission). "
+            "Does not return token secrets."
+        ),
+    )
+    async def list_user_sessions_endpoint(
+        user_id: UUID,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:read"),
+            )
+        ),
+    ):
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            await _get_target_user_or_404(session, user_id, actor_user)
+            tokens = await auth.auth_service.list_user_sessions(session, user_id)
+            return [_serialize_user_session(token) for token in tokens]
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
+            raise
+
+    @router.delete(
+        "/{user_id}/sessions/{session_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Revoke a user's session",
+        description="Revoke one active session for a user (requires user:update permission).",
+    )
+    async def revoke_user_session_endpoint(
+        user_id: UUID,
+        session_id: UUID,
+        request: Request,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            subject_user = await _get_target_user_or_404(
+                session, user_id, actor_user, for_mutation=True
+            )
+            reason = "Session revoked by admin"
+            try:
+                revoked_count = await auth.auth_service.revoke_user_session(
+                    session,
+                    user_id,
+                    session_id,
+                    reason=reason,
+                )
+            except TokenInvalidError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Session not found",
+                ) from exc
+
+            await _record_admin_session_revoke_audit(
+                session,
+                actor_user=actor_user,
+                subject_user=subject_user,
+                session_id=session_id,
+                revoked_count=revoked_count,
+                reason=reason,
+                request=request,
+            )
+            return None
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(
+                e,
+                target_user_id=str(user_id),
+                session_id=str(session_id),
+            )
+            raise
+
+    @router.delete(
+        "/{user_id}/sessions",
+        status_code=status.HTTP_204_NO_CONTENT,
+        summary="Revoke all of a user's sessions",
+        description="Revoke every active session for a user (requires user:update permission).",
+    )
+    async def revoke_all_user_sessions_endpoint(
+        user_id: UUID,
+        request: Request,
+        session: AsyncSession = Depends(auth.uow),
+        obs: ObservabilityContext = Depends(
+            get_observability_with_auth(
+                auth.observability,
+                auth.deps.require_permission("user:update"),
+            )
+        ),
+    ):
+        try:
+            actor_user = await _get_actor_user_or_401(session, obs.user_id)
+            subject_user = await _get_target_user_or_404(
+                session, user_id, actor_user, for_mutation=True
+            )
+            reason = "All sessions revoked by admin"
+            revoked_count = await auth.auth_service.revoke_all_user_tokens(
+                session,
+                user_id,
+                reason=reason,
+            )
+            await _record_admin_session_revoke_audit(
+                session,
+                actor_user=actor_user,
+                subject_user=subject_user,
+                session_id=None,
+                revoked_count=revoked_count,
+                reason=reason,
+                request=request,
+            )
+            return None
+        except HTTPException:
+            raise
+        except Exception as e:
+            obs.log_500_error(e, target_user_id=str(user_id))
             raise
 
     @router.get(
