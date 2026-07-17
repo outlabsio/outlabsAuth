@@ -30,6 +30,7 @@ that as a docs bug).
 3. [Choosing Simple vs Enterprise](./07-Choosing-a-Preset.md) — pick a preset
 4. Run an [example](../examples/) that matches your preset
 5. Optionally plug in [OutlabsAuth UI](../docs/AUTH_UI.md)
+6. Before production: [Deployment](./08-Deployment.md)
 
 ### Adding features to an existing integration?
 
@@ -64,6 +65,7 @@ JWT behavior, data models, metrics, and log event catalogs live under
 | [00 — Introduction](./00-Introduction.md) | What the library is, what it is not, and how the pieces fit |
 | [01 — Getting Started](./01-Getting-Started.md) | Install → migrate → mount → login → optional admin UI |
 | [07 — Choosing a Preset](./07-Choosing-a-Preset.md) | SimpleRBAC vs EnterpriseRBAC in plain language |
+| [08 — Deployment](./08-Deployment.md) | Production migrate, Redis, multi-worker checklist |
 | [13 — Core Authorization Concepts](./13-Core-Authorization-Concepts.md) | Users, roles, permissions, entities, tree access |
 
 ### Build & configure
@@ -72,6 +74,7 @@ JWT behavior, data models, metrics, and log event catalogs live under
 |-------|---------|
 | [02 — Routers & Prefixes](./02-Routers-and-Prefixes.md) | Which `get_*_router` factories to mount and how prefixes work |
 | [03 — Configuration](./03-Configuration.md) | Secrets, schema, Redis, in-process cache, CLI, production defaults |
+| [08 — Deployment](./08-Deployment.md) | Production checklist (migrate once, Redis, workers) |
 
 ### Auth features
 
@@ -129,7 +132,7 @@ folder 1:1. Suggested nav:
 
 | Nav section | Handbook sources |
 |-------------|------------------|
-| **Get started** | `00`, `01`, `07` |
+| **Get started** | `00`, `01`, `07`, `08` |
 | **Build** | `02`, `03` |
 | **Auth** | `04`, `05`, `06`, `22`, `23`, `24`, `25`, `26`, `48` |
 | **Enterprise** | `13`, `51`, `54` |

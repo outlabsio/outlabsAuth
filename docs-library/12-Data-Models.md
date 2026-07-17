@@ -1687,27 +1687,14 @@ async with auth.get_session() as session:
 
 ## Summary
 
-**Core Models**:
-- ✅ **User** - User accounts and authentication
-- ✅ **Role** - Roles (permissions via the `role_permissions` junction)
-- ✅ **Permission** - Permission definitions
-- ✅ **RefreshToken** - JWT refresh tokens with rotation families
-- ✅ **APIKey** - API key authentication
-- ✅ **SocialAccount** - OAuth/social login accounts
-- ✅ **IntegrationPrincipal** - Non-human principals
+| Area | Models |
+|------|--------|
+| Auth core | `User`, `Role`, `Permission`, `RefreshToken`, `APIKey`, `SocialAccount`, `IntegrationPrincipal` |
+| Enterprise | `Entity`, `EntityMembership`, `EntityClosure` |
+| ABAC | `RoleCondition`, `PermissionCondition`, `ConditionGroup` |
 
-**EnterpriseRBAC Models**:
-- ✅ **Entity** - Organizational entities
-- ✅ **EntityMembership** - User memberships (roles via `entity_membership_roles`)
-- ✅ **EntityClosure** - Closure table for ancestor/descendant queries
-
-**ABAC Models**:
-- ✅ **RoleCondition** / **PermissionCondition** - ABAC conditions (own tables)
-- ✅ **ConditionGroup** - Condition groups with AND/OR
-
-**Database**: PostgreSQL with SQLAlchemy/SQLModel (async, asyncpg)
-**Tables**: 33 in the `outlabs_auth` schema; the created subset depends on the feature flags
-**Migrations**: Alembic (`outlabs_auth/migrations/versions/`)
+**Database:** PostgreSQL + SQLAlchemy/SQLModel (asyncpg). Table subset depends on
+feature flags. Migrations: `outlabs_auth/migrations/versions/`.
 
 ---
 
