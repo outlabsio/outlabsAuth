@@ -139,5 +139,6 @@ Pass `observability_config=` (see `ObservabilityConfig` / presets) and call
 ## Related
 
 - [Getting Started](./01-Getting-Started.md)
+- [Deployment](./08-Deployment.md)
 - [Routers & Prefixes](./02-Routers-and-Prefixes.md)
 - [OutlabsAuth UI](../docs/AUTH_UI.md)
