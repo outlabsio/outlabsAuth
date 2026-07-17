@@ -28,8 +28,37 @@ auth = EnterpriseRBAC(
 |---------|----------|
 | `database_schema` | Keep auth tables in a dedicated schema (e.g. `outlabs_auth`) |
 | `auto_migrate` | `False` in multi-worker runtime; migrate via CLI in prestart |
-| `redis_url` | Enables counters, rate limits, and permission caching |
+| `redis_url` | Enables counters, rate limits, and shared (`cache_backend='redis'`) permission caching |
+| `cache_backend` | `redis` (multi-instance), `memory` (single-process, no Redis), or `none` |
 | Mount prefix | App-owned, e.g. `/iam` or `/v1` — keep consistent with OutlabsAuth UI `authApiPrefix` |
+
+### Cache backends (DD-057)
+
+| Backend | When to use | Invalidation |
+|---------|-------------|--------------|
+| `redis` | Multi-instance / multi-worker production | Instant via Redis pub/sub version bumps |
+| `memory` | Single-process hosts that want cache without Redis | Instant in-process; TTL-bounded across processes |
+| `none` | No cross-request permission cache | N/A |
+
+```python
+# Single-instance, no Redis
+auth = SimpleRBAC(
+    database_url=...,
+    secret_key=...,
+    cache_backend="memory",
+)
+
+# Multi-instance (default when redis_url is set)
+auth = EnterpriseRBAC(
+    database_url=...,
+    secret_key=...,
+    redis_url="redis://cache-host:6379/0",
+    redis_key_prefix="outlabs-auth:prod:myapp",
+)
+```
+
+Do **not** use `memory` when multiple workers/instances must see each other's
+permission invalidations immediately — use `redis` instead.
 
 Prefer a **direct** Postgres URL over provider transaction-pooler (`-pooler`)
 endpoints for auth-heavy traffic. Details: root README + [`docs/DEPLOYMENT_GUIDE.md`](../docs/DEPLOYMENT_GUIDE.md).
@@ -83,12 +112,14 @@ outlabs-auth current          # current Alembic revision
 
 ## Redis
 
-Providing `redis_url` typically enables Redis features and caching unless you
-explicitly set `redis_enabled=False` or `enable_caching=False`.
+Providing `redis_url` typically enables Redis features, `cache_backend='redis'`,
+and caching unless you explicitly set `redis_enabled=False` or
+`enable_caching=False`.
 
-Without Redis, the library still runs; permission checks hit Postgres every time.
-Use Redis in production when you care about API-key counters and hot-path authz
-latency.
+Without Redis you can still enable permission caching with
+`cache_backend='memory'` (single-instance). Otherwise permission checks hit
+Postgres every time. Use Redis in production when you need shared API-key
+counters and multi-instance cache invalidation.
 
 ## Observability
 

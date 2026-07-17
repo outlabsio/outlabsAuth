@@ -57,6 +57,7 @@ For short-horizon maintainer follow-ups that are known but not yet folded back i
 - Phone verify OTP is self-service on `get_users_router` (`/me/phone/request-code`, `/me/phone/verify-code`) using `phone_verify`.
 - Delivery remains host-owned (intents/hooks + transactional mail). Enterprise example wires console/Twilio WhatsApp Content + SMS Messages recipes.
 - Bundled transactional mail providers now include Postmark and Resend in addition to SMTP/SendGrid/Mailgun.
+- Permission caching supports `cache_backend='memory'` for single-instance hosts without Redis (DD-057). Multi-instance hosts should keep `cache_backend='redis'` (default when `redis_url` is set).
 
 ### User Audit and Membership History
 

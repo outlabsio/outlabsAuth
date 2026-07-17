@@ -232,8 +232,23 @@ class AuthConfig(BaseModel):
         pattern=r"^[A-Za-z0-9][A-Za-z0-9:_-]*$",
         description=(
             "Required unique application/environment namespace for every Redis key and Pub/Sub channel "
-            "when Redis is enabled, for example 'outlabs-auth:production:billing-api'."
+            "when Redis is enabled, for example 'outlabs-auth:production:billing-api'. "
+            "Also used to namespace in-process memory cache keys when cache_backend='memory'."
         ),
+    )
+    cache_backend: Literal["redis", "memory", "none"] = Field(
+        default="none",
+        description=(
+            "Permission-cache storage (DD-057). "
+            "'redis' shares cache + pub/sub across instances; "
+            "'memory' is an in-process bounded TTL cache for single-instance hosts; "
+            "'none' disables cross-request permission caching."
+        ),
+    )
+    cache_memory_max_entries: int = Field(
+        default=10_000,
+        ge=100,
+        description="Max entries for cache_backend='memory' (LRU eviction after this size)",
     )
 
     # Cache TTL Settings
@@ -344,11 +359,13 @@ class AuthConfig(BaseModel):
     @model_validator(mode="after")
     def _resolve_redis_defaults(self) -> Self:
         """
-        Treat Redis configuration as the source of truth while preserving explicit opt-outs.
+        Treat Redis / cache_backend configuration as the source of truth while
+        preserving explicit opt-outs (DD-048, DD-057).
 
         Direct AuthConfig construction should behave the same as OutlabsAuth:
         providing redis_url enables Redis features and permission caching unless
         the caller explicitly sets redis_enabled=False or enable_caching=False.
+        cache_backend='memory' enables in-process caching without Redis.
         """
         fields_set = self.model_fields_set
 
@@ -358,8 +375,25 @@ class AuthConfig(BaseModel):
         if self.redis_enabled and "enable_caching" not in fields_set:
             object.__setattr__(self, "enable_caching", True)
 
-        if self.enable_caching and not self.redis_enabled:
-            raise ValueError("enable_caching=True requires Redis; provide redis_url or redis_enabled=True")
+        if self.redis_enabled and "cache_backend" not in fields_set:
+            object.__setattr__(self, "cache_backend", "redis")
+
+        if self.cache_backend == "memory" and "enable_caching" not in fields_set:
+            object.__setattr__(self, "enable_caching", True)
+
+        if self.cache_backend == "memory" and not self.redis_key_prefix:
+            object.__setattr__(self, "redis_key_prefix", "outlabs-auth:memory")
+
+        if self.enable_caching:
+            if self.cache_backend == "none":
+                raise ValueError(
+                    "enable_caching=True requires cache_backend='redis' (with redis_url/"
+                    "redis_enabled) or cache_backend='memory' for in-process caching"
+                )
+            if self.cache_backend == "redis" and not self.redis_enabled:
+                raise ValueError(
+                    "cache_backend='redis' requires Redis; provide redis_url or redis_enabled=True"
+                )
 
         if self.redis_enabled and not self.redis_key_prefix:
             raise ValueError(

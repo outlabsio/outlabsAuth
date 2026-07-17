@@ -18,7 +18,7 @@ Most auth products push you into a separate IdP or a black-box service. OutlabsA
 | Two presets | **SimpleRBAC** (flat roles) or **EnterpriseRBAC** (entity hierarchy + tree permissions) |
 | Auth surface | JWT access/refresh, API keys, service tokens, invitations, optional OAuth / magic link / access codes |
 | Admin console | Optional sister app [OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) — point it at any host that mounts this library |
-| Ops | Packaged Alembic migrations, CLI bootstrap, Redis-backed caches when you need them |
+| Ops | Packaged Alembic migrations, CLI bootstrap, Redis when needed, optional in-process permission cache (`cache_backend="memory"`) |
 
 ## Documentation
 
@@ -175,7 +175,9 @@ exec uvicorn myapp.main:app --host 0.0.0.0 --port 8000 --workers 2
 
 ## Status
 
-**Library version**: 0.1.0a24 · **Stage**: Alpha
+**Current Library Version**: 0.1.0a24
+
+**Release Stage**: Alpha
 
 ## License
 

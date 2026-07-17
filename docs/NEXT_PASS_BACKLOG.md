@@ -10,6 +10,7 @@ This document is intentionally short. It is not a full project plan. It is a wor
 - ✅ **Implementer docs spine** — root README product front door; `docs-library/` Getting Started / routers / configuration / OAuth / sessions+audit / passwordless+messaging; OutlabsAuth UI documented as Vite/React sister console (`docs/AUTH_UI.md`).
 - ✅ **Session inventory + social unlink + audit search APIs** — users-router session/social surfaces; `get_audit_router`; focused integration tests; OAuth-only accounts cannot unlink their last social method.
 - ✅ **Verified-phone access codes + host messaging recipes** — `whatsapp_otp` / `sms_otp` / phone verify; per-channel rate limits; Postmark/Resend mail providers; enterprise Twilio WhatsApp Content + SMS Messages wiring; OAuth SPA redirects / invite-only login DX.
+- ✅ **DD-057 cache backend abstraction** — `cache_backend: redis | memory | none`; in-process `MemoryCacheBackend` for single-instance hosts without Redis.
 
 ## Shipped Since Last Backlog Update (2026-06)
 
@@ -22,7 +23,18 @@ Recorded so this backlog reflects reality after the June release train (this lis
 
 The forward-looking items in "Runtime Performance Follow-Ups" below remain open and were intentionally left as-is.
 
-## Cache Backend Abstraction (Redis-Optional Caching) — PROPOSED
+## Cache Backend Abstraction (Redis-Optional Caching) — SHIPPED
+
+**Status**: Shipped 2026-07-17 (DD-057). Use `cache_backend='memory'` for
+single-instance hosts; `redis` remains the multi-instance default when
+`redis_url` is set. See `outlabs_auth/services/cache_backend.py` and
+`docs-library/03-Configuration.md`.
+
+Historical proposal notes retained below for context; implementation follows
+the DD-057 decision in `DESIGN_DECISIONS.md`.
+
+<details>
+<summary>Original proposal text</summary>
 
 **Status**: Proposed, not started. Direction accepted 2026-06-26. Design recorded in **DD-057** (`docs/DESIGN_DECISIONS.md`).
 
@@ -39,6 +51,8 @@ The forward-looking items in "Runtime Performance Follow-Ups" below remain open 
 - Document the three backends and the single-instance (instant invalidation) vs multi-instance (TTL-bounded staleness) contract in `README` + `CURRENT_IMPLEMENTATION_STATUS.md`.
 
 **Explicitly out of scope (future extension)**: multi-instance-without-Redis via epoch counters held in Postgres + `LISTEN/NOTIFY` fan-out, layered over the in-process payload cache. Only worth it to remove Redis from multi-instance deployments; single-instance `memory` does not need it.
+
+</details>
 
 ## Release-Ready Auth Perf Slice
 

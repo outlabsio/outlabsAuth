@@ -3626,7 +3626,7 @@ Entities do not store live direct permission grants. Access is granted through:
 ## DD-057: Cache Backend Abstraction (Redis-Optional Permission Caching)
 
 **Date**: 2026-06-26
-**Status**: Proposed (direction accepted 2026-06-26; implementation pending — task breakdown in `docs/NEXT_PASS_BACKLOG.md`)
+**Status**: Accepted / shipped 2026-07-17 (implementation in `cache_backend.py` + `AuthConfig.cache_backend`)
 **Deciders**: Maintainer
 **Context**: Permission/authorization caching is currently Redis-only. `AuthConfig` rejects `enable_caching=True` unless `redis_enabled` (`core/config.py` `_resolve_redis_defaults`), `CacheService` is constructed with a `RedisClient` (`core/auth.py:552-554`), and every `CacheService` method early-returns a miss/no-op when `redis_client.is_available` is False. The practical effect: with Redis disabled there is **no cross-request cache at all** — every authorization check runs full resolution against Postgres (closure-table ancestor walk, role/permission aggregation, optional ABAC evaluation). The gap is large and measured: the benchmark table in `NEXT_PASS_BACKLOG.md` shows the API-key dependency paths at 12–21 SQL queries / ~80–144 ms p95 with Redis off versus 0 queries / ~4–8 ms with the Redis cache warm. Single-instance consumers that do not want to operate a Redis server (the personal/Outlabs stack on a home server; small OSS adopters) therefore either run an unnecessary Redis or eat the uncached cost — and on a remote-Postgres (Neon) deployment the uncached cost is worse, since each check crosses the network.
 
