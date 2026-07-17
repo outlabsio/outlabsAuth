@@ -41,6 +41,8 @@ that as a docs bug).
 | Let users see / revoke devices | [Sessions & audit](./05-Sessions-and-Audit.md) |
 | Magic links, OTPs, WhatsApp/SMS | [Passwordless & messaging](./06-Passwordless-and-Messaging.md) |
 | Invite users by email | [User invitations](./24-User-Invitations.md) |
+| Manage the org tree (Enterprise) | [Entities](./51-Entities.md) |
+| Assign users to entities | [Entity memberships](./54-Entity-Memberships.md) |
 | Issue API keys from the host app | [API key host integration](./50-API-Key-Host-Integration.md) |
 | Understand roles / entities | [Core authorization concepts](./13-Core-Authorization-Concepts.md) |
 
@@ -77,8 +79,10 @@ JWT behavior, data models, metrics, and log event catalogs live under
 | [05 — Sessions & Audit](./05-Sessions-and-Audit.md) | Active sessions and searching user audit events |
 | [06 — Passwordless & Messaging](./06-Passwordless-and-Messaging.md) | Magic links, access codes, phone channels, host delivery |
 | [24 — User Invitations](./24-User-Invitations.md) | Invite-by-email onboarding |
+| [23 — User Management API](./23-User-Management-API.md) | Admin + self-service user HTTP surface |
 | [48 — User Status](./48-User-Status-System.md) | Active, invited, suspended, deleted, and related states |
 | [50 — API Keys (Host Integration)](./50-API-Key-Host-Integration.md) | Personal and system keys for host apps |
+| [51 — Entities](./51-Entities.md) | Enterprise org tree CRUD, move, children, path |
 | [54 — Entity Memberships](./54-Entity-Memberships.md) | Enterprise membership lifecycle |
 
 ### Admin console
@@ -93,7 +97,6 @@ JWT behavior, data models, metrics, and log event catalogs live under
 |-------|---------|
 | [12 — Data Models](./12-Data-Models.md) | Postgres / SQLModel schema reference |
 | [22 — JWT Tokens](./22-JWT-Tokens.md) | Access and refresh token behavior |
-| [23 — User Management API](./23-User-Management-API.md) | Admin + self-service user HTTP surface |
 | [49 — Activity Tracking](./49-Activity-Tracking.md) | DAU / MAU style activity metrics |
 | [95 — Testing](./95-Testing-Guide.md) | How to test hosts and the library |
 | [97 — Observability](./97-Observability.md) | Metrics and logging for host apps |
@@ -109,6 +112,27 @@ JWT behavior, data models, metrics, and log event catalogs live under
 | [SimpleRBAC blog API](../examples/simple_rbac/) | 8003 | Flat roles, quick local loop |
 | [EnterpriseRBAC leads API](../examples/enterprise_rbac/) | 8004 | Hierarchy, memberships, richer admin mounts |
 | [ABAC cookbook](../examples/abac_cookbook/) | 8005 | Attribute conditions |
+
+---
+
+## Future docs site (Nuxt) — information architecture
+
+When we stand up a public docs site (Nuxt + docs UI template), mirror this
+folder 1:1. Suggested nav:
+
+| Nav section | Handbook sources |
+|-------------|------------------|
+| **Get started** | `00`, `01`, `07` |
+| **Build** | `02`, `03` |
+| **Auth** | `04`, `05`, `06`, `22`, `23`, `24`, `48` |
+| **Enterprise** | `13`, `51`, `54` |
+| **Integrations** | `50`, `AUTH_UI.md` (or a short UI page copied from `docs/`) |
+| **Reference** | `12`, `49`, `95`, `97`–`99` |
+| **Examples** | Link out to `examples/` (or embed READMEs) |
+
+Keep maintainer `docs/` off the public nav (or behind a “Contributing” section).
+One Markdown file ≈ one docs route; frontmatter can be added later without
+renumbering.
 
 ---
 

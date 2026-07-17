@@ -227,6 +227,7 @@ inside one membership share the same membership lifecycle window.
 
 ## Related
 
+- [Entities](./51-Entities.md) — org tree CRUD and navigation
 - [Core Authorization Concepts](./13-Core-Authorization-Concepts.md)
 - [User Management API](./23-User-Management-API.md) — orphans + membership history
 - [Choosing a Preset](./07-Choosing-a-Preset.md)

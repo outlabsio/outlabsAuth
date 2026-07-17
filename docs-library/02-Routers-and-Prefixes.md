@@ -153,5 +153,7 @@ Trust the running app:
 
 - [Getting Started](./01-Getting-Started.md)
 - [User Management API](./23-User-Management-API.md)
+- [Entities](./51-Entities.md)
+- [Entity Memberships](./54-Entity-Memberships.md)
 - [Configuration](./03-Configuration.md)
 - [OutlabsAuth UI](../docs/AUTH_UI.md)
