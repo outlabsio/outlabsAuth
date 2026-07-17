@@ -4,23 +4,23 @@
 > Part of the [OutlabsAuth Handbook](./README.md). Setup:
 > [Observability](./97-Observability.md).
 
+Lookup page — jump to the `event` name you need. For integration modes and host
+ownership rules, start with [97](./97-Observability.md).
+
 ## Overview
 
-OutlabsAuth emits structured log events for all critical authentication and authorization operations. Each event has a consistent schema with standard fields plus event-specific data.
+OutlabsAuth emits structured log events for auth-domain operations. Each event
+has a consistent schema plus event-specific fields.
 
-**Standard Fields (All Events):**
-- `timestamp` - ISO 8601 timestamp (UTC)
-- `level` - Log level (debug, info, warning, error, critical)
-- `event` - Event name (e.g., `user_login_success`)
-- `correlation_id` - Request correlation ID for distributed tracing
-- `service` - Service name (always `outlabs_auth`)
+**Standard fields (most events):**
+- `timestamp` — ISO 8601 UTC
+- `level` — debug / info / warning / error / critical
+- `event` — event name (e.g. `user_login_success`)
+- `correlation_id` — request correlation id when present
+- `service` — typically `outlabs_auth`
 
-**Optional Fields (When Available):**
-- `user_id` - User's ID
-- `email` - User's email address (if not redacted)
-- `ip_address` - Client IP address
-- `user_agent` - Client user agent string
-- `duration_ms` - Operation duration in milliseconds
+**Often present:** `user_id`, `email` (if not redacted), `ip_address`,
+`user_agent`, `duration_ms`.
 
 ---
 

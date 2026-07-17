@@ -95,7 +95,7 @@ Enterprise tips:
 ### ABAC on roles (when enabled)
 
 Under `/{role_id}/condition-groups` and `/{role_id}/conditions` — CRUD with
-`role:read` / `role:update`. Meaningful when `enable_abac=True`.
+`role:read` / `role:update`. Walkthrough: [ABAC](./26-ABAC.md).
 
 ---
 
@@ -118,11 +118,13 @@ Under `/{role_id}/condition-groups` and `/{role_id}/conditions` — CRUD with
    **Enterprise:** `POST /v1/memberships/` with `role_ids`; use
    `GET /v1/roles/entity/{entity_id}` in the UI.
 4. Gate product UI with `POST /v1/permissions/check` (and `entity_id` when needed).
+5. Optional attribute conditions: [ABAC](./26-ABAC.md).
 
 ## Related
 
 - [Routers & Prefixes](./02-Routers-and-Prefixes.md)
 - [User Management API](./23-User-Management-API.md)
+- [ABAC](./26-ABAC.md)
 - [Entities](./51-Entities.md)
 - [Entity Memberships](./54-Entity-Memberships.md)
 - [Core Authorization Concepts](./13-Core-Authorization-Concepts.md)

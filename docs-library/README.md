@@ -43,6 +43,7 @@ that as a docs bug).
 | Invite users by email | [User invitations](./24-User-Invitations.md) |
 | Manage the org tree (Enterprise) | [Entities](./51-Entities.md) |
 | Assign users to entities | [Entity memberships](./54-Entity-Memberships.md) |
+| Add attribute conditions (ABAC) | [ABAC](./26-ABAC.md) |
 | Issue API keys from the host app | [API key host integration](./50-API-Key-Host-Integration.md) |
 | Understand roles / entities | [Core authorization concepts](./13-Core-Authorization-Concepts.md) |
 | Define roles & permission catalog | [Roles & permissions](./25-Roles-and-Permissions.md) |
@@ -82,6 +83,7 @@ JWT behavior, data models, metrics, and log event catalogs live under
 | [24 — User Invitations](./24-User-Invitations.md) | Invite-by-email onboarding |
 | [23 — User Management API](./23-User-Management-API.md) | Admin + self-service user HTTP surface |
 | [25 — Roles & Permissions](./25-Roles-and-Permissions.md) | Permission catalog and role definitions |
+| [26 — ABAC](./26-ABAC.md) | Attribute conditions on roles/permissions |
 | [48 — User Status](./48-User-Status-System.md) | Active, invited, suspended, deleted, and related states |
 | [50 — API Keys (Host Integration)](./50-API-Key-Host-Integration.md) | Personal and system keys for host apps |
 | [51 — Entities](./51-Entities.md) | Enterprise org tree CRUD, move, children, path |
@@ -126,7 +128,7 @@ folder 1:1. Suggested nav:
 |-------------|------------------|
 | **Get started** | `00`, `01`, `07` |
 | **Build** | `02`, `03` |
-| **Auth** | `04`, `05`, `06`, `22`, `23`, `24`, `25`, `48` |
+| **Auth** | `04`, `05`, `06`, `22`, `23`, `24`, `25`, `26`, `48` |
 | **Enterprise** | `13`, `51`, `54` |
 | **Integrations** | `50`, `AUTH_UI.md` (or a short UI page copied from `docs/`) |
 | **Reference** | `12`, `49`, `95`, `97`–`99` |

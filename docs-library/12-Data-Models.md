@@ -1306,7 +1306,7 @@ Condition(
 )
 ```
 
-**See**: [[46-ABAC-Policies]] for ABAC guide.
+**See**: [26 — ABAC](./26-ABAC.md) for the implementer guide.
 
 ---
 

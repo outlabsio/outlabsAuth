@@ -94,6 +94,7 @@ Other common toggles:
 
 Passwordless and messaging walkthrough:
 [Passwordless & Messaging](./06-Passwordless-and-Messaging.md).  
+ABAC: [26 — ABAC](./26-ABAC.md).  
 Deep maintainer notes: [`docs/AUTH_EXTENSIONS.md`](../docs/AUTH_EXTENSIONS.md).
 
 ## CLI environment

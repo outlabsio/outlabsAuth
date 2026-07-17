@@ -230,9 +230,10 @@ register_outlabs_exception_handler(app)
 Avoid `exception_handler_mode="global"` unless the auth library should own the
 full exception surface for that app.
 
-## Related Docs
+## Related
 
-- [README.md](../README.md) - installation and integration overview
-- [98-Metrics-Reference.md](98-Metrics-Reference.md) - metrics catalog
-- [99-Log-Events-Reference.md](99-Log-Events-Reference.md) - event catalog
-- [grafana-dashboards/README.md](../grafana-dashboards/README.md) - Grafana setup
+- [Handbook home](./README.md)
+- [Metrics Reference](./98-Metrics-Reference.md)
+- [Log Events Reference](./99-Log-Events-Reference.md)
+- [Configuration](./03-Configuration.md)
+- Portable stack: [`observability/`](../observability/) (Grafana / Prometheus)

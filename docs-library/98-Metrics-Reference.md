@@ -4,20 +4,19 @@
 > Part of the [OutlabsAuth Handbook](./README.md). Setup:
 > [Observability](./97-Observability.md).
 
+Lookup page — jump to the metric name you need. For how to wire registries and
+embedded vs standalone modes, start with [97](./97-Observability.md).
+
 ## Overview
 
-OutlabsAuth exposes Prometheus metrics at the `/metrics` endpoint for monitoring authentication and authorization operations.
+OutlabsAuth registers auth-domain Prometheus metrics. In **embedded** hosts they
+appear on the host’s `/metrics` scrape; in **standalone** demos the library may
+mount `/metrics` itself.
 
-**Metric Types:**
-- **Counter** - Cumulative value that only increases (e.g., total logins)
-- **Histogram** - Distribution of values with buckets (e.g., latency)
-- **Gauge** - Current value that can go up or down (e.g., active sessions)
+**Metric types:** Counter (monotonic), Histogram (distributions), Gauge (up/down).
 
-**Common Labels:**
-- `status` - Operation result (success, failed, denied, etc.)
-- `method` - Authentication method (password, google, api_key, etc.)
-- `permission` - Permission being checked (user:read, post:create, etc.)
-- `result` - Permission check result (granted, denied)
+**Common labels:** `status`, `method`, `permission`, `result` (exact sets vary
+per metric below).
 
 ---
 
