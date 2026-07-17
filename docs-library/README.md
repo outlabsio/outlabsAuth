@@ -15,9 +15,11 @@ language. It is **not** the design-spec tree.
 When a guide and the running code disagree, **trust the code** (and please treat
 that as a docs bug).
 
-> **Coming later:** this handbook is the content source for a public docs site
-> (Nuxt + a docs UI template). Get the structure and wording right here first;
-> the site can mirror these sections almost 1:1.
+> **Coming later:** a public docs site based on the
+> [Nuxt UI docs template](https://github.com/nuxt-ui-templates/docs) lives at
+> [`../outlabsAuth-docs`](../outlabsAuth-docs). Re-port this tree with
+> `python3 scripts/port_handbook.py` there. This folder remains the content
+> source of truth.
 
 ---
 

@@ -24,8 +24,9 @@ Most auth products push you into a separate IdP or a black-box service. OutlabsA
 
 **Implementers** start in the [OutlabsAuth Handbook](./docs-library/)
 (`docs-library/`) — human-readable guides written for people integrating the
-library. A public Nuxt docs site can mirror that tree later; get the content
-right here first.
+library. A Nuxt docs site lives beside this repo at
+[`../outlabsAuth-docs`](../outlabsAuth-docs) (Nuxt UI docs template); re-port
+with `python3 scripts/port_handbook.py` from that project.
 
 | Guide | What it covers |
 |-------|----------------|
