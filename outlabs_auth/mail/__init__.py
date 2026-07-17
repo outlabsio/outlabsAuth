@@ -3,6 +3,8 @@
 from outlabs_auth.mail.composer import AuthMailComposer, DefaultAuthMailComposer
 from outlabs_auth.mail.providers import (
     MailgunMailProvider,
+    PostmarkMailProvider,
+    ResendMailProvider,
     SMTPMailProvider,
     SendGridMailProvider,
     TransactionalMailProvider,
@@ -31,6 +33,8 @@ __all__ = [
     "MailRecipient",
     "MailgunMailProvider",
     "PasswordResetConfirmationMailIntent",
+    "PostmarkMailProvider",
+    "ResendMailProvider",
     "SMTPMailProvider",
     "SendGridMailProvider",
     "TransactionalMailProvider",

@@ -48,6 +48,7 @@ async def test_user_service_sends_access_code_delivery_intent():
     assert len(messaging.intents) == 1
     intent = messaging.intents[0]
     assert intent.challenge_type == "access_code"
+    assert intent.delivery_channel == "email"
     assert intent.secret == "123456"
     assert intent.redirect_url == "/app"
     assert intent.recipient.phone == "+15551234567"
@@ -105,7 +106,7 @@ async def test_console_whatsapp_spike_queues_when_phone_present():
     lines: list[str] = []
     service = ConsoleWhatsAppChallengeMessagingService(output=lines.append)
     intent = AuthChallengeDeliveryIntent(
-        challenge_type="access_code",
+        challenge_type="whatsapp_otp",
         recipient=DeliveryRecipient(
             user_id="user-1",
             email="agent@example.com",
@@ -114,6 +115,7 @@ async def test_console_whatsapp_spike_queues_when_phone_present():
         ),
         secret="123456",
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+        delivery_channel="whatsapp",
     )
 
     result = await service.send_auth_challenge(intent)
@@ -133,13 +135,14 @@ async def test_console_whatsapp_spike_skips_without_phone():
 
     service = ConsoleWhatsAppChallengeMessagingService(output=lambda _line: None)
     intent = AuthChallengeDeliveryIntent(
-        challenge_type="access_code",
+        challenge_type="whatsapp_otp",
         recipient=DeliveryRecipient(
             user_id="user-1",
             email="agent@example.com",
         ),
         secret="123456",
         expires_at=None,
+        delivery_channel="whatsapp",
     )
 
     result = await service.send_auth_challenge(intent)
@@ -164,9 +167,132 @@ async def test_mail_recipient_includes_optional_phone():
 
 
 @pytest.mark.unit
-def test_enterprise_factory_uses_console_without_twilio_env(monkeypatch):
+@pytest.mark.asyncio
+async def test_console_whatsapp_spike_skips_sms_channel():
     from examples.enterprise_rbac.challenge_messaging import (
         ConsoleWhatsAppChallengeMessagingService,
+    )
+
+    service = ConsoleWhatsAppChallengeMessagingService(output=lambda _line: None)
+    intent = AuthChallengeDeliveryIntent(
+        challenge_type="sms_otp",
+        recipient=DeliveryRecipient(
+            user_id="user-1",
+            email="agent@example.com",
+            phone="+15551234567",
+            phone_verified=True,
+        ),
+        secret="123456",
+        expires_at=None,
+        delivery_channel="sms",
+    )
+
+    result = await service.send_auth_challenge(intent)
+
+    assert result.accepted is False
+    assert result.skipped is True
+    assert "SMS challenges are handled by the SMS host path" in (result.error or "")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_console_sms_spike_queues_sms_otp():
+    from examples.enterprise_rbac.challenge_messaging import (
+        ConsoleSmsChallengeMessagingService,
+    )
+
+    lines: list[str] = []
+    service = ConsoleSmsChallengeMessagingService(output=lines.append)
+    intent = AuthChallengeDeliveryIntent(
+        challenge_type="sms_otp",
+        recipient=DeliveryRecipient(
+            user_id="user-1",
+            email="agent@example.com",
+            phone="+15551234567",
+            phone_verified=True,
+        ),
+        secret="654321",
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+        delivery_channel="sms",
+    )
+
+    result = await service.send_auth_challenge(intent)
+
+    assert result.accepted is True
+    assert result.skipped is False
+    assert "+15551234567" in lines[0]
+    assert "654321" in lines[0]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_multiplex_routes_sms_to_sms_provider():
+    from examples.enterprise_rbac.challenge_messaging import (
+        ConsoleSmsChallengeMessagingService,
+        ConsoleWhatsAppChallengeMessagingService,
+        MultiplexChallengeMessagingService,
+    )
+
+    whatsapp_lines: list[str] = []
+    sms_lines: list[str] = []
+    service = MultiplexChallengeMessagingService(
+        whatsapp=ConsoleWhatsAppChallengeMessagingService(output=whatsapp_lines.append),
+        sms=ConsoleSmsChallengeMessagingService(output=sms_lines.append),
+    )
+    intent = AuthChallengeDeliveryIntent(
+        challenge_type="sms_otp",
+        recipient=DeliveryRecipient(
+            user_id="user-1",
+            email="agent@example.com",
+            phone="+15551234567",
+            phone_verified=True,
+        ),
+        secret="999000",
+        expires_at=None,
+        delivery_channel="sms",
+    )
+
+    result = await service.send_auth_challenge(intent)
+
+    assert result.accepted is True
+    assert sms_lines
+    assert not whatsapp_lines
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_user_service_sends_whatsapp_otp_delivery_intent():
+    messaging = RecordingMessagingService()
+    config = AuthConfig(secret_key="x" * 32, access_code_expire_minutes=10)
+    service = UserService(config, transactional_messaging_service=messaging)
+    user = SimpleNamespace(
+        id="11111111-1111-1111-1111-111111111111",
+        email="agent@example.com",
+        first_name="Jane",
+        last_name="Agent",
+        phone="+15551234567",
+        phone_verified=True,
+    )
+
+    sent = await service.send_access_code_delivery(
+        user,
+        "123456",
+        delivery_channel="whatsapp",
+        challenge_type="whatsapp_otp",
+    )
+
+    assert sent is True
+    intent = messaging.intents[0]
+    assert intent.challenge_type == "whatsapp_otp"
+    assert intent.delivery_channel == "whatsapp"
+
+
+@pytest.mark.unit
+def test_enterprise_factory_uses_console_without_twilio_env(monkeypatch):
+    from examples.enterprise_rbac.challenge_messaging import (
+        ConsoleSmsChallengeMessagingService,
+        ConsoleWhatsAppChallengeMessagingService,
+        MultiplexChallengeMessagingService,
         build_enterprise_example_challenge_messaging_service,
     )
 
@@ -174,6 +300,35 @@ def test_enterprise_factory_uses_console_without_twilio_env(monkeypatch):
     monkeypatch.delenv("TWILIO_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("TWILIO_WHATSAPP_FROM", raising=False)
     monkeypatch.delenv("TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID", raising=False)
+    monkeypatch.delenv("TWILIO_SMS_FROM", raising=False)
 
     service = build_enterprise_example_challenge_messaging_service()
-    assert isinstance(service, ConsoleWhatsAppChallengeMessagingService)
+    assert isinstance(service, MultiplexChallengeMessagingService)
+    assert isinstance(service.whatsapp, ConsoleWhatsAppChallengeMessagingService)
+    assert isinstance(service.sms, ConsoleSmsChallengeMessagingService)
+
+
+@pytest.mark.unit
+def test_enterprise_factory_uses_twilio_sms_when_configured(monkeypatch):
+    from examples.enterprise_rbac import challenge_messaging as cm
+
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "auth-token")
+    monkeypatch.setenv("TWILIO_SMS_FROM", "+15550001111")
+    monkeypatch.delenv("TWILIO_WHATSAPP_FROM", raising=False)
+    monkeypatch.delenv("TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID", raising=False)
+
+    class FakeSmsService:
+        provider_name = "twilio-sms"
+
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def send_auth_challenge(self, intent):
+            return MessageDeliveryResult.queued(self.provider_name)
+
+    monkeypatch.setattr(cm, "TwilioSmsChallengeMessagingService", FakeSmsService)
+
+    service = cm.build_enterprise_example_challenge_messaging_service()
+    assert isinstance(service, cm.MultiplexChallengeMessagingService)
+    assert isinstance(service.sms, FakeSmsService)

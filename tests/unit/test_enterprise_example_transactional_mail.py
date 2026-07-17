@@ -82,6 +82,29 @@ async def test_enterprise_example_mail_service_applies_recipient_override() -> N
 def test_enterprise_example_mail_service_falls_back_to_console_provider() -> None:
     service = build_enterprise_example_transactional_mail_service(
         frontend_url="https://frontend.example.com",
+        mail_provider="console",
     )
 
     assert isinstance(service.provider, ConsoleMailProvider)
+
+
+@pytest.mark.unit
+def test_resolve_mail_provider_name_auto_prefers_mailgun(monkeypatch: pytest.MonkeyPatch) -> None:
+    from examples.enterprise_rbac.transactional_mail import resolve_mail_provider_name
+
+    monkeypatch.delenv("OUTLABS_AUTH_MAIL_PROVIDER", raising=False)
+    monkeypatch.setenv("MAILGUN_DOMAIN", "example.mailgun.org")
+    monkeypatch.setenv("MAILGUN_API_KEY", "key")
+    monkeypatch.setenv("MAILGUN_FROM_EMAIL", "postmaster@example.mailgun.org")
+    monkeypatch.delenv("SENDGRID_API_KEY", raising=False)
+    monkeypatch.delenv("POSTMARK_SERVER_TOKEN", raising=False)
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+
+    assert resolve_mail_provider_name("auto") == "mailgun"
+
+
+@pytest.mark.unit
+def test_resolve_mail_provider_name_explicit_postmark() -> None:
+    from examples.enterprise_rbac.transactional_mail import resolve_mail_provider_name
+
+    assert resolve_mail_provider_name("postmark") == "postmark"

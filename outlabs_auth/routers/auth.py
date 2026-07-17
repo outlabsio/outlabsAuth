@@ -519,7 +519,10 @@ def get_auth_router(
         "/access-code/request",
         status_code=status.HTTP_204_NO_CONTENT,
         summary="Request access code",
-        description="Generate a one-time email access code and expose it to the host email hook.",
+        description=(
+            "Generate a one-time access code by email or verified WhatsApp phone "
+            "and expose it to the host delivery hook."
+        ),
     )
     async def request_access_code(
         data: AccessCodeRequest,
@@ -527,11 +530,12 @@ def get_auth_router(
         session: AsyncSession = Depends(auth.uow),
     ):
         """
-        Request an email access code.
+        Request an access code by email or verified phone.
 
-        This endpoint never reveals whether the email belongs to an account. If
-        a usable account exists, it calls `on_after_access_code_requested` with
-        the plain code so the host application can send its own email.
+        This endpoint never reveals whether the identifier belongs to an account.
+        Phone requests only match users with ``phone_verified``. If a usable
+        account exists, it calls `on_after_access_code_requested` with the plain
+        code so the host can deliver via email/WhatsApp.
         """
         if not auth.config.enable_access_codes:
             raise HTTPException(
@@ -539,9 +543,14 @@ def get_auth_router(
                 detail="Access code authentication is not enabled",
             )
 
+        rate_limit_identifier = data.email or data.phone
+        assert rate_limit_identifier is not None
+        delivery_channel = data.channel or ("email" if data.email else "whatsapp")
+
         is_limited, seconds_until_reset = await check_access_code_request_rate_limit(
-            data.email,
+            rate_limit_identifier,
             redis_client=getattr(auth, "redis_client", None),
+            channel=delivery_channel,
             max_requests=auth.config.access_code_request_rate_limit_max,
             window_seconds=auth.config.access_code_request_rate_limit_window_seconds,
         )
@@ -557,7 +566,19 @@ def get_auth_router(
             )
 
         try:
-            user = await auth.user_service.get_user_by_email(session, data.email)
+            if data.email:
+                user = await auth.user_service.get_user_by_email(session, data.email)
+                challenge_recipient = None
+                challenge_type = "access_code"
+            else:
+                user = await auth.user_service.get_user_by_verified_phone(
+                    session, data.phone or ""
+                )
+                challenge_recipient = data.phone
+                challenge_type = (
+                    "whatsapp_otp" if delivery_channel == "whatsapp" else "sms_otp"
+                )
+
             if not user:
                 return None
 
@@ -567,6 +588,8 @@ def get_auth_router(
             code = await auth.auth_service.generate_access_code(
                 session,
                 user,
+                recipient=challenge_recipient,
+                channel=delivery_channel,
                 redirect_url=data.redirect_url,
                 ip_address=request.client.host if request.client else None,
                 user_agent=request.headers.get("user-agent"),
@@ -576,10 +599,17 @@ def get_auth_router(
                 code,
                 request,
                 redirect_url=data.redirect_url,
+                delivery_channel=delivery_channel,
+                challenge_type=challenge_type,
             )
         except Exception as e:
             if auth.observability:
-                auth.observability.logger.error("access_code_request_error", email=data.email, error=str(e))
+                auth.observability.logger.error(
+                    "access_code_request_error",
+                    email=data.email,
+                    phone=data.phone,
+                    error=str(e),
+                )
 
         return None
 
@@ -587,7 +617,7 @@ def get_auth_router(
         "/access-code/verify",
         response_model=LoginResponse,
         summary="Verify access code",
-        description="Exchange a one-time email access code for JWT tokens.",
+        description="Exchange a one-time access code (email or WhatsApp phone) for JWT tokens.",
     )
     async def verify_access_code(
         data: AccessCodeVerifyRequest,
@@ -596,7 +626,7 @@ def get_auth_router(
         obs: ObservabilityContext = Depends(get_obs),
     ):
         """
-        Verify an email access code and return JWT tokens.
+        Verify an access code and return JWT tokens.
         """
         if not auth.config.enable_access_codes:
             raise HTTPException(
@@ -604,9 +634,14 @@ def get_auth_router(
                 detail="Access code authentication is not enabled",
             )
 
+        rate_limit_identifier = data.email or data.phone
+        assert rate_limit_identifier is not None
+        delivery_channel = data.channel or ("email" if data.email else "whatsapp")
+
         is_limited, seconds_until_reset = await check_access_code_verify_rate_limit(
-            data.email,
+            rate_limit_identifier,
             redis_client=getattr(auth, "redis_client", None),
+            channel=delivery_channel,
             max_requests=auth.config.access_code_verify_rate_limit_max,
             window_seconds=auth.config.access_code_verify_rate_limit_window_seconds,
         )
@@ -625,7 +660,9 @@ def get_auth_router(
             user, tokens = await auth.auth_service.verify_access_code(
                 session,
                 email=data.email,
+                phone=data.phone,
                 code=data.code,
+                channel=delivery_channel,
                 ip_address=request.client.host if request.client else None,
                 user_agent=request.headers.get("user-agent"),
             )

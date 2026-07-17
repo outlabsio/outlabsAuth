@@ -146,16 +146,18 @@ async def check_magic_link_rate_limit(
 
 
 async def check_access_code_request_rate_limit(
-    email: str,
+    identifier: str,
     redis_client: Any = None,
     *,
+    channel: str = "email",
     max_requests: int = 3,
     window_seconds: int = 300,
 ) -> Tuple[bool, int]:
     """
-    Check if email has exceeded access-code request rate limits.
+    Check if an email or phone identifier has exceeded access-code request rate limits.
     """
-    rate_limit_key = f"access_code_request:{email.lower()}"
+    normalized_channel = (channel or "email").strip().lower() or "email"
+    rate_limit_key = f"access_code_request:{normalized_channel}:{identifier.lower()}"
 
     if redis_client is not None and getattr(redis_client, "is_available", False):
         count = await redis_client.increment_with_ttl(
@@ -175,16 +177,18 @@ async def check_access_code_request_rate_limit(
 
 
 async def check_access_code_verify_rate_limit(
-    email: str,
+    identifier: str,
     redis_client: Any = None,
     *,
+    channel: str = "email",
     max_requests: int = 10,
     window_seconds: int = 300,
 ) -> Tuple[bool, int]:
     """
-    Check if email has exceeded access-code verification rate limits.
+    Check if an email or phone identifier has exceeded access-code verification rate limits.
     """
-    rate_limit_key = f"access_code_verify:{email.lower()}"
+    normalized_channel = (channel or "email").strip().lower() or "email"
+    rate_limit_key = f"access_code_verify:{normalized_channel}:{identifier.lower()}"
 
     if redis_client is not None and getattr(redis_client, "is_available", False):
         count = await redis_client.increment_with_ttl(

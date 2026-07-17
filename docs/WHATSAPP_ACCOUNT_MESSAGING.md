@@ -1,6 +1,6 @@
 # WhatsApp Account Messaging
 
-**Status**: Design accepted for Phase A/B; Phase C deferred  
+**Status**: Phase A/B shipped; Phase C host wire-up + phone verify + WhatsApp-as-login (verified-phone access codes) shipped; `whatsapp_otp` / `sms_otp` challenge types + `delivery_channel` shipped; enterprise Twilio SMS Messages host recipe shipped  
 **Date**: 2026-07-16  
 **Related**: [DD-025](./DESIGN_DECISIONS.md#dd-025-no-built-in-emailsms-service), [DD-058](./DESIGN_DECISIONS.md#dd-058-whatsapp-as-host-owned-delivery-channel-for-auth-challenges), transactional mail (`outlabs_auth/mail/`), notification channels (`outlabs_auth/services/channels/whatsapp.py`)
 
@@ -120,6 +120,7 @@ Shipped:
 - `phone_verified` on `UserResponse`
 - Sidecar Account + admin user profile fields for WhatsApp phone (E.164)
 - Enterprise host Twilio WhatsApp Content API path when `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM`, and `TWILIO_WHATSAPP_ACCESS_CODE_CONTENT_SID` are set (otherwise console spike)
+- Enterprise host Twilio SMS Messages path when `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_SMS_FROM` are set (otherwise console SMS spike); multiplex routes by `delivery_channel`
 - Phone verification OTP:
   - `AuthChallengeType.PHONE_VERIFY`
   - `POST /users/me/phone/request-code` (204) + `POST /users/me/phone/verify-code` → `UserResponse`
@@ -127,13 +128,20 @@ Shipped:
   - Sidecar Account verify UI
   - Enterprise capture: `GET /dev/auth/phone-verify/latest?email=`
 
-Still deferred:
+Shipped for WhatsApp-as-login (access codes by verified phone):
 
-- Request-by-phone / WhatsApp as login identifier
-- Separate `SMS_OTP` / `WHATSAPP_OTP` login challenge types
-- Channel query params and per-channel rate limits on login endpoints
+- `POST /auth/access-code/request` and `/verify` accept exactly one of `email` or `phone` (E.164)
+- Optional `channel` (`email` | `whatsapp` | `sms`); phone defaults to `whatsapp`
+- Phone path only matches users with `phone_verified`
+- Phone WhatsApp path stores `whatsapp_otp`; phone SMS path stores `sms_otp`; email remains `access_code`
+- Intent includes `delivery_channel`; rate-limit keys are per channel
+- Challenge HMAC recipient is the phone when requested by phone; email path unchanged
+- Sidecar access-code page: Email / WhatsApp / SMS identifier toggle
+- Enterprise capture: `GET /dev/auth/access-code/latest?phone=` (also still `?email=`)
 
-Roadmap/AUTH_EXTENSIONS language about multi-channel OTP as a login method is aspirational relative to the live enum (`magic_link` / `access_code` / `phone_verify`).
+Live challenge types: `magic_link`, `access_code`, `whatsapp_otp`, `sms_otp`, `phone_verify`.
+
+Hosts without SMS credentials should keep skipping/failing clearly for `delivery_channel=sms` (enterprise example uses a console SMS spike locally).
 
 ## What not to do
 
@@ -145,7 +153,7 @@ Roadmap/AUTH_EXTENSIONS language about multi-channel OTP as a login method is as
 ## Example wiring pointers
 
 - Enterprise mail (email intents): `examples/enterprise_rbac/transactional_mail.py`
-- Enterprise challenge messaging (console spike + optional Twilio): `examples/enterprise_rbac/challenge_messaging.py`
+- Enterprise challenge messaging (WhatsApp + SMS console spikes + optional Twilio): `examples/enterprise_rbac/challenge_messaging.py`
 - Optional Twilio ambient channel (non-secret events): `outlabs_auth/services/channels/whatsapp.py`
 
 ### Enterprise Twilio env vars

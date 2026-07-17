@@ -14,10 +14,10 @@ import hmac
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping, Optional, Tuple, cast
+from typing import Any, List, Mapping, Optional, Tuple, cast
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from outlabs_auth.core.config import AuthConfig
@@ -42,7 +42,7 @@ from outlabs_auth.utils.password import (
     verify_password_async,
     verify_password_dummy_async,
 )
-from outlabs_auth.utils.validation import validate_email
+from outlabs_auth.utils.validation import validate_email, validate_phone
 
 
 class TokenPair:
@@ -797,6 +797,87 @@ class AuthService:
         await session.flush()
         return revoked_count
 
+    async def list_user_sessions(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+    ) -> List[RefreshToken]:
+        """
+        List active refresh-token sessions for a user.
+
+        Active means not revoked and not expired. Returns newest activity first.
+        """
+        if not self.config.store_refresh_tokens:
+            return []
+
+        now = datetime.now(timezone.utc)
+        activity = func.coalesce(
+            cast(Any, RefreshToken.last_used_at),
+            cast(Any, RefreshToken.created_at),
+        )
+        stmt = (
+            select(RefreshToken)
+            .where(
+                cast(Any, RefreshToken.user_id) == user_id,
+                cast(Any, RefreshToken.is_revoked).is_(False),
+                cast(Any, RefreshToken.expires_at) > now,
+            )
+            .order_by(activity.desc())
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def revoke_user_session(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+        token_id: UUID,
+        *,
+        reason: str = "Session revoked",
+    ) -> int:
+        """
+        Revoke one active session (and any other active tokens in its family).
+
+        Returns:
+            Number of tokens revoked.
+
+        Raises:
+            TokenInvalidError: If the session is missing, belongs to another user,
+                or is already inactive.
+        """
+        if not self.config.store_refresh_tokens:
+            return 0
+
+        now = datetime.now(timezone.utc)
+        token_stmt = select(RefreshToken).where(cast(Any, RefreshToken.id) == token_id)
+        token_result = await session.execute(token_stmt)
+        token_model = token_result.scalar_one_or_none()
+
+        if (
+            token_model is None
+            or token_model.user_id != user_id
+            or token_model.is_revoked
+            or token_model.expires_at <= now
+        ):
+            raise TokenInvalidError(
+                message="Session not found",
+                details={"reason": "session_not_found", "session_id": str(token_id)},
+            )
+
+        family_stmt = select(RefreshToken).where(
+            cast(Any, RefreshToken.user_id) == user_id,
+            cast(Any, RefreshToken.family_id) == token_model.family_id,
+            cast(Any, RefreshToken.is_revoked).is_(False),
+        )
+        family_result = await session.execute(family_stmt)
+        revoked_count = 0
+        for family_token in family_result.scalars().all():
+            family_token.revoke(reason)
+            revoked_count += 1
+
+        await session.flush()
+        return revoked_count
+
     async def generate_reset_token(
         self,
         session: AsyncSession,
@@ -936,6 +1017,8 @@ class AuthService:
         session: AsyncSession,
         user: User,
         *,
+        recipient: Optional[str] = None,
+        channel: Optional[str] = None,
         redirect_url: Optional[str] = None,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
@@ -943,19 +1026,51 @@ class AuthService:
         """
         Generate a short-lived, single-use access code for an active user.
 
-        The returned code is plain text for host-owned email delivery. The
-        stored verifier is a nonce-prefixed HMAC so database contents alone are
-        not enough to brute-force the six-digit code.
+        The returned code is plain text for host-owned delivery. The stored
+        verifier is a nonce-prefixed HMAC bound to ``recipient`` (email by
+        default, or E.164 phone when requested via WhatsApp/SMS login).
+
+        Phone requests store ``whatsapp_otp`` or ``sms_otp``; email requests
+        store ``access_code``.
         """
+        challenge_recipient = (recipient or user.email).strip()
+        if not challenge_recipient:
+            raise InvalidInputError(
+                message="Access code recipient is required",
+                details={"field": "recipient"},
+            )
+
+        normalized_channel = (channel or "").strip().lower() or None
+        if challenge_recipient.startswith("+"):
+            delivery_channel = normalized_channel or "whatsapp"
+            if delivery_channel not in {"whatsapp", "sms"}:
+                raise InvalidInputError(
+                    message="Phone access codes must use channel=whatsapp or channel=sms",
+                    details={"field": "channel", "channel": delivery_channel},
+                )
+            challenge_type = (
+                AuthChallengeType.WHATSAPP_OTP
+                if delivery_channel == "whatsapp"
+                else AuthChallengeType.SMS_OTP
+            )
+        else:
+            delivery_channel = "email"
+            if normalized_channel not in {None, "email"}:
+                raise InvalidInputError(
+                    message="Email access codes must use channel=email or omit channel",
+                    details={"field": "channel", "channel": normalized_channel},
+                )
+            challenge_type = AuthChallengeType.ACCESS_CODE
+
         code = self._generate_access_code()
-        token_hash = self._hash_access_code(code, user.email)
+        token_hash = self._hash_access_code(code, challenge_recipient)
         now = datetime.now(timezone.utc)
         expires = now + timedelta(minutes=self.config.access_code_expire_minutes)
 
-        # Keep only the newest outstanding access code for a user valid.
+        # Keep only the newest outstanding code for this user+challenge type.
         prior_stmt = select(AuthChallenge).where(
             cast(Any, AuthChallenge.user_id) == user.id,
-            cast(Any, AuthChallenge.challenge_type) == AuthChallengeType.ACCESS_CODE.value,
+            cast(Any, AuthChallenge.challenge_type) == challenge_type.value,
             cast(Any, AuthChallenge.used_at).is_(None),
             cast(Any, AuthChallenge.expires_at) > now,
         )
@@ -965,9 +1080,9 @@ class AuthService:
 
         challenge = AuthChallenge(
             user_id=user.id,
-            challenge_type=AuthChallengeType.ACCESS_CODE,
+            challenge_type=challenge_type,
             token_hash=token_hash,
-            recipient=user.email,
+            recipient=challenge_recipient,
             expires_at=expires,
             redirect_url=redirect_url,
             requested_ip_address=ip_address,
@@ -983,6 +1098,8 @@ class AuthService:
                     "user_id": str(user.id),
                     "email": user.email,
                     "expires_at": expires.isoformat(),
+                    "challenge_type": challenge_type.value,
+                    "delivery_channel": delivery_channel,
                 },
                 metadata={"ip": ip_address, "user_agent": user_agent},
             )
@@ -1000,10 +1117,11 @@ class AuthService:
                 user_agent=user_agent,
                 after={
                     "access_code_expires_at": expires,
-                    "recipient": user.email,
+                    "recipient": challenge_recipient,
+                    "challenge_type": challenge_type.value,
                 },
                 metadata={
-                    "delivery_channel": "email",
+                    "delivery_channel": delivery_channel,
                     "redirect_url": redirect_url,
                 },
                 occurred_at=now,
@@ -1205,24 +1323,59 @@ class AuthService:
         self,
         session: AsyncSession,
         *,
-        email: str,
+        email: Optional[str] = None,
+        phone: Optional[str] = None,
         code: str,
+        channel: Optional[str] = None,
         device_name: Optional[str] = None,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
     ) -> Tuple[User, TokenPair]:
         """
-        Verify an email access code and create JWT tokens.
+        Verify an access code (email or verified phone) and create JWT tokens.
 
         Raises:
-            TokenInvalidError: If the email/code pair is unknown or already used
+            TokenInvalidError: If the identifier/code pair is unknown or already used
             TokenExpiredError: If the matching code has expired
             AccountInactiveError: If the user cannot authenticate
+            InvalidInputError: If neither or both of email/phone are provided
         """
-        normalized_email = validate_email(email)
-        normalized_code = self._normalize_access_code(code)
+        has_email = bool(email and str(email).strip())
+        has_phone = bool(phone and str(phone).strip())
+        if has_email == has_phone:
+            raise InvalidInputError(
+                message="Provide exactly one of email or phone",
+                details={"fields": ["email", "phone"]},
+            )
 
-        user_stmt = select(User).where(cast(Any, User.email) == normalized_email)
+        normalized_code = self._normalize_access_code(code)
+        normalized_channel = (channel or "").strip().lower() or None
+
+        if has_email:
+            challenge_recipient = validate_email(str(email))
+            delivery_channel = "email"
+            challenge_types = [AuthChallengeType.ACCESS_CODE.value]
+            user_stmt = select(User).where(cast(Any, User.email) == challenge_recipient)
+        else:
+            challenge_recipient = validate_phone(str(phone))
+            delivery_channel = normalized_channel or "whatsapp"
+            if delivery_channel not in {"whatsapp", "sms"}:
+                raise InvalidInputError(
+                    message="Phone access codes must use channel=whatsapp or channel=sms",
+                    details={"field": "channel", "channel": delivery_channel},
+                )
+            primary_type = (
+                AuthChallengeType.WHATSAPP_OTP.value
+                if delivery_channel == "whatsapp"
+                else AuthChallengeType.SMS_OTP.value
+            )
+            # Accept legacy phone-bound ACCESS_CODE rows during migration.
+            challenge_types = [primary_type, AuthChallengeType.ACCESS_CODE.value]
+            user_stmt = select(User).where(
+                cast(Any, User.phone) == challenge_recipient,
+                cast(Any, User.phone_verified).is_(True),
+            )
+
         user_result = await session.execute(user_stmt)
         user = user_result.scalar_one_or_none()
         if not user:
@@ -1235,7 +1388,7 @@ class AuthService:
             select(AuthChallenge)
             .where(
                 cast(Any, AuthChallenge.user_id) == user.id,
-                cast(Any, AuthChallenge.challenge_type) == AuthChallengeType.ACCESS_CODE.value,
+                cast(Any, AuthChallenge.challenge_type).in_(challenge_types),
                 cast(Any, AuthChallenge.used_at).is_(None),
             )
             .order_by(cast(Any, AuthChallenge.created_at).desc())
@@ -1244,7 +1397,9 @@ class AuthService:
         challenge_result = await session.execute(challenge_stmt)
         matching_challenge = None
         for challenge in challenge_result.scalars().all():
-            if self._verify_access_code_hash(normalized_code, normalized_email, challenge.token_hash):
+            if self._verify_access_code_hash(
+                normalized_code, challenge_recipient, challenge.token_hash
+            ):
                 matching_challenge = challenge
                 break
 
@@ -1264,6 +1419,7 @@ class AuthService:
         previous_email_verified = user.email_verified
         previous_failed_attempts = user.failed_login_attempts
         previous_locked_until = user.locked_until
+        verify_marks_email = has_email
 
         if user.is_locked:
             raise AccountLockedError(
@@ -1279,10 +1435,16 @@ class AuthService:
         self._check_user_status(user)
 
         matching_challenge.used_at = now
-        user.email_verified = True
+        if verify_marks_email:
+            user.email_verified = True
         user.failed_login_attempts = 0
         user.locked_until = None
-        self._append_auth_method(user, "ACCESS_CODE")
+        auth_method_label = {
+            AuthChallengeType.ACCESS_CODE.value: "ACCESS_CODE",
+            AuthChallengeType.WHATSAPP_OTP.value: "WHATSAPP_OTP",
+            AuthChallengeType.SMS_OTP.value: "SMS_OTP",
+        }.get(str(matching_challenge.challenge_type), "ACCESS_CODE")
+        self._append_auth_method(user, auth_method_label)
 
         if self.user_audit_service is not None:
             await self.user_audit_service.record_event(
@@ -1309,6 +1471,10 @@ class AuthService:
                 metadata={
                     "redirect_url": matching_challenge.redirect_url,
                     "requested_ip_address": matching_challenge.requested_ip_address,
+                    "identifier": "email" if has_email else "phone",
+                    "recipient": challenge_recipient,
+                    "delivery_channel": delivery_channel,
+                    "challenge_type": str(matching_challenge.challenge_type),
                 },
                 occurred_at=now,
             )
@@ -1319,7 +1485,7 @@ class AuthService:
             device_name=device_name or "access_code",
             ip_address=ip_address,
             user_agent=user_agent,
-            auth_method="access_code",
+            auth_method=f"access_code:{delivery_channel}",
         )
 
         return user, tokens

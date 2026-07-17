@@ -30,6 +30,7 @@ async def issue_oauth_state(
     provider: str,
     flow: str,
     user_id: Optional[UUID] = None,
+    cookie_secure: bool = True,
 ) -> None:
     """Persist a one-time state record and set its HttpOnly browser binding."""
     binding = secrets.token_urlsafe(32)
@@ -49,7 +50,7 @@ async def issue_oauth_state(
         value=binding,
         max_age=OAUTH_STATE_TTL_SECONDS,
         httponly=True,
-        secure=True,
+        secure=cookie_secure,
         samesite="lax",
         path="/",
     )

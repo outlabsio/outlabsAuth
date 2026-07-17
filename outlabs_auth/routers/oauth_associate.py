@@ -6,10 +6,12 @@ Allows authenticated users to link additional OAuth providers to their account.
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional, cast
+from typing import Any, Optional, Union, cast
+from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,6 +45,7 @@ def _append_auth_method(user: Any, provider: str) -> None:
 
 def _to_social_account_response(account: SocialAccount) -> SocialAccountResponse:
     return SocialAccountResponse(
+        id=account.id,
         provider=account.provider,
         provider_user_id=account.provider_user_id,
         email=account.provider_email or "",
@@ -54,6 +57,11 @@ def _to_social_account_response(account: SocialAccount) -> SocialAccountResponse
     )
 
 
+def _build_success_redirect(base_url: str, *, provider: str) -> str:
+    separator = "&" if "?" in base_url else "?"
+    return f"{base_url}{separator}{urlencode({'linked': provider})}"
+
+
 def get_oauth_associate_router(
     oauth_client: Any,
     auth: Any,
@@ -61,9 +69,18 @@ def get_oauth_associate_router(
     prefix: str = "",
     tags: Optional[list[str | Enum]] = None,
     redirect_url: Optional[str] = None,
+    success_redirect_url: Optional[str] = None,
     requires_verification: bool = False,
+    cookie_secure: bool = True,
 ) -> APIRouter:
-    """Generate OAuth account association router for authenticated users."""
+    """
+    Generate OAuth account association router for authenticated users.
+
+    ``/authorize`` requires a Bearer session. ``/callback`` authenticates via
+    the signed one-time state + browser binding cookie (Google/GitHub will not
+    send the SPA Bearer token on redirect). When ``success_redirect_url`` is
+    set, successful callbacks redirect to the SPA instead of returning JSON.
+    """
     from httpx_oauth.integrations.fastapi import OAuth2AuthorizeCallback
 
     router = APIRouter(prefix=prefix, tags=tags or ["oauth"])
@@ -122,6 +139,7 @@ def get_oauth_associate_router(
             provider=oauth_client.name,
             flow="associate",
             user_id=user_uuid,
+            cookie_secure=cookie_secure,
         )
 
         authorization_url = await oauth_client.get_authorization_url(
@@ -134,35 +152,23 @@ def get_oauth_associate_router(
 
     @router.get(
         "/callback",
-        response_model=SocialAccountResponse,
+        response_model=None,
         name=callback_route_name,
         summary=f"{oauth_client.name.title()} association callback",
-        description="Handles OAuth provider callback and links account",
+        description=(
+            "Handles OAuth provider callback and links account. Authenticated via "
+            "signed state + binding cookie (no Bearer token required)."
+        ),
         responses={
+            status.HTTP_302_FOUND: {
+                "description": "SPA redirect when success_redirect_url is configured",
+            },
+            status.HTTP_200_OK: {
+                "description": "Linked account JSON when success_redirect_url is unset",
+                "model": SocialAccountResponse,
+            },
             status.HTTP_400_BAD_REQUEST: {
-                "description": "Invalid state token or user mismatch",
-                "content": {
-                    "application/json": {
-                        "examples": {
-                            "invalid_state": {
-                                "summary": "Invalid or expired state token",
-                                "value": {"detail": "Invalid OAuth state token"},
-                            },
-                            "user_mismatch": {
-                                "summary": "State user_id doesn't match authenticated user",
-                                "value": {"detail": "OAuth state user mismatch (security)"},
-                            },
-                            "no_email": {
-                                "summary": "Provider didn't return email",
-                                "value": {"detail": "Email not available from OAuth provider"},
-                            },
-                            "already_linked": {
-                                "summary": "This OAuth account is already linked",
-                                "value": {"detail": "This OAuth account is already linked to a user"},
-                            },
-                        }
-                    }
-                },
+                "description": "Invalid state token or linking conflict",
             },
         },
     )
@@ -170,13 +176,11 @@ def get_oauth_associate_router(
         request: Request,
         response: Response,
         session: AsyncSession = Depends(auth.uow),
-        auth_context=Depends(get_current_user),
         access_token_state: tuple[dict[str, Any], str] = Depends(
             oauth2_authorize_callback
         ),
-    ):
+    ) -> Union[SocialAccountResponse, RedirectResponse]:
         token, state = access_token_state
-        user_id = auth_context.get("user_id")
 
         try:
             state_data = decode_state_token(state, state_secret)
@@ -186,18 +190,13 @@ def get_oauth_associate_router(
                 detail="Invalid OAuth state token",
             )
 
+        user_id = state_data.get("sub")
         try:
             user_uuid = UUID(str(user_id))
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid authenticated user ID",
-            )
-
-        if state_data.get("sub") != user_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="OAuth state user mismatch (security)",
             )
 
         await consume_oauth_state(
@@ -256,6 +255,13 @@ def get_oauth_associate_router(
             _append_auth_method(user, oauth_client.name)
             await session.flush()
             await session.commit()
+            if success_redirect_url:
+                return RedirectResponse(
+                    url=_build_success_redirect(
+                        success_redirect_url, provider=oauth_client.name
+                    ),
+                    status_code=status.HTTP_302_FOUND,
+                )
             return _to_social_account_response(linked_account)
 
         existing_provider_stmt = select(SocialAccount).where(
@@ -307,6 +313,13 @@ def get_oauth_associate_router(
         # OAuth callback is GET; commit explicitly before read-method rollback.
         await session.commit()
 
+        if success_redirect_url:
+            return RedirectResponse(
+                url=_build_success_redirect(
+                    success_redirect_url, provider=oauth_client.name
+                ),
+                status_code=status.HTTP_302_FOUND,
+            )
         return _to_social_account_response(social_account)
 
     return router

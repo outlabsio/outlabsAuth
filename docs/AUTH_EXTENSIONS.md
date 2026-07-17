@@ -445,18 +445,20 @@ Implemented and shipping:
 
 - **OAuth / social login** — Google, Facebook, Apple, GitHub providers; Microsoft and
   Discord client factories; state, PKCE, and nonce validation; account linking and
-  association; optional encrypted provider-token storage.
-- **Passwordless** — magic links and email access codes, with hashed single-use
-  challenges and rate limiting on request and verify.
+  association; optional encrypted provider-token storage; self-service list/unlink
+  on `get_users_router`.
+- **Passwordless** — magic links and access codes (email and verified-phone with
+  `whatsapp` / `sms` delivery channels), hashed single-use challenges, and rate
+  limiting on request and verify.
+- **Phone verify** — `PHONE_VERIFY` challenges via `POST /users/me/phone/request-code`
+  and `/verify-code` on `get_users_router`.
+- **Challenge types in use** — `magic_link`, `access_code`, `whatsapp_otp`,
+  `sms_otp`, `phone_verify` (see [`WHATSAPP_ACCOUNT_MESSAGING.md`](./WHATSAPP_ACCOUNT_MESSAGING.md)
+  for host delivery).
 - **Notifications** — `NotificationService` plus RabbitMQ, SMTP, SendGrid, Webhook,
-  Twilio, Telegram, and WhatsApp channels.
+  Twilio, Telegram, and WhatsApp channels (ambient events — not OTP plaintext).
 - **Transactional auth mail** — invite, forgot-password, reset confirmation, and
-  access-granted flows, with SMTP, SendGrid, and Mailgun providers.
-
-Present in the schema but without a full flow built on them: the `WHATSAPP_OTP`,
-`SMS_OTP`, and `PHONE_VERIFY` challenge types exist in `AuthChallengeType`, and
-`verify_phone_verify_code` exists on `AuthService`, but these are not surfaced by
-`get_auth_router` the way magic links and access codes are.
+  access-granted flows, with SMTP, SendGrid, Mailgun, Postmark, and Resend providers.
 
 Not implemented — do not plan around these:
 

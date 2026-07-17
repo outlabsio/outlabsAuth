@@ -419,7 +419,6 @@ async def test_oauth_associate_callback_links_account_for_authenticated_user(
             request=_request(state_cookies),
             response=Response(),
             session=session,
-            auth_context={"user_id": user_id},
             access_token_state=(
                 {
                     "access_token": "associate-access-token",
@@ -504,7 +503,6 @@ async def test_oauth_associate_callback_rejects_state_user_mismatch(
                 request=_request(state_cookies),
                 response=Response(),
                 session=session,
-                auth_context={"user_id": str(user.id)},
                 access_token_state=(
                     {"access_token": "associate-access-token"},
                     state,
@@ -512,7 +510,9 @@ async def test_oauth_associate_callback_rejects_state_user_mismatch(
             )
 
     assert exc_info.value.status_code == 400
-    assert exc_info.value.detail == "OAuth state user mismatch (security)"
+    assert exc_info.value.detail == (
+        "Invalid, expired, replayed, or browser-mismatched OAuth state"
+    )
 
 
 @pytest.mark.integration
@@ -580,7 +580,6 @@ async def test_oauth_associate_callback_rejects_provider_account_linked_to_anoth
                 request=_request(state_cookies),
                 response=Response(),
                 session=session,
-                auth_context={"user_id": owner_id},
                 access_token_state=(
                     {"access_token": "associate-access-token"},
                     state,

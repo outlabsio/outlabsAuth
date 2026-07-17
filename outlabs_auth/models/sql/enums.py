@@ -22,6 +22,8 @@ class AuthChallengeType(str, Enum):
 
     MAGIC_LINK = "magic_link"
     ACCESS_CODE = "access_code"
+    WHATSAPP_OTP = "whatsapp_otp"
+    SMS_OTP = "sms_otp"
     PHONE_VERIFY = "phone_verify"
 
 

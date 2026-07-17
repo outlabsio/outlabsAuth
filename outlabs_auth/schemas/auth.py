@@ -1,8 +1,33 @@
 """Authentication request/response schemas."""
 
+import re
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
+
+_E164_PHONE_RE = re.compile(r"^\+[1-9]\d{6,14}$")
+
+
+def _normalize_optional_phone(phone: Optional[str]) -> Optional[str]:
+    if phone is None:
+        return None
+    normalized = phone.strip().replace(" ", "")
+    return normalized or None
+
+
+def _require_exactly_one_email_or_phone(
+    *,
+    email: Optional[EmailStr],
+    phone: Optional[str],
+) -> Optional[str]:
+    normalized_phone = _normalize_optional_phone(phone)
+    has_email = email is not None
+    has_phone = normalized_phone is not None
+    if has_email == has_phone:
+        raise ValueError("Provide exactly one of email or phone")
+    if normalized_phone is not None and not _E164_PHONE_RE.match(normalized_phone):
+        raise ValueError("Phone must be E.164 format (e.g. +15551234567)")
+    return normalized_phone
 
 
 class LoginRequest(BaseModel):
@@ -76,21 +101,76 @@ class MagicLinkVerifyRequest(BaseModel):
 
 
 class AccessCodeRequest(BaseModel):
-    """Request a short-lived email access code."""
+    """Request a short-lived access code by email or verified phone (WhatsApp/SMS)."""
 
-    email: EmailStr
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = Field(
+        default=None,
+        max_length=20,
+        description="E.164 phone for WhatsApp/SMS login when the number is verified on the account.",
+    )
+    channel: Optional[str] = Field(
+        default=None,
+        description=(
+            "Delivery channel. Required semantics: email when email is set; "
+            "whatsapp (default) or sms when phone is set."
+        ),
+    )
     redirect_url: Optional[str] = Field(
         default=None,
         max_length=2048,
         description="Optional host-owned redirect URL to include in the access-code email.",
     )
 
+    @model_validator(mode="after")
+    def exactly_one_identifier(self) -> "AccessCodeRequest":
+        self.phone = _require_exactly_one_email_or_phone(email=self.email, phone=self.phone)
+        channel = (self.channel or "").strip().lower() or None
+        if self.email is not None:
+            if channel is not None and channel != "email":
+                raise ValueError("Email access codes must use channel=email or omit channel")
+            self.channel = "email"
+        else:
+            if channel is None:
+                self.channel = "whatsapp"
+            elif channel not in {"whatsapp", "sms"}:
+                raise ValueError("Phone access codes must use channel=whatsapp or channel=sms")
+            else:
+                self.channel = channel
+        return self
+
 
 class AccessCodeVerifyRequest(BaseModel):
-    """Verify an email access code and exchange it for JWT tokens."""
+    """Verify an access code (email or verified phone) and exchange it for JWT tokens."""
 
-    email: EmailStr
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = Field(
+        default=None,
+        max_length=20,
+        description="E.164 phone used when the access code was requested by WhatsApp or SMS.",
+    )
+    channel: Optional[str] = Field(
+        default=None,
+        description="Delivery channel used when the code was requested (email|whatsapp|sms).",
+    )
     code: str = Field(..., min_length=1, max_length=32)
+
+    @model_validator(mode="after")
+    def exactly_one_identifier(self) -> "AccessCodeVerifyRequest":
+        self.phone = _require_exactly_one_email_or_phone(email=self.email, phone=self.phone)
+        channel = (self.channel or "").strip().lower() or None
+        if self.email is not None:
+            if channel is not None and channel != "email":
+                raise ValueError("Email access codes must use channel=email or omit channel")
+            self.channel = "email"
+        else:
+            if channel is None:
+                self.channel = "whatsapp"
+            elif channel not in {"whatsapp", "sms"}:
+                raise ValueError("Phone access codes must use channel=whatsapp or channel=sms")
+            else:
+                self.channel = channel
+        return self
 
 
 class LogoutRequest(BaseModel):

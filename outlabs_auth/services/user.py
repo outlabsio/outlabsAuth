@@ -7,7 +7,7 @@ Handles user management operations with PostgreSQL/SQLAlchemy.
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 from uuid import UUID
 
 from fastapi import Request, Response
@@ -150,6 +150,9 @@ class UserService(BaseService[User]):
         code: str,
         request: Optional[Request] = None,
         redirect_url: Optional[str] = None,
+        *,
+        delivery_channel: str = "email",
+        challenge_type: str = "access_code",
     ) -> None:
         """Hook called after an access code is generated. Override or use messaging service."""
         await self.send_access_code_delivery(
@@ -157,6 +160,8 @@ class UserService(BaseService[User]):
             code,
             request=request,
             redirect_url=redirect_url,
+            delivery_channel=delivery_channel,  # type: ignore[arg-type]
+            challenge_type=challenge_type,  # type: ignore[arg-type]
         )
 
     async def on_failed_login(
@@ -198,6 +203,7 @@ class UserService(BaseService[User]):
             recipient=self._build_delivery_recipient(user),
             secret=token,
             expires_at=expires_at,
+            delivery_channel="email",
             redirect_url=redirect_url,
             request_base_url=self._request_base_url(request),
             metadata=self._merge_mail_metadata(metadata, extra_metadata),
@@ -212,20 +218,25 @@ class UserService(BaseService[User]):
         *,
         request: Optional[Request] = None,
         redirect_url: Optional[str] = None,
+        delivery_channel: Literal["email", "sms", "whatsapp"] = "email",
+        challenge_type: Literal[
+            "access_code", "whatsapp_otp", "sms_otp"
+        ] = "access_code",
         metadata: Optional[dict[str, Any]] = None,
         **extra_metadata: Any,
     ) -> bool:
-        """Deliver an access-code secret via the configured transactional messaging service."""
+        """Deliver an access-code / OTP secret via the configured messaging service."""
         if self.transactional_messaging_service is None:
             return False
         expires_at = datetime.now(timezone.utc) + timedelta(
             minutes=self.config.access_code_expire_minutes
         )
         intent = AuthChallengeDeliveryIntent(
-            challenge_type="access_code",
+            challenge_type=challenge_type,
             recipient=self._build_delivery_recipient(user),
             secret=code,
             expires_at=expires_at,
+            delivery_channel=delivery_channel,
             redirect_url=redirect_url,
             request_base_url=self._request_base_url(request),
             metadata=self._merge_mail_metadata(metadata, extra_metadata),
@@ -239,6 +250,7 @@ class UserService(BaseService[User]):
         code: str,
         *,
         request: Optional[Request] = None,
+        delivery_channel: Literal["sms", "whatsapp"] = "whatsapp",
         metadata: Optional[dict[str, Any]] = None,
         **extra_metadata: Any,
     ) -> bool:
@@ -253,6 +265,7 @@ class UserService(BaseService[User]):
             recipient=self._build_delivery_recipient(user),
             secret=code,
             expires_at=expires_at,
+            delivery_channel=delivery_channel,
             request_base_url=self._request_base_url(request),
             metadata=self._merge_mail_metadata(metadata, extra_metadata),
         )
@@ -542,6 +555,23 @@ class UserService(BaseService[User]):
         """
         email = validate_email(email)
         return await self.get_one(session, User.email == email)
+
+    async def get_user_by_verified_phone(
+        self,
+        session: AsyncSession,
+        phone: str,
+    ) -> Optional[User]:
+        """
+        Get user by verified E.164 WhatsApp phone.
+
+        Unverified phones never match — WhatsApp login requires prior verification.
+        """
+        normalized = validate_phone(phone)
+        return await self.get_one(
+            session,
+            User.phone == normalized,
+            User.phone_verified == True,  # noqa: E712
+        )
 
     async def update_user(
         self,

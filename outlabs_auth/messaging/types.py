@@ -6,7 +6,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, Mapping, Optional
 
-AuthChallengeTypeName = Literal["magic_link", "access_code", "phone_verify"]
+AuthChallengeTypeName = Literal[
+    "magic_link",
+    "access_code",
+    "whatsapp_otp",
+    "sms_otp",
+    "phone_verify",
+]
+DeliveryChannelName = Literal["email", "sms", "whatsapp"]
 
 
 @dataclass(slots=True, frozen=True)
@@ -33,9 +40,9 @@ class DeliveryRecipient:
 @dataclass(slots=True, frozen=True)
 class AuthChallengeDeliveryIntent:
     """
-    Intent payload for magic-link / access-code delivery.
+    Intent payload for magic-link / access-code / OTP delivery.
 
-    Hosts map this into email bodies and/or WhatsApp template variables.
+    Hosts map this into email bodies and/or WhatsApp/SMS template variables.
     The library does not choose a provider or template.
     """
 
@@ -43,6 +50,7 @@ class AuthChallengeDeliveryIntent:
     recipient: DeliveryRecipient
     secret: str
     expires_at: Optional[datetime]
+    delivery_channel: DeliveryChannelName = "email"
     redirect_url: Optional[str] = None
     request_base_url: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
