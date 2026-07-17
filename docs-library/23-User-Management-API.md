@@ -187,5 +187,6 @@ app.include_router(get_self_service_users_router(auth, prefix="/v1/account"))
 
 - [User Status](./48-User-Status-System.md)
 - [User Invitations](./24-User-Invitations.md)
+- [Roles & Permissions](./25-Roles-and-Permissions.md)
 - [Sessions & Audit](./05-Sessions-and-Audit.md)
 - [Core Authorization Concepts](./13-Core-Authorization-Concepts.md)

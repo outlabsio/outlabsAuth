@@ -153,6 +153,7 @@ Trust the running app:
 
 - [Getting Started](./01-Getting-Started.md)
 - [User Management API](./23-User-Management-API.md)
+- [Roles & Permissions](./25-Roles-and-Permissions.md)
 - [Entities](./51-Entities.md)
 - [Entity Memberships](./54-Entity-Memberships.md)
 - [Configuration](./03-Configuration.md)
