@@ -12,6 +12,9 @@ Maintainer design specs live in [`docs/`](../docs/). Prefer this folder, the roo
 | [01-Getting-Started.md](./01-Getting-Started.md) | Install → migrate → mount routers → login → optional admin UI |
 | [02-Routers-and-Prefixes.md](./02-Routers-and-Prefixes.md) | Catalog of `get_*_router` factories and prefix conventions |
 | [03-Configuration.md](./03-Configuration.md) | Database, Redis, feature flags, CLI, production baseline |
+| [04-OAuth-and-Social-Login.md](./04-OAuth-and-Social-Login.md) | Mount Google/GitHub/… login + associate; social account self-service |
+| [05-Sessions-and-Audit.md](./05-Sessions-and-Audit.md) | Active sessions (refresh tokens) and audit search |
+| [06-Passwordless-and-Messaging.md](./06-Passwordless-and-Messaging.md) | Magic links, access codes, invites, host email/WhatsApp/SMS delivery |
 | [13-Core-Authorization-Concepts.md](./13-Core-Authorization-Concepts.md) | SimpleRBAC vs EnterpriseRBAC mental model |
 | [../docs/COMPARISON_MATRIX.md](../docs/COMPARISON_MATRIX.md) | Feature comparison and decision tree |
 | [../docs/API_DESIGN.md](../docs/API_DESIGN.md) | Library API surface and host DX patterns |
@@ -44,7 +47,10 @@ Maintainer design specs live in [`docs/`](../docs/). Prefer this folder, the roo
 This folder was rebuilt from a larger series; some numbered chapters are still
 missing. Until they exist, use:
 
-- **OAuth / passwordless / messaging** — [`docs/AUTH_EXTENSIONS.md`](../docs/AUTH_EXTENSIONS.md) and examples
+- **OAuth / passwordless / messaging depth** — [04](./04-OAuth-and-Social-Login.md),
+  [06](./06-Passwordless-and-Messaging.md), plus maintainer specs in
+  [`docs/AUTH_EXTENSIONS.md`](../docs/AUTH_EXTENSIONS.md) and
+  [`docs/WHATSAPP_ACCOUNT_MESSAGING.md`](../docs/WHATSAPP_ACCOUNT_MESSAGING.md)
 - **Production deploy** — [03-Configuration.md](./03-Configuration.md) + [`docs/DEPLOYMENT_GUIDE.md`](../docs/DEPLOYMENT_GUIDE.md)
 - **Runnable wiring** — [`examples/simple_rbac`](../examples/simple_rbac/) and [`examples/enterprise_rbac`](../examples/enterprise_rbac/)
 

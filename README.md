@@ -22,11 +22,12 @@ Most auth products push you into a separate IdP or a black-box service. OutlabsA
 
 ## Documentation
 
-| Start here | |
-|------------|--|
+| Guide | What it covers |
+|-------|----------------|
 | [Getting Started](./docs-library/01-Getting-Started.md) | Install → migrate → mount → login → optional UI |
 | [Routers & Prefixes](./docs-library/02-Routers-and-Prefixes.md) | Which `get_*_router` factories to mount |
 | [Configuration](./docs-library/03-Configuration.md) | Constructor flags, Redis, schema, production defaults |
+| [OAuth](./docs-library/04-OAuth-and-Social-Login.md) · [Sessions & audit](./docs-library/05-Sessions-and-Audit.md) · [Passwordless](./docs-library/06-Passwordless-and-Messaging.md) | Optional auth extensions |
 | [User docs index](./docs-library/) | Topic guides (JWT, invites, API keys, observability, …) |
 | [Examples](./examples/) | Runnable SimpleRBAC + EnterpriseRBAC apps |
 | [OutlabsAuth UI](./docs/AUTH_UI.md) | Sister admin console (Vite/React) |

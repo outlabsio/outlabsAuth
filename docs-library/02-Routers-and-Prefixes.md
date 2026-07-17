@@ -29,7 +29,7 @@ Imported from `outlabs_auth.routers` unless noted.
 | `get_auth_router` | `/v1/auth` | Login, register, refresh, logout, password reset, invites, magic link / access code (when enabled), **`GET /config`** for admin UIs |
 | `get_users_router` | `/v1/users` | Admin user management |
 | `get_self_service_users_router` | host-chosen | Authenticated self-service user profile routes |
-| `get_session_router` | `/v1/sessions` (or under users) | Session listing / revoke (when mounted) |
+| `get_session_router` | `/v1/auth` (minimal) | Login / refresh / logout only — **not** session inventory |
 | `get_roles_router` | `/v1/roles` | Role CRUD and permission assignment |
 | `get_permissions_router` | `/v1/permissions` | Permission catalog |
 | `get_api_keys_router` | `/v1/api-keys` | Personal / self-service API keys |
@@ -38,7 +38,12 @@ Imported from `outlabs_auth.routers` unless noted.
 | `get_entities_router` | `/v1/entities` | Entity hierarchy (Enterprise) |
 | `get_memberships_router` | `/v1/memberships` | User–entity memberships (Enterprise) |
 | `get_config_router` | `/v1/config` | Mutable entity-type vocabulary (`/entity-types`) |
-| `get_audit_router` | `/v1/audit-events` | Audit event search |
+| `get_audit_router` | `/v1/audit-events` | Cross-user audit event search |
+
+**Sessions and social accounts** live on `get_users_router` (`/me/sessions`,
+`/me/social-accounts`, admin `/{user_id}/sessions`, …) — see
+[05-Sessions-and-Audit.md](./05-Sessions-and-Audit.md) and
+[04-OAuth-and-Social-Login.md](./04-OAuth-and-Social-Login.md).
 
 OAuth factories live on the oauth modules (not always re-exported from
 `outlabs_auth.routers`):

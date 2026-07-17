@@ -148,6 +148,10 @@ Full contract and Simple vs Enterprise invite rules: [`docs/AUTH_UI.md`](../docs
 
 Configuration deep-dive: [03-Configuration.md](./03-Configuration.md).
 
+Optional extensions: [04-OAuth](./04-OAuth-and-Social-Login.md),
+[05-Sessions & audit](./05-Sessions-and-Audit.md),
+[06-Passwordless & messaging](./06-Passwordless-and-Messaging.md).
+
 ## Checklist
 
 - [ ] Postgres reachable; schema migrated and seeded
