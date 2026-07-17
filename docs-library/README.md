@@ -97,6 +97,9 @@ JWT behavior, data models, metrics, and log event catalogs live under
 
 ### Reference
 
+Large catalogs (`12` data models, `98` metrics, `99` log events) stay long on
+purpose — treat them as lookup appendices, not tutorials.
+
 | Guide | Summary |
 |-------|---------|
 | [12 — Data Models](./12-Data-Models.md) | Postgres / SQLModel schema reference |
