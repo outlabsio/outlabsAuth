@@ -1,6 +1,8 @@
-# 99. Log Events Reference
+# Log Events Reference
 
-> **Quick Reference**: Complete catalog of all structured log events emitted by OutlabsAuth. Use this for log searching, filtering, and building alerts.
+> **Handbook · Reference** — structured log event catalog.  
+> Part of the [OutlabsAuth Handbook](./README.md). Setup:
+> [Observability](./97-Observability.md).
 
 ## Overview
 

@@ -1,6 +1,11 @@
-# 54. Entity Memberships
+# Entity Memberships
 
-This document describes how EnterpriseRBAC models entity memberships, how lifecycle state affects access, and which API endpoints manage that state.
+> **Handbook** · EnterpriseRBAC membership lifecycle.  
+> Part of the [OutlabsAuth Handbook](./README.md). Concepts:
+> [Core Authorization Concepts](./13-Core-Authorization-Concepts.md).
+
+How EnterpriseRBAC models entity memberships, how lifecycle state affects
+access, and which API endpoints manage that state.
 
 ## Overview
 
@@ -213,29 +218,16 @@ That means:
 - revoked memberships never grant permissions
 - active memberships outside their time window also do not grant permissions
 
-## Current Limitation
+## Current limitation
 
 Membership-level timing is supported.
 
-Per-role timing inside a membership is not currently supported. Scoped roles inside one membership share the same membership lifecycle window.
+Per-role timing inside a membership is not currently supported — scoped roles
+inside one membership share the same membership lifecycle window.
 
-## Testing Status
+## Related
 
-Current automated coverage for this lifecycle contract exists in:
-
-- `tests/integration/test_membership_lifecycle_api.py`
-
-That coverage verifies:
-
-- create with lifecycle fields
-- update with lifecycle fields and multiple roles
-- inactive membership filtering
-- soft revoke plus reactivation
-
-Important note:
-
-- this is still feature-focused coverage, not the full admin user-details contract exercised end-to-end with the adjacent user-management routes
-- comprehensive cross-surface integration coverage should still be added in the future for:
-  - user detail reads
-  - direct role memberships
-  - membership lifecycle updates from the same record page flow
+- [Core Authorization Concepts](./13-Core-Authorization-Concepts.md)
+- [User Management API](./23-User-Management-API.md) — orphans + membership history
+- [Choosing a Preset](./07-Choosing-a-Preset.md)
+- Mount: `get_memberships_router` in [Routers & Prefixes](./02-Routers-and-Prefixes.md)

@@ -4,10 +4,12 @@ This directory contains **design specifications and architectural decisions** fo
 
 ## For Library Users
 
-Start with the user handbook, not this folder:
+Start with the **[OutlabsAuth Handbook](../docs-library/)** (`docs-library/`), not
+this folder. That tree is written for people integrating the library and is the
+content source for a future public docs site.
 
-- **[docs-library/](../docs-library/)** — index of implementer guides
-- **[docs-library/01-Getting-Started.md](../docs-library/01-Getting-Started.md)** — install through first login
+- **[Handbook home](../docs-library/)** — reading paths and full guide index
+- **[Getting Started](../docs-library/01-Getting-Started.md)** — install through first login
 - **[AUTH_UI.md](./AUTH_UI.md)** — [OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) sister admin console
 - **[../examples/](../examples/)** — runnable SimpleRBAC / EnterpriseRBAC apps
 

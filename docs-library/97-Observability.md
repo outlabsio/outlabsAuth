@@ -1,6 +1,8 @@
-# 97. Observability & Monitoring
+# Observability & Monitoring
 
-> **Quick Reference**: How to use OutlabsAuth observability without taking over the host FastAPI application's logging, metrics, middleware, or generic exception handling.
+> **Handbook** · Metrics and logs without taking over your FastAPI app.  
+> Part of the [OutlabsAuth Handbook](./README.md). Catalogs:
+> [Metrics](./98-Metrics-Reference.md), [Log events](./99-Log-Events-Reference.md).
 
 ## Overview
 
@@ -15,8 +17,7 @@ designed for two integration modes:
 
 ## Embedded Mode
 
-Use this mode when OutlabsAuth is installed inside an existing API such as
-`outlabsAPI` or `DiverseAPI-postgres`.
+Use this mode when OutlabsAuth is installed inside an existing host API.
 
 ### Rules
 

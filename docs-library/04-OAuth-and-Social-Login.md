@@ -1,12 +1,14 @@
-# 04. OAuth and Social Login
+# OAuth and Social Login
 
-Optional social login for hosts that mount OutlabsAuth. Email/password works
-without any of this.
+Add Google (or another provider) so users can sign in with an existing account.
+Email/password keeps working without any of this — OAuth is opt-in by mounting
+routers, not a constructor flag.
 
-Design depth: [`docs/AUTH_EXTENSIONS.md`](../docs/AUTH_EXTENSIONS.md). Runnable
-wiring: `examples/enterprise_rbac/main.py` (Google invite-only + associate).
+Runnable wiring: `examples/enterprise_rbac/main.py` (Google invite-only +
+associate). Deeper design notes for maintainers:
+[`docs/AUTH_EXTENSIONS.md`](../docs/AUTH_EXTENSIONS.md).
 
-## Model
+## How it fits
 
 - Local `User` rows stay the account of record
 - Each linked provider is a `SocialAccount` row (`user_id`, `provider`,

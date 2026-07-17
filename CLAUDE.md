@@ -73,13 +73,19 @@ To learn how the library works, in order:
 | **ARCHITECTURE_SECURITY_PERFORMANCE_AUDIT_2026-07-15.md** | Latest audit |
 | **SECURITY_AUDIT_2026-06-10.md**, **PERFORMANCE_AUDIT_*.md** | Point-in-time audits |
 
-#### `docs-library/` - User Documentation (Implementation-Specific)
-Currently only 9 files - being rebuilt to match actual implementation:
-- Data models, JWT, user status, activity tracking
-- Testing, observability, metrics, log events
-- Extending user model
+#### `docs-library/` - User Handbook (Implementers)
 
-**Note**: Most user documentation was deleted (48 files) due to inconsistencies with actual implementation. User docs are being rewritten from scratch based on real code, not design specs.
+Human-readable guides for people integrating OutlabsAuth — distinct from
+maintainer `docs/`. Index and reading paths: **`docs-library/README.md`**.
+
+Spine: Introduction → Getting Started → Choosing a Preset → Routers /
+Configuration → OAuth / Sessions / Passwordless, plus topic and reference
+guides (JWT, invites, API keys, observability catalogs, …).
+
+This tree is the content source for a future public docs site; keep product
+language here and design-decision jargon in `docs/`.
+
+When a handbook page and the running code disagree, trust the code.
 
 ## Architecture Overview
 

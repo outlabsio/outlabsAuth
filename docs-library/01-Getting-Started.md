@@ -1,38 +1,60 @@
-# 01. Getting Started
+# Getting Started
 
-End-to-end path for embedding OutlabsAuth in a FastAPI app.
+Get from zero to a working login in one sitting. When you are done you will have:
 
-## 1. Prerequisites
+- OutlabsAuth installed against Postgres  
+- Schema migrated and an admin user  
+- Auth routes mounted on FastAPI  
+- A successful login that returns JWT tokens  
+
+Optional: point [OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) at
+the same API.
+
+New here? Skim [Introduction](./00-Introduction.md) first (two minutes).
+
+---
+
+## Prerequisites
 
 - Python 3.12+
-- PostgreSQL
-- Redis optional for local demos; recommended in production for counters, rate limits, and permission cache
+- A PostgreSQL database you can reach
+- Redis is optional for local demos. For production counters and shared
+  permission cache, plan on Redis — or use `cache_backend="memory"` on a
+  **single-process** host (see [Configuration](./03-Configuration.md))
 
-## 2. Install
+## 1. Install
 
 ```bash
 pip install outlabs-auth
-# or, in a uv project: uv add outlabs-auth
+# or: uv add outlabs-auth
 ```
 
-Provide at minimum:
+You will need at least:
 
-- `DATABASE_URL` — `postgresql+asyncpg://...`
-- `SECRET_KEY` — at least 32 characters for HS256
+| Variable | Meaning |
+|----------|---------|
+| `DATABASE_URL` | `postgresql+asyncpg://…` |
+| `SECRET_KEY` | JWT signing secret, **≥ 32 characters** for HS256 |
 
-## 3. Choose a Preset
+Generate a secret:
 
-| Question | Preset |
-|----------|--------|
-| Flat roles, no org tree? | `SimpleRBAC` |
-| Departments / teams / entity hierarchy? | `EnterpriseRBAC` |
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
 
-See [13-Core-Authorization-Concepts.md](./13-Core-Authorization-Concepts.md) and
-[`docs/COMPARISON_MATRIX.md`](../docs/COMPARISON_MATRIX.md).
+## 2. Pick a preset
 
-## 4. Bootstrap Schema
+| Need | Preset |
+|------|--------|
+| Flat roles, no org tree | `SimpleRBAC` |
+| Departments / teams / hierarchy | `EnterpriseRBAC` |
 
-Run these in a **single-process** release or prestart step (not inside every worker):
+Details: [Choosing a Preset](./07-Choosing-a-Preset.md).
+
+## 3. Create the schema (once per environment)
+
+Run this in a **single-process** release or prestart step — not inside every
+app worker:
 
 ```bash
 export DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/app
@@ -43,18 +65,19 @@ outlabs-auth seed-system
 outlabs-auth bootstrap-admin --email admin@example.com --password 'ChangeMe_now1!'
 ```
 
-Or use the orchestrator:
+Or the one-shot orchestrator:
 
 ```bash
 outlabs-auth bootstrap --admin-email admin@example.com --admin-password 'ChangeMe_now1!'
 ```
 
-Keep `auto_migrate=False` in multi-worker app runtime. Details: root README
-“Recommended Production Defaults”.
+Keep `auto_migrate=False` when you run multiple uvicorn workers. More:
+[Configuration](./03-Configuration.md).
 
-## 5. Wire FastAPI
+## 4. Wire FastAPI
 
-Minimal shape (also in the root README; executed by `tests/unit/test_readme_quickstart.py`):
+This is the minimal shape. The same block is executed by
+`tests/unit/test_readme_quickstart.py`, so it cannot silently rot.
 
 ```python
 import os
@@ -83,14 +106,20 @@ auth.instrument_fastapi(app)
 app.include_router(get_auth_router(auth, prefix="/auth"))
 ```
 
-For a product admin console or full management API, mount more routers (users, roles,
-permissions, API keys, entities, …). Catalog:
-[02-Routers-and-Prefixes.md](./02-Routers-and-Prefixes.md).
+Two habits that matter:
 
-Examples mount under `/v1/...` (e.g. `/v1/auth`). Production often uses `/iam`.
-Pick one prefix family and keep it consistent for the UI’s `authApiPrefix`.
+1. Call **`prime_fastapi_routing()`** before mounting routers at import time
+   (or mount inside `lifespan` after `initialize()` — see the SimpleRBAC example).
+2. Call **`instrument_fastapi(app)`** so commits finish before the response is
+   sent and exception handlers are registered.
 
-## 6. Smoke Login
+For an admin console you will also mount users, roles, permissions, and so on.
+Catalog: [Routers & Prefixes](./02-Routers-and-Prefixes.md).
+
+Examples use `/v1/auth`, `/v1/users`, …. Production often uses `/iam`. Pick one
+prefix family and keep it consistent for OutlabsAuth UI’s `authApiPrefix`.
+
+## 5. Smoke login
 
 ```bash
 curl -s -X POST http://localhost:8000/auth/login \
@@ -98,10 +127,13 @@ curl -s -X POST http://localhost:8000/auth/login \
   -d '{"email":"admin@example.com","password":"ChangeMe_now1!"}'
 ```
 
-Expect access + refresh tokens. Then call a protected host route with
-`Authorization: Bearer <access_token>`.
+You should get an access token and a refresh token. Call protected routes with:
 
-## 7. Protect Host Routes
+```http
+Authorization: Bearer <access_token>
+```
+
+## 6. Protect your own routes
 
 ```python
 from fastapi import Depends
@@ -119,44 +151,47 @@ async def delete_item(
     ...
 ```
 
-More patterns: [`docs/API_DESIGN.md`](../docs/API_DESIGN.md) and the examples.
+More host patterns live in the examples and [`docs/API_DESIGN.md`](../docs/API_DESIGN.md)
+(that file is denser — use it when you need edge cases).
 
-## 8. Optional: OutlabsAuth UI
+## 7. Optional: OutlabsAuth UI
 
-[OutlabsAuth UI](https://github.com/outlabsio/OutlabsAuthUI) is a sister Vite/React
-admin console. Point it at your mounted API:
+The sister admin console is a separate repo. Point it at your API:
 
 ```bash
 git clone https://github.com/outlabsio/OutlabsAuthUI.git
 cd OutlabsAuthUI
 bun install
 cp public/app-config.template.json public/app-config.json
-# apiBaseUrl = your FastAPI origin
-# authApiPrefix = /auth parent prefix (e.g. /v1 if routers are under /v1/auth)
+# apiBaseUrl  = http://localhost:8000  (your API origin)
+# authApiPrefix = "" if you mounted at /auth
+#               = /v1 if you mounted at /v1/auth, /v1/users, …
 bun run dev
 ```
 
-Full contract and Simple vs Enterprise invite rules: [`docs/AUTH_UI.md`](../docs/AUTH_UI.md).
+Full wiring and Simple vs Enterprise invite rules:
+[`docs/AUTH_UI.md`](../docs/AUTH_UI.md).
 
-## 9. Learn From Examples
+## 8. Learn from examples
 
 | Example | Port | Best for |
 |---------|------|----------|
-| [`examples/simple_rbac`](../examples/simple_rbac/) | 8003 | Flat RBAC blog API |
-| [`examples/enterprise_rbac`](../examples/enterprise_rbac/) | 8004 | Hierarchy, tree permissions, richer admin mounts |
+| [`examples/simple_rbac`](../examples/simple_rbac/) | 8003 | Flat RBAC |
+| [`examples/enterprise_rbac`](../examples/enterprise_rbac/) | 8004 | Hierarchy + richer mounts |
 | [`examples/abac_cookbook`](../examples/abac_cookbook/) | 8005 | ABAC conditions |
-
-Configuration deep-dive: [03-Configuration.md](./03-Configuration.md).
-
-Optional extensions: [04-OAuth](./04-OAuth-and-Social-Login.md),
-[05-Sessions & audit](./05-Sessions-and-Audit.md),
-[06-Passwordless & messaging](./06-Passwordless-and-Messaging.md).
 
 ## Checklist
 
-- [ ] Postgres reachable; schema migrated and seeded
+- [ ] Postgres reachable; migrated and seeded
 - [ ] `prime_fastapi_routing()` (or mount after `initialize()`)
-- [ ] `instrument_fastapi(app)` for middleware + exception handlers
+- [ ] `instrument_fastapi(app)`
 - [ ] Auth router mounted; smoke login works
 - [ ] Host routes use `auth.deps`
 - [ ] (Optional) OutlabsAuth UI `app-config.json` matches your prefix
+
+## Where to go next
+
+- [Configuration](./03-Configuration.md) — production defaults, Redis, memory cache  
+- [Routers & Prefixes](./02-Routers-and-Prefixes.md) — full management API  
+- [User Management API](./23-User-Management-API.md) — users admin surface  
+- [OAuth](./04-OAuth-and-Social-Login.md) · [Sessions](./05-Sessions-and-Audit.md) · [Passwordless](./06-Passwordless-and-Messaging.md)

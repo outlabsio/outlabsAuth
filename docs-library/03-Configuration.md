@@ -1,7 +1,13 @@
-# 03. Configuration
+# Configuration
 
-Constructor and environment knobs you need when embedding OutlabsAuth. Full field
-list: `outlabs_auth/core/config.py` (`AuthConfig`).
+Knobs you set when embedding OutlabsAuth: database, secrets, Redis, cache, and
+feature flags. The full field list lives in `outlabs_auth/core/config.py`
+(`AuthConfig`).
+
+New install? Start with [Getting Started](./01-Getting-Started.md), then come
+back here for production defaults.
+
+---
 
 ## Required
 
@@ -28,11 +34,11 @@ auth = EnterpriseRBAC(
 |---------|----------|
 | `database_schema` | Keep auth tables in a dedicated schema (e.g. `outlabs_auth`) |
 | `auto_migrate` | `False` in multi-worker runtime; migrate via CLI in prestart |
-| `redis_url` | Enables counters, rate limits, and shared (`cache_backend='redis'`) permission caching |
+| `redis_url` | Enables counters, rate limits, and shared permission caching |
 | `cache_backend` | `redis` (multi-instance), `memory` (single-process, no Redis), or `none` |
 | Mount prefix | App-owned, e.g. `/iam` or `/v1` — keep consistent with OutlabsAuth UI `authApiPrefix` |
 
-### Cache backends (DD-057)
+### Permission cache backends
 
 | Backend | When to use | Invalidation |
 |---------|-------------|--------------|
@@ -57,13 +63,14 @@ auth = EnterpriseRBAC(
 )
 ```
 
-Do **not** use `memory` when multiple workers/instances must see each other's
+Do **not** use `memory` when multiple workers or instances must see each other's
 permission invalidations immediately — use `redis` instead.
 
 Prefer a **direct** Postgres URL over provider transaction-pooler (`-pooler`)
-endpoints for auth-heavy traffic. Details: root README + [`docs/DEPLOYMENT_GUIDE.md`](../docs/DEPLOYMENT_GUIDE.md).
+endpoints for auth-heavy traffic. Details: root README +
+[`docs/DEPLOYMENT_GUIDE.md`](../docs/DEPLOYMENT_GUIDE.md).
 
-## Preset feature flags
+## Feature flags
 
 Set on the preset constructor (or underlying `AuthConfig`):
 
@@ -80,12 +87,14 @@ Other common toggles:
 | `enable_invitations` | `True` | Invite-by-email flow |
 | `enable_magic_links` | `False` | Passwordless magic links |
 | `enable_access_codes` | `False` | Passwordless access codes |
-| `enable_audit_log` | `False` | Audit logging |
-| `enable_caching` | follows Redis | Permission cache (requires Redis) |
-| `store_refresh_tokens` | `True` | DB-backed refresh revocation |
+| `enable_audit_log` | `False` | Legacy audit feature-status flag (does **not** gate session/audit HTTP routes) |
+| `enable_caching` | follows Redis | Permission cache |
+| `store_refresh_tokens` | `True` | DB-backed refresh revocation (powers session inventory) |
 | `enable_token_blacklist` | `False` | Immediate access-token blacklist (Redis) |
 
-Passwordless and messaging: [`docs/AUTH_EXTENSIONS.md`](../docs/AUTH_EXTENSIONS.md).
+Passwordless and messaging walkthrough:
+[Passwordless & Messaging](./06-Passwordless-and-Messaging.md).  
+Deep maintainer notes: [`docs/AUTH_EXTENSIONS.md`](../docs/AUTH_EXTENSIONS.md).
 
 ## CLI environment
 
@@ -124,10 +133,10 @@ counters and multi-instance cache invalidation.
 ## Observability
 
 Pass `observability_config=` (see `ObservabilityConfig` / presets) and call
-`auth.instrument_fastapi(app)`. Guides: [97-Observability.md](./97-Observability.md).
+`auth.instrument_fastapi(app)`. Guide: [Observability](./97-Observability.md).
 
 ## Related
 
-- [01-Getting-Started.md](./01-Getting-Started.md)
-- [02-Routers-and-Prefixes.md](./02-Routers-and-Prefixes.md)
-- [`docs/AUTH_UI.md`](../docs/AUTH_UI.md)
+- [Getting Started](./01-Getting-Started.md)
+- [Routers & Prefixes](./02-Routers-and-Prefixes.md)
+- [OutlabsAuth UI](../docs/AUTH_UI.md)

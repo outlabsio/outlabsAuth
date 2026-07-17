@@ -1,85 +1,50 @@
-# 50. API Key Host Integration
+# API Key Host Integration
 
-This guide describes the supported API key integration surface for host
-applications embedding OutlabsAuth.
+> **Handbook** · Issue and check API keys from your FastAPI host.  
+> Part of the [OutlabsAuth Handbook](./README.md).
 
-The short version:
+Two key kinds, three routers to mount, one runtime helper for your own routes.
 
-- use mounted routers for API key management APIs
-- use `auth.authorize_api_key(...)` for custom host-side runtime checks
-- do not build host integrations around direct DB reads or raw primitive
-  service calls
+| Kind | Owner | Typical use |
+|------|-------|-------------|
+| `personal` | A user | Self-service keys that act as that user |
+| `system_integration` | An `IntegrationPrincipal` | Non-human / service integrations (admin-managed) |
 
-## Current Status
+**Do:** mount the routers below and call `auth.authorize_api_key(...)` on host
+routes.  
+**Don’t:** build host auth around raw DB reads or digging into
+`api_key_service` internals.
 
-As of 2026-04-06, the backend integration surface is implemented for:
+```python
+# Personal (self-service)
+app.include_router(get_api_keys_router(auth, prefix="/v1/api-keys"))
 
-- `personal` user-owned API keys
-- EnterpriseRBAC `system_integration` API keys owned by
-  `IntegrationPrincipal`
-- host-side runtime authorization through `auth.authorize_api_key(...)`
+# System integration principals + keys (Enterprise-oriented admin)
+app.include_router(get_integration_principals_router(auth, prefix="/v1/admin"))
 
-What is already in place:
+# Entity-anchored inventory + revoke (incident response)
+app.include_router(get_api_key_admin_router(auth, prefix="/v1/admin/entities"))
+```
 
-- the self-service router for `personal` keys
-- the Enterprise integration-principal admin router for durable
-  `system_integration` keys
-- the entity inventory router for anchored-key listing and incident response
-- owner-aware runtime authorization
-- derived effectiveness fields on API key responses
-- auth-owned observability for API key policy, validation, and lifecycle events
-- the reference `OutlabsAuthUI` workspace for integration principals,
-  system keys, and anchored-key inventory
+```python
+auth_result = await auth.authorize_api_key(
+    session,
+    api_key_string,
+    required_scope="contacts:read",
+    entity_id=entity_id,       # optional entity context
+    ip_address=client_ip,      # optional IP allowlist check
+)
+# None → deny; otherwise an auth-result dict (source="api_key", scopes, …)
+```
 
-What is still outside the backend surface:
+Admin listing of another user’s personal keys also lives on the users router —
+see [User Management API](./23-User-Management-API.md).
 
-- host-product-specific onboarding and operator workflows beyond the reference UI
-- product-specific scope allowlists and naming conventions layered on top of
-  the shared auth model
+---
 
-## Current Backend Test Position
+## Supported surfaces
 
-The backend surface described in this guide is already covered by focused
-Python tests in:
-
-- `tests/integration/test_api_key_admin_endpoints.py`
-- `tests/integration/test_api_key_lifecycle.py`
-- `tests/integration/test_api_keys_router_callback_paths.py`
-- `tests/integration/test_enterprise_api_key_policy_matrix.py`
-- `tests/unit/services/test_api_key_service.py`
-- `tests/unit/test_auth_core_lifecycle.py`
-- `tests/unit/test_auth_deps_permission_sources.py`
-- `tests/unit/authentication/test_strategy.py`
-- `tests/unit/observability/test_observability_integration.py`
-
-The main remaining backend test work after the current UI reference slice is:
-
-- exhaust the remaining denial branches through the admin HTTP surface
-- add route-flow observability assertions for the new admin/runtime API key
-  paths
-- add more pagination, search, and filter edge-case coverage
-- add more admin-created key IP-whitelist and rate-limit edge-case coverage
-
-## Current UI and E2E Position
-
-The reference `OutlabsAuthUI` workspace now covers the main EnterpriseRBAC
-operator flows in:
-
-- `../OutlabsAuthUI/e2e/api-keys/api-keys-workspace.spec.ts`
-- `../OutlabsAuthUI/e2e/api-keys/api-keys-persona-access.spec.ts`
-
-That coverage currently proves:
-
-- admin happy-path lifecycle for entity-scoped and platform-global integrations
-- root-scoped, hierarchy-scoped, and entity-only admin personas
-- direct API lifecycle checks with bearer tokens for the acting personas
-- runtime `X-API-Key` use against a path-scoped host route
-- post-revoke runtime denial
-- read-only persona denial in both UI and direct API paths
-
-## Supported Surfaces
-
-### 1. Self-Service API Key Router
+### 1. Self-service API key router
 
 For owner-managed API key CRUD, mount:
 
@@ -100,7 +65,7 @@ This is the supported self-service surface for:
 - revoking one key
 - rotating one key
 
-### 2. Integration-Principal Admin Router
+### 2. Integration-principal admin router
 
 For EnterpriseRBAC admin products that need durable non-human integrations,
 mount:
@@ -143,7 +108,7 @@ Platform-global superuser routes:
 - `DELETE /system/integration-principals/{principal_id}/api-keys/{key_id}`
 - `POST /system/integration-principals/{principal_id}/api-keys/{key_id}/rotate`
 
-### 3. Entity Inventory and Incident-Response Router
+### 3. Entity inventory and incident-response router
 
 For EnterpriseRBAC inventory and incident response across keys anchored to an
 entity, mount:
@@ -176,7 +141,7 @@ Responses include derived runtime state:
 That lets host products render “stored but currently ineffective” keys without
 inventing their own runtime policy evaluation.
 
-### 4. Runtime Authorization Helper
+### 4. Runtime authorization helper
 
 For host-defined routes that need to accept API keys directly, use:
 

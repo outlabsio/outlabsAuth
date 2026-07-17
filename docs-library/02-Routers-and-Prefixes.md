@@ -1,7 +1,11 @@
-# 02. Routers and Prefixes
+# Routers and Prefixes
 
 OutlabsAuth ships **router factories** (`get_*_router`). You choose which ones to
-mount and under which URL prefix. Nothing is mounted automatically.
+mount and under which URL prefix — nothing is mounted automatically.
+
+Think of this page as the menu of HTTP surfaces you can expose. For a first
+login only, mount `get_auth_router`. For an admin console, mount the fuller sets
+below.
 
 ## Convention
 
@@ -20,7 +24,7 @@ calls `/v1/auth/config`, `/v1/users`, `/v1/roles`, and so on.
 **Rule:** if you mount `get_auth_router(..., prefix="/v1/auth")`, set the UI’s
 `authApiPrefix` to `/v1` (the parent of `/auth`), not `/v1/auth`.
 
-## Factory Catalog
+## Which routers exist?
 
 Imported from `outlabs_auth.routers` unless noted.
 
@@ -55,7 +59,7 @@ OAuth factories live on the oauth modules (not always re-exported from
 
 Host examples may also mount app-owned routers (e.g. team directory) next to these.
 
-## Minimal vs Full Mount Sets
+## What should I mount?
 
 ### Minimum (auth only)
 
@@ -121,14 +125,14 @@ app.include_router(get_memberships_router(auth, prefix="/v1/memberships"))
 app.include_router(get_config_router(auth, prefix="/v1/config"))
 ```
 
-## Config Endpoints (Easy to Confuse)
+## Two different “config” endpoints
 
 | Endpoint | Router | Purpose |
 |----------|--------|---------|
 | `GET {base}/auth/config` | `get_auth_router` | Preset, feature flags, auth methods — **required for OutlabsAuth UI** |
 | `GET/PUT {base}/config/entity-types` | `get_config_router` | Mutable entity-type vocabulary (Enterprise settings) |
 
-## Mount Timing
+## When to mount (timing)
 
 Router factories resolve `auth.deps` at call time. Either:
 
@@ -137,8 +141,17 @@ Router factories resolve `auth.deps` at call time. Either:
 
 Also call `auth.instrument_fastapi(app)` so UnitOfWork middleware commits correctly.
 
-## Source of Truth
+## When docs and code disagree
+
+Trust the running app:
 
 - Factory exports: `outlabs_auth/routers/__init__.py`
 - Runnable mounts: `examples/simple_rbac/main.py`, `examples/enterprise_rbac/main.py`
 - Live OpenAPI: `{your-api}/docs` after boot
+
+## Related
+
+- [Getting Started](./01-Getting-Started.md)
+- [User Management API](./23-User-Management-API.md)
+- [Configuration](./03-Configuration.md)
+- [OutlabsAuth UI](../docs/AUTH_UI.md)

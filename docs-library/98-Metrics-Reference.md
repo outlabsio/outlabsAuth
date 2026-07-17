@@ -1,6 +1,8 @@
-# 98. Metrics Reference
+# Metrics Reference
 
-> **Quick Reference**: Complete catalog of all Prometheus metrics exposed by OutlabsAuth. Use this for building dashboards, alerts, and monitoring queries.
+> **Handbook · Reference** — Prometheus metric catalog.  
+> Part of the [OutlabsAuth Handbook](./README.md). Setup:
+> [Observability](./97-Observability.md).
 
 ## Overview
 

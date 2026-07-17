@@ -1,15 +1,14 @@
-# DD-049: Activity Tracking System (DAU/MAU/WAU/QAU)
+# Activity Tracking (DAU / MAU / …)
 
-**Status**: ✅ Implemented
-**Created**: 2025-01-24
-**Implemented**: 2025-01-24
-**Related**: DD-033 (Redis Counters), DD-036 (Performance Optimizations)
+> **Handbook · Reference** — engagement counters for host apps.  
+> Part of the [OutlabsAuth Handbook](./README.md). Design history: DD-049 in
+> [`docs/DESIGN_DECISIONS.md`](../docs/DESIGN_DECISIONS.md).
 
 ## Overview
 
-### What is Activity Tracking?
+### What is activity tracking?
 
-Activity tracking measures user engagement through time-based metrics:
+Activity tracking measures engagement with time-based metrics:
 
 - **DAU** (Daily Active Users): Unique users active on a calendar day
 - **MAU** (Monthly Active Users): Unique users active in a calendar month

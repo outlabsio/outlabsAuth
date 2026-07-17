@@ -1,19 +1,18 @@
-# 06. Passwordless and Messaging
+# Passwordless and Messaging
 
-Magic links, access codes, invitations, and host-owned delivery (email /
-WhatsApp / SMS). The library **mints** secrets and stores **hashes**; your host
-**delivers** messages.
+Magic links, one-time access codes, invitations, and delivery over email /
+WhatsApp / SMS. Split of responsibility:
 
-Deep specs:
+- The library **mints** secrets and stores **hashes**
+- Your host **delivers** messages (templates, Twilio/Meta/SMTP, branding)
 
-- [`docs/AUTH_EXTENSIONS.md`](../docs/AUTH_EXTENSIONS.md)
-- [`docs/WHATSAPP_ACCOUNT_MESSAGING.md`](../docs/WHATSAPP_ACCOUNT_MESSAGING.md)
-- [24-User-Invitations.md](./24-User-Invitations.md)
+Invitations walkthrough: [User Invitations](./24-User-Invitations.md).  
+Runnable recipes: `examples/enterprise_rbac/` (`transactional_mail.py`,
+`challenge_messaging.py`).  
+Maintainer depth: [`docs/AUTH_EXTENSIONS.md`](../docs/AUTH_EXTENSIONS.md),
+[`docs/WHATSAPP_ACCOUNT_MESSAGING.md`](../docs/WHATSAPP_ACCOUNT_MESSAGING.md).
 
-Runnable host recipes: `examples/enterprise_rbac/` (`transactional_mail.py`,
-`challenge_messaging.py`).
-
-## Design rule
+## Who owns what?
 
 | Concern | Owner |
 |---------|--------|

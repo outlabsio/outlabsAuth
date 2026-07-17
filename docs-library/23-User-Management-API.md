@@ -1,445 +1,191 @@
-# 23. User Management API
+# User Management API
 
-> **Status: partially stale.** Path shapes, ID formats, and some response fields in
-> this file may not match the current routers. Prefer:
->
-> - Live OpenAPI at `{api}/docs` on a running example
-> - [02-Routers-and-Prefixes.md](./02-Routers-and-Prefixes.md)
-> - `outlabs_auth/routers/users.py` and related schemas
->
-> Keep this page as historical narrative until it is rewritten against the current
-> SQLModel / UUID surface.
+> **Handbook** · HTTP surface for user admin and self-service.  
+> Part of the [OutlabsAuth Handbook](./README.md). Mount details:
+> [Routers & Prefixes](./02-Routers-and-Prefixes.md).
 
-## Overview
+Paths below assume the common example mount `prefix="/v1/users"`. Your host may
+use `/iam/users` or another base — only the suffix after that prefix matters.
 
-The User Management API provides endpoints for:
-- Retrieving user details
-- Managing user role assignments
-- Querying user permissions
-
-All endpoints require authentication via JWT access token and appropriate permissions.
-
-**Base Path** (examples): `/v1/users` — your host may use `/iam/users` or another prefix.
+When this page and a running app disagree, trust **live OpenAPI** at
+`{your-api}/docs` and `outlabs_auth/routers/users.py`.
 
 ---
 
-## Endpoints
+## What to mount
 
-### 1. Get User by ID
+| Factory | When |
+|---------|------|
+| `get_users_router(auth, prefix="/v1/users")` | Full admin + self-service (examples, OutlabsAuth UI) |
+| `get_self_service_users_router(...)` | Tiny embed: own profile + permission **names** only |
 
-Retrieve detailed information about a specific user.
+```python
+from outlabs_auth.routers import get_users_router
 
-**Endpoint**: `GET /v1/users/{user_id}`
-
-**Required Permission**: `user:read`
-
-**Path Parameters**:
-- `user_id` (string, required): The unique identifier of the user
-
-**Request Example**:
-```bash
-GET /v1/users/69109a6e73bc51988f730c04
-Authorization: Bearer eyJhbGc...
+app.include_router(get_users_router(auth, prefix="/v1/users"))
 ```
 
-**Response** (200 OK):
-```json
-{
-  "id": "69109a6e73bc51988f730c04",
-  "email": "admin@test.com",
-  "first_name": "Admin",
-  "last_name": "User",
-  "status": "active",
-  "email_verified": false,
-  "is_superuser": true
-}
-```
+Optional: `requires_verification=True` tightens auth on `/me*` routes.
 
-**Error Responses**:
-- `401 Unauthorized`: Missing or invalid authentication token
-- `403 Forbidden`: User lacks `user:read` permission
-- `404 Not Found`: User with specified ID does not exist
-- `500 Internal Server Error`: Server-side error occurred
+Invites are mostly on the **auth** router — see [User Invitations](./24-User-Invitations.md).
+This router only exposes `POST /{user_id}/resend-invite`. Entity membership
+CRUD lives on the memberships router — see [Entity Memberships](./54-Entity-Memberships.md).
 
 ---
 
-### 2. Get User's Roles
+## Permissions at a glance
 
-Retrieve all roles assigned to a specific user.
-
-**Endpoint**: `GET /v1/users/{user_id}/roles`
-
-**Required Permission**: `user:read`
-
-**Path Parameters**:
-- `user_id` (string, required): The unique identifier of the user
-
-**Query Parameters**:
-- `include_inactive` (boolean, optional, default: `false`): Include inactive role memberships in the response
-
-**Request Example**:
-```bash
-GET /v1/users/69109a6e73bc51988f730c04/roles?include_inactive=false
-Authorization: Bearer eyJhbGc...
-```
-
-**Response** (200 OK):
-```json
-[
-  {
-    "id": "role_abc123",
-    "name": "admin",
-    "display_name": "Administrator",
-    "description": "Full system access",
-    "permissions": ["user:*", "role:*", "permission:*"],
-    "is_active": true,
-    "is_system": true,
-    "created_at": "2025-01-09T12:00:00Z",
-    "updated_at": "2025-01-09T12:00:00Z"
-  },
-  {
-    "id": "role_def456",
-    "name": "editor",
-    "display_name": "Content Editor",
-    "description": "Can manage content",
-    "permissions": ["post:*", "comment:*"],
-    "is_active": true,
-    "is_system": false,
-    "created_at": "2025-01-09T12:00:00Z",
-    "updated_at": "2025-01-09T12:00:00Z"
-  }
-]
-```
-
-**Empty Response** (200 OK):
-```json
-[]
-```
-
-**Error Responses**:
-- `401 Unauthorized`: Missing or invalid authentication token
-- `403 Forbidden`: User lacks `user:read` permission
-- `404 Not Found`: User with specified ID does not exist
-- `500 Internal Server Error`: Server-side error occurred
-
-**Notes**:
-- Returns an empty array `[]` if the user has no roles assigned
-- Only returns active memberships by default; use `include_inactive=true` to see all
-- Roles returned do not include the `entity` field (SimpleRBAC has flat role assignments)
+| Action | Typical permission |
+|--------|--------------------|
+| Create user | `user:create` |
+| List / get / roles / audit / sessions (admin) | `user:read` |
+| Update profile, status, roles, revoke sessions/keys | `user:update` |
+| Soft-delete | `user:delete` |
+| Grant/revoke `is_superuser` | Superuser only (`require_superuser`) |
+| `/me*` self-service | Authenticated (optional email verification) |
 
 ---
 
-### 3. Assign Role to User
+## Simple vs Enterprise scope
 
-Assign a role to a user, granting them all permissions associated with that role.
+Same router for both presets. Behavior depends on flags:
 
-**Endpoint**: `POST /v1/users/{user_id}/roles`
+| Concern | Behavior |
+|---------|----------|
+| **SimpleRBAC** (`enable_entity_hierarchy=False`) | Scope filtering is effectively off — list/get are system-wide for permitted actors |
+| **Enterprise** + `enforce_user_scope=True` (default) | Non-global actors only see/mutate users in their entity trees. Out of scope → **404** (not 403). Self always allowed |
+| `root_entity_id` on list | Narrows within the actor’s scope; never widens it |
+| `/orphaned`, `/{id}/membership-history` | Meaningful when membership service exists (Enterprise); otherwise empty pages |
 
-**Required Permission**: `user:update`
-
-**Path Parameters**:
-- `user_id` (string, required): The unique identifier of the user
-
-**Request Body**:
-```json
-{
-  "role_id": "role_abc123",
-  "valid_from": "2025-01-09T00:00:00Z",  // Optional: When membership becomes active
-  "valid_until": "2025-12-31T23:59:59Z"  // Optional: When membership expires
-}
-```
-
-**Request Example**:
-```bash
-POST /v1/users/69109a6e73bc51988f730c04/roles
-Authorization: Bearer eyJhbGc...
-Content-Type: application/json
-
-{
-  "role_id": "role_abc123"
-}
-```
-
-**Response** (201 Created):
-```json
-{
-  "id": "membership_xyz789",
-  "user_id": "69109a6e73bc51988f730c04",
-  "role_id": "role_abc123",
-  "status": "active",
-  "assigned_by": "admin_user_id",
-  "assigned_at": "2025-01-09T12:30:00Z",
-  "valid_from": null,
-  "valid_until": null,
-  "revoked_at": null,
-  "revoked_by": null
-}
-```
-
-**Error Responses**:
-- `401 Unauthorized`: Missing or invalid authentication token
-- `403 Forbidden`: User lacks `user:update` permission
-- `404 Not Found`: User or role with specified ID does not exist
-- `409 Conflict`: User already has this role assigned
-- `500 Internal Server Error`: Server-side error occurred
-
-**Notes**:
-- The `assigned_by` field is automatically set to the ID of the authenticated user making the request
-- `status` is automatically set to `active` for new assignments
-- Time-bound memberships: Use `valid_from` and `valid_until` for temporary role assignments
-- Observability: Logs `role_assigned` event with user_id and role_id
+Set `enforce_user_scope=False` only as a transitional escape hatch.
 
 ---
 
-### 4. Remove Role from User
+## Admin CRUD and lifecycle
 
-Revoke a role assignment from a user, removing all associated permissions.
+| Method | Path | Permission | Notes |
+|--------|------|------------|-------|
+| `POST` | `/` | `user:create` | Admin create (not public register). Only superusers may set `is_superuser` |
+| `GET` | `/` | `user:read` | Paginated list. Query: `page`, `limit`, `search`, `status`, `is_superuser`, `root_entity_id` |
+| `GET` | `/{user_id}` | `user:read` | Single user (scoped) |
+| `PATCH` | `/{user_id}` | `user:update` | Admin profile update |
+| `DELETE` | `/{user_id}` | `user:delete` | Soft delete |
+| `PATCH` | `/{user_id}/password` | `user:update` | Admin set password (no current password) |
+| `PATCH` | `/{user_id}/status` | `user:update` | `active` / `suspended` / `banned` only — not `deleted` |
+| `POST` | `/{user_id}/restore` | `user:update` | Restore a deleted identity (does not restore grants/credentials) |
+| `PATCH` | `/{user_id}/superuser` | Superuser | Grant/revoke platform superuser; cannot revoke yourself |
+| `POST` | `/{user_id}/resend-invite` | `user:update` | New invite token for `INVITED` users |
 
-**Endpoint**: `DELETE /v1/users/{user_id}/roles/{role_id}`
+List `status` filter: `active` | `suspended` | `banned` | `deleted`.
 
-**Required Permission**: `user:update`
-
-**Path Parameters**:
-- `user_id` (string, required): The unique identifier of the user
-- `role_id` (string, required): The unique identifier of the role to remove
-
-**Request Example**:
-```bash
-DELETE /v1/users/69109a6e73bc51988f730c04/roles/role_abc123
-Authorization: Bearer eyJhbGc...
-```
-
-**Response** (204 No Content):
-```
-(Empty response body)
-```
-
-**Error Responses**:
-- `401 Unauthorized`: Missing or invalid authentication token
-- `403 Forbidden`: User lacks `user:update` permission
-- `404 Not Found`:
-  - User with specified ID does not exist
-  - User does not have the specified role assigned
-- `500 Internal Server Error`: Server-side error occurred
-
-**Notes**:
-- Successfully removing a role returns `204 No Content` with an empty body
-- The `revoked_by` field is automatically set to the ID of the authenticated user
-- The `revoked_at` timestamp is set to the current time
-- Observability: Logs `role_revoked` event with user_id and role_id
+**Create body** (`UserCreateRequest`): email, password, optional names / phone /
+`is_superuser`.  
+**Update body** (`UserUpdateRequest`): email, names, phone (partial).  
+**Responses**: `UserResponse` (UUID `id`, profile fields, status flags).  
+**List**: `PaginatedResponse[UserResponse]` (`items`, `total`, `page`, `limit`, `pages`).
 
 ---
 
-### 5. Get User's Effective Permissions
+## Self-service (`/me`)
 
-Retrieve all effective permissions for a user (deduplicated from all assigned roles).
-
-**Endpoint**: `GET /v1/users/{user_id}/permissions`
-
-**Required Permission**: `user:read`
-
-**Path Parameters**:
-- `user_id` (string, required): The unique identifier of the user
-
-**Request Example**:
-```bash
-GET /v1/users/69109a6e73bc51988f730c04/permissions
-Authorization: Bearer eyJhbGc...
-```
-
-**Response** (200 OK):
-```json
-[
-  "apikey:create",
-  "apikey:delete",
-  "apikey:read",
-  "apikey:update",
-  "comment:create",
-  "comment:delete",
-  "comment:read",
-  "comment:update",
-  "permission:create",
-  "permission:delete",
-  "permission:read",
-  "permission:update",
-  "post:create",
-  "post:delete",
-  "post:read",
-  "post:update",
-  "role:create",
-  "role:delete",
-  "role:read",
-  "role:update",
-  "user:create",
-  "user:delete",
-  "user:read",
-  "user:update"
-]
-```
-
-**Empty Response** (200 OK):
-```json
-[]
-```
-
-**Error Responses**:
-- `401 Unauthorized`: Missing or invalid authentication token
-- `403 Forbidden`: User lacks `user:read` permission
-- `404 Not Found`: User with specified ID does not exist
-- `500 Internal Server Error`: Server-side error occurred
-
-**Notes**:
-- Returns a sorted, deduplicated list of permission names
-- Aggregates permissions from all active roles assigned to the user
-- Empty array `[]` indicates the user has no permissions (no roles assigned)
-- Permissions are returned in alphabetical order for consistency
+| Method | Path | Auth | Notes |
+|--------|------|------|-------|
+| `GET` | `/me` | Authenticated | Own profile |
+| `PATCH` | `/me` | Authenticated | Own profile (`UserUpdateRequest`) |
+| `POST` | `/me/change-password` | Authenticated | `ChangePasswordRequest` (current + new) → 204 |
+| `POST` | `/me/phone/request-code` | Authenticated | OTP to registered phone (rate-limited) → 204 |
+| `POST` | `/me/phone/verify-code` | Authenticated | `PhoneVerifyCodeRequest` → `UserResponse` |
 
 ---
 
-## Common Patterns
+## Roles and effective permissions
 
-### Authentication Header
+Direct role memberships (flat RBAC and Enterprise “direct” roles):
 
-All endpoints require a valid JWT access token in the Authorization header:
+| Method | Path | Permission | Notes |
+|--------|------|------------|-------|
+| `GET` | `/{user_id}/roles` | `user:read` | `?include_inactive` → `RoleResponse[]` |
+| `GET` | `/{user_id}/role-memberships` | `user:read` | Membership rows + embedded role |
+| `POST` | `/{user_id}/roles` | `user:update` | `AssignRoleRequest` → membership (201). Actor must hold all permissions on the role |
+| `DELETE` | `/{user_id}/roles/{role_id}` | `user:update` | Soft-revoke |
+| `PATCH` | `/{user_id}/role-memberships/{membership_id}` | `user:update` | Validity window / status |
+| `GET` | `/{user_id}/permissions` | Self **or** `user:read` | Effective perms: direct roles **and** entity-membership roles when present → `UserPermissionSource[]` |
 
-```bash
-Authorization: Bearer <access_token>
-```
-
-To obtain an access token, use the `/v1/auth/login` endpoint (see `22-JWT-Tokens.md`).
-
-### Permission Checking
-
-Before calling these endpoints, ensure the authenticated user has the required permissions:
-- **Read operations** (`GET`): Require `user:read` permission
-- **Write operations** (`POST`, `DELETE`): Require `user:update` permission
-
-Superusers automatically have all permissions and bypass permission checks.
-
-### Error Handling
-
-Standard HTTP status codes are used:
-- `2xx`: Success
-- `4xx`: Client error (bad request, unauthorized, forbidden, not found)
-- `5xx`: Server error
-
-Error responses include a `detail` field with a human-readable message:
-
-```json
-{
-  "detail": "User not found"
-}
-```
-
-### Observability
-
-All successful write operations (POST, DELETE) trigger observability events:
-- `role_assigned`: When a role is assigned to a user
-- `role_revoked`: When a role is removed from a user
-
-These events include:
-- `user_id`: The user being modified
-- `role_id`: The role being assigned/revoked
-- `timestamp`: When the operation occurred
-- `performed_by`: The authenticated user who performed the action
-
-See `97-Observability.md` for details on monitoring and logging.
+Entity-scoped role assignment (membership + roles on an entity) is **not** here —
+use [Entity Memberships](./54-Entity-Memberships.md).
 
 ---
 
-## Complete Example Workflow
+## Orphans and membership history (Enterprise)
 
-### Scenario: Grant Editor Role to a New User
-
-```bash
-# Step 1: Get the user's current details
-GET /v1/users/new_user_id
-Authorization: Bearer <access_token>
-
-# Response: User has no roles yet
-
-# Step 2: Check what roles are available (from Roles API)
-GET /v1/roles
-Authorization: Bearer <access_token>
-
-# Response: List of roles including "editor" role
-
-# Step 3: Assign the "editor" role
-POST /v1/users/new_user_id/roles
-Authorization: Bearer <access_token>
-Content-Type: application/json
-
-{
-  "role_id": "role_editor_123"
-}
-
-# Response 201: Role assigned successfully
-
-# Step 4: Verify the user's effective permissions
-GET /v1/users/new_user_id/permissions
-Authorization: Bearer <access_token>
-
-# Response: ["post:create", "post:read", "post:update", "comment:create"]
-
-# Step 5: List all roles assigned to the user
-GET /v1/users/new_user_id/roles
-Authorization: Bearer <access_token>
-
-# Response: Array with "editor" role details
-```
-
-### Scenario: Temporary Role Assignment
-
-```bash
-# Assign a role that expires after 30 days
-POST /v1/users/consultant_user_id/roles
-Authorization: Bearer <access_token>
-Content-Type: application/json
-
-{
-  "role_id": "role_consultant_123",
-  "valid_from": "2025-01-09T00:00:00Z",
-  "valid_until": "2025-02-09T23:59:59Z"
-}
-
-# The role will automatically become inactive after 2025-02-09
-```
-
-### Scenario: Revoke Access
-
-```bash
-# Remove a user's role when they leave the project
-DELETE /v1/users/former_member_id/roles/role_editor_123
-Authorization: Bearer <access_token>
-
-# Response 204: Role removed, user no longer has editor permissions
-
-# Verify permissions are gone
-GET /v1/users/former_member_id/permissions
-Authorization: Bearer <access_token>
-
-# Response: [] (empty array if no other roles)
-```
+| Method | Path | Permission | Notes |
+|--------|------|------------|-------|
+| `GET` | `/orphaned` | `user:read` | Users with no active entity memberships. Empty for non-global scoped actors or without membership service |
+| `GET` | `/{user_id}/membership-history` | `user:read` | Append-only entity membership lifecycle events |
 
 ---
 
-## Related Documentation
+## Personal API keys (admin view)
 
-- **22-JWT-Tokens.md**: Authentication and token management
-- **13-Core-Authorization-Concepts.md**: Understanding users, roles, and permissions
-- **12-Data-Models.md**: Database models for User, Role, and UserRoleMembership
-- **97-Observability.md**: Monitoring role assignment events
-- **95-Testing-Guide.md**: Testing user management functionality
+| Method | Path | Permission | Notes |
+|--------|------|------------|-------|
+| `GET` | `/{user_id}/api-keys` | `user:read` | List personal keys (no secrets) |
+| `DELETE` | `/{user_id}/api-keys/{key_id}` | `user:update` | Admin revoke |
+
+Self-service key minting and system/integration keys:
+[API Key Host Integration](./50-API-Key-Host-Integration.md).
 
 ---
 
-## Notes for EnterpriseRBAC
+## Sessions, social accounts, audit (elsewhere)
 
-This documentation describes the SimpleRBAC preset where roles are assigned globally to users.
+Do not duplicate those tables here:
 
-In **EnterpriseRBAC**, role assignments are scoped to entities (departments, teams, etc.). The API endpoints will be different:
-- `POST /v1/entities/{entity_id}/members` - Assign role to user within an entity
-- `GET /v1/entities/{entity_id}/members/{user_id}` - Get user's roles in an entity
-- `DELETE /v1/entities/{entity_id}/members/{user_id}/roles/{role_id}` - Remove role from user in entity
+| Area | Guide |
+|------|-------|
+| List / revoke sessions (`/me/sessions`, `/{user_id}/sessions`) | [Sessions & Audit](./05-Sessions-and-Audit.md) |
+| Per-user audit (`/{user_id}/audit-events`) + cross-user search | same |
+| Link / unlink social (`/me/social-accounts`) | [OAuth & Social Login](./04-OAuth-and-Social-Login.md) |
 
-See the EnterpriseRBAC API documentation (coming soon) for entity-scoped role management.
+---
+
+## Minimal self-service router
+
+For hosts that only need “who am I?”:
+
+```python
+from outlabs_auth.routers import get_self_service_users_router
+
+app.include_router(get_self_service_users_router(auth, prefix="/v1/account"))
+```
+
+| Method | Path | Response |
+|--------|------|----------|
+| `GET` | `/me` | `UserResponse` |
+| `GET` | `/me/permissions` | `list[str]` — permission **names** only (not `UserPermissionSource`) |
+
+---
+
+## Schemas quick reference
+
+| Model | Role |
+|-------|------|
+| `UserResponse` | Profile payload |
+| `UserCreateRequest` / `UserUpdateRequest` | Admin create / patch |
+| `ChangePasswordRequest` / `AdminResetPasswordRequest` | Password changes |
+| `UserStatusUpdateRequest` / `UserSuperuserUpdateRequest` | Status / superuser |
+| `PhoneVerifyCodeRequest` | Phone OTP confirm |
+| `AssignRoleRequest` / `UserRoleMembershipUpdate` | Direct roles |
+| `UserRoleMembershipResponse` / `UserRoleMembershipDetailResponse` | Membership rows |
+| `UserPermissionSource` | Effective permission + source metadata |
+| `OrphanedUserResponse` / `MembershipHistoryEventResponse` | Enterprise helpers |
+| `PaginatedResponse[T]` | List envelopes |
+
+---
+
+## Related
+
+- [User Status](./48-User-Status-System.md)
+- [User Invitations](./24-User-Invitations.md)
+- [Sessions & Audit](./05-Sessions-and-Audit.md)
+- [Core Authorization Concepts](./13-Core-Authorization-Concepts.md)

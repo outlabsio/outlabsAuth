@@ -7,7 +7,8 @@
 - Admin UI now lives in the sibling repository `../OutlabsAuthUI`.
 - `examples/` and `scripts/`: runnable demos and smoke scripts.
 - `observability/` and `docker-compose.yml`: metrics/logging stack and local dependencies.
-- `docs/` and `docs-library/`: design docs, guides, and API references.
+- `docs/`: maintainer design specs, audits, release process
+- `docs-library/`: implementer handbook (user-facing guides; future docs-site source)
 
 ## Build, Test, and Development Commands
 - `uv run start.py`: interactive launcher for API/observability services.

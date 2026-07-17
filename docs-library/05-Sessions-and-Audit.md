@@ -1,14 +1,14 @@
-# 05. Sessions and Audit
+# Sessions and Audit
 
-How hosts expose **active login sessions** (refresh tokens) and **user audit
-events**. Requires `get_users_router` (sessions + per-user audit) and optionally
-`get_audit_router` (cross-user search).
+Let users (and admins) see **active devices / logins** and search **audit
+events**. Mount `get_users_router` for sessions and per-user history; mount
+`get_audit_router` when you need cross-user search.
 
-## Sessions = refresh tokens
+## Sessions (active logins)
 
-When `store_refresh_tokens=True` (default), each successful login creates a
-refresh-token row. The users router surfaces those as “sessions” **without**
-returning secrets.
+Under the hood, a “session” is a stored refresh-token row
+(`store_refresh_tokens=True`, the default). The users router lists those rows as
+sessions **without** returning secrets.
 
 Mount users (examples use `/v1/users`):
 

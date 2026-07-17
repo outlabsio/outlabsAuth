@@ -22,19 +22,27 @@ Most auth products push you into a separate IdP or a black-box service. OutlabsA
 
 ## Documentation
 
+**Implementers** start in the [OutlabsAuth Handbook](./docs-library/)
+(`docs-library/`) — human-readable guides written for people integrating the
+library. A public Nuxt docs site can mirror that tree later; get the content
+right here first.
+
 | Guide | What it covers |
 |-------|----------------|
+| [Handbook home](./docs-library/) | Reading paths, full guide index |
+| [Introduction](./docs-library/00-Introduction.md) | Mental model in a few minutes |
 | [Getting Started](./docs-library/01-Getting-Started.md) | Install → migrate → mount → login → optional UI |
+| [Choosing a Preset](./docs-library/07-Choosing-a-Preset.md) | SimpleRBAC vs EnterpriseRBAC in plain language |
 | [Routers & Prefixes](./docs-library/02-Routers-and-Prefixes.md) | Which `get_*_router` factories to mount |
 | [Configuration](./docs-library/03-Configuration.md) | Constructor flags, Redis, schema, production defaults |
 | [OAuth](./docs-library/04-OAuth-and-Social-Login.md) · [Sessions & audit](./docs-library/05-Sessions-and-Audit.md) · [Passwordless](./docs-library/06-Passwordless-and-Messaging.md) | Optional auth extensions |
-| [User docs index](./docs-library/) | Topic guides (JWT, invites, API keys, observability, …) |
 | [Examples](./examples/) | Runnable SimpleRBAC + EnterpriseRBAC apps |
 | [OutlabsAuth UI](./docs/AUTH_UI.md) | Sister admin console (Vite/React) |
-| [API design](./docs/API_DESIGN.md) | Host DX patterns |
-| [Comparison matrix](./docs/COMPARISON_MATRIX.md) | Simple vs Enterprise features |
 
-Maintainer design specs live under [`docs/`](./docs/).
+**Maintainers** (design decisions, audits, release process): [`docs/`](./docs/).
+Deep host DX / feature matrix when you need them:
+[API design](./docs/API_DESIGN.md),
+[Comparison matrix](./docs/COMPARISON_MATRIX.md).
 
 ## Choose a Preset
 

@@ -1,107 +1,52 @@
 # JWT Tokens
 
-**Tags**: #authentication #jwt #tokens #stateless
+> **Handbook · Reference** — how access and refresh tokens behave.  
+> Part of the [OutlabsAuth Handbook](./README.md). For mounting login routes, see
+> [Routers & Prefixes](./02-Routers-and-Prefixes.md).
 
-Complete guide to JSON Web Tokens (JWT) in OutlabsAuth.
+## How OutlabsAuth uses JWTs
 
----
+Login (and accept-invite, magic-link verify, …) returns two tokens:
 
-## What are JWT Tokens?
+| Token | Typical lifetime | Role |
+|-------|------------------|------|
+| **Access** | ~15 minutes | Send as `Authorization: Bearer …` on API calls |
+| **Refresh** | ~30 days | Exchange for a new access token; powers [session inventory](./05-Sessions-and-Audit.md) when stored |
 
-**JWT (JSON Web Token)** is a compact, URL-safe token format for securely transmitting information between parties as a JSON object.
+Defaults are configurable on `AuthConfig`. Prefer short access tokens; revoke
+refresh rows (or blacklist access JWTs with Redis) when you need immediate cut-off.
 
-**Structure**: `header.payload.signature`
+### Access token claims (typical)
 
-**Example**:
-```
-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyXzEyMyIsImV4cCI6MTY0MjU5NjAwMH0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
-```
-
-**Decoded**:
 ```json
-// Header
 {
-  "alg": "HS256",
-  "typ": "JWT"
-}
-
-// Payload
-{
-  "sub": "user_123",
+  "sub": "<user uuid>",
   "exp": 1642596000,
   "iat": 1642594200,
   "type": "access",
-  "aud": "outlabs-auth"
-}
-
-// Signature (cryptographic)
-```
-
----
-
-## Token Types
-
-OutlabsAuth uses two token types:
-
-### 1. Access Token (15 minutes)
-
-**Purpose**: Short-lived token for API requests
-
-**Lifetime**: 15 minutes (configurable)
-
-**Claims**:
-```json
-{
-  "sub": "user_123",           // Subject (user ID)
-  "exp": 1642596000,           // Expiration (Unix timestamp)
-  "iat": 1642594200,           // Issued at
-  "type": "access",            // Token type
-  "aud": "outlabs-auth",       // Audience (prevents cross-app token reuse)
-  "jti": "Abc123XyZ789..."     // JWT ID (for immediate revocation/blacklisting)
+  "aud": "outlabs-auth",
+  "jti": "Abc123XyZ789..."
 }
 ```
 
-**Usage**:
-```bash
-GET /protected
-Authorization: Bearer eyJhbGc...
-```
+### Refresh token claims (typical)
 
-**Security**: Short expiration limits damage if compromised
-
-### 2. Refresh Token (30 days)
-
-**Purpose**: Long-lived token to get new access tokens
-
-**Lifetime**: 30 days (configurable)
-
-**Claims**:
 ```json
 {
-  "sub": "user_123",
-  "exp": 1645188000,           // 30 days from now
+  "sub": "<user uuid>",
+  "exp": 1645188000,
   "iat": 1642594200,
   "type": "refresh",
-  "aud": "outlabs-auth",       // Audience (prevents cross-app token reuse)
-  "jti": "Xyz789Abc123..."     // JWT ID (ensures token uniqueness, prevents collisions)
+  "aud": "outlabs-auth",
+  "jti": "..."
 }
 ```
 
-**Note**: The `jti` (JWT ID) was added to refresh tokens to prevent collisions when multiple sessions are created simultaneously for the same user. Each refresh token is guaranteed to be unique.
-
-**Usage**:
-```bash
-POST /auth/refresh
-{
-  "refresh_token": "eyJhbGc..."
-}
-```
-
-**Security**: Stored securely (httpOnly cookie recommended)
+Refresh tokens must **not** be accepted as access credentials (SEC-1).
 
 ---
 
-## Token Flow
+## Token flow
 
 ```
 ┌─────────────────────────────────────────────────────────┐

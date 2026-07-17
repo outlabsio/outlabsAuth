@@ -1,265 +1,90 @@
 # User Status System
 
-**Decision**: DD-048
-**Date**: 2025-01-24
-**Status**: Active
-
----
+> **Handbook** · What each user status means for login and admin flows.  
+> Part of the [OutlabsAuth Handbook](./README.md). Related:
+> [User Invitations](./24-User-Invitations.md),
+> [User Management API](./23-User-Management-API.md).
 
 ## Overview
 
-OutlabsAuth uses a simple, clear user status system with 5 statuses that control authentication access. This document defines the semantics and behavior of each status.
+Status answers one question: **can this user authenticate?**
 
----
+| Status | Can log in? | Typical meaning |
+|--------|-------------|-----------------|
+| `active` | Yes | Normal account |
+| `invited` | No | Invite sent; password not set yet |
+| `suspended` | No | Temporary block |
+| `banned` | No | Permanent block |
+| `deleted` | No | Soft-deleted |
 
-## Design Philosophy
-
-**Core Principle**: User status is an **authentication concern**, not a business logic concern.
-
-The status field answers one question: **Can this user authenticate?**
-
-- ✅ **ACTIVE** → Yes
-- ❌ **INVITED** → No (hasn't set password yet)
-- ❌ **SUSPENDED** → No (temporarily)
-- ❌ **BANNED** → No (permanently)
-- ❌ **DELETED** → No (soft-deleted)
-
-Other concerns (email verification, inactivity tracking, policy violations) are handled through separate fields or application logic.
-
----
-
-## User Status Enum
+Email verification, inactivity, and product policy live in **other** fields —
+do not overload `status` for those.
 
 ```python
-from enum import Enum
+from outlabs_auth.models.sql.enums import UserStatus  # or your import path
 
-class UserStatus(str, Enum):
-    """User account status controlling authentication access"""
-    ACTIVE = "active"
-    INVITED = "invited"
-    SUSPENDED = "suspended"
-    BANNED = "banned"
-    DELETED = "deleted"
+# active | invited | suspended | banned | deleted
 ```
 
 ---
 
-## Status Definitions
+## Status definitions
 
-### 1. ACTIVE
+### ACTIVE
 
-**Can authenticate**: ✅ Yes
+**Can authenticate:** yes
 
-**Description**: Normal, active user account with full authentication access.
+Normal account with full authentication access.
 
-**Use Cases**:
-- Standard user accounts
-- Default status for newly created users
-- Users who have passed email verification (if required)
+**Behavior:** email/password login, API keys, refresh — permissions apply as usual.
 
-**Behavior**:
-- Can login with email/password
-- Can use API keys
-- Can refresh access tokens
-- All permissions apply normally
-
-**Transitions**:
-- Can be changed to SUSPENDED (temporary block)
-- Can be changed to BANNED (permanent block)
-- Can be changed to DELETED (soft delete)
+**Transitions:** → suspended, banned, or deleted (admin).
 
 ---
 
-### 2. INVITED
+### INVITED
 
-**Can authenticate**: No
+**Can authenticate:** no
 
-**Description**: User has been invited but hasn't set their password yet. Created via the invitation system (`POST /v1/auth/invite`).
+Created via `POST /v1/auth/invite`. No password yet; invite token fields are set.
 
-**Use Cases**:
-- Admin invites a new team member by email
-- Onboarding users without requiring admin to set passwords
+**Behavior:** login raises an inactive-account error pointing the user at the invite email.
 
-**Behavior**:
-- Cannot login (no password set) — raises `AccountInactiveError` with message: "Account has not been activated yet. Please check your email for the invitation link."
-- Has no `hashed_password` (NULL)
-- Has an `invite_token` (SHA-256 hash) and `invite_token_expires`
-- `invited_by_id` tracks who sent the invitation
+**Transitions:** → active on `POST /v1/auth/accept-invite`; admin may delete/cancel.
 
-**Related Fields**:
-```python
-invite_token: Optional[str] = None          # SHA-256 hash of invite token
-invite_token_expires: Optional[datetime] = None  # Token expiry
-invited_by_id: Optional[UUID] = None        # FK to inviting user
-```
-
-**Transitions**:
-- Changes to ACTIVE when user accepts invite (`POST /v1/auth/accept-invite`)
-- Can be changed to DELETED (admin cancels invite)
-
-**Notes**:
-- Invite tokens can be regenerated via `POST /v1/users/{id}/resend-invite`
-- On acceptance, `email_verified` is set to `true` and invite token fields are cleared
-- See [24-User-Invitations.md](./24-User-Invitations.md) for full details
+Resend: `POST /v1/users/{id}/resend-invite`. Details: [User Invitations](./24-User-Invitations.md).
 
 ---
 
-### 3. SUSPENDED
+### SUSPENDED
 
-**Can authenticate**: ❌ No
+**Can authenticate:** no
 
-**Description**: Temporarily blocked account that can be reactivated.
+Temporarily blocked; can be reactivated.
 
-**Use Cases**:
-- Temporary ban for policy violation (e.g., "banned for 7 days")
-- Payment/subscription issues (e.g., "account suspended until payment resolved")
-- Under investigation (e.g., "suspicious activity detected")
-- Cooling-off period after multiple warnings
+**Behavior:** login denied; revoke refresh tokens on suspend; API keys should not work. Optional `suspended_until` for auto-reactivation in host logic.
 
-**Behavior**:
-- Cannot login - raises `AccountInactiveError`
-- All existing tokens remain valid until expiration (refresh tokens should be revoked on suspension)
-- API keys do not work
-- Can be manually reactivated to ACTIVE by admin
-- Can be auto-reactivated if `suspended_until` date passes (application logic)
-
-**Related Fields**:
-```python
-suspended_until: Optional[datetime] = None  # Optional auto-expiry
-```
-
-**Error Response**:
-```json
-{
-  "detail": "Account is suspended until 2025-02-01T00:00:00Z",
-  "status": "suspended",
-  "suspended_until": "2025-02-01T00:00:00Z"
-}
-```
-
-**Transitions**:
-- Can be changed to ACTIVE (reactivation)
-- Can be changed to BANNED (escalation)
-- Can be changed to DELETED (user deletion)
-
-**Best Practices**:
-- Always set `suspended_until` if suspension is temporary
-- Revoke all refresh tokens when suspending user
-- Consider blacklisting active access tokens if immediate revocation needed (requires Redis)
-- Log suspension reason in audit log
+**Transitions:** → active, banned, or deleted.
 
 ---
 
-### 4. BANNED
+### BANNED
 
-**Can authenticate**: ❌ No
+**Can authenticate:** no
 
-**Description**: Permanently blocked account for security or severe policy violations.
-
-**Use Cases**:
-- Security threat detected (e.g., "account compromised")
-- Fraud detected (e.g., "payment fraud")
-- Severe Terms of Service violation (e.g., "harassment, illegal content")
-- Repeated policy violations after multiple suspensions
-
-**Behavior**:
-- Cannot login - raises `AccountInactiveError`
-- All existing tokens remain valid until expiration (should be revoked immediately)
-- API keys do not work
-- Intended to be permanent (but can be manually changed if appeal successful)
-
-**Error Response**:
-```json
-{
-  "detail": "Account is permanently banned",
-  "status": "banned"
-}
-```
-
-**Transitions**:
-- Rarely changed (intended to be permanent)
-- Can be changed to ACTIVE (only after appeal review)
-- Can be changed to DELETED (data cleanup)
-
-**Best Practices**:
-- Revoke ALL refresh tokens immediately
-- Revoke ALL active API keys
-- Consider blacklisting current access token (requires Redis)
-- Log ban reason in audit log with detailed context
-- Store ban reason in `metadata` field for record-keeping
-
-```python
-user.status = UserStatus.BANNED
-user.metadata["ban_reason"] = "Fraud detected: multiple chargebacks"
-user.metadata["banned_at"] = datetime.now(timezone.utc).isoformat()
-user.metadata["banned_by"] = admin_user_id
-```
+Permanent block for severe policy or security issues. Revoke refresh tokens and API keys immediately. Rarely reversed (appeal → active, or → deleted).
 
 ---
 
-### 5. DELETED
+### DELETED
 
-**Can authenticate**: ❌ No
+**Can authenticate:** no
 
-**Description**: Soft-deleted account for data retention and audit compliance.
-
-**Use Cases**:
-- User requested account deletion (e.g., "delete my account")
-- GDPR "right to be forgotten" with retention period (e.g., "keep 30 days for legal compliance")
-- Compliance requirements (e.g., "audit log retention")
-- Account recovery grace period (e.g., "30-day recovery window")
-
-**Behavior**:
-- Cannot login - raises `AccountInactiveError`
-- All data remains in database
-- Can be hard-deleted (permanently) after retention period
-- Can be restored to ACTIVE if within recovery period
-
-**Related Fields**:
-```python
-deleted_at: Optional[datetime] = None  # Soft delete timestamp
-```
-
-**Error Response**:
-```json
-{
-  "detail": "Account has been deleted",
-  "status": "deleted",
-  "deleted_at": "2025-01-15T10:30:00Z"
-}
-```
-
-**Transitions**:
-- Can be changed to ACTIVE (account recovery)
-- Eventually hard-deleted (purged from database) after retention period
-
-**Best Practices**:
-- Always set `deleted_at` timestamp
-- Revoke all refresh tokens
-- Revoke all API keys
-- Set retention period based on compliance requirements (30-90 days typical)
-- Use background job to hard-delete after retention period
-
-```python
-# Soft delete
-user.status = UserStatus.DELETED
-user.deleted_at = datetime.now(timezone.utc)
-await user.save()
-
-# Hard delete after retention period (e.g., 30 days later)
-retention_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-deleted_users = await UserModel.find(
-    UserModel.status == UserStatus.DELETED,
-    UserModel.deleted_at < retention_cutoff
-).to_list()
-
-for user in deleted_users:
-    await user.delete()  # Permanent deletion
-```
+Soft delete for retention / recovery windows. Restore via `POST /v1/users/{id}/restore` when your product allows it; hard-delete later per your retention policy (`deleted_at` is set).
 
 ---
 
-## Authentication Logic
+## Authentication logic
 
 ### can_authenticate() Method
 

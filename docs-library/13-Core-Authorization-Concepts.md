@@ -1,10 +1,14 @@
-# 13. Core Authorization Concepts
+# Core Authorization Concepts
 
-This document explains the core concepts of the OutlabsAuth authorization model, including the relationships between Users, Permissions, Roles, and Entities.
+> **Handbook** · Conceptual guide for implementers.  
+> Part of the [OutlabsAuth Handbook](./README.md). Choosing a preset:
+> [07 — Choosing a Preset](./07-Choosing-a-Preset.md).
 
-## The Core Components
+How users, permissions, roles, and (in Enterprise) entities fit together.
 
-At its heart, the system uses a Role-Based Access Control (RBAC) model.
+## The building blocks
+
+OutlabsAuth is Role-Based Access Control (RBAC) at its core.
 
 1.  **Permission**: A single, specific action a user can perform. These are represented as strings, typically in the format `resource:action` (e.g., `user:create`, `invoice:approve`).
 2.  **Role**: A named collection of permissions. For example, an "Accountant" role might contain the `invoice:read`, `invoice:create`, and `invoice:pay` permissions. Roles are the primary way to manage and assign permissions.

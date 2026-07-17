@@ -1,8 +1,7 @@
-# DD-095: Testing Guide
+# Testing Guide
 
-**Status**: Complete
-**Created**: 2025-01-24
-**Related**: DD-048 (User Status), DD-049 (Activity Tracking)
+> **Handbook · Reference** — how to run and extend tests for hosts and the library.  
+> Part of the [OutlabsAuth Handbook](./README.md).
 
 ## Overview
 

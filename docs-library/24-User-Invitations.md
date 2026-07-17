@@ -1,124 +1,122 @@
-# 24. User Invitations
+# User Invitations
 
-**Tags**: #authentication #invitations #onboarding #users
-
-Complete guide to the user invitation system in OutlabsAuth.
-
----
+> **Handbook** · Onboarding by email.  
+> Part of the [OutlabsAuth Handbook](./README.md). Related:
+> [Passwordless & Messaging](./06-Passwordless-and-Messaging.md),
+> [User Status](./48-User-Status-System.md),
+> [User Management API](./23-User-Management-API.md).
 
 ## Overview
 
-The invitation system lets admins onboard users by email without setting a password on their behalf. The invited user receives a token-based link, sets their own password, and their account activates automatically.
+Invite users by email without setting a password for them. They open a
+token-based link, choose their own password, and the account activates
+(`INVITED` → `ACTIVE`) with a JWT session.
 
-**Key characteristics**:
-- Invited users are created with `status=INVITED` and no password
-- Invite tokens use SHA-256 hashing (same security pattern as password reset tokens)
-- Token expiry is configurable (default: 7 days)
-- Provider-agnostic delivery — the library generates the token and emits a typed mail intent; your app decides how to brand and send it
-- Works with both SimpleRBAC and EnterpriseRBAC presets
+| Concern | Who owns it |
+|---------|-------------|
+| Mint invite token, hash + expiry in Postgres | Library |
+| Branding, email provider, copy | Host (`on_after_invite` / mail intent) |
+| Accept link + set password | Client → `POST …/auth/accept-invite` |
+
+**Also true:**
+
+- Invite tokens are SHA-256 hashed at rest (same pattern as password-reset tokens)
+- Default expiry: 7 days (`invite_token_expire_days`)
+- Works with SimpleRBAC and EnterpriseRBAC
+
+---
+
+## Endpoints
+
+Mount `get_auth_router` and `get_users_router` (examples use `/v1`):
+
+| Action | Method + path | Auth |
+|--------|---------------|------|
+| Create invite | `POST /v1/auth/invite` | `user:create` |
+| Accept invite | `POST /v1/auth/accept-invite` | Public |
+| Resend invite | `POST /v1/users/{user_id}/resend-invite` | `user:update` |
+
+Create/resend return `UserResponse` (the plaintext token is **not** in the JSON
+body — it goes to the host delivery hook). Accept returns `LoginResponse`.
 
 ---
 
 ## Configuration
 
-### Enable/Disable
-
-Invitations are **enabled by default**. To disable:
+Invitations are **enabled by default** for product/UI detection:
 
 ```python
 auth = SimpleRBAC(
     database_url="...",
     secret_key="...",
-    enable_invitations=False,  # Disables invite endpoints
+    enable_invitations=True,       # default — surfaced on GET /auth/config
+    invite_token_expire_days=7,    # default
 )
 ```
 
-### Token Expiry
+`GET /v1/auth/config` → `features.invitations` so OutlabsAuth UI (and your app)
+can show or hide invite UI.
 
-Control how long invite tokens remain valid:
-
-```python
-auth = SimpleRBAC(
-    database_url="...",
-    secret_key="...",
-    invite_token_expire_days=14,  # Default: 7
-)
-```
-
-### Config Detection
-
-The `/v1/auth/config` endpoint exposes the invitation feature flag so UIs can show/hide invite functionality:
-
-```json
-{
-  "preset": "SimpleRBAC",
-  "features": {
-    "invitations": true,
-    "entity_hierarchy": false,
-    ...
-  }
-}
-```
+> **Honest caveat:** setting `enable_invitations=False` currently hides the
+> feature in config / UI discovery. Invite HTTP routes remain registered —
+> treat the flag as a product switch, and avoid advertising invites when it is
+> off. If you need a hard gate, do not mount invite-facing UX (or add a host
+> middleware check).
 
 ---
 
-## How It Works
+## How it works
 
 ### Flow
 
 ```
-Admin calls POST /invite
+Admin calls POST /v1/auth/invite
     |
     v
 User created (status=INVITED, no password)
     |
     v
-Transactional mail service receives invite intent
+Host receives invite intent / on_after_invite (plaintext token once)
     |
     v
-Host app composes branded message + chooses provider
+Host sends branded email with accept URL + token
     |
     v
-App sends link: {base_url}/accept-invite?token={token}
+User POST /v1/auth/accept-invite { token, new_password }
     |
     v
-User visits link, sets password via POST /accept-invite
-    |
-    v
-Account activated (status=ACTIVE, email_verified=true)
-    |
-    v
-User can now login normally
+User ACTIVE + LoginResponse (access + refresh JWTs)
 ```
 
-### Token Security
+### Token security
 
 Invite tokens follow the same security model as password reset tokens:
 
 1. A cryptographically random token is generated (`secrets.token_urlsafe(32)`)
 2. The SHA-256 hash is stored in the database (`invite_token` column)
-3. The plain token is returned to the caller (never stored)
+3. The plain token is delivered once to the host hook (never stored plaintext)
 4. On acceptance, the plain token is hashed and matched against the database
 5. Tokens are single-use and cleared after acceptance
 
 ---
 
-## API Endpoints
+## API details
 
-### 1. Invite User
+### Invite user
 
 Create an invited user account.
 
 **Endpoint**: `POST /v1/auth/invite`
 
-**Required Permission**: `user:create`
+**Required permission**: `user:create`
 
-**Request Body**:
+**Request body** (`InviteUserRequest`):
 ```json
 {
   "email": "newuser@example.com",
   "first_name": "Jane",
   "last_name": "Smith",
+  "is_superuser": false,
   "role_ids": ["role-uuid-1", "role-uuid-2"],
   "entity_id": "entity-uuid"
 }
@@ -129,8 +127,9 @@ Create an invited user account.
 | `email` | string | Yes | Email address to invite |
 | `first_name` | string | No | First name |
 | `last_name` | string | No | Last name |
-| `role_ids` | string[] | No | Role IDs to assign (EnterpriseRBAC with entity_id) |
-| `entity_id` | string | No | Entity to add membership to (EnterpriseRBAC) |
+| `is_superuser` | bool | No | Only current superusers may set this |
+| `role_ids` | string[] | No | Without `entity_id`: assign as **direct** roles (SimpleRBAC-friendly). With `entity_id`: roles on that membership |
+| `entity_id` | string | No | Enterprise: create entity membership (needs membership service) |
 
 **Response** (201 Created):
 ```json

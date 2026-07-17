@@ -1,14 +1,18 @@
-# 12. Data Models
+# Data Models
 
-> **Quick Reference**: Complete database schema reference for OutlabsAuth models including users, roles, entities, API keys, and OAuth accounts.
+> **Handbook · Reference** — schema lookup for implementers.  
+> Part of the [OutlabsAuth Handbook](./README.md). Not a getting-started guide.
 
 ## Overview
 
-OutlabsAuth uses **PostgreSQL** with **SQLAlchemy/SQLModel** (async) for data persistence. Every table model inherits from `outlabs_auth.database.base.BaseModel`, which supplies the common id/timestamp fields.
+OutlabsAuth uses **PostgreSQL** with **SQLAlchemy/SQLModel** (async). Common
+fields (`id`, timestamps) come from `outlabs_auth.database.base.BaseModel`.
 
-**Database**: PostgreSQL 14+
+This page is a **schema reference**, not a tutorial — start with
+[Getting Started](./01-Getting-Started.md) if you are wiring an app.
+
+**Database**: PostgreSQL 14+  
 **ORM**: SQLAlchemy async + SQLModel (driver: asyncpg)
-**Tables**: 33 tables in the `outlabs_auth` schema
 
 Not every table is created for every configuration -
 `outlabs_auth/database/registry.py` selects the table set from the feature
