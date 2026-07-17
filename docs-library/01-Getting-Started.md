@@ -194,4 +194,5 @@ Full wiring and Simple vs Enterprise invite rules:
 - [Configuration](./03-Configuration.md) — production defaults, Redis, memory cache  
 - [Routers & Prefixes](./02-Routers-and-Prefixes.md) — full management API  
 - [User Management API](./23-User-Management-API.md) — users admin surface  
+- [Observability](./97-Observability.md) — metrics/logs without taking over the host  
 - [OAuth](./04-OAuth-and-Social-Login.md) · [Sessions](./05-Sessions-and-Audit.md) · [Passwordless](./06-Passwordless-and-Messaging.md)

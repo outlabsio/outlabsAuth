@@ -1711,23 +1711,17 @@ async with auth.get_session() as session:
 
 ---
 
-## Next Steps
+## Related
 
-- **[11. Core Components →](./11-Core-Components.md)** - Services and architecture
-- **[10. Architecture Overview →](./10-Architecture-Overview.md)** - System design
-- **[13. Authentication Flow →](./13-Authentication-Flow.md)** - How authentication works
-- **[14. Authorization Flow →](./14-Authorization-Flow.md)** - How permissions are checked
+- [Getting Started](./01-Getting-Started.md)
+- [Core Authorization Concepts](./13-Core-Authorization-Concepts.md)
+- [JWT Tokens](./22-JWT-Tokens.md)
+- [Entities](./51-Entities.md)
+- [ABAC](./26-ABAC.md)
+- Maintainer architecture: [`docs/LIBRARY_ARCHITECTURE.md`](../docs/LIBRARY_ARCHITECTURE.md)
 
----
+### Further reading
 
-## Further Reading
-
-### PostgreSQL & SQLAlchemy
-- [PostgreSQL Documentation](https://www.postgresql.org/docs/)
-- [SQLAlchemy Documentation](https://docs.sqlalchemy.org/)
-- [SQLModel Documentation](https://sqlmodel.tiangolo.com/)
-
-### Data Modeling
-- [PostgreSQL Schema Design Best Practices](https://www.postgresql.org/docs/current/ddl.html)
-- [Closure Table Pattern](https://www.slideshare.net/billkarwin/models-for-hierarchical-data)
-- [Pydantic Documentation](https://docs.pydantic.dev/)
+- [PostgreSQL docs](https://www.postgresql.org/docs/)
+- [SQLAlchemy](https://docs.sqlalchemy.org/) · [SQLModel](https://sqlmodel.tiangolo.com/)
+- [Closure table pattern](https://www.slideshare.net/billkarwin/models-for-hierarchical-data) (hierarchy background)

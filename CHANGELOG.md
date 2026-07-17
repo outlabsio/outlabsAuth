@@ -9,9 +9,11 @@ This project is in alpha (pre-1.0); breaking changes are allowed between alpha r
 
 ### Added
 
-- **Implementer documentation spine** — Getting Started, routers/prefixes, configuration, OAuth,
-  sessions/audit, and passwordless/messaging guides under `docs-library/`, plus OutlabsAuth UI as a
-  Vite/React sister console (`docs/AUTH_UI.md`).
+- **Implementer handbook (`docs-library/`)** — reading paths, Introduction / Choosing a Preset,
+  Getting Started, routers, configuration, OAuth, sessions/audit, passwordless, roles/permissions,
+  ABAC, entities, memberships, and trimmed topic guides (users, invites, status, JWT, API keys,
+  activity, testing, observability). Nuxt docs IA sketch in `docs-library/README.md`. OutlabsAuth UI
+  documented as a Vite/React sister console (`docs/AUTH_UI.md`).
 - **Session inventory and social unlink** on `get_users_router` (`/me/sessions`,
   `/me/social-accounts`, admin session revoke).
 - **Cross-user audit search** via `get_audit_router`.
